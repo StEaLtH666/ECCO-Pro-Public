@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement to ECCO-Pro
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Describe the behaviour you would like.
+    validations:
+      required: true
+  - type: dropdown
+    id: control
+    attributes:
+      label: Does this affect inverter-control behaviour?
+      options:
+        - "No"
+        - "Possibly"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Do not include secrets, account identifiers, private telemetry or private network details.
