@@ -1,0 +1,52 @@
+# Local secrets and credentials
+secrets.yaml
+**/secrets.yaml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Installation-specific local configuration
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.env
+site_profile.local.json
+
+# Private telemetry / exports / recordings
+hist_stats*.csv
+hist_stats*.csv.gz
+*.flight-recording.csv
+tools/flight-recordings/
+private-data/
+local-data/
+
+# ESPHome / PlatformIO generated content
+.esphome/
+.pio/
+.platformio/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary / scratch
+*.tmp
+*.bak
+*.orig
+scratch/
