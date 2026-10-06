@@ -1,0 +1,17 @@
+# The ECCO Energy Flow card's built bundle is minified/bundled third-party
+# (Lit) + ECCO source, not hand-authored - esbuild preserves whitespace
+# verbatim inside template-literal string content it doesn't minify,
+# including a literal tab character Lit's own internals use as part of a
+# whitespace-matching character class. Minifier identifier renaming
+# elsewhere in the bundle can shift which physical line that lands on
+# between builds, which otherwise makes `git diff --check` flag it as
+# "trailing whitespace" on an unrelated line - a false positive on
+# generated/vendored content, not a real formatting issue in anything
+# actually authored in this repository. Excluded from the whitespace
+# check rather than trimmed, since trimming could alter the literal
+# string content Lit's own code depends on.
+frontend/ecco-energy-flow-card/dist/*.js -whitespace
+# Same Lit/esbuild false positive, same reasoning, for the Energy Actions
+# card's generated bundle (its HEAD copy already carries that trailing tab;
+# the 2026-09-26 Dump-to-Grid rebuild merely shifted it onto a changed line).
+frontend/ecco-energy-actions-card/dist/*.js -whitespace

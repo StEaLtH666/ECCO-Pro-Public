@@ -1,51 +1,78 @@
 name: Bug report
-description: Report a reproducible ECCO-Pro problem
+description: A reproducible problem in ECCO. Sanitise everything you paste.
 title: "[Bug] "
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Please remove secrets, serial numbers, account identifiers, private IP addresses, and household telemetry before posting.
-  - type: textarea
-    id: description
+        **Do not paste** secrets, serial numbers, MPAN / MPRN, meter serials, account or tariff ids (they can be inside entity ids),
+        IP / MAC addresses, locations or household telemetry. See SUPPORT.md for how to sanitise logs.
+        **If ECCO wrote something unexpected to your inverter, stop here** and use private reporting (SECURITY.md) instead.
+  - type: dropdown
+    id: unexpected_write
     attributes:
-      label: What happened?
-      description: Describe the problem and expected behaviour.
+      label: Did ECCO write something unexpected to the inverter?
+      options: ["No", "Not sure", "Yes - I will use private reporting instead"]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: dropdown
+    id: running
+    attributes:
+      label: What was armed or running?
+      multiple: true
+      options: ["Nothing (read-only)", "Free Power", "Dump-to-Grid", "Manual TOU", "Export mode (244)", "Fallback profile", "RTC correction", "Other"]
     validations:
       required: true
   - type: input
     id: inverter
     attributes:
-      label: Inverter model
-      placeholder: e.g. supported Deye/Sunsynk model
-  - type: input
-    id: firmware
-    attributes:
-      label: Inverter firmware
-  - type: input
-    id: ecco
-    attributes:
-      label: ECCO-Pro version or commit
-  - type: input
-    id: esphome
-    attributes:
-      label: ESPHome version
+      label: Inverter make, model, phase type and battery type ("unknown" is allowed)
+    validations:
+      required: true
   - type: textarea
-    id: reproduction
+    id: inverter_firmware
     attributes:
-      label: Reproduction steps
+      label: Every firmware / version string the inverter shows ("unknown" is allowed)
+    validations:
+      required: true
+  - type: input
+    id: controller
+    attributes:
+      label: Controller board (classic ESP32 or ESP32-S3) and RS485 adapter
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: ECCO version or commit, firmware YAML, ESPHome version, Home Assistant version
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: Sanitised logs
-      description: Remove secrets, identifiers, private addresses and personal data.
+      label: Relevant, sanitised log excerpt
+      render: text
+  - type: textarea
+    id: local_changes
+    attributes:
+      label: Local modifications to ECCO files (if any)
   - type: checkboxes
     id: privacy
     attributes:
       label: Privacy check
       options:
-        - label: I removed secrets, account identifiers, private network details and household-specific data.
+        - label: I removed secrets, serials, MPAN / meter / account ids, addresses and household data.
           required: true

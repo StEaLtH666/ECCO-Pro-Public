@@ -1,0 +1,70 @@
+name: Hardware compatibility report
+description: Tell us what you tested, and how strongly. No serials, account ids or addresses.
+title: "[Hardware] "
+labels: ["hardware-report", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste** serial numbers, MPAN / MPRN, meter serials, account ids, IP / MAC addresses, locations or household telemetry.
+        A report is **not** a request to enable writes on an unsupported system. Start read-only.
+  - type: input
+    id: inverter
+    attributes:
+      label: Inverter make and model
+    validations:
+      required: true
+  - type: textarea
+    id: firmware
+    attributes:
+      label: Every firmware / version string the inverter shows
+      description: Use "unknown" if you cannot find them.
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase type
+      options: ["Single-phase", "Three-phase", "Unknown"]
+    validations:
+      required: true
+  - type: input
+    id: battery
+    attributes:
+      label: Battery type (chemistry / voltage class; make is optional)
+  - type: input
+    id: controller
+    attributes:
+      label: Controller board and RS485 adapter
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: ECCO version or commit, ESPHome version, Home Assistant version
+    validations:
+      required: true
+  - type: dropdown
+    id: level
+    attributes:
+      label: What did you do?
+      options:
+        - "Read-only only (no write-enable switch was turned on)"
+        - "Wrote with a supervised, low-power test and verified the restore"
+        - "Running it day to day"
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What worked, what did not, and how you checked
+      description: For example "read values matched the inverter display for load, PV and SOC"; list any registers that looked wrong.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed serials, MPAN / meter / account ids, addresses and household data.
+          required: true

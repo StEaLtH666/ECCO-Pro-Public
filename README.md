@@ -1,28 +1,18 @@
 # ECCO-Pro
 
-ECCO-Pro is an open-source energy-control, monitoring, and optimisation project for supported Deye/Sunsynk inverter systems.
+An open-source, experimental energy-control, monitoring and optimisation project for specific, tested Deye/Sunsynk-family hybrid
+inverter systems, built on ESPHome and Home Assistant.
 
-> **Public-release staging repository**
->
-> This repository is being prepared from a sanitised source tree. Production source code has not yet been imported. Do not treat the current contents as a release.
+> **Safety warning.** ECCO-Pro can write settings to your inverter. It is experimental, hardware-tested on a very small number of
+> systems, and comes without warranty. Do not connect it to an inverter unless you understand your installation, have backed up
+> the inverter's configuration, and accept the risk yourself.
 
-## Status
+**Status: pre-release.** This repository is being assembled for its first public release; documentation is still being added.
 
-ECCO-Pro is experimental software. It can ultimately interact with inverter configuration and power-control functions. Public release will only follow a privacy, security, provenance, licensing, and safety review of the exact source tree being published.
+- Licence: GNU General Public License v3.0 or later (`GPL-3.0-or-later`), see [LICENSE](LICENSE).
+- How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- Security problems or unexpected inverter writes: report privately, see [SECURITY.md](SECURITY.md).
+- Help: [SUPPORT.md](SUPPORT.md).
 
-## Planned public documentation
-
-The public repository will include:
-
-- supported hardware and firmware matrix
-- installation and configuration guidance
-- architecture and safety model
-- contribution and security-reporting guidance
-- test and validation instructions
-- licence and third-party notices
-
-## Safety
-
-Do not connect unreviewed or development builds to production energy equipment. Incorrect configuration or register writes can affect charging, discharging, export behaviour, equipment operation, and financial outcomes.
-
-No production credentials, household telemetry, account identifiers, private network details, or private development history should be committed to this repository.
+Deye, Sunsynk, Octopus Energy, Home Assistant and ESPHome are trademarks of their respective owners. ECCO-Pro is an independent
+project, not affiliated with or endorsed by them.

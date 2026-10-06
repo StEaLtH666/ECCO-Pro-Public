@@ -1,10 +1,41 @@
-# Safety and project-governance ownership
-* @StEaLtH666
+# Code owners. One maintainer today; the explicit paths document which areas are safety-critical or release-critical and need a
+# code-owner review once branch protection requires it (a sole maintainer needs the documented admin bypass to merge).
+# GitHub applies the LAST matching pattern; every line names the same owner, so the specific lines are documentation of the
+# critical areas and keep them covered if the catch-all line ever changes.
+*                                   @StEaLtH666
 
-/.github/ @StEaLtH666
-/firmware/ @StEaLtH666
-/registry/ @StEaLtH666
-/tools/ @StEaLtH666
-/deployment/ @StEaLtH666
-/home-assistant/ @StEaLtH666
-/intelligence/ @StEaLtH666
+# CI and repository automation
+/.github/                           @StEaLtH666
+/tools/check_workflows.py           @StEaLtH666
+/tools/run_offline_tests.py         @StEaLtH666
+/tools/offline_test_roots.txt       @StEaLtH666
+/requirements-ci.txt                @StEaLtH666
+
+# Inverter control and its evidence
+/firmware/                          @StEaLtH666
+/registry/                          @StEaLtH666
+/home-assistant/                    @StEaLtH666
+/deployment/                        @StEaLtH666
+/intelligence/                      @StEaLtH666
+/frontend/                          @StEaLtH666
+/influxdb/                          @StEaLtH666
+/health/                            @StEaLtH666
+
+# Proof chain and release transitions (pinned artifacts; never re-hashed)
+/registry/tests/                    @StEaLtH666
+/registry/tests/_scope_chain.py     @StEaLtH666
+/registry/tests/_pub0_scope.py      @StEaLtH666
+/registry/tests/_lic0_scope.py      @StEaLtH666
+/registry/tests/fixtures/           @StEaLtH666
+/tools/public/                      @StEaLtH666
+/tools/                             @StEaLtH666
+
+# Licence, safety and policy documents
+/LICENSE                            @StEaLtH666
+/THIRD_PARTY_NOTICES.md             @StEaLtH666
+/CODE_OF_CONDUCT.md                 @StEaLtH666
+/CONTRIBUTING.md                    @StEaLtH666
+/SAFETY.md                          @StEaLtH666
+/SECURITY.md                        @StEaLtH666
+/SUPPORTED_HARDWARE.md              @StEaLtH666
+/VERSION.yaml                       @StEaLtH666

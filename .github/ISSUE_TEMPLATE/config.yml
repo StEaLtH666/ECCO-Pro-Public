@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help (Discussions)
+    url: https://github.com/StEaLtH666/ECCO-Pro-Public/discussions
+    about: Setup questions, "will it work on my inverter?", ideas.
+  - name: Security problem or unexpected inverter write (private)
+    url: https://github.com/StEaLtH666/ECCO-Pro-Public/security/advisories/new
+    about: Do not open a public issue for vulnerabilities or if ECCO wrote something unexpected. Use private reporting.

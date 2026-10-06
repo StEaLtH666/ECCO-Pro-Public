@@ -1,34 +1,42 @@
 name: Feature request
-description: Suggest an improvement to ECCO-Pro
+description: Suggest an improvement. Broad ideas are welcome in Discussions first.
 title: "[Feature] "
-labels: ["enhancement"]
+labels: ["enhancement", "needs-triage"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Features that widen what ECCO can write to an inverter need design agreement before any code is written (CONTRIBUTING.md).
   - type: textarea
     id: problem
     attributes:
-      label: Problem or use case
-      description: What problem would this solve?
+      label: What problem would this solve?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed approach
-      description: Describe the behaviour you would like.
+      label: Proposed behaviour
     validations:
       required: true
   - type: dropdown
     id: control
     attributes:
-      label: Does this affect inverter-control behaviour?
-      options:
-        - "No"
-        - "Possibly"
-        - "Yes"
+      label: Does it affect inverter-control behaviour (writes, schedules, restore, reserve)?
+      options: ["No", "Possibly", "Yes"]
     validations:
       required: true
   - type: textarea
-    id: additional
+    id: safety
     attributes:
-      label: Additional context
-      description: Do not include secrets, account identifiers, private telemetry or private network details.
+      label: If possibly / yes - safety considerations
+      description: What could write, how it is verified, how the original state is restored, what happens on failure.
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware you could test on (optional)
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Would you help test it?
+      options: ["Offline only", "Read-only on my system", "Supervised write test on my system", "No"]
