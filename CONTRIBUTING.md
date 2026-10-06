@@ -51,6 +51,9 @@ Never test a write path on a system whose configuration you have not backed up (
 
 ## Running the checks locally
 
+On Windows, clone with LF line endings (`git clone -c core.autocrlf=false ...`): several suites hash files byte for byte, as CI
+does on Linux, and a CRLF checkout makes them fail.
+
 - Python 3.12 with the packages in `requirements-ci.txt` (PyYAML, Jinja2).
 - `python tools/validate_repo.py`: YAML, Python, JSON, Flux and manifest references.
 - `python tools/run_offline_tests.py --all` (add `--parallel N` to use more cores): every offline suite under the roots listed in
@@ -69,8 +72,9 @@ of the frontend) are pinned by sha256 and by exact-match "reverters" in `registr
 modules. A change to a pinned artifact must be declared as a new chain entry with exact reverters and new checkpoints. **Never
 re-hash an older pin to make a test pass.** If a suite fails because a pin moved, that is the suite doing its job.
 
-The public tree was produced from the private development tree by one declared, reversible transition, `pub0`
-(`registry/tests/_pub0_scope.py`, `tools/public/pub0.py`). Its manifest is generated and must not be hand-edited.
+The public tree was produced from the private development tree by one declared transition, `pub0` (exactly reversible for
+the proofs; only the tariff identifiers are deliberately irreversible, because their real values are not in this repository;
+see `registry/tests/_pub0_scope.py` and `tools/public/pub0.py`). Its manifest is generated and must not be hand-edited.
 
 ## Privacy
 

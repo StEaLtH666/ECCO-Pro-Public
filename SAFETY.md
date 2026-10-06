@@ -85,9 +85,9 @@ ECCO's **fallback profile** saves a user-captured subset of settings in the cont
 | **Snapshot before write.** Free Power, register 244 and Dump-to-Grid take a snapshot of the original values and store it durably in the controller *before* writing | Hardware tested on the reference system |
 | **Verify after write.** Writes are read back and compared exactly. A mismatch is a failure, not a success | Hardware tested |
 | **Timers and watchdog in the controller.** Free Power and Dump-to-Grid are time-limited. The controller ends and restores them itself, so Home Assistant being unavailable does not stop the restore. If the bus is busy it retries | Hardware tested for the normal paths |
-| **Durable records survive reboots.** After a reboot the controller reads its records. An unreadable record is treated as *unknown*, not *clear*, and blocks writes | Offline tested; some paths hardware tested |
-| **Bounded retries, then a person decides.** Repeated restore failures or an unrecognised inverter state lock further automatic writes and ask for an operator decision | Offline tested |
-| **Operator recovery** (review live state, force restore original, accept current state) | **Offline tested only. Not hardware-tested** |
+| **Durable records survive reboots.** After a reboot the controller reads its records. An unreadable record is treated as *unknown*, not *clear*, and blocks writes | Hardware tested for the register 244 durable transaction recovery; every other path Offline only |
+| **Bounded retries, then a person decides.** Repeated restore failures or an unrecognised inverter state lock further automatic writes and ask for an operator decision | Offline only |
+| **Operator recovery** (review live state, force restore original, accept current state) | **Offline only.** Not hardware tested |
 | **Fallback profile**: save, invalidate and compare a user-captured profile | Hardware tested |
 | **Applying the fallback profile / automatic failback if Home Assistant is lost** | **Not implemented. Not enabled.** If Home Assistant is lost, ECCO does **not** put the inverter back to a saved profile |
 
@@ -104,13 +104,18 @@ ECCO's **fallback profile** saves a user-captured subset of settings in the cont
 What is enforced today, and by which layer:
 
 - **Intelligence (advisory only)** plans against an *effective reserve*: the larger of your **user reserve** (configurable,
-  default 40%), a **technical minimum** and, when known, the inverter's own shutdown level plus a margin. It never recommends
-  a target below that floor, and it cannot write to the inverter. The technical minimum defaults to 10% as a placeholder: **set
+  default 40%), a **technical minimum** and, optionally, a reserve value read from Home Assistant at run time (an input only).
+  Recommended targets keep a further safety margin (default 5 percentage points) above it; it never recommends a target
+  below that floor, and it cannot write to the inverter. Intelligence does **not** read the inverter's own battery
+  shutdown setting. The technical minimum defaults to 10% as a placeholder: **set
   it to the minimum permitted by your inverter / battery configuration**. 10% is not a universal battery-safety minimum.
 - **Dump-to-Grid** stops at a stop level you choose. The firmware refuses a stop level below 10% and the Home Assistant scripts
   bound it to 10-90% (default 25%). These are software bounds of this feature, **not** a statement of what is safe for your
-  battery. Dump-to-Grid does **not** yet use the configured reserve: that enforcement (Home Assistant first, firmware later) is
-  planned, not built.
+  battery. Dump-to-Grid does **not** use the configured reserve: in 0.9.0 its firmware enforces only its existing stop-level
+  bounds, not the Intelligence reserve policy. Reserve enforcement for Dump-to-Grid is deferred until it can be
+  hardware-proven.
+- Home Assistant also has a reserve helper, `input_number.ecco_minimum_reserve_soc` (0-80%; a
+  one-time defaults automation in the core package sets it to 15% when Home Assistant first starts with ECCO). In 0.9.0 nothing enforces it: no firmware feature and no Home Assistant script uses it as a limit. Intelligence can take it as a run-time input, and then it can only **raise** the effective reserve, never lower it.
 - The inverter's own battery protection settings (for example its shutdown / low-battery levels) remain the final protection.
   ECCO does not change them.
 - Set the Dump-to-Grid stop level at or above your configured reserve and at or above the minimum your inverter / battery
