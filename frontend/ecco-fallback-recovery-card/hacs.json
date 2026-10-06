@@ -1,0 +1,7 @@
+{
+  "name": "ECCO Fallback Recovery Card",
+  "render_readme": true,
+  "content_in_root": true,
+  "filename": "ecco-fallback-recovery-card.js",
+  "homeassistant": "2024.8.0"
+}

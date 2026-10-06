@@ -1,0 +1,121 @@
+# ECCO Data Layer - InfluxDB export options v1.3
+# Connection details are configured through Settings > Devices & services > InfluxDB.
+# This YAML controls what Home Assistant exports to the configured InfluxDB entry.
+#
+# v1.3 (FB-B3): v1.2 plus two explicit exclusions of single-use / high-churn dongle entities
+# (the supervision challenge and the Fallback Profile Review ID). Everything else stays
+# exported - the Fallback Profile / supervision strings are soak evidence. v1.2 is kept
+# unchanged for rollback. [INFERENCE, verify at LP-B3] Home Assistant's entity filter lets an
+# explicit exclude entity override a matching include glob; if live verification shows
+# otherwise, accept the export - it is harmless. Do not enumerate the dongle sensors.
+#
+# v1.2:
+# - captures ALL ECCO Clock Dongle sensors, not only *_ecco_* entities
+# - adds dongle switches and numbers for health/config audit history
+# - keeps ECCO intelligence/helper entities
+# - keeps Octopus tariff/rate entities and Forecast.Solar
+# - records the legacy TOU input_datetime helpers for configuration history
+
+max_retries: 3
+precision: s
+
+measurement_attr: entity_id
+default_measurement: state
+
+tags:
+  project: ECCO
+  source: HomeAssistant
+
+tags_attributes:
+  - friendly_name
+
+include:
+  entities:
+    - sun.sun
+
+    # Existing Wi-Fi entity has a slightly different entity_id prefix
+    - sensor.ecco_clock_dongle_wifi_signal
+
+  entity_globs:
+
+    # ---------------------------------------------------------
+    # ECCO CLOCK DONGLE
+    # ---------------------------------------------------------
+
+    # Capture every sensor exposed by the ECCO dongle.
+    # This includes telemetry/configuration plus diagnostics such as:
+    # clock difference, RTC stalls, correction counts,
+    # last telemetry/config update, failures, etc.
+    - sensor.ecco_clock_dongle_*
+
+    # Connectivity, RTC and configuration status
+    - binary_sensor.ecco_clock_dongle_*
+
+    # Record operating switches so later analysis knows whether
+    # telemetry/config polling/clock correction were enabled.
+    - switch.ecco_clock_dongle_*
+
+    # Includes adjustable ESPHome numbers such as clock threshold.
+    - number.ecco_clock_dongle_*
+
+    # ---------------------------------------------------------
+    # ECCO PRO / INTELLIGENCE ENGINE
+    # ---------------------------------------------------------
+
+    # Existing flow helper sensors
+    - sensor.ecco_pro_*
+
+    # Current and future ECCO engine calculations
+    - sensor.ecco_*
+    - binary_sensor.ecco_*
+    - event.ecco_*
+
+    # Policy / user-adjustable model settings
+    - input_number.ecco_*
+    - input_boolean.ecco_*
+    - input_select.ecco_*
+    - input_datetime.ecco_*
+
+    # ---------------------------------------------------------
+    # INVERTER TOU CONFIGURATION HELPERS
+    # ---------------------------------------------------------
+
+    # Existing SmartDeye package TOU time helpers.
+    # Useful later for auditing requested values versus inverter readback.
+    - input_datetime.timezone*_time
+
+    # ---------------------------------------------------------
+    # OCTOPUS ENERGY
+    # ---------------------------------------------------------
+
+    # Numeric import/export rates, cost/consumption data, etc.
+    - sensor.octopus_energy_electricity_*
+
+    # Off-peak/free-electricity/session states
+    - binary_sensor.octopus_energy_electricity_*
+
+    # Full current/next/previous tariff schedules
+    - event.octopus_energy_electricity_*
+
+    # ---------------------------------------------------------
+    # FORECAST.SOLAR
+    # ---------------------------------------------------------
+
+    - sensor.energy_production_today*
+    - sensor.energy_production_tomorrow*
+    - sensor.power_production_now*
+    - sensor.power_highest_peak_time_today*
+    - sensor.power_highest_peak_time_tomorrow*
+
+exclude:
+  entities:
+    # Single-use challenge token, replaced about every 30 s (pre-existing gap).
+    - sensor.ecco_clock_dongle_ecco_supervision_challenge
+    # Single-use 120 s Review ID, no analytic value.
+    - sensor.ecco_clock_dongle_ecco_fallback_profile_review_id
+
+ignore_attributes:
+  - icon
+  - entity_picture
+  - attribution
+  - restored

@@ -1,0 +1,83 @@
+# ECCO Pro - Fallback Profile operator actions (FB-B3)
+#
+# *** STAGED / NOT LIVE-PROVEN - offline script-shape tests only ***
+#
+# OPERATOR-ONLY wrappers for the firmware API action
+# esphome.<node>_fallback_profile_execute. They are called ONLY from dashboard
+# buttons that a human presses after Review + Arm + a confirmation dialog.
+# NEVER call these scripts from an automation, schedule, blueprint or another
+# script (pinned by home-assistant/tests/test_ecco_fallback_packages.py).
+#
+# Each wrapper has NO fields: the target id is always the firmware's current
+# value (Review ID for SAVE / REPLACE CORRUPT; the saved profile's full 16-hex
+# binding from the Summary for INVALIDATE), rendered with | string so an
+# all-digit id stays a string. The firmware API variable is target_id.
+#
+# NOTHING here turns the ECCO Fallback Profile Arm ON - the human must arm it
+# separately. The firmware re-validates arm, id, phrase, TTL, heartbeat and
+# every precondition; a refused call is reported through the Last Action-Result
+# entity. SAVE / REPLACE CORRUPT / INVALIDATE never write an inverter register.
+# There is no RESTORE or ACKNOWLEDGE wrapper yet (reserved for FB-E / FB-F; they
+# are added to THIS file and nowhere else).
+#
+# script.ecco_fallback_reset_high_water is a helper-only script: it fires a
+# Home Assistant event that re-baselines the detection-only generation
+# high-water sensor (ecco_fallback_status.yaml). It makes no device call.
+
+script:
+  ecco_fallback_profile_save:
+    alias: "ECCO - Fallback Profile: Save Known-Good Profile"
+    icon: mdi:content-save-check-outline
+    mode: single
+    max_exceeded: silent
+    sequence:
+      - variables:
+          rid: "{{ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_id') | string }}"
+      - action: esphome.ecco_clock_dongle_fallback_profile_execute
+        data:
+          action: SAVE
+          target_id: "{{ rid | string }}"
+          confirmation: "SAVE {{ rid }}"
+      - delay:
+          seconds: 3
+
+  ecco_fallback_profile_replace_corrupt:
+    alias: "ECCO - Fallback Profile: Replace Damaged Profile"
+    icon: mdi:file-replace-outline
+    mode: single
+    max_exceeded: silent
+    sequence:
+      - variables:
+          rid: "{{ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_id') | string }}"
+      - action: esphome.ecco_clock_dongle_fallback_profile_execute
+        data:
+          action: SAVE
+          target_id: "{{ rid | string }}"
+          confirmation: "SAVE {{ rid }} REPLACE CORRUPT"
+      - delay:
+          seconds: 3
+
+  ecco_fallback_profile_invalidate:
+    alias: "ECCO - Fallback Profile: Invalidate Profile"
+    icon: mdi:file-cancel-outline
+    mode: single
+    max_exceeded: silent
+    sequence:
+      - variables:
+          summ: "{{ ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' }}"
+          bid: "{{ (summ.split(';id=')[1].split(';')[0] if ';id=' in summ else '') | string }}"
+      - action: esphome.ecco_clock_dongle_fallback_profile_execute
+        data:
+          action: INVALIDATE
+          target_id: "{{ bid | string }}"
+          confirmation: "INVALIDATE {{ bid }}"
+      - delay:
+          seconds: 3
+
+  ecco_fallback_reset_high_water:
+    alias: "ECCO - Fallback Profile: Reset Generation High Water"
+    icon: mdi:backup-restore
+    mode: single
+    max_exceeded: silent
+    sequence:
+      - event: ecco_fallback_reset_high_water

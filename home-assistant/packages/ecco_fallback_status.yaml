@@ -1,0 +1,772 @@
+# ECCO Pro - Fallback Profile / Supervision display layer (FB-B3)
+#
+# *** STAGED / NOT LIVE-PROVEN - offline Jinja matrix tests only ***
+#
+# READ-ONLY DISPLAY LAYER. Every entity below is a template entity (or the one
+# UI helper) whose state is a pure function of existing ESPHome entities. This
+# file is never a firmware safety primitive: Home Assistant is NOT a control
+# authority here, and nothing in this file gates, enables or triggers any
+# inverter, lease, arm or fallback behaviour. The dongle firmware re-validates
+# every operator action and remains the only safety authority.
+#
+# This file contains:
+#   - no service calls (no esphome / button / switch / modbus_client calls)
+#   - no automation: or script: blocks (the operator wrappers live ONLY in
+#     ecco_fallback_profile_actions.yaml)
+#   - no restart / reload calls
+#   - no package-level recorder: block (a package-level block can conflict
+#     with the site's own recorder configuration; same precedent as
+#     ecco_supervision_heartbeat.yaml)
+#   - no firmware control logic
+#
+# Contract: docs/architecture/fallback/FINAL_FBB_FBC_ARCHITECTURE.md section 9
+# (9.6 packages, 9.7 display mapping) and design/S5_ha_contract_ux_final.md
+# Part A (which overrides Part B). The firmware entities consumed here are the
+# ESPHome FB-B entities: B1 State, B2 Summary, B3 Review, B4 Review ID, B7/B8
+# saved Slots/Context, B10 Live Match (introduced by FB-B3 firmware; until that
+# firmware is deployed the Live Match entity is unavailable and a VALID profile
+# displays Unknown, never Ready) and the Arm switch (read only).
+#
+# Entity ids use the installation's device/area slug `ecco_clock_dongle`
+# (a site constant, not portable). Confirm by live discovery (LP-B3) before
+# deploying; if the slug differs, fix THIS file, never the firmware names.
+#
+# DISPLAY PRECEDENCE of sensor.ecco_fallback_status_code (first match wins; a
+# later stage inserts its rows at the marked anchors and never reorders):
+#   1  not_reporting         B1 unknown/unavailable
+#   -  [FB-E/F rows 2-6 insert here]
+#   7  lease_unreadable      B10 obl has :UR :MC :CT or :ML  ("Do NOT restart")
+#   8  lease_lockout         B10 obl has :ON :DV :LK or R4:PC
+#   9  shadow_episode        FB-C Shadow State is SHADOW_EPISODE or SHADOW_EPISODE_HA_BACK (FB-C3; display words
+#                            "Shadow Recovery"; ONLY the Shadow State opens this row - no shadow Verdict, Inputs or
+#                            plan ever changes the canonical status, S5 Part A H4)
+#   10 save_unconfirmed      B1 = SAVE_UNCONFIRMED
+#   11 profile_regressed     HA generation high-water > device (detection only)
+#   12 profile_unusable      B1 in UNREADABLE CORRUPT CORRUPT_DOMAIN PROFILE_LOST PROFILE_STALE
+#   13 not_captured          B1 = NOT_CAPTURED
+#   14 invalidated           B1 = INVALIDATED
+#   15 lease_restoring       VALID and obl has :RR :PC :EN or :IF
+#   16 live_out_of_domain    VALID and m = OUT_OF_DOMAIN
+#   17 drift_export          VALID and m = EXPORT
+#   18 drift_context         VALID and m = CONTEXT
+#   19 drift_values          VALID and m = DRIFT
+#   20 match                 VALID and m = MATCH
+#   21 paused                VALID and m in PAUSED, PAUSED_IO
+#   22 live_unknown          VALID and any other m
+#   23 unexpected_state      anything else
+# The profile is NEVER silently updated: drift only changes this display.
+#
+# OPTIONAL site-level recorder exclusions (not applied here):
+#   sensor.ecco_clock_dongle_ecco_supervision_challenge
+#
+# Attribute names exposed for the dashboard (read-only; Part A: safety
+# decoding lives in jinja-tested template attributes, never in dashboard JS):
+#   sensor.ecco_fallback_status:
+#     code, subline, profile_class, live_match, summary, obligations,
+#     export_hazard, high_water, saved_export_mode, saved_energy_mode,
+#     saved_grid_charging, saved_tou_schedule, saved_sources,
+#     drift_cells, drift_count,
+#     candidate_export_mode, candidate_energy_mode, candidate_grid_charging,
+#     candidate_tou_schedule, candidate_sources, candidate_changed_cells,
+#     next_generation, next_generation_text
+#   sensor.ecco_shadow_check (FB-C3; diagnostic decoder of the five existing ECCO Failback Shadow strings; state =
+#     operator wording of the current Verdict; attributes verdict, shadow_state, episode_open, status_masks_shadow,
+#     canonical_status_code, verdict_scope, verdict_heading, latched, inputs, episode, soak, unknown_keys, raw,
+#     scope_note, source_entities)
+#   binary_sensor.ecco_shadow_episode_open (FB-C3; display flag for the dashboard banner)
+
+template:
+  - sensor:
+      - name: "ECCO Supervision Status"
+        unique_id: ecco_supervision_status
+        icon: mdi:shield-account-outline
+        state: >-
+          {%- set s = states('sensor.ecco_clock_dongle_ecco_supervision_state') -%}
+          {%- set st = states('binary_sensor.ecco_clock_dongle_ecco_supervision_stable') -%}
+          {%- if s == 'SUPERVISED' and st == 'on' -%}Healthy
+          {%- elif s == 'SUPERVISED' and st == 'off' -%}Recovering
+          {%- elif s == 'SUSPECT' -%}Suspect
+          {%- elif s == 'LOST' -%}Lost
+          {%- elif s == 'STARTUP' -%}Awaiting Heartbeat
+          {%- else -%}Unknown
+          {%- endif -%}
+        attributes:
+          firmware_state: "{{ states('sensor.ecco_clock_dongle_ecco_supervision_state') }}"
+          stable: "{{ states('binary_sensor.ecco_clock_dongle_ecco_supervision_stable') }}"
+          heartbeat_age_s: "{{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') }}"
+          api_client_connected: "{{ states('binary_sensor.ecco_clock_dongle_ecco_api_client_connected') }}"
+          subline: >-
+            {%- set s = states('sensor.ecco_clock_dongle_ecco_supervision_state') -%}
+            {%- set st = states('binary_sensor.ecco_clock_dongle_ecco_supervision_stable') -%}
+            {%- if s == 'SUPERVISED' and st == 'on' -%}Home Assistant heartbeat is healthy (last beat {{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') }} s ago).
+            {%- elif s == 'SUPERVISED' and st == 'off' -%}Heartbeats resumed; waiting for a stable run of on-time beats.
+            {%- elif s == 'SUSPECT' -%}No valid heartbeat for longer than the suspect threshold.
+            {%- elif s == 'LOST' -%}No valid heartbeat within the loss threshold - check the ECCO supervision heartbeat automation.
+            {%- elif s == 'STARTUP' -%}No heartbeat yet since the dongle started.
+            {%- else -%}Supervision state not available.
+            {%- endif -%}
+          source_entities: >-
+            {{ ['sensor.ecco_clock_dongle_ecco_supervision_state',
+                'binary_sensor.ecco_clock_dongle_ecco_supervision_stable'] }}
+
+      - name: "ECCO Fallback Status Code"
+        unique_id: ecco_fallback_status_code
+        icon: mdi:shield-star-outline
+        state: >-
+          {%- set P = states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') -%}
+          {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+          {%- set m = L.split(';m=')[1].split(';')[0] if ';m=' in L else 'UNKNOWN' -%}
+          {%- set obl = (L.split(';obl=')[1].split(';')[0] if ';obl=' in L else '') ~ ',' -%}
+          {%- set ns = namespace(unreadable=false, lockout=false, restoring=false) -%}
+          {%- for e in obl.split(',') if ':' in e -%}
+            {%- set k = e.split(':')[1] -%}
+            {%- if k in ['UR', 'MC', 'CT', 'ML'] -%}{%- set ns.unreadable = true -%}
+            {%- elif k in ['ON', 'DV', 'LK'] or e == 'R4:PC' -%}{%- set ns.lockout = true -%}
+            {%- elif k in ['RR', 'PC', 'EN', 'IF'] -%}{%- set ns.restoring = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+          {%- set g = G.split(';g=')[1].split(';')[0] if ';g=' in G else '-' -%}
+          {%- set hw = states('sensor.ecco_fallback_generation_high_water') | int(0) -%}
+          {%- set regressed = hw > 0 and (P == 'NOT_CAPTURED' or (P in ['VALID', 'INVALIDATED'] and g.isdigit() and (g | int(0)) < hw)) -%}
+          {#- C3 -#}{%- set SS = states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') -%}
+          {%- if P in ['unknown', 'unavailable', 'none', ''] -%}not_reporting
+          {#- E/F -#}{#- FB-E/F rows 2-6 insert here, immediately after not_reporting -#}
+          {%- elif ns.unreadable -%}lease_unreadable
+          {%- elif ns.lockout -%}lease_lockout
+          {#- C3 -#}{%- elif SS in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK'] -%}shadow_episode
+          {%- elif P == 'SAVE_UNCONFIRMED' -%}save_unconfirmed
+          {%- elif regressed -%}profile_regressed
+          {%- elif P in ['UNREADABLE', 'CORRUPT', 'CORRUPT_DOMAIN', 'PROFILE_LOST', 'PROFILE_STALE'] -%}profile_unusable
+          {%- elif P == 'NOT_CAPTURED' -%}not_captured
+          {%- elif P == 'INVALIDATED' -%}invalidated
+          {%- elif P == 'VALID' -%}
+            {%- if ns.restoring -%}lease_restoring
+            {%- elif m == 'OUT_OF_DOMAIN' -%}live_out_of_domain
+            {%- elif m == 'EXPORT' -%}drift_export
+            {%- elif m == 'CONTEXT' -%}drift_context
+            {%- elif m == 'DRIFT' -%}drift_values
+            {%- elif m == 'MATCH' -%}match
+            {%- elif m in ['PAUSED', 'PAUSED_IO'] -%}paused
+            {%- else -%}live_unknown
+            {%- endif -%}
+          {%- else -%}unexpected_state
+          {%- endif -%}
+        attributes:
+          profile_class: "{{ states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') }}"
+          live_match: >-
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {{ L.split(';m=')[1].split(';')[0] if ';m=' in L else 'UNKNOWN' }}
+          obligations: >-
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {{ L.split(';obl=')[1].split(';')[0] if ';obl=' in L else '-' }}
+          export_hazard: >-
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {{ L.split(';eh=')[1].split(';')[0] if ';eh=' in L else 'U' }}
+          high_water: "{{ states('sensor.ecco_fallback_generation_high_water') }}"
+          summary: "{{ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') }}"
+
+      - name: "ECCO Fallback Status"
+        unique_id: ecco_fallback_status
+        icon: mdi:shield-check-outline
+        # Pure lookup of sensor.ecco_fallback_status_code. FB-C3 adds the
+        # Shadow Recovery word; the reserved FB-E/F (Applying / Applied /
+        # Needs Acknowledgement) display words are deliberately NOT in this
+        # table until those stages land.
+        state: >-
+          {%- set c = states('sensor.ecco_fallback_status_code') -%}
+          {%- set words = {
+            'not_reporting': 'Unknown', 'unexpected_state': 'Unknown', 'live_unknown': 'Unknown',
+            'lease_unreadable': 'Blocked', 'lease_lockout': 'Blocked', 'lease_restoring': 'Blocked',
+            'save_unconfirmed': 'Blocked', 'profile_regressed': 'Blocked', 'profile_unusable': 'Blocked',
+            'live_out_of_domain': 'Blocked',
+            'not_captured': 'Not Captured', 'invalidated': 'Invalidated',
+            'drift_export': 'Drifted', 'drift_context': 'Drifted', 'drift_values': 'Drifted',
+            'match': 'Ready', 'paused': 'Ready', 'shadow_episode': 'Shadow Recovery'} -%}
+          {{ words.get(c, 'Unknown') }}
+        attributes:
+          code: "{{ states('sensor.ecco_fallback_status_code') }}"
+          subline: >-
+            {%- set c = states('sensor.ecco_fallback_status_code') -%}
+            {%- set P = states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') -%}
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+            {%- set m = L.split(';m=')[1].split(';')[0] if ';m=' in L else 'UNKNOWN' -%}
+            {%- set obl = (L.split(';obl=')[1].split(';')[0] if ';obl=' in L else '') ~ ',' -%}
+            {%- set eh = L.split(';eh=')[1].split(';')[0] if ';eh=' in L else 'U' -%}
+            {%- set ew = L.split(';ew=')[1].split(';')[0] if ';ew=' in L else '-' -%}
+            {%- set dxh = L.split(';dx=')[1].split(';')[0] if ';dx=' in L else '-' -%}
+            {%- set hwd = G.split(';hw=')[1].split(';')[0] if ';hw=' in G else '-' -%}
+            {%- set names = {'FP': 'Free Power', 'DP': 'Dump to Grid', 'R4': 'The register 244 test', 'BUS': 'The inverter write lock'} -%}
+            {%- set kinds = {'ON': 'needs your decision', 'PC': 'needs your decision', 'UR': 'recovery state unreadable', 'MC': 'recovery metadata corrupt', 'CT': 'recovery metadata corrupt', 'ML': 'recovery metadata corrupt', 'DV': 'stored state disagrees with memory', 'LK': 'inverter write lock stuck'} -%}
+            {%- set ns = namespace(uf='', uk='', lf='', lk='', rf='', af='', dump=false, n=0) -%}
+            {%- for e in obl.split(',') if ':' in e -%}
+              {%- set d = e.split(':')[0] -%}
+              {%- set k = e.split(':')[1] -%}
+              {%- if d == 'DP' and k not in ['CM', 'CA', 'CN', 'CR'] -%}{%- set ns.dump = true -%}{%- endif -%}
+              {%- if k in ['UR', 'MC', 'CT', 'ML'] -%}
+                {%- if ns.uf == '' -%}{%- set ns.uf = d -%}{%- set ns.uk = k -%}{%- endif -%}
+              {%- elif k in ['ON', 'DV', 'LK'] or e == 'R4:PC' -%}
+                {%- if ns.lf == '' -%}{%- set ns.lf = d -%}{%- set ns.lk = k -%}{%- endif -%}
+              {%- elif k in ['RR', 'PC', 'EN', 'IF'] -%}
+                {%- if ns.rf == '' -%}{%- set ns.rf = d -%}{%- endif -%}
+              {%- elif k in ['AC', 'ST'] -%}
+                {%- if ns.af == '' -%}{%- set ns.af = d -%}{%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set dxv = (dxh | int(0, 16)) if dxh != '-' else 0 -%}
+            {%- for i in range(0, 19) -%}
+              {%- if ((dxv // (2 ** i)) % 2) == 1 -%}{%- set ns.n = ns.n + 1 -%}{%- endif -%}
+            {%- endfor -%}
+            {%- set hz = (' Export is currently ENABLED while ' ~ names.get(ns.uf or ns.lf or ns.rf, 'a temporary operation') ~ ' needs recovery.') if eh == '1' else ((' Export state unknown - check the inverter.') if (eh == 'U' and ns.dump) else '') -%}
+            {%- if c == 'not_reporting' -%}The ECCO dongle is not reporting its Fallback Profile status.
+            {%- elif c == 'unexpected_state' -%}Unrecognised Fallback Profile state '{{ P }}' - check that firmware and dashboard versions match.
+            {%- elif c == 'lease_unreadable' -%}Do NOT restart the dongle: {{ names.get(ns.uf, 'a temporary operation') }} recovery state is unreadable - follow the recovery procedure.{{ hz }}
+            {%- elif c == 'lease_lockout' -%}{{ names.get(ns.lf, 'A temporary operation') }} needs attention before the profile could be used ({{ kinds.get(ns.lk, 'needs your decision') }}).{{ hz }}
+            {%- elif c == 'shadow_episode' -%}ECCO recorded a loss of Home Assistant supervision. Shadow mode: nothing was written.
+            {%- elif c == 'save_unconfirmed' -%}The last save could not be confirmed. Restart the dongle when no temporary operation is active; saving stays disabled until then.
+            {%- elif c == 'profile_regressed' -%}The saved profile appears to have been lost or rolled back. Lease records may also be affected - check Free Power and Dump status.
+            {%- elif c == 'profile_unusable' -%}
+              {%- if P == 'UNREADABLE' -%}The stored profile could not be read (storage read error). Saving is disabled until the dongle next restarts.
+              {%- elif P == 'CORRUPT' -%}The stored profile is damaged and cannot be used. After a review it can be replaced with the Replace damaged profile action.
+              {%- elif P == 'CORRUPT_DOMAIN' -%}The stored profile holds values outside the supported range and cannot be used. Review and save a new known-good profile.
+              {%- elif P == 'PROFILE_LOST' -%}The saved profile (last known generation {{ hwd }}) is missing from storage. Review and save a new known-good profile.
+              {%- else -%}Saved profile is out of step with its record - review and save again.
+              {%- endif -%}
+            {%- elif c == 'not_captured' -%}No known-good profile saved yet. Review your current configuration and save it.
+            {%- elif c == 'invalidated' -%}The saved profile was invalidated and will not be used. Review and save a new known-good profile.
+            {%- elif c == 'lease_restoring' -%}Waiting for {{ names.get(ns.rf, 'a temporary operation') }} to finish restoring.{{ hz }}
+            {%- elif c == 'live_out_of_domain' -%}Current inverter settings are outside what Fallback V1 supports ({{ ew.split(',')[0].split('+')[0] }}). Saving and restoring are both unavailable.
+            {%- elif c == 'drift_export' -%}Export mode is Allow Export; your saved profile uses Zero Export. This setting cannot be saved as a fallback - change it back in Manual Controls.
+            {%- elif c == 'drift_context' -%}Slot times or context changed since the profile was saved. Review and save again, or put them back.
+            {%- elif c == 'drift_values' -%}Live settings differ from the saved profile in {{ ns.n }} {{ 'place' if ns.n == 1 else 'places' }}. Review and save if the change was intended.
+            {%- elif c == 'match' -%}Live inverter settings match the saved profile.
+            {%- elif c == 'paused' -%}
+              {%- if m == 'PAUSED_IO' -%}Comparison paused while an inverter write or bus operation is in progress.
+              {%- else -%}{{ names.get(ns.af, 'A temporary operation') }} is running - a restore would first end it
+              {%- endif -%}
+            {%- elif c == 'live_unknown' -%}A known-good profile is saved, but the live comparison is unavailable (configuration data not fresh).
+            {%- else -%}Fallback status not available.
+            {%- endif -%}
+          # Saved-profile decoders (jinja-tested; the dashboard only renders
+          # these strings). B7 = saved slots + b=<8HEX>, B8 = saved context.
+          saved_export_mode: >-
+            {%- set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_slots') ~ ';' -%}
+            {%- set v = S.split(';244=')[1].split(';')[0] if ';244=' in S else '-' -%}
+            {%- if v == '0' -%}Allow Export
+            {%- elif v == '1' -%}Essentials
+            {%- elif v == '2' -%}Zero Export
+            {%- elif v == '-' -%}-
+            {%- else -%}unrecognised ({{ v }})
+            {%- endif -%}
+          saved_energy_mode: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_context') ~ ';' -%}
+            {%- set v = C.split(';243=')[1].split(';')[0] if ';243=' in C else '-' -%}
+            {%- if v == '0' -%}Battery First
+            {%- elif v == '1' -%}Load First
+            {%- elif v == '-' -%}-
+            {%- else -%}unrecognised ({{ v }})
+            {%- endif -%}
+          saved_grid_charging: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_context') ~ ';' -%}
+            {%- set v = C.split(';232=')[1].split(';')[0] if ';232=' in C else '-' -%}
+            {%- if v == '-' -%}-
+            {%- elif ((v | int(0, 16)) % 2) == 1 -%}on
+            {%- else -%}off
+            {%- endif -%}
+          saved_tou_schedule: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_context') ~ ';' -%}
+            {%- set v = C.split(';248=')[1].split(';')[0] if ';248=' in C else '-' -%}
+            {%- if v == '-' -%}-
+            {%- elif ((v | int(0, 16)) % 2) == 1 -%}on
+            {%- else -%}off
+            {%- endif -%}
+          saved_sources: >-
+            {%- set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_slots') ~ ';' -%}
+            {%- set base = ['None', 'Grid', 'Generator', 'Grid + Generator'] -%}
+            {%- set ns = namespace(out=[]) -%}
+            {%- for n in range(1, 7) -%}
+              {%- set t = S.split(';' ~ n ~ '=')[1].split(';')[0] if (';' ~ n ~ '=') in S else '-' -%}
+              {%- set w = (t.split('/')[3] if t.split('/') | length == 4 else '-') -%}
+              {%- if w == '-' or not w.isdigit() -%}{%- set ns.out = ns.out + ['-'] -%}
+              {%- else -%}
+                {%- set wv = w | int(0) -%}
+                {%- if wv > 31 -%}{%- set ns.out = ns.out + [('raw 0x%04X' | format(wv))] -%}
+                {%- else -%}
+                  {%- set label = base[wv % 4] -%}
+                  {%- if (wv // 4) % 2 == 1 -%}{%- set label = label ~ ' + General' -%}{%- endif -%}
+                  {%- if (wv // 8) % 2 == 1 -%}{%- set label = label ~ ' + Backup' -%}{%- endif -%}
+                  {%- if (wv // 16) % 2 == 1 -%}{%- set label = label ~ ' + Charge' -%}{%- endif -%}
+                  {%- set ns.out = ns.out + [label] -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ ns.out | join(' | ') }}
+          # Candidate (Review) decoders: the SAME tables as the saved-profile ones above, over the candidate's
+          # B5 Review Slots (244 + the six slot tuples) and B6 Review Context (232 / 243 / 248). The dashboard
+          # renders these strings; it never decodes a register word itself.
+          candidate_export_mode: >-
+            {%- set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_slots') ~ ';' -%}
+            {%- set v = S.split(';244=')[1].split(';')[0] if ';244=' in S else '-' -%}
+            {%- if v == '0' -%}Allow Export
+            {%- elif v == '1' -%}Essentials
+            {%- elif v == '2' -%}Zero Export
+            {%- elif v == '-' -%}-
+            {%- else -%}unrecognised ({{ v }})
+            {%- endif -%}
+          candidate_energy_mode: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_context') ~ ';' -%}
+            {%- set v = C.split(';243=')[1].split(';')[0] if ';243=' in C else '-' -%}
+            {%- if v == '0' -%}Battery First
+            {%- elif v == '1' -%}Load First
+            {%- elif v == '-' -%}-
+            {%- else -%}unrecognised ({{ v }})
+            {%- endif -%}
+          candidate_grid_charging: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_context') ~ ';' -%}
+            {%- set v = C.split(';232=')[1].split(';')[0] if ';232=' in C else '-' -%}
+            {%- if v == '-' -%}-
+            {%- elif ((v | int(0, 16)) % 2) == 1 -%}on
+            {%- else -%}off
+            {%- endif -%}
+          candidate_tou_schedule: >-
+            {%- set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_context') ~ ';' -%}
+            {%- set v = C.split(';248=')[1].split(';')[0] if ';248=' in C else '-' -%}
+            {%- if v == '-' -%}-
+            {%- elif ((v | int(0, 16)) % 2) == 1 -%}on
+            {%- else -%}off
+            {%- endif -%}
+          candidate_sources: >-
+            {%- set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_slots') ~ ';' -%}
+            {%- set base = ['None', 'Grid', 'Generator', 'Grid + Generator'] -%}
+            {%- set ns = namespace(out=[]) -%}
+            {%- for n in range(1, 7) -%}
+              {%- set t = S.split(';' ~ n ~ '=')[1].split(';')[0] if (';' ~ n ~ '=') in S else '-' -%}
+              {%- set w = (t.split('/')[3] if t.split('/') | length == 4 else '-') -%}
+              {%- if w == '-' or not w.isdigit() -%}{%- set ns.out = ns.out + ['-'] -%}
+              {%- else -%}
+                {%- set wv = w | int(0) -%}
+                {%- if wv > 31 -%}{%- set ns.out = ns.out + [('raw 0x%04X' | format(wv))] -%}
+                {%- else -%}
+                  {%- set label = base[wv % 4] -%}
+                  {%- if (wv // 4) % 2 == 1 -%}{%- set label = label ~ ' + General' -%}{%- endif -%}
+                  {%- if (wv // 8) % 2 == 1 -%}{%- set label = label ~ ' + Backup' -%}{%- endif -%}
+                  {%- if (wv // 16) % 2 == 1 -%}{%- set label = label ~ ' + Charge' -%}{%- endif -%}
+                  {%- set ns.out = ns.out + [label] -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ ns.out | join(' | ') }}
+          candidate_changed_cells: >-
+            {%- set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_slots') ~ ';' -%}
+            {%- set dxh = S.split(';dx=')[1].split(';')[0] if ';dx=' in S else '-' -%}
+            {%- set dxv = (dxh | int(0, 16)) if dxh != '-' else 0 -%}
+            {%- set ns = namespace(cells=[]) -%}
+            {%- if dxv % 2 == 1 -%}{%- set ns.cells = ns.cells + ['export_mode'] -%}{%- endif -%}
+            {%- for i in range(0, 6) -%}
+              {%- if ((dxv // (2 ** (1 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['power' ~ (i + 1)] -%}{%- endif -%}
+              {%- if ((dxv // (2 ** (7 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['soc' ~ (i + 1)] -%}{%- endif -%}
+              {%- if ((dxv // (2 ** (13 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['source' ~ (i + 1)] -%}{%- endif -%}
+            {%- endfor -%}
+            {{ ns.cells }}
+          # The generation the NEXT save will write, for DISPLAY ONLY (never a gate; the device decides). The device's rule is
+          # max(authentic generation, witness high-water, RAM floor) + 1 (FINAL 3.9). It is shown only where the published
+          # evidence makes it exact: NOT_CAPTURED (nothing stored at all) is generation 1; a VALID or INVALIDATED profile whose
+          # witness is consistent (B2 w=OK) is max(g, hw) + 1. In every other state the number is not derivable and the
+          # neutral wording is used instead of a fabricated one.
+          next_generation: >-
+            {%- set P = states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') -%}
+            {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+            {%- set g = G.split(';g=')[1].split(';')[0] if ';g=' in G else '-' -%}
+            {%- set hw = G.split(';hw=')[1].split(';')[0] if ';hw=' in G else '-' -%}
+            {%- set w = G.split(';w=')[1].split(';')[0] if ';w=' in G else '-' -%}
+            {%- if P == 'NOT_CAPTURED' -%}1
+            {%- elif P in ['VALID', 'INVALIDATED'] and w == 'OK' and g.isdigit() and hw.isdigit() and (g | int(0)) < 4294967295 and (hw | int(0)) < 4294967295 -%}{{ [g | int(0), hw | int(0)] | max + 1 }}
+            {%- else -%}-
+            {%- endif -%}
+          next_generation_text: >-
+            {%- set P = states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') -%}
+            {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+            {%- set g = G.split(';g=')[1].split(';')[0] if ';g=' in G else '-' -%}
+            {%- set hw = G.split(';hw=')[1].split(';')[0] if ';hw=' in G else '-' -%}
+            {%- set w = G.split(';w=')[1].split(';')[0] if ';w=' in G else '-' -%}
+            {%- if P == 'NOT_CAPTURED' -%}Will save generation 1
+            {%- elif P in ['VALID', 'INVALIDATED'] and w == 'OK' and g.isdigit() and hw.isdigit() and (g | int(0)) < 4294967295 and (hw | int(0)) < 4294967295 -%}Will save generation {{ [g | int(0), hw | int(0)] | max + 1 }}
+            {%- else -%}Will save a new generation
+            {%- endif -%}
+          drift_count: >-
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {%- set dxh = L.split(';dx=')[1].split(';')[0] if ';dx=' in L else '-' -%}
+            {%- set cxh = L.split(';cx=')[1].split(';')[0] if ';cx=' in L else '-' -%}
+            {%- set ns = namespace(n=0) -%}
+            {%- for h, width in [(dxh, 19), (cxh, 9)] -%}
+              {%- set v = (h | int(0, 16)) if h != '-' else 0 -%}
+              {%- for i in range(0, width) -%}
+                {%- if ((v // (2 ** i)) % 2) == 1 -%}{%- set ns.n = ns.n + 1 -%}{%- endif -%}
+              {%- endfor -%}
+            {%- endfor -%}
+            {{ ns.n }}
+          drift_cells: >-
+            {%- set L = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') ~ ';' -%}
+            {%- set dxh = L.split(';dx=')[1].split(';')[0] if ';dx=' in L else '-' -%}
+            {%- set cxh = L.split(';cx=')[1].split(';')[0] if ';cx=' in L else '-' -%}
+            {%- set dxv = (dxh | int(0, 16)) if dxh != '-' else 0 -%}
+            {%- set cxv = (cxh | int(0, 16)) if cxh != '-' else 0 -%}
+            {%- set ns = namespace(cells=[]) -%}
+            {%- if dxv % 2 == 1 -%}{%- set ns.cells = ns.cells + ['export_mode'] -%}{%- endif -%}
+            {%- for i in range(0, 6) -%}
+              {%- if ((dxv // (2 ** (1 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['power' ~ (i + 1)] -%}{%- endif -%}
+              {%- if ((dxv // (2 ** (7 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['soc' ~ (i + 1)] -%}{%- endif -%}
+              {%- if ((dxv // (2 ** (13 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['source' ~ (i + 1)] -%}{%- endif -%}
+              {%- if ((cxv // (2 ** (3 + i))) % 2) == 1 -%}{%- set ns.cells = ns.cells + ['time' ~ (i + 1)] -%}{%- endif -%}
+            {%- endfor -%}
+            {%- if cxv % 2 == 1 -%}{%- set ns.cells = ns.cells + ['grid_charging'] -%}{%- endif -%}
+            {%- if (cxv // 2) % 2 == 1 -%}{%- set ns.cells = ns.cells + ['energy_mode'] -%}{%- endif -%}
+            {%- if (cxv // 4) % 2 == 1 -%}{%- set ns.cells = ns.cells + ['tou_schedule'] -%}{%- endif -%}
+            {{ ns.cells }}
+
+      # ---- FB-C3 SHADOW CHECK (STAGED / NOT LIVE-PROVEN; DISPLAY ONLY) --------------------------------------------------
+      # A pure DECODER of the five existing firmware strings ECCO Failback Shadow State / Episode / Soak / Verdict / Inputs
+      # (FB-C1 / FB-C2). It is NOT a second evaluator: the Verdict and the plan codes are the C2 evaluator's own output (a plan
+      # name / a plan code), only mapped to words here. Diagnostic only - a shadow verdict never changes the canonical Fallback
+      # status (only an open shadow EPISODE does, in sensor.ecco_fallback_status_code). Shadow data is RAM-only on the dongle
+      # (this boot); nothing here is persisted shadow history. No service call, no write, no automation.
+      # Contract = FB-C2 as merged (PR #63, remediated d172574): the Verdict is the READINESS plan of one MODE_IF_LOST
+      # evaluation per tick - outside an episode what a future automatic failback would do if Home Assistant were lost now,
+      # inside an episode the continuation plan - or WOULD_REMAIN_LATCHED (code 50) while the modelled FB-F latch is set.
+      # NO_ACTION / WOULD_REFUSE_STARTS are never published (they show as SHADOW_IDLE / SHADOW_WATCH on the State), so they
+      # are not Verdict words here: like any other unpublished value they read "not recognised" and land in `unknown_keys`.
+      # Plan-code fields decode only the codes C2 publishes in them (Inputs pl / alt / pa and Episode vu: the readiness
+      # codes; Episode v0: those plus 50); any other code reads '-' and is listed verbatim in `unknown_keys`.
+      # Grammars (actual C2): Episode id/ph/k/tr/u0/e0/cli/rb/v0/vu/f0/dm/pre/blk/d/ret/gap/rl/vch/cl/fbf, Inputs
+      # sup/st/fp/dp/r4/mt/pc/g/pb/e1/cx/in/ca/d/blk/lk/pl/rs/alt/pa (alt / pa appended, FINAL 8.5), Soak
+      # b/h/mx/lg/gm/lx/wr/nc/ncm/xh/cs. Keys outside those sets (append-only additions) are listed verbatim in
+      # `unknown_keys`. No RTC / cross-boot breadcrumb fields exist (S3 FINAL).
+      - name: "ECCO Shadow Check"
+        unique_id: ecco_shadow_check
+        icon: mdi:shield-search
+        state: >-
+          {%- set v = states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') -%}
+          {%- set i = ';' ~ states('sensor.ecco_clock_dongle_ecco_failback_shadow_inputs') ~ ';' -%}
+          {%- set d = i.split(';d=')[1].split(';')[0] if ';d=' in i else '-' -%}
+          {%- set w = {'NOT_EVALUATED': 'Shadow evaluator not ready yet', 'WOULD_PREEMPT_DUMP': 'Would end Dump to Grid, then continue failback', 'WOULD_PREEMPT_FREE_POWER': 'Would end Free Power, then continue failback', 'WAIT_DUMP_RESTORE': 'Would wait for Dump to Grid to put settings back', 'WAIT_FREE_POWER_RESTORE': 'Would wait for Free Power to put settings back', 'WAIT_WRITE_IN_FLIGHT': 'Would wait: another inverter write is running', 'WAIT_LIVE_DATA': 'Would wait: live inverter settings not current', 'WAIT_MANUAL_TOU_RECOVERY': 'Would wait for Manual TOU recovery to finish', 'BLOCKED_RECOVERY_METADATA': 'Would hold: saved lease records unreadable or corrupt', 'BLOCKED_DURABLE_UNKNOWN': 'Would hold: saved lease state not confirmed', 'BLOCKED_OPERATOR_NEEDED': 'Would hold: a lease needs your decision first', 'BLOCKED_PROFILE_CORRUPT': 'Would hold: saved profile is damaged', 'BLOCKED_PROFILE_UNAVAILABLE': 'Would hold: saved profile cannot be confirmed now', 'BLOCKED_SITE_CEILING': 'Would hold: profile power above site limit', 'BLOCKED_CONTEXT_MISMATCH': 'Would hold: schedule or context changed since save', 'BLOCKED_LIVE_OUT_OF_DOMAIN': 'Would hold: live settings outside profile range', 'BLOCKED_NO_PROFILE': 'No failback possible: no known-good profile saved', 'BLOCKED_PROFILE_INVALIDATED': 'No failback possible: profile was invalidated', 'WOULD_ALREADY_MATCH': 'Would do nothing: inverter already matches profile', 'WOULD_APPLY_PROFILE': 'Would apply known-good profile', 'WOULD_REMAIN_LATCHED': 'Would stay latched: previous episode not acknowledged'} -%}
+          {%- if v == 'WOULD_APPLY_PROFILE' -%}Would apply known-good profile{{ (' (' ~ d ~ (' register)' if d == '1' else ' registers)')) if d.isdigit() else '' }}
+          {%- elif v in w -%}{{ w[v] }}
+          {%- elif v in ['unknown', 'unavailable', 'none', ''] -%}Shadow check not available
+          {%- else -%}Shadow check result not recognised
+          {%- endif -%}
+        attributes:
+          verdict: >-
+            {{ states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') }}
+          shadow_state: >-
+            {{ states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') }}
+          episode_open: >-
+            {{ states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK'] }}
+          status_masks_shadow: >-
+            {%- set c = states('sensor.ecco_fallback_status_code') -%}
+            {{ c not in ['shadow_episode', 'unknown', 'unavailable', ''] and states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK'] }}
+          canonical_status_code: >-
+            {{ states('sensor.ecco_fallback_status_code') }}
+          canonical_status: >-
+            {{ states('sensor.ecco_fallback_status') }}
+          # FB-C2 Verdict semantics (S5 2.3 / 6.4): `readiness` outside an episode ("if Home Assistant were lost now"), `episode`
+          # inside one (the continuation plan); `not_evaluated`, `unrecognised` (incl. the never-published NO_ACTION /
+          # WOULD_REFUSE_STARTS) and `not_available` carry no plan, so they get no heading.
+          verdict_scope: >-
+            {%- set v = states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') -%}
+            {%- set published = ['NOT_EVALUATED', 'WOULD_PREEMPT_DUMP', 'WOULD_PREEMPT_FREE_POWER', 'WAIT_DUMP_RESTORE', 'WAIT_FREE_POWER_RESTORE', 'WAIT_WRITE_IN_FLIGHT', 'WAIT_LIVE_DATA', 'WAIT_MANUAL_TOU_RECOVERY', 'BLOCKED_RECOVERY_METADATA', 'BLOCKED_DURABLE_UNKNOWN', 'BLOCKED_OPERATOR_NEEDED', 'BLOCKED_PROFILE_CORRUPT', 'BLOCKED_PROFILE_UNAVAILABLE', 'BLOCKED_SITE_CEILING', 'BLOCKED_CONTEXT_MISMATCH', 'BLOCKED_LIVE_OUT_OF_DOMAIN', 'BLOCKED_NO_PROFILE', 'BLOCKED_PROFILE_INVALIDATED', 'WOULD_ALREADY_MATCH', 'WOULD_APPLY_PROFILE', 'WOULD_REMAIN_LATCHED'] -%}
+            {{ 'not_available' if v in ['unknown', 'unavailable', 'none', ''] else 'unrecognised' if v not in published
+               else 'not_evaluated' if v == 'NOT_EVALUATED'
+               else 'episode' if states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK'] else 'readiness' }}
+          verdict_heading: >-
+            {%- set v = states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') -%}
+            {%- set published = ['NOT_EVALUATED', 'WOULD_PREEMPT_DUMP', 'WOULD_PREEMPT_FREE_POWER', 'WAIT_DUMP_RESTORE', 'WAIT_FREE_POWER_RESTORE', 'WAIT_WRITE_IN_FLIGHT', 'WAIT_LIVE_DATA', 'WAIT_MANUAL_TOU_RECOVERY', 'BLOCKED_RECOVERY_METADATA', 'BLOCKED_DURABLE_UNKNOWN', 'BLOCKED_OPERATOR_NEEDED', 'BLOCKED_PROFILE_CORRUPT', 'BLOCKED_PROFILE_UNAVAILABLE', 'BLOCKED_SITE_CEILING', 'BLOCKED_CONTEXT_MISMATCH', 'BLOCKED_LIVE_OUT_OF_DOMAIN', 'BLOCKED_NO_PROFILE', 'BLOCKED_PROFILE_INVALIDATED', 'WOULD_ALREADY_MATCH', 'WOULD_APPLY_PROFILE', 'WOULD_REMAIN_LATCHED'] -%}
+            {{ '' if (v not in published or v == 'NOT_EVALUATED')
+               else 'A shadow episode is open; a future automatic failback would now:' if states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK']
+               else 'If Home Assistant were lost now, a future automatic failback would:' }}
+          # True while the Verdict is code 50: the modelled FB-F latch is set; Inputs `pl` still carries the readiness plan underneath.
+          latched: >-
+            {{ states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') == 'WOULD_REMAIN_LATCHED' }}
+          inputs: >-
+            {%- set raw = states('sensor.ecco_clock_dongle_ecco_failback_shadow_inputs') -%}
+            {%- set ns = namespace(kv={}) -%}
+            {%- for p in raw.split(';') if '=' in p -%}
+            {%- set ns.kv = dict(ns.kv, **{p.split('=', 1)[0]: p.split('=', 1)[1]}) -%}
+            {%- endfor -%}
+            {%- set kv = ns.kv -%}
+            {%- set plans = {'0': 'NOT_EVALUATED', '10': 'WOULD_PREEMPT_DUMP', '11': 'WOULD_PREEMPT_FREE_POWER', '12': 'WAIT_DUMP_RESTORE', '13': 'WAIT_FREE_POWER_RESTORE', '14': 'WAIT_WRITE_IN_FLIGHT', '15': 'WAIT_LIVE_DATA', '16': 'WAIT_MANUAL_TOU_RECOVERY', '20': 'BLOCKED_RECOVERY_METADATA', '21': 'BLOCKED_DURABLE_UNKNOWN', '22': 'BLOCKED_OPERATOR_NEEDED', '23': 'BLOCKED_PROFILE_CORRUPT', '24': 'BLOCKED_PROFILE_UNAVAILABLE', '25': 'BLOCKED_SITE_CEILING', '26': 'BLOCKED_CONTEXT_MISMATCH', '27': 'BLOCKED_LIVE_OUT_OF_DOMAIN', '30': 'BLOCKED_NO_PROFILE', '31': 'BLOCKED_PROFILE_INVALIDATED', '40': 'WOULD_ALREADY_MATCH', '41': 'WOULD_APPLY_PROFILE'} -%}
+            {%- set reasons = {'1': 'SUP_STABLE', '2': 'SUP_STARTUP', '3': 'SUP_SUSPECT', '4': 'SUP_UNSTABLE', '5': 'SUP_LOST', '6': 'SUP_RETURNED_EPISODE_OPEN', '7': 'IF_LOST_READINESS', '10': 'BOOT_NOT_LOADED', '11': 'INPUT_INVALID', '101': 'DUMP_ACTIVE', '102': 'DUMP_STARTING', '103': 'DUMP_RESTORE_DUE', '104': 'DUMP_RESTORE_BACKOFF', '105': 'DUMP_RESTORE_RUNNING', '106': 'DUMP_CLEAR_PENDING', '107': 'DUMP_OPERATOR_NEEDED', '108': 'DUMP_OPERATOR_NEEDED_EXPORT_LIVE', '109': 'DUMP_FORCE_QUEUED', '110': 'DUMP_METADATA_CORRUPT', '111': 'DUMP_MARKER_UNREADABLE', '112': 'DUMP_MARKER_DIVERGED', '113': 'DUMP_PROBE_UNREADABLE', '114': 'DUMP_PROBE_MALFORMED', '115': 'DUMP_MARKER_EVIDENCE_VANISHED', '116': 'DUMP_MARKER_LOST', '117': 'DUMP_MARKER_ABSENT_UNPROVEN', '118': 'DUMP_RAM_INCONSISTENT', '119': 'DUMP_OP_FLAG_STUCK', '120': 'DUMP_OP_FLAG_SETTLING', '201': 'FP_ACTIVE', '202': 'FP_STARTING', '203': 'FP_RESTORE_DUE', '204': 'FP_RESTORE_BACKOFF', '205': 'FP_RESTORE_RUNNING', '206': 'FP_OPERATOR_ACTION_RUNNING', '207': 'FP_CLEAR_PENDING', '208': 'FP_OPERATOR_NEEDED', '210': 'FP_METADATA_CORRUPT', '211': 'FP_MARKER_UNREADABLE', '212': 'FP_MARKER_DIVERGED', '213': 'FP_PROBE_UNREADABLE', '214': 'FP_PROBE_MALFORMED', '215': 'FP_MARKER_EVIDENCE_VANISHED', '216': 'FP_MARKER_LOST', '217': 'FP_MARKER_ABSENT_UNPROVEN', '218': 'FP_RAM_INCONSISTENT', '219': 'FP_OP_FLAG_STUCK', '220': 'FP_OP_FLAG_SETTLING', '301': 'R244_HELD', '302': 'R244_HELD_DRIFT_GUARD', '303': 'R244_CLEAR_PENDING_OPERATOR', '304': 'R244_APPLY_RUNNING', '305': 'R244_RESTORE_RUNNING', '307': 'R244_METADATA_CORRUPT', '308': 'R244_MARKER_UNREADABLE', '309': 'R244_MARKER_DIVERGED', '310': 'R244_PROBE_UNREADABLE', '311': 'R244_PROBE_MALFORMED', '312': 'R244_MARKER_EVIDENCE_VANISHED', '313': 'R244_RAM_INCONSISTENT', '314': 'R244_OP_FLAG_STUCK', '315': 'R244_MARKER_ABSENT_UNPROVEN', '316': 'R244_OP_FLAG_SETTLING', '401': 'MTOU_APPLY_RUNNING', '402': 'FBB_CAPTURE_RUNNING', '403': 'RTC_CORRECTION_RUNNING', '404': 'LOCK_HELD_OWNER_RUNNING', '405': 'LOCK_HELD_NO_KNOWN_OWNER', '406': 'RTC_LOCK_STUCK', '407': 'LOCK_HELD_SETTLING', '410': 'MTOU_JOURNAL_OBLIGATION', '501': 'PROFILE_NOT_CAPTURED', '502': 'PROFILE_INVALIDATED', '503': 'PROFILE_CORRUPT', '504': 'PROFILE_CORRUPT_DOMAIN', '505': 'PROFILE_UNREADABLE', '506': 'PROFILE_LOST', '507': 'PROFILE_SAVE_UNCONFIRMED', '508': 'PROFILE_CHANGED_SINCE_LOST', '509': 'PROFILE_ABSENT_UNPROVEN', '510': 'PROFILE_NOT_WRITER_USABLE', '511': 'PROFILE_STALE', '601': 'SITE_CEILING_BELOW_PROFILE', '610': 'LIVE_CACHE_INVALID', '611': 'LIVE_CACHE_STALE', '612': 'LIVE_POLLING_OFF', '613': 'LIVE_CACHE_PRE_FENCE', '614': 'LIVE_NOT_LATCHED', '620': 'CTX_SLOT_TIMES', '621': 'CTX_243', '622': 'CTX_232_BIT0', '623': 'CTX_248_BIT0', '624': 'CTX_MULTIPLE', '630': 'LIVE_244_ESSENTIALS', '631': 'LIVE_244_UNRECOGNISED', '632': 'LIVE_POWER_OUT_OF_RANGE', '633': 'LIVE_SOC_OUT_OF_RANGE', '634': 'LIVE_SOURCE_WORD_UNSUPPORTED', '635': 'LIVE_MULTIPLE_OUT_OF_DOMAIN', '701': 'MATCH_E1_AND_CTX', '702': 'E1_DELTA'} -%}
+            {%- set words = {'NOT_EVALUATED': 'Shadow evaluator not ready yet', 'WOULD_PREEMPT_DUMP': 'Would end Dump to Grid, then continue failback', 'WOULD_PREEMPT_FREE_POWER': 'Would end Free Power, then continue failback', 'WAIT_DUMP_RESTORE': 'Would wait for Dump to Grid to put settings back', 'WAIT_FREE_POWER_RESTORE': 'Would wait for Free Power to put settings back', 'WAIT_WRITE_IN_FLIGHT': 'Would wait: another inverter write is running', 'WAIT_LIVE_DATA': 'Would wait: live inverter settings not current', 'WAIT_MANUAL_TOU_RECOVERY': 'Would wait for Manual TOU recovery to finish', 'BLOCKED_RECOVERY_METADATA': 'Would hold: saved lease records unreadable or corrupt', 'BLOCKED_DURABLE_UNKNOWN': 'Would hold: saved lease state not confirmed', 'BLOCKED_OPERATOR_NEEDED': 'Would hold: a lease needs your decision first', 'BLOCKED_PROFILE_CORRUPT': 'Would hold: saved profile is damaged', 'BLOCKED_PROFILE_UNAVAILABLE': 'Would hold: saved profile cannot be confirmed now', 'BLOCKED_SITE_CEILING': 'Would hold: profile power above site limit', 'BLOCKED_CONTEXT_MISMATCH': 'Would hold: schedule or context changed since save', 'BLOCKED_LIVE_OUT_OF_DOMAIN': 'Would hold: live settings outside profile range', 'BLOCKED_NO_PROFILE': 'No failback possible: no known-good profile saved', 'BLOCKED_PROFILE_INVALIDATED': 'No failback possible: profile was invalidated', 'WOULD_ALREADY_MATCH': 'Would do nothing: inverter already matches profile', 'WOULD_APPLY_PROFILE': 'Would apply known-good profile', 'WOULD_REMAIN_LATCHED': 'Would stay latched: previous episode not acknowledged'} -%}
+            {%- set kinds = {'0': 'none', '1': 'active', '2': 'starting', '3': 'restore required', '4': 'ending', '5': 'clear pending', '6': 'needs your decision', '7': 'in flight', '16': 'recovery state unreadable', '17': 'recovery metadata corrupt', '19': 'not loaded at boot', '20': 'stored state disagrees with memory', '21': 'inverter lock stuck', '23': 'probe pending'} -%}
+            {%- set basis = {'M': 'clear (boot marker)', 'R': 'clear (checked at runtime)', 'A': 'clear by absence (not proven)', '-': 'clear'} -%}
+            {%- set cmpw = {'M': 'matches', 'D': 'differs', 'N': 'not comparable', 'O': 'not a baseline (cache overlay)'} -%}
+            {%- set cache = {'B': 'boot not loaded yet', 'I': 'no valid cache', 'O': 'configuration polling off', 'S': 'stale', 'P': 'may pre-date a write (write fence)', 'M': 'never filled', 'F': 'fresh'} -%}
+            {%- set pcs = {'0': 'UNREADABLE', '1': 'NOT_CAPTURED', '2': 'CORRUPT', '3': 'CORRUPT_DOMAIN', '4': 'INVALIDATED', '5': 'VALID', '6': 'PROFILE_LOST', '7': 'SAVE_UNCONFIRMED', '8': 'PROFILE_STALE'} -%}
+            {%- set locks = {'0': 'none', '1': 'manual write in progress', '2': 'clock correction in progress', '3': 'manual write and clock correction in progress'} -%}
+            {%- set fr = {'1': '244 export write (0 to 2)', '2': 'slot power down (256-261)', '4': 'target SOC / source (268-279)', '8': 'slot power up (256-261)'} -%}
+            {%- set ns2 = namespace(dom={}) -%}
+            {%- for key in ['fp', 'dp', 'r4'] -%}
+            {%- set t = kv.get(key, '-') -%}
+            {%- if t[:1] == 'C' -%}{%- set txt = basis.get(t[1:], 'clear') -%}
+            {%- elif t[:1] == 'O' -%}{%- set txt = 'obligation: ' ~ kinds.get(t[1:], 'code ' ~ t[1:]) -%}
+            {%- elif t[:1] == 'U' -%}{%- set txt = 'unknown: ' ~ kinds.get(t[1:], 'code ' ~ t[1:]) -%}
+            {%- else -%}{%- set txt = '-' -%}
+            {%- endif -%}
+            {%- set ns2.dom = dict(ns2.dom, **{key: txt}) -%}
+            {%- endfor -%}
+            {%- set blk = kv.get('blk', '-') -%}
+            {%- set bm = (blk | int(0, 16)) if blk != '-' else 0 -%}
+            {%- set pl = kv.get('pl', '-') -%}
+            {%- set pn = plans.get(pl, '-') -%}
+            {%- set rs = kv.get('rs', '-') -%}
+            {%- set alt = kv.get('alt', '-') -%}
+            {%- set an = plans.get(alt, '-') -%}
+            {%- set pa = kv.get('pa', '-') -%}
+            {%- set pan = plans.get(pa, '-') -%}
+            {%- set dd = kv.get('d', '-') -%}
+            {%- set pcn = pcs.get(kv.get('pc', '-'), '-') -%}
+            {{ {
+              'available': 'sup' in kv and 'pl' in kv,
+              'supervision': {'U': 'starting (no heartbeat yet)', 'O': 'supervised', 'S': 'suspect', 'L': 'lost'}.get(kv.get('sup', '-'), '-'),
+              'stable': {'1': 'stable', '0': 'not stable'}.get(kv.get('st', '-'), '-'),
+              'free_power': ns2.dom['fp'],
+              'dump_to_grid': ns2.dom['dp'],
+              'register_244_test': ns2.dom['r4'],
+              'manual_tou': 'not evaluated' if kv.get('mt', '-') == '-' else kv.get('mt'),
+              'profile_class': pcn,
+              'profile_generation': kv.get('g', '-'),
+              'profile_binding': kv.get('pb', '-'),
+              'e1': cmpw.get(kv.get('e1', '-'), '-'),
+              'context': cmpw.get(kv.get('cx', '-'), '-'),
+              'info': cmpw.get(kv.get('in', '-'), '-'),
+              'cache': cache.get(kv.get('ca', '-'), '-'),
+              'delta_count': dd,
+              'projected_frames': ((['244 export write (0 to 2)'] if bm % 2 == 1 else []) + (['slot power down (256-261)'] if (bm // 2) % 2 == 1 else []) + (['target SOC / source (268-279)'] if (bm // 4) % 2 == 1 else []) + (['slot power up (256-261)'] if (bm // 8) % 2 == 1 else [])),
+              'locks': locks.get(kv.get('lk', '-'), '-'),
+              'if_lost_plan': pn,
+              'if_lost_wording': ((words.get(pn, pn) ~ ((' (' ~ dd ~ (' register)' if dd == '1' else ' registers)')) if (pn == 'WOULD_APPLY_PROFILE' and dd.isdigit()) else '')) if pn != '-' else '-'),
+              'if_lost_reason': reasons.get(rs, '-'),
+              'if_lost_plan_code': pl,
+              'if_lost_reason_code': rs,
+              'absence_accepted_plan': an,
+              'absence_accepted_wording': words.get(an, '-'),
+              'absence_accepted_plan_code': alt,
+              'projected_after_plan': pan,
+              'projected_after_wording': words.get(pan, '-'),
+              'projected_after_plan_code': pa
+            } }}
+          episode: >-
+            {%- set raw = states('sensor.ecco_clock_dongle_ecco_failback_shadow_episode') -%}
+            {%- set ns = namespace(kv={}) -%}
+            {%- for p in raw.split(';') if '=' in p -%}
+            {%- set ns.kv = dict(ns.kv, **{p.split('=', 1)[0]: p.split('=', 1)[1]}) -%}
+            {%- endfor -%}
+            {%- set kv = ns.kv -%}
+            {%- set plans = {'0': 'NOT_EVALUATED', '10': 'WOULD_PREEMPT_DUMP', '11': 'WOULD_PREEMPT_FREE_POWER', '12': 'WAIT_DUMP_RESTORE', '13': 'WAIT_FREE_POWER_RESTORE', '14': 'WAIT_WRITE_IN_FLIGHT', '15': 'WAIT_LIVE_DATA', '16': 'WAIT_MANUAL_TOU_RECOVERY', '20': 'BLOCKED_RECOVERY_METADATA', '21': 'BLOCKED_DURABLE_UNKNOWN', '22': 'BLOCKED_OPERATOR_NEEDED', '23': 'BLOCKED_PROFILE_CORRUPT', '24': 'BLOCKED_PROFILE_UNAVAILABLE', '25': 'BLOCKED_SITE_CEILING', '26': 'BLOCKED_CONTEXT_MISMATCH', '27': 'BLOCKED_LIVE_OUT_OF_DOMAIN', '30': 'BLOCKED_NO_PROFILE', '31': 'BLOCKED_PROFILE_INVALIDATED', '40': 'WOULD_ALREADY_MATCH', '41': 'WOULD_APPLY_PROFILE'} -%}
+            {%- set would = {'WOULD_PREEMPT_DUMP': 'ended Dump to Grid, then continued failback', 'WOULD_PREEMPT_FREE_POWER': 'ended Free Power, then continued failback', 'WAIT_DUMP_RESTORE': 'waited for Dump to Grid to put settings back', 'WAIT_FREE_POWER_RESTORE': 'waited for Free Power to put settings back', 'WAIT_WRITE_IN_FLIGHT': 'waited because another inverter write was running', 'WAIT_LIVE_DATA': 'waited because the live inverter settings were not current', 'WAIT_MANUAL_TOU_RECOVERY': 'waited for Manual TOU recovery to finish', 'BLOCKED_RECOVERY_METADATA': 'held because saved lease records were unreadable or corrupt', 'BLOCKED_DURABLE_UNKNOWN': 'held because the saved lease state was not confirmed', 'BLOCKED_OPERATOR_NEEDED': 'held because a lease needed your decision first', 'BLOCKED_PROFILE_CORRUPT': 'held because the saved profile is damaged', 'BLOCKED_PROFILE_UNAVAILABLE': 'held because the saved profile could not be confirmed', 'BLOCKED_SITE_CEILING': 'held because the profile power is above the site limit', 'BLOCKED_CONTEXT_MISMATCH': 'held because the schedule or context changed since the save', 'BLOCKED_LIVE_OUT_OF_DOMAIN': 'held because the live settings are outside the profile range', 'BLOCKED_NO_PROFILE': 'been unable to fail back because no known-good profile is saved', 'BLOCKED_PROFILE_INVALIDATED': 'been unable to fail back because the profile was invalidated', 'WOULD_ALREADY_MATCH': 'done nothing because the inverter already matched the profile', 'WOULD_APPLY_PROFILE': 'applied the known-good profile@N@', 'NOT_EVALUATED': 'been unable to evaluate a plan (the evaluator was not ready)'} -%}
+            {%- set fba = {'0': 'NONE', '1': 'PREEMPTED_ONLY', '2': 'PREEMPTED_NO_PROFILE', '3': 'ALREADY_AT_PROFILE', '4': 'APPLIED_VERIFIED', '5': 'BLOCKED_LEASE_RESTORE_LOCKED', '6': 'BLOCKED_MARKER_DIVERGENCE', '7': 'BLOCKED_PROFILE_UNAVAILABLE', '8': 'BLOCKED_CONTEXT_MISMATCH', '9': 'BLOCKED_LIVE_OUT_OF_DOMAIN', '10': 'BLOCKED_SITE_CEILING', '11': 'BLOCKED_APPLY_FAILED'} -%}
+            {%- set doms = {'0': 'none', '1': 'supervision', '2': 'boot', '3': 'Dump to Grid', '4': 'Free Power', '5': 'register 244 test', '6': 'inverter bus', '7': 'Manual TOU', '8': 'Manual TOU journal', '9': 'known-good profile', '10': 'site ceiling', '11': 'live inverter data'} -%}
+            {%- set ph = kv.get('ph', '-') -%}
+            {%- set k = kv.get('k', '-') -%}
+            {%- set n0 = 'WOULD_REMAIN_LATCHED' if kv.get('v0', '-') == '50' else plans.get(kv.get('v0', '-'), '-') -%}
+            {%- set nu = plans.get(kv.get('vu', '-'), '-') -%}
+            {%- set dd = kv.get('d', '-') -%}
+            {%- set sfx = (' (' ~ dd ~ (' setting)' if dd == '1' else ' settings)')) if dd.isdigit() else '' -%}
+            {%- set pm = (kv['pre'] | int(0)) if kv.get('pre', '').isdigit() else 0 -%}
+            {%- set bm = (kv['blk'] | int(0, 16)) if kv.get('blk', '-') != '-' else 0 -%}
+            {%- set rl = (kv['rl'] | int(0)) if kv.get('rl', '').isdigit() else 0 -%}
+            {%- set e0 = (kv['e0'] | int(0)) if kv.get('e0', '').isdigit() else 0 -%}
+            {%- set ret = (kv['ret'] | int(0)) if kv.get('ret', '').isdigit() else none -%}
+            {%- set cl = (kv['cl'] | int(0)) if kv.get('cl', '').isdigit() else none -%}
+            {%- set elapsed = ([as_timestamp(now()) - e0, 0] | max | int) if (e0 > 0 and ph == 'O') else none -%}
+            {%- set ns2 = namespace(t=[]) -%}
+            {%- for s in [elapsed, ret, cl] -%}
+            {%- if s is none -%}{%- set ns2.t = ns2.t + ['-'] -%}
+            {%- elif s >= 3600 -%}{%- set ns2.t = ns2.t + [((s // 3600) | string) ~ ' h ' ~ (((s % 3600) // 60) | string) ~ ' min'] -%}
+            {%- elif s >= 60 -%}{%- set ns2.t = ns2.t + [((s // 60) | string) ~ ' min ' ~ ((s % 60) | string) ~ ' s'] -%}
+            {%- else -%}{%- set ns2.t = ns2.t + [(s | string) ~ ' s'] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- if k == 'L' -%}{%- set wh = 'done nothing new (an earlier shadow episode is still latched); the underlying plan would have been: ' ~ ((would.get(nu, nu) | replace('@N@', sfx)) if nu != '-' else 'not recorded') -%}
+            {%- elif n0 != '-' -%}{%- set wh = would.get(n0, n0) | replace('@N@', sfx) -%}
+            {%- else -%}{%- set wh = 'nothing recorded' -%}
+            {%- endif -%}
+            {%- set id = kv.get('id', '-') -%}
+            {%- if ph == 'O' and rl == 0 -%}{%- set bl = ('Lost for ' ~ ns2.t[0] ~ ' since the loss was declared (episode ' ~ id ~ ').') if ns2.t[0] != '-' else ('Home Assistant supervision was lost (episode ' ~ id ~ '); the duration is not available.') -%}
+            {%- elif ph == 'O' -%}{%- set bl = 'Home Assistant supervision was lost again (episode ' ~ id ~ ', ' ~ rl ~ ' re-loss(es)).' -%}
+            {%- elif ph == 'B' -%}{%- set bl = 'Home Assistant is back' ~ ((' ' ~ ns2.t[1] ~ ' after the loss was declared') if ns2.t[1] != '-' else '') ~ ', but the episode (' ~ id ~ ') stays open until supervision has been stable.' -%}
+            {%- elif ph == 'C' -%}{%- set bl = 'The shadow episode ' ~ id ~ ' is closed' ~ ((' (closed ' ~ ns2.t[2] ~ ' after the loss was declared)') if ns2.t[2] != '-' else '') ~ '.' -%}
+            {%- else -%}{%- set bl = 'No shadow episode on record for this boot.' -%}
+            {%- endif -%}
+            {{ {
+              'available': 'id' in kv and 'ph' in kv,
+              'id': id,
+              'phase': {'N': 'none', 'O': 'open', 'B': 'ha_back', 'C': 'closed'}.get(ph, 'unknown'),
+              'kind': {'N': 'new', 'L': 'latched'}.get(k, '-'),
+              'trigger': {'H': 'heartbeat loss', 'S': 'no heartbeat since the dongle started'}.get(kv.get('tr', '-'), '-'),
+              'edge_uptime_s': kv.get('u0', '-'),
+              'edge_epoch': e0,
+              'edge_time': (e0 | timestamp_custom('%Y-%m-%d %H:%M:%S')) if e0 > 0 else '-',
+              'client_at_edge': {'1': 'yes', '0': 'no'}.get(kv.get('cli', '-'), '-'),
+              'reboot_margin_s': kv.get('rb', '-'),
+              'edge_plan': n0,
+              'underlying_plan': nu,
+              'fba_result': fba.get(kv.get('f0', '-'), '-'),
+              'blocking_domain': doms.get(kv.get('dm', '-'), '-'),
+              'preempt': ((['Free Power'] if pm % 2 == 1 else []) + (['Dump to Grid'] if (pm // 2) % 2 == 1 else [])),
+              'projected_frames': ((['244 export write (0 to 2)'] if bm % 2 == 1 else []) + (['slot power down (256-261)'] if (bm // 2) % 2 == 1 else []) + (['target SOC / source (268-279)'] if (bm // 4) % 2 == 1 else []) + (['slot power up (256-261)'] if (bm // 8) % 2 == 1 else [])),
+              'delta_count': dd,
+              'return_s': kv.get('ret', '-'),
+              'return_gap_s': kv.get('gap', '-'),
+              're_lost': kv.get('rl', '-'),
+              'verdict_changes': kv.get('vch', '-'),
+              'close_s': kv.get('cl', '-'),
+              'close_outcome': {'A': 'a future FB-F would stay latched until acknowledged (no such control exists yet)', 'P': 'a future FB-F would clear itself'}.get(kv.get('fbf', '-'), '-'),
+              'lost_for': ns2.t[0],
+              'returned_after': ns2.t[1],
+              'closed_after': ns2.t[2],
+              'would_have': wh,
+              'banner_lost': bl,
+              'banner_would': 'If automatic failback were enabled it would have: ' ~ wh ~ '.',
+              'banner_edge': ('Loss declared at ' ~ ((e0 | timestamp_custom('%Y-%m-%d %H:%M:%S')) if e0 > 0 else 'an unknown time') ~ '; the API client was ' ~ ('connected' if kv.get('cli') == '1' else 'not connected') ~ ' at that moment.') if ph in ['O', 'B', 'C'] else '',
+              'banner_details': ('Re-lost ' ~ rl ~ ' time(s) since the first loss; the verdict changed ' ~ kv.get('vch', '0') ~ ' time(s).') if (rl > 0 or kv.get('vch', '0') not in ['0', '-']) else ''
+            } }}
+          soak: >-
+            {%- set raw = states('sensor.ecco_clock_dongle_ecco_failback_shadow_soak') -%}
+            {%- set ns = namespace(kv={}) -%}
+            {%- for p in raw.split(';') if '=' in p -%}
+            {%- set ns.kv = dict(ns.kv, **{p.split('=', 1)[0]: p.split('=', 1)[1]}) -%}
+            {%- endfor -%}
+            {%- set kv = ns.kv -%}
+            {%- set hh = kv.get('h', '').split('/') -%}
+            {%- set hh = hh if (hh | length) == 6 else ['-', '-', '-', '-', '-', '-'] -%}
+            {%- set wr = kv.get('wr', '').split('/') -%}
+            {%- set wr = wr if (wr | length) == 4 else ['-', '-', '-', '-'] -%}
+            {%- set xh = kv.get('xh', '').split('/') -%}
+            {%- set xh = xh if (xh | length) == 2 else ['-', '-'] -%}
+            {%- set cs = kv.get('cs', '').split('/') -%}
+            {%- set cs = cs if (cs | length) == 3 else ['-', '-', '-'] -%}
+            {{ {
+              'available': 'b' in kv and 'h' in kv,
+              'boot_id': kv.get('b', '-'),
+              'gap_histogram': {'<=35 s': hh[0], '<=45 s': hh[1], '<=90 s': hh[2], '<=300 s': hh[3], '<=900 s': hh[4], '>900 s': hh[5]},
+              'max_gap_s': kv.get('mx', '-'),
+              'last_long_gap_s': kv.get('lg', '-'),
+              'gaps_missed': kv.get('gm', '-'),
+              'episodes': kv.get('lx', '-'),
+              'starts_seen_while_would_refuse': {'free_power': wr[0], 'dump_to_grid': wr[1], 'register_244_test': wr[2], 'profile_changes': wr[3]},
+              'api_client_drops': kv.get('nc', '-'),
+              'longest_no_client_s': kv.get('ncm', '-'),
+              'export_hazard_s': {'yes': xh[0], 'unknown': xh[1]},
+              'cache_s': {'fresh': cs[0], 'pre_fence': cs[1], 'other': cs[2]}
+            } }}
+          unknown_keys: >-
+            {%- set ns = namespace(u=[]) -%}
+            {%- set groups = [
+              ['episode', states('sensor.ecco_clock_dongle_ecco_failback_shadow_episode'), ['id', 'ph', 'k', 'tr', 'u0', 'e0', 'cli', 'rb', 'v0', 'vu', 'f0', 'dm', 'pre', 'blk', 'd', 'ret', 'gap', 'rl', 'vch', 'cl', 'fbf']],
+              ['inputs', states('sensor.ecco_clock_dongle_ecco_failback_shadow_inputs'), ['sup', 'st', 'fp', 'dp', 'r4', 'mt', 'pc', 'g', 'pb', 'e1', 'cx', 'in', 'ca', 'd', 'blk', 'lk', 'pl', 'rs', 'alt', 'pa']],
+              ['soak', states('sensor.ecco_clock_dongle_ecco_failback_shadow_soak'), ['b', 'h', 'mx', 'lg', 'gm', 'lx', 'wr', 'nc', 'ncm', 'xh', 'cs']]] -%}
+            {%- set ready = ['0', '10', '11', '12', '13', '14', '15', '16', '20', '21', '22', '23', '24', '25', '26', '27', '30', '31', '40', '41'] -%}
+            {%- set codes = {'inputs': {'pl': ready, 'alt': ready, 'pa': ready}, 'episode': {'v0': ready + ['50'], 'vu': ready}} -%}
+            {%- for g in groups -%}
+            {%- for p in g[1].split(';') if '=' in p -%}
+            {%- set key = p.split('=', 1)[0] -%}
+            {%- set val = p.split('=', 1)[1] -%}
+            {%- if key not in g[2] -%}{%- set ns.u = ns.u + [g[0] ~ ':' ~ p] -%}
+            {%- elif key in codes.get(g[0], {}) and val != '-' and val not in codes[g[0]][key] -%}{%- set ns.u = ns.u + [g[0] ~ ':' ~ p] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- endfor -%}
+            {%- set s = states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') -%}
+            {%- if s not in ['SHADOW_BOOT', 'SHADOW_IDLE', 'SHADOW_WATCH', 'SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK', 'SHADOW_WOULD_AWAIT_ACK'] and s not in ['unknown', 'unavailable', 'none', ''] -%}{%- set ns.u = ns.u + ['state:' ~ s] -%}{%- endif -%}
+            {%- set v = states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict') -%}
+            {%- if v not in ['NOT_EVALUATED', 'WOULD_PREEMPT_DUMP', 'WOULD_PREEMPT_FREE_POWER', 'WAIT_DUMP_RESTORE', 'WAIT_FREE_POWER_RESTORE', 'WAIT_WRITE_IN_FLIGHT', 'WAIT_LIVE_DATA', 'WAIT_MANUAL_TOU_RECOVERY', 'BLOCKED_RECOVERY_METADATA', 'BLOCKED_DURABLE_UNKNOWN', 'BLOCKED_OPERATOR_NEEDED', 'BLOCKED_PROFILE_CORRUPT', 'BLOCKED_PROFILE_UNAVAILABLE', 'BLOCKED_SITE_CEILING', 'BLOCKED_CONTEXT_MISMATCH', 'BLOCKED_LIVE_OUT_OF_DOMAIN', 'BLOCKED_NO_PROFILE', 'BLOCKED_PROFILE_INVALIDATED', 'WOULD_ALREADY_MATCH', 'WOULD_APPLY_PROFILE', 'WOULD_REMAIN_LATCHED'] and v not in ['unknown', 'unavailable', 'none', ''] -%}{%- set ns.u = ns.u + ['verdict:' ~ v] -%}{%- endif -%}
+            {{ ns.u }}
+          raw: >-
+            {{ {'state': states('sensor.ecco_clock_dongle_ecco_failback_shadow_state'), 'verdict': states('sensor.ecco_clock_dongle_ecco_failback_shadow_verdict'), 'inputs': states('sensor.ecco_clock_dongle_ecco_failback_shadow_inputs'), 'episode': states('sensor.ecco_clock_dongle_ecco_failback_shadow_episode'), 'soak': states('sensor.ecco_clock_dongle_ecco_failback_shadow_soak')} }}
+          scope_note: "Shadow data is RAM-only on the dongle for this boot and is not stored; earlier boots: Soak boot id, ECCO Reset Reason, Home Assistant history / InfluxDB."
+          source_entities: >-
+            {{ ['sensor.ecco_clock_dongle_ecco_failback_shadow_state',
+                'sensor.ecco_clock_dongle_ecco_failback_shadow_episode',
+                'sensor.ecco_clock_dongle_ecco_failback_shadow_soak',
+                'sensor.ecco_clock_dongle_ecco_failback_shadow_verdict',
+                'sensor.ecco_clock_dongle_ecco_failback_shadow_inputs'] }}
+
+  # Operator-UI convenience gates. The firmware re-checks every precondition;
+  # these only decide whether a dashboard button is SHOWN.
+  - binary_sensor:
+      - name: "ECCO Fallback Save Available"
+        unique_id: ecco_fallback_save_available
+        state: >-
+          {%- set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' -%}
+          {%- set st = R.split(';st=')[1].split(';')[0] if ';st=' in R else '' -%}
+          {%- set prior = R.split(';prior=')[1].split(';')[0] if ';prior=' in R else '' -%}
+          {%- set rid = states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_id') -%}
+          {{ st == 'CANDIDATE_READY' and prior != 'CORRUPT' and (rid | length) == 16
+             and states('switch.ecco_clock_dongle_ecco_fallback_profile_arm') == 'on' }}
+      - name: "ECCO Fallback Replace Corrupt Available"
+        unique_id: ecco_fallback_replace_corrupt_available
+        state: >-
+          {%- set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' -%}
+          {%- set st = R.split(';st=')[1].split(';')[0] if ';st=' in R else '' -%}
+          {%- set prior = R.split(';prior=')[1].split(';')[0] if ';prior=' in R else '' -%}
+          {%- set rid = states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_id') -%}
+          {{ st == 'CANDIDATE_READY' and prior == 'CORRUPT' and (rid | length) == 16
+             and states('switch.ecco_clock_dongle_ecco_fallback_profile_arm') == 'on' }}
+      - name: "ECCO Fallback Invalidate Available"
+        unique_id: ecco_fallback_invalidate_available
+        state: >-
+          {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+          {%- set bid = G.split(';id=')[1].split(';')[0] if ';id=' in G else '' -%}
+          {{ states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') == 'VALID'
+             and (bid | length) == 16
+             and states('switch.ecco_clock_dongle_ecco_fallback_profile_arm') == 'on' }}
+
+      # FB-C3: display-only flag for the dashboard banner (visibility needs an entity state). The SAME condition that opens the
+      # canonical `shadow_episode` row of sensor.ecco_fallback_status_code; it gates nothing.
+      - name: "ECCO Shadow Episode Open"
+        unique_id: ecco_shadow_episode_open
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_failback_shadow_state') in ['SHADOW_EPISODE', 'SHADOW_EPISODE_HA_BACK'] }}
+
+  # Generation high-water: DETECTION ONLY, never a gate. Trigger-based so it is
+  # restored across Home Assistant restarts. It only ever rises, from the
+  # device's own authentic generation (B2 g=, while the class is VALID or
+  # INVALIDATED), and falls only through the operator reset script
+  # (script.ecco_fallback_reset_high_water, which fires the event below). It
+  # lets Home Assistant notice a lost or rolled-back profile that no in-device
+  # witness can see (whole-partition wipe, residual revert after INVALIDATE).
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - sensor.ecco_clock_dongle_ecco_fallback_profile_state
+          - sensor.ecco_clock_dongle_ecco_fallback_profile_summary
+      - trigger: event
+        event_type: ecco_fallback_reset_high_water
+        id: reset
+    sensor:
+      - name: "ECCO Fallback Generation High Water"
+        unique_id: ecco_fallback_generation_high_water
+        icon: mdi:arrow-collapse-up
+        state: >-
+          {%- set P = states('sensor.ecco_clock_dongle_ecco_fallback_profile_state') -%}
+          {%- set G = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_summary') ~ ';' -%}
+          {%- set g = G.split(';g=')[1].split(';')[0] if ';g=' in G else '-' -%}
+          {%- set cur = (g | int(0)) if (P in ['VALID', 'INVALIDATED'] and g.isdigit()) else 0 -%}
+          {%- set prev = this.state | int(0) -%}
+          {%- if trigger.id == 'reset' -%}{{ cur }}
+          {%- else -%}{{ [prev, cur] | max }}
+          {%- endif -%}
+        attributes:
+          purpose: >-
+            Detection only. Compared with the device generation by
+            sensor.ecco_fallback_status_code (profile_regressed); never gates
+            any action. Reset only via script.ecco_fallback_reset_high_water.
+
+input_boolean:
+  ecco_safety_show_technical_detail:
+    name: "ECCO Safety Show Technical Detail"
+    icon: mdi:chevron-down-box-outline
+    initial: false

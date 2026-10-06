@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECCO Fallback / Recovery card preview</title>
+<!--
+  Development preview for ecco-fallback-recovery-card.js. It runs the real card against a mock `hass`
+  object and the scenario fixtures in ../test/fixtures. It talks to nothing: every service call is
+  logged, and anything other than the Review press, the arm switch (turn on / off), the execute action and the optional
+  technical-detail toggle is rejected so a stray call would be visible.
+
+  FB-B2: a small stand-in for the dongle answers Review, the arm (120 s limit, turned off by every execute call) and the
+  execute action (SAVE / INVALIDATE with the firmware's gate order, one-shot arm and candidate). The outcome of an
+  accepted save or invalidate is chosen in the option panel, so every result state can be looked at.
+
+  The confirmation panel opens only for an arm that the card itself switched on (press Arm Save or Arm Invalidate). The
+  scenarios whose name starts with arm_on_ start with the arm already on, as if another tab or a reload had done it: they show
+  the strip "Arm was turned on elsewhere" with Turn arm off, never a panel. "Slow link" delivers the arm turning off a moment
+  BEFORE the review state and the last action, to look at a request that stays pending until the dongle really answers.
+
+  Browsers refuse to import an ES module from a file:// page, so serve the card folder:
+
+      cd frontend/ecco-fallback-recovery-card
+      python -m http.server 8765
+      open http://localhost:8765/preview/#ready_diff
+
+  Pick a scenario with a hash (#ready_diff or #scenario=ready_diff) or a query (?scenario=ready_diff).
+-->
+<style>
+  :root { color-scheme: dark; --bg: #08101c; --text: rgba(255,255,255,.92); --text-2: rgba(255,255,255,.72); --text-3: rgba(255,255,255,.46); --border: rgba(255,255,255,.08); --future: #b8adff; --busy: #42aaff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Roboto", "Segoe UI", Arial, sans-serif; }
+  body.light { background: #e9edf3; }
+  .wrap { max-width: 1560px; margin: 0 auto; padding: 16px 16px 40px; }
+  .panel { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border: 1px dashed color-mix(in srgb, var(--future) 45%, var(--border)); border-radius: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--future) 5%, transparent); }
+  .panel .lbl { font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: var(--future); width: 100%; }
+  .panel button, .panel label { font: inherit; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,.04); color: var(--text-2); cursor: pointer; }
+  .panel button[aria-pressed="true"] { background: color-mix(in srgb, var(--future) 22%, transparent); color: var(--future); border-color: color-mix(in srgb, var(--future) 55%, var(--border)); }
+  .panel button:focus-visible, .panel input:focus-visible { outline: 2px solid color-mix(in srgb, var(--busy) 60%, transparent); outline-offset: 2px; }
+  .panel label { display: inline-flex; gap: 6px; align-items: center; }
+  #stage { margin: 0 auto; transition: width .2s; }
+  #log { margin: 16px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; font: 12px/1.5 "Cascadia Mono", Consolas, monospace; color: var(--text-2); min-height: 3.5em; white-space: pre-wrap; background: rgba(255,255,255,.03); }
+  #file-warning { margin: 0 0 12px; padding: 12px 14px; border: 1px solid #ffbd3d; border-radius: 12px; color: #ffbd3d; background: rgba(255,189,61,.08); }
+  #file-warning code { font-family: "Cascadia Mono", Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="file-warning" hidden>
+    This page was opened from a file. Browsers block ES module imports from file:// pages, so the card cannot load here.
+    Serve the card folder instead: <code>cd frontend/ecco-fallback-recovery-card &amp;&amp; python -m http.server 8765</code>,
+    then open <code>http://localhost:8765/preview/</code>.
+  </div>
+  <div class="panel" id="scen" role="group" aria-label="Scenario"><span class="lbl">Scenario (simulated entity states)</span></div>
+  <div class="panel" id="opts" role="group" aria-label="Preview options"><span class="lbl">Preview options</span></div>
+  <div id="stage"></div>
+  <pre id="log" aria-live="polite">Service calls appear here.</pre>
+</div>
+
+<script>
+  if (location.protocol === 'file:') document.getElementById('file-warning').hidden = false;
+</script>
+<script type="module">
+import { parseKv, TAG, TTL_S } from '../ecco-fallback-recovery-card.js';
+
+const IDS = {
+  profile_state: 'sensor.example_profile_state', summary: 'sensor.example_summary', review: 'sensor.example_review',
+  review_id: 'sensor.example_review_id', review_slots: 'sensor.example_review_slots', review_context: 'sensor.example_review_context',
+  saved_slots: 'sensor.example_saved_slots', saved_context: 'sensor.example_saved_context', last_result: 'sensor.example_last_result',
+  review_button: 'button.example_review_button', supervision_stable: 'binary_sensor.example_supervision_stable',
+  supervision_state: 'sensor.example_supervision_state', ntp_synced: 'binary_sensor.example_ntp_synced',
+  write_lock: 'binary_sensor.example_write_lock', configuration_online: 'binary_sensor.example_configuration_online',
+  arm: 'switch.example_arm', free_power_arm: 'switch.example_free_power_arm', dump_arm: 'switch.example_dump_arm', manual_arm: 'switch.example_manual_arm',
+};
+const EXECUTE = 'ecco_clock_dongle_fallback_profile_execute';
+const HELPER = 'input_boolean.example_technical_detail';
+const NONE_SLOTS = 'v=NONE;g=-;244=-;1=-;2=-;3=-;4=-;5=-;6=-;dx=-';
+const NONE_CTX = 'v=NONE;232=-;243=-;248=-;ring=-;230=-;245=-;247=-;dc=-;di=-';
+
+const logEl = document.getElementById('log');
+const log = (msg) => { logEl.textContent = `${new Date().toLocaleTimeString()}  ${msg}\n${logEl.textContent === 'Service calls appear here.' ? '' : logEl.textContent}`.slice(0, 2400); };
+
+const scenarios = await (await fetch('../test/fixtures/scenarios.json')).json();
+const meta = await (await fetch('../test/fixtures/scenario_meta.json')).json();
+
+let cur = null;            // { name, E, changed }
+let helperConfigured = false;
+let helperOn = false;
+let firmwareSim = true;
+let simTimer = null;
+let armTimer = null;
+let outcome = 'saved'; // what an accepted save / invalidate ends with (chosen in the option panel)
+let slowLink = false;  // the arm-off echo of an execute call arrives alone, B3 / B9 a moment later
+let bornMs = null;         // when the simulated candidate was built
+let card = null;
+
+const now = () => Date.now();
+
+function loadScenario(name) {
+  const E = { ...scenarios[name] };
+  const t = now();
+  const changed = {};
+  for (const k of Object.keys(E)) changed[k] = t;
+  cur = { name, E, changed };
+  clearTimeout(armTimer);
+  if (E.arm === 'on') armTimer = setTimeout(() => { setArm(false); publish(); }, 125000);
+  const b3 = parseKv(E.review, ['st', 'exp']);
+  bornMs = b3 && b3.exp !== '-' && (b3.st === 'CANDIDATE_READY' || b3.st === 'CANDIDATE_NOT_SAVEABLE') ? t - (TTL_S - Number(b3.exp)) * 1000 : null;
+  document.querySelectorAll('#scen button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.k === name)));
+  history.replaceState(null, '', `#${name}`);
+  publish();
+}
+
+function makeHass() {
+  const states = {};
+  for (const [k, id] of Object.entries(IDS)) {
+    const v = cur.E[k];
+    if (v === undefined) continue;
+    states[id] = { entity_id: id, state: v, last_changed: new Date(cur.changed[k] || now()).toISOString(), last_updated: new Date(cur.changed[k] || now()).toISOString(), attributes: {} };
+  }
+  if (helperConfigured) states[HELPER] = { entity_id: HELPER, state: helperOn ? 'on' : 'off', last_changed: new Date().toISOString(), attributes: {} };
+  return {
+    states,
+    locale: { language: navigator.language, time_zone: 'local' },
+    config: { time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    callService(domain, service, data) {
+      log(`callService ${domain}.${service} ${JSON.stringify(data)}`);
+      if (domain === 'button' && service === 'press' && data.entity_id === IDS.review_button) { simulateReview(); return Promise.resolve(); }
+      if (domain === 'input_boolean' && service === 'toggle' && data.entity_id === HELPER) { helperOn = !helperOn; setTimeout(publish, 120); return Promise.resolve(); }
+      if (domain === 'switch' && (service === 'turn_on' || service === 'turn_off') && data.entity_id === IDS.arm && Object.keys(data).length === 1) {
+        setTimeout(() => { setArm(service === 'turn_on'); publish(); }, 150);
+        return Promise.resolve();
+      }
+      if (domain === 'esphome' && service === EXECUTE && Object.keys(data).sort().join() === 'action,confirmation,target_id') {
+        setTimeout(() => onExecute(data), 200);
+        return Promise.resolve();
+      }
+      log('REJECTED: the card must never make this call');
+      return Promise.reject(new Error('call not allowed in the preview'));
+    },
+  };
+}
+
+function publish() {
+  if (!card || !cur) return;
+  card.hass = makeHass();
+}
+
+function set(keys, t = now()) {
+  for (const [k, v] of Object.entries(keys)) { cur.E[k] = v; cur.changed[k] = t; }
+}
+
+// A tiny stand-in for the firmware: a review takes ~2.6 s and yields a candidate that expires after 120 s.
+function simulateReview() {
+  const t = now();
+  const obl = 'FP:CA,DP:CM,R4:CA,MT:CN,FS:CA,BUS:OK';
+  bornMs = null;
+  setArm(false); // a review press turns the arm off
+  set({ review: `st=READING;prior=-;exp=-;warn=-;obl=${obl};latch=-;sv=-`, review_id: '-', review_slots: NONE_SLOTS, review_context: NONE_CTX, last_result: 'review in progress (read-only)' }, t);
+  publish();
+  setTimeout(() => {
+    const pick = { VALID: 'ready_diff', NOT_CAPTURED: 'not_captured_cand', CORRUPT: 'ready_corrupt_prior' }[cur.E.profile_state] || 'ready_match';
+    const src = scenarios[pick];
+    const t2 = now();
+    set({ review: src.review, review_id: src.review_id, review_slots: src.review_slots, review_context: src.review_context, last_result: src.last_result }, t2);
+    bornMs = t2;
+    publish();
+  }, 2600);
+}
+
+// ---- the arm and the execute action (a stand-in for the dongle; the real gates live in the firmware) -------------------
+const NO_CAND = { review_id: '-', review_slots: NONE_SLOTS, review_context: NONE_CTX };
+const hex16 = () => Array.from({ length: 16 }, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('');
+
+function setArm(on) {
+  set({ arm: on ? 'on' : 'off' });
+  clearTimeout(armTimer);
+  // the firmware applies the 120 s limit on its 10 s tick: the arm can stay on for up to about 130 s
+  if (on) armTimer = setTimeout(() => { setArm(false); publish(); }, 125000);
+}
+
+function idleReview(obl, latch) {
+  return `st=IDLE;prior=-;exp=-;warn=-;obl=${obl};latch=${latch};sv=-`;
+}
+
+// Slow link: the dongle turns the arm off first and publishes B3 / B9 a moment later (separate updates in Home Assistant).
+function onExecute(d) {
+  if (!slowLink) return simulateExecute(d);
+  const armWasOn = cur.E.arm === 'on';
+  setArm(false);
+  publish();
+  setTimeout(() => simulateExecute(d, armWasOn), 2500);
+}
+
+function simulateExecute(d, armWasOnAtCall = null) {
+  const E = cur.E;
+  const b3 = parseKv(E.review, ['st', 'prior', 'exp', 'warn', 'obl', 'latch', 'sv']);
+  const b2 = parseKv(E.summary, ['g', 'id', 'at', 'ld', 'df', 'w', 'hw', 'op', 'why', 'werr', 'us']);
+  const armWasOn = armWasOnAtCall === null ? E.arm === 'on' : armWasOnAtCall;
+  const verb = d.action === 'INVALIDATE' ? 'INVALIDATE' : 'SAVE';
+  setArm(false); // every execute call turns the arm off, accepted or refused
+  const refuse = (body, consume = true) => {
+    const patch = { last_result: `${verb} REFUSED - ${body}` };
+    if (consume && b3) Object.assign(patch, NO_CAND, { review: idleReview(b3.obl, b3.latch) });
+    set(patch);
+    bornMs = null;
+    publish();
+  };
+  if (d.action !== 'SAVE' && d.action !== 'INVALIDATE') { set({ last_result: `REFUSED - unsupported action '${String(d.action).slice(0, 24)}'` }); publish(); return; }
+  if (E.review && /st=(READING|SAVING)/.test(E.review)) { log('execute while an operation is running: the arm is turned off, nothing else'); publish(); return; }
+  if (d.action === 'INVALIDATE') {
+    if (!armWasOn) return refuse('ECCO Fallback Profile Arm is not on');
+    if (d.confirmation !== `INVALIDATE ${d.target_id}`) return refuse(`confirmation phrase mismatch (expected 'INVALIDATE ${d.target_id}')`);
+    if (E.profile_state !== 'VALID') return refuse(`profile is ${E.profile_state}; only a VALID profile can be invalidated`);
+    if (!b2 || d.target_id !== b2.id) return refuse('profile ID does not match the stored VALID profile');
+    if (outcome === 'refused') return refuse('inverter busy; try again');
+    const g = Number(b2.g);
+    const idle = { review: idleReview(b3.obl, b3.latch), ...NO_CAND };
+    bornMs = null;
+    if (outcome === 'unknown') { set({ ...idle, profile_state: 'SAVE_UNCONFIRMED', last_result: 'INVALIDATE OUTCOME UNKNOWN - E105/READ_ERROR; treat the profile as unusable; reboot to re-verify (Fallback Profile writes locked until reboot)' }); publish(); return; }
+    if (outcome === 'notcommitted') { set({ ...idle, last_result: 'INVALIDATE NOT COMMITTED - storage refused the write (E102); profile still VALID g' + g }); publish(); return; }
+    if (outcome === 'witness') { set({ ...idle, profile_state: 'PROFILE_STALE', last_result: `INVALIDATE NOT COMMITTED for the profile record, but the generation record advanced: g${g} is now STALE (unusable)` }); publish(); return; }
+    set({ ...idle, profile_state: 'INVALIDATED', summary: E.summary.replace(/g=\d+;/, `g=${g + 1};`).replace(/op=\w+;/, 'op=INV;').replace(/hw=\d+/, `hw=${g + 1}`).replace(/us=\S+$/, 'us=15110'),
+      last_result: `INVALIDATED - profile generation ${g} is no longer usable (now INVALIDATED g${g + 1}); payload kept for reference; save a new profile to re-enable` });
+    publish();
+    return;
+  }
+  // SAVE (gate order of the firmware: arm, candidate, ID, phrase, heartbeat, time)
+  if (!armWasOn) return refuse('ECCO Fallback Profile Arm is not on');
+  if (!b3 || b3.st !== 'CANDIDATE_READY') return refuse('no saveable candidate - press Review Current Configuration first');
+  if (d.target_id !== E.review_id) return refuse('candidate ID does not match the current candidate');
+  const phrase = `SAVE ${E.review_id}${b3.prior === 'CORRUPT' ? ' REPLACE CORRUPT' : ''}`;
+  if (d.confirmation !== phrase) return refuse(`confirmation phrase mismatch (expected '${phrase}')`);
+  if (E.supervision_stable !== 'on' || E.supervision_state !== 'SUPERVISED') return refuse('Home Assistant heartbeat is not stable; wait until the dashboard shows it healthy, then review and save again');
+  if (E.ntp_synced !== 'on') return refuse('clock not NTP-synchronised this boot; the capture time would be untrusted');
+  const cand = { slots: E.review_slots, ctx: E.review_context };
+  const obl = b3.obl;
+  bornMs = null;
+  set({ review: `st=SAVING;prior=-;exp=-;warn=-;obl=${obl};latch=${b3.latch};sv=-`, ...NO_CAND, last_result: 'save in progress - re-reading live configuration' });
+  publish();
+  setTimeout(() => {
+    const idle = idleReview(obl, b3.latch);
+    if (outcome === 'refused') { set({ review: idle, last_result: 'SAVE REFUSED - live configuration changed since Review (register 257: reviewed 5000, now 4000); profile unchanged; review again' }); publish(); return; }
+    if (outcome === 'notcommitted') { set({ review: idle, summary: E.summary.replace(/werr=\S+;us=\S+$/, 'werr=E102;us=1450'), last_result: 'SAVE NOT COMMITTED - storage refused the write (E102); nothing changed' }); publish(); return; }
+    if (outcome === 'witness') { set({ review: idle, profile_state: 'PROFILE_STALE', last_result: 'SAVE NOT COMMITTED - witness advanced; profile unchanged; stored profile is now out of step - review and save again' }); publish(); return; }
+    if (outcome === 'unknown') { set({ review: idle, profile_state: 'SAVE_UNCONFIRMED', last_result: 'SAVE OUTCOME UNKNOWN - storage reported E105/READ_ERROR; reboot the dongle (when no temporary operation is active) to re-verify; saving disabled until then' }); publish(); return; }
+    const gen = Math.max(Number(b2 && b2.g !== '-' ? b2.g : 0), Number(b2 && b2.hw !== '-' ? b2.hw : 0)) + 1;
+    const id = hex16();
+    const b8 = id.slice(0, 8);
+    set({
+      review: idle,
+      profile_state: 'VALID',
+      summary: `g=${gen};id=${id};at=${Math.floor(now() / 1000)};ld=OK;df=-;w=OK;hw=${gen};op=SAVE;why=-;werr=-;us=23041`,
+      saved_slots: cand.slots.replace('v=CAND', 'v=SAVED').replace('g=-', `g=${gen}`).replace(/dx=[0-9A-F-]+$/, `dx=-;b=${b8}`),
+      saved_context: cand.ctx.replace('v=CAND', 'v=SAVED').replace(/dc=[0-9A-F-]+;di=[0-9A-F-]+$/, `dc=-;di=-;b=${b8}`),
+      last_result: `SAVED - known-good profile generation ${gen} saved (verified this boot)`,
+    });
+    publish();
+  }, 2800);
+}
+
+// Firmware housekeeping: re-publish exp every 10 s, and clear the candidate once it has expired.
+function startSim() {
+  clearInterval(simTimer);
+  if (!firmwareSim) return;
+  simTimer = setInterval(() => {
+    const b3 = parseKv(cur.E.review, ['st', 'prior', 'exp', 'warn', 'obl', 'latch', 'sv']);
+    if (!b3 || !(b3.st === 'CANDIDATE_READY' || b3.st === 'CANDIDATE_NOT_SAVEABLE') || bornMs === null) return;
+    const left = Math.max(0, TTL_S - Math.floor((now() - bornMs) / 1000));
+    const t = now();
+    if (now() - bornMs >= TTL_S * 1000) {
+      set({ review: `st=IDLE;prior=-;exp=-;warn=-;obl=${b3.obl};latch=${b3.latch};sv=-`, review_id: '-', review_slots: NONE_SLOTS, review_context: NONE_CTX, last_result: 'REVIEW EXPIRED - candidate expired (120 s); review again' }, t);
+      bornMs = null;
+    } else {
+      set({ review: cur.E.review.replace(/exp=\d+/, `exp=${left}`) }, t);
+    }
+    publish();
+  }, 10000);
+}
+
+function buildCard() {
+  const stage = document.getElementById('stage');
+  stage.textContent = '';
+  card = document.createElement(TAG);
+  const cfg = { type: `custom:${TAG}`, entities: IDS, show_header: document.getElementById('hdr').checked };
+  if (helperConfigured) cfg.technical_detail_entity = HELPER;
+  card.setConfig(cfg);
+  stage.appendChild(card);
+  publish();
+}
+
+// ---- controls -----------------------------------------------------------------------
+const scen = document.getElementById('scen');
+for (const name of Object.keys(scenarios)) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.dataset.k = name; b.textContent = (meta[name] && meta[name].label) || name;
+  b.setAttribute('aria-pressed', 'false');
+  b.onclick = () => loadScenario(name);
+  scen.appendChild(b);
+}
+
+const opts = document.getElementById('opts');
+const stage = document.getElementById('stage');
+const widths = [['Phone 390', '390px'], ['Phone 360', '360px'], ['Tablet 820', '820px'], ['Laptop 1100', '1100px'], ['Desktop 1500', '1500px'], ['Fluid', '100%']];
+for (const [label, w] of widths) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.textContent = label; b.dataset.w = w; b.setAttribute('aria-pressed', String(w === '100%'));
+  b.onclick = () => { stage.style.width = w; opts.querySelectorAll('button[data-w]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); };
+  opts.appendChild(b);
+}
+stage.style.width = '100%';
+const mk = (id, text, checked, fn) => {
+  const l = document.createElement('label'); const i = document.createElement('input');
+  i.type = 'checkbox'; i.id = id; i.checked = checked; i.onchange = () => fn(i.checked);
+  l.append(i, document.createTextNode(text)); opts.appendChild(l);
+};
+mk('hdr', 'Top bar with badges', true, () => buildCard());
+mk('sim', 'Simulate firmware (10 s exp publishes, expiry)', true, (v) => { firmwareSim = v; startSim(); });
+mk('help', 'Technical-detail helper configured', false, (v) => { helperConfigured = v; helperOn = false; buildCard(); });
+mk('light', 'Light page background', false, (v) => document.body.classList.toggle('light', v));
+mk('slow', 'Slow link (arm turns off 2.5 s before B3 / B9)', false, (v) => { slowLink = v; });
+{
+  const l = document.createElement('label');
+  const s = document.createElement('select');
+  s.id = 'outcome';
+  for (const [v, text] of [['saved', 'Save / invalidate: succeeds'], ['refused', 'Save / invalidate: refused (changed / busy)'], ['notcommitted', 'Save / invalidate: not committed'], ['witness', 'Save / invalidate: witness advanced'], ['unknown', 'Save / invalidate: outcome unknown']]) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = text; s.appendChild(o);
+  }
+  s.onchange = () => { outcome = s.value; };
+  l.appendChild(s); opts.appendChild(l);
+}
+
+// ---- start ---------------------------------------------------------------------------
+const q = new URLSearchParams(location.search);
+if (q.get('chrome') === '0') {
+  // ?chrome=0 hides the scenario/option panels (useful for screenshots next to the design mockup)
+  document.querySelectorAll('.panel, #log').forEach((n) => { n.hidden = true; n.style.display = 'none'; });
+}
+const h = location.hash.slice(1);
+let start = q.get('scenario') || (h.startsWith('scenario=') ? h.slice(9) : h);
+if (!scenarios[start]) start = 'ready_diff';
+await customElements.whenDefined(TAG);
+buildCard();
+loadScenario(start);
+startSim();
+window.__preview = { loadScenario, get card() { return card; } };
+</script>
+</body>
+</html>

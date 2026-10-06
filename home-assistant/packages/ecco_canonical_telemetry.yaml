@@ -1,0 +1,94 @@
+# ECCO Canonical Telemetry Adapter
+# Replace /config/packages/ecco_canonical_telemetry.yaml with this file.
+#
+# READ ONLY. Aliases existing live raw dongle telemetry under stable,
+# hardware-independent names. Makes no inverter-facing calls, stages or
+# arms no writes, and does not interpose on any write/arm/verify path.
+# Raw entities remain the source of truth; this adapter changes nothing
+# about how they are populated. InfluxDB continues to export and the
+# Battery Outlook Flux tasks continue to read the raw entity_id-derived
+# measurement names unchanged - this file does not touch that.
+#
+# Introduced alongside the existing *_snapshot sensors in ecco_pro.yaml,
+# not as a replacement for them. Those are untouched by this file.
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_ecco_battery_soc
+    sensor:
+      - name: ECCO Battery SOC
+        unique_id: ecco_battery_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_battery_soc') | float(0) | round(1) }}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_battery_soc
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_ecco_load_power
+    sensor:
+      - name: ECCO House Power
+        unique_id: ecco_house_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_load_power') | float(0) | round(1) }}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_load_power
+          note: "Whole-house consumption. Always non-negative in current usage."
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_ecco_pv_power
+    sensor:
+      - name: ECCO PV Power
+        unique_id: ecco_pv_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_pv_power') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_pv_power') | float(0) | round(1) }}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_pv_power
+          note: "Combined PV1-PV4 total, not a single string."
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp
+    sensor:
+      - name: ECCO Grid Power
+        unique_id: ecco_grid_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(0) | round(1) }}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp
+          sign_convention: "Positive = importing from grid, negative = exporting to grid"
+          note: "Sourced from the external CT clamp reading, not the inverter's own internal grid-power register (sensor.ecco_clock_dongle_ecco_grid_load), matching existing dashboard/intelligence practice."
+          refreshed_at: "{{ now().isoformat() }}"

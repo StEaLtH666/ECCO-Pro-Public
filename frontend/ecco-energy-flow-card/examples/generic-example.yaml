@@ -1,0 +1,101 @@
+# ECCO Energy Flow Card - minimal generic example.
+#
+# Nothing in this file is ECCO/Deye-specific - every entity id below is a
+# placeholder. See examples/ecco-example.yaml for a real ECCO installation's
+# configuration using entities that actually exist in this repository.
+#
+# Every node, every "today" total, and every inverter_details field is
+# independently optional - delete whatever you don't have. Only `nodes:`
+# with at least one entry is required.
+
+type: custom:ecco-energy-flow-card
+title: Energy Flow
+
+nodes:
+  # `solar:` accepts EITHER shape - pick whichever matches your installation:
+  #
+  # (a) a single combined source (shown active below):
+  solar:
+    power: sensor.solar_power
+  #
+  # (b) one entry per independent array/string/MPPT - any number, 1..N,
+  #     not just two. Each gets its own node and its own line into the
+  #     inverter. Un-comment this and remove/comment out (a) above to use it:
+  #
+  # solar:
+  #   - label: Array 1
+  #     power: sensor.array_1_power
+  #   - label: Array 2
+  #     power: sensor.array_2_power
+  #   - label: Array 3
+  #     power: sensor.array_3_power
+  #
+  # Optional either way. With 2+ sources (shape (b)), the card renders a
+  # small "Solar Total" combiner node between the array row and the
+  # inverter - every array's line feeds into it, then one line runs from
+  # it to the inverter. If `solar_total` is set, its value is shown on that
+  # node authoritatively; otherwise the card derives it by summing the
+  # configured array readings itself. With exactly one source (shape (a))
+  # this field is unused - there is nothing to combine.
+  # solar_total: sensor.solar_power_total
+
+  inverter:
+    power: sensor.inverter_power
+    state: sensor.inverter_state
+    status: sensor.inverter_status
+
+  home:
+    power: sensor.home_power
+
+  battery:
+    power: sensor.battery_power
+    soc: sensor.battery_soc
+    # This installation's battery sensor reports positive = charging.
+    # Set to "discharge_positive" if yours reports the opposite.
+    power_sign: charge_positive
+
+  grid:
+    power: sensor.grid_power
+    # This installation's grid sensor reports positive = importing.
+    # Set to "export_positive" if yours reports the opposite.
+    power_sign: import_positive
+
+  # Fully optional - omit the whole `generator:` block if you don't have one.
+  generator:
+    power: sensor.generator_power
+
+today:
+  solar: sensor.solar_energy_today
+  load: sensor.load_energy_today
+  import: sensor.grid_import_today
+  export: sensor.grid_export_today
+  battery_charge: sensor.battery_charge_today
+  battery_discharge: sensor.battery_discharge_today
+
+inverter_details:
+  temperature: sensor.inverter_temperature
+  # ac_temperature/dc_temperature/grid_voltage are ALSO shown in a small
+  # always-visible compact strip between the flow diagram and the "Today"
+  # totals (in addition to this collapsible panel) - independently
+  # optional, same as everything else here.
+  ac_temperature: sensor.inverter_ac_temperature
+  dc_temperature: sensor.inverter_dc_temperature
+  grid_voltage: sensor.grid_voltage
+  grid_connected: binary_sensor.inverter_grid_connected
+  frequency: sensor.grid_frequency
+  mode: sensor.inverter_operating_mode
+
+features:
+  # Computed as 1 - today.import/today.load - can be misleading on any
+  # installation with a battery (imported energy may have charged the
+  # battery rather than covered load directly). Leave this off for a
+  # battery-equipped site; it's accurate for solar-only installations.
+  self_sufficiency: true
+  solar_contribution: true
+  animate_flow: true
+  compact_today: false
+
+format:
+  precision: 2
+  energy_precision: 1
+  power_unit: auto

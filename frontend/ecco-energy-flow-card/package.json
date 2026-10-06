@@ -1,0 +1,31 @@
+{
+  "name": "ecco-energy-flow-card",
+  "version": "0.1.0",
+  "description": "A portable Home Assistant Lovelace card showing a live energy flow diagram with the inverter as a first-class centre node, plus daily energy totals.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "hacs",
+    "energy",
+    "solar",
+    "inverter",
+    "battery"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "lit": "^3.1.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,45 @@
+# ECCO Clock Dongle - ESP32-S3 (N16R8) drop-in hardware variant of the production firmware.
+#
+# This file is a HARDWARE WRAPPER ONLY. All application logic, entities, API actions,
+# Modbus/UART settings, secrets references and node identity come, unchanged, from
+# ecco_clock_dongle_stage3_4_free_power.yaml, which is pulled in below as a package. The
+# production file is NOT edited, copied or forked.
+#
+# Identity is deliberately identical to the production dongle (esphome.name
+# `ecco-clock-dongle`, same api/ota/wifi secrets). Therefore this firmware must NEVER be
+# flashed or powered while the original ESP32 dongle is still on the network or on the
+# RS485 bus: two ECCO nodes with one hostname, or two Modbus masters on one inverter bus,
+# is not allowed. See docs/ESP32_S3_DROP_IN_REPLACEMENT.md for the swap procedure.
+#
+# This wrapper carries no logic. It is an explicitly allow-listed hardware-only wrapper
+# (registry/tests/_hardware_wrappers.py): the suites that characterise production
+# application YAMLs skip it because it has no application content, the exclusivity /
+# lambda scans still include it, and its shape and equivalence to production are pinned
+# by registry/tests/test_esp32s3_variant.py and
+# registry/tests/check_esp32s3_equivalence.py (generated C++ identical apart from the
+# logger UART selection).
+#
+# Compile (native ESPHome 2026.8.x ONLY - the firmware static_asserts < 2026.9.0):
+#   esphome compile firmware/ecco_clock_dongle_stage3_4_free_power_esp32s3.yaml
+#
+# Everything below overrides the package's `esp32:` and `logger:` blocks and nothing else.
+
+packages:
+  ecco_production: !include ecco_clock_dongle_stage3_4_free_power.yaml
+
+esp32:
+  # The production block is `variant: esp32` + esp-idf and names no board or flash size.
+  # The N16R8 module has 16 MB of quad flash (ESPHome defaults to 4 MB). PSRAM (8 MB
+  # octal) is intentionally NOT enabled: the production logic was proven against the
+  # internal heap only, and PSRAM would change allocator behaviour for no benefit.
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+  # The production block is the default logger (UART0 on the classic ESP32). On this
+  # board the verified lab logger is the native USB Serial/JTAG port. UART1/UART2 are
+  # untouched; the inverter UART (GPIO17 TX / GPIO16 RX, 9600 8N1) is unchanged and is
+  # declared only in the production package.
+  hardware_uart: USB_SERIAL_JTAG

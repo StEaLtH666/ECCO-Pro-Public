@@ -1,0 +1,17 @@
+{
+  "name": "ecco-fallback-recovery-card",
+  "version": "0.2.0",
+  "description": "A dependency-free Home Assistant Lovelace card for the ECCO Fallback / Recovery tab (FB-B1: read-only review of the inverter fallback-profile registers; FB-B2: guarded Save / Invalidate of the saved profile).",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "ecco"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

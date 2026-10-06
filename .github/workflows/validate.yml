@@ -1,0 +1,253 @@
+# ECCO-Pro validation: the ONLY workflow. Validation and build-review only.
+#
+# THREAT MODEL. On a public repository a pull request from a fork is arbitrary code: it can change the firmware,
+# the tests, the Python tools, the Home Assistant YAML and this very file's inputs, and every job below executes
+# it on an ephemeral GitHub-hosted runner. Safety therefore does not depend on trusting the code, it depends on
+# there being nothing to steal or abuse:
+#   * no secrets are referenced anywhere (the firmware job writes obviously fake placeholder credentials);
+#   * the token is read-only (`contents: read`) and checkout does not persist it (`persist-credentials: false`);
+#   * no pull_request_target, no workflow_run, no self-hosted runner, no environment, no deploy, no git push;
+#   * nothing a job produces is trusted by a later privileged step: the only artifact is a REVIEW-ONLY HA bundle,
+#     short-lived, and no workflow consumes it;
+#   * no ${{ }} expression is placed inside a `run:` script (values go through `env:`), so event data cannot
+#     become shell code; tools/check_workflows.py (run in `repo-checks`) enforces this shape.
+# The runner has ordinary internet egress (pip, PlatformIO downloads); it has no route to any production system.
+#
+# SIMPLE ON PURPOSE. No path filtering, no result caching, no "skip if already green" logic: every event runs
+# every check. Public GitHub-hosted minutes are free, so this optimises for security, simplicity, correctness and
+# debuggability, not for saving minutes.
+#
+# ACTION PINS. Every `uses:` is a first-party actions/* action pinned to the full 40-hex commit SHA of an upstream
+# release (the release tag is the trailing comment), resolved from github.com/actions/* on 2026-10-06:
+#   actions/checkout        v4.4.0  11d5960a326750d5838078e36cf38b85af677262
+#   actions/setup-python    v5.6.0  a26af69be951a213d495a4c3e4e4022e16d87065
+#   actions/upload-artifact v4.6.2  ea165f8d65b6e75b540449e92b4886f43607fa02
+# The policy step runs `tools/check_workflows.py --require-sha-pins`, so a tag or branch ref fails CI. To update a pin,
+# resolve the new release tag to its commit SHA on the official repository and change both the SHA and the comment.
+#
+# Single required status check: `ci-ok` (it fails unless every other job succeeded).
+name: Validate ECCO
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  repo-checks:
+    name: Repository checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install validator dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem tools -Filter '*.ps1' -File | ForEach-Object {
+            $tokens = $null
+            $issues = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$issues
+            ) | Out-Null
+
+            if ($issues -and $issues.Count -gt 0) {
+              $failed = $true
+              foreach ($issue in $issues) {
+                Write-Host "$($_.Name):$($issue.Extent.StartLineNumber): $($issue.Message)"
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Validate repository syntax and manifests
+        run: python tools/validate_repo.py
+
+      - name: Workflow security policy
+        run: python tools/check_workflows.py --require-sha-pins
+
+      # Prints the write-surface report; exits non-zero (fail closed) if any write's register extent is uncertain or
+      # any inverter-bus access falls outside what the analysis models - see the tool's module docstring.
+      - name: Write-surface analysis (fails closed on unknown extent / unclassified bus access)
+        run: python tools/analyze_write_surface.py
+
+  plan-tests:
+    name: Discover offline test roots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      roots: ${{ steps.roots.outputs.roots }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      # tools/offline_test_roots.txt is the ONE list of test roots. The tool exits non-zero (so this step and the
+      # job fail, and no tests job is created) if the file is missing/empty/malformed or any root is missing or has no
+      # tests. Its output is a JSON array of strings restricted to [A-Za-z0-9_./-].
+      - name: List offline test roots
+        id: roots
+        run: |
+          roots="$(python tools/run_offline_tests.py --list-roots-json)"
+          echo "roots=${roots}" >> "$GITHUB_OUTPUT"
+          echo "Offline test roots: ${roots}"
+
+  offline-tests:
+    name: Offline tests (${{ matrix.root }})
+    needs: plan-tests
+    runs-on: ubuntu-24.04
+    # registry/tests holds the slow host-compile suites (about an hour on a 2 vCPU runner); the rest take minutes.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(needs.plan-tests.outputs.roots) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Historical fallback suites pin earlier commits; enough ancestry to read those exact states without a
+          # full clone. (Suites that cannot find a pinned commit skip that optional cross-check explicitly.)
+          fetch-depth: 20
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install validator dependencies
+        # Jinja2: home-assistant/tests/test_ecco_dump_to_grid_schedule_package.py evaluates the package's own templates.
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
+
+      - name: Run every offline suite under this root
+        env:
+          TEST_ROOT: ${{ matrix.root }}
+        # Runs all suites to completion (no stop at first failure); fails if the root is unlisted or has no tests.
+        run: python tools/run_offline_tests.py --root "$TEST_ROOT" --parallel 2 --timeout 5400
+
+  firmware-compile:
+    name: Firmware (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: classic ESP32
+            config: firmware/ecco_clock_dongle_stage3_4_free_power.yaml
+          - name: ESP32-S3
+            config: firmware/ecco_clock_dongle_stage3_4_free_power_esp32s3.yaml
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install ESPHome
+        # Pinned inside the firmware's supported window [2026.8.2, 2026.9.0); the durable-model suite reads this pin.
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt "esphome==2026.8.2"
+
+      - name: Add CI-only placeholder secrets
+        # Fake values so `!secret` resolves. Not real credentials; never uploaded, removed again below.
+        run: |
+          cat > firmware/secrets.yaml <<'EOF'
+          wifi_ssid: "ci-test"
+          wifi_password: "ci-test-password"
+          ecco_api_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          ecco_ota_password: "ci-test-password"
+          EOF
+
+      - name: Validate ESPHome configuration
+        env:
+          FIRMWARE_CONFIG: ${{ matrix.config }}
+        run: esphome config "$FIRMWARE_CONFIG"
+
+      - name: Compile ESPHome firmware
+        env:
+          FIRMWARE_CONFIG: ${{ matrix.config }}
+        run: esphome compile "$FIRMWARE_CONFIG"
+
+      - name: Remove CI-only secrets
+        if: always()
+        run: rm -f firmware/secrets.yaml
+
+  ha-bundle:
+    name: HA bundle (review only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
+
+      # tools/build_ha_bundle.py refuses (non-zero exit) any manifest source that is absolute, uses `..`, is a
+      # symlink, resolves outside the checkout, is untracked, or sits outside the approved directories/suffixes.
+      - name: Build deployment bundle
+        run: python tools/build_ha_bundle.py
+
+      # REVIEW ONLY. On a pull request this is built from unreviewed code. No workflow consumes it, and it must
+      # never be used as a deployment input: deploy only from a reviewed, merged commit. Short retention.
+      - name: Upload review-only bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ecco-ha-bundle-REVIEW-ONLY-not-for-deployment
+          path: dist/ecco-ha-bundle
+          retention-days: 7
+          if-no-files-found: error
+
+  ci-ok:
+    name: ci-ok
+    needs: [repo-checks, plan-tests, offline-tests, firmware-compile, ha-bundle]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to have succeeded
+        env:
+          REPO_CHECKS: ${{ needs.repo-checks.result }}
+          PLAN_TESTS: ${{ needs.plan-tests.result }}
+          OFFLINE_TESTS: ${{ needs.offline-tests.result }}
+          FIRMWARE_COMPILE: ${{ needs.firmware-compile.result }}
+          HA_BUNDLE: ${{ needs.ha-bundle.result }}
+        run: |
+          echo "repo-checks=$REPO_CHECKS plan-tests=$PLAN_TESTS offline-tests=$OFFLINE_TESTS firmware-compile=$FIRMWARE_COMPILE ha-bundle=$HA_BUNDLE"
+          for r in "$REPO_CHECKS" "$PLAN_TESTS" "$OFFLINE_TESTS" "$FIRMWARE_COMPILE" "$HA_BUNDLE"; do
+            if [ "$r" != "success" ]; then
+              echo "A required job did not succeed (skipped and cancelled count as failure)." >&2
+              exit 1
+            fi
+          done

@@ -1,0 +1,472 @@
+# ECCO Pro - Scheduled Dump to Grid V1
+# Home Assistant scheduling layer around the Manual Dump-to-Grid V1 firmware
+# feature - mirrors home-assistant/packages/ecco_free_power_schedule.yaml
+# exactly, with one extra staged value (Stop SOC) that Free Power has no
+# analogue for. This file does NOT write Deye registers directly. It stages
+# the existing ECCO Dump-to-Grid controls, arms the dedicated Dump-to-Grid
+# write enable, and presses the verified START button. The ESPHome firmware
+# remains responsible for snapshot, verified writes, timer and exact restore.
+#
+# NOT LIVE-PROVEN - see docs/DUMP_TO_GRID_V1.md.
+
+input_boolean:
+  ecco_dump_to_grid_schedule_armed:
+    name: ECCO Scheduled Dump to Grid Armed
+    icon: mdi:calendar-check
+
+input_datetime:
+  ecco_dump_to_grid_schedule_start:
+    name: ECCO Dump to Grid Schedule Start
+    has_date: true
+    has_time: true
+
+input_number:
+  ecco_dump_to_grid_schedule_duration:
+    name: ECCO Scheduled Dump to Grid Duration
+    min: 1
+    max: 240
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+  ecco_dump_to_grid_schedule_power:
+    name: ECCO Scheduled Dump to Grid Export Power
+    min: 500
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+
+  ecco_dump_to_grid_schedule_stop_soc:
+    name: ECCO Scheduled Dump to Grid Stop SOC
+    min: 10
+    max: 90
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+
+input_text:
+  ecco_dump_to_grid_schedule_last_result:
+    name: ECCO Dump to Grid Schedule Last Result
+    max: 255
+
+script:
+  ecco_dump_to_grid_start_scheduled:
+    alias: "ECCO - Start scheduled Dump to Grid"
+    description: "Stages and starts the Dump-to-Grid V1 override with one automatic retry."
+    mode: single
+    fields:
+      duration_minutes:
+        description: "Duration to stage into the ESPHome Dump-to-Grid controller"
+      power_w:
+        description: "Requested export power in watts"
+      stop_soc:
+        description: "Requested Stop SOC floor in percent"
+    sequence:
+      - variables:
+          requested_duration: "{{ duration_minutes | int(1) }}"
+          requested_power: "{{ power_w | int(500) }}"
+          requested_stop_soc: "{{ stop_soc | int(25) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (requested_power | int(0)) < 500 or (requested_power | int(0)) > 8000 }}
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    BLOCKED - requested {{ requested_power }}W outside safe range 500-8000W
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (requested_stop_soc | int(0)) < 10 or (requested_stop_soc | int(0)) > 90 }}
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    BLOCKED - requested Stop SOC {{ requested_stop_soc }}% outside safe range 10-90%
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                state: "on"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "BLOCKED - Dump to Grid already active"
+          - conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+                    state: "off"
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_configuration_online
+                    state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "BLOCKED - ECCO telemetry/configuration offline"
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+            data:
+              value: >-
+                STARTING - {{ requested_power }}W for {{ requested_duration }} min, Stop SOC {{ requested_stop_soc }}%
+
+          - action: number.set_value
+            target:
+              entity_id: number.ecco_clock_dongle_dump_to_grid_duration
+            data:
+              value: "{{ requested_duration }}"
+
+          - action: number.set_value
+            target:
+              entity_id: number.ecco_clock_dongle_dump_to_grid_export_power
+            data:
+              value: "{{ requested_power }}"
+
+          - action: number.set_value
+            target:
+              entity_id: number.ecco_clock_dongle_dump_to_grid_stop_soc
+            data:
+              value: "{{ requested_stop_soc }}"
+
+          - delay: "00:00:01"
+
+          - action: switch.turn_on
+            target:
+              entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+
+          - delay: "00:00:01"
+
+          - action: button.press
+            target:
+              entity_id: button.ecco_clock_dongle_start_dump_to_grid_now
+
+          - wait_template: >-
+              {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') }}
+            timeout: "00:00:20"
+            continue_on_timeout: true
+
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                    state: "on"
+                sequence:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: >-
+                        STARTED OK - {{ requested_power }}W for {{ requested_duration }} min, Stop SOC {{ requested_stop_soc }}%
+            default:
+              # A scheduled start can collide with an independent transaction
+              # (RTC correction, Free Power, reg244). Re-arm and retry once
+              # after a short wait; the firmware still performs all safety
+              # checks, snapshots and verification on the retry.
+              - delay: "00:00:12"
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+              - delay: "00:00:01"
+              - action: button.press
+                target:
+                  entity_id: button.ecco_clock_dongle_start_dump_to_grid_now
+              - wait_template: >-
+                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') }}
+                timeout: "00:00:20"
+                continue_on_timeout: true
+              - choose:
+                  - conditions:
+                      - condition: state
+                        entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                        state: "on"
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                        data:
+                          value: >-
+                            STARTED OK ON RETRY - {{ requested_power }}W for {{ requested_duration }} min, Stop SOC {{ requested_stop_soc }}%
+                default:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: >-
+                        FAILED TO START - {{ states('sensor.ecco_clock_dongle_dump_to_grid_status') }}
+
+  ecco_dump_to_grid_cancel_schedule:
+    alias: "ECCO - Cancel scheduled Dump to Grid"
+    description: "Cancels a future scheduled Dump to Grid event. It does not stop an already-active run."
+    mode: single
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+        data:
+          value: "CANCELLED - scheduled event disarmed"
+
+automation:
+  - id: ecco_dump_to_grid_schedule_arm_validation
+    alias: "ECCO - Validate scheduled Dump to Grid arm"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+        to: "on"
+    actions:
+      - variables:
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
+          scheduled_power: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(0) }}"
+          scheduled_stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(0) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (scheduled_power | int(0)) < 500 or (scheduled_power | int(0)) > 8000 }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - scheduled {{ scheduled_power }}W outside safe range 500-8000W
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (scheduled_stop_soc | int(0)) < 10 or (scheduled_stop_soc | int(0)) > 90 }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - scheduled Stop SOC {{ scheduled_stop_soc }}% outside safe range 10-90%
+          - conditions:
+              - condition: template
+                value_template: "{{ start_ts <= as_timestamp(now()) }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "REJECTED - scheduled start must be in the future"
+          # 2026-09-26 pre-live hardening: early UX check - refuse to arm
+          # when an ARMED Scheduled Free Power window overlaps this one
+          # (2-minute buffer either side for start retry / restore). The
+          # firmware's mutual-exclusion gates stay authoritative regardless
+          # (the second START would be rejected with zero Modbus I/O).
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ecco_free_power_schedule_armed
+                state: "on"
+              - condition: template
+                value_template: >-
+                  {% set d_start = start_ts | float(0) %}
+                  {% set d_end = d_start + (states('input_number.ecco_dump_to_grid_schedule_duration') | int(0)) * 60 %}
+                  {% set f_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
+                  {% set f_end = f_start + (states('input_number.ecco_free_power_schedule_duration') | int(0)) * 60 %}
+                  {{ d_start < f_end + 120 and f_start < d_end + 120 }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - overlaps the armed Scheduled Free Power window
+                    ({{ states('input_datetime.ecco_free_power_schedule_start') }}); cancel it first
+          # 2026-09-26 pre-live hardening: early UX mirror of the firmware's
+          # START-time TOU slot refusal (start_dump_to_grid_override) - a
+          # window overlapping any TOU slot with a charge source set (e.g. the
+          # overnight slot-1 grid-charge window) would be refused at fire time
+          # anyway. Same slot model as the dashboard's "Current Plan": slot i
+          # runs from its time to slot i+1's, slot 6 wrapping to slot 1. Only
+          # ever refuses; if the slot sensors are unavailable it defers to the
+          # firmware's own check.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {% set ns = namespace(ok=true, starts=[], charges=[], hit=0) %}
+                  {% for i in range(1, 7) %}
+                    {% set t = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_time') %}
+                    {% set c = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_charge') %}
+                    {% if t is match('^\\d{1,2}:\\d{2}$') and c not in ['unknown', 'unavailable', ''] %}
+                      {% set ns.starts = ns.starts + [ (t.split(':')[0] | int) * 60 + (t.split(':')[1] | int) ] %}
+                      {% set ns.charges = ns.charges + [c] %}
+                    {% else %}
+                      {% set ns.ok = false %}
+                    {% endif %}
+                  {% endfor %}
+                  {% if ns.ok and (start_ts | float(0)) > 0 %}
+                    {% set st = (start_ts | float(0)) | timestamp_local %}
+                    {% set m0 = (st[11:13] | int) * 60 + (st[14:16] | int) %}
+                    {% set dur = states('input_number.ecco_dump_to_grid_schedule_duration') | int(0) %}
+                    {% for k in range(0, dur + 1) %}
+                      {% set m = (m0 + k) % 1440 %}
+                      {% for i in range(0, 6) %}
+                        {% set s = ns.starts[i] %}
+                        {% set e = ns.starts[(i + 1) % 6] %}
+                        {% set inside = (e > s and m >= s and m < e) or (e < s and (m >= s or m < e)) %}
+                        {% if ns.hit == 0 and inside and ns.charges[i] != 'None' %}
+                          {% set ns.hit = i + 1 %}
+                        {% endif %}
+                      {% endfor %}
+                    {% endfor %}
+                  {% endif %}
+                  {{ ns.hit > 0 }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - window overlaps a TOU slot with a charge source set
+                    (e.g. the overnight grid-charge slot); Dump V1 will not start there
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+            data:
+              value: >-
+                ARMED - {{ states('input_datetime.ecco_dump_to_grid_schedule_start') }} •
+                {{ states('input_number.ecco_dump_to_grid_schedule_duration') | int }} min •
+                {{ states('input_number.ecco_dump_to_grid_schedule_power') | int }}W •
+                Stop SOC {{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int }}%
+
+  - id: ecco_dump_to_grid_schedule_fire
+    alias: "ECCO - Fire scheduled Dump to Grid"
+    mode: single
+    triggers:
+      - trigger: time
+        at: input_datetime.ecco_dump_to_grid_schedule_start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+        state: "on"
+    actions:
+      - action: script.ecco_dump_to_grid_start_scheduled
+        data:
+          duration_minutes: "{{ states('input_number.ecco_dump_to_grid_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(500) }}"
+          stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(25) }}"
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+
+  - id: ecco_dump_to_grid_schedule_startup_recovery
+    alias: "ECCO - Recover scheduled Dump to Grid after Home Assistant restart"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+        state: "on"
+    actions:
+      - delay: "00:00:20"
+      - variables:
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_dump_to_grid_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(500) }}"
+          stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(25) }}"
+          end_ts: "{{ start_ts + (duration_min * 60) }}"
+          now_ts: "{{ as_timestamp(now()) }}"
+          remaining_min: "{{ [1, (((end_ts - now_ts) / 60) | round(0, 'ceil')) | int] | max }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts < start_ts }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    ARMED AFTER RESTART - waiting for {{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts >= start_ts and now_ts < end_ts }}"
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    RECOVERING MISSED START - {{ remaining_min }} min remaining
+              - action: script.ecco_dump_to_grid_start_scheduled
+                data:
+                  duration_minutes: "{{ remaining_min }}"
+                  power_w: "{{ power_w }}"
+                  stop_soc: "{{ stop_soc }}"
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts >= end_ts }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "MISSED - scheduled Dump to Grid window already expired"
+
+template:
+  - sensor:
+      - name: ECCO Dump to Grid Schedule Status
+        unique_id: ecco_dump_to_grid_schedule_status
+        icon: mdi:calendar-clock
+        state: >-
+          {% if is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') %}
+            ACTIVE
+          {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') %}
+            ARMED
+          {% else %}
+            IDLE
+          {% endif %}
+        attributes:
+          scheduled_start: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}"
+          duration_minutes: "{{ states('input_number.ecco_dump_to_grid_schedule_duration') | int(0) }}"
+          requested_power_w: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(0) }}"
+          requested_stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(0) }}"
+          last_result: "{{ states('input_text.ecco_dump_to_grid_schedule_last_result') }}"

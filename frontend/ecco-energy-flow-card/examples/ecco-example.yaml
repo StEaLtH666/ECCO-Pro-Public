@@ -1,0 +1,150 @@
+# ECCO Energy Flow Card - example configuration for the actual ECCO
+# installation this repository maintains.
+#
+# Every entity id below was found in this repository, not guessed:
+#   - firmware/ecco_clock_dongle_stage3_4_free_power.yaml's own `name:`
+#     fields for every raw dongle sensor, cross-checked against
+#     registry/inverter_capabilities.yaml for sign conventions
+#   - home-assistant/packages/ecco_canonical_telemetry.yaml for the four
+#     already-portable canonical aliases (battery SOC, house power, PV
+#     power, grid power)
+#
+# ASSUMPTIONS (flagged explicitly, not hidden):
+#   - Every `sensor.ecco_clock_dongle_*` entity id below is the
+#     ESPHome-standard slugification of that sensor's `name:` field in the
+#     firmware (device name "ecco_clock_dongle" + the name, lower-
+#     cased/underscored) - the exact pattern already confirmed live for
+#     several other ECCO entities this project, but these SPECIFIC entity
+#     ids have not been independently re-checked against a live Home
+#     Assistant entity registry in this task. Confirm against the real
+#     installation before relying on this file as-is.
+#   - `inverter_details.mode` has NO mapping below - no single "TOU /
+#     operating mode" text entity was found that cleanly matches what this
+#     field is for (battery_operation_mode/battery_control_mode exist but
+#     are configuration values, not a live operating-mode readout) -
+#     omitted rather than guessed.
+#   - `inverter.status` (a free-text status distinct from `state`) has no
+#     separate ECCO entity - omitted; `inverter.state` (the system-state
+#     enum) is used instead.
+#   - The reference installation has TWO separate physical solar arrays. Array 1 and Array 2 map
+#     to sensor.ecco_clock_dongle_ecco_pv1_power and
+#     ..._ecco_pv2_power respectively - confirmed live against the actual
+#     installation (PV3/PV4 currently read 0 at this site and are not
+#     referenced below). The combined canonical alias sensor.ecco_pv_power
+#     is kept as the authoritative `solar_total` figure shown on the Solar
+#     Total combiner node, rather than letting the card derive it by
+#     summing PV1+PV2 client-side.
+#   - AC/DC transformer temperature entities were corrected against the
+#     live Home Assistant registry: the actual entity ids are
+#     ..._ecco_temperature_ac_transformer / ..._ecco_temperature_dc_transformer
+#     (not the earlier guessed ..._ecco_ac_temperature / ..._ecco_dc_temperature).
+#     Confirmed live values at the time of this correction: AC ~40.2C, DC ~46.9C.
+#   - KNOWN LIVE FINDING, out of scope for this card: Home Assistant currently
+#     reports these two sensors' `unit_of_measurement` attribute with a
+#     stray extra character before the degree symbol (a UTF-8-read-as-
+#     Latin-1 mojibake artifact) instead of a plain degrees-Celsius unit -
+#     a firmware/metadata encoding issue upstream of this card, not
+#     something this task fixes. This card never reads or displays that
+#     attribute itself (it always renders its own literal degrees-Celsius
+#     suffix), so the card's own output is unaffected either way.
+
+type: custom:ecco-energy-flow-card
+title: ECCO Energy Flow
+
+nodes:
+  solar:
+    - label: Array 1
+      power: sensor.ecco_clock_dongle_ecco_pv1_power
+    - label: Array 2
+      power: sensor.ecco_clock_dongle_ecco_pv2_power
+  # Combined canonical figure - shown authoritatively on the Solar Total
+  # combiner node that sits between the two array nodes and the inverter.
+  solar_total: sensor.ecco_pv_power
+
+  inverter:
+    # Not yet canonicalised - raw dongle entity.
+    # firmware name: "ECCO Inverter Output Power" (id: ecco_inverter_power)
+    power: sensor.ecco_clock_dongle_ecco_inverter_output_power
+    # firmware name: "ECCO Inverter System State" (id: ecco_inverter_system_state)
+    state: sensor.ecco_clock_dongle_ecco_inverter_system_state
+
+  home:
+    # Canonical portable alias - "Whole-house consumption. Always non-negative."
+    power: sensor.ecco_house_power
+
+  battery:
+    # Not yet canonicalised - raw dongle entity.
+    # firmware name: "ECCO Battery Output Power" (id: ecco_battery_power)
+    power: sensor.ecco_clock_dongle_ecco_battery_output_power
+    # Canonical portable alias.
+    soc: sensor.ecco_battery_soc
+    # registry/inverter_capabilities.yaml battery_power record:
+    # "Signed power; positive = discharge, negative = charge."
+    power_sign: discharge_positive
+
+  grid:
+    # Canonical portable alias (CT-clamp-measured - the source ECCO's own
+    # intelligence/dashboards actually use, per registry/inverter_capabilities.yaml).
+    power: sensor.ecco_grid_power
+    # ecco_canonical_telemetry.yaml's own sign_convention comment:
+    # "Positive = importing from grid, negative = exporting to grid."
+    power_sign: import_positive
+
+  # ECCO's firmware exposes "ECCO Generator Port Power" but no generator is
+  # installed at this site today - block omitted rather than pointed at an
+  # entity that would only ever read 0.
+
+today:
+  # firmware names: "ECCO Day PV Energy" / "ECCO Day Load Energy" /
+  # "ECCO Day Grid Import" / "ECCO Day Grid Export" / "ECCO Day Battery
+  # Charge" / "ECCO Day Battery Discharge" - all read directly from the
+  # inverter's own daily energy registers (Stage 2b).
+  solar: sensor.ecco_clock_dongle_ecco_day_pv_energy
+  load: sensor.ecco_clock_dongle_ecco_day_load_energy
+  import: sensor.ecco_clock_dongle_ecco_day_grid_import
+  # This is the entity the maintainer specifically wants prominently shown - it
+  # already exists in the firmware but is not prominent on the current
+  # dashboard.
+  export: sensor.ecco_clock_dongle_ecco_day_grid_export
+  battery_charge: sensor.ecco_clock_dongle_ecco_day_battery_charge
+  battery_discharge: sensor.ecco_clock_dongle_ecco_day_battery_discharge
+
+inverter_details:
+  # Corrected against the live HA entity registry - the real entity is the
+  # AC transformer temperature sensor, not a generic "ecco_ac_temperature"
+  # id (see ASSUMPTIONS above). Also surfaced in the always-visible compact
+  # metrics strip below the flow diagram (see NodesConfig.solar_total /
+  # InverterDetailsConfig.grid_voltage doc comments in src/config.ts) -
+  # shown here too so the full detail panel still lists every configured
+  # reading on demand.
+  ac_temperature: sensor.ecco_clock_dongle_ecco_temperature_ac_transformer
+  # Corrected against the live HA entity registry - the real entity is the
+  # DC transformer temperature sensor.
+  dc_temperature: sensor.ecco_clock_dongle_ecco_temperature_dc_transformer
+  # firmware name: "ECCO Grid Voltage L1" (id: ecco_grid_voltage_l1)
+  grid_voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
+  # firmware name: "ECCO Grid Connected" (id: ecco_grid_connected, binary_sensor)
+  grid_connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
+  # firmware name: "ECCO Grid Frequency" (id: ecco_grid_frequency)
+  frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
+  # mode: intentionally omitted - see ASSUMPTIONS above.
+
+features:
+  # Left off deliberately - today.import/today.load can be misleading on a
+  # battery system like this one (imported energy may have charged the
+  # battery rather than covered load directly). See the caveat on
+  # FeaturesConfig.self_sufficiency in src/config.ts. Solar Share remains
+  # accurate and stays enabled below.
+  self_sufficiency: false
+  solar_contribution: true
+  animate_flow: true
+  # All five inverter_details fields below are already surfaced in the
+  # always-visible quick-metrics strip - the collapsible panel would only
+  # ever repeat them (ECCO doesn't configure `temperature`/`mode`/`status`,
+  # the three fields it could otherwise add). See FeaturesConfig.show_details_panel.
+  show_details_panel: false
+
+format:
+  precision: 2
+  energy_precision: 1
+  power_unit: auto

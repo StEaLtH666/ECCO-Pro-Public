@@ -1,0 +1,83 @@
+# ECCO Energy Actions Card - example configuration for the actual ECCO
+# installation this repository maintains.
+#
+# Every free_power.* entity id below is the one named in the Free Power
+# live-hardware-proof task this card was built for (device slug
+# "ecco_clock_dongle" + each firmware entity's own name), cross-
+# checked against firmware/ecco_clock_dongle_stage3_4_free_power.yaml - the
+# same entities the now-superseded "FREE POWER — COMPACT CONTROL STRIP"
+# button-card panel in home-assistant/dashboards/ecco_pro.yaml used.
+#
+# Every schedule.* entity id below is exactly what
+# home-assistant/packages/ecco_free_power_schedule.yaml defines - the
+# same entities the now-removed "SCHEDULED FREE POWER — COMPACT CONTROL
+# STRIP" panel used. This card never duplicates that package's own
+# validation/automation logic, only presents and drives its entities.
+
+type: custom:ecco-energy-actions-card
+title: Energy Actions
+
+free_power:
+  active: binary_sensor.ecco_clock_dongle_free_power_active
+  operation_in_progress: binary_sensor.ecco_clock_dongle_free_power_operation_in_progress
+  snapshot_valid: binary_sensor.ecco_clock_dongle_free_power_snapshot_valid
+  status: sensor.ecco_clock_dongle_free_power_status
+  ends_at: sensor.ecco_clock_dongle_free_power_ends_at
+  failures: sensor.ecco_clock_dongle_free_power_failures_since_boot
+  start_attempts: sensor.ecco_clock_dongle_free_power_start_attempts_since_boot
+  start_successes: sensor.ecco_clock_dongle_free_power_start_successes_since_boot
+  restore_successes: sensor.ecco_clock_dongle_free_power_restore_successes_since_boot
+  write_enable: switch.ecco_clock_dongle_free_power_write_enable
+  max_charge_power: number.ecco_clock_dongle_free_power_max_charge_power
+  duration: number.ecco_clock_dongle_free_power_duration
+  start: button.ecco_clock_dongle_start_free_power_charge_now
+  end_restore: button.ecco_clock_dongle_end_free_power_restore_now
+
+schedule:
+  armed: input_boolean.ecco_free_power_schedule_armed
+  start: input_datetime.ecco_free_power_schedule_start
+  duration: input_number.ecco_free_power_schedule_duration
+  power: input_number.ecco_free_power_schedule_power
+  last_result: input_text.ecco_free_power_schedule_last_result
+  status: sensor.ecco_free_power_schedule_status
+  cancel: script.ecco_free_power_cancel_schedule
+
+# Manual Dump to Grid V1 (2026-09-26) - implemented and locally validated,
+# NOT yet live-proven. Every entity id below matches
+# firmware/ecco_clock_dongle_stage3_4_free_power.yaml's Dump-to-Grid section.
+# See docs/DUMP_TO_GRID_V1.md.
+dump_to_grid:
+  active: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+  operation_in_progress: binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress
+  snapshot_valid: binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid
+  status: sensor.ecco_clock_dongle_dump_to_grid_status
+  ends_at: sensor.ecco_clock_dongle_dump_to_grid_ends_at
+  battery_soc: sensor.ecco_clock_dongle_ecco_battery_soc
+  failures: sensor.ecco_clock_dongle_dump_to_grid_failures_since_boot
+  start_attempts: sensor.ecco_clock_dongle_dump_to_grid_start_attempts_since_boot
+  start_successes: sensor.ecco_clock_dongle_dump_to_grid_start_successes_since_boot
+  restore_successes: sensor.ecco_clock_dongle_dump_to_grid_restore_successes_since_boot
+  write_enable: switch.ecco_clock_dongle_dump_to_grid_write_enable
+  export_power: number.ecco_clock_dongle_dump_to_grid_export_power
+  stop_soc: number.ecco_clock_dongle_dump_to_grid_stop_soc
+  duration: number.ecco_clock_dongle_dump_to_grid_duration
+  start: button.ecco_clock_dongle_start_dump_to_grid_now
+  end_restore: button.ecco_clock_dongle_end_dump_to_grid_restore_now
+  active_export_power: sensor.ecco_clock_dongle_dump_to_grid_active_export_power
+  active_stop_soc: sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc
+  last_end_reason: sensor.ecco_clock_dongle_dump_to_grid_last_end_reason
+  recovery_arm: switch.ecco_clock_dongle_dump_to_grid_recovery_arm
+  recovery_force_restore: button.ecco_clock_dongle_dump_to_grid_force_restore_original
+  recovery_accept: button.ecco_clock_dongle_dump_to_grid_accept_current_state
+  recovery_state: sensor.ecco_clock_dongle_dump_to_grid_recovery_state
+  # Optional - the NOW/LATER selector for Dump to Grid, driving
+  # home-assistant/packages/ecco_dump_to_grid_schedule.yaml's helpers.
+  schedule:
+    armed: input_boolean.ecco_dump_to_grid_schedule_armed
+    start: input_datetime.ecco_dump_to_grid_schedule_start
+    duration: input_number.ecco_dump_to_grid_schedule_duration
+    power: input_number.ecco_dump_to_grid_schedule_power
+    stop_soc: input_number.ecco_dump_to_grid_schedule_stop_soc
+    last_result: input_text.ecco_dump_to_grid_schedule_last_result
+    status: sensor.ecco_dump_to_grid_schedule_status
+    cancel: script.ecco_dump_to_grid_cancel_schedule

@@ -1,0 +1,28 @@
+# ECCO site file - EXAMPLE. Copy it to ecco_site.local.yaml (git-ignored: never commit your real values) and edit the copy.
+# Then render the deployable files for your installation into dist/site/ (also git-ignored):
+#
+#   python tools/ecco_site_render.py --site ecco_site.local.yaml --dry-run   # what would change
+#   python tools/ecco_site_render.py --site ecco_site.local.yaml --diff      # the exact edits (tariff values masked)
+#   python tools/ecco_site_render.py --site ecco_site.local.yaml             # write dist/site/
+#
+# The tracked repository stays generic. Deploy from dist/site/, not from the repository files, when any value below differs
+# from the defaults.
+schema: ecco-site/1
+
+# The Home Assistant device slug of your ECCO dongle: the part between "<domain>." and "_<entity>" in its entity ids, e.g.
+# sensor.ecco_clock_dongle_ecco_battery_soc -> ecco_clock_dongle. A fresh install of the ECCO firmware gets ecco_clock_dongle;
+# it changes only if you renamed the device in Home Assistant.
+device_slug: ecco_clock_dongle
+
+# Entity ids of the dongle that kept the default slug on your installation although the device was renamed (rare; leave empty).
+keep_default_slug_entities: []
+
+# Octopus Energy integration ids (optional). Without this block the tariff entities keep the your_* placeholders and the tariff
+# features report unavailable. Use the values exactly as they appear in your Octopus Energy entity ids (lower-case).
+# octopus:
+#   meter_serial: "<your meter serial, lower-case>"
+#   import_mpan: "<your 13-digit import MPAN>"
+#   export_mpan: "<your 13-digit export MPAN>"
+
+# Exact entity id renames for other site-specific entities the packages reference (optional; whole entity ids only).
+entity_map: {}

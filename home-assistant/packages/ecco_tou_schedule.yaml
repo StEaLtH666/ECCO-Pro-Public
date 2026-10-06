@@ -1,0 +1,189 @@
+# ECCO Pro - Canonical six-slot TOU schedule
+#
+# Read-only schedule adapter for the Deye/Sunsynk six-zone TOU table.
+# Each inverter zone is stored as a START boundary. The end of a zone is the
+# start of the following zone; Slot 6 wraps to Slot 1 on the next day.
+#
+# This package performs no inverter writes.
+# It gives the intelligence layer stable, site-independent schedule entities.
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: ECCO TOU Slot 1 Start Minute
+        unique_id: ecco_tou_slot_1_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone1_time') %}
+          {% if ':' in raw %}
+            {% set p = raw.split(':') %}
+            {{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}
+          {% else %}
+            {% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}
+            {{ hhmm >= 0 and hh <= 23 and mm <= 59 }}
+          {% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone1_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}
+          {% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone1_time
+
+      - name: ECCO TOU Slot 2 Start Minute
+        unique_id: ecco_tou_slot_2_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone2_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}
+          {% else %}{% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}{{ hhmm >= 0 and hh <= 23 and mm <= 59 }}{% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone2_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}{% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone2_time
+
+      - name: ECCO TOU Slot 3 Start Minute
+        unique_id: ecco_tou_slot_3_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone3_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}{% else %}{% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}{{ hhmm >= 0 and hh <= 23 and mm <= 59 }}{% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone3_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}{% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone3_time
+
+      - name: ECCO TOU Slot 4 Start Minute
+        unique_id: ecco_tou_slot_4_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone4_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}{% else %}{% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}{{ hhmm >= 0 and hh <= 23 and mm <= 59 }}{% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone4_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}{% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone4_time
+
+      - name: ECCO TOU Slot 5 Start Minute
+        unique_id: ecco_tou_slot_5_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone5_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}{% else %}{% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}{{ hhmm >= 0 and hh <= 23 and mm <= 59 }}{% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone5_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}{% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone5_time
+
+      - name: ECCO TOU Slot 6 Start Minute
+        unique_id: ecco_tou_slot_6_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone6_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ p | length >= 2 and (p[0] | int(-1)) >= 0 and (p[0] | int(-1)) <= 23 and (p[1] | int(-1)) >= 0 and (p[1] | int(-1)) <= 59 }}{% else %}{% set hhmm = raw | int(-1) %}{% set hh = hhmm // 100 %}{% set mm = hhmm % 100 %}{{ hhmm >= 0 and hh <= 23 and mm <= 59 }}{% endif %}
+        state: >-
+          {% set raw = states('sensor.ecco_clock_dongle_ecco_timezone6_time') %}
+          {% if ':' in raw %}{% set p = raw.split(':') %}{{ (p[0] | int(0)) * 60 + (p[1] | int(0)) }}{% else %}{% set hhmm = raw | int(0) %}{{ (hhmm // 100) * 60 + (hhmm % 100) }}{% endif %}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_ecco_timezone6_time
+
+      - name: ECCO TOU Slot 1
+        unique_id: ecco_tou_slot_1
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_1_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_2_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_1_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_2_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+      - name: ECCO TOU Slot 2
+        unique_id: ecco_tou_slot_2
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_2_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_3_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_2_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_3_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+      - name: ECCO TOU Slot 3
+        unique_id: ecco_tou_slot_3
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_3_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_4_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_3_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_4_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+      - name: ECCO TOU Slot 4
+        unique_id: ecco_tou_slot_4
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_4_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_5_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_4_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_5_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+      - name: ECCO TOU Slot 5
+        unique_id: ecco_tou_slot_5
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_5_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_6_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_5_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_6_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+      - name: ECCO TOU Slot 6
+        unique_id: ecco_tou_slot_6
+        state: >-
+          {% set s = states('sensor.ecco_tou_slot_6_start_minute') | int(0) %}{{ '%02d:%02d' | format(s // 60, s % 60) }}
+        attributes:
+          end_time: >-
+            {% set e = states('sensor.ecco_tou_slot_1_start_minute') | int(0) %}{{ '%02d:%02d' | format(e // 60, e % 60) }}
+          duration_minutes: >-
+            {% set s = states('sensor.ecco_tou_slot_6_start_minute') | int(0) %}{% set e = states('sensor.ecco_tou_slot_1_start_minute') | int(0) %}{{ (e - s + 1440) % 1440 }}
+
+  - binary_sensor:
+      - name: ECCO TOU Schedule Valid
+        unique_id: ecco_tou_schedule_valid
+        device_class: connectivity
+        state: >-
+          {% set ns = namespace(ok=true, total=0) %}
+          {% for i in range(1, 7) %}
+            {% set s = states('sensor.ecco_tou_slot_' ~ i ~ '_start_minute') %}
+            {% if s in ['unknown','unavailable','none',''] %}{% set ns.ok = false %}{% endif %}
+          {% endfor %}
+          {% if ns.ok %}
+            {% for i in range(1, 7) %}
+              {% set n = i + 1 if i < 6 else 1 %}
+              {% set s = states('sensor.ecco_tou_slot_' ~ i ~ '_start_minute') | int(0) %}
+              {% set e = states('sensor.ecco_tou_slot_' ~ n ~ '_start_minute') | int(0) %}
+              {% set d = (e - s + 1440) % 1440 %}
+              {% if d <= 0 %}{% set ns.ok = false %}{% else %}{% set ns.total = ns.total + d %}{% endif %}
+            {% endfor %}
+          {% endif %}
+          {{ ns.ok and ns.total == 1440 }}
+        attributes:
+          slot_1: "{{ states('sensor.ecco_tou_slot_1') }}–{{ state_attr('sensor.ecco_tou_slot_1', 'end_time') }}"
+          slot_2: "{{ states('sensor.ecco_tou_slot_2') }}–{{ state_attr('sensor.ecco_tou_slot_2', 'end_time') }}"
+          slot_3: "{{ states('sensor.ecco_tou_slot_3') }}–{{ state_attr('sensor.ecco_tou_slot_3', 'end_time') }}"
+          slot_4: "{{ states('sensor.ecco_tou_slot_4') }}–{{ state_attr('sensor.ecco_tou_slot_4', 'end_time') }}"
+          slot_5: "{{ states('sensor.ecco_tou_slot_5') }}–{{ state_attr('sensor.ecco_tou_slot_5', 'end_time') }}"
+          slot_6: "{{ states('sensor.ecco_tou_slot_6') }}–{{ state_attr('sensor.ecco_tou_slot_6', 'end_time') }}"

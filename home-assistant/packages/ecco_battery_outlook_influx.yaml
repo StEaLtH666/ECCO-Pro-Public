@@ -1,0 +1,134 @@
+# ECCO Pro - Battery Outlook InfluxDB read-back
+# Reads the automatic learned Battery Outlook task results and daily scoring
+# results from ecco_5m.
+#
+# Required secrets.yaml entries:
+#   ecco_influx_host
+#   ecco_influx_port
+#   ecco_influx_org
+#   ecco_influx_read_token
+#
+# The Battery Outlook task writes every 5 minutes. Live-model sensors read the
+# latest value from the previous 30 minutes so one missed task run does not
+# immediately make them unavailable. Daily score sensors use longer windows.
+
+sensor:
+  - platform: influxdb
+    api_version: 2
+    host: !secret ecco_influx_host
+    port: !secret ecco_influx_port
+    ssl: false
+    organization: !secret ecco_influx_org
+    token: !secret ecco_influx_read_token
+    bucket: ecco_5m
+    queries_flux:
+      - name: ECCO Predicted SOC 0035
+        unique_id: ecco_predicted_soc_0035
+        unit_of_measurement: "%"
+        range_start: "-30m"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook" and r._field == "predicted_soc_0035")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Expected Load To 0035
+        unique_id: ecco_expected_load_to_0035
+        unit_of_measurement: "kWh"
+        range_start: "-30m"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook" and r._field == "expected_load_kwh_0035")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(2) }}"
+
+      - name: ECCO Load Model Training Days
+        unique_id: ecco_load_model_training_days
+        unit_of_measurement: "d"
+        range_start: "-30m"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook" and r._field == "training_days_equivalent")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Model Capacity
+        unique_id: ecco_battery_model_capacity
+        unit_of_measurement: "kWh"
+        range_start: "-30m"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook" and r._field == "model_capacity_kwh")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Model Efficiency
+        unique_id: ecco_battery_model_efficiency
+        unit_of_measurement: "%"
+        range_start: "-30m"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook" and r._field == "discharge_efficiency")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ (value | float * 100) | round(0) }}"
+
+      # Daily prediction score: prediction made around 21:30 for the 00:35 SOC.
+      - name: ECCO Battery Outlook Last Scored Prediction
+        unique_id: ecco_battery_outlook_last_scored_prediction
+        unit_of_measurement: "%"
+        range_start: "-30d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "predicted_soc_0035")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Outlook Last Actual SOC
+        unique_id: ecco_battery_outlook_last_actual_soc
+        unit_of_measurement: "%"
+        range_start: "-30d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "actual_soc_0035")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Outlook Last Error
+        unique_id: ecco_battery_outlook_last_error
+        unit_of_measurement: "%"
+        range_start: "-30d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "error_soc_points")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Outlook Last Absolute Error
+        unique_id: ecco_battery_outlook_last_absolute_error
+        unit_of_measurement: "%"
+        range_start: "-30d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "absolute_error_points")
+          |> keep(columns: ["_time", "_value"])
+        group_function: last
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Outlook 7 Day MAE
+        unique_id: ecco_battery_outlook_7d_mae
+        unit_of_measurement: "%"
+        range_start: "-7d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "absolute_error_points")
+          |> keep(columns: ["_time", "_value"])
+        group_function: mean
+        value_template: "{{ value | float | round(1) }}"
+
+      - name: ECCO Battery Outlook 7 Day Bias
+        unique_id: ecco_battery_outlook_7d_bias
+        unit_of_measurement: "%"
+        range_start: "-7d"
+        query: >
+          filter(fn: (r) => r._measurement == "ecco_battery_outlook_score" and r._field == "error_soc_points")
+          |> keep(columns: ["_time", "_value"])
+        group_function: mean
+        value_template: "{{ value | float | round(1) }}"

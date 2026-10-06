@@ -1,0 +1,10 @@
+# Offline test roots: the ONE list of directories whose test_*.py files are the repository's offline test suites.
+# One repo-relative POSIX directory per line; blank lines and whole-line '#' comments are ignored.
+# Read by: tools/run_offline_tests.py (the CI runner: .github/workflows/validate.yml builds one matrix job per root) and
+#          registry/tests/test_offline_suite_exit_codes.py.
+# Do not copy this list anywhere else. A missing, empty or malformed file is an error, never "run nothing".
+registry/tests
+home-assistant/tests
+health/tests
+influxdb
+tools/tests

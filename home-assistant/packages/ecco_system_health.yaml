@@ -1,0 +1,875 @@
+# ECCO Pro - System Health (Task 006)
+#
+# *** PHASE 1 LIVE-PROVEN 2026-09-18 - READ-ONLY PARTIAL HEALTH SURFACE ***
+#
+# Phase 1 is intentionally limited to three read-only entities whose
+# dependencies are already used by live ECCO packages. Task 007 / Phase 3
+# stages five additional read-only subsystem sensors below. The package is
+# referenced by deployment/ha-manifest.yaml and MUST NOT be interpreted as
+# complete system health or as permission to perform inverter writes.
+#
+# READ ONLY. Every sensor below is a template sensor/binary_sensor
+# whose state/availability is a pure Jinja expression over existing
+# entities. This file contains:
+#   - no service calls (no modbus_client/esphome/button.press)
+#   - no shell_command:/command_line: platforms
+#   - no homeassistant.restart or config-reload calls
+#   - no automation: blocks (nothing here can change another entity's state)
+#
+# This is a DELIBERATELY PARTIAL implementation of the full design in
+# docs/SYSTEM_HEALTH_ARCHITECTURE.md and docs/SYSTEM_HEALTH_HA_DESIGN.md
+# - only the three entities below could be written against entities
+# this repository's OWN other packages already define with confidence.
+# The full 43-check design remains data-only in
+# registry/system_health_checks.yaml until the entity IDs it also
+# depends on (ESPHome auto-generated ids for manual_write_in_progress,
+# correction_in_progress, free_power_operation_in_progress,
+# free_power_snapshot_valid, rtc_stall_detected, etc.) are live-verified
+# - see docs/SYSTEM_HEALTH_HA_DESIGN.md "Live validation checklist".
+#
+# *** TASK 007 / PHASE 3 - LIVE-PROVEN NORMAL PATHS 2026-09-19 ***
+#
+# The five sensors below (ecco_health_manual_write_system, ecco_health_rtc,
+# ecco_health_free_power, ecco_health_configuration,
+# ecco_health_inverter_telemetry) are NEW as of Task 007 and consume the five
+# Phase 2 firmware diagnostics (live-proven 2026-09-18) plus rtc_stall_detected,
+# ntp_synced and the inverter system-state text sensor (all already live per
+# docs/SYSTEM_HEALTH_HA_DESIGN.md). They implement the exact checks already
+# specified in registry/system_health_checks.yaml /
+# registry/health_reason_codes.yaml - see docs/SYSTEM_HEALTH_ARCHITECTURE.md
+# "Phase 3" section for which check ids each sensor represents and which
+# remain unrepresented.
+#
+# STATUS: LIVE-PROVEN for deployment/registration, idle evaluation, and
+# normal RTC-correction, manual-write, and Free-Power transaction cycles on
+# 2026-09-19. The deliberate 60s/180s stuck-duration failure thresholds have
+# NOT been forced and remain unproven. See docs/SYSTEM_HEALTH_HA_DESIGN.md.
+#
+# Every new sensor here is READ-ONLY (template sensor, no service calls) and
+# NON-AUTHORITATIVE for control - none of them is, feeds, or gates
+# binary_sensor.ecco_manual_control_ready, which remains absent from this
+# file. Each new sensor carries partial_implementation: true and an explicit
+# list of which checks of its subsystem it does and does not represent.
+#
+# Current-operation duration (manual write, RTC correction, Free Power
+# operation, Free Power snapshot recovery) is computed from
+# states.<entity>.last_changed via as_timestamp(now()) - as_timestamp(...).
+# This is NOT proven restart-safe: if Home Assistant restarts, or the
+# ESPHome device disconnects/reconnects, while one of these booleans is
+# already "on", last_changed reflects when the entity's state was
+# re-established after that event, not necessarily the true original start
+# of the underlying firmware transaction - so a duration computed this way
+# can UNDER-report how long a transaction has really been running across
+# such an event. No undocumented history/recorder API is used; this is the
+# entity's own current-state metadata only. See docs/SYSTEM_HEALTH_HA_DESIGN.md
+# "Phase 3" section for the full caveat. Every sensor below surfaces
+# unknown/unavailable source-entity states as its own UNKNOWN state rather
+# than silently treating them as healthy.
+#
+# REVIEW HARDENING: the three duration-based trigger-template sensors also
+# receive a once-per-minute time_pattern trigger. Trigger-based Template
+# entities only re-render when one of their explicit triggers fires, so a
+# state-only trigger would never cross the 60s/180s stuck thresholds while
+# the underlying boolean remained continuously ON. The one-minute cadence is
+# diagnostic only; blocking begins immediately from the source-state trigger.
+# The duration-based sensors deliberately do not carry a refreshed_at=now()
+# attribute, avoiding a forced recorder-visible attribute change every minute
+# while the underlying subsystem is idle.
+#
+# *** TASK 006A SAFETY FIX ***
+# There is deliberately NO entity named binary_sensor.ecco_manual_control_ready
+# in this file. That is the FINAL, complete-gate entity name reserved by
+# docs/SYSTEM_HEALTH_HA_DESIGN.md's entity plan, and it must never exist
+# until every required blocking precondition (see
+# health/system_health.py's required_control_checks()) is implemented
+# and live-verified - not just the four this partial package evaluates.
+# The entity below uses unique_id ecco_manual_control_ready_reference.
+# Home Assistant generates a deliberately verbose entity_id from its display
+# name, so it cannot be mistaken for the reserved final gate by a future
+# automation/dashboard author.
+# DO NOT USE THIS ENTITY TO DECIDE WHETHER TO ENABLE ANY MANUAL INVERTER
+# CONTROL. It evaluates 4 of the required checks only; see its own
+# `unevaluated_required_preconditions` attribute for the rest.
+#
+# *** PHASE 4 (FB-B3) - STAGED / NOT LIVE-PROVEN ***
+#
+# ecco_health_supervision and ecco_health_fallback (end of file) are the two
+# FB-B3 health sensors. They are read-only relabels of the display layer in
+# ecco_fallback_status.yaml (sensor.ecco_supervision_status and
+# sensor.ecco_fallback_status_code) onto the health vocabulary - never of the
+# firmware UPPER_SNAKE enums directly, so no reason-code-shaped literal can
+# collide with a firmware value. Both subsystems (supervision, fallback) are
+# STANDARD tier (supervision Lost reports WARNING, per FINAL 9.7; it becomes
+# FAILED only when the subsystem becomes CRITICAL at FB-F). Neither blocks
+# manual control and neither is part of binary_sensor.ecco_manual_control_ready.
+# The fallback sensor carries a time_pattern trigger only so lease_restoring
+# can escalate DEGRADED -> WARNING after 10 minutes (same last_changed caveat
+# as the Phase 3 duration sensors: NOT proven restart-safe, can under-report).
+#
+# FB-C3 (STAGED / NOT LIVE-PROVEN): the display cause shadow_episode (an open supervision-loss SHADOW episode,
+# diagnostic only, nothing was written) reports WARNING with the single reason code FAILBACK_SHADOW_EPISODE and the
+# check fallback_shadow_episode. A shadow verdict (BLOCKED_* / WAIT_* / WOULD_*) never reaches this file: only the
+# canonical status code does, and a shadow BLOCKED_* verdict never makes it Blocked (S5 Part A H4).
+
+template:
+  # Keep the partial reference gate state-based. It only derives state from
+  # existing Home Assistant entities, so explicit triggers add no value here;
+  # state-based template entities automatically re-render when referenced
+  # entities change. This also avoids the live-observed 2026-09-18 behaviour
+  # where the trigger-based form passed ha core check but did not register an
+  # entity, with no related template error in the Home Assistant log.
+  - binary_sensor:
+      - name: "ECCO Manual Control Ready (PARTIAL - REFERENCE ONLY, DO NOT USE TO GATE CONTROLS)"
+        unique_id: ecco_manual_control_ready_reference
+        device_class: connectivity
+        # Task 006A fail-closed fix: this partial implementation only
+        # evaluates 4 of the checks health/system_health.py's
+        # required_control_checks() identifies as capable of blocking
+        # manual control (see registry/system_health_checks.yaml and
+        # registry/health_reason_codes.yaml for the full required set -
+        # every check with a blocks_manual_control: true outcome). Per
+        # the fail-closed rule (docs/SYSTEM_HEALTH_ARCHITECTURE.md
+        # section 12), a missing/unevaluated required precondition must
+        # never be silently treated as satisfied - so this entity is
+        # DELIBERATELY NOT named ecco_manual_control_ready, is marked
+        # sufficient_for_control_decision: false unconditionally, and
+        # its `state` reflects only "the 4 checked preconditions are
+        # fine", never "manual control is ready" as a whole.
+        state: >-
+          {% set runtime_ready = states('binary_sensor.ecco_runtime_configuration_ready') == 'on' %}
+          {% set limit_available = states('sensor.ecco_config_maximum_grid_charge_power') not in ['unknown','unavailable','none',''] %}
+          {% set telemetry_online = states('binary_sensor.ecco_clock_dongle_telemetry_online') == 'on' %}
+          {% set config_online = states('binary_sensor.ecco_clock_dongle_configuration_online') == 'on' %}
+          {{ runtime_ready and limit_available and telemetry_online and config_online }}
+        attributes:
+          sufficient_for_control_decision: false
+          warning: >-
+            DO NOT USE THIS ENTITY TO ENABLE OR GATE ANY MANUAL INVERTER
+            CONTROL. It is a partial reference implementation evaluating
+            4 of the required preconditions only - see
+            unevaluated_required_preconditions.
+          evaluated_preconditions: >-
+            {{ ['runtime_configuration_ready',
+                'grid_charge_limit_available',
+                'telemetry_online',
+                'configuration_online'] }}
+          unevaluated_required_preconditions: >-
+            manual_write_in_progress (and its stuck-duration tier),
+            correction_in_progress (and its stuck-duration tier),
+            free_power_operation_in_progress (and its stuck-duration tier),
+            free_power_snapshot_pending_recovery / free_power_active,
+            inverter_alarm_or_fault, config_cache_valid - see
+            docs/SYSTEM_HEALTH_HA_DESIGN.md "Live validation checklist"
+            item 1 for why these are not yet evaluated by this partial
+            implementation. Per the fail-closed rule, treat ANY of these
+            as blocking until they are actually implemented and checked.
+          partial_implementation: true
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - binary_sensor.ecco_clock_dongle_telemetry_online
+          - binary_sensor.ecco_clock_dongle_configuration_online
+          - sensor.ecco_clock_dongle_last_telemetry_update
+          - sensor.ecco_clock_dongle_last_configuration_update
+    sensor:
+      - name: "ECCO Health Communications"
+        unique_id: ecco_health_communications
+        # Implements the telemetry_freshness / configuration_freshness
+        # checks (registry/system_health_checks.yaml) directly - the
+        # one subsystem whose HA entities this audit is most confident
+        # about, since they are the same raw dongle sensors every other
+        # ECCO HA package already depends on.
+        state: >-
+          {% set telemetry_online = states('binary_sensor.ecco_clock_dongle_telemetry_online') == 'on' %}
+          {% set config_online = states('binary_sensor.ecco_clock_dongle_configuration_online') == 'on' %}
+          {% if not telemetry_online or not config_online %}
+            FAILED
+          {% else %}
+            HEALTHY
+          {% endif %}
+        attributes:
+          reason_codes: >-
+            {% set telemetry_online = states('binary_sensor.ecco_clock_dongle_telemetry_online') == 'on' %}
+            {% set config_online = states('binary_sensor.ecco_clock_dongle_configuration_online') == 'on' %}
+            {% set codes = [] %}
+            {% if not telemetry_online %}{% set codes = codes + ['MODBUS_TELEMETRY_STALE'] %}{% endif %}
+            {% if not config_online %}{% set codes = codes + ['MODBUS_CONFIG_STALE'] %}{% endif %}
+            {{ codes }}
+          summary: >-
+            {% set telemetry_online = states('binary_sensor.ecco_clock_dongle_telemetry_online') == 'on' %}
+            {% set config_online = states('binary_sensor.ecco_clock_dongle_configuration_online') == 'on' %}
+            {% if telemetry_online and config_online %}
+              Telemetry and configuration polling both online.
+            {% elif not telemetry_online and not config_online %}
+              Both telemetry and configuration polling are offline.
+            {% elif not telemetry_online %}
+              Telemetry polling offline; configuration polling online.
+            {% else %}
+              Configuration polling offline; telemetry polling online.
+            {% endif %}
+          last_telemetry_update: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') }}"
+          last_configuration_update: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+          blocks_manual_control: true
+          note: >-
+            This entity reports online/offline only (a binary online
+            flag, not the two-tier 60s/180s and 180s/600s age brackets
+            from docs/SYSTEM_HEALTH_ARCHITECTURE.md section 5) - Home
+            Assistant templates do not have a clean way to compute "age
+            since a text-formatted timestamp string" without a
+            reference-vs-now duration helper this design has not yet
+            live-verified; the full DEGRADED/FAILED two-tier version is
+            DESIGNED, not implemented here.
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: binary_sensor.ecco_runtime_configuration_ready
+    sensor:
+      - name: "ECCO Health Runtime Configuration"
+        unique_id: ecco_health_runtime_configuration
+        # Thin relabel of the already-existing, already-live
+        # binary_sensor.ecco_runtime_configuration_ready
+        # (home-assistant/packages/ecco_runtime_config.yaml) onto the
+        # health-subsystem vocabulary - demonstrates runtime_config_ready
+        # (registry/system_health_checks.yaml) without new logic.
+        state: >-
+          {% if states('binary_sensor.ecco_runtime_configuration_ready') == 'on' %}
+            HEALTHY
+          {% elif states('binary_sensor.ecco_runtime_configuration_ready') in ['unknown','unavailable'] %}
+            UNKNOWN
+          {% else %}
+            FAILED
+          {% endif %}
+        attributes:
+          reason_codes: >-
+            {% if states('binary_sensor.ecco_runtime_configuration_ready') == 'on' %}
+              []
+            {% elif states('binary_sensor.ecco_runtime_configuration_ready') in ['unknown','unavailable'] %}
+              ['RUNTIME_CONFIG_UNAVAILABLE']
+            {% else %}
+              ['RUNTIME_CONFIG_NOT_READY']
+            {% endif %}
+          source_entity: binary_sensor.ecco_runtime_configuration_ready
+          blocks_manual_control: true
+          affects_forecast: true
+          refreshed_at: "{{ now().isoformat() }}"
+
+  # ===========================================================================
+  # TASK 007 / PHASE 3 - LIVE-PROVEN NORMAL PATHS. See the file header comment
+  # and docs/SYSTEM_HEALTH_HA_DESIGN.md "Phase 3" section.
+  # ===========================================================================
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_manual_write_in_progress
+      - trigger: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "ECCO Health Manual Write System"
+        unique_id: ecco_health_manual_write_system
+        # Implements registry/system_health_checks.yaml's manual_write_duration
+        # check (subsystem manual_write_system) only. Duration is computed from
+        # states.<entity>.last_changed - see the file header's restart/reconnect
+        # caveat. manual_write_failures_recent and manual_write_arm_unexpected
+        # (same subsystem) are NOT represented - see
+        # not_yet_implemented_checks below.
+        state: >-
+          {% set e = 'binary_sensor.ecco_clock_dongle_manual_write_in_progress' %}
+          {% set s = states(e) %}
+          {% if s in ['unknown', 'unavailable', ''] %}
+            UNKNOWN
+          {% elif s == 'off' %}
+            HEALTHY
+          {% else %}
+            {% set duration = as_timestamp(now()) - as_timestamp(states[e].last_changed) %}
+            {% if duration >= 180 %}
+              FAILED
+            {% else %}
+              WARNING
+            {% endif %}
+          {% endif %}
+        attributes:
+          subsystem: manual_write_system
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['manual_write_duration'] }}"
+          not_yet_implemented_checks: >-
+            manual_write_failures_recent (needs a persisted failure-counter
+            baseline mechanism across Home Assistant restarts - not yet
+            designed/verified, see docs/SYSTEM_HEALTH_HA_DESIGN.md live
+            validation checklist item 3); manual_write_arm_unexpected (needs
+            manual_config_write_enable duration tracking against
+            manual_write_in_progress - not yet implemented).
+          source_entity: binary_sensor.ecco_clock_dongle_manual_write_in_progress
+          reason_codes: >-
+            {% set e = 'binary_sensor.ecco_clock_dongle_manual_write_in_progress' %}
+            {% set s = states(e) %}
+            {% if s in ['unknown', 'unavailable', ''] %}
+              []
+            {% elif s == 'off' %}
+              []
+            {% else %}
+              {% set duration = as_timestamp(now()) - as_timestamp(states[e].last_changed) %}
+              {% if duration >= 180 %}
+                ['MANUAL_WRITE_STUCK']
+              {% else %}
+                ['MANUAL_WRITE_ACTIVE']
+              {% endif %}
+            {% endif %}
+          blocks_manual_control: >-
+            {{ states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') != 'off' }}
+          current_operation_duration_seconds: >-
+            {% set e = 'binary_sensor.ecco_clock_dongle_manual_write_in_progress' %}
+            {% if states(e) == 'on' %}
+              {{ (as_timestamp(now()) - as_timestamp(states[e].last_changed)) | round(0) }}
+            {% else %}
+              none
+            {% endif %}
+          duration_basis: "states.<entity>.last_changed - see file header for the restart/reconnect caveat; NOT proven restart-safe."
+          summary: >-
+            {% set e = 'binary_sensor.ecco_clock_dongle_manual_write_in_progress' %}
+            {% set s = states(e) %}
+            {% if s in ['unknown', 'unavailable', ''] %}
+              Manual write state is unknown/unavailable.
+            {% elif s == 'off' %}
+              No manual write in progress.
+            {% else %}
+              {% set duration = as_timestamp(now()) - as_timestamp(states[e].last_changed) %}
+              {% if duration >= 180 %}
+                Manual write has been in progress for {{ duration | round(0) }}s - beyond the 180s expected worst case.
+              {% else %}
+                Manual write in progress for {{ duration | round(0) }}s - within normal range.
+              {% endif %}
+            {% endif %}
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - binary_sensor.ecco_clock_dongle_rtc_correction_in_progress
+          - binary_sensor.ecco_clock_dongle_rtc_stall_detected
+          - binary_sensor.ecco_clock_dongle_ntp_synced
+      - trigger: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "ECCO Health RTC"
+        unique_id: ecco_health_rtc
+        # Implements three registry checks under subsystem rtc_time:
+        # rtc_correction_duration (transaction_state, 180s stuck bracket),
+        # rtc_stall_detected (boolean_expected: false) and rtc_ntp_synced
+        # (boolean_expected: true). Aggregates using the same rank/tie-break
+        # rule as health/system_health.py's evaluate_subsystem() /
+        # _resolve_flavor_at_rank(): the worst severity rank wins, and at a
+        # shared rank a real finding (WARNING/FAILED/DEGRADED) always beats
+        # UNKNOWN. rtc_read_freshness and rtc_drift_uncorrected (same
+        # subsystem) are deliberately NOT represented - see
+        # not_yet_implemented_checks. Correction COUNT alone is never
+        # evaluated here - only correction_in_progress's CURRENT duration -
+        # per Task 007's explicit instruction that frequent successful
+        # corrections are expected on this installation and must not be
+        # treated as a fault.
+        state: >-
+          {% set e1 = 'binary_sensor.ecco_clock_dongle_rtc_correction_in_progress' %}
+          {% set s1 = states(e1) %}
+          {% if s1 in ['unknown', 'unavailable', ''] %}
+            {% set rank1 = 2 %}{% set state1 = 'UNKNOWN' %}
+          {% elif s1 == 'off' %}
+            {% set rank1 = 0 %}{% set state1 = 'HEALTHY' %}
+          {% else %}
+            {% set dur1 = as_timestamp(now()) - as_timestamp(states[e1].last_changed) %}
+            {% if dur1 >= 180 %}
+              {% set rank1 = 3 %}{% set state1 = 'FAILED' %}
+            {% else %}
+              {% set rank1 = 2 %}{% set state1 = 'WARNING' %}
+            {% endif %}
+          {% endif %}
+          {% set e2 = 'binary_sensor.ecco_clock_dongle_rtc_stall_detected' %}
+          {% set s2 = states(e2) %}
+          {% if s2 in ['unknown', 'unavailable', ''] %}
+            {% set rank2 = 2 %}{% set state2 = 'UNKNOWN' %}
+          {% elif s2 == 'on' %}
+            {% set rank2 = 2 %}{% set state2 = 'WARNING' %}
+          {% else %}
+            {% set rank2 = 0 %}{% set state2 = 'HEALTHY' %}
+          {% endif %}
+          {% set e3 = 'binary_sensor.ecco_clock_dongle_ntp_synced' %}
+          {% set s3 = states(e3) %}
+          {% if s3 in ['unknown', 'unavailable', ''] %}
+            {% set rank3 = 2 %}{% set state3 = 'UNKNOWN' %}
+          {% elif s3 == 'off' %}
+            {% set rank3 = 2 %}{% set state3 = 'WARNING' %}
+          {% else %}
+            {% set rank3 = 0 %}{% set state3 = 'HEALTHY' %}
+          {% endif %}
+          {% set max_rank = [rank1, rank2, rank3] | max %}
+          {% set definite = {0: 'HEALTHY', 1: 'DEGRADED', 2: 'WARNING', 3: 'FAILED'}[max_rank] %}
+          {% set states_at_max = [] %}
+          {% if rank1 == max_rank %}{% set states_at_max = states_at_max + [state1] %}{% endif %}
+          {% if rank2 == max_rank %}{% set states_at_max = states_at_max + [state2] %}{% endif %}
+          {% if rank3 == max_rank %}{% set states_at_max = states_at_max + [state3] %}{% endif %}
+          {% if definite in states_at_max %}
+            {{ definite }}
+          {% elif 'UNKNOWN' in states_at_max %}
+            UNKNOWN
+          {% else %}
+            {{ definite }}
+          {% endif %}
+        attributes:
+          subsystem: rtc_time
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['rtc_correction_duration', 'rtc_stall_detected', 'rtc_ntp_synced'] }}"
+          not_yet_implemented_checks: >-
+            rtc_read_freshness (needs a live clock_difference_valid
+            age/timestamp entity, not confirmed available);
+            rtc_correction_failures_recent (needs a persisted failure-counter
+            baseline mechanism across Home Assistant restarts);
+            rtc_drift_uncorrected (needs live correction_threshold and
+            cooldown_until_ms entities, neither of which is currently exposed
+            to Home Assistant - the raw clock_difference value is surfaced
+            below as an informational attribute only, NOT evaluated against a
+            threshold here).
+          correction_count_note: >-
+            Correction COUNT/frequency is intentionally never evaluated by
+            this sensor - frequent successful corrections are expected on
+            this installation and are not a fault by themselves. Only
+            correction_in_progress's current duration is evaluated.
+          source_entities: >-
+            {{ ['binary_sensor.ecco_clock_dongle_rtc_correction_in_progress',
+                'binary_sensor.ecco_clock_dongle_rtc_stall_detected',
+                'binary_sensor.ecco_clock_dongle_ntp_synced'] }}
+          clock_difference_seconds_informational: "{{ states('sensor.ecco_clock_dongle_clock_difference') }}"
+          reason_codes: >-
+            {% set e1 = 'binary_sensor.ecco_clock_dongle_rtc_correction_in_progress' %}
+            {% set s1 = states(e1) %}
+            {% set codes = [] %}
+            {% if s1 not in ['unknown', 'unavailable', '', 'off'] %}
+              {% set dur1 = as_timestamp(now()) - as_timestamp(states[e1].last_changed) %}
+              {% if dur1 >= 180 %}
+                {% set codes = codes + ['RTC_CORRECTION_STUCK'] %}
+              {% else %}
+                {% set codes = codes + ['RTC_CORRECTION_ACTIVE'] %}
+              {% endif %}
+            {% endif %}
+            {% if states('binary_sensor.ecco_clock_dongle_rtc_stall_detected') == 'on' %}
+              {% set codes = codes + ['RTC_STALL_DETECTED'] %}
+            {% endif %}
+            {% if states('binary_sensor.ecco_clock_dongle_ntp_synced') == 'off' %}
+              {% set codes = codes + ['RTC_NTP_UNSYNCED'] %}
+            {% endif %}
+            {{ codes }}
+          blocks_manual_control: >-
+            {{ states('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress') != 'off' }}
+          current_correction_duration_seconds: >-
+            {% set e = 'binary_sensor.ecco_clock_dongle_rtc_correction_in_progress' %}
+            {% if states(e) == 'on' %}
+              {{ (as_timestamp(now()) - as_timestamp(states[e].last_changed)) | round(0) }}
+            {% else %}
+              none
+            {% endif %}
+          duration_basis: "states.<entity>.last_changed - see file header for the restart/reconnect caveat; NOT proven restart-safe."
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - binary_sensor.ecco_clock_dongle_free_power_operation_in_progress
+          - binary_sensor.ecco_clock_dongle_free_power_active
+          - binary_sensor.ecco_clock_dongle_free_power_snapshot_valid
+      - trigger: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "ECCO Health Free Power"
+        unique_id: ecco_health_free_power
+        # Implements three registry checks under subsystem free_power:
+        # free_power_operation_duration (transaction_state, 180s stuck
+        # bracket), free_power_active_state (boolean_expected: false) and
+        # free_power_snapshot_recovery (derived transaction_state: snapshot
+        # valid AND NOT active, 60s stuck bracket). These three inputs are
+        # deliberately evaluated as separate signals and never conflated -
+        # active/operation-in-progress/snapshot-valid each has its own
+        # meaning per docs/SYSTEM_HEALTH_ARCHITECTURE.md section 11. This
+        # sensor performs no restore action and calls no service - it only
+        # observes and reports, exactly like free_power_snapshot_recovery's
+        # designed semantics.
+        state: >-
+          {% set e1 = 'binary_sensor.ecco_clock_dongle_free_power_operation_in_progress' %}
+          {% set s1 = states(e1) %}
+          {% if s1 in ['unknown', 'unavailable', ''] %}
+            {% set rank1 = 2 %}{% set state1 = 'UNKNOWN' %}
+          {% elif s1 == 'off' %}
+            {% set rank1 = 0 %}{% set state1 = 'HEALTHY' %}
+          {% else %}
+            {% set dur1 = as_timestamp(now()) - as_timestamp(states[e1].last_changed) %}
+            {% if dur1 >= 180 %}
+              {% set rank1 = 3 %}{% set state1 = 'FAILED' %}
+            {% else %}
+              {% set rank1 = 2 %}{% set state1 = 'WARNING' %}
+            {% endif %}
+          {% endif %}
+          {% set e2 = 'binary_sensor.ecco_clock_dongle_free_power_active' %}
+          {% set s2 = states(e2) %}
+          {% if s2 in ['unknown', 'unavailable', ''] %}
+            {% set rank2 = 2 %}{% set state2 = 'UNKNOWN' %}
+          {% elif s2 == 'on' %}
+            {% set rank2 = 2 %}{% set state2 = 'WARNING' %}
+          {% else %}
+            {% set rank2 = 0 %}{% set state2 = 'HEALTHY' %}
+          {% endif %}
+          {% set e3 = 'binary_sensor.ecco_clock_dongle_free_power_snapshot_valid' %}
+          {% set s3 = states(e3) %}
+          {% if s3 in ['unknown', 'unavailable', ''] or s2 in ['unknown', 'unavailable', ''] %}
+            {% set rank3 = 2 %}{% set state3 = 'UNKNOWN' %}
+          {% elif s3 == 'on' and s2 == 'off' %}
+            {% set since3 = [as_timestamp(states[e3].last_changed), as_timestamp(states[e2].last_changed)] | max %}
+            {% set dur3 = as_timestamp(now()) - since3 %}
+            {% if dur3 >= 60 %}
+              {% set rank3 = 3 %}{% set state3 = 'FAILED' %}
+            {% else %}
+              {% set rank3 = 2 %}{% set state3 = 'WARNING' %}
+            {% endif %}
+          {% else %}
+            {% set rank3 = 0 %}{% set state3 = 'HEALTHY' %}
+          {% endif %}
+          {% set max_rank = [rank1, rank2, rank3] | max %}
+          {% set definite = {0: 'HEALTHY', 1: 'DEGRADED', 2: 'WARNING', 3: 'FAILED'}[max_rank] %}
+          {% set states_at_max = [] %}
+          {% if rank1 == max_rank %}{% set states_at_max = states_at_max + [state1] %}{% endif %}
+          {% if rank2 == max_rank %}{% set states_at_max = states_at_max + [state2] %}{% endif %}
+          {% if rank3 == max_rank %}{% set states_at_max = states_at_max + [state3] %}{% endif %}
+          {% if definite in states_at_max %}
+            {{ definite }}
+          {% elif 'UNKNOWN' in states_at_max %}
+            UNKNOWN
+          {% else %}
+            {{ definite }}
+          {% endif %}
+        attributes:
+          subsystem: free_power
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['free_power_operation_duration', 'free_power_active_state', 'free_power_snapshot_recovery'] }}"
+          not_yet_implemented_checks: >-
+            free_power_failures_recent (needs a persisted failure-counter
+            baseline mechanism, same limitation as manual_write_failures_recent);
+            free_power_state_consistency (cross_source_agreement between
+            free_power_active_sensor and the free_power_status text - not
+            implemented in this phase).
+          conflation_note: >-
+            active, operation_in_progress and snapshot_valid are evaluated as
+            three independent signals, never merged into one flag - see the
+            three represented_checks above and their independent
+            source_entities.
+          source_entities: >-
+            {{ ['binary_sensor.ecco_clock_dongle_free_power_operation_in_progress',
+                'binary_sensor.ecco_clock_dongle_free_power_active',
+                'binary_sensor.ecco_clock_dongle_free_power_snapshot_valid'] }}
+          reason_codes: >-
+            {% set e1 = 'binary_sensor.ecco_clock_dongle_free_power_operation_in_progress' %}
+            {% set s1 = states(e1) %}
+            {% set codes = [] %}
+            {% if s1 not in ['unknown', 'unavailable', '', 'off'] %}
+              {% set dur1 = as_timestamp(now()) - as_timestamp(states[e1].last_changed) %}
+              {% if dur1 >= 180 %}
+                {% set codes = codes + ['FREE_POWER_OPERATION_STUCK'] %}
+              {% else %}
+                {% set codes = codes + ['FREE_POWER_OPERATION_ACTIVE'] %}
+              {% endif %}
+            {% endif %}
+            {% if states('binary_sensor.ecco_clock_dongle_free_power_active') == 'on' %}
+              {% set codes = codes + ['FREE_POWER_ACTIVE'] %}
+            {% endif %}
+            {% set s2 = states('binary_sensor.ecco_clock_dongle_free_power_active') %}
+            {% set s3 = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') %}
+            {% if s3 == 'on' and s2 == 'off' %}
+              {% set e2 = 'binary_sensor.ecco_clock_dongle_free_power_active' %}
+              {% set e3 = 'binary_sensor.ecco_clock_dongle_free_power_snapshot_valid' %}
+              {% set since3 = [states[e3].last_changed, states[e2].last_changed] | max %}
+              {% set dur3 = as_timestamp(now()) - as_timestamp(since3) %}
+              {% if dur3 >= 60 %}
+                {% set codes = codes + ['FREE_POWER_RECOVERY_FAILED'] %}
+              {% else %}
+                {% set codes = codes + ['FREE_POWER_RECOVERY_REQUIRED'] %}
+              {% endif %}
+            {% endif %}
+            {{ codes }}
+          blocks_manual_control: >-
+            {% set s1 = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') %}
+            {% set s2 = states('binary_sensor.ecco_clock_dongle_free_power_active') %}
+            {% set s3 = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') %}
+            {{ s1 != 'off' or s2 != 'off' or s3 != 'off' }}
+          current_operation_duration_seconds: >-
+            {% set e = 'binary_sensor.ecco_clock_dongle_free_power_operation_in_progress' %}
+            {% if states(e) == 'on' %}
+              {{ (as_timestamp(now()) - as_timestamp(states[e].last_changed)) | round(0) }}
+            {% else %}
+              none
+            {% endif %}
+          current_snapshot_pending_recovery_duration_seconds: >-
+            {% set e2 = 'binary_sensor.ecco_clock_dongle_free_power_active' %}
+            {% set e3 = 'binary_sensor.ecco_clock_dongle_free_power_snapshot_valid' %}
+            {% if states(e3) == 'on' and states(e2) == 'off' %}
+              {% set since3 = [as_timestamp(states[e3].last_changed), as_timestamp(states[e2].last_changed)] | max %}
+              {{ (as_timestamp(now()) - since3) | round(0) }}
+            {% else %}
+              none
+            {% endif %}
+          duration_basis: >-
+            states.<entity>.last_changed (for the pending-recovery duration:
+            the MORE RECENT of the two contributing entities' last_changed
+            values, as a documented approximation of when the combined
+            condition became true) - see file header for the restart/reconnect
+            caveat; NOT proven restart-safe.
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid
+    sensor:
+      - name: "ECCO Health Configuration"
+        unique_id: ecco_health_configuration
+        # Implements registry/system_health_checks.yaml's config_cache_valid
+        # check only (subsystem inverter_configuration). configuration_freshness
+        # and configuration_failures_recent (same subsystem) remain
+        # unrepresented here - configuration_freshness is already partially
+        # covered, in simplified online/offline form, by the Phase 1
+        # sensor.ecco_health_communications entity.
+        state: >-
+          {% set e = 'binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid' %}
+          {% set s = states(e) %}
+          {% if s in ['unknown', 'unavailable', ''] %}
+            UNKNOWN
+          {% elif s == 'off' %}
+            WARNING
+          {% else %}
+            HEALTHY
+          {% endif %}
+        attributes:
+          subsystem: inverter_configuration
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['config_cache_valid'] }}"
+          not_yet_implemented_checks: >-
+            configuration_freshness (partially covered in simplified
+            online/offline form by sensor.ecco_health_communications, not the
+            full 180s/600s two-tier design); configuration_failures_recent
+            (needs a persisted failure-counter baseline mechanism, same
+            limitation as manual_write_failures_recent).
+          source_entity: binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid
+          reason_codes: >-
+            {% set s = states('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid') %}
+            {% if s == 'off' %}
+              ['CONFIG_CACHE_INVALID']
+            {% else %}
+              []
+            {% endif %}
+          blocks_manual_control: >-
+            {{ states('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid') != 'on' }}
+          summary: >-
+            {% set s = states('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid') %}
+            {% if s in ['unknown', 'unavailable', ''] %}
+              Configuration raw-cache validity is unknown/unavailable.
+            {% elif s == 'off' %}
+              Configuration raw cache is not currently valid - a manual TOU write would be rejected by the firmware.
+            {% else %}
+              Configuration raw cache is valid.
+            {% endif %}
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - sensor.ecco_clock_dongle_ecco_inverter_system_state
+          - sensor.ecco_clock_dongle_ecco_inverter_warning
+          - sensor.ecco_clock_dongle_ecco_inverter_fault
+          - binary_sensor.ecco_clock_dongle_ecco_grid_connected
+    sensor:
+      - name: "ECCO Health Inverter Telemetry"
+        unique_id: ecco_health_inverter_telemetry
+        # Implements two registry/system_health_checks.yaml checks:
+        # inverter_alarm_fault (text_state on ecco_inverter_system_state,
+        # failure_values [alarm, fault]) and inverter_grid_connected
+        # (boolean_expected true on the live register-194 binary sensor).
+        # telemetry_freshness and telemetry_failures_recent remain
+        # unrepresented - telemetry_freshness is already partially covered,
+        # in simplified online/offline form, by the Phase 1
+        # sensor.ecco_health_communications entity. inverter_grid_connected
+        # is represented here using the already-live-proven register-194
+        # binary sensor used by the production dashboard.
+        state: >-
+          {% set e1 = 'sensor.ecco_clock_dongle_ecco_inverter_system_state' %}
+          {% set raw1 = states(e1) %}
+          {% set s1 = raw1 | lower %}
+          {% if raw1 in ['unknown', 'unavailable', ''] %}
+            {% set rank1 = 2 %}{% set state1 = 'UNKNOWN' %}
+          {% elif s1 in ['alarm', 'fault'] %}
+            {% set rank1 = 3 %}{% set state1 = 'FAILED' %}
+          {% else %}
+            {% set rank1 = 0 %}{% set state1 = 'HEALTHY' %}
+          {% endif %}
+          {% set e2 = 'binary_sensor.ecco_clock_dongle_ecco_grid_connected' %}
+          {% set s2 = states(e2) %}
+          {% if s2 in ['unknown', 'unavailable', ''] %}
+            {% set rank2 = 2 %}{% set state2 = 'UNKNOWN' %}
+          {% elif s2 == 'off' %}
+            {% set rank2 = 2 %}{% set state2 = 'WARNING' %}
+          {% else %}
+            {% set rank2 = 0 %}{% set state2 = 'HEALTHY' %}
+          {% endif %}
+          {% set max_rank = [rank1, rank2] | max %}
+          {% set definite = {0: 'HEALTHY', 1: 'DEGRADED', 2: 'WARNING', 3: 'FAILED'}[max_rank] %}
+          {% set states_at_max = [] %}
+          {% if rank1 == max_rank %}{% set states_at_max = states_at_max + [state1] %}{% endif %}
+          {% if rank2 == max_rank %}{% set states_at_max = states_at_max + [state2] %}{% endif %}
+          {% if definite in states_at_max %}
+            {{ definite }}
+          {% elif 'UNKNOWN' in states_at_max %}
+            UNKNOWN
+          {% else %}
+            {{ definite }}
+          {% endif %}
+        attributes:
+          subsystem: inverter_telemetry
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['inverter_alarm_fault', 'inverter_grid_connected'] }}"
+          not_yet_implemented_checks: >-
+            telemetry_freshness (partially covered in simplified
+            online/offline form by sensor.ecco_health_communications, not the
+            full 60s/180s two-tier design); telemetry_failures_recent (needs
+            a persisted failure-counter baseline mechanism).
+          source_entities: >-
+            {{ ['sensor.ecco_clock_dongle_ecco_inverter_system_state',
+                'binary_sensor.ecco_clock_dongle_ecco_grid_connected'] }}
+          inverter_warning_text_informational: "{{ states('sensor.ecco_clock_dongle_ecco_inverter_warning') }}"
+          inverter_fault_text_informational: "{{ states('sensor.ecco_clock_dongle_ecco_inverter_fault') }}"
+          informational_note: >-
+            The warning/fault text attributes above are surfaced for
+            visibility only - they are not part of the registered
+            inverter_alarm_fault check (which evaluates the system-state
+            enum only, per registry/system_health_checks.yaml) and do not
+            independently affect this sensor's state.
+          reason_codes: >-
+            {% set e = 'sensor.ecco_clock_dongle_ecco_inverter_system_state' %}
+            {% set raw = states(e) %}
+            {% set s = raw | lower %}
+            {% set codes = [] %}
+            {% if raw not in ['unknown', 'unavailable', ''] and s in ['alarm', 'fault'] %}
+              {% set codes = codes + ['INVERTER_ALARM_OR_FAULT'] %}
+            {% endif %}
+            {% if states('binary_sensor.ecco_clock_dongle_ecco_grid_connected') == 'off' %}
+              {% set codes = codes + ['INVERTER_GRID_DISCONNECTED'] %}
+            {% endif %}
+            {{ codes }}
+          blocks_manual_control: >-
+            {% set e = 'sensor.ecco_clock_dongle_ecco_inverter_system_state' %}
+            {% set raw = states(e) %}
+            {{ raw in ['unknown', 'unavailable', ''] or (raw | lower) in ['alarm', 'fault'] }}
+          refreshed_at: "{{ now().isoformat() }}"
+
+  # ===========================================================================
+  # PHASE 4 (FB-B3) - supervision / fallback. STAGED / NOT LIVE-PROVEN.
+  # Inputs are the display-layer sensors in ecco_fallback_status.yaml.
+  # ===========================================================================
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_supervision_status
+    sensor:
+      - name: "ECCO Health Supervision"
+        unique_id: ecco_health_supervision
+        state: >-
+          {%- set d = states('sensor.ecco_supervision_status') -%}
+          {%- if d == 'Healthy' -%}HEALTHY
+          {%- elif d in ['Recovering', 'Awaiting Heartbeat'] -%}DEGRADED
+          {%- elif d == 'Suspect' -%}WARNING
+          {%- elif d == 'Lost' -%}WARNING
+          {%- else -%}UNKNOWN
+          {%- endif -%}
+        attributes:
+          subsystem: supervision
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          reason_codes: >-
+            {%- set d = states('sensor.ecco_supervision_status') -%}
+            {%- if d == 'Healthy' -%}[]
+            {%- elif d == 'Recovering' -%}['SUPERVISION_NOT_STABLE']
+            {%- elif d == 'Awaiting Heartbeat' -%}['SUPERVISION_STARTING']
+            {%- elif d == 'Suspect' -%}['SUPERVISION_SUSPECT']
+            {%- elif d == 'Lost' -%}['SUPERVISION_LOST']
+            {%- else -%}['SUPERVISION_UNAVAILABLE']
+            {%- endif -%}
+          represented_checks: "{{ ['supervision_status_available', 'supervision_startup', 'supervision_not_stable', 'supervision_suspect', 'supervision_lost'] }}"
+          source_entity: sensor.ecco_supervision_status
+          blocks_manual_control: false
+          affects_forecast: false
+          summary: "{{ state_attr('sensor.ecco_supervision_status', 'subline') }}"
+
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id: sensor.ecco_fallback_status_code
+      - trigger: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "ECCO Health Fallback"
+        unique_id: ecco_health_fallback
+        # lease_restoring is DEGRADED while a temporary operation finishes
+        # restoring, and escalates to WARNING once the status code has held
+        # that value for 10 minutes (last_changed basis; see file header).
+        state: >-
+          {%- set c = states('sensor.ecco_fallback_status_code') -%}
+          {%- if c in ['match', 'paused'] -%}HEALTHY
+          {%- elif c in ['not_captured', 'invalidated', 'drift_values'] -%}DEGRADED
+          {%- elif c == 'lease_restoring' -%}
+            {%- if (as_timestamp(now()) - as_timestamp(states['sensor.ecco_fallback_status_code'].last_changed)) >= 600 -%}WARNING
+            {%- else -%}DEGRADED
+            {%- endif -%}
+          {%- elif c in ['drift_context', 'drift_export', 'profile_unusable', 'save_unconfirmed', 'profile_regressed', 'live_out_of_domain', 'lease_unreadable', 'lease_lockout', 'shadow_episode'] -%}WARNING
+          {%- else -%}UNKNOWN
+          {%- endif -%}
+        attributes:
+          subsystem: fallback
+          partial_implementation: true
+          sufficient_for_control_decision: false
+          represented_checks: "{{ ['fallback_status_available', 'fallback_live_unknown', 'fallback_not_captured', 'fallback_invalidated', 'fallback_drifted', 'fallback_context_changed', 'fallback_export_enabled', 'fallback_unusable', 'fallback_save_unconfirmed', 'fallback_profile_regressed', 'fallback_live_out_of_domain', 'fallback_blocked_by_lease', 'fallback_shadow_episode'] }}"
+          not_yet_implemented_checks: >-
+            The FB-E/F recovery-record checks are reserved and not
+            registered until those stages land.
+          source_entity: sensor.ecco_fallback_status_code
+          reason_codes: >-
+            {%- set c = states('sensor.ecco_fallback_status_code') -%}
+            {%- if c in ['match', 'paused'] -%}[]
+            {%- elif c == 'live_unknown' -%}['FALLBACK_LIVE_UNKNOWN']
+            {%- elif c == 'not_captured' -%}['FALLBACK_NOT_CAPTURED']
+            {%- elif c == 'invalidated' -%}['FALLBACK_INVALIDATED']
+            {%- elif c == 'drift_values' -%}['FALLBACK_DRIFTED']
+            {%- elif c == 'drift_context' -%}['FALLBACK_CONTEXT_CHANGED']
+            {%- elif c == 'drift_export' -%}['FALLBACK_EXPORT_ENABLED']
+            {%- elif c == 'profile_unusable' -%}['FALLBACK_UNUSABLE']
+            {%- elif c == 'save_unconfirmed' -%}['FALLBACK_SAVE_UNCONFIRMED']
+            {%- elif c == 'profile_regressed' -%}['FALLBACK_REGRESSED']
+            {%- elif c == 'live_out_of_domain' -%}['FALLBACK_LIVE_OUT_OF_DOMAIN']
+            {%- elif c in ['lease_unreadable', 'lease_lockout', 'lease_restoring'] -%}['FALLBACK_BLOCKED_BY_LEASE']
+            {%- elif c == 'shadow_episode' -%}['FAILBACK_SHADOW_EPISODE']
+            {%- else -%}['FALLBACK_STATUS_UNAVAILABLE']
+            {%- endif -%}
+          blocks_manual_control: false
+          affects_forecast: false
+          summary: "{{ state_attr('sensor.ecco_fallback_status', 'subline') }}"

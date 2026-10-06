@@ -1,0 +1,729 @@
+{
+  "idle_saved": {
+    "label": "Saved, never reviewed",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "live": "UNKNOWN",
+      "button": "enabled"
+    }
+  },
+  "reading": {
+    "label": "Reading (pass 1 / 2 / compare)",
+    "expect": {
+      "profile": "saved",
+      "review": "reading",
+      "hasCand": false,
+      "live": "CHECKING",
+      "button": "disabled"
+    }
+  },
+  "ready_match": {
+    "label": "Candidate ready, matches",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "MATCHES SAVED PROFILE",
+      "button": "enabled",
+      "exp": 87,
+      "dx": "00000"
+    }
+  },
+  "ready_diff": {
+    "label": "Candidate ready, differs",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "DIFFERS",
+      "button": "enabled",
+      "exp": 112,
+      "dx": "10004",
+      "di": "01"
+    }
+  },
+  "ready_expiring": {
+    "label": "Candidate, 12 s left",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "MATCHES SAVED PROFILE",
+      "button": "enabled",
+      "exp": 12
+    }
+  },
+  "ready_nosup": {
+    "label": "Candidate ready, no supervision / NTP",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "MATCHES SAVED PROFILE",
+      "button": "enabled",
+      "exp": 95,
+      "checkStates": [
+        "pass",
+        "pass",
+        "pass",
+        "pass",
+        "fail",
+        "fail"
+      ]
+    }
+  },
+  "not_saveable": {
+    "label": "Not saveable (power below minimum, generator source)",
+    "expect": {
+      "profile": "saved",
+      "review": "notsaveable",
+      "hasCand": true,
+      "eligible": false,
+      "button": "enabled",
+      "exp": 101,
+      "blockers": 2
+    }
+  },
+  "mismatch": {
+    "label": "Mismatch during read",
+    "expect": {
+      "profile": "saved",
+      "review": "mismatch",
+      "hasCand": false,
+      "button": "enabled",
+      "mismatch": {
+        "reg": 257,
+        "a": "8000",
+        "b": "5000"
+      }
+    }
+  },
+  "read_error": {
+    "label": "Read not completed (no response)",
+    "expect": {
+      "profile": "saved",
+      "review": "readerror",
+      "hasCand": false,
+      "button": "enabled",
+      "block": "241/53"
+    }
+  },
+  "refused": {
+    "label": "Blocked (refused, Free Power active)",
+    "expect": {
+      "profile": "saved",
+      "review": "refused",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "expired": {
+    "label": "Candidate expired",
+    "expect": {
+      "profile": "saved",
+      "review": "expired",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "cleared": {
+    "label": "Candidate cleared",
+    "expect": {
+      "profile": "saved",
+      "review": "cleared",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "not_captured": {
+    "label": "No profile saved",
+    "expect": {
+      "profile": "notsaved",
+      "review": "available",
+      "hasCand": false,
+      "live": "UNKNOWN",
+      "button": "enabled"
+    }
+  },
+  "not_captured_cand": {
+    "label": "No profile, candidate ready",
+    "expect": {
+      "profile": "notsaved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "UNKNOWN",
+      "button": "enabled",
+      "exp": 110
+    }
+  },
+  "invalidated": {
+    "label": "Profile invalidated",
+    "expect": {
+      "profile": "invalidated",
+      "review": "available",
+      "hasCand": false,
+      "live": "UNKNOWN",
+      "button": "enabled"
+    }
+  },
+  "unusable": {
+    "label": "Profile unusable (CORRUPT)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "live": "UNKNOWN",
+      "button": "enabled"
+    }
+  },
+  "unavailable": {
+    "label": "Entities unavailable",
+    "expect": {
+      "profile": "unavailable",
+      "review": "unavailable",
+      "hasCand": false,
+      "button": "disabled",
+      "live": "NOT REPORTING"
+    }
+  },
+  "bus_busy": {
+    "label": "Read not completed (bus stayed busy)",
+    "expect": {
+      "profile": "saved",
+      "review": "readerror",
+      "hasCand": false,
+      "button": "enabled",
+      "block": null
+    }
+  },
+  "internal": {
+    "label": "Internal state reset",
+    "expect": {
+      "profile": "saved",
+      "review": "internal",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "refused_lock": {
+    "label": "Refused, write lock held",
+    "expect": {
+      "profile": "saved",
+      "review": "refused",
+      "hasCand": false,
+      "button": "disabled"
+    }
+  },
+  "refused_boot": {
+    "label": "Refused, durable state not loaded (other entities not published yet)",
+    "expect": {
+      "profile": "unavailable",
+      "review": "refused",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "refused_latch": {
+    "label": "Refused, marker latch",
+    "expect": {
+      "profile": "saved",
+      "review": "refused",
+      "hasCand": false,
+      "button": "enabled",
+      "latch": [
+        "FP"
+      ]
+    }
+  },
+  "unreadable": {
+    "label": "Profile unreadable",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "profile_lost": {
+    "label": "Profile lost",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "profile_stale": {
+    "label": "Profile stale",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "corrupt_domain": {
+    "label": "Profile out of the supported range (CORRUPT_DOMAIN)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "save_unconfirmed": {
+    "label": "Save unconfirmed (class renders, never produced by FB-B1)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "witness_lag": {
+    "label": "Valid profile, lagging witness",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "ready_corrupt_prior": {
+    "label": "Candidate ready over a CORRUPT profile",
+    "expect": {
+      "profile": "unusable",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 100,
+      "notes": 1
+    }
+  },
+  "not_saveable_unreadable": {
+    "label": "Not saveable because the stored profile is unreadable",
+    "expect": {
+      "profile": "unusable",
+      "review": "notsaveable",
+      "hasCand": true,
+      "eligible": false,
+      "button": "enabled",
+      "exp": 90,
+      "blockers": 1
+    }
+  },
+  "not_saveable_many": {
+    "label": "Not saveable, many reasons",
+    "expect": {
+      "profile": "saved",
+      "review": "notsaveable",
+      "hasCand": true,
+      "eligible": false,
+      "button": "enabled",
+      "exp": 60,
+      "blockers": 4
+    }
+  },
+  "ready_warn": {
+    "label": "Candidate ready with warnings W2 W3 W4 W5",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 80,
+      "warnings": 4
+    }
+  },
+  "ready_w1": {
+    "label": "Candidate ready, looks like a Free Power overlay (W1)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 118,
+      "warnings": 1
+    }
+  },
+  "ready_w6": {
+    "label": "Candidate ready, ring invalid (W6)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 70,
+      "warnings": 1
+    }
+  },
+  "ready_ctx_diff": {
+    "label": "Candidate ready, slot time differs (context)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "DIFFERS (CONTEXT)",
+      "button": "enabled",
+      "exp": 66,
+      "dc": "080"
+    }
+  },
+  "ready_both_diff": {
+    "label": "Candidate ready, a slot time and two settings differ (dx and dc together)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "DIFFERS (CONTEXT)",
+      "button": "enabled",
+      "exp": 98,
+      "dx": "10004",
+      "dc": "008",
+      "di": "01"
+    }
+  },
+  "ready_info_diff": {
+    "label": "Candidate ready, only information registers differ",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "live": "MATCHES SAVED PROFILE",
+      "button": "enabled",
+      "exp": 75,
+      "di": "06"
+    }
+  },
+  "ready_exp0": {
+    "label": "Candidate ready, exp=0 (waiting for the firmware)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 0
+    }
+  },
+  "transient_op": {
+    "label": "Candidate ready, but a temporary operation is reported",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 55,
+      "checkStates": [
+        "pass",
+        "pass",
+        "pass",
+        "warn",
+        "pass",
+        "pass"
+      ]
+    }
+  },
+  "partial_unavailable": {
+    "label": "Review entity unavailable, others present",
+    "expect": {
+      "profile": "saved",
+      "review": "unavailable",
+      "hasCand": false,
+      "button": "disabled",
+      "live": "NOT REPORTING"
+    }
+  },
+  "malformed_review": {
+    "label": "Review entity garbled",
+    "expect": {
+      "profile": "saved",
+      "review": "unavailable",
+      "hasCand": false,
+      "button": "disabled",
+      "live": "NOT REPORTING"
+    },
+    "offGrammar": true
+  },
+  "st_unrecognised": {
+    "label": "Review status not recognised",
+    "expect": {
+      "profile": "saved",
+      "review": "unrecognised",
+      "hasCand": false,
+      "button": "disabled"
+    },
+    "offGrammar": true
+  },
+  "config_offline": {
+    "label": "Configuration polling offline",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled"
+    }
+  },
+  "button_unavailable": {
+    "label": "Review button unavailable",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "disabled"
+    }
+  },
+  "arm_on_ready": {
+    "label": "Candidate ready, arm on (confirm panel)",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 87,
+      "armState": true,
+      "save": "allowed",
+      "variant": "save"
+    }
+  },
+  "arm_on_corrupt": {
+    "label": "Candidate over a CORRUPT profile, arm on (REPLACE CORRUPT)",
+    "expect": {
+      "profile": "unusable",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 100,
+      "armState": true,
+      "save": "allowed",
+      "variant": "replace_corrupt"
+    }
+  },
+  "arm_on_first": {
+    "label": "First save: no profile, candidate ready, arm on",
+    "expect": {
+      "profile": "notsaved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 110,
+      "armState": true,
+      "save": "allowed",
+      "variant": "save"
+    }
+  },
+  "arm_unavailable": {
+    "label": "Candidate ready, arm entity unavailable",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 87,
+      "armState": null,
+      "save": "blocked"
+    }
+  },
+  "arm_on_no_candidate": {
+    "label": "Arm on, no candidate (stray arm; invalidate arm)",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "armState": true,
+      "save": "blocked"
+    }
+  },
+  "ready_other_arm_on": {
+    "label": "Candidate ready, another write arm is on",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "enabled",
+      "exp": 87,
+      "armState": false,
+      "save": "blocked"
+    }
+  },
+  "ready_bus_busy": {
+    "label": "Candidate ready, inverter bus busy",
+    "expect": {
+      "profile": "saved",
+      "review": "ready",
+      "hasCand": true,
+      "eligible": true,
+      "button": "disabled",
+      "exp": 87,
+      "armState": false,
+      "save": "blocked"
+    }
+  },
+  "saving": {
+    "label": "Saving (B3 st=SAVING)",
+    "expect": {
+      "profile": "saved",
+      "review": "saving",
+      "hasCand": false,
+      "button": "disabled",
+      "live": "CHECKING",
+      "act": "save:progress"
+    }
+  },
+  "saved_ok": {
+    "label": "Saved and verified (generation 8)",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:saved",
+      "verified": true
+    }
+  },
+  "saved_first": {
+    "label": "First save verified (generation 1)",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:saved",
+      "verified": true
+    }
+  },
+  "save_refused_arm": {
+    "label": "Save refused: arm not on",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:refused"
+    }
+  },
+  "save_refused_hb": {
+    "label": "Save refused: heartbeat not stable",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:refused"
+    }
+  },
+  "save_changed": {
+    "label": "Save refused: configuration changed since Review",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:refused"
+    }
+  },
+  "save_not_committed": {
+    "label": "Save not committed: storage refused the write",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:notcommitted"
+    }
+  },
+  "save_stale_witness": {
+    "label": "Save not committed: witness advanced (profile stale)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:notcommitted",
+      "witness": true
+    }
+  },
+  "save_unknown": {
+    "label": "Save outcome unknown (SAVE_UNCONFIRMED)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "save:unknown"
+    }
+  },
+  "invalidated_ok": {
+    "label": "Invalidated (generation 7 -> record g8)",
+    "expect": {
+      "profile": "invalidated",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "invalidate:invalidated",
+      "verified": true
+    }
+  },
+  "invalidate_refused": {
+    "label": "Invalidate refused: inverter busy",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "invalidate:refused"
+    }
+  },
+  "invalidate_stale": {
+    "label": "Invalidate not committed: generation record advanced",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "invalidate:notcommitted",
+      "witness": true
+    }
+  },
+  "invalidate_unknown": {
+    "label": "Invalidate outcome unknown (SAVE_UNCONFIRMED)",
+    "expect": {
+      "profile": "unusable",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "invalidate:unknown"
+    }
+  },
+  "action_refused": {
+    "label": "Action refused: unsupported action",
+    "expect": {
+      "profile": "saved",
+      "review": "available",
+      "hasCand": false,
+      "button": "enabled",
+      "act": "other:refused"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "ECCO Energy Flow Card",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "ecco-energy-flow-card.js",
+  "homeassistant": "2024.8.0"
+}

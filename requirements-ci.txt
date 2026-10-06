@@ -1,0 +1,7 @@
+# Python packages the CI validation jobs install (tools/validate_repo.py, tools/analyze_write_surface.py and the
+# offline suites). Exact versions are the ones the suites were validated with locally. Hash-pinning
+# (pip install --require-hashes) is a possible later tightening; ESPHome is pinned in the workflow's firmware job
+# because registry/tests/test_fallback_durable_model.py reads that pin from the workflow file.
+PyYAML==6.0.3
+Jinja2==3.1.6
+MarkupSafe==3.0.3

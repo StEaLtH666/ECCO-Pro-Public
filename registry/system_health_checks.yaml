@@ -1,0 +1,1424 @@
+# ECCO Pro - system health check registry (Task 006, hardened in Task 006A)
+#
+# One record per independently-evaluated health check. Read-only
+# design artifact: nothing in this repository currently reads this
+# file to drive a live sensor or make a control decision. See
+# docs/SYSTEM_HEALTH_ARCHITECTURE.md for the full design and every
+# threshold's evidence, docs/SYSTEM_HEALTH_REASON_CODES.md and
+# registry/health_reason_codes.yaml for the reason-code catalog this
+# file's `outcomes[].reason_code` values reference, and
+# tools/validate_system_health_checks.py for what is mechanically
+# enforced.
+#
+# Field schema per check:
+#   id                    <snake_case, unique>
+#   subsystem             <one of the 16 subsystems - see the architecture doc section 3>
+#   description           <free text>
+#   source:
+#     entity              <HA entity id, firmware id, or a documented derived-condition description>
+#     type                <esphome_sensor | ha_binary_sensor | ha_template_sensor |
+#                           influx_diagnostic | repository_file | derived | cross_source>
+#   expected_datatype     <bool | numeric | string | timestamp | enum | counter>
+#   check_type            <entity_available | freshness | boolean_expected | numeric_range |
+#                           failure_counter_delta | text_state | transaction_state |
+#                           timestamp_age | cross_source_agreement | history_depth |
+#                           version_match | conditional_presence>
+#   parameters            <check_type-specific dict - see tools/validate_system_health_checks.py
+#                           for exactly which keys each check_type requires. Threshold field
+#                           names (warning_threshold_seconds / failure_threshold_seconds,
+#                           warning_delta / failure_delta) denote ORDERING (first tier / second,
+#                           more severe tier), not a literal WARNING/FAILED state guarantee - the
+#                           actual state each tier produces comes from that outcome's reason_code
+#                           severity in registry/health_reason_codes.yaml. A single-outcome check
+#                           MUST set exactly one of the pair (never both - the validator rejects
+#                           an ambiguous single-outcome check with two threshold tiers); a
+#                           multi-outcome check MUST set both. thresholds_unresolved: true marks
+#                           a check where no repository evidence supports ANY fixed threshold
+#                           (see docs/SYSTEM_HEALTH_ARCHITECTURE.md section 5)>
+#   applicability_condition  <free text, or null if the check always applies>
+#   outcomes:             <list of {reason_code, condition} - a check may produce more than
+#                           one outcome at different severities/thresholds (e.g. a freshness
+#                           check's two tiers); every reason_code must exist in
+#                           registry/health_reason_codes.yaml, which is the single source of
+#                           truth for severity/blocks_manual_control/affects_forecast>
+#   dependencies           <list of other check ids this check's own evaluation is informed
+#                           by - validated to exist, no cycles>
+#   evidence               <REQUIRED - firmware:line / HA package path / doc citation>
+#   implementation_status  <designed | implemented_offline | not_implemented>
+#   live_proof_status      <unknown | documented_not_live_proven | live_proven_read>
+#   rollup_participation   <OPTIONAL, default "automatic" - one of:
+#                             automatic       participates in evaluate_subsystem()/
+#                                             evaluate_overall()'s automatic rollup (the default)
+#                             diagnostic_only excluded from automatic rollup: a manual/ad-hoc
+#                                             diagnostic (e.g. a Flux script) with no continuous
+#                                             live signal or no evidenced fixed threshold
+#                             manual_only     excluded from automatic rollup: a PERMANENT
+#                                             repository-level limitation (e.g. "no live entity
+#                                             exists to verify this") that would otherwise poison
+#                                             the automatic overall state forever
+#                           Task 006A section 3 - a diagnostic_only/manual_only check is still
+#                           fully evaluated and visible (SubsystemResult.diagnostic_results), it
+#                           just never contributes to sensor.ecco_system_health's automatic state.>
+#   suppressed_is_safe_for_control  <OPTIONAL bool, default false - Task 006A section 1. A
+#                           required (blocking-capable) check that evaluates SUPPRESSED still
+#                           BLOCKS manual_control_ready by default (fail closed); set this true
+#                           only when the check's applicability semantics genuinely make its
+#                           absence safe for a new manual action (no current check in this
+#                           registry sets this - see health/tests/test_system_health.py for a
+#                           synthetic example of both branches).>
+#
+# `blocks_manual_control` and `affects_forecast` are deliberately NOT
+# duplicated at the check level - they belong to each reason code in
+# registry/health_reason_codes.yaml (a single check's different
+# outcomes can have different blocking behaviour, e.g. telemetry
+# DEGRADED does not block manual control but STALE does - a per-check
+# flag could not represent that correctly).
+#
+# Do not build a generic framework merely for abstraction's sake: only
+# the check_type values ECCO's real signals actually need are used
+# here (see docs/SYSTEM_HEALTH_ARCHITECTURE.md section 4 for which
+# ones - `hash_match` is defined in the validator's enum but
+# deliberately unused by any check today, for the reason documented
+# there).
+
+schema_version: 1
+checks:
+- id: esphome_reachable
+  subsystem: communications
+  description: Home Assistant's own connection state to the ECCO ESPHome device (API/MQTT).
+  source:
+    entity: ESPHome device availability (HA-side, not a firmware entity)
+    type: ha_binary_sensor
+  expected_datatype: bool
+  check_type: entity_available
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: INSUFFICIENT_EVIDENCE
+    condition: The device has never reported any state to Home Assistant.
+  - reason_code: ESPHOME_UNAVAILABLE
+    condition: The device previously reported state but is now unavailable.
+  dependencies: []
+  evidence: No firmware self-report of HA connectivity exists; this is HA's own ESPHome integration availability
+    state.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: wifi_signal_quality
+  subsystem: communications
+  description: ESP32 Wi-Fi RSSI plausibility range.
+  source:
+    entity: wifi_signal (platform wifi_signal sensor)
+    type: esphome_sensor
+  expected_datatype: numeric
+  check_type: numeric_range
+  parameters:
+    min: -90
+    max: 0
+    unit: dBm
+  applicability_condition: null
+  outcomes:
+  - reason_code: WIFI_SIGNAL_UNKNOWN
+    condition: Value is outside -90..0 dBm - not a real RSSI reading, most likely the sensor has never
+      reported.
+  dependencies:
+  - esphome_reachable
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml:1430 (platform: wifi_signal). -90 to
+    0 dBm is the conventional Wi-Fi RSSI plausibility range, not a project-specific measured threshold
+    - documented as a plausibility bound, not a proven quality threshold. Task 006B: uses the dedicated
+    non-blocking WIFI_SIGNAL_UNKNOWN reason code, not the blocking-by-default INSUFFICIENT_EVIDENCE,
+    since Wi-Fi signal quality alone must never gate manual control - esphome_reachable is the separate,
+    dedicated reachability check.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: telemetry_freshness
+  subsystem: inverter_telemetry
+  description: Age of the last successful telemetry poll (registers block 59-116 and 150-196).
+  source:
+    entity: last_telemetry_update / telemetry_online
+    type: esphome_sensor
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: 10
+    warning_threshold_seconds: 60
+    failure_threshold_seconds: 180
+  applicability_condition: live_telemetry switch is on (see telemetry_polling_enabled check for the off
+    case)
+  outcomes:
+  - reason_code: MODBUS_TELEMETRY_DEGRADED
+    condition: Age between 60s and 180s.
+  - reason_code: MODBUS_TELEMETRY_STALE
+    condition: Age at or beyond 180s.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:6042-6051 (10s interval, 5s startup_delay,
+    gated on live_telemetry/correction/manual-write); docs/SYSTEM_HEALTH_ARCHITECTURE.md section 5 threshold
+    rationale.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: telemetry_failures_recent
+  subsystem: inverter_telemetry
+  description: Recent-vs-historical delta on the cumulative telemetry_failures counter.
+  source:
+    entity: telemetry_failures
+    type: esphome_sensor
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 600
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: MODBUS_TELEMETRY_FAILURES_RECENT
+    condition: delta > 0 within the 600s window while the most recent poll succeeded.
+  dependencies:
+  - telemetry_freshness
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:180 (counter id), incremented in poll_inverter_telemetry's
+    on_error/on_no_response handlers; docs/SYSTEM_HEALTH_ARCHITECTURE.md section 6.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: inverter_alarm_fault
+  subsystem: inverter_telemetry
+  description: Inverter system-state register must not report alarm or fault.
+  source:
+    entity: ecco_inverter_system_state (register 59)
+    type: esphome_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - alarm
+    - fault
+    warning_values:
+    - unknown (%u)
+  applicability_condition: null
+  outcomes:
+  - reason_code: INVERTER_ALARM_OR_FAULT
+    condition: State is alarm or fault.
+  dependencies:
+  - telemetry_freshness
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml:4715-4739 (enum decode: 0=standby,1=self-check,2=normal,3=alarm,4=fault).'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: inverter_grid_connected
+  subsystem: inverter_telemetry
+  description: Inverter-reported grid-connected boolean.
+  source:
+    entity: ecco_grid_connected (register 194)
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: true
+  applicability_condition: null
+  outcomes:
+  - reason_code: INVERTER_GRID_DISCONNECTED
+    condition: Value is false.
+  dependencies:
+  - telemetry_freshness
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml: block 150-196, values[44] -> register
+    194.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: configuration_freshness
+  subsystem: inverter_configuration
+  description: Age of the last successful configuration poll (register blocks 200-240 and 241-293).
+  source:
+    entity: last_configuration_update / configuration_online
+    type: esphome_sensor
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: 60
+    warning_threshold_seconds: 180
+    failure_threshold_seconds: 600
+  applicability_condition: configuration_polling switch is on
+  outcomes:
+  - reason_code: MODBUS_CONFIG_DEGRADED
+    condition: Age between 180s and 600s.
+  - reason_code: MODBUS_CONFIG_STALE
+    condition: Age at or beyond 600s.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:6056-6065 (60s interval, 20s startup_delay,
+    gated on configuration_polling/correction/manual-write); firmware:6053-6055 comment 'slow-changing
+    data'.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: configuration_failures_recent
+  subsystem: inverter_configuration
+  description: Recent-vs-historical delta on the cumulative configuration_failures counter.
+  source:
+    entity: configuration_failures
+    type: esphome_sensor
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 600
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: MODBUS_CONFIG_FAILURES_RECENT
+    condition: delta > 0 within the 600s window while the most recent poll succeeded.
+  dependencies:
+  - configuration_freshness
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:184 (counter id), incremented in poll_inverter_configuration's
+    on_error/on_no_response handlers.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: config_cache_valid
+  subsystem: inverter_configuration
+  description: Cached raw register values used for safe read-modify-write of shared TOU bitfields.
+  source:
+    entity: manual_config_raw_cache_valid
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: true
+  applicability_condition: null
+  outcomes:
+  - reason_code: CONFIG_CACHE_INVALID
+    condition: Value is false.
+  dependencies:
+  - configuration_freshness
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:5057/5069 (set false on poll failure),
+    5226 (set true once block 241-293 has been read).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_ntp_synced
+  subsystem: rtc_time
+  description: ESP32 SNTP sync confirmation.
+  source:
+    entity: ntp_synced
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: true
+  applicability_condition: null
+  outcomes:
+  - reason_code: RTC_NTP_UNSYNCED
+    condition: Value is false.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:100/1124, set true on first successful
+    SNTP sync; update_interval 15min at firmware:75.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_read_freshness
+  subsystem: rtc_time
+  description: Age of the last successful inverter RTC read.
+  source:
+    entity: clock_difference_valid
+    type: esphome_sensor
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: 60
+    warning_threshold_seconds: 180
+    failure_threshold_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: RTC_READ_STALE
+    condition: Age at or beyond 180s - shares gating conditions with configuration polling, so this check
+      alone does not distinguish degraded vs failed; see inverter_configuration for the failed-tier signal
+      on the same root cause.
+  dependencies:
+  - configuration_freshness
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:6031-6040 (60s interval, 30s startup_delay,
+    same !correction_in_progress && !manual_write_in_progress gating as configuration polling).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_correction_duration
+  subsystem: rtc_time
+  description: Duration correction_in_progress has remained true.
+  source:
+    entity: correction_in_progress
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: transaction_state
+  parameters:
+    warning_threshold_seconds: 0
+    failure_threshold_seconds: 180
+  applicability_condition: null
+  outcomes:
+  - reason_code: RTC_CORRECTION_ACTIVE
+    condition: True for any duration below the stuck threshold.
+  - reason_code: RTC_CORRECTION_STUCK
+    condition: True for 180s or more.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:116 (id); verification_due_ms = millis()+10000
+    (firmware:2569); max 2 retries at 1s interval cadence (firmware:6067-6111); worst case well under
+    30s.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_stall_detected
+  subsystem: rtc_time
+  description: Firmware's own RTC-vs-NTP elapsed-time stall detector.
+  source:
+    entity: rtc_stall_detected
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: false
+  applicability_condition: null
+  outcomes:
+  - reason_code: RTC_STALL_DETECTED
+    condition: Value is true.
+  dependencies:
+  - rtc_read_freshness
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:5500-5521 (45-90s NTP-elapsed comparison
+    window, stall = inverter advanced less than ntp_elapsed-15s).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_correction_failures_recent
+  subsystem: rtc_time
+  description: Recent-vs-historical delta on the cumulative failed_corrections counter.
+  source:
+    entity: failed_corrections
+    type: esphome_sensor
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 1800
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: RTC_CORRECTION_FAILURES_RECENT
+    condition: delta > 0 within the 1800s (30 min) window - wider than the comms counters since the 5-minute
+      post-failure cooldown means a retry cannot occur sooner than 300s.
+  dependencies:
+  - rtc_correction_duration
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:5476/6101 (increment), 5482/6106 (5-minute
+    cooldown_until_ms after failure).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: rtc_drift_uncorrected
+  subsystem: rtc_time
+  description: Measured clock difference exceeds correction_threshold with no correction in progress or
+    cooldown.
+  source:
+    entity: latest_clock_difference vs. correction_threshold, correction_in_progress, cooldown_until_ms
+      (derived condition)
+    type: derived
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: false
+  applicability_condition: automatic_clock_sync switch is on
+  outcomes:
+  - reason_code: RTC_DRIFT_UNCORRECTED
+    condition: abs_difference >= threshold, automatic_clock_sync is on, but neither correction_in_progress
+      nor cooldown_active is true.
+  dependencies:
+  - rtc_read_freshness
+  - rtc_ntp_synced
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml:5542-5566 (automatic correction trigger
+    condition: automatic_clock_sync.state && !correction_in_progress && !cooldown_active && (date_mismatch
+    || abs_difference >= threshold)).'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: manual_write_duration
+  subsystem: manual_write_system
+  description: Duration manual_write_in_progress has remained true.
+  source:
+    entity: manual_write_in_progress
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: transaction_state
+  parameters:
+    warning_threshold_seconds: 0
+    failure_threshold_seconds: 180
+  applicability_condition: null
+  outcomes:
+  - reason_code: MANUAL_WRITE_ACTIVE
+    condition: True for any duration below the stuck threshold.
+  - reason_code: MANUAL_WRITE_STUCK
+    condition: True for 180s or more.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:301 (id); per-write delay pattern of 700ms-1200ms
+    across up to ~5 registers per slot apply (e.g. firmware:3479-3546); worst case well under 30s.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: manual_write_failures_recent
+  subsystem: manual_write_system
+  description: Recent-vs-historical delta on the cumulative manual_write_failures counter.
+  source:
+    entity: manual_write_failures
+    type: esphome_sensor
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 600
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: MANUAL_WRITE_FAILURES_RECENT
+    condition: delta > 0 within the 600s window.
+  dependencies:
+  - manual_write_duration
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:450 (id), incremented throughout every
+    apply-slot script's rejection/failure paths.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: manual_write_arm_unexpected
+  subsystem: manual_write_system
+  description: Master write-enable arm observed on for longer than one poll interval with no write starting.
+  source:
+    entity: manual_config_write_enable vs. manual_write_in_progress (derived condition)
+    type: derived
+  expected_datatype: bool
+  check_type: transaction_state
+  parameters:
+    warning_threshold_seconds: 60
+    failure_threshold_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: MANUAL_WRITE_ARM_UNEXPECTED
+    condition: manual_config_write_enable has been true for 60s+ with manual_write_in_progress never having
+      become true in that window.
+  dependencies:
+  - manual_write_duration
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml:949-950 (comment: master safety arm,
+    auto-disarms after every Apply attempt - a timer-based auto-disarm does not exist, only an attempt-based
+    one).'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_active_state
+  subsystem: free_power
+  description: Free Power override currently active.
+  source:
+    entity: free_power_active_persisted
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: boolean_expected
+  parameters:
+    expected_value: false
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_ACTIVE
+    condition: Value is true.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:461/1192-1195 (persisted across reboot).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_operation_duration
+  subsystem: free_power
+  description: Duration free_power_operation_in_progress has remained true.
+  source:
+    entity: free_power_operation_in_progress
+    type: esphome_sensor
+  expected_datatype: bool
+  check_type: transaction_state
+  parameters:
+    warning_threshold_seconds: 0
+    failure_threshold_seconds: 180
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_OPERATION_ACTIVE
+    condition: True for any duration below the stuck threshold.
+  - reason_code: FREE_POWER_OPERATION_STUCK
+    condition: True for 180s or more.
+  dependencies: []
+  evidence: Referenced throughout the start/end scripts' preconditions; goes through the same per-write
+    delay pattern as manual_write_duration.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_snapshot_recovery
+  subsystem: free_power
+  description: Snapshot valid but not active - activation/restore was interrupted.
+  source:
+    entity: free_power_snapshot_valid && !free_power_active_persisted (derived condition)
+    type: derived
+  expected_datatype: bool
+  check_type: transaction_state
+  parameters:
+    warning_threshold_seconds: 0
+    failure_threshold_seconds: 60
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_RECOVERY_REQUIRED
+    condition: Condition true for less than 60s - within the watchdog's reasonable resolution window (4
+      x 15s cycles).
+  - reason_code: FREE_POWER_RECOVERY_FAILED
+    condition: Condition true for 60s or more, or free_power_failures increased during a restore attempt
+      while still unresolved.
+  dependencies:
+  - free_power_active_state
+  evidence: 'firmware/ecco_clock_dongle_stage3_4_free_power.yaml:6011-6029 (15s watchdog interval; comment
+    at firmware:6022 ''Snapshot valid but not active means activation/restore was interrupted: fail safe
+    by restoring'').'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_failures_recent
+  subsystem: free_power
+  description: Recent-vs-historical delta on the cumulative free_power_failures counter.
+  source:
+    entity: free_power_failures
+    type: esphome_sensor
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 600
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_FAILURES_RECENT
+    condition: delta > 0 within the 600s window.
+  dependencies:
+  - free_power_operation_duration
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:599 (id), incremented throughout the start/restore
+    write/verify blocks.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_state_consistency
+  subsystem: free_power
+  description: Derived active-state boolean vs. free_power_status text agreement.
+  source:
+    entity: free_power_active_sensor vs. free_power_status
+    type: derived
+  expected_datatype: bool
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 0
+    timestamp_tolerance_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_STATE_INCONSISTENT
+    condition: The boolean and the text status describe different active/inactive states.
+  dependencies:
+  - free_power_active_state
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:1192-1195 (free_power_active_sensor derived
+    from free_power_active_persisted); firmware:2897-2901,3068-3071 (free_power_status text states).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: runtime_config_ready
+  subsystem: runtime_configuration
+  description: Reuses the existing binary_sensor.ecco_runtime_configuration_ready readiness gate.
+  source:
+    entity: binary_sensor.ecco_runtime_configuration_ready
+    type: ha_binary_sensor
+  expected_datatype: bool
+  check_type: entity_available
+  parameters:
+    expected_value: true
+  applicability_condition: null
+  outcomes:
+  - reason_code: RUNTIME_CONFIG_UNAVAILABLE
+    condition: The entity does not exist or has never reported a state.
+  - reason_code: RUNTIME_CONFIG_NOT_READY
+    condition: The entity reports false.
+  dependencies: []
+  evidence: home-assistant/packages/ecco_runtime_config.yaml:193-206 (already-existing pre-Task-006 HA
+    signal, reused directly rather than re-implemented).
+  implementation_status: designed
+  live_proof_status: unknown
+- id: ha_entity_availability_generic
+  subsystem: home_assistant
+  description: 'Generic pattern check: an ECCO-related HA entity another check depends on is unavailable.'
+  source:
+    entity: varies - see the dependent check's own source_entity
+    type: ha_template_sensor
+  expected_datatype: bool
+  check_type: entity_available
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: HA_ENTITY_UNAVAILABLE
+    condition: A depended-on HA entity is unavailable.
+  dependencies: []
+  evidence: home-assistant/packages/ecco_pro.yaml, ecco_canonical_telemetry.yaml, ecco_runtime_config.yaml
+    all follow the availability template pattern states(x) not in ['unknown','unavailable','none','']
+  implementation_status: designed
+  live_proof_status: unknown
+- id: canonical_entity_available
+  subsystem: canonical_telemetry
+  description: Canonical telemetry sensor exists and is available; distinguishes canonical-only-missing
+    from both-missing.
+  source:
+    entity: sensor.ecco_battery_soc / ecco_house_power / ecco_pv_power / ecco_grid_power vs. their raw
+      source entities
+    type: ha_template_sensor
+  expected_datatype: bool
+  check_type: entity_available
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: CANONICAL_ENTITY_MISSING
+    condition: Canonical entity unavailable while its raw source entity is available.
+  - reason_code: RAW_AND_CANONICAL_MISSING
+    condition: Both the canonical entity and its raw source entity are unavailable.
+  dependencies:
+  - telemetry_freshness
+  evidence: home-assistant/packages/ecco_canonical_telemetry.yaml - applies uniformly to all 4 canonical
+    sensors (ecco_battery_soc, ecco_house_power, ecco_pv_power, ecco_grid_power), each structurally identical.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: canonical_raw_skew
+  subsystem: canonical_telemetry
+  description: Timestamp skew between the canonical sensor's refreshed_at attribute and the raw entity's
+    last_changed.
+  source:
+    entity: canonical.refreshed_at vs. raw.last_changed
+    type: cross_source
+  expected_datatype: numeric
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: null
+    timestamp_tolerance_seconds: 30
+  applicability_condition: null
+  outcomes:
+  - reason_code: CANONICAL_RAW_SKEW
+    condition: Skew exceeds 30s.
+  dependencies:
+  - canonical_entity_available
+  evidence: home-assistant/packages/ecco_canonical_telemetry.yaml - applies uniformly to all 4 canonical
+    sensors (ecco_battery_soc, ecco_house_power, ecco_pv_power, ecco_grid_power), each structurally identical.
+    Every canonical sensor triggers on the raw entity's own state change, so skew should be seconds not
+    minutes under normal operation.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: canonical_raw_mismatch
+  subsystem: canonical_telemetry
+  description: Value disagreement between the canonical sensor and its raw source beyond rounding tolerance.
+  source:
+    entity: canonical.state vs. float(raw.state)
+    type: cross_source
+  expected_datatype: numeric
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 0.5
+    timestamp_tolerance_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: CANONICAL_RAW_MISMATCH
+    condition: abs(canonical.state - float(raw.state)) > 0.5.
+  dependencies:
+  - canonical_entity_available
+  evidence: home-assistant/packages/ecco_canonical_telemetry.yaml - applies uniformly to all 4 canonical
+    sensors (ecco_battery_soc, ecco_house_power, ecco_pv_power, ecco_grid_power), each structurally identical.
+    Canonical state is a direct float/round of the raw value with no unit conversion, so this should be
+    exactly 0 normally.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: canonical_stale_raw_fresh
+  subsystem: canonical_telemetry
+  description: Canonical refreshed_at is stale while the underlying raw entity is actively updating.
+  source:
+    entity: canonical.refreshed_at age vs. raw entity freshness
+    type: cross_source
+  expected_datatype: numeric
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: 10
+    warning_threshold_seconds: null
+    failure_threshold_seconds: 60
+  applicability_condition: raw source entity (delegated to telemetry_freshness) is itself fresh
+  outcomes:
+  - reason_code: CANONICAL_STALE_RAW_FRESH
+    condition: canonical.refreshed_at age exceeds 60s while the raw entity has updated more recently.
+  dependencies:
+  - canonical_entity_available
+  - telemetry_freshness
+  evidence: home-assistant/packages/ecco_canonical_telemetry.yaml - applies uniformly to all 4 canonical
+    sensors (ecco_battery_soc, ecco_house_power, ecco_pv_power, ecco_grid_power), each structurally identical.
+    Would indicate the trigger itself is not firing despite the raw entity changing.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: influx_raw_freshness
+  subsystem: influx_raw
+  description: Age of the latest point in the ecco_raw bucket (ad-hoc Flux diagnostic, not a live HA entity).
+  source:
+    entity: influxdb/diagnostics/latest_ecco_raw_point.flux result
+    type: influx_diagnostic
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: null
+    warning_threshold_seconds: null
+    failure_threshold_seconds: null
+    thresholds_unresolved: true
+  applicability_condition: run manually - no automatic HA entity reads ecco_raw directly today
+  outcomes:
+  - reason_code: INFLUX_RAW_STALE
+    condition: No new point observed within a manually-judged reasonable window - no fixed threshold is
+      evidenced (see docs/SYSTEM_HEALTH_ARCHITECTURE.md section 5).
+  dependencies: []
+  evidence: influxdb/ecco_influxdb_options_v1_2.yaml (export configuration governs write cadence into
+    InfluxDB, not documented read cadence out); CURRENT_STATE.md Buckets section (30-day retention).
+  implementation_status: designed
+  live_proof_status: unknown
+  rollup_participation: diagnostic_only
+- id: influx_5m_freshness
+  subsystem: influx_5m
+  description: 'Age of the latest point in the UNDERLYING house-load history that Battery Outlook actually
+    trains on (sensor.ecco_clock_dongle_ecco_load_power in the ecco_5m bucket) - Task 006A correction:
+    this previously used the Battery Outlook OUTPUT measurement (ecco_battery_outlook/predicted_soc_0035)
+    as a stand-in, which only proves the production task ran, not that the underlying 5-minute history
+    it reads is itself healthy. See battery_outlook_freshness for the (separate) output-freshness check.'
+  source:
+    entity: influxdb/diagnostics/latest_ecco_5m_point.flux result (sensor.ecco_clock_dongle_ecco_load_power
+      history in ecco_5m)
+    type: influx_diagnostic
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: null
+    warning_threshold_seconds: null
+    failure_threshold_seconds: null
+    thresholds_unresolved: true
+  applicability_condition: run manually - no live HA entity reads the ecco_5m load-power history directly;
+    only the production Battery Outlook task itself consumes it
+  outcomes:
+  - reason_code: INFLUX_5M_STALE
+    condition: No new load-power history point observed within a manually-judged reasonable window - no
+      fixed threshold is evidenced for the ecco_5m downsample's own write cadence (distinct from the 5-minute
+      Battery Outlook TASK cadence, which reads this history, not writes it).
+  dependencies: []
+  evidence: 'influxdb/tasks/ecco_battery_outlook_5m.flux:100-106 (loadHistory query: from(bucket: "ecco_5m")
+    |> filter(r._measurement == "sensor.ecco_clock_dongle_ecco_load_power" and r._field == "value")
+    - the actual training input, confirmed by reading the production task''s own Flux source). No repository
+    evidence establishes the ecco_5m bucket''s OWN downsample/write cadence (distinct from the task''s
+    5-minute READ cadence) - thresholds_unresolved is honest, not a guess.'
+  implementation_status: designed
+  live_proof_status: unknown
+  rollup_participation: diagnostic_only
+- id: influx_history_depth
+  subsystem: influx_5m
+  description: 'Independent measurement of the UNDERLYING house-load history depth Battery Outlook trains
+    on (earliest/latest point, distinct-day coverage) via a read-only Flux diagnostic - Task 006A correction:
+    this previously counted days of ecco_battery_outlook OUTPUT points, which measures whether the production
+    task ran, not the actual input history depth. Deliberately described as a DIFFERENT signal from the
+    model''s own self-reported training_days_equivalent (see battery_outlook_history) - the two should
+    agree in a healthy system, but this check does not assume they do.'
+  source:
+    entity: influxdb/diagnostics/history_depth_check.flux result (sensor.ecco_clock_dongle_ecco_load_power
+      distinct-day coverage in ecco_5m)
+    type: influx_diagnostic
+  expected_datatype: numeric
+  check_type: history_depth
+  parameters:
+    minimum_value: 7
+    unit: days
+  applicability_condition: run manually - no live HA entity independently reports the underlying history's
+    own depth, only the model's self-reported training_days_equivalent (see battery_outlook_history)
+  outcomes:
+  - reason_code: INFLUX_HISTORY_INSUFFICIENT
+    condition: The diagnostic's distinct-day count is present but below 7 days.
+  dependencies:
+  - influx_5m_freshness
+  evidence: influxdb/tasks/ecco_battery_outlook_5m.flux:100-115 (loadHistory query and trainingDays derivation
+    - the production task's own 30-day range and 288-samples-per-day assumption, reused here only to identify
+    the correct source measurement, not to duplicate the task's logic). 7-day minimum is a judgement threshold
+    documented as such, not derived from a proven model-accuracy study - see docs/SYSTEM_HEALTH_ARCHITECTURE.md.
+  implementation_status: designed
+  live_proof_status: unknown
+  rollup_participation: diagnostic_only
+- id: battery_outlook_freshness
+  subsystem: battery_outlook
+  description: Age of the latest Battery Outlook model result, from the forecast-consumer side.
+  source:
+    entity: sensor.ecco_predicted_soc_0035
+    type: ha_template_sensor
+  expected_datatype: timestamp
+  check_type: freshness
+  parameters:
+    expected_interval_seconds: 300
+    warning_threshold_seconds: 1200
+    failure_threshold_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: FORECAST_STALE
+    condition: Age at or beyond 1200s (20m).
+  dependencies:
+  - influx_5m_freshness
+  evidence: home-assistant/packages/ecco_battery_outlook_influx.yaml:25-33. This is the MODEL'S OUTPUT
+    freshness (a live HA entity, automatically evaluable) - a genuinely different signal from influx_5m_freshness's
+    underlying-history freshness (a manual diagnostic, Task 006A correction). The dependency reflects
+    that a fresh output requires fresh input, not that they are the same measurement - the output can
+    still be fresh a short time after the input goes stale, and vice versa immediately after a task run.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: battery_outlook_history
+  subsystem: battery_outlook
+  description: 'The Battery Outlook model''s OWN self-reported training_days_equivalent pipeline metric
+    (a live HA entity) - deliberately kept distinct from influx_history_depth''s independent Flux-diagnostic
+    measurement of the underlying history''s actual depth (Task 006A correction: these were previously
+    described as reading ''the same underlying signal'', which they do not - one is the model''s self-report,
+    the other an independent read-only measurement of its input).'
+  source:
+    entity: sensor.ecco_load_model_training_days
+    type: ha_template_sensor
+  expected_datatype: numeric
+  check_type: history_depth
+  parameters:
+    minimum_value: 7
+    unit: days
+  applicability_condition: null
+  outcomes:
+  - reason_code: FORECAST_HISTORY_INSUFFICIENT
+    condition: training_days_equivalent is present but below 7 days.
+  dependencies: []
+  evidence: home-assistant/packages/ecco_battery_outlook_influx.yaml:45-53 (ECCO Load Model Training Days
+    sensor - the model's own trainingDays calculation from influxdb/tasks/ecco_battery_outlook_5m.flux:108-115,
+    read back into HA). Kept as a separate check from influx_history_depth per Task 006A section 7 - self-reported
+    pipeline metric vs. independent diagnostic are not described as the same thing.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: battery_outlook_prediction_available
+  subsystem: battery_outlook
+  description: Predicted target SOC entity exists and has reported a value.
+  source:
+    entity: sensor.ecco_predicted_soc_0035
+    type: ha_template_sensor
+  expected_datatype: numeric
+  check_type: entity_available
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: FORECAST_PREDICTION_UNAVAILABLE
+    condition: The entity does not exist or has never reported a value.
+  dependencies: []
+  evidence: home-assistant/packages/ecco_battery_outlook_influx.yaml:25-33.
+  implementation_status: designed
+  live_proof_status: unknown
+- id: battery_outlook_model_version
+  subsystem: battery_outlook
+  description: Repository-expected model id vs. a live signal - documented as unverifiable, not guessed.
+  source:
+    entity: VERSION.yaml current.influxdb.battery_outlook_model (repository only)
+    type: repository_file
+  expected_datatype: string
+  check_type: version_match
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: FORECAST_MODEL_VERSION_UNVERIFIABLE
+    condition: Always - no live HA entity reads back the running model's version, so this check can only
+      report the limitation, never PASS or FAIL a live comparison.
+  dependencies: []
+  evidence: 'VERSION.yaml current.influxdb.battery_outlook_model: load_only_v1_2 - a repository expectation
+    with no live counterpart found anywhere in home-assistant/packages/.'
+  implementation_status: designed
+  live_proof_status: unknown
+  rollup_participation: manual_only
+- id: battery_outlook_scorer_freshness
+  subsystem: battery_outlook_scorer
+  description: Age of the latest daily scorer result, evaluated against whether today's scoring checkpoint
+    has occurred yet.
+  source:
+    entity: sensor.ecco_battery_outlook_last_scored_prediction
+    type: ha_template_sensor
+  expected_datatype: timestamp
+  check_type: conditional_presence
+  parameters:
+    checkpoint_reference: lead180_to_target derived from the live TOU charge-start minute
+  applicability_condition: current time is past today's derived scoring checkpoint
+  outcomes:
+  - reason_code: FORECAST_SCORER_NOT_YET_DUE
+    condition: Current time is before today's derived checkpoint - no new score point today is expected
+      yet.
+  - reason_code: FORECAST_SCORER_STALE
+    condition: Current time is past today's derived checkpoint and no new score point appeared since before
+      the checkpoint.
+  dependencies:
+  - battery_outlook_freshness
+  evidence: 'influxdb/tasks/ecco_battery_outlook_score_daily.flux:19-22 (runs every 5m, but a new score
+    point is only expected once/day); CURRENT_STATE.md ''scoring checkpoint: lead180_to_target... derives
+    from live TOU charge-start minute rather than a hard-coded 00:35''.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: battery_outlook_scorer_anti_contamination
+  subsystem: battery_outlook_scorer
+  description: Whether a specific score point was genuinely pre-charge - documented as undetectable from
+    outside the Flux task.
+  source:
+    entity: influxdb/tasks/ecco_battery_outlook_score_daily.flux's own internal filter logic
+    type: repository_file
+  expected_datatype: string
+  check_type: conditional_presence
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: FORECAST_SCORER_ANTI_CONTAMINATION_UNVERIFIABLE
+    condition: Always - a lightweight health check cannot independently re-derive whether a specific score
+      point was pre-charge without re-running the task's own filter against raw data.
+  dependencies: []
+  evidence: 'CURRENT_STATE.md: ''daily scorer selects the latest pre-charge actual SOC and no longer contaminates
+    the score with SOC values after grid charging begins.'''
+  implementation_status: designed
+  live_proof_status: unknown
+  rollup_participation: manual_only
+- id: firmware_ceiling_vs_runtime_config
+  subsystem: deployment_consistency
+  description: Repository-expected inverter TOU power ceiling vs. the live HA readback of the firmware
+    substitution.
+  source:
+    entity: VERSION.yaml current.site_profile.inverter_tou_power_ceiling_w vs. sensor.ecco_clock_dongle_inverter_tou_power_ceiling
+    type: cross_source
+  expected_datatype: numeric
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 0
+    timestamp_tolerance_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: CONFIGURATION_MISMATCH
+    condition: Values differ - could reflect a stale VERSION.yaml or a redeployed firmware not yet reflected
+      in the repository.
+  dependencies: []
+  evidence: 'VERSION.yaml current.site_profile.inverter_tou_power_ceiling_w: 8000; the live entity is
+    sourced from the firmware''s compile-time ${ecco_inverter_tou_power_ceiling_w} substitution.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: charge_start_vs_tou_schedule
+  subsystem: deployment_consistency
+  description: Repository-expected live TOU charge-start vs. the live HA charge-start-minute sensor.
+  source:
+    entity: VERSION.yaml current.site_profile.live_charge_start vs. sensor.ecco_config_charge_start_time
+    type: cross_source
+  expected_datatype: string
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 0
+    value_tolerance_unit: minutes (exact match expected - this is a configured value, not a continuous
+      measurement)
+  applicability_condition: null
+  outcomes:
+  - reason_code: CONFIGURATION_MISMATCH
+    condition: Values differ - a difference could be an intentional live override, not necessarily an
+      error (VERSION.yaml is a point-in-time snapshot, not a live-enforced constraint).
+  dependencies:
+  - runtime_config_ready
+  evidence: 'VERSION.yaml current.site_profile.live_charge_start: ''00:30''; home-assistant/packages/ecco_runtime_config.yaml
+    (sensor.ecco_config_charge_start_time).'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: battery_capacity_config_drift
+  subsystem: deployment_consistency
+  description: Repository-expected battery capacity vs. the live input_number.
+  source:
+    entity: VERSION.yaml current.site_profile.battery_capacity_kwh vs. input_number.ecco_battery_model_capacity
+    type: cross_source
+  expected_datatype: numeric
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 0.1
+    timestamp_tolerance_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: CONFIGURATION_MISMATCH
+    condition: Values differ by more than 0.1 kWh.
+  dependencies:
+  - runtime_config_ready
+  evidence: 'VERSION.yaml current.site_profile.battery_capacity_kwh: 31.7.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: round_trip_efficiency_config_drift
+  subsystem: deployment_consistency
+  description: Repository-expected round-trip efficiency vs. the live input_number.
+  source:
+    entity: VERSION.yaml current.site_profile.round_trip_efficiency_percent vs. input_number.ecco_round_trip_efficiency
+    type: cross_source
+  expected_datatype: numeric
+  check_type: cross_source_agreement
+  parameters:
+    value_tolerance: 1
+    timestamp_tolerance_seconds: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: CONFIGURATION_MISMATCH
+    condition: Values differ by more than 1 percentage point.
+  dependencies:
+  - runtime_config_ready
+  evidence: 'VERSION.yaml current.site_profile.round_trip_efficiency_percent: 90.'
+  implementation_status: designed
+  live_proof_status: unknown
+- id: deployment_manifest_paths_exist
+  subsystem: deployment_consistency
+  description: Every path referenced by VERSION.yaml/deployment manifest resolves to a real repository
+    file - reuses tools/validate_repo.py's existing logic.
+  source:
+    entity: 'VERSION.yaml current.*, deployment/ha-manifest.yaml source: entries'
+    type: repository_file
+  expected_datatype: string
+  check_type: version_match
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: DEPLOYMENT_MANIFEST_PATH_MISSING
+    condition: A referenced path does not exist in this repository.
+  dependencies: []
+  evidence: tools/validate_repo.py's existing validate_version_references()/validate_deployment_sources()
+    functions (already implemented pre-Task-006) - this check documents reuse rather than re-implementing.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+
+# ---------------------------------------------------------------------------
+# supervision / fallback (FB-B3: HA display layer, read-only)
+# ---------------------------------------------------------------------------
+- id: supervision_status_available
+  subsystem: supervision
+  description: Supervision display sensor is available.
+  source:
+    entity: sensor.ecco_supervision_status
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: entity_available
+  parameters: {}
+  applicability_condition: null
+  outcomes:
+  - reason_code: SUPERVISION_UNAVAILABLE
+    condition: The supervision display sensor is unknown or unavailable.
+  dependencies: []
+  evidence: The supervision display sensor must be present and available in Home Assistant.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: supervision_startup
+  subsystem: supervision
+  description: No heartbeat accepted since the dongle started.
+  source:
+    entity: sensor.ecco_supervision_status
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - Awaiting Heartbeat
+  applicability_condition: null
+  outcomes:
+  - reason_code: SUPERVISION_STARTING
+    condition: Display state is Awaiting Heartbeat.
+  dependencies: []
+  evidence: Firmware state STARTUP covers the up-to-300 s start window.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: supervision_not_stable
+  subsystem: supervision
+  description: Heartbeats resumed but not yet stable.
+  source:
+    entity: sensor.ecco_supervision_status
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - Recovering
+  applicability_condition: null
+  outcomes:
+  - reason_code: SUPERVISION_NOT_STABLE
+    condition: Display state is Recovering.
+  dependencies: []
+  evidence: Firmware state SUPERVISED with Stable off.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: supervision_suspect
+  subsystem: supervision
+  description: No valid heartbeat beyond the suspect threshold.
+  source:
+    entity: sensor.ecco_supervision_status
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - Suspect
+  applicability_condition: null
+  outcomes:
+  - reason_code: SUPERVISION_SUSPECT
+    condition: Display state is Suspect.
+  dependencies: []
+  evidence: Firmware state SUSPECT.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: supervision_lost
+  subsystem: supervision
+  description: No valid heartbeat beyond the loss threshold.
+  source:
+    entity: sensor.ecco_supervision_status
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - Lost
+  applicability_condition: null
+  outcomes:
+  - reason_code: SUPERVISION_LOST
+    condition: Display state is Lost.
+  dependencies: []
+  evidence: Firmware state LOST. Reported as WARNING (FINAL 9.7); it becomes FAILED only when FB-F makes the supervision subsystem CRITICAL.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_status_available
+  subsystem: fallback
+  description: Fallback status is not reported or not recognised.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - not_reporting
+    - unexpected_state
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_STATUS_UNAVAILABLE
+    condition: Status code is not_reporting or unexpected_state.
+  dependencies: []
+  evidence: First and last rows of the canonical fallback precedence.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_live_unknown
+  subsystem: fallback
+  description: Live comparison unavailable.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - live_unknown
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_LIVE_UNKNOWN
+    condition: Status code is live_unknown.
+  dependencies: []
+  evidence: A VALID profile whose live comparison is not trustworthy.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_not_captured
+  subsystem: fallback
+  description: No profile saved.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - not_captured
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_NOT_CAPTURED
+    condition: Status code is not_captured.
+  dependencies: []
+  evidence: Profile class NOT_CAPTURED.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_invalidated
+  subsystem: fallback
+  description: Profile invalidated.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - invalidated
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_INVALIDATED
+    condition: Status code is invalidated.
+  dependencies: []
+  evidence: Profile class INVALIDATED.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_drifted
+  subsystem: fallback
+  description: Live E1 values differ from the saved profile.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - drift_values
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_DRIFTED
+    condition: Status code is drift_values.
+  dependencies: []
+  evidence: Live Match m=DRIFT.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_context_changed
+  subsystem: fallback
+  description: Slot times or context differ from the saved profile.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - drift_context
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_CONTEXT_CHANGED
+    condition: Status code is drift_context.
+  dependencies: []
+  evidence: Live Match m=CONTEXT.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_export_enabled
+  subsystem: fallback
+  description: Export mode is Allow Export.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - drift_export
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_EXPORT_ENABLED
+    condition: Status code is drift_export.
+  dependencies: []
+  evidence: Live Match m=EXPORT (live register 244 = 0, no obligation).
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_unusable
+  subsystem: fallback
+  description: Stored profile unusable.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - profile_unusable
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_UNUSABLE
+    condition: Status code is profile_unusable.
+  dependencies: []
+  evidence: Profile class UNREADABLE, CORRUPT, CORRUPT_DOMAIN, PROFILE_LOST or PROFILE_STALE.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_save_unconfirmed
+  subsystem: fallback
+  description: Last save outcome unconfirmed.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - save_unconfirmed
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_SAVE_UNCONFIRMED
+    condition: Status code is save_unconfirmed.
+  dependencies: []
+  evidence: Profile class SAVE_UNCONFIRMED.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_profile_regressed
+  subsystem: fallback
+  description: Saved profile appears lost or rolled back.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - profile_regressed
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_REGRESSED
+    condition: Status code is profile_regressed.
+  dependencies: []
+  evidence: HA-side generation high-water exceeds the device's generation. Detection only, never a gate.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_live_out_of_domain
+  subsystem: fallback
+  description: Live settings are outside Fallback V1.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - live_out_of_domain
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_LIVE_OUT_OF_DOMAIN
+    condition: Status code is live_out_of_domain.
+  dependencies: []
+  evidence: Live Match m=OUT_OF_DOMAIN.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_blocked_by_lease
+  subsystem: fallback
+  description: Recovery domain blocks the profile.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - lease_unreadable
+    - lease_lockout
+    - lease_restoring
+  applicability_condition: null
+  outcomes:
+  - reason_code: FALLBACK_BLOCKED_BY_LEASE
+    condition: Status code is lease_unreadable, lease_lockout or lease_restoring.
+  dependencies: []
+  evidence: Live Match obligation vector shows an unreadable, operator-needed or restoring recovery domain. The HA sensor shows DEGRADED for lease_restoring until it has lasted 10 minutes; this registry check is the conservative WARNING form.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic
+- id: fallback_shadow_episode
+  subsystem: fallback
+  description: A supervision-loss shadow episode is open.
+  source:
+    entity: sensor.ecco_fallback_status_code
+    type: ha_template_sensor
+  expected_datatype: enum
+  check_type: text_state
+  parameters:
+    failure_values:
+    - shadow_episode
+  applicability_condition: null
+  outcomes:
+  - reason_code: FAILBACK_SHADOW_EPISODE
+    condition: Status code is shadow_episode.
+  dependencies: []
+  evidence: The dongle's Failback Shadow State is SHADOW_EPISODE or SHADOW_EPISODE_HA_BACK. Diagnostic only; a shadow verdict never changes the status code and nothing was written.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
+  rollup_participation: automatic

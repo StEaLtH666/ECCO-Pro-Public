@@ -1,0 +1,771 @@
+# ECCO Pro - system health reason-code catalog (Task 006)
+#
+# Authoritative machine-readable list of every reason code a health
+# check in registry/system_health_checks.yaml may reference. Validated
+# by tools/validate_system_health_checks.py: every `reason_code` used
+# in the check registry must exist here, every `code` here must be
+# unique, and every `code` must be referenced by at least one check
+# (an orphaned reason code is flagged, not silently allowed).
+#
+# See docs/SYSTEM_HEALTH_REASON_CODES.md for the prose version of this
+# same catalog, including the "safe diagnostic next step" guidance in
+# full sentences (kept here as a shorter field for validator/UI use).
+#
+# No reason code here describes or authorises a repair action - only
+# observation and a safe, non-destructive diagnostic step.
+
+schema_version: 1
+
+reason_codes:
+
+  # ===================================================================
+  # communications
+  # ===================================================================
+  - code: ESPHOME_UNAVAILABLE
+    subsystem: communications
+    severity: FAILED
+    meaning: "Home Assistant cannot currently reach the ECCO ESPHome device (API/MQTT connection down)."
+    source_signal: "ESPHome device availability (HA-side connection state, not a firmware signal)"
+    likely_cause: "Device power loss, Wi-Fi outage, ESPHome crash/reboot loop, or HA restart racing the device's reconnect."
+    safe_diagnostic_step: "Check the device's physical power/Wi-Fi indicator and HA's own ESPHome integration status page; do not power-cycle remotely from this health check."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  # ===================================================================
+  # inverter_telemetry
+  # ===================================================================
+  - code: MODBUS_TELEMETRY_DEGRADED
+    subsystem: inverter_telemetry
+    severity: DEGRADED
+    meaning: "Telemetry has not updated within the expected 60s degraded-after window but has not yet reached the 180s failed threshold."
+    source_signal: "last_telemetry_update age; telemetry_online"
+    likely_cause: "A single missed 10s poll cycle, a brief Wi-Fi hiccup, or a concurrent manual write/RTC correction legitimately pausing telemetry polling."
+    safe_diagnostic_step: "Wait one more poll cycle and re-check; if it clears on its own, no action is needed."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: MODBUS_TELEMETRY_STALE
+    subsystem: inverter_telemetry
+    severity: FAILED
+    meaning: "Telemetry has not updated for at least 180s - well beyond any legitimate poll pause."
+    source_signal: "last_telemetry_update age; telemetry_online"
+    likely_cause: "ESPHome device unreachable, Modbus/RS485 wiring fault, inverter powered off, or telemetry polling disabled via the live_telemetry switch."
+    safe_diagnostic_step: "Check the live_telemetry switch state and RS485 wiring/connection before assuming a hardware fault."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: MODBUS_TELEMETRY_FAILURES_RECENT
+    subsystem: inverter_telemetry
+    severity: WARNING
+    meaning: "telemetry_failures has incremented within the current counter-delta window, but the most recent poll succeeded."
+    source_signal: "telemetry_failures counter delta"
+    likely_cause: "Transient Modbus exception or no-response event that has since recovered."
+    safe_diagnostic_step: "No action required if telemetry is currently online; monitor for repeated increments."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: INVERTER_ALARM_OR_FAULT
+    subsystem: inverter_telemetry
+    severity: FAILED
+    meaning: "The inverter's own system-state register reports alarm or fault, not normal/standby/self-check."
+    source_signal: "ecco_inverter_system_state (register 59)"
+    likely_cause: "A genuine inverter-side fault condition - grid anomaly, over-temperature, internal protection trip, etc."
+    safe_diagnostic_step: "Read the inverter's own display/fault code and consult its manual; do not attempt any ECCO-initiated write while this is set."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: INVERTER_GRID_DISCONNECTED
+    subsystem: inverter_telemetry
+    severity: WARNING
+    meaning: "The inverter reports it is not currently grid-connected."
+    source_signal: "ecco_grid_connected (register 194)"
+    likely_cause: "Genuine grid outage, or the inverter is intentionally in an off-grid/backup mode."
+    safe_diagnostic_step: "Cross-check against known local grid status before treating as a fault."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # inverter_configuration
+  # ===================================================================
+  - code: MODBUS_CONFIG_DEGRADED
+    subsystem: inverter_configuration
+    severity: DEGRADED
+    meaning: "Configuration has not updated within the expected 180s degraded-after window but has not yet reached the 600s failed threshold."
+    source_signal: "last_configuration_update age; configuration_online"
+    likely_cause: "A single missed 60s poll cycle, or a concurrent manual write/RTC correction pausing configuration polling."
+    safe_diagnostic_step: "Wait one more poll cycle and re-check."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: MODBUS_CONFIG_STALE
+    subsystem: inverter_configuration
+    severity: FAILED
+    meaning: "Configuration has not updated for at least 600s (10 minutes)."
+    source_signal: "last_configuration_update age; configuration_online"
+    likely_cause: "ESPHome device unreachable, or configuration polling disabled via the configuration_polling switch."
+    safe_diagnostic_step: "Check the configuration_polling switch state before assuming a hardware fault."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: MODBUS_CONFIG_FAILURES_RECENT
+    subsystem: inverter_configuration
+    severity: WARNING
+    meaning: "configuration_failures has incremented within the current window, but the most recent poll succeeded."
+    source_signal: "configuration_failures counter delta"
+    likely_cause: "Transient Modbus exception or no-response event that has since recovered."
+    safe_diagnostic_step: "No action required if configuration is currently online; monitor for repeated increments."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: CONFIG_CACHE_INVALID
+    subsystem: inverter_configuration
+    severity: WARNING
+    meaning: "The cached raw register values used for safe read-modify-write of shared TOU bitfields are not currently valid."
+    source_signal: "manual_config_raw_cache_valid"
+    likely_cause: "A configuration poll has not completed successfully since the cache was last invalidated (e.g. after a poll failure)."
+    safe_diagnostic_step: "Wait for the next successful configuration poll before attempting any manual TOU write."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  # ===================================================================
+  # rtc_time
+  # ===================================================================
+  - code: RTC_NTP_UNSYNCED
+    subsystem: rtc_time
+    severity: WARNING
+    meaning: "The ESP32 has not yet achieved a confirmed SNTP sync."
+    source_signal: "ntp_synced"
+    likely_cause: "Recent boot (NTP sync can take a short time), or outbound internet/NTP server reachability issue."
+    safe_diagnostic_step: "Wait for the next SNTP sync attempt (15-minute update_interval); check outbound internet connectivity if persistent."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: RTC_READ_STALE
+    subsystem: rtc_time
+    severity: DEGRADED
+    meaning: "The inverter RTC has not been successfully read within the expected 60s/180s brackets."
+    source_signal: "clock_difference_valid age"
+    likely_cause: "Same causes as MODBUS_CONFIG_DEGRADED/STALE - the RTC read shares the same gating conditions as configuration polling."
+    safe_diagnostic_step: "Check inverter_configuration's own health first - they share the same poll gating."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: RTC_CORRECTION_ACTIVE
+    subsystem: rtc_time
+    severity: WARNING
+    meaning: "An RTC correction is currently in progress (of any duration, including normal)."
+    source_signal: "correction_in_progress"
+    likely_cause: "Normal operation - a drift correction was triggered and is proceeding through its write/verify sequence."
+    safe_diagnostic_step: "No action needed; this clears automatically within tens of seconds under normal conditions."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: RTC_CORRECTION_STUCK
+    subsystem: rtc_time
+    severity: FAILED
+    meaning: "correction_in_progress has remained true for longer than the 180s failed-after bracket - well beyond the firmware's own worst-case sequencing."
+    source_signal: "correction_in_progress duration"
+    likely_cause: "A stuck/hung state, or Modbus communication failure part-way through the correction sequence."
+    safe_diagnostic_step: "Check ESPHome logs for the correction sequence's last logged step; do not manually clear the flag - it is not writable from Home Assistant."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: RTC_STALL_DETECTED
+    subsystem: rtc_time
+    severity: WARNING
+    meaning: "The firmware's own stall detector found the inverter clock advancing meaningfully slower than NTP over a 45-90s comparison window."
+    source_signal: "rtc_stall_detected"
+    likely_cause: "Inverter-side RTC hardware issue, or a Modbus read timing artefact on a single sample."
+    safe_diagnostic_step: "Check rtc_stall_count for repeated occurrences before treating a single stall as a hardware fault."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: RTC_CORRECTION_FAILURES_RECENT
+    subsystem: rtc_time
+    severity: WARNING
+    meaning: "failed_corrections has incremented within the current window."
+    source_signal: "failed_corrections counter delta"
+    likely_cause: "Repeated verification failures or communication errors during a correction attempt, now in its 5-minute cooldown."
+    safe_diagnostic_step: "Wait for the cooldown to expire and observe whether the next automatic attempt succeeds."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: RTC_DRIFT_UNCORRECTED
+    subsystem: rtc_time
+    severity: WARNING
+    meaning: "The measured clock difference exceeds the configured correction_threshold, but no correction is in progress and none is in cooldown."
+    source_signal: "latest_clock_difference vs. correction_threshold; correction_in_progress; cooldown_until_ms"
+    likely_cause: "automatic_clock_sync is disabled, or the condition was observed between polls and will resolve on the next 60s read cycle."
+    safe_diagnostic_step: "Check the automatic_clock_sync switch state; if enabled, re-check after the next 60s RTC read."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # manual_write_system
+  # ===================================================================
+  - code: MANUAL_WRITE_ACTIVE
+    subsystem: manual_write_system
+    severity: WARNING
+    meaning: "A manual TOU configuration write is currently in progress (of any duration, including normal)."
+    source_signal: "manual_write_in_progress"
+    likely_cause: "Normal operation - a slot Apply was triggered and is proceeding through its write/verify sequence."
+    safe_diagnostic_step: "No action needed; this clears automatically within tens of seconds under normal conditions."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: MANUAL_WRITE_STUCK
+    subsystem: manual_write_system
+    severity: FAILED
+    meaning: "manual_write_in_progress has remained true for longer than the 180s failed-after bracket."
+    source_signal: "manual_write_in_progress duration"
+    likely_cause: "A stuck/hung state, or Modbus communication failure part-way through a write sequence."
+    safe_diagnostic_step: "Check ESPHome logs for the last logged write step; do not manually clear the flag."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: MANUAL_WRITE_FAILURES_RECENT
+    subsystem: manual_write_system
+    severity: WARNING
+    meaning: "manual_write_failures has incremented within the current window."
+    source_signal: "manual_write_failures counter delta"
+    likely_cause: "A rejected/failed Apply attempt - check manual_config_last_result for the specific reason text."
+    safe_diagnostic_step: "Read manual_config_last_result for the firmware's own explanation before retrying."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: MANUAL_WRITE_ARM_UNEXPECTED
+    subsystem: manual_write_system
+    severity: WARNING
+    meaning: "The manual_config_write_enable arm switch has been observed on for longer than one health-poll interval with no write ever starting."
+    source_signal: "manual_config_write_enable; manual_write_in_progress"
+    likely_cause: "A user armed the switch but has not yet pressed Apply, or forgot to (the firmware auto-disarms only after an Apply attempt, not on a timer)."
+    safe_diagnostic_step: "No write has occurred - arming alone never writes anything - but consider disarming if not actively about to apply a change."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # free_power
+  # ===================================================================
+  - code: FREE_POWER_ACTIVE
+    subsystem: free_power
+    severity: WARNING
+    meaning: "A Free Power override is currently active (temporarily forcing grid-charge intent)."
+    source_signal: "free_power_active_persisted"
+    likely_cause: "Normal operation - a manual or scheduled Free Power session is running."
+    safe_diagnostic_step: "No action needed; it will end automatically at its configured duration or an explicit End request."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: FREE_POWER_OPERATION_ACTIVE
+    subsystem: free_power
+    severity: WARNING
+    meaning: "A Free Power start or end write sequence is currently in progress."
+    source_signal: "free_power_operation_in_progress"
+    likely_cause: "Normal operation, mid-transaction."
+    safe_diagnostic_step: "No action needed; this clears automatically within tens of seconds under normal conditions."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: FREE_POWER_OPERATION_STUCK
+    subsystem: free_power
+    severity: FAILED
+    meaning: "free_power_operation_in_progress has remained true for longer than the 180s failed-after bracket."
+    source_signal: "free_power_operation_in_progress duration"
+    likely_cause: "A stuck/hung state, or Modbus communication failure part-way through the Free Power write sequence."
+    safe_diagnostic_step: "Check ESPHome logs for the last logged step; do not manually clear the flag."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: FREE_POWER_RECOVERY_REQUIRED
+    subsystem: free_power
+    severity: WARNING
+    meaning: "free_power_snapshot_valid is true while free_power_active_persisted is false - the firmware's own watchdog is expected to resolve this within a few 15s cycles."
+    source_signal: "free_power_snapshot_valid && !free_power_active_persisted"
+    likely_cause: "Activation or restore was interrupted (e.g. a reboot mid-transaction) - the firmware watchdog (firmware:6011-6029) is designed to auto-restore from exactly this state."
+    safe_diagnostic_step: "Wait up to 60s for the watchdog to resolve it automatically; do not manually intervene with the inverter."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: FREE_POWER_RECOVERY_FAILED
+    subsystem: free_power
+    severity: FAILED
+    meaning: "The pending-recovery condition above has persisted beyond the watchdog's reasonable resolution window (60s), or free_power_failures incremented during a restore attempt while the snapshot remains unresolved."
+    source_signal: "free_power_snapshot_valid && !free_power_active_persisted, sustained; free_power_failures delta"
+    likely_cause: "The watchdog's restore attempt(s) are failing, likely due to a persistent Modbus communication issue."
+    safe_diagnostic_step: "Check inverter_telemetry/inverter_configuration health first - a restore cannot succeed while communications are down. Do not attempt a manual write to force resolution."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: FREE_POWER_FAILURES_RECENT
+    subsystem: free_power
+    severity: WARNING
+    meaning: "free_power_failures has incremented within the current window."
+    source_signal: "free_power_failures counter delta"
+    likely_cause: "A rejected/failed start, end, or restore attempt - check free_power_status for the specific reason text."
+    safe_diagnostic_step: "Read free_power_status for the firmware's own explanation before retrying."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FREE_POWER_STATE_INCONSISTENT
+    subsystem: free_power
+    severity: WARNING
+    meaning: "The derived active-state boolean and the free_power_status text disagree about whether Free Power is currently active."
+    source_signal: "free_power_active_sensor vs. free_power_status text"
+    likely_cause: "Most likely a transient read across two separate ESPHome API state updates, not a firmware bug."
+    safe_diagnostic_step: "Re-check on the next poll cycle before treating as a genuine inconsistency."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # runtime_configuration
+  # ===================================================================
+  - code: RUNTIME_CONFIG_NOT_READY
+    subsystem: runtime_configuration
+    severity: FAILED
+    meaning: "binary_sensor.ecco_runtime_configuration_ready reports false - required site-profile configuration is missing or out of bounds."
+    source_signal: "binary_sensor.ecco_runtime_configuration_ready"
+    likely_cause: "Battery capacity or round-trip efficiency is zero/unset, or the live charge-start minute is unavailable/out of range."
+    safe_diagnostic_step: "Check the sensor's own attributes (battery_capacity_kwh, round_trip_efficiency_percent, charge_start_time) for which specific value is missing."
+    blocks_manual_control: true
+    affects_forecast: true
+
+  - code: RUNTIME_CONFIG_UNAVAILABLE
+    subsystem: runtime_configuration
+    severity: UNKNOWN
+    meaning: "binary_sensor.ecco_runtime_configuration_ready itself does not exist or has never reported a state."
+    source_signal: "binary_sensor.ecco_runtime_configuration_ready availability"
+    likely_cause: "The ecco_runtime_config.yaml package is not installed, or Home Assistant has not started template evaluation yet."
+    safe_diagnostic_step: "Confirm the package is installed and Home Assistant has fully started."
+    blocks_manual_control: true
+    affects_forecast: true
+
+  # ===================================================================
+  # home_assistant
+  # ===================================================================
+  - code: HA_ENTITY_UNAVAILABLE
+    subsystem: home_assistant
+    severity: DEGRADED
+    meaning: "A generic ECCO-related Home Assistant entity that a health check depends on is unavailable."
+    source_signal: "entity availability state"
+    likely_cause: "A missing package, an HA restart in progress, or an upstream (Influx/ESPHome) source outage."
+    safe_diagnostic_step: "Check which specific entity is unavailable via the check's own source_signal attribute before assuming a systemic issue."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # canonical_telemetry
+  # ===================================================================
+  - code: CANONICAL_ENTITY_MISSING
+    subsystem: canonical_telemetry
+    severity: DEGRADED
+    meaning: "A canonical telemetry sensor (e.g. sensor.ecco_battery_soc) does not exist or is unavailable, while its raw source entity is fine."
+    source_signal: "canonical sensor availability vs. raw sensor availability"
+    likely_cause: "ecco_canonical_telemetry.yaml is not installed, or was installed after the raw entity but before an HA restart re-evaluated templates."
+    safe_diagnostic_step: "Confirm the ecco_canonical_telemetry.yaml package is installed."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: CANONICAL_STALE_RAW_FRESH
+    subsystem: canonical_telemetry
+    severity: WARNING
+    meaning: "The canonical sensor's refreshed_at attribute is stale while the underlying raw entity is actively updating."
+    source_signal: "canonical refreshed_at age vs. raw entity freshness"
+    likely_cause: "The canonical template's trigger is not firing correctly - possible template/automation engine issue."
+    safe_diagnostic_step: "Check Home Assistant's template/logbook for errors on the specific canonical entity."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: RAW_AND_CANONICAL_MISSING
+    subsystem: canonical_telemetry
+    severity: DEGRADED
+    meaning: "Both the canonical sensor and its raw source entity are unavailable."
+    source_signal: "canonical + raw availability"
+    likely_cause: "This is an inverter_telemetry-level problem surfacing here too - check inverter_telemetry's own health first."
+    safe_diagnostic_step: "Resolve inverter_telemetry health first; this should clear on its own once telemetry resumes."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: CANONICAL_RAW_MISMATCH
+    subsystem: canonical_telemetry
+    severity: WARNING
+    meaning: "The canonical sensor's value differs from its raw source by more than the 0.5-unit rounding tolerance."
+    source_signal: "canonical.state vs. float(raw.state)"
+    likely_cause: "A broken canonical template (wrong source entity, wrong rounding/unit conversion) - cannot itself cause a bad inverter write, since canonical entities are read-only aliases."
+    safe_diagnostic_step: "Compare the canonical template source against the raw entity id it is meant to alias."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: CANONICAL_RAW_SKEW
+    subsystem: canonical_telemetry
+    severity: DEGRADED
+    meaning: "The canonical sensor's refreshed_at timestamp differs from the raw entity's last_changed by more than 30s."
+    source_signal: "canonical.refreshed_at vs. raw.last_changed"
+    likely_cause: "HA internal scheduling delay beyond normal jitter, or a stuck template."
+    safe_diagnostic_step: "Re-check after the next raw entity update; investigate the template engine if persistent."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # influx_raw / influx_5m
+  # ===================================================================
+  - code: INFLUX_RAW_STALE
+    subsystem: influx_raw
+    severity: DEGRADED
+    meaning: "No new point has been observed in the ecco_raw bucket within the expected window (ad-hoc diagnostic finding, not a live HA entity check)."
+    source_signal: "influxdb/diagnostics/latest_ecco_raw_point.flux result"
+    likely_cause: "InfluxDB export configuration issue, or the underlying Home Assistant recorder/InfluxDB integration is not running."
+    safe_diagnostic_step: "Run the ad-hoc diagnostic script manually against InfluxDB and check the export integration's own log."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: INFLUX_5M_STALE
+    subsystem: influx_5m
+    severity: WARNING
+    meaning: >-
+      No new point has been observed in the UNDERLYING house-load history
+      (sensor.ecco_clock_dongle_ecco_load_power in the ecco_5m
+      bucket) that Battery Outlook trains on - a manual/ad-hoc diagnostic
+      finding, not a live HA entity check, and not the same signal as
+      FORECAST_STALE (the model's OUTPUT freshness). Task 006A correction:
+      this previously used the model's output as a stand-in for the
+      underlying data layer's health, which only proves the task ran.
+    source_signal: "influxdb/diagnostics/latest_ecco_5m_point.flux result"
+    likely_cause: "The Home Assistant InfluxDB export/downsample into ecco_5m has stopped, or its upstream ecco_raw data has stopped arriving."
+    safe_diagnostic_step: "Run the ad-hoc diagnostic script manually against InfluxDB; check influx_raw health first (an upstream cause is more likely than the ecco_5m layer itself)."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: INFLUX_HISTORY_INSUFFICIENT
+    subsystem: influx_5m
+    severity: WARNING
+    meaning: >-
+      The independent Flux diagnostic's distinct-day count for the
+      UNDERLYING house-load history is below the 7-day judgement
+      threshold. Deliberately a different signal from
+      FORECAST_HISTORY_INSUFFICIENT (the model's own self-reported
+      training_days_equivalent) - see battery_outlook_history in
+      registry/system_health_checks.yaml for that one. Task 006A
+      correction: this previously counted days of model OUTPUT points,
+      not the actual input history.
+    source_signal: "influxdb/diagnostics/history_depth_check.flux result"
+    likely_cause: "A recently-deployed/reset installation, or a gap in raw data collection."
+    safe_diagnostic_step: "This resolves naturally over time as more data accumulates; no corrective action exists."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  # ===================================================================
+  # battery_outlook
+  # ===================================================================
+  - code: FORECAST_STALE
+    subsystem: battery_outlook
+    severity: WARNING
+    meaning: "The Battery Outlook model's latest result age exceeds the 20m/35m degraded/failed brackets."
+    source_signal: "sensor.ecco_predicted_soc_0035 age"
+    likely_cause: "Same as INFLUX_5M_STALE - this is often the same underlying condition observed from the forecast-consumer side rather than the data-pipeline side."
+    safe_diagnostic_step: "Check influx_5m health first."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: FORECAST_HISTORY_INSUFFICIENT
+    subsystem: battery_outlook
+    severity: WARNING
+    meaning: "training_days_equivalent is present but below a useful threshold for a reliable forecast."
+    source_signal: "sensor.ecco_load_model_training_days"
+    likely_cause: "A recently-deployed/reset installation."
+    safe_diagnostic_step: "This resolves naturally over time; no corrective action exists."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: FORECAST_PREDICTION_UNAVAILABLE
+    subsystem: battery_outlook
+    severity: WARNING
+    meaning: "sensor.ecco_predicted_soc_0035 does not exist or has never reported a value."
+    source_signal: "sensor.ecco_predicted_soc_0035 availability"
+    likely_cause: "The ecco_battery_outlook_influx.yaml package is not installed, or the InfluxDB task has never run successfully."
+    safe_diagnostic_step: "Confirm the package is installed and the InfluxDB task has a successful run in its history."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: FORECAST_MODEL_VERSION_UNVERIFIABLE
+    subsystem: battery_outlook
+    severity: UNKNOWN
+    meaning: "The repository-expected model id (VERSION.yaml) cannot be compared against a live signal - no HA entity currently reads back the running model's version."
+    source_signal: "VERSION.yaml current.influxdb.battery_outlook_model (repository only - no live counterpart exists)"
+    likely_cause: "Not a fault - this is a documented gap, not a detected problem."
+    safe_diagnostic_step: "No live action possible; this reflects a genuine repository limitation, not something to fix via a health check."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  # ===================================================================
+  # battery_outlook_scorer
+  # ===================================================================
+  - code: FORECAST_SCORER_STALE
+    subsystem: battery_outlook_scorer
+    severity: WARNING
+    meaning: "Today's expected scoring checkpoint (lead180_to_target, derived from the live TOU charge-start) has passed, but no new score point appeared."
+    source_signal: "sensor.ecco_battery_outlook_last_scored_prediction age vs. the derived checkpoint time"
+    likely_cause: "The daily scorer task has stopped running, or its pre-charge actual-SOC selection found no qualifying sample."
+    safe_diagnostic_step: "Check the InfluxDB scorer task's run history; check inverter_telemetry health around the expected checkpoint time."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: FORECAST_SCORER_NOT_YET_DUE
+    subsystem: battery_outlook_scorer
+    severity: SUPPRESSED
+    meaning: "Today's expected scoring checkpoint has not yet occurred - the absence of a new score point today is expected, not a fault."
+    source_signal: "current time vs. the derived checkpoint time"
+    likely_cause: "Normal - the checkpoint is later today."
+    safe_diagnostic_step: "No action; this check will naturally transition to FORECAST_SCORER_STALE evaluation once the checkpoint passes."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  - code: FORECAST_SCORER_ANTI_CONTAMINATION_UNVERIFIABLE
+    subsystem: battery_outlook_scorer
+    severity: UNKNOWN
+    meaning: "Whether a specific score point was genuinely pre-charge (not contaminated by post-charge SOC) cannot be independently re-derived by a lightweight health check."
+    source_signal: "influxdb/tasks/ecco_battery_outlook_score_daily.flux's own internal filter logic (not independently re-checkable)"
+    likely_cause: "Not a fault - this is a documented limitation of external health observation, not a detected problem."
+    safe_diagnostic_step: "Trust the task's own logic (already documented in CURRENT_STATE.md as selecting the latest pre-charge actual SOC); no independent verification is possible without re-running the task's filter against raw data."
+    blocks_manual_control: false
+    affects_forecast: true
+
+  # ===================================================================
+  # deployment_consistency
+  # ===================================================================
+  - code: CONFIGURATION_MISMATCH
+    subsystem: deployment_consistency
+    severity: WARNING
+    meaning: "A repository-expected site-profile value differs from its live Home Assistant entity counterpart."
+    source_signal: "VERSION.yaml current.site_profile.* vs. the corresponding sensor.ecco_config_*/input_number.ecco_* entity"
+    likely_cause: "Either a genuinely stale VERSION.yaml snapshot, or an intentional live override - the two are indistinguishable from outside, so this is never auto-corrected."
+    safe_diagnostic_step: "Compare the two values manually and decide whether VERSION.yaml or the live value should change; do not assume either is 'correct' automatically."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: DEPLOYMENT_MANIFEST_PATH_MISSING
+    subsystem: deployment_consistency
+    severity: FAILED
+    meaning: "A path referenced by VERSION.yaml or deployment/ha-manifest.yaml does not exist in this repository."
+    source_signal: "tools/validate_repo.py's existing validate_version_references()/validate_deployment_sources() checks"
+    likely_cause: "A file was renamed/removed without updating the manifest, or a manifest entry was added before the file existed."
+    safe_diagnostic_step: "This is a repository integrity issue, not a live-system issue - fix the manifest or restore the missing file."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # generic / cross-subsystem
+  # ===================================================================
+  - code: INSUFFICIENT_EVIDENCE
+    subsystem: communications
+    severity: UNKNOWN
+    meaning: "Generic fallback for a subsystem whose required inputs have never been observed at all (distinct from stale - genuinely never-seen)."
+    source_signal: "varies - see the specific check's source_entity"
+    likely_cause: "First boot before any data has arrived, or a package/entity that has never existed on this installation."
+    safe_diagnostic_step: "Wait for the relevant subsystem's first successful update; if it never arrives, investigate that subsystem specifically."
+    blocks_manual_control: true
+    affects_forecast: false
+
+  - code: WIFI_SIGNAL_UNKNOWN
+    subsystem: communications
+    severity: UNKNOWN
+    meaning: >-
+      Task 006B: dedicated, NON-BLOCKING reason code for the Wi-Fi RSSI
+      plausibility check (wifi_signal_quality) - deliberately separate
+      from INSUFFICIENT_EVIDENCE, which is required_control_checks()-blocking
+      and correctly used by esphome_reachable's genuine first-observation
+      uncertainty. RSSI is absent, out of the -90..0 dBm plausibility
+      range, or otherwise incomplete signal-quality information. This
+      says nothing about whether the device is actually reachable -
+      esphome_reachable is the dedicated, separately-evaluated check for
+      that - so it must never gate manual control on its own.
+    source_signal: "wifi_signal (platform wifi_signal sensor)"
+    likely_cause: "The sensor has never reported, or reported an implausible value (e.g. before the ESPHome Wi-Fi stack fully initialised)."
+    safe_diagnostic_step: "Check esphome_reachable's own state before treating this as a connectivity problem; Wi-Fi signal QUALITY is diagnostic information, not a proof of unreachability."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  # ===================================================================
+  # supervision / fallback (FB-B3: HA display layer, read-only, STANDARD tier)
+  # ===================================================================
+  # No code here may contain FALLBACK_PROFILE or FAILBACK_STATE (banned under
+  # home-assistant/ by the PR54 scope pin; see S5 section 5.6).
+
+  - code: SUPERVISION_STARTING
+    subsystem: supervision
+    severity: DEGRADED
+    meaning: "No valid Home Assistant heartbeat has been accepted since the dongle started (display word: Awaiting Heartbeat)."
+    source_signal: "ecco_supervision_status (HA display layer over the firmware supervision state STARTUP)"
+    likely_cause: "Dongle just restarted, or the supervision heartbeat automation is disabled or missing."
+    safe_diagnostic_step: "Wait up to one heartbeat period after a dongle restart; if it persists, check that the supervision heartbeat automation is enabled."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: SUPERVISION_NOT_STABLE
+    subsystem: supervision
+    severity: DEGRADED
+    meaning: "Heartbeats resumed but the stability window (3 on-time beats) is not yet met."
+    source_signal: "ecco_supervision_status (firmware state SUPERVISED with Stable off)"
+    likely_cause: "Heartbeats were interrupted and have just resumed."
+    safe_diagnostic_step: "No action needed if it clears within about a minute."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: SUPERVISION_SUSPECT
+    subsystem: supervision
+    severity: WARNING
+    meaning: "No valid heartbeat for longer than the suspect threshold."
+    source_signal: "ecco_supervision_status (firmware state SUSPECT)"
+    likely_cause: "Home Assistant is overloaded or the heartbeat automation is not running."
+    safe_diagnostic_step: "Check Home Assistant load and the heartbeat automation's last run."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: SUPERVISION_LOST
+    subsystem: supervision
+    severity: WARNING
+    meaning: "No valid heartbeat for longer than the loss threshold."
+    source_signal: "ecco_supervision_status (firmware state LOST)"
+    likely_cause: "The heartbeat path from Home Assistant is broken: automation disabled, package missing or action name wrong."
+    safe_diagnostic_step: "Check the ECCO supervision heartbeat automation and the ESPHome action name; do not restart the dongle from this check."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: SUPERVISION_UNAVAILABLE
+    subsystem: supervision
+    severity: UNKNOWN
+    meaning: "Supervision state is not available in Home Assistant."
+    source_signal: "ecco_supervision_status (firmware supervision entities unknown/unavailable)"
+    likely_cause: "The ESPHome device is disconnected, or firmware and package versions do not match."
+    safe_diagnostic_step: "Check the ESPHome device connection."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_STATUS_UNAVAILABLE
+    subsystem: fallback
+    severity: UNKNOWN
+    meaning: "The dongle is not reporting Fallback Profile status, or reports an unrecognised state."
+    source_signal: "ecco_fallback_status_code (not_reporting / unexpected_state)"
+    likely_cause: "The ESPHome device is disconnected, or firmware and dashboard versions do not match."
+    safe_diagnostic_step: "Check the ESPHome device connection and that firmware and dashboard versions match."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_LIVE_UNKNOWN
+    subsystem: fallback
+    severity: UNKNOWN
+    meaning: "A profile is saved but the live comparison is unavailable (configuration data not fresh)."
+    source_signal: "ecco_fallback_status_code (live_unknown)"
+    likely_cause: "Configuration polling is off or stale, so the live comparison cannot be trusted."
+    safe_diagnostic_step: "Check the configuration polling switch and configuration freshness."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_NOT_CAPTURED
+    subsystem: fallback
+    severity: DEGRADED
+    meaning: "No known-good Fallback Profile has been saved."
+    source_signal: "ecco_fallback_status_code (not_captured)"
+    likely_cause: "No profile has been saved yet on this dongle."
+    safe_diagnostic_step: "Review the current configuration and save it if it is your known-good setup."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_INVALIDATED
+    subsystem: fallback
+    severity: DEGRADED
+    meaning: "The saved profile was invalidated by the operator."
+    source_signal: "ecco_fallback_status_code (invalidated)"
+    likely_cause: "The operator invalidated the saved profile."
+    safe_diagnostic_step: "Save a new known-good profile when ready."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_DRIFTED
+    subsystem: fallback
+    severity: DEGRADED
+    meaning: "Live E1 settings differ from the saved profile."
+    source_signal: "ecco_fallback_status_code (drift_values)"
+    likely_cause: "A setting was changed after the profile was saved (for example by Manual TOU)."
+    safe_diagnostic_step: "Review; save again if the change was intended."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_CONTEXT_CHANGED
+    subsystem: fallback
+    severity: WARNING
+    meaning: "Slot times or context registers differ from the saved profile; a restore would be refused."
+    source_signal: "ecco_fallback_status_code (drift_context)"
+    likely_cause: "Slot times, the grid-charging enable bit, the energy-management model or the TOU master bit changed after the save."
+    safe_diagnostic_step: "Review and save again, or put the slot times back."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_EXPORT_ENABLED
+    subsystem: fallback
+    severity: WARNING
+    meaning: "Export mode is Allow Export while the saved profile uses Zero Export; this setting cannot be saved as a fallback."
+    source_signal: "ecco_fallback_status_code (drift_export)"
+    likely_cause: "Register 244 was changed to Allow Export after the profile was saved."
+    safe_diagnostic_step: "Change the export mode back in Manual Controls."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_UNUSABLE
+    subsystem: fallback
+    severity: WARNING
+    meaning: "The stored profile is unreadable, damaged, out of range, lost or out of step with its record."
+    source_signal: "ecco_fallback_status_code (profile_unusable)"
+    likely_cause: "Storage read error, structural damage, out-of-domain stored values, a missing profile or a profile that no longer matches its witness record."
+    safe_diagnostic_step: "Open the Safety view technical detail; record the state before any restart."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_SAVE_UNCONFIRMED
+    subsystem: fallback
+    severity: WARNING
+    meaning: "The last save's storage outcome could not be confirmed this boot."
+    source_signal: "ecco_fallback_status_code (save_unconfirmed)"
+    likely_cause: "The durable write outcome is unknown; a reboot re-derives it from storage."
+    safe_diagnostic_step: "Restart the dongle only when no temporary operation is active and no recovery lockout is shown; it re-reads storage at boot."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_REGRESSED
+    subsystem: fallback
+    severity: WARNING
+    meaning: "The saved profile appears to have been lost or rolled back: the dongle reports a lower generation than Home Assistant has seen. Detection only, never a gate."
+    source_signal: "ecco_fallback_status_code (profile_regressed) from sensor.ecco_fallback_generation_high_water"
+    likely_cause: "Storage was erased or reverted, or an invalidation did not persist. Lease records may also be affected."
+    safe_diagnostic_step: "Check Free Power and Dump to Grid status, then review and save again; reset the high-water mark with the operator script only after investigating."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_LIVE_OUT_OF_DOMAIN
+    subsystem: fallback
+    severity: WARNING
+    meaning: "Live settings are outside what Fallback V1 can save or restore."
+    source_signal: "ecco_fallback_status_code (live_out_of_domain)"
+    likely_cause: "A live slot value or mode is outside the supported range."
+    safe_diagnostic_step: "Adjust the listed slot values in Manual Controls."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FALLBACK_BLOCKED_BY_LEASE
+    subsystem: fallback
+    severity: WARNING
+    meaning: "A temporary-operation domain needs an operator decision, is restoring, or has unreadable or corrupt recovery metadata."
+    source_signal: "ecco_fallback_status_code (lease_unreadable / lease_lockout / lease_restoring)"
+    likely_cause: "Free Power, Dump to Grid or the register 244 test left a recovery obligation or an unreadable marker."
+    safe_diagnostic_step: "Resolve that feature's own recovery first (see Energy Actions / technical detail). Do NOT restart the dongle while a recovery state is unreadable."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FAILBACK_SHADOW_EPISODE
+    subsystem: fallback
+    severity: WARNING
+    meaning: "A supervision-loss shadow episode is open; nothing was written."
+    source_signal: "ecco_fallback_status_code (shadow_episode) from the dongle's Failback Shadow State (SHADOW_EPISODE / SHADOW_EPISODE_HA_BACK)"
+    likely_cause: "Home Assistant stopped sending valid heartbeats long enough for the dongle's shadow evaluator to record a loss of supervision. Shadow mode only: nothing was written to the inverter."
+    safe_diagnostic_step: "No action needed; it closes after 5 minutes of stable supervision."
+    blocks_manual_control: false
+    affects_forecast: false

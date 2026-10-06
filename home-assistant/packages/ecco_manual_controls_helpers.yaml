@@ -1,0 +1,489 @@
+# ECCO Pro - Manual Controls V1 friendly-input helpers
+#
+# Presentation-layer helpers only. This file does NOT write Deye
+# registers and does NOT touch the manual-write transaction
+# architecture - it exists purely so the TOU matrix dashboard can show
+# a real 24-hour HH:MM time editor and compact numeric Power/SOC boxes
+# instead of raw HHMM integers and long sliders, following the exact
+# same input_datetime/input_number(mode: box) + bidirectional-sync-
+# automation pattern already proven live by ecco_free_power_schedule.yaml.
+#
+# Architecture:
+#   ESPHome staging entity (authoritative) <-> HA helper (friendly display/edit)
+#   number.ecco_clock_dongle_manual_slot_N_start_hhmm  <-> input_datetime.ecco_manual_slot_N_start_time
+#   number.ecco_clock_dongle_manual_slot_N_power       <-> input_number.ecco_manual_slot_N_power_staged
+#   number.ecco_clock_dongle_manual_slot_N_target_soc  <-> input_number.ecco_manual_slot_N_soc_staged
+#
+# The ESPHome number entities remain the ONLY thing apply_manual_slotN
+# reads when Apply is pressed - these helpers are kept in sync with them
+# by the automations below, in both directions:
+#   - ESPHome number changes (e.g. "Load Current -> Staging" pressed,
+#     or the entity edited directly) -> helper is updated to match.
+#   - Helper edited by the user (time picker / numeric box) -> the
+#     underlying ESPHome number is set to match, so Apply picks up
+#     exactly what the user entered, converted to the register's own
+#     HHMM representation. No new Modbus register, no new write path -
+#     Apply still only ever reads the same number entities it always did.
+#
+# Time representation: ECCO firmware stores TOU start times as plain
+# 24-hour numeric HHMM (e.g. 530 = 05:30). No AM/PM register or bit has
+# ever been identified in this repository's evidence - see
+# docs/SMARTDEYE_READONLY_PARITY_AUDIT.md and the capability registry.
+# input_datetime with has_time only (no date) is used here purely as a
+# convenient native 24-hour-capable time-of-day picker widget; it does
+# not imply the inverter has any date/AM-PM concept. Whether the picker
+# itself DISPLAYS as 24-hour or 12-hour AM/PM text is controlled by each
+# viewer's own Home Assistant profile time-format setting, same as any
+# other input_datetime/time entity in HA - this file cannot force that
+# at the dashboard-YAML level.
+#
+# Every sync automation is guarded by a template condition that only
+# writes the target when its value would actually change, so a settled
+# pair never loops (A changes B, B's new value already matches what A
+# would compute, so B's own sync automation has nothing to do).
+#
+# `initial:` below is NOT an authoritative default - HA requires some
+# value at entity-creation time, but on every Home Assistant startup
+# (and after "Load Current"/"Load ALL Current TOU Slots -> Staging" is
+# pressed) script.ecco_refresh_manual_control_helpers unconditionally
+# overwrites every helper from the live ESPHome staging entities. A
+# helper only shows its `initial:` value transiently, before that first
+# refresh runs; it must never be read as "the current staged value".
+#
+# 5-minute TOU boundary: input_datetime has no native minute-step, so a
+# user can pick a non-5-minute time (e.g. 07:33) in the picker. The
+# helper -> ESPHome sync automation below refuses to forward such a
+# value into the authoritative staging number - it reverts the helper
+# to the last valid staged time and stops, so an invalid time can never
+# reach the number entity apply_manual_slotN reads, let alone Modbus.
+# Firmware's own valid_hhmm() (mm % 5 == 0, from commit 806a6600) is
+# kept unchanged as the final defence either way.
+
+input_datetime:
+  ecco_manual_slot_1_start_time:
+    name: ECCO Manual Slot 1 Start Time
+    has_time: true
+    has_date: false
+    initial: "00:35:00"
+  ecco_manual_slot_2_start_time:
+    name: ECCO Manual Slot 2 Start Time
+    has_time: true
+    has_date: false
+    initial: "05:25:00"
+  ecco_manual_slot_3_start_time:
+    name: ECCO Manual Slot 3 Start Time
+    has_time: true
+    has_date: false
+    initial: "11:05:00"
+  ecco_manual_slot_4_start_time:
+    name: ECCO Manual Slot 4 Start Time
+    has_time: true
+    has_date: false
+    initial: "12:55:00"
+  ecco_manual_slot_5_start_time:
+    name: ECCO Manual Slot 5 Start Time
+    has_time: true
+    has_date: false
+    initial: "23:45:00"
+  ecco_manual_slot_6_start_time:
+    name: ECCO Manual Slot 6 Start Time
+    has_time: true
+    has_date: false
+    initial: "00:25:00"
+
+input_number:
+  ecco_manual_slot_1_power_staged:
+    name: ECCO Manual Slot 1 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+  ecco_manual_slot_2_power_staged:
+    name: ECCO Manual Slot 2 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+  ecco_manual_slot_3_power_staged:
+    name: ECCO Manual Slot 3 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+  ecco_manual_slot_4_power_staged:
+    name: ECCO Manual Slot 4 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+  ecco_manual_slot_5_power_staged:
+    name: ECCO Manual Slot 5 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+  ecco_manual_slot_6_power_staged:
+    name: ECCO Manual Slot 6 Power (staged)
+    min: 0
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 8000
+
+  ecco_manual_slot_1_soc_staged:
+    name: ECCO Manual Slot 1 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 100
+  ecco_manual_slot_2_soc_staged:
+    name: ECCO Manual Slot 2 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 0
+  ecco_manual_slot_3_soc_staged:
+    name: ECCO Manual Slot 3 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 0
+  ecco_manual_slot_4_soc_staged:
+    name: ECCO Manual Slot 4 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 0
+  ecco_manual_slot_5_soc_staged:
+    name: ECCO Manual Slot 5 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 0
+  ecco_manual_slot_6_soc_staged:
+    name: ECCO Manual Slot 6 Target SOC (staged)
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 0
+
+automation:
+  # ---- ESPHome staging number -> friendly helper (3 field types) ----
+  - id: ecco_manual_tou_sync_hhmm_to_time_helper
+    alias: "ECCO Manual TOU - sync numeric HHMM staging to time helper"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - number.ecco_clock_dongle_manual_slot_1_start_hhmm
+          - number.ecco_clock_dongle_manual_slot_2_start_hhmm
+          - number.ecco_clock_dongle_manual_slot_3_start_hhmm
+          - number.ecco_clock_dongle_manual_slot_4_start_hhmm
+          - number.ecco_clock_dongle_manual_slot_5_start_hhmm
+          - number.ecco_clock_dongle_manual_slot_6_start_hhmm
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          raw: "{{ trigger.to_state.state | int(0) }}"
+          hh: "{{ (raw // 100) | int(0) }}"
+          mm: "{{ (raw % 100) | int(0) }}"
+          target: "input_datetime.ecco_manual_slot_{{ slot_num }}_start_time"
+          new_time: "{{ '%02d:%02d:00' | format(hh, mm) }}"
+      - condition: template
+        value_template: "{{ states(target) != new_time }}"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: "{{ target }}"
+        data:
+          time: "{{ new_time }}"
+
+  - id: ecco_manual_tou_sync_power_to_helper
+    alias: "ECCO Manual TOU - sync numeric Power staging to box helper"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - number.ecco_clock_dongle_manual_slot_1_power
+          - number.ecco_clock_dongle_manual_slot_2_power
+          - number.ecco_clock_dongle_manual_slot_3_power
+          - number.ecco_clock_dongle_manual_slot_4_power
+          - number.ecco_clock_dongle_manual_slot_5_power
+          - number.ecco_clock_dongle_manual_slot_6_power
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          target: "input_number.ecco_manual_slot_{{ slot_num }}_power_staged"
+          new_val: "{{ trigger.to_state.state | int(0) }}"
+      - condition: template
+        value_template: "{{ (states(target) | int(-1)) != new_val }}"
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ target }}"
+        data:
+          value: "{{ new_val }}"
+
+  - id: ecco_manual_tou_sync_soc_to_helper
+    alias: "ECCO Manual TOU - sync numeric Target SOC staging to box helper"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - number.ecco_clock_dongle_manual_slot_1_target_soc
+          - number.ecco_clock_dongle_manual_slot_2_target_soc
+          - number.ecco_clock_dongle_manual_slot_3_target_soc
+          - number.ecco_clock_dongle_manual_slot_4_target_soc
+          - number.ecco_clock_dongle_manual_slot_5_target_soc
+          - number.ecco_clock_dongle_manual_slot_6_target_soc
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          target: "input_number.ecco_manual_slot_{{ slot_num }}_soc_staged"
+          new_val: "{{ trigger.to_state.state | int(0) }}"
+      - condition: template
+        value_template: "{{ (states(target) | int(-1)) != new_val }}"
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ target }}"
+        data:
+          value: "{{ new_val }}"
+
+  # ---- Friendly helper -> ESPHome staging number (3 field types) ----
+  - id: ecco_manual_tou_sync_time_helper_to_hhmm
+    alias: "ECCO Manual TOU - sync time helper to numeric HHMM staging"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_datetime.ecco_manual_slot_1_start_time
+          - input_datetime.ecco_manual_slot_2_start_time
+          - input_datetime.ecco_manual_slot_3_start_time
+          - input_datetime.ecco_manual_slot_4_start_time
+          - input_datetime.ecco_manual_slot_5_start_time
+          - input_datetime.ecco_manual_slot_6_start_time
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          hh: "{{ trigger.to_state.attributes.hour | int(0) }}"
+          mm: "{{ trigger.to_state.attributes.minute | int(0) }}"
+          hhmm: "{{ hh * 100 + mm }}"
+          target: "number.ecco_clock_dongle_manual_slot_{{ slot_num }}_start_hhmm"
+      # Reject (do not silently round) any time not on a 5-minute
+      # boundary: revert the helper to the last valid staged time and
+      # stop, so an invalid HHMM never reaches the staging number that
+      # apply_manual_slotN reads. Firmware's valid_hhmm() stays the
+      # final defence regardless.
+      - if:
+          - condition: template
+            value_template: "{{ (mm % 5) != 0 }}"
+        then:
+          - variables:
+              current_raw: "{{ states(target) | int(0) }}"
+              current_hh: "{{ (current_raw // 100) | int(0) }}"
+              current_mm: "{{ (current_raw % 100) | int(0) }}"
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: "{{ trigger.entity_id }}"
+            data:
+              time: "{{ '%02d:%02d:00' | format(current_hh, current_mm) }}"
+          - stop: "Rejected: TOU start minutes must be a multiple of 5 - helper reverted to the last valid staged time."
+      - condition: template
+        value_template: "{{ (states(target) | int(-1)) != hhmm }}"
+      - action: number.set_value
+        target:
+          entity_id: "{{ target }}"
+        data:
+          value: "{{ hhmm }}"
+
+  - id: ecco_manual_tou_sync_power_helper_to_number
+    alias: "ECCO Manual TOU - sync Power box helper to numeric staging"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.ecco_manual_slot_1_power_staged
+          - input_number.ecco_manual_slot_2_power_staged
+          - input_number.ecco_manual_slot_3_power_staged
+          - input_number.ecco_manual_slot_4_power_staged
+          - input_number.ecco_manual_slot_5_power_staged
+          - input_number.ecco_manual_slot_6_power_staged
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          target: "number.ecco_clock_dongle_manual_slot_{{ slot_num }}_power"
+          new_val: "{{ trigger.to_state.state | int(0) }}"
+      - condition: template
+        value_template: "{{ (states(target) | int(-1)) != new_val }}"
+      - action: number.set_value
+        target:
+          entity_id: "{{ target }}"
+        data:
+          value: "{{ new_val }}"
+
+  - id: ecco_manual_tou_sync_soc_helper_to_number
+    alias: "ECCO Manual TOU - sync Target SOC box helper to numeric staging"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.ecco_manual_slot_1_soc_staged
+          - input_number.ecco_manual_slot_2_soc_staged
+          - input_number.ecco_manual_slot_3_soc_staged
+          - input_number.ecco_manual_slot_4_soc_staged
+          - input_number.ecco_manual_slot_5_soc_staged
+          - input_number.ecco_manual_slot_6_soc_staged
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state is not none and trigger.to_state.state not in ['unknown','unavailable'] }}"
+    actions:
+      - variables:
+          slot_num: "{{ trigger.entity_id.split('_slot_')[1].split('_')[0] }}"
+          target: "number.ecco_clock_dongle_manual_slot_{{ slot_num }}_target_soc"
+          new_val: "{{ trigger.to_state.state | int(0) }}"
+      - condition: template
+        value_template: "{{ (states(target) | int(-1)) != new_val }}"
+      - action: number.set_value
+        target:
+          entity_id: "{{ target }}"
+        data:
+          value: "{{ new_val }}"
+
+  - id: ecco_manual_tou_refresh_helpers_on_startup
+    alias: "ECCO Manual TOU - refresh friendly helpers on Home Assistant startup"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      # ESPHome entities may briefly read unavailable while the API
+      # connection re-establishes after a restart; wait (bounded) for
+      # the staging entities to be readable before refreshing, rather
+      # than refreshing helpers from placeholder "unavailable" state.
+      - wait_template: >
+          {{ states('number.ecco_clock_dongle_manual_slot_1_start_hhmm') not in ['unknown', 'unavailable'] and
+             states('number.ecco_clock_dongle_manual_slot_6_start_hhmm') not in ['unknown', 'unavailable'] }}
+        timeout: "00:03:00"
+        continue_on_timeout: true
+      - action: script.ecco_refresh_manual_control_helpers
+
+  - id: ecco_manual_tou_refresh_helpers_after_load
+    alias: "ECCO Manual TOU - refresh friendly helpers after a Load button is pressed"
+    mode: queued
+    max: 5
+    triggers:
+      - trigger: state
+        entity_id:
+          - button.ecco_clock_dongle_load_current_slot_1_to_manual_staging
+          - button.ecco_clock_dongle_load_current_slot_2_to_manual_staging
+          - button.ecco_clock_dongle_load_current_slot_3_to_manual_staging
+          - button.ecco_clock_dongle_load_current_slot_4_to_manual_staging
+          - button.ecco_clock_dongle_load_current_slot_5_to_manual_staging
+          - button.ecco_clock_dongle_load_current_slot_6_to_manual_staging
+          - button.ecco_clock_dongle_load_all_current_tou_slots_to_manual_staging
+    actions:
+      # Give the ESPHome staging entities a moment to report their
+      # newly-loaded values before pulling them into the helpers.
+      - delay: "00:00:02"
+      - action: script.ecco_refresh_manual_control_helpers
+
+script:
+  ecco_refresh_manual_control_helpers:
+    alias: "ECCO Manual Controls - Refresh friendly helpers from live ESPHome staging"
+    mode: single
+    icon: mdi:refresh
+    sequence:
+      # Explicit, unconditional pull of the current ESPHome staging
+      # values into all 18 friendly helpers (6 start-time, 6 power, 6
+      # SOC). Unlike the bidirectional state-triggered automations
+      # above (which only fire when a value actually CHANGES after
+      # this script runs), this script always re-reads the current
+      # ESPHome state regardless of whether it "changed" from HA's
+      # point of view - the correct behaviour right after Home
+      # Assistant startup (helpers only have their placeholder
+      # `initial:` values so far) and right after Load/Load ALL
+      # (whose target values may happen to equal what was already
+      # staged, in which case no state-changed event would otherwise
+      # fire). Still only ever reads the same ESPHome number entities
+      # apply_manual_slotN reads - no new write path.
+      - repeat:
+          for_each: [1, 2, 3, 4, 5, 6]
+          sequence:
+            - variables:
+                n: "{{ repeat.item }}"
+                hhmm_source: "number.ecco_clock_dongle_manual_slot_{{ n }}_start_hhmm"
+                power_source: "number.ecco_clock_dongle_manual_slot_{{ n }}_power"
+                soc_source: "number.ecco_clock_dongle_manual_slot_{{ n }}_target_soc"
+            - if:
+                - condition: template
+                  value_template: "{{ states(hhmm_source) not in ['unknown', 'unavailable', 'none', None] }}"
+              then:
+                - variables:
+                    raw: "{{ states(hhmm_source) | int(0) }}"
+                    hh: "{{ (raw // 100) | int(0) }}"
+                    mm: "{{ (raw % 100) | int(0) }}"
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: "input_datetime.ecco_manual_slot_{{ n }}_start_time"
+                  data:
+                    time: "{{ '%02d:%02d:00' | format(hh, mm) }}"
+            - if:
+                - condition: template
+                  value_template: "{{ states(power_source) not in ['unknown', 'unavailable', 'none', None] }}"
+              then:
+                - action: input_number.set_value
+                  target:
+                    entity_id: "input_number.ecco_manual_slot_{{ n }}_power_staged"
+                  data:
+                    value: "{{ states(power_source) | int(0) }}"
+            - if:
+                - condition: template
+                  value_template: "{{ states(soc_source) not in ['unknown', 'unavailable', 'none', None] }}"
+              then:
+                - action: input_number.set_value
+                  target:
+                    entity_id: "input_number.ecco_manual_slot_{{ n }}_soc_staged"
+                  data:
+                    value: "{{ states(soc_source) | int(0) }}"

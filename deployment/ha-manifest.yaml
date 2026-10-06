@@ -1,0 +1,121 @@
+schema_version: 2
+release: "2026-10-02-fbb3-dashboard"
+
+home_assistant_packages:
+  - source: home-assistant/packages/ecco_pro.yaml
+    destination: /config/packages/ecco_pro.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_runtime_config.yaml
+    destination: /config/packages/ecco_runtime_config.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_free_power_schedule.yaml
+    destination: /config/packages/ecco_free_power_schedule.yaml
+    method: ssh_file_copy
+    restart_required: true
+  # Manual Dump-to-Grid V1 scheduler (NOT live-proven). Only meaningful
+  # alongside the Dump-to-Grid firmware; its arm validation also reads
+  # ecco_free_power_schedule.yaml's helpers for the schedule-overlap check.
+  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
+    destination: /config/packages/ecco_dump_to_grid_schedule.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_battery_outlook_influx.yaml
+    destination: /config/packages/ecco_battery_outlook_influx.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_canonical_telemetry.yaml
+    destination: /config/packages/ecco_canonical_telemetry.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_system_health.yaml
+    destination: /config/packages/ecco_system_health.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_manual_controls_helpers.yaml
+    destination: /config/packages/ecco_manual_controls_helpers.yaml
+    method: ssh_file_copy
+    restart_required: true
+  # HA supervision heartbeat - PR A, OBSERVE-ONLY (NOT live-proven). Only
+  # meaningful alongside firmware that provides the ha_supervision_heartbeat
+  # API action; against older firmware its call simply fails (continue_on_error).
+  - source: home-assistant/packages/ecco_supervision_heartbeat.yaml
+    destination: /config/packages/ecco_supervision_heartbeat.yaml
+    method: ssh_file_copy
+    restart_required: true
+  # Fallback Profile / supervision display layer (FB-B3; read-only, NOT live-proven until the FB-B3
+  # live proof). Requires firmware with the FB-B1/FB-B2/FB-B3 entities.
+  - source: home-assistant/packages/ecco_fallback_status.yaml
+    destination: /config/packages/ecco_fallback_status.yaml
+    method: ssh_file_copy
+    restart_required: true
+  # Operator-only wrappers for esphome.<node>_fallback_profile_execute (FB-B3). Never called by
+  # automations; only the dashboard's human-pressed buttons reach them.
+  - source: home-assistant/packages/ecco_fallback_profile_actions.yaml
+    destination: /config/packages/ecco_fallback_profile_actions.yaml
+    method: ssh_file_copy
+    restart_required: true
+
+dashboard:
+  source: home-assistant/dashboards/ecco_pro.yaml
+  destination: /config/ecco/dashboards/ecco_pro.yaml
+  method: ssh_file_copy_staged
+  restart_required: false
+  activation_required: true
+
+# Committed Lovelace custom-card dist assets. Only the Energy Actions card
+# is listed here for now - the already-working Energy Flow asset/resource
+# path is deliberately left as-is and not migrated in this pass.
+frontend_assets:
+  - source: frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js
+    destination: /config/www/ecco/ecco-energy-actions-card.js
+    method: ssh_file_copy
+    restart_required: false
+    resource_registration: manual
+    resource_url: /local/ecco/ecco-energy-actions-card.js
+  # Fallback / Recovery card - FB-B1 (read-only review of the inverter fallback-profile
+  # registers). NOT deployed: listed for the deploy tooling only; copying the file and
+  # registering the resource stay deliberate manual steps. A single dependency-free ES
+  # module (no dist build step).
+  - source: frontend/ecco-fallback-recovery-card/ecco-fallback-recovery-card.js
+    destination: /config/www/ecco/ecco-fallback-recovery-card.js
+    method: ssh_file_copy
+    restart_required: false
+    resource_registration: manual
+    resource_url: /local/ecco/ecco-fallback-recovery-card.js
+
+firmware:
+  source: firmware/ecco_clock_dongle_stage3_4_free_power.yaml
+  destination: esphome_device_builder
+  method: manual_device_builder
+  hardware_write_capable: true
+
+influxdb:
+  - source: influxdb/tasks/ecco_battery_outlook_5m.flux
+    destination: influxdb_task_ecco_battery_outlook_5m
+    method: manual_task_editor
+  - source: influxdb/tasks/ecco_battery_outlook_score_daily.flux
+    destination: influxdb_task_ecco_battery_outlook_daily_score
+    method: manual_task_editor
+  - source: influxdb/ecco_influxdb_options_v1_3.yaml
+    destination: home_assistant_influx_export_configuration
+    method: reference_only
+
+deployment:
+  ssh_alias: ecco-ha
+  backup_root: /config/ecco-backups
+  validation_command: ha core check
+  automatic_restart: false
+  automatic_inverter_writes: false
+
+notes:
+  - Home Assistant package deployment is now prepared for local key-authenticated SSH/SFTP using tools/deploy-ha.ps1.
+  - Every SSH file deployment is staged to a temporary path, SHA256-verified, backed up, checked with ha core check, and rolled back on failure.
+  - Home Assistant is not restarted unless -Restart is explicitly supplied.
+  - The dashboard can be staged at /config/ecco/dashboards/ecco_pro.yaml, but storage-mode Lovelace is not replaced automatically; YAML dashboard registration remains a deliberate one-time configuration step.
+  - ESPHome firmware and InfluxDB tasks remain deliberate/manual deployment paths.
+  - Install ecco_runtime_config.yaml before deploying portable Battery Outlook tasks; it supplies fresh sensor.ecco_config_* values to InfluxDB.
+  - ecco_system_health.yaml is Phase 1 only: read-only, partial, and not a complete manual-control readiness gate.
+  - Never include secrets.yaml, API tokens, Wi-Fi credentials, Home Assistant auth tokens or SSH private keys in a deployment bundle.
+  - Fallback packages require firmware with FB-B1/FB-B2/FB-B3 entities; deploy firmware first, then packages, then the dashboard.

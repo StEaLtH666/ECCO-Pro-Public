@@ -1,0 +1,7 @@
+{
+  "name": "ECCO Energy Actions Card",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "ecco-energy-actions-card.js",
+  "homeassistant": "2024.8.0"
+}

@@ -1,0 +1,1203 @@
+# ECCO Pro - Phase 3B.2 Forecast Accuracy Learning
+# Replace /config/packages/ecco_pro.yaml with this file.
+# NO inverter setting writes are performed by this package.
+# 3B.2 keeps the proven 3B.1 forecast snapshots and daily scoring,
+# and adds persistent cumulative accuracy learning across completed forecast days.
+
+input_select:
+  ecco_automation_mode:
+    name: ECCO Automation Mode
+    icon: mdi:robot-outline
+    options:
+      - Observe Only
+      - Advisory
+      - Automatic
+  ecco_managed_tou_slot:
+    name: ECCO Managed TOU Slot
+    icon: mdi:calendar-clock
+    options:
+      - Disabled
+      - Slot 1
+
+input_boolean:
+  ecco_defaults_initialized:
+    name: ECCO Defaults Initialized
+  ecco_grid_charging_enabled:
+    name: ECCO Grid Charging Allowed
+    icon: mdi:transmission-tower-import
+  ecco_free_power_override_enabled:
+    name: ECCO Free Power Override
+    icon: mdi:lightning-bolt-circle
+  ecco_dynamic_tou_enabled:
+    name: ECCO Dynamic TOU Window
+    icon: mdi:calendar-sync
+  ecco_automatic_setting_writes_enabled:
+    name: ECCO Automatic Setting Writes
+    icon: mdi:shield-lock-outline
+  ecco_full_charge_tracking_valid:
+    name: ECCO Full Charge Tracking Valid
+    icon: mdi:battery-check
+  ecco_forecast_snapshot_valid:
+    name: ECCO Forecast Snapshot Valid
+    icon: mdi:weather-sunset-up
+  ecco_forecast_score_valid:
+    name: ECCO Forecast Score Valid
+    icon: mdi:target
+
+input_number:
+  ecco_minimum_reserve_soc:
+    name: ECCO Minimum Reserve SOC
+    min: 0
+    max: 80
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  ecco_normal_max_charge_target:
+    name: ECCO Normal Maximum Charge Target
+    min: 50
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  ecco_round_trip_efficiency:
+    name: ECCO Round Trip Efficiency
+    min: 70
+    max: 100
+    step: 0.5
+    unit_of_measurement: "%"
+    mode: box
+  ecco_battery_model_capacity:
+    name: ECCO Battery Model Capacity
+    min: 5
+    max: 100
+    step: 0.1
+    unit_of_measurement: kWh
+    mode: box
+  ecco_max_grid_charge_power:
+    name: ECCO Grid Charge Operating Limit
+    min: 0
+    max: 65500
+    step: 100
+    unit_of_measurement: W
+    mode: box
+  ecco_free_power_threshold:
+    name: ECCO Free Power Threshold
+    min: -50
+    max: 20
+    step: 0.1
+    unit_of_measurement: p/kWh
+    mode: box
+  ecco_minimum_saving_threshold:
+    name: ECCO Minimum Saving Threshold
+    min: 0
+    max: 30
+    step: 0.5
+    unit_of_measurement: p/kWh
+    mode: box
+  ecco_battery_wear_cost:
+    name: ECCO Battery Wear Cost
+    min: 0
+    max: 30
+    step: 0.5
+    unit_of_measurement: p/kWh
+    mode: box
+  ecco_full_charge_interval_days:
+    name: ECCO Full Grid Charge Interval
+    min: 1
+    max: 14
+    step: 1
+    unit_of_measurement: d
+    mode: box
+  ecco_weekly_full_charge_target:
+    name: ECCO Full Grid Charge Target
+    min: 90
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+  ecco_forecast_ratio_min_power:
+    name: ECCO Forecast Ratio Minimum Power
+    min: 50
+    max: 2000
+    step: 50
+    unit_of_measurement: W
+    mode: box
+
+  # Phase 3B.1 persisted forecast-learning values
+  ecco_forecast_snapshot_forecast_solar:
+    name: ECCO Snapshot Forecast Solar
+    min: 0
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_snapshot_solcast:
+    name: ECCO Snapshot Solcast
+    min: 0
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_snapshot_blend:
+    name: ECCO Snapshot Blend
+    min: 0
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_score_actual_pv:
+    name: ECCO Forecast Score Actual PV
+    min: 0
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_error_forecast_solar_kwh:
+    name: ECCO Forecast Solar Error kWh
+    min: -100
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_error_solcast_kwh:
+    name: ECCO Solcast Error kWh
+    min: -100
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_error_blend_kwh:
+    name: ECCO Blend Error kWh
+    min: -100
+    max: 100
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_error_forecast_solar_pct:
+    name: ECCO Forecast Solar Error Percent
+    min: -1000
+    max: 1000
+    step: 0.1
+    unit_of_measurement: "%"
+    mode: box
+  ecco_forecast_error_solcast_pct:
+    name: ECCO Solcast Error Percent
+    min: -1000
+    max: 1000
+    step: 0.1
+    unit_of_measurement: "%"
+    mode: box
+  ecco_forecast_error_blend_pct:
+    name: ECCO Blend Error Percent
+    min: -1000
+    max: 1000
+    step: 0.1
+    unit_of_measurement: "%"
+    mode: box
+
+  # Phase 3B.2 persistent cumulative forecast accuracy
+  ecco_forecast_completed_days:
+    name: ECCO Forecast Completed Days
+    min: 0
+    max: 10000
+    step: 1
+    mode: box
+  ecco_forecast_abs_error_sum_forecast_solar:
+    name: ECCO Forecast Solar Absolute Error Sum
+    min: 0
+    max: 100000
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_abs_error_sum_solcast:
+    name: ECCO Solcast Absolute Error Sum
+    min: 0
+    max: 100000
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+  ecco_forecast_abs_error_sum_blend:
+    name: ECCO Blend Absolute Error Sum
+    min: 0
+    max: 100000
+    step: 0.001
+    unit_of_measurement: kWh
+    mode: box
+
+input_datetime:
+  ecco_forecast_snapshot_for_date:
+    name: ECCO Forecast Snapshot For Date
+    has_date: true
+    has_time: false
+  ecco_forecast_last_scored_date:
+    name: ECCO Forecast Last Scored Date
+    has_date: true
+    has_time: false
+
+automation:
+  - id: ecco_phase3a_initialize_defaults
+    alias: "ECCO - Initialize Phase 3A defaults"
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_defaults_initialized
+        state: "off"
+    actions:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.ecco_automation_mode
+        data:
+          option: "Observe Only"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.ecco_managed_tou_slot
+        data:
+          option: "Slot 1"
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_minimum_reserve_soc}
+        data: {value: 15}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_normal_max_charge_target}
+        data: {value: 100}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_round_trip_efficiency}
+        data: {value: 90}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_battery_model_capacity}
+        data: {value: 31.7}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_max_grid_charge_power}
+        data: {value: 65500}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_free_power_threshold}
+        data: {value: 0}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_minimum_saving_threshold}
+        data: {value: 5}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_battery_wear_cost}
+        data: {value: 0}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_full_charge_interval_days}
+        data: {value: 7}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_weekly_full_charge_target}
+        data: {value: 100}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_ratio_min_power}
+        data: {value: 300}
+      - action: input_boolean.turn_on
+        target:
+          entity_id:
+            - input_boolean.ecco_grid_charging_enabled
+            - input_boolean.ecco_free_power_override_enabled
+            - input_boolean.ecco_dynamic_tou_enabled
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.ecco_automatic_setting_writes_enabled
+            - input_boolean.ecco_full_charge_tracking_valid
+      - action: input_boolean.turn_on
+        target: {entity_id: input_boolean.ecco_defaults_initialized}
+    mode: single
+
+  # Score the forecast captured the previous evening against today's actual PV.
+  # Positive error = forecast was too high; negative error = forecast was too low.
+  - id: ecco_forecast_score_completed_day
+    alias: "ECCO - Score completed PV forecast day"
+    triggers:
+      - trigger: time
+        at: "23:50:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_forecast_snapshot_valid
+        state: "on"
+      - condition: template
+        value_template: >
+          {{ states('input_datetime.ecco_forecast_snapshot_for_date') == now().date().isoformat() }}
+      - condition: template
+        value_template: >
+          {{ states('sensor.ecco_clock_dongle_ecco_day_pv_energy') not in ['unknown','unavailable','none','']
+             and (states('sensor.ecco_clock_dongle_ecco_day_pv_energy') | float(0)) >= 0.1 }}
+    actions:
+      - variables:
+          actual: "{{ states('sensor.ecco_clock_dongle_ecco_day_pv_energy') | float(0) }}"
+          fs: "{{ states('input_number.ecco_forecast_snapshot_forecast_solar') | float(0) }}"
+          sc: "{{ states('input_number.ecco_forecast_snapshot_solcast') | float(0) }}"
+          blend: "{{ states('input_number.ecco_forecast_snapshot_blend') | float(0) }}"
+          completed_days: "{{ states('input_number.ecco_forecast_completed_days') | int(0) }}"
+          fs_abs_sum: "{{ states('input_number.ecco_forecast_abs_error_sum_forecast_solar') | float(0) }}"
+          sc_abs_sum: "{{ states('input_number.ecco_forecast_abs_error_sum_solcast') | float(0) }}"
+          blend_abs_sum: "{{ states('input_number.ecco_forecast_abs_error_sum_blend') | float(0) }}"
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_score_actual_pv}
+        data: {value: "{{ actual | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_forecast_solar_kwh}
+        data: {value: "{{ (fs - actual) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_solcast_kwh}
+        data: {value: "{{ (sc - actual) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_blend_kwh}
+        data: {value: "{{ (blend - actual) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_forecast_solar_pct}
+        data: {value: "{{ (((fs - actual) / actual) * 100) | round(1) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_solcast_pct}
+        data: {value: "{{ (((sc - actual) / actual) * 100) | round(1) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_error_blend_pct}
+        data: {value: "{{ (((blend - actual) / actual) * 100) | round(1) }}"}
+
+      # Accumulate absolute errors once per successfully scored day.
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_completed_days}
+        data: {value: "{{ completed_days + 1 }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_abs_error_sum_forecast_solar}
+        data: {value: "{{ (fs_abs_sum + ((fs - actual) | abs)) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_abs_error_sum_solcast}
+        data: {value: "{{ (sc_abs_sum + ((sc - actual) | abs)) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_abs_error_sum_blend}
+        data: {value: "{{ (blend_abs_sum + ((blend - actual) | abs)) | round(3) }}"}
+
+      - action: input_datetime.set_datetime
+        target: {entity_id: input_datetime.ecco_forecast_last_scored_date}
+        data: {date: "{{ now().date().isoformat() }}"}
+      - action: input_boolean.turn_on
+        target: {entity_id: input_boolean.ecco_forecast_score_valid}
+      - action: input_boolean.turn_off
+        target: {entity_id: input_boolean.ecco_forecast_snapshot_valid}
+    mode: single
+
+  # Capture both providers' next-day forecasts immediately after the day's score.
+  # These values persist across restarts and become the fixed forecast for tomorrow.
+  - id: ecco_forecast_capture_tomorrow_snapshot
+    alias: "ECCO - Capture tomorrow PV forecast snapshot"
+    triggers:
+      - trigger: time
+        at: "23:55:00"
+    conditions:
+      - condition: template
+        value_template: >
+          {{ states('sensor.energy_production_tomorrow') not in ['unknown','unavailable','none','']
+             and states('sensor.solcast_pv_forecast_forecast_tomorrow') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_solar_forecast_tomorrow') not in ['unknown','unavailable','none',''] }}
+    actions:
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_snapshot_forecast_solar}
+        data: {value: "{{ states('sensor.energy_production_tomorrow') | float(0) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_snapshot_solcast}
+        data: {value: "{{ states('sensor.solcast_pv_forecast_forecast_tomorrow') | float(0) | round(3) }}"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_forecast_snapshot_blend}
+        data: {value: "{{ states('sensor.ecco_solar_forecast_tomorrow') | float(0) | round(3) }}"}
+      - action: input_datetime.set_datetime
+        target: {entity_id: input_datetime.ecco_forecast_snapshot_for_date}
+        data:
+          date: "{{ (now() + timedelta(days=1)).date().isoformat() }}"
+      - action: input_boolean.turn_on
+        target: {entity_id: input_boolean.ecco_forecast_snapshot_valid}
+    mode: single
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+
+      - trigger: time_pattern
+        minutes: "/5"
+
+      - trigger: state
+        entity_id:
+          - input_boolean.ecco_defaults_initialized
+          - input_boolean.ecco_grid_charging_enabled
+          - input_boolean.ecco_free_power_override_enabled
+          - input_boolean.ecco_dynamic_tou_enabled
+          - input_boolean.ecco_automatic_setting_writes_enabled
+          - input_boolean.ecco_full_charge_tracking_valid
+          - input_select.ecco_automation_mode
+          - input_select.ecco_managed_tou_slot
+          - input_number.ecco_minimum_reserve_soc
+          - input_number.ecco_normal_max_charge_target
+          - input_number.ecco_round_trip_efficiency
+          - input_number.ecco_battery_model_capacity
+          - input_number.ecco_max_grid_charge_power
+          - input_number.ecco_free_power_threshold
+          - input_number.ecco_minimum_saving_threshold
+          - input_number.ecco_battery_wear_cost
+          - input_number.ecco_full_charge_interval_days
+          - input_number.ecco_weekly_full_charge_target
+          - input_number.ecco_forecast_ratio_min_power
+          - input_boolean.ecco_forecast_snapshot_valid
+          - input_boolean.ecco_forecast_score_valid
+          - input_number.ecco_forecast_snapshot_forecast_solar
+          - input_number.ecco_forecast_snapshot_solcast
+          - input_number.ecco_forecast_snapshot_blend
+          - input_number.ecco_forecast_score_actual_pv
+          - input_number.ecco_forecast_error_forecast_solar_kwh
+          - input_number.ecco_forecast_error_solcast_kwh
+          - input_number.ecco_forecast_error_blend_kwh
+          - input_number.ecco_forecast_error_forecast_solar_pct
+          - input_number.ecco_forecast_error_solcast_pct
+          - input_number.ecco_forecast_error_blend_pct
+          - input_number.ecco_forecast_completed_days
+          - input_number.ecco_forecast_abs_error_sum_forecast_solar
+          - input_number.ecco_forecast_abs_error_sum_solcast
+          - input_number.ecco_forecast_abs_error_sum_blend
+          - input_datetime.ecco_forecast_snapshot_for_date
+          - input_datetime.ecco_forecast_last_scored_date
+
+      - trigger: state
+        entity_id:
+          - sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate
+          - sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_rate
+          - sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_current_rate
+          - sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_rate
+          - event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates
+          - event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates
+          - sensor.energy_production_today
+          - sensor.energy_production_today_remaining
+          - sensor.energy_production_tomorrow
+          - sensor.power_production_now
+          - sensor.solcast_pv_forecast_forecast_today
+          - sensor.solcast_pv_forecast_forecast_remaining_today
+          - sensor.solcast_pv_forecast_forecast_tomorrow
+    sensor:
+      - name: ECCO Import Rate
+        unique_id: ecco_import_rate
+        availability: >
+          {{ states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {{ (states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') | float(0) * 100) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Export Rate
+        unique_id: ecco_export_rate
+        availability: >
+          {{ states('sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_current_rate') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {{ (states('sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_current_rate') | float(0) * 100) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Import Rate
+        unique_id: ecco_next_import_rate
+        availability: >
+          {{ states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_rate') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {{ (states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_rate') | float(0) * 100) | round(4) }}
+        attributes:
+          start: "{{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_rate', 'start') }}"
+          end: "{{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_rate', 'end') }}"
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Today Cheap Import Rate
+        unique_id: ecco_today_cheap_import_rate
+        availability: >
+          {{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') is not none }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set v = state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') %}
+          {{ (v | float(0) * 100) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Today Peak Import Rate
+        unique_id: ecco_today_peak_import_rate
+        availability: >
+          {{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_max_rate') is not none }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set v = state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_max_rate') %}
+          {{ (v | float(0) * 100) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Import Export Spread
+        unique_id: ecco_import_export_spread
+        availability: >
+          {{ states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') not in ['unknown','unavailable','none',''] and states('sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_current_rate') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set i = states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') | float(0) * 100 %}
+          {% set e = states('sensor.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_current_rate') | float(0) * 100 %}
+          {{ (i - e) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Cheap Energy Delivered Cost
+        unique_id: ecco_cheap_energy_delivered_cost
+        availability: >
+          {{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') is not none and states('input_number.ecco_round_trip_efficiency') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set cheap = state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') | float(0) * 100 %}
+          {% set eff = states('input_number.ecco_round_trip_efficiency') | float(90) / 100 %}
+          {{ (cheap / eff if eff > 0 else 0) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Peak Avoidance Margin
+        unique_id: ecco_peak_avoidance_margin
+        availability: >
+          {{ state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') is not none and state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_max_rate') is not none and states('input_number.ecco_round_trip_efficiency') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set cheap = state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_min_rate') | float(0) * 100 %}
+          {% set peak = state_attr('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate', 'current_day_max_rate') | float(0) * 100 %}
+          {% set eff = states('input_number.ecco_round_trip_efficiency') | float(90) / 100 %}
+          {% set delivered = cheap / eff if eff > 0 else 0 %}
+          {{ (peak - delivered) | round(4) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Tariff Band
+        unique_id: ecco_tariff_band
+        state: >
+          {% set ent = 'sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate' %}
+          {% set c = states(ent) %}
+          {% set mn = state_attr(ent, 'current_day_min_rate') %}
+          {% set mx = state_attr(ent, 'current_day_max_rate') %}
+          {% if c in ['unknown','unavailable','none',''] or mn is none or mx is none %}
+            Unknown
+          {% else %}
+            {% set cv = c | float * 100 %}
+            {% set minv = mn | float * 100 %}
+            {% set maxv = mx | float * 100 %}
+            {% if cv <= minv + 0.01 %}Cheap{% elif cv >= maxv - 0.01 %}Peak{% else %}Standard{% endif %}
+          {% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Day Import Slots
+        unique_id: ecco_next_day_import_slots
+        unit_of_measurement: slots
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates', 'rates') | default([], true) %}
+          {{ rates | count }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Day Minimum Import Rate
+        unique_id: ecco_next_day_minimum_import_rate
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates', 'rates') | default([], true) %}
+          {% if rates | count > 0 %}{{ ((rates | map(attribute='value_inc_vat') | list | min) | float * 100) | round(4) }}{% else %}{{ none }}{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Day Maximum Import Rate
+        unique_id: ecco_next_day_maximum_import_rate
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates', 'rates') | default([], true) %}
+          {% if rates | count > 0 %}{{ ((rates | map(attribute='value_inc_vat') | list | max) | float * 100) | round(4) }}{% else %}{{ none }}{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Day Export Slots
+        unique_id: ecco_next_day_export_slots
+        unit_of_measurement: slots
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) %}
+          {{ rates | count }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Next Day Minimum Export Rate
+        unique_id: ecco_next_day_minimum_export_rate
+        availability: >
+          {{ (state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) | count) > 0 }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) %}
+          {% if rates | count > 0 %}{{ ((rates | map(attribute='value_inc_vat') | list | min) | float * 100) | round(4) }}{% else %}{{ none }}{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Next Day Maximum Export Rate
+        unique_id: ecco_next_day_maximum_export_rate
+        availability: >
+          {{ (state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) | count) > 0 }}
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) %}
+          {% if rates | count > 0 %}{{ ((rates | map(attribute='value_inc_vat') | list | max) | float * 100) | round(4) }}{% else %}{{ none }}{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      # ------------------------------------------------------------
+      # PV FORECAST SOURCES + ECCO BLEND
+      # 50/50 Forecast.Solar + Solcast when both are available.
+      # Falls back safely to whichever single source is available.
+      # ------------------------------------------------------------
+
+      - name: ECCO Forecast Solar Today Source
+        unique_id: ecco_forecast_solar_today_source
+        availability: >
+          {{ states('sensor.energy_production_today')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.energy_production_today') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Forecast.Solar"
+
+      - name: ECCO Solcast Today Source
+        unique_id: ecco_solcast_today_source
+        availability: >
+          {{ states('sensor.solcast_pv_forecast_forecast_today')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.solcast_pv_forecast_forecast_today') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Solcast"
+
+      - name: ECCO Solar Forecast Today
+        unique_id: ecco_solar_forecast_today
+        availability: >
+          {{ states('sensor.energy_production_today')
+                not in ['unknown','unavailable','none','']
+             or
+             states('sensor.solcast_pv_forecast_forecast_today')
+                not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {% set fs_raw = states('sensor.energy_production_today') %}
+          {% set sc_raw = states('sensor.solcast_pv_forecast_forecast_today') %}
+          {% set fs_ok = fs_raw not in ['unknown','unavailable','none',''] %}
+          {% set sc_ok = sc_raw not in ['unknown','unavailable','none',''] %}
+          {% if fs_ok and sc_ok %}
+            {{ (((fs_raw | float) + (sc_raw | float)) / 2) | round(3) }}
+          {% elif fs_ok %}
+            {{ (fs_raw | float) | round(3) }}
+          {% elif sc_ok %}
+            {{ (sc_raw | float) | round(3) }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        attributes:
+          forecast_solar_kwh: >
+            {% set v = states('sensor.energy_production_today') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          solcast_kwh: >
+            {% set v = states('sensor.solcast_pv_forecast_forecast_today') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          blend_method: "50/50 mean when both sources valid; single-source fallback"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Solar Remaining Source
+        unique_id: ecco_forecast_solar_remaining_source
+        availability: >
+          {{ states('sensor.energy_production_today_remaining')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.energy_production_today_remaining') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Forecast.Solar"
+
+      - name: ECCO Solcast Remaining Source
+        unique_id: ecco_solcast_remaining_source
+        availability: >
+          {{ states('sensor.solcast_pv_forecast_forecast_remaining_today')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.solcast_pv_forecast_forecast_remaining_today') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Solcast"
+
+      - name: ECCO Solar Forecast Remaining
+        unique_id: ecco_solar_forecast_remaining
+        availability: >
+          {{ states('sensor.energy_production_today_remaining')
+                not in ['unknown','unavailable','none','']
+             or
+             states('sensor.solcast_pv_forecast_forecast_remaining_today')
+                not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {% set fs_raw = states('sensor.energy_production_today_remaining') %}
+          {% set sc_raw = states('sensor.solcast_pv_forecast_forecast_remaining_today') %}
+          {% set fs_ok = fs_raw not in ['unknown','unavailable','none',''] %}
+          {% set sc_ok = sc_raw not in ['unknown','unavailable','none',''] %}
+          {% if fs_ok and sc_ok %}
+            {{ (((fs_raw | float) + (sc_raw | float)) / 2) | round(3) }}
+          {% elif fs_ok %}
+            {{ (fs_raw | float) | round(3) }}
+          {% elif sc_ok %}
+            {{ (sc_raw | float) | round(3) }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        attributes:
+          forecast_solar_kwh: >
+            {% set v = states('sensor.energy_production_today_remaining') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          solcast_kwh: >
+            {% set v = states('sensor.solcast_pv_forecast_forecast_remaining_today') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          blend_method: "50/50 mean when both sources valid; single-source fallback"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Solar Tomorrow Source
+        unique_id: ecco_forecast_solar_tomorrow_source
+        availability: >
+          {{ states('sensor.energy_production_tomorrow')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.energy_production_tomorrow') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Forecast.Solar"
+
+      - name: ECCO Solcast Tomorrow Source
+        unique_id: ecco_solcast_tomorrow_source
+        availability: >
+          {{ states('sensor.solcast_pv_forecast_forecast_tomorrow')
+             not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {{ states('sensor.solcast_pv_forecast_forecast_tomorrow') | float(0) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          source: "Solcast"
+
+      - name: ECCO Solar Forecast Tomorrow
+        unique_id: ecco_solar_forecast_tomorrow
+        availability: >
+          {{ states('sensor.energy_production_tomorrow')
+                not in ['unknown','unavailable','none','']
+             or
+             states('sensor.solcast_pv_forecast_forecast_tomorrow')
+                not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {% set fs_raw = states('sensor.energy_production_tomorrow') %}
+          {% set sc_raw = states('sensor.solcast_pv_forecast_forecast_tomorrow') %}
+          {% set fs_ok = fs_raw not in ['unknown','unavailable','none',''] %}
+          {% set sc_ok = sc_raw not in ['unknown','unavailable','none',''] %}
+          {% if fs_ok and sc_ok %}
+            {{ (((fs_raw | float) + (sc_raw | float)) / 2) | round(3) }}
+          {% elif fs_ok %}
+            {{ (fs_raw | float) | round(3) }}
+          {% elif sc_ok %}
+            {{ (sc_raw | float) | round(3) }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+        attributes:
+          forecast_solar_kwh: >
+            {% set v = states('sensor.energy_production_tomorrow') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          solcast_kwh: >
+            {% set v = states('sensor.solcast_pv_forecast_forecast_tomorrow') %}
+            {{ (v | float | round(3)) if v not in ['unknown','unavailable','none',''] else none }}
+          blend_method: "50/50 mean when both sources valid; single-source fallback"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Solar Forecast Power Now
+        unique_id: ecco_solar_forecast_power_now
+        availability: >
+          {{ states('sensor.power_production_now') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: "{{ states('sensor.power_production_now') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Actual PV Power Snapshot
+        unique_id: ecco_actual_pv_power_snapshot
+        availability: >
+          {{ states('sensor.ecco_clock_dongle_ecco_pv_power') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: "{{ states('sensor.ecco_clock_dongle_ecco_pv_power') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Live Solar Forecast Ratio
+        unique_id: ecco_live_solar_forecast_ratio
+        availability: >
+          {{ states('sensor.power_production_now') not in ['unknown','unavailable','none',''] and states('sensor.ecco_clock_dongle_ecco_pv_power') not in ['unknown','unavailable','none',''] and is_state('input_boolean.ecco_defaults_initialized','on') }}
+        unit_of_measurement: "%"
+        state_class: measurement
+        state: >
+          {% set f = states('sensor.power_production_now') | float(0) %}
+          {% set a = states('sensor.ecco_clock_dongle_ecco_pv_power') | float(0) %}
+          {% set floor = states('input_number.ecco_forecast_ratio_min_power') | float(300) %}
+          {% if f >= floor %}{{ ((a / f) * 100) | round(1) }}{% else %}{{ none }}{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          note: "Instantaneous ratio only; not yet used as a learned correction factor."
+      - name: ECCO Battery SOC Snapshot
+        unique_id: ecco_battery_soc_snapshot
+        availability: >
+          {{ states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        state: "{{ states('sensor.ecco_clock_dongle_ecco_battery_soc') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Battery Power Snapshot
+        unique_id: ecco_battery_power_snapshot
+        availability: >
+          {{ states('sensor.ecco_clock_dongle_ecco_battery_output_power') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: "{{ states('sensor.ecco_clock_dongle_ecco_battery_output_power') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          sign_convention: "Positive = discharge, negative = charge"
+      - name: ECCO House Load Snapshot
+        unique_id: ecco_house_load_snapshot
+        availability: >
+          {{ states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: "{{ states('sensor.ecco_clock_dongle_ecco_load_power') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Grid Power Snapshot
+        unique_id: ecco_grid_power_snapshot
+        availability: >
+          {{ states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: "{{ states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(0) | round(1) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Battery Energy Estimate
+        unique_id: ecco_battery_energy_estimate
+        availability: >
+          {{ is_state('input_boolean.ecco_defaults_initialized','on') and states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none',''] and states('input_number.ecco_battery_model_capacity') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: >
+          {% set soc = states('sensor.ecco_clock_dongle_ecco_battery_soc') | float(0) %}
+          {% set cap = states('input_number.ecco_battery_model_capacity') | float(31.7) %}
+          {{ (cap * soc / 100) | round(3) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          model: "Configured capacity × SOC; baseline estimate"
+      - name: ECCO Predicted SOC Plus 1 Hour Baseline
+        unique_id: ecco_predicted_soc_plus_1h_baseline
+        availability: >
+          {{ is_state('input_boolean.ecco_defaults_initialized','on') and states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none',''] and states('sensor.ecco_clock_dongle_ecco_battery_output_power') not in ['unknown','unavailable','none',''] and states('input_number.ecco_battery_model_capacity') not in ['unknown','unavailable','none',''] }}
+        unit_of_measurement: "%"
+        state_class: measurement
+        state: >
+          {% set soc = states('sensor.ecco_clock_dongle_ecco_battery_soc') | float(0) %}
+          {% set p = states('sensor.ecco_clock_dongle_ecco_battery_output_power') | float(0) %}
+          {% set cap = states('input_number.ecco_battery_model_capacity') | float(31.7) %}
+          {% set pred = soc - ((p / 1000) / cap * 100) if cap > 0 else soc %}
+          {{ ([0, ([100, pred] | min)] | max) | round(1) }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          model: "One-hour constant battery-power baseline"
+          horizon_minutes: 60
+      # ------------------------------------------------------------
+      # PHASE 3B.1 FORECAST LEARNING / DAILY SCORECARD
+      # ------------------------------------------------------------
+      - name: ECCO Forecast Snapshot Forecast Solar
+        unique_id: ecco_forecast_snapshot_forecast_solar_sensor
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_snapshot_valid','on') }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_snapshot_forecast_solar') | float(0) | round(3) }}"
+        attributes:
+          forecast_for_date: "{{ states('input_datetime.ecco_forecast_snapshot_for_date') }}"
+          source: "Forecast.Solar"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Snapshot Solcast
+        unique_id: ecco_forecast_snapshot_solcast_sensor
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_snapshot_valid','on') }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_snapshot_solcast') | float(0) | round(3) }}"
+        attributes:
+          forecast_for_date: "{{ states('input_datetime.ecco_forecast_snapshot_for_date') }}"
+          source: "Solcast"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Snapshot Blend
+        unique_id: ecco_forecast_snapshot_blend_sensor
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_snapshot_valid','on') }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_snapshot_blend') | float(0) | round(3) }}"
+        attributes:
+          forecast_for_date: "{{ states('input_datetime.ecco_forecast_snapshot_for_date') }}"
+          source: "ECCO 50/50 blend"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Score Actual PV
+        unique_id: ecco_forecast_score_actual_pv_sensor
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_score_valid','on') }}
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_score_actual_pv') | float(0) | round(3) }}"
+        attributes:
+          scored_date: "{{ states('input_datetime.ecco_forecast_last_scored_date') }}"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Solar Error
+        unique_id: ecco_forecast_solar_error
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_score_valid','on') }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_error_forecast_solar_kwh') | float(0) | round(3) }}"
+        attributes:
+          error_percent: "{{ states('input_number.ecco_forecast_error_forecast_solar_pct') | float(0) | round(1) }}"
+          scored_date: "{{ states('input_datetime.ecco_forecast_last_scored_date') }}"
+          sign: "Positive = over-forecast; negative = under-forecast"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Solcast Error
+        unique_id: ecco_solcast_error
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_score_valid','on') }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_error_solcast_kwh') | float(0) | round(3) }}"
+        attributes:
+          error_percent: "{{ states('input_number.ecco_forecast_error_solcast_pct') | float(0) | round(1) }}"
+          scored_date: "{{ states('input_datetime.ecco_forecast_last_scored_date') }}"
+          sign: "Positive = over-forecast; negative = under-forecast"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Blend Error
+        unique_id: ecco_blend_error
+        availability: >
+          {{ is_state('input_boolean.ecco_forecast_score_valid','on') }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_error_blend_kwh') | float(0) | round(3) }}"
+        attributes:
+          error_percent: "{{ states('input_number.ecco_forecast_error_blend_pct') | float(0) | round(1) }}"
+          scored_date: "{{ states('input_datetime.ecco_forecast_last_scored_date') }}"
+          sign: "Positive = over-forecast; negative = under-forecast"
+          sampled_at: "{{ now().isoformat() }}"
+
+      # ------------------------------------------------------------
+      # PHASE 3B.2 CUMULATIVE FORECAST ACCURACY
+      # ------------------------------------------------------------
+      - name: ECCO Forecast Learning Days
+        unique_id: ecco_forecast_learning_days
+        unit_of_measurement: d
+        state_class: measurement
+        state: "{{ states('input_number.ecco_forecast_completed_days') | int(0) }}"
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Solar MAE
+        unique_id: ecco_forecast_solar_mae
+        availability: >
+          {{ (states('input_number.ecco_forecast_completed_days') | int(0)) > 0 }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: >
+          {% set n = states('input_number.ecco_forecast_completed_days') | int(0) %}
+          {% set total = states('input_number.ecco_forecast_abs_error_sum_forecast_solar') | float(0) %}
+          {{ (total / n) | round(3) if n > 0 else none }}
+        attributes:
+          metric: "Mean absolute error across completed next-day forecasts"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Solcast MAE
+        unique_id: ecco_solcast_mae
+        availability: >
+          {{ (states('input_number.ecco_forecast_completed_days') | int(0)) > 0 }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: >
+          {% set n = states('input_number.ecco_forecast_completed_days') | int(0) %}
+          {% set total = states('input_number.ecco_forecast_abs_error_sum_solcast') | float(0) %}
+          {{ (total / n) | round(3) if n > 0 else none }}
+        attributes:
+          metric: "Mean absolute error across completed next-day forecasts"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Blend MAE
+        unique_id: ecco_blend_mae
+        availability: >
+          {{ (states('input_number.ecco_forecast_completed_days') | int(0)) > 0 }}
+        unit_of_measurement: kWh
+        state_class: measurement
+        state: >
+          {% set n = states('input_number.ecco_forecast_completed_days') | int(0) %}
+          {% set total = states('input_number.ecco_forecast_abs_error_sum_blend') | float(0) %}
+          {{ (total / n) | round(3) if n > 0 else none }}
+        attributes:
+          metric: "Mean absolute error across completed next-day forecasts"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Forecast Best Source
+        unique_id: ecco_forecast_best_source
+        state: >
+          {% set n = states('input_number.ecco_forecast_completed_days') | int(0) %}
+          {% if n <= 0 %}
+            Awaiting data
+          {% else %}
+            {% set fs = (states('input_number.ecco_forecast_abs_error_sum_forecast_solar') | float(0)) / n %}
+            {% set sc = (states('input_number.ecco_forecast_abs_error_sum_solcast') | float(0)) / n %}
+            {% set bl = (states('input_number.ecco_forecast_abs_error_sum_blend') | float(0)) / n %}
+            {% set m = [fs, sc, bl] | min %}
+            {% if m == fs %}Forecast.Solar{% elif m == sc %}Solcast{% else %}ECCO 50/50 blend{% endif %}
+          {% endif %}
+        attributes:
+          completed_days: "{{ states('input_number.ecco_forecast_completed_days') | int(0) }}"
+          method: "Lowest cumulative mean absolute error in kWh"
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Model Phase
+        unique_id: ecco_model_phase
+        state: "Forecast accuracy learning - 3B.2"
+        attributes:
+          version: "3B.2"
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Strategy Status
+        unique_id: ecco_strategy_status
+        state: >
+          {% set mode = states('input_select.ecco_automation_mode') %}
+          {% if mode == 'Observe Only' %}Observe only - gathering evidence{% elif mode == 'Advisory' %}Advisory - no setting writes{% elif is_state('input_boolean.ecco_automatic_setting_writes_enabled','on') %}Automatic enabled{% else %}Automatic selected - writes locked{% endif %}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          managed_tou_slot: "{{ states('input_select.ecco_managed_tou_slot') }}"
+    binary_sensor:
+      - name: ECCO Next Day Tariff Ready
+        unique_id: ecco_next_day_tariff_ready
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates', 'rates') | default([], true) %}
+          {{ rates | count >= 46 }}
+        attributes:
+          slot_count: >
+            {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_import_mpan_next_day_rates', 'rates') | default([], true) %}
+            {{ rates | count }}
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Next Day Export Tariff Ready
+        unique_id: ecco_next_day_export_tariff_ready
+        state: >
+          {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) %}
+          {{ rates | count >= 46 }}
+        attributes:
+          slot_count: >
+            {% set rates = state_attr('event.octopus_energy_electricity_your_meter_serial_your_export_mpan_export_next_day_rates', 'rates') | default([], true) %}
+            {{ rates | count }}
+          sampled_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Model Inputs Ready
+        unique_id: ecco_model_inputs_ready
+        state: >
+          {{ is_state('input_boolean.ecco_defaults_initialized','on')
+             and states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_clock_dongle_ecco_battery_output_power') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_clock_dongle_ecco_pv_power') not in ['unknown','unavailable','none','']
+             and states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') not in ['unknown','unavailable','none','']
+             and states('sensor.energy_production_today_remaining') not in ['unknown','unavailable','none',''] }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          purpose: "Gate for later learning/prediction scoring so unavailable source values are not treated as real zeros."
+
+      - name: ECCO Forecast Comparison Valid
+        unique_id: ecco_forecast_comparison_valid
+        state: >
+          {% set forecast_raw = states('sensor.power_production_now') %}
+          {% set actual_raw = states('sensor.ecco_clock_dongle_ecco_pv_power') %}
+          {% set forecast = forecast_raw | float(0) %}
+          {% set floor = states('input_number.ecco_forecast_ratio_min_power') | float(300) %}
+          {{ is_state('input_boolean.ecco_defaults_initialized','on')
+             and forecast_raw not in ['unknown','unavailable','none','']
+             and actual_raw not in ['unknown','unavailable','none','']
+             and forecast >= floor }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+          minimum_forecast_power_w: "{{ states('input_number.ecco_forecast_ratio_min_power') }}"
+
+      - name: ECCO Free Power Now
+        unique_id: ecco_free_power_now
+        state: >
+          {% set p = states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') | float(999) * 100 %}
+          {% set threshold = states('input_number.ecco_free_power_threshold') | float(0) %}
+          {{ p <= threshold }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Tariff Charge Opportunity
+        unique_id: ecco_tariff_charge_opportunity
+        state: >
+          {% set ent = 'sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate' %}
+          {% set current = states(ent) | float(999) * 100 %}
+          {% set peak = state_attr(ent, 'current_day_max_rate') | float(0) * 100 %}
+          {% set eff = states('input_number.ecco_round_trip_efficiency') | float(90) / 100 %}
+          {% set minsave = states('input_number.ecco_minimum_saving_threshold') | float(5) %}
+          {% set wear = states('input_number.ecco_battery_wear_cost') | float(0) %}
+          {% set delivered = current / eff if eff > 0 else 999 %}
+          {{ is_state('input_boolean.ecco_grid_charging_enabled','on')
+             and is_state('input_boolean.ecco_defaults_initialized','on')
+             and states(ent) not in ['unknown','unavailable','none','']
+             and state_attr(ent, 'current_day_max_rate') is not none
+             and (peak - delivered - wear) >= minsave }}
+        attributes:
+          note: "Economic opportunity only; solar/load/reserve model not yet included."
+          sampled_at: "{{ now().isoformat() }}"
+      - name: ECCO Automatic Writes Armed
+        unique_id: ecco_automatic_writes_armed
+        state: >
+          {{ states('input_select.ecco_automation_mode') == 'Automatic' and is_state('input_boolean.ecco_automatic_setting_writes_enabled','on') }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"

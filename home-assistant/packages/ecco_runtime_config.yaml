@@ -1,0 +1,206 @@
+# ECCO Pro - Runtime Configuration Bridge
+#
+# Purpose:
+# - expose installation-specific Home Assistant helpers as stable sensor.ecco_config_* entities
+# - refresh them every five minutes so InfluxDB always has a recent copy
+# - keep intelligence/tasks independent from development-site physical values
+#
+# This package does not write the inverter.
+# The existing input_number helpers remain the user-facing source of truth.
+# The next grid-charge start is discovered from the inverter's live TOU Slot 1
+# readback rather than hard-coded in the intelligence model.
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: state
+        entity_id:
+          - sensor.ecco_tou_slot_1_start_minute
+          - input_number.ecco_max_grid_charge_power
+          - sensor.ecco_clock_dongle_inverter_tou_power_ceiling
+    sensor:
+      - name: ECCO Config Battery Capacity
+        unique_id: ecco_config_battery_capacity
+        unit_of_measurement: kWh
+        device_class: energy_storage
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_battery_model_capacity') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_battery_model_capacity') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_battery_model_capacity
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Round Trip Efficiency
+        unique_id: ecco_config_round_trip_efficiency
+        unit_of_measurement: "%"
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_round_trip_efficiency') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_round_trip_efficiency') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_round_trip_efficiency
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Inverter TOU Power Ceiling
+        unique_id: ecco_config_inverter_tou_power_ceiling
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {% set value = states('sensor.ecco_clock_dongle_inverter_tou_power_ceiling') %}
+          {{ value not in ['unknown','unavailable','none',''] and (value | float(0)) > 0 }}
+        state: >-
+          {{ states('sensor.ecco_clock_dongle_inverter_tou_power_ceiling') | float(0) }}
+        attributes:
+          source_entity: sensor.ecco_clock_dongle_inverter_tou_power_ceiling
+          source_type: firmware_profile
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Grid Charge Operating Limit
+        unique_id: ecco_config_grid_charge_operating_limit
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {% set value = states('input_number.ecco_max_grid_charge_power') %}
+          {{ value not in ['unknown','unavailable','none',''] and (value | float(-1)) >= 0 }}
+        state: >-
+          {{ states('input_number.ecco_max_grid_charge_power') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_max_grid_charge_power
+          source_type: site_operating_limit
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Maximum Grid Charge Power
+        unique_id: ecco_config_maximum_grid_charge_power
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {% set ceiling = states('sensor.ecco_clock_dongle_inverter_tou_power_ceiling') %}
+          {% set operating = states('input_number.ecco_max_grid_charge_power') %}
+          {{ ceiling not in ['unknown','unavailable','none','']
+             and operating not in ['unknown','unavailable','none','']
+             and (ceiling | float(0)) > 0
+             and (operating | float(-1)) >= 0 }}
+        state: >-
+          {% set ceiling = states('sensor.ecco_clock_dongle_inverter_tou_power_ceiling') | float(0) %}
+          {% set operating = states('input_number.ecco_max_grid_charge_power') | float(0) %}
+          {{ [ceiling, operating] | min }}
+        attributes:
+          hardware_ceiling_entity: sensor.ecco_clock_dongle_inverter_tou_power_ceiling
+          operating_limit_entity: input_number.ecco_max_grid_charge_power
+          limit_rule: min(hardware_ceiling, operating_limit)
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Minimum Reserve SOC
+        unique_id: ecco_config_minimum_reserve_soc
+        unit_of_measurement: "%"
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_minimum_reserve_soc') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_minimum_reserve_soc') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_minimum_reserve_soc
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Normal Maximum Charge Target
+        unique_id: ecco_config_normal_maximum_charge_target
+        unit_of_measurement: "%"
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_normal_max_charge_target') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_normal_max_charge_target') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_normal_max_charge_target
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Free Power Threshold
+        unique_id: ecco_config_free_power_threshold
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_free_power_threshold') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_free_power_threshold') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_free_power_threshold
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Minimum Saving Threshold
+        unique_id: ecco_config_minimum_saving_threshold
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_minimum_saving_threshold') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_minimum_saving_threshold') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_minimum_saving_threshold
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Battery Wear Cost
+        unique_id: ecco_config_battery_wear_cost
+        unit_of_measurement: p/kWh
+        state_class: measurement
+        availability: >-
+          {{ states('input_number.ecco_battery_wear_cost') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {{ states('input_number.ecco_battery_wear_cost') | float(0) }}
+        attributes:
+          source_entity: input_number.ecco_battery_wear_cost
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Charge Start Minute
+        unique_id: ecco_config_charge_start_minute
+        unit_of_measurement: min
+        state_class: measurement
+        availability: >-
+          {{ is_state('binary_sensor.ecco_tou_schedule_valid', 'on')
+             and states('sensor.ecco_tou_slot_1_start_minute') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_tou_slot_1_start_minute') | int(-1) >= 0
+             and states('sensor.ecco_tou_slot_1_start_minute') | int(-1) < 1440 }}
+        state: >-
+          {{ states('sensor.ecco_tou_slot_1_start_minute') | int(0) }}
+        attributes:
+          source_entity: sensor.ecco_tou_slot_1_start_minute
+          source_value: "{{ states('sensor.ecco_tou_slot_1_start_minute') }}"
+          schedule_valid: "{{ states('binary_sensor.ecco_tou_schedule_valid') }}"
+          note: "Minutes after midnight for the next regular grid-charge TOU start"
+          refreshed_at: "{{ now().isoformat() }}"
+
+      - name: ECCO Config Charge Start Time
+        unique_id: ecco_config_charge_start_time
+        availability: >-
+          {{ states('sensor.ecco_config_charge_start_minute') not in ['unknown','unavailable','none',''] }}
+        state: >-
+          {% set total = states('sensor.ecco_config_charge_start_minute') | int(0) %}
+          {{ '%02d:%02d' | format(total // 60, total % 60) }}
+        attributes:
+          source_entity: sensor.ecco_config_charge_start_minute
+          refreshed_at: "{{ now().isoformat() }}"
+
+  - binary_sensor:
+      - name: ECCO Runtime Configuration Ready
+        unique_id: ecco_runtime_configuration_ready
+        device_class: connectivity
+        state: >-
+          {{ states('input_number.ecco_battery_model_capacity') | float(0) > 0
+             and states('input_number.ecco_round_trip_efficiency') | float(0) > 0
+             and states('input_number.ecco_round_trip_efficiency') | float(0) <= 100
+             and states('sensor.ecco_config_charge_start_minute') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_config_charge_start_minute') | int(-1) >= 0
+             and states('sensor.ecco_config_charge_start_minute') | int(-1) < 1440 }}
+        attributes:
+          battery_capacity_kwh: "{{ states('input_number.ecco_battery_model_capacity') }}"
+          round_trip_efficiency_percent: "{{ states('input_number.ecco_round_trip_efficiency') }}"
+          charge_start_time: "{{ states('sensor.ecco_config_charge_start_time') }}"
+          note: "Core runtime configuration required by portable ECCO intelligence"

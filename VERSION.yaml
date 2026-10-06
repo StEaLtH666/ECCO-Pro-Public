@@ -1,0 +1,78 @@
+schema_version: 1
+status: pre-release
+# The ECCO-Pro project release (SemVer). The component versions below (dashboard, firmware stage, models) are separate.
+project_version: "0.9.0"
+
+current:
+  dashboard:
+    version: "7.18.0"
+    path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.18.0 adds the FB-C3 Safety-view SHADOW CHECK line, the shadow-episode banner, the technical Failback
+    # shadow evaluator block and the Shadow Recovery chip / tile tone (HA packages: canonical status row
+    # shadow_episode, FAILBACK_SHADOW_EPISODE, decoder sensor.ecco_shadow_check). FB-C3 is
+    # OFFLINE / STAGED / NOT LIVE-PROVEN: offline Jinja and contract tests only, no firmware change.
+    # tested_in_home_assistant is therefore false for 7.18.0. The previous dashboard release (7.17.0,
+    # FB-B3: Safety view, Known-Good Profile tile, supervision/fallback chips and health rows) was tested
+    # in Home Assistant on the reference installation.
+    tested_in_home_assistant: false
+  firmware:
+    version: "stage3.4"
+    path: firmware/ecco_clock_dongle_stage3_4_free_power.yaml
+    hardware_verified: true
+  home_assistant:
+    core_package: home-assistant/packages/ecco_pro.yaml
+    runtime_config: home-assistant/packages/ecco_runtime_config.yaml
+    free_power_schedule: home-assistant/packages/ecco_free_power_schedule.yaml
+    battery_outlook_readback: home-assistant/packages/ecco_battery_outlook_influx.yaml
+  influxdb:
+    export_config: influxdb/ecco_influxdb_options_v1_3.yaml
+    battery_outlook_task: influxdb/tasks/ecco_battery_outlook_5m.flux
+    battery_outlook_model: load_only_v1_2
+    battery_outlook_score_task: influxdb/tasks/ecco_battery_outlook_score_daily.flux
+    battery_outlook_score_model: load_only_v1_3
+  site_profile:
+    # Site values (battery capacity, round-trip efficiency, charge start, grid-charge limits) are configured per
+    # installation through the Home Assistant helpers and firmware substitutions; none is recorded here. The one
+    # value below is the firmware's compile-time default (substitution ecco_inverter_tou_power_ceiling_w), which
+    # the FB-A profile schema bound is checked against.
+    inverter_tou_power_ceiling_w: 8000
+
+deployment:
+  ssh_alias: ecco-ha
+  happy_path_verified: true
+  rollback_path_verified: true
+  automatic_restart: false
+  automatic_inverter_writes: false
+
+proven:
+  # "Proven" = exercised on the reference installation (one single-phase low-voltage Deye/Sunsynk-family hybrid
+  # inverter). It is not a claim about any other model or firmware.
+  rtc_correction: true
+  manual_six_slot_tou: true
+  free_power_now: true
+  scheduled_free_power: true
+  automatic_snapshot_restore: true
+  free_power_v4_reg244_context_normal_path: true
+  free_power_v4_dashboard_manual_end: true
+  # Not separately live-proven on V4:
+  # deliberate context-mismatch recovery, Force Restore Original,
+  # Accept Current State, and deliberate fault-injection paths.
+  battery_outlook_influx_write: true
+  battery_outlook_home_assistant_readback: true
+  portable_battery_capacity: true
+  portable_round_trip_efficiency: true
+  portable_tou_charge_start: true
+  portable_grid_charge_power_limits: true
+  ssh_sftp_sha256_deployment: true
+  home_assistant_config_check: true
+  automatic_deployment_rollback: true
+  register_244_grid_export_policy_write: true
+  register_244_durable_transaction_recovery: true
+
+safety:
+  main_branch_policy: proven-or-safe-tooling-only
+  inverter_write_changes_require_hardware_verification: true
+  no_secrets_in_repository: true
+  automatic_live_deployment: false
+  automatic_optimizer_control: false
+  home_assistant_restart_requires_explicit_request: true

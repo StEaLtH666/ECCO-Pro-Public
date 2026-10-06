@@ -1,0 +1,397 @@
+# ECCO Pro - Scheduled Free Power
+# Home Assistant scheduling layer around the hardware-proven Stage 3.4 Free Power engine.
+# This file does NOT write Deye registers directly. It stages the existing ECCO Free Power
+# controls, arms the dedicated Free Power write enable, and presses the verified START button.
+# The ESPHome firmware remains responsible for snapshot, verified writes, timer and exact restore.
+
+input_boolean:
+  ecco_free_power_schedule_armed:
+    name: ECCO Scheduled Free Power Armed
+    icon: mdi:calendar-check
+
+input_datetime:
+  ecco_free_power_schedule_start:
+    name: ECCO Free Power Schedule Start
+    has_date: true
+    has_time: true
+
+input_number:
+  ecco_free_power_schedule_duration:
+    name: ECCO Scheduled Free Power Duration
+    min: 1
+    max: 240
+    step: 1
+    unit_of_measurement: min
+    mode: slider
+
+  ecco_free_power_schedule_power:
+    name: ECCO Scheduled Free Power Power
+    min: 500
+    max: 8000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+
+input_text:
+  ecco_free_power_schedule_last_result:
+    name: ECCO Free Power Schedule Last Result
+    max: 255
+
+script:
+  ecco_free_power_start_scheduled:
+    alias: "ECCO - Start scheduled Free Power"
+    description: "Stages and starts the proven ESPHome Free Power override with one automatic retry."
+    mode: single
+    fields:
+      duration_minutes:
+        description: "Duration to stage into the ESPHome Free Power controller"
+      power_w:
+        description: "Requested battery charge power in watts"
+    sequence:
+      - variables:
+          requested_duration: "{{ duration_minutes | int(1) }}"
+          requested_power: "{{ power_w | int(500) }}"
+          effective_limit: "{{ states('sensor.ecco_config_maximum_grid_charge_power') | int(0) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ (effective_limit | int(0)) <= 0 }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "BLOCKED - effective grid charge power limit unavailable"
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (requested_power | int(0)) < 500
+                     or (requested_power | int(0)) > (effective_limit | int(0)) }}
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: >-
+                    BLOCKED - requested {{ requested_power }}W outside safe range
+                    500-{{ effective_limit }}W
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+                state: "on"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "BLOCKED - Free Power already active"
+          - conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+                    state: "off"
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_configuration_online
+                    state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "BLOCKED - ECCO telemetry/configuration offline"
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_free_power_schedule_last_result
+            data:
+              value: >-
+                STARTING - {{ requested_power }}W for {{ requested_duration }} min
+
+          - action: number.set_value
+            target:
+              entity_id: number.ecco_clock_dongle_free_power_duration
+            data:
+              value: "{{ requested_duration }}"
+
+          - action: number.set_value
+            target:
+              entity_id: number.ecco_clock_dongle_free_power_max_charge_power
+            data:
+              value: "{{ requested_power }}"
+
+          - delay: "00:00:01"
+
+          - action: switch.turn_on
+            target:
+              entity_id: switch.ecco_clock_dongle_free_power_write_enable
+
+          - delay: "00:00:01"
+
+          - action: button.press
+            target:
+              entity_id: button.ecco_clock_dongle_start_free_power_charge_now
+
+          - wait_template: >-
+              {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') }}
+            timeout: "00:00:20"
+            continue_on_timeout: true
+
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+                    state: "on"
+                sequence:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: >-
+                        STARTED OK - {{ requested_power }}W for {{ requested_duration }} min
+            default:
+              # A scheduled start can collide with the independent RTC correction window.
+              # Re-arm and retry once after a short wait; the firmware still performs all
+              # safety checks, snapshots and verification on the retry.
+              - delay: "00:00:12"
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.ecco_clock_dongle_free_power_write_enable
+              - delay: "00:00:01"
+              - action: button.press
+                target:
+                  entity_id: button.ecco_clock_dongle_start_free_power_charge_now
+              - wait_template: >-
+                  {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') }}
+                timeout: "00:00:20"
+                continue_on_timeout: true
+              - choose:
+                  - conditions:
+                      - condition: state
+                        entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+                        state: "on"
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_free_power_schedule_last_result
+                        data:
+                          value: >-
+                            STARTED OK ON RETRY - {{ requested_power }}W for {{ requested_duration }} min
+                default:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: switch.ecco_clock_dongle_free_power_write_enable
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: >-
+                        FAILED TO START - {{ states('sensor.ecco_clock_dongle_free_power_status') }}
+
+  ecco_free_power_cancel_schedule:
+    alias: "ECCO - Cancel scheduled Free Power"
+    description: "Cancels a future scheduled Free Power event. It does not stop an already-active Free Power run."
+    mode: single
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ecco_free_power_schedule_armed
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.ecco_free_power_schedule_last_result
+        data:
+          value: "CANCELLED - scheduled event disarmed"
+
+automation:
+  - id: ecco_free_power_schedule_arm_validation
+    alias: "ECCO - Validate scheduled Free Power arm"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ecco_free_power_schedule_armed
+        to: "on"
+    actions:
+      - variables:
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"
+          scheduled_power: "{{ states('input_number.ecco_free_power_schedule_power') | int(0) }}"
+          effective_limit: "{{ states('sensor.ecco_config_maximum_grid_charge_power') | int(0) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ (effective_limit | int(0)) <= 0 }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "REJECTED - effective grid charge power limit unavailable"
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ (scheduled_power | int(0)) < 500
+                     or (scheduled_power | int(0)) > (effective_limit | int(0)) }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - scheduled {{ scheduled_power }}W outside safe range
+                    500-{{ effective_limit }}W
+          - conditions:
+              - condition: template
+                value_template: "{{ start_ts <= as_timestamp(now()) }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "REJECTED - scheduled start must be in the future"
+          # 2026-09-26 (Manual Dump-to-Grid V1): additive early UX check only.
+          # Refuse to arm when an ARMED Scheduled Dump to Grid window overlaps
+          # this one (2-minute buffer either side for start retry / restore).
+          # Inert when ecco_dump_to_grid_schedule.yaml is not installed (the
+          # helper then never reads "on"). The firmware's own mutual-exclusion
+          # gates stay authoritative regardless.
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+                state: "on"
+              - condition: template
+                value_template: >-
+                  {% set f_start = start_ts | float(0) %}
+                  {% set f_end = f_start + (states('input_number.ecco_free_power_schedule_duration') | int(0)) * 60 %}
+                  {% set d_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
+                  {% set d_end = d_start + (states('input_number.ecco_dump_to_grid_schedule_duration') | int(0)) * 60 %}
+                  {{ f_start < d_end + 120 and d_start < f_end + 120 }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: >-
+                    REJECTED - overlaps the armed Scheduled Dump to Grid window
+                    ({{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}); cancel it first
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_free_power_schedule_last_result
+            data:
+              value: >-
+                ARMED - {{ states('input_datetime.ecco_free_power_schedule_start') }} •
+                {{ states('input_number.ecco_free_power_schedule_duration') | int }} min •
+                {{ states('input_number.ecco_free_power_schedule_power') | int }}W
+
+  - id: ecco_free_power_schedule_fire
+    alias: "ECCO - Fire scheduled Free Power"
+    mode: single
+    triggers:
+      - trigger: time
+        at: input_datetime.ecco_free_power_schedule_start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_free_power_schedule_armed
+        state: "on"
+    actions:
+      - action: script.ecco_free_power_start_scheduled
+        data:
+          duration_minutes: "{{ states('input_number.ecco_free_power_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(500) }}"
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ecco_free_power_schedule_armed
+
+  - id: ecco_free_power_schedule_startup_recovery
+    alias: "ECCO - Recover scheduled Free Power after Home Assistant restart"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_free_power_schedule_armed
+        state: "on"
+    actions:
+      - delay: "00:00:20"
+      - variables:
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_free_power_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(500) }}"
+          end_ts: "{{ start_ts + (duration_min * 60) }}"
+          now_ts: "{{ as_timestamp(now()) }}"
+          remaining_min: "{{ [1, (((end_ts - now_ts) / 60) | round(0, 'ceil')) | int] | max }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts < start_ts }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: >-
+                    ARMED AFTER RESTART - waiting for {{ states('input_datetime.ecco_free_power_schedule_start') }}
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts >= start_ts and now_ts < end_ts }}"
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+                state: "off"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: >-
+                    RECOVERING MISSED START - {{ remaining_min }} min remaining
+              - action: script.ecco_free_power_start_scheduled
+                data:
+                  duration_minutes: "{{ remaining_min }}"
+                  power_w: "{{ power_w }}"
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts >= end_ts }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "MISSED - scheduled Free Power window already expired"
+
+template:
+  - sensor:
+      - name: ECCO Free Power Schedule Status
+        unique_id: ecco_free_power_schedule_status
+        icon: mdi:calendar-clock
+        state: >-
+          {% if is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') %}
+            ACTIVE
+          {% elif is_state('input_boolean.ecco_free_power_schedule_armed', 'on') %}
+            ARMED
+          {% else %}
+            IDLE
+          {% endif %}
+        attributes:
+          scheduled_start: "{{ states('input_datetime.ecco_free_power_schedule_start') }}"
+          duration_minutes: "{{ states('input_number.ecco_free_power_schedule_duration') | int(0) }}"
+          requested_power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(0) }}"
+          effective_power_limit_w: "{{ states('sensor.ecco_config_maximum_grid_charge_power') | int(0) }}"
+          last_result: "{{ states('input_text.ecco_free_power_schedule_last_result') }}"

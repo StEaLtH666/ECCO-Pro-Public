@@ -1,0 +1,283 @@
+{
+  "schema": "ecco.fbb0.nvs_keyhash_fixture/1",
+  "purpose": "FB-B0 BLK-60 / X5: the non-derivable inputs of the NVS 24-bit item-hash collision proof (registry/tests/test_fallback_nvs_keyhash.py), each with its provenance. Everything derivable from repository files (ECCO tags, restore globals, entity names) is derived by the test itself.",
+  "hash_function": {
+    "definition": "crc32_le(0xffffffff, [nsIndex] || key[16] NUL-padded || [chunkIndex]) & 0xFFFFFF",
+    "idf_source": "components/nvs_flash/src/nvs_types.cpp Item::calculateCrc32WithoutValue + nvs_item_hash_list.cpp HashList (hash & 0xffffff) @ esp-idf v5.5.5",
+    "python_equivalent": "zlib.crc32(bytes([ns]) + key.ljust(16, b'\\0') + bytes([chunk]), 0xffffffff) & 0xFFFFFF",
+    "datatype_included": false
+  },
+  "esp_idf": {
+    "version": "v5.5.5",
+    "commit": "b774170ff46c393eeb5e495ea37936038d3f4f4f"
+  },
+  "rom_crc_vector": {
+    "source": "components/esp_rom/test_apps/linux_rom_apis/main/rom_test.cpp 'crc quick check' @ esp-idf v5.5.5",
+    "init": "0xffffffff",
+    "data_hex": "012109ff63657274696669636174650000000000e500ffff06bae7a1",
+    "expected": "0xd4dc5010"
+  },
+  "item_hash_goldens": {
+    "source": "computed on the host by esp-idf v5.5.5's own nvs_types.hpp Item layout and the verbatim Item::calculateCrc32WithoutValue body (g++), NOT by the Python formula",
+    "datatype_independent": true,
+    "vectors": [
+      [
+        1,
+        "1609458070",
+        255,
+        "0xD8E0DF"
+      ],
+      [
+        1,
+        "1609458070",
+        0,
+        "0xDA0F52"
+      ],
+      [
+        1,
+        "1609458070",
+        128,
+        "0x628C72"
+      ],
+      [
+        1,
+        "1000595297",
+        255,
+        "0xE5ADCE"
+      ],
+      [
+        1,
+        "1000595297",
+        0,
+        "0xE74243"
+      ],
+      [
+        1,
+        "1000595297",
+        128,
+        "0x5FC163"
+      ],
+      [
+        2,
+        "2156168643",
+        255,
+        "0x83BEB3"
+      ],
+      [
+        0,
+        "esphome",
+        255,
+        "0x3DBF5F"
+      ],
+      [
+        0,
+        "nvs.net80211",
+        255,
+        "0xC538ED"
+      ],
+      [
+        3,
+        "sta.rssi_5g_adj",
+        255,
+        "0x2FFE01"
+      ],
+      [
+        4,
+        "cal_data",
+        129,
+        "0x89C62F"
+      ],
+      [
+        254,
+        "a",
+        0,
+        "0x9203F2"
+      ]
+    ]
+  },
+  "wifi_keys": {
+    "namespace": "nvs.net80211",
+    "repository": "https://github.com/espressif/esp32-wifi-lib",
+    "commit": "22bb3517b08760ed43b889013f8a122db0d46da0",
+    "pinned_by": "esp-idf v5.5.5 submodule components/esp_wifi/lib",
+    "archive": "esp32/libnet80211.a",
+    "archive_sha256": "97790012b24f35e30f72d426ea69a23e636e8eb6ac3d81c11b42658840f1b110",
+    "object": "ieee80211_nvs.o",
+    "section": ".rodata.wifi_nvs_cfg_init.str1.1",
+    "section_sha256": "6afc6a6fd0d7b39f0affce650d66a18692d967c13f8887f401e9f6eb3aa1ca78",
+    "section_len": 973,
+    "keys_in_section_order": [
+      "opmode",
+      "sta.ssid",
+      "sta.authmode",
+      "sta.pswd",
+      "sta.pmk",
+      "sta.chan",
+      "auto.conn",
+      "bssid.set",
+      "sta.bssid",
+      "sta.lis_intval",
+      "sta.phym",
+      "sta.phybw",
+      "sta.apsw",
+      "sta.apinfo",
+      "sta.scan_method",
+      "sta.sort_method",
+      "sta.minrssi",
+      "sta.minauth",
+      "sta.pmf_e",
+      "sta.pmf_r",
+      "sta.btm_e",
+      "sta.rrm_e",
+      "sta.mbo_e",
+      "sta.phym5g",
+      "sta.phybw5g",
+      "sta.lowrate",
+      "ap.ssid",
+      "ap.passwd",
+      "ap.pmk",
+      "ap.chan",
+      "ap.authmode",
+      "ap.hidden",
+      "ap.max.conn",
+      "bcn.interval",
+      "ap.phym",
+      "ap.phybw",
+      "ap.sndchan",
+      "ap.pmf_e",
+      "ap.pmf_r",
+      "ap.p_cipher",
+      "ap.phym5g",
+      "ap.phybw5g",
+      "ap.chan5g",
+      "ap.sndchan5g",
+      "ap.chanisset",
+      "ap.chan5gisset",
+      "ap.csa_count",
+      "ap.dtim_period",
+      "ap.trans_d",
+      "ap.bssmaxidle",
+      "ap.pro_keep_a",
+      "ap.lowrate",
+      "lorate",
+      "country",
+      "band_mode",
+      "sta.rssi_5g_adj",
+      "ap.ftm_r",
+      "sta.ft",
+      "sta.owe",
+      "sta.trans_d",
+      "sta.sae_h2e",
+      "sta.sae_pk_mode",
+      "sta.bss_retry",
+      "sta.owe_data",
+      "sta.he_dcm",
+      "sta.he_dcm_c_tx",
+      "sta.he_dcm_c_rx",
+      "sta.he_mcs9_d",
+      "sta.he_su_b_d",
+      "sta.he_su_b_f_d",
+      "sta.he_mu_b_f_d",
+      "sta.he_cqi_f_d",
+      "ap.sae_h2e",
+      "sta.sae_h2e_id",
+      "ap.pmk_info",
+      "nan.phym",
+      "sta.pwr_reset",
+      "ap.sae_ext",
+      "sta.vht_su_b_d",
+      "sta.vht_mu_b_d",
+      "sta.vht_mcs8_e",
+      "ap.gtk_rekey",
+      "sta.ina_time",
+      "ap.ina_time"
+    ]
+  },
+  "other_wifi_lib_objects": {
+    "esp32/libpp.a": {
+      "sha256": "dba76f58e886c5e407f52ec6de7ef6b9aaa66bb21250bfee0cd3d73bf6c6aead",
+      "nvs_keys": []
+    },
+    "esp32/libcore.a": {
+      "sha256": "84881011635d99afe91dd3a1c508278dc73edd6037e32e8a388b99999f44665b",
+      "object": "misc_nvs.o",
+      "namespaces_opened": [
+        "misc"
+      ],
+      "nvs_keys": []
+    }
+  },
+  "phy": {
+    "namespace": "phy",
+    "source": "components/esp_phy/src/phy_init.c:731-734 @ esp-idf v5.5.5",
+    "keys": [
+      "cal_version",
+      "cal_mac",
+      "cal_data"
+    ],
+    "multi_chunk_blob": "cal_data"
+  },
+  "namespaces": [
+    "esphome",
+    "nvs.net80211",
+    "phy",
+    "misc"
+  ],
+  "esphome": {
+    "version": "2026.8.2",
+    "namespace": "esphome (components/esp32/preferences.cpp nvs_open)",
+    "key_string": "decimal uint32_to_str() of the 32-bit key (components/esp32/preferences.cpp)",
+    "safe_mode_key": {
+      "value": 233825507,
+      "source": "components/safe_mode/safe_mode.h:15 RTC_KEY"
+    },
+    "api_noise_key": {
+      "value": 88491486,
+      "source": "components/api/api_server.cpp:44"
+    },
+    "wifi_no_sta_key": {
+      "value": 88491487,
+      "source": "components/wifi/wifi_component.cpp:650 (unused with STA; superset)"
+    },
+    "wifi_sta_key": {
+      "value": null,
+      "source": "components/wifi/wifi_component.cpp:650 App.get_config_version_hash()",
+      "residual": "build-dependent; written only by save_wifi_sta(), whose callers (captive_portal, improv_serial, esp32_improv, the wifi.configure action) are absent from this config - never written by this firmware"
+    },
+    "globals_key_seed": {
+      "value": 1944399030,
+      "source": "components/globals/globals_component.h:40 (1944399030U ^ name_hash_), name_hash_ = int(md5(id).hexdigest()[:8], 16) (components/globals/__init__.py)"
+    },
+    "debug_reboot_key": {
+      "source": "components/debug/debug_esp32.cpp:45-53 fnv1_hash_extend(fnv1_hash(\"reboot_source\"), App.get_name())"
+    },
+    "entity_key": {
+      "source": "core/entity_base.cpp make_entity_preference_: get_preference_hash() ^ version; entity_base.h get_preference_hash = object_id_hash ^ device_id (0); helpers.h fnv1_hash_object_id = FNV-1 over sanitize(snake_case(name)); version 0 for template number / select / switch",
+      "beta_variant": "esphome/helpers.py fnv1_hash_name: FNV-1 over the raw UTF-8 name (2026.8 beta firmware stored preferences under these keys)"
+    }
+  },
+  "negative_controls": [
+    {
+      "ns": 1,
+      "key": "16726700",
+      "chunk": 255,
+      "collides_with": [
+        1,
+        "1609458070",
+        255
+      ],
+      "hash": "0xD8E0DF"
+    },
+    {
+      "ns": 2,
+      "key": "sta.x15201949",
+      "chunk": 0,
+      "collides_with": [
+        1,
+        "1000595297",
+        128
+      ],
+      "hash": "0x5FC163"
+    }
+  ]
+}

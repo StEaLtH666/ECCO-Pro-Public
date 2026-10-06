@@ -1,0 +1,30 @@
+{
+  "name": "ecco-energy-actions-card",
+  "version": "0.1.0",
+  "description": "A Home Assistant Lovelace card presenting energy actions (live-proven Free Power, and Manual Dump to Grid V1 - implemented and locally validated, not yet live-proven) as first-class product features rather than raw entity tiles.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "hacs",
+    "energy",
+    "battery",
+    "free-power"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "lit": "^3.1.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.4"
+  }
+}

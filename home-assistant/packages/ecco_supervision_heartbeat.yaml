@@ -1,0 +1,63 @@
+# ECCO Pro - HA supervision heartbeat (PR A, OBSERVE-ONLY) - 2026-09-27
+#
+# *** STAGED / NOT LIVE-PROVEN - offline tests and `esphome compile` only ***
+#
+# Proves to the ECCO firmware, every ~30 seconds, that Home Assistant's
+# automation engine is alive AND still receiving this device's state: it
+# reads the single-use challenge the firmware publishes on
+# "ECCO Supervision Challenge" and echoes it back through the dedicated
+# `ha_supervision_heartbeat` ESPHome API action. The firmware accepts only
+# the CURRENT challenge, consumes it, and publishes the next one - so a
+# Home Assistant that has stopped receiving the device's state (or an old
+# replayed value) cannot keep supervision alive.
+#
+# See docs/SUPERVISION_FALLBACK_FAILBACK_ARCHITECTURE.md (section 3) and
+# firmware/ecco_clock_dongle_stage3_4_free_power.yaml (api: actions).
+#
+# OBSERVE-ONLY. In PR A the firmware's supervision state (STARTUP /
+# SUPERVISED / SUSPECT / LOST) is purely observational: it never ends or
+# blocks a lease, writes the inverter, or applies any fallback. Failback
+# will be FIRMWARE-owned in a later PR; this package will never contain
+# failback logic.
+#
+# This file deliberately contains exactly ONE service call - the dedicated
+# supervision heartbeat action - and nothing else: no switch/button/number
+# calls, no Free Power or Dump entities, no recovery actions, no
+# homeassistant.restart. registry/tests/test_supervision_heartbeat_observe_only.py
+# pins this.
+#
+# Operational notes:
+#   - continue_on_error: a call made while the device is disconnected must
+#     never raise or disable anything; the firmware simply sees no heartbeat.
+#   - The condition skips the call while the challenge entity is unknown /
+#     unavailable (device offline or not yet reconnected after a restart).
+#   - Each run adds one automation_triggered event (~2,880/day). If recorder
+#     load matters, exclude automation.ecco_supervision_heartbeat and
+#     sensor.ecco_clock_dongle_ecco_supervision_challenge in your own
+#     recorder: configuration (not done here: a recorder: block in a package
+#     can conflict with the site's existing recorder configuration).
+#   - The HA action name below follows HA's ESPHome convention
+#     (esphome.<node_name>_<action>) and must be confirmed live after deploy.
+
+automation:
+  - id: ecco_supervision_heartbeat
+    alias: "ECCO - Supervision heartbeat (observe-only)"
+    description: >-
+      Echo the ECCO firmware's supervision challenge every 30 seconds so the
+      firmware can observe whether Home Assistant supervision is alive.
+      Observe-only: no inverter, lease or fallback effect.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        seconds: "/30"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states('sensor.ecco_clock_dongle_ecco_supervision_challenge')
+             not in ['unknown', 'unavailable', 'none', ''] }}
+    actions:
+      - action: esphome.ecco_clock_dongle_ha_supervision_heartbeat
+        continue_on_error: true
+        data:
+          challenge: "{{ states('sensor.ecco_clock_dongle_ecco_supervision_challenge') }}"
