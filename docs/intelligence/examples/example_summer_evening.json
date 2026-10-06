@@ -1,0 +1,722 @@
+{
+ "_example": {
+  "description": "Synthetic household, summer evening: lower targets and export become possible.",
+  "name": "example_summer_evening",
+  "synthetic": true
+ },
+ "actual": {
+  "inverter_ok": true,
+  "load_w": 1423.5336534835842,
+  "pv_so_far_kwh": 48.16327575696774,
+  "pv_w": 363.28106987099784,
+  "soc_age_s": 0.0,
+  "soc_pct": 85.0
+ },
+ "anomalies": {
+  "abnormal_load_now": false,
+  "anomalies": [],
+  "base_load_kw": 0.705,
+  "base_load_norm_kw": 0.823,
+  "excess_kw_now": 0.0
+ },
+ "applies_nothing": true,
+ "confidence": {
+  "downgrade_reasons": [],
+  "history_days": 60,
+  "label": "HIGH",
+  "overall": 1.0,
+  "pv": 1.0,
+  "usage": 1.0
+ },
+ "config_hash": "6348bb3c9d004cd9",
+ "feature_hash": "914c87bdc5bc2a15",
+ "forecast_records": [
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [
+     "short-term persistence adjustment -0.05 kWh"
+    ],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-15T21:30:00+00:00",
+   "horizon_start": "2030-07-15T20:30:00+00:00",
+   "kind": "load_kwh:next_1h",
+   "p10": 0.8109152954701803,
+   "p50": 0.9774545338481265,
+   "p90": 1.1535555457331337,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-16T23:30:00+00:00",
+   "horizon_start": "2030-07-16T04:30:00+00:00",
+   "kind": "load_kwh:to_next_cheap",
+   "p10": 21.34359177431895,
+   "p50": 25.133362724770063,
+   "p90": 28.923133675221177,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-16T04:30:00+00:00",
+   "horizon_start": "2030-07-15T23:30:00+00:00",
+   "kind": "load_kwh:cheap_window",
+   "p10": 3.2641979779860875,
+   "p50": 4.038073556996506,
+   "p90": 4.811949136006923,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-15T23:00:00+00:00",
+   "horizon_start": "2030-07-14T23:00:00+00:00",
+   "kind": "load_kwh:day",
+   "p10": 24.537675720879133,
+   "p50": 29.171436281766574,
+   "p90": 33.80519684265402,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-16T08:00:00+00:00",
+   "horizon_start": "2030-07-16T04:30:00+00:00",
+   "kind": "load_kwh:morning",
+   "p10": 3.6302838388907355,
+   "p50": 4.2821242011262015,
+   "p90": 4.933964563361667,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-16T04:02:07.681658+00:00",
+   "horizon_start": "2030-07-15T20:30:00+00:00",
+   "kind": "load_kwh:overnight",
+   "p10": 5.487618148663076,
+   "p50": 6.314289092724019,
+   "p90": 7.090016724062066,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "n_days": 60,
+    "notes": [
+     "band includes uncertainty in WHEN useful PV starts"
+    ],
+    "weights": {
+     "fast": 1.0,
+     "median14": 0.0,
+     "slow": 0.0
+    }
+   },
+   "horizon_end": "2030-07-16T05:21:36.023636+00:00",
+   "horizon_start": "2030-07-15T20:30:00+00:00",
+   "kind": "load_kwh:to_useful_pv_from_now",
+   "p10": 5.843511870477128,
+   "p50": 7.544521087178952,
+   "p90": 10.64706535232066,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "ratio": 1.0,
+    "raw": 22.97,
+    "source": "solcast"
+   },
+   "horizon_end": "2030-07-16T23:00:00+00:00",
+   "horizon_start": "2030-07-15T23:00:00+00:00",
+   "kind": "pv_kwh:day",
+   "p10": 20.33,
+   "p50": 22.98,
+   "p90": 25.93,
+   "unit": "kWh"
+  },
+  {
+   "confidence": 1.0,
+   "explanation": {
+    "note": "hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"
+   },
+   "horizon_end": "2030-07-15T23:00:00+00:00",
+   "horizon_start": "2030-07-15T22:00:00+00:00",
+   "kind": "soc_pct:pre_window_hour",
+   "p10": 78.35,
+   "p50": 79.0,
+   "p90": 79.65,
+   "unit": "%"
+  }
+ ],
+ "generated_for": "2030-07-15T20:30:00+00:00",
+ "load_baseline_guard": {
+  "active": false,
+  "applies_to": "pessimistic and hard scenario paths only",
+  "baseline_day_kwh": 29.58,
+  "baseline_source": "max(slow expert, 30-day per-hour median)",
+  "fast_day_kwh": 29.17,
+  "ratio": 0.986,
+  "triggers": [],
+  "uplift_day_kwh": 0.63
+ },
+ "mode": "SHADOW",
+ "model_version": "intel-v1.0.0-shadow",
+ "notes": [
+  "cheap-window times come from site configuration, not from live tariff data"
+ ],
+ "predicted": {
+  "cheap_window": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.933,
+   "expert_preds": {
+    "fast": 4.038,
+    "median14": 4.051,
+    "slow": 4.064
+   },
+   "kind": "cheap_window",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 90,
+   "notes": [],
+   "p10": 3.264,
+   "p50": 4.038,
+   "p90": 4.812,
+   "t0": "2030-07-15T23:30:00+00:00",
+   "t1": "2030-07-16T04:30:00+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "day": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.9,
+   "expert_preds": {
+    "fast": 29.171,
+    "median14": 29.311,
+    "slow": 29.302
+   },
+   "kind": "day",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 90,
+   "notes": [],
+   "p10": 24.538,
+   "p50": 29.171,
+   "p90": 33.805,
+   "t0": "2030-07-14T23:00:00+00:00",
+   "t1": "2030-07-15T23:00:00+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "day_projection_kwh": 28.78,
+  "day_so_far_kwh": 26.53,
+  "morning": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.822,
+   "expert_preds": {
+    "fast": 4.282,
+    "median14": 4.24,
+    "slow": 4.257
+   },
+   "kind": "morning",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 90,
+   "notes": [],
+   "p10": 3.63,
+   "p50": 4.282,
+   "p90": 4.934,
+   "t0": "2030-07-16T04:30:00+00:00",
+   "t1": "2030-07-16T08:00:00+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "next_1h": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.799,
+   "expert_preds": {
+    "fast": 1.023
+   },
+   "kind": "next_1h",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 844,
+   "notes": [
+    "short-term persistence adjustment -0.05 kWh"
+   ],
+   "p10": 0.811,
+   "p50": 0.977,
+   "p90": 1.154,
+   "t0": "2030-07-15T20:30:00+00:00",
+   "t1": "2030-07-15T21:30:00+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "next_sunrise": "2030-07-16T04:02:07.681658+00:00",
+  "overnight": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.8,
+   "expert_preds": {
+    "fast": 6.314,
+    "median14": 6.266,
+    "slow": 6.345
+   },
+   "kind": "overnight",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 90,
+   "notes": [],
+   "p10": 5.488,
+   "p50": 6.314,
+   "p90": 7.09,
+   "t0": "2030-07-15T20:30:00+00:00",
+   "t1": "2030-07-16T04:02:07.681658+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "sunrise": "2030-07-15T04:00:55.337519+00:00",
+  "sunset": "2030-07-15T20:11:25.246029+00:00",
+  "to_next_cheap": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.889,
+   "expert_preds": {
+    "fast": 25.133,
+    "median14": 25.26,
+    "slow": 25.238
+   },
+   "kind": "to_next_cheap",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 90,
+   "notes": [],
+   "p10": 21.344,
+   "p50": 25.133,
+   "p90": 28.923,
+   "t0": "2030-07-16T04:30:00+00:00",
+   "t1": "2030-07-16T23:30:00+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "to_useful_pv_from_now": {
+   "confidence": 1.0,
+   "empirical_coverage": 0.795,
+   "expert_preds": {
+    "fast": 7.545,
+    "median14": 7.516,
+    "slow": 7.581
+   },
+   "kind": "to_useful_pv",
+   "label": "HIGH",
+   "n_days": 60,
+   "n_residuals": 88,
+   "notes": [
+    "band includes uncertainty in WHEN useful PV starts"
+   ],
+   "p10": 5.844,
+   "p50": 7.545,
+   "p90": 10.647,
+   "t0": "2030-07-15T20:30:00+00:00",
+   "t1": "2030-07-16T05:21:36.023636+00:00",
+   "usable": true,
+   "weights": {
+    "fast": 1.0,
+    "median14": 0.0,
+    "slow": 0.0
+   }
+  },
+  "useful_pv_start": {
+   "early_p10": "2030-07-16T04:57:50.426717+00:00",
+   "late_p90": "2030-07-16T06:32:02.245304+00:00",
+   "p50": "2030-07-16T05:21:36.023636+00:00",
+   "threshold_w": 500.0
+  }
+ },
+ "pv": {
+  "2030-07-15": {
+   "confidence": 1.0,
+   "day": "2030-07-15",
+   "inflation": 1.0,
+   "label": "HIGH",
+   "mae_corrected": 2.65,
+   "mae_raw": 2.75,
+   "n_pairs": 7,
+   "notes": [],
+   "p10": 36.37,
+   "p50": 41.22,
+   "p90": 46.28,
+   "plausibility": {
+    "limits_kwh": {
+     "history_max": 71.24,
+     "recent_max": 137.36,
+     "site_physical": 76.0
+    },
+    "rejected": [],
+    "verdict": "OK"
+   },
+   "ratio": 1.0,
+   "raw_kwh": 41.2,
+   "source": "solcast",
+   "usable": true
+  },
+  "2030-07-16": {
+   "confidence": 1.0,
+   "day": "2030-07-16",
+   "inflation": 1.0,
+   "label": "HIGH",
+   "mae_corrected": 2.72,
+   "mae_raw": 2.81,
+   "n_pairs": 7,
+   "notes": [],
+   "p10": 20.33,
+   "p50": 22.98,
+   "p90": 25.93,
+   "plausibility": {
+    "limits_kwh": {
+     "history_max": 71.24,
+     "recent_max": 137.36,
+     "site_physical": 76.0
+    },
+    "rejected": [],
+    "verdict": "OK"
+   },
+   "ratio": 1.0,
+   "raw_kwh": 22.97,
+   "source": "solcast",
+   "usable": true
+  },
+  "today_reanchor": {
+   "factor": 1.118,
+   "live_ratio": 1.169,
+   "weight": 0.7
+  }
+ },
+ "recommended": {
+  "assumptions": [
+   "Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.",
+   "Hourly resolution: sub-hour spikes are averaged out.",
+   "Beyond tomorrow no PV is assumed (conservative).",
+   "Grid charging is assumed available at up to 8 kW inside the cheap window."
+  ],
+  "desired_min_pct": 45.0,
+  "floor_pct": 40.0,
+  "overnight_target": {
+   "expected_import_after_charge_kwh_pessimistic": 0.0,
+   "expected_import_before_window_kwh_pessimistic": 0.0,
+   "feasible_on_pessimistic_path": true,
+   "grid_charge_kwh_median": 0.0,
+   "grid_charge_needed": false,
+   "median_case_target_soc_pct": 45.0,
+   "period_end": "2030-07-16T23:30:00+00:00",
+   "pessimistic_case_target_soc_pct": 69.0,
+   "recommended_target_soc_pct": 70.0,
+   "window": [
+    "2030-07-15T23:30:00+00:00",
+    "2030-07-16T04:30:00+00:00"
+   ]
+  },
+  "predicted": {
+   "assumed_target_soc_pct": 70.0,
+   "assumes_recommended_target_followed": true,
+   "min_soc_after_charge_median": 60.638360317011795,
+   "min_soc_after_charge_pessimistic": 46.326627165029166,
+   "min_soc_after_charge_time": "2030-07-16T23:30:00+00:00",
+   "pre_window_min_soc_median": 76.35651630659204,
+   "pv_overflow_kwh_median": 0.0,
+   "soc_at_charge_end_median": 70.0,
+   "soc_at_period_end_median": 60.638360317011795,
+   "soc_at_sunrise_median": 70.0,
+   "soc_at_useful_pv_median": 68.10241164586503,
+   "soc_at_useful_pv_pessimistic": 67.7382325934732,
+   "time_to_floor_without_grid_charging": null
+  },
+  "reasons": [
+   {
+    "code": "TARGET",
+    "text": "Charging to 70% by 05:30 keeps the battery above 45% (your 40% reserve plus a 5% margin) until the next cheap window, even if demand runs high and solar low. The expected-case need is 45%."
+   },
+   {
+    "code": "EXPORT",
+    "text": "About 9.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."
+   }
+  ],
+  "reserve": {
+   "binding": "user_reserve",
+   "effective_pct": 40.0,
+   "ha_reserve_pct": null,
+   "override_code": null,
+   "override_reason": null,
+   "technical_min_pct": 10.0,
+   "user_reserve_pct": 40.0
+  },
+  "safe_export": {
+   "assumes_refill_in_cheap_window": true,
+   "kwh": 9.0,
+   "kwh_before_reductions": 9.0
+  },
+  "safety_margin_pct": 5.0,
+  "saving_session": null,
+  "status": "OK",
+  "trajectory": [
+   {
+    "soc_high": 83.4,
+    "soc_low": 83.0,
+    "soc_median": 83.2,
+    "t": "2030-07-15T21:00:00+00:00"
+   },
+   {
+    "soc_high": 80.8,
+    "soc_low": 79.7,
+    "soc_median": 80.2,
+    "t": "2030-07-15T22:00:00+00:00"
+   },
+   {
+    "soc_high": 78.5,
+    "soc_low": 77.0,
+    "soc_median": 77.8,
+    "t": "2030-07-15T23:00:00+00:00"
+   },
+   {
+    "soc_high": 77.3,
+    "soc_low": 75.4,
+    "soc_median": 76.4,
+    "t": "2030-07-15T23:30:00+00:00"
+   },
+   {
+    "soc_high": 76.0,
+    "soc_low": 73.9,
+    "soc_median": 74.9,
+    "t": "2030-07-16T00:00:00+00:00"
+   },
+   {
+    "soc_high": 73.6,
+    "soc_low": 70.9,
+    "soc_median": 72.3,
+    "t": "2030-07-16T01:00:00+00:00"
+   },
+   {
+    "soc_high": 71.2,
+    "soc_low": 70.0,
+    "soc_median": 70.0,
+    "t": "2030-07-16T02:00:00+00:00"
+   },
+   {
+    "soc_high": 70.0,
+    "soc_low": 70.0,
+    "soc_median": 70.0,
+    "t": "2030-07-16T03:00:00+00:00"
+   },
+   {
+    "soc_high": 70.0,
+    "soc_low": 70.0,
+    "soc_median": 70.0,
+    "t": "2030-07-16T04:00:00+00:00"
+   },
+   {
+    "soc_high": 70.0,
+    "soc_low": 70.0,
+    "soc_median": 70.0,
+    "t": "2030-07-16T04:30:00+00:00"
+   },
+   {
+    "soc_high": 69.0,
+    "soc_low": 68.6,
+    "soc_median": 68.8,
+    "t": "2030-07-16T05:00:00+00:00"
+   },
+   {
+    "soc_high": 67.6,
+    "soc_low": 66.1,
+    "soc_median": 66.8,
+    "t": "2030-07-16T06:00:00+00:00"
+   },
+   {
+    "soc_high": 66.4,
+    "soc_low": 63.4,
+    "soc_median": 64.9,
+    "t": "2030-07-16T07:00:00+00:00"
+   },
+   {
+    "soc_high": 67.5,
+    "soc_low": 62.9,
+    "soc_median": 65.2,
+    "t": "2030-07-16T08:00:00+00:00"
+   },
+   {
+    "soc_high": 69.4,
+    "soc_low": 63.0,
+    "soc_median": 66.1,
+    "t": "2030-07-16T09:00:00+00:00"
+   },
+   {
+    "soc_high": 72.5,
+    "soc_low": 64.3,
+    "soc_median": 68.3,
+    "t": "2030-07-16T10:00:00+00:00"
+   },
+   {
+    "soc_high": 76.3,
+    "soc_low": 66.1,
+    "soc_median": 71.1,
+    "t": "2030-07-16T11:00:00+00:00"
+   },
+   {
+    "soc_high": 80.3,
+    "soc_low": 68.0,
+    "soc_median": 74.0,
+    "t": "2030-07-16T12:00:00+00:00"
+   },
+   {
+    "soc_high": 84.5,
+    "soc_low": 70.0,
+    "soc_median": 77.1,
+    "t": "2030-07-16T13:00:00+00:00"
+   },
+   {
+    "soc_high": 88.3,
+    "soc_low": 71.9,
+    "soc_median": 79.9,
+    "t": "2030-07-16T14:00:00+00:00"
+   },
+   {
+    "soc_high": 91.5,
+    "soc_low": 73.2,
+    "soc_median": 82.1,
+    "t": "2030-07-16T15:00:00+00:00"
+   },
+   {
+    "soc_high": 92.9,
+    "soc_low": 72.5,
+    "soc_median": 82.5,
+    "t": "2030-07-16T16:00:00+00:00"
+   },
+   {
+    "soc_high": 93.5,
+    "soc_low": 71.4,
+    "soc_median": 82.3,
+    "t": "2030-07-16T17:00:00+00:00"
+   },
+   {
+    "soc_high": 91.8,
+    "soc_low": 67.8,
+    "soc_median": 79.6,
+    "t": "2030-07-16T18:00:00+00:00"
+   },
+   {
+    "soc_high": 88.9,
+    "soc_low": 63.3,
+    "soc_median": 75.9,
+    "t": "2030-07-16T19:00:00+00:00"
+   },
+   {
+    "soc_high": 85.0,
+    "soc_low": 58.3,
+    "soc_median": 71.4,
+    "t": "2030-07-16T20:00:00+00:00"
+   },
+   {
+    "soc_high": 81.7,
+    "soc_low": 54.1,
+    "soc_median": 67.7,
+    "t": "2030-07-16T21:00:00+00:00"
+   },
+   {
+    "soc_high": 79.0,
+    "soc_low": 50.7,
+    "soc_median": 64.6,
+    "t": "2030-07-16T22:00:00+00:00"
+   },
+   {
+    "soc_high": 76.7,
+    "soc_low": 47.9,
+    "soc_median": 62.1,
+    "t": "2030-07-16T23:00:00+00:00"
+   },
+   {
+    "soc_high": 75.4,
+    "soc_low": 46.3,
+    "soc_median": 60.6,
+    "t": "2030-07-16T23:30:00+00:00"
+   }
+  ],
+  "uncertainty": []
+ },
+ "status": "LEARNING_NORMALLY",
+ "weekday_effect": {
+  "explained_variance": 0.0455,
+  "f_stat": 0.78,
+  "material": false,
+  "n": 105
+ }
+}

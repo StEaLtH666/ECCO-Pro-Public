@@ -174,9 +174,7 @@ print("[4] The real repository")
 # ---------------------------------------------------------------------------
 roots = rot.load_roots(ROOT)
 check("the real roots file loads", bool(roots), str(roots))
-# PUBLIC-EXPORT staging: the core import precedes the Intelligence import; the Intelligence commit restores this check's
-# "intelligence/tests" half (the public CI baseline as written).
-check("the real roots include the tools suites", "tools/tests" in roots, str(roots))
+check("the real roots include the Intelligence and tools suites", "intelligence/tests" in roots and "tools/tests" in roots, str(roots))
 counts = {r: len(rot.discover(r, ROOT)) for r in roots}
 check("every real root has at least one suite", all(c >= 1 for c in counts.values()), str(counts))
 check("this suite is discovered under the real tools/tests root", "tools/tests/test_run_offline_tests.py" in rot.discover("tools/tests", ROOT))

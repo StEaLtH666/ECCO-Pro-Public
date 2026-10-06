@@ -103,13 +103,18 @@ ECCO's **fallback profile** saves a user-captured subset of settings in the cont
 
 What is enforced today, and by which layer:
 
+- **Intelligence (advisory only)** plans against an *effective reserve*: the larger of your **user reserve** (configurable,
+  default 40%), a **technical minimum** and, when known, the inverter's own shutdown level plus a margin. It never recommends
+  a target below that floor, and it cannot write to the inverter. The technical minimum defaults to 10% as a placeholder: **set
+  it to the minimum permitted by your inverter / battery configuration**. 10% is not a universal battery-safety minimum.
 - **Dump-to-Grid** stops at a stop level you choose. The firmware refuses a stop level below 10% and the Home Assistant scripts
   bound it to 10-90% (default 25%). These are software bounds of this feature, **not** a statement of what is safe for your
-  battery. Dump-to-Grid does **not** yet check a separate, user-configured reserve.
+  battery. Dump-to-Grid does **not** yet use the configured reserve: that enforcement (Home Assistant first, firmware later) is
+  planned, not built.
 - The inverter's own battery protection settings (for example its shutdown / low-battery levels) remain the final protection.
   ECCO does not change them.
-- Set the Dump-to-Grid stop level at or above the minimum your inverter / battery configuration permits and the level you want
-  to keep for the evening or for backup.
+- Set the Dump-to-Grid stop level at or above your configured reserve and at or above the minimum your inverter / battery
+  configuration permits.
 
 ## 10. Reporting a safety problem
 

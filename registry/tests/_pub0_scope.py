@@ -133,6 +133,7 @@ TARGETS = tuple(sorted({
     "home-assistant/packages/ecco_supervision_heartbeat.yaml",
     "home-assistant/packages/ecco_system_health.yaml",
     "home-assistant/packages/ecco_tou_schedule.yaml",
+    "home-assistant/prototypes/intelligence-v1/ecco_intelligence_v1_prototype_dashboard.yaml",   # Intelligence (spec H.4 item 5)
     "home-assistant/tests/test_ecco_dump_to_grid_schedule_package.py",
     "home-assistant/tests/test_ecco_fallback_packages.py",
     "home-assistant/tests/test_ecco_shadow_check_ux.py",
@@ -150,6 +151,8 @@ TARGETS = tuple(sorted({
     "influxdb/ecco_influxdb_options_v1_3.yaml",
     "influxdb/tasks/ecco_battery_outlook_5m.flux",
     "influxdb/tasks/ecco_battery_outlook_score_daily.flux",
+    "intelligence/tests/test_intelligence_dashboard_prototype.py",                              # Intelligence (spec H.4 item 5)
+    "intelligence/tools/preview_states.json",                                                  # Intelligence (spec H.4 item 5)
     "registry/health_reason_codes.yaml",
     "registry/inverter_capabilities.yaml",
     "registry/system_health_checks.yaml",

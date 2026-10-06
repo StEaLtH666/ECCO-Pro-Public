@@ -421,7 +421,7 @@ ENTRIES: tuple[Entry, ...] = (
 # FRESH-HISTORY (recorded exception, no pin touched): _fbb2_static_lib.base_text() now undoes only the fbb1..fbb2 entries from the
 # as-of-fbb2 text it is handed (test_fresh_history_fallback.py), so test_fallback_save_static_pins passes without commit 65e4be5.
 # ---------------------------------------------------------------------------
-PUB0_FINGERPRINT = "4ecb9316e703712d098e7d595069e93b18a8a8016831f4f3175c1ebb5d858096"
+PUB0_FINGERPRINT = "921c3ffefb5b233ffc7fd4d579f1c710fa1278fde03f9567eff9bf61269f45d6"
 PUB0 = Entry(
     id="pub0", pr="PUB0", commit="public-export",
     reverts={CAPABILITIES: _pub0.reverter(CAPABILITIES)},

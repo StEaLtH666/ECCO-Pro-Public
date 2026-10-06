@@ -1,0 +1,123 @@
+{
+  "_comment": "TEMPLATE site profile. Copy to intelligence/profiles/<site>.local.json (git-ignored), replace every <placeholder> with the real entity id, and pass it with --profile. Priority 1 = the ECCO ESP dongle; priority 2 = an optional legacy integration that overlaps its history (counters may need a scale, e.g. 1000 when the legacy totals are in MWh). Nothing here is read from a real installation.",
+  "site": {
+    "pv_array_kwp": 9.5,
+    "user_reserve_soc_pct": 40,
+    "technical_min_soc_pct": 10,
+    "_note": "optional hints; the CLI flags override them. pv_array_kwp feeds only the PV plausibility ceiling. user_reserve_soc_pct is the minimum battery reserve you want (default 40); technical_min_soc_pct is the hardware floor the reserve can never go below (set it from the inverter's battery shutdown SOC)"
+  },
+  "sources": [
+    {
+      "name": "dongle",
+      "priority": 1,
+      "entities": {
+        "load_energy": {
+          "id": "sensor.<dongle>_ecco_total_load_energy"
+        },
+        "pv_energy": {
+          "id": "sensor.<dongle>_ecco_total_pv_energy"
+        },
+        "imp_energy": {
+          "id": "sensor.<dongle>_ecco_total_grid_import"
+        },
+        "exp_energy": {
+          "id": "sensor.<dongle>_ecco_total_grid_export"
+        },
+        "chg_energy": {
+          "id": "sensor.<dongle>_ecco_total_battery_charge"
+        },
+        "dis_energy": {
+          "id": "sensor.<dongle>_ecco_total_battery_discharge"
+        },
+        "load_power": {
+          "id": "sensor.<dongle>_ecco_load_power"
+        },
+        "pv_power": {
+          "id": "sensor.<dongle>_ecco_pv_power"
+        },
+        "batt_power": {
+          "id": "sensor.<dongle>_ecco_battery_output_power"
+        },
+        "grid_power": {
+          "id": "sensor.<dongle>_ecco_grid_power_ct_clamp"
+        },
+        "soc": {
+          "id": "sensor.<dongle>_ecco_battery_soc"
+        }
+      }
+    },
+    {
+      "name": "legacy_inverter_integration",
+      "priority": 2,
+      "entities": {
+        "load_energy": {
+          "id": "sensor.<legacy>_summary_total_load",
+          "scale": 1000.0
+        },
+        "pv_energy": {
+          "id": "sensor.<legacy>_summary_total_pv",
+          "scale": 1000.0
+        },
+        "imp_energy": {
+          "id": "sensor.<legacy>_summary_total_grid_import_buy",
+          "scale": 1000.0
+        },
+        "exp_energy": {
+          "id": "sensor.<legacy>_summary_total_grid_export_sell",
+          "scale": 1000.0
+        },
+        "chg_energy": {
+          "id": "sensor.<legacy>_summary_total_battery_charge",
+          "scale": 1000.0
+        },
+        "dis_energy": {
+          "id": "sensor.<legacy>_summary_total_battery_discharge",
+          "scale": 1000.0
+        },
+        "load_power": {
+          "id": "sensor.<legacy>_load_power"
+        },
+        "pv_power": {
+          "id": "sensor.<legacy>_pv_power"
+        },
+        "batt_power": {
+          "id": "sensor.<legacy>_battery_output_power"
+        },
+        "grid_power": {
+          "id": "sensor.<legacy>_grid_power_ct_clamp"
+        },
+        "soc": {
+          "id": "sensor.<legacy>_battery_soc"
+        }
+      }
+    }
+  ],
+  "forecasts": {
+    "solcast_day": {
+      "id": "sensor.<solcast_today>",
+      "note": "day total (kWh); the value late the previous evening / pre-dawn is the day-ahead issue"
+    },
+    "forecast_solar_day": {
+      "id": "sensor.<forecast_solar_today>"
+    },
+    "blend_day": {
+      "id": "sensor.ecco_solar_forecast_today"
+    }
+  },
+  "tariff": {
+    "import_rate": "sensor.ecco_import_rate",
+    "export_rate": "sensor.ecco_export_rate",
+    "import_day_rates_event": "event.<octopus_import_current_day_rates>",
+    "saving_session_binary": "binary_sensor.<octopus_saving_sessions>"
+  },
+  "live": {
+    "soc": "sensor.ecco_battery_soc",
+    "house_power": "sensor.ecco_house_power",
+    "pv_power": "sensor.ecco_pv_power",
+    "grid_power": "sensor.ecco_grid_power",
+    "battery_power": "sensor.<dongle>_ecco_battery_output_power",
+    "ha_reserve_soc": "input_number.ecco_minimum_reserve_soc",
+    "capacity_kwh": "input_number.ecco_battery_model_capacity",
+    "round_trip_efficiency": "input_number.ecco_round_trip_efficiency"
+  }
+}

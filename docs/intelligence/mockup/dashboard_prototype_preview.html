@@ -1,0 +1,169 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECCO Intelligence V1 - prototype dashboard preview</title>
+<style>
+body{margin:0;background:#0b1120;color:#e8ecf5;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:18px}
+.note{max-width:1180px;margin:0 auto 14px;padding:10px 14px;border:1px dashed rgba(255,255,255,.3);border-radius:12px;color:rgba(255,255,255,.75);font-size:12px}
+.grid{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(48,minmax(0,1fr));gap:14px}
+.cell{min-width:0;overflow-wrap:anywhere} h2{overflow-wrap:anywhere} .card{height:100%;box-sizing:border-box} h2{margin:6px 2px;font-size:22px}
+.ttl{font-size:13px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px;opacity:.9}
+.fld{font-size:12px;line-height:1.55;color:rgba(255,255,255,.78)}
+table td,table th{padding:2px 4px}
+@media (max-width:900px){.cell{grid-column:span 48 !important}}
+</style></head><body>
+<div class="note"><b>Static preview, rendered locally from the dashboard's own button-card JavaScript.</b> Not Home Assistant. Data: the frozen engine report in the mock
+package (time-shifted to now) plus a small synthetic sample of sensor values (intelligence/tools/preview_states.json). Nothing here talks to any system.</div>
+<section class="grid"><div class="cell" style="grid-column:span 48"><h2>ECCO Pro • Intelligence V1 (SHADOW PROTOTYPE)</h2></div><div class="cell" style="grid-column:span 48"><div class="card" style=";border-radius:18px;padding:14px 18px;background:linear-gradient(145deg, rgba(60,44,12,0.55), rgba(20,16,8,0.7));border:1px solid rgba(255,189,61,0.45)"><div class="ttl">SHADOW MODE</div><div class="fld"><b>Advice only. Nothing is applied.</b> ECCO Intelligence never writes to the inverter; the
+    deterministic ESP safety layer stays in charge. Nothing is ever advised below the Minimum Battery Reserve (default 40%, set per installation).<br>
+    <span style="display:inline-flex;align-items:center;gap:8px;margin-top:6px;padding:4px 10px;
+      border-radius:999px;background:#39d27a1f;border:1px solid #39d27a55;color:#39d27a;
+      font-weight:700;">
+      <span style="width:8px;height:8px;border-radius:50%;background:#39d27a;"></span>Learning normally</span>
+    <span style="margin-left:8px;color:rgba(255,255,255,0.6);">
+      confidence <b>HIGH</b> (1) • history 60 days •
+      model intel-v1.0.0-shadow • report for Sat 08:10</span><span style="color:#ffbd3d;font-weight:800;"> • FROZEN SAMPLE REPORT (prototype): shown time-shifted to now</span></div></div></div><div class="cell" style="grid-column:span 48"><div class="card" style=";border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(34,24,56,0.9), rgba(12,12,27,0.98));border:1px dashed rgba(179,108,255,0.55)"><div class="ttl">ECCO expects...</div><div class="fld"><div>• Overnight (sunset→sunrise) demand: <b>14.8 kWh</b> <span style="color:rgba(255,255,255,0.55)">(13.1–16.8)</span>.</div><div>• Demand before useful solar: <b>0.1 kWh</b> <span style="color:rgba(255,255,255,0.55)">(0.1–0.1)</span>.</div><div>• Whole-day demand: <b>32.6 kWh</b> <span style="color:rgba(255,255,255,0.55)">(27.7–37.6)</span>.</div><div>• Solar tomorrow: provider says 60 kWh, ECCO expects <b>36 kWh</b> (learned ×0.59).</div><div>• Battery at useful solar: <b>86%</b> predicted <span style="color:rgba(255,255,255,0.55)">(if the recommended target is followed)</span>.</div><div>• Recommended overnight target: <b style="color:#ffbd3d">60%</b> <span style="color:rgba(255,255,255,0.55)">(median case 55%, pessimistic 56%)</span>.</div><div>• Safe export now: <b>0.0 kWh</b> while keeping the reserve.</div></div></div></div></section><section class="grid"><div class="cell" style="grid-column:span 12"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);border:1px solid rgba(66,170,255,0.55)"><div class="ttl">Actual</div><div class="fld"><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px;">MEASURED NOW • live sensors</div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Battery SOC</span><b style="color:#fff">88 %</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">House load</span><b style="color:#fff">1.10 kW</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Solar</span><b style="color:#fff">0.20 kW</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Grid (+import / −export)</span><b style="color:#fff">0.00 kW</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Battery (+discharge)</span><b style="color:#fff">0.90 kW</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Import rate now</span><b style="color:#fff">30.0 p/kWh</b></div></div></div></div><div class="cell" style="grid-column:span 12"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);border:1px dashed rgba(179,108,255,0.6)"><div class="ttl">Predicted</div><div class="fld"><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px;">MODEL OUTPUT • p50 and p10–p90 band</div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">Next hour</span>
+    <span><b>1.3</b> <span style="color:rgba(255,255,255,0.5)">1.1–1.6 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">To useful solar</span>
+    <span><b>0.1</b> <span style="color:rgba(255,255,255,0.5)">0.1–0.1 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">Tonight (sun down→up)</span>
+    <span><b>14.8</b> <span style="color:rgba(255,255,255,0.5)">13.1–16.8 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">Cheap window</span>
+    <span><b>4.5</b> <span style="color:rgba(255,255,255,0.5)">3.8–5.2 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">Whole day</span>
+    <span><b>32.6</b> <span style="color:rgba(255,255,255,0.5)">27.7–37.6 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;opacity:1">
+    <span style="color:rgba(255,255,255,0.6)">To next cheap window</span>
+    <span><b>28.2</b> <span style="color:rgba(255,255,255,0.5)">23.7–32.7 kWh</span>
+    <span style="color:#39d27a;font-size:10px;font-weight:800">HIGH</span></span></div><div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Solar 10-05</span>
+      <b> 8 kWh</b> <span style="color:rgba(255,255,255,0.5)">(7–10)</span><br>
+      <span style="font-size:10px;color:rgba(255,255,255,0.5)">solcast says 14 kWh • learned ×0.59</span></div><div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+      <span style="color:rgba(255,255,255,0.6)">Solar 10-06</span>
+      <b> 36 kWh</b> <span style="color:rgba(255,255,255,0.5)">(30–42)</span><br>
+      <span style="font-size:10px;color:rgba(255,255,255,0.5)">solcast says 60 kWh • learned ×0.59</span></div></div></div></div><div class="cell" style="grid-column:span 12"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);border:1px solid rgba(255,189,61,0.6)"><div class="ttl">Recommended</div><div class="fld"><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:2px;">ADVICE ONLY • SHADOW • not applied</div>
+    <div style="font-size:30px;font-weight:800;color:#ffbd3d;letter-spacing:-0.5px;">60%
+      <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,0.6)">overnight target</span></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+    <span style="color:rgba(255,255,255,0.6)">Median-case need</span><b style="color:#fff">55 %</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+    <span style="color:rgba(255,255,255,0.6)">Pessimistic-case need</span><b style="color:#fff">56 %</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+    <span style="color:rgba(255,255,255,0.6)">Grid charge (median)</span><b style="color:#fff">9.0 kWh</b></div><div style="display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,0.06);padding:3px 0;">
+    <span style="color:rgba(255,255,255,0.6)">Safe export now</span><b style="color:#fff">0.0 kWh</b></div><div style="margin-top:10px;">
+    <button disabled title="Not connected: ECCO Intelligence never writes to the inverter. The deterministic ESP safety layer stays in charge."
+      style="width:100%;padding:9px 10px;border-radius:10px;border:1px dashed rgba(255,255,255,0.25);background:rgba(255,255,255,0.04);
+      color:rgba(255,255,255,0.4);font-weight:700;cursor:not-allowed;">Apply (disabled • shadow only)</button>
+    <div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:4px;">Not connected: ECCO Intelligence never writes to the inverter.</div></div></div></div></div><div class="cell" style="grid-column:span 12"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);border:1px solid rgba(139,147,165,0.5)"><div class="ttl">Confidence</div><div class="fld"><div style="font-size:11px;color:rgba(255,255,255,0.5);">HOW MUCH TO TRUST THIS</div>
+    <div style="font-size:26px;font-weight:800;color:#39d27a;">HIGH
+      <span style="font-size:12px;color:rgba(255,255,255,0.6);font-weight:600">100/100</span></div>
+    <div style="height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;margin:4px 0 8px;">
+      <div style="width:100%;height:100%;background:#39d27a;"></div></div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:11px;">
+      <span style="color:rgba(255,255,255,0.6)">Usage forecast</span><b>100</b>
+      <span style="color:rgba(255,255,255,0.6)">Solar forecast</span><b>100</b>
+      <span style="color:rgba(255,255,255,0.6)">Days of history</span><b>60</b></div>
+    <div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.6)">Why not higher:</div><div style="font-size:11px;color:rgba(255,255,255,0.72)">• cheap-window times come from site configuration, not from live tariff data</div><div style="font-size:11px;color:rgba(255,255,255,0.72)">• raw solcast forecast is unreliable here: trailing raw MAE 10.0 kWh vs 2.8 kWh after correction</div><div style="font-size:11px;color:rgba(255,255,255,0.72)">• raw solcast forecast is unreliable here: trailing raw MAE 10.1 kWh vs 2.6 kWh after correction</div></div></div></div></section><section class="grid"><div class="cell" style="grid-column:span 48"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22)"><div class="ttl">Battery SOC • actual (solid) vs predicted IF the recommended target is followed (dashed) • minimum battery reserve 40% in this sample • FROZEN SAMPLE</div><svg viewBox="0 0 900 300" width="100%" role="img" aria-label="Battery SOC: actual history and predicted trajectory">
+<line x1="44" x2="888" y1="270.0" y2="270.0" stroke="rgba(255,255,255,.08)"/><text x="4" y="274.0" fill="rgba(255,255,255,.5)" font-size="10">0%</text><line x1="44" x2="888" y1="206.0" y2="206.0" stroke="rgba(255,255,255,.08)"/><text x="4" y="210.0" fill="rgba(255,255,255,.5)" font-size="10">25%</text><line x1="44" x2="888" y1="142.0" y2="142.0" stroke="rgba(255,255,255,.08)"/><text x="4" y="146.0" fill="rgba(255,255,255,.5)" font-size="10">50%</text><line x1="44" x2="888" y1="78.0" y2="78.0" stroke="rgba(255,255,255,.08)"/><text x="4" y="82.0" fill="rgba(255,255,255,.5)" font-size="10">75%</text><line x1="44" x2="888" y1="14.0" y2="14.0" stroke="rgba(255,255,255,.08)"/><text x="4" y="18.0" fill="rgba(255,255,255,.5)" font-size="10">100%</text><text x="44.0" y="290" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">-12h</text><text x="255.0" y="290" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">now</text><text x="466.0" y="290" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">+12h</text><text x="677.0" y="290" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">+24h</text><text x="888.0" y="290" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">+36h</text>
+<polygon points="269.7,49.8 287.2,55.5 304.8,58.0 322.4,59.1 340.0,58.5 357.6,59.3 375.2,60.1 392.7,63.4 410.3,71.9 427.9,82.6 445.5,98.2 463.1,113.8 480.7,125.9 498.2,135.3 515.8,143.3 533.4,150.4 542.2,153.8 551.0,126.1 568.6,116.4 586.2,116.4 603.7,116.4 621.3,116.4 630.1,116.4 638.9,120.0 656.5,128.9 674.1,137.1 691.7,132.0 709.2,118.4 726.8,94.9 744.4,64.7 762.0,30.4 779.6,14.0 797.2,14.0 814.7,14.0 832.3,14.0 849.9,15.8 867.5,30.1 885.1,45.5 902.7,57.8 920.2,67.2 937.8,75.2 955.4,82.1 964.2,85.7 964.2,127.4 955.4,123.3 937.8,114.4 920.2,104.4 902.7,92.6 885.1,77.2 867.5,58.0 849.9,39.3 832.3,31.7 814.7,32.7 797.2,44.2 779.6,62.6 762.0,83.1 744.4,105.6 726.8,124.6 709.2,138.4 691.7,144.3 674.1,144.3 656.5,132.3 638.9,120.8 630.1,116.4 621.3,116.4 603.7,116.4 586.2,116.4 568.6,136.4 551.0,190.1 542.2,217.0 533.4,212.9 515.8,204.0 498.2,194.2 480.7,182.2 463.1,166.8 445.5,147.6 427.9,127.9 410.3,113.1 392.7,100.0 375.2,92.1 357.6,86.4 340.0,80.3 322.4,75.7 304.8,69.8 287.2,62.4 269.7,52.7" fill="#b36cff" opacity="0.13"/>
+<line x1="44" x2="888" y1="167.6" y2="167.6" stroke="#ff6376" stroke-width="1.6"/>
+<text x="884" y="163.6" fill="#ff6376" font-size="10" text-anchor="end">Minimum battery reserve 40%</text>
+<line x1="44" x2="888" y1="154.8" y2="154.8" stroke="#ffbd3d" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="48" y="150.8" fill="#ffbd3d" font-size="10">Comfort margin 45%</text>
+<path d="M269.7,52.7 L287.2,62.4 L304.8,69.8 L322.4,75.7 L340.0,80.3 L357.6,86.4 L375.2,92.1 L392.7,100.0 L410.3,113.1 L427.9,127.9 L445.5,147.6 L463.1,166.8 L480.7,182.2 L498.2,194.2 L515.8,204.0 L533.4,212.9 L542.2,217.0 L551.0,190.1 L568.6,136.4 L586.2,116.4 L603.7,116.4 L621.3,116.4 L630.1,116.4 L638.9,120.8 L656.5,132.3 L674.1,144.3 L691.7,144.3 L709.2,138.4 L726.8,124.6 L744.4,105.6 L762.0,83.1 L779.6,62.6 L797.2,44.2 L814.7,32.7 L832.3,31.7 L849.9,39.3 L867.5,58.0 L885.1,77.2 L902.7,92.6 L920.2,104.4 L937.8,114.4 L955.4,123.3 L964.2,127.4" fill="none" stroke="#b36cff" stroke-width="1" stroke-opacity=".5" stroke-dasharray="5 4"/>
+<path d="M269.7,49.8 L287.2,55.5 L304.8,58.0 L322.4,59.1 L340.0,58.5 L357.6,59.3 L375.2,60.1 L392.7,63.4 L410.3,71.9 L427.9,82.6 L445.5,98.2 L463.1,113.8 L480.7,125.9 L498.2,135.3 L515.8,143.3 L533.4,150.4 L542.2,153.8 L551.0,126.1 L568.6,116.4 L586.2,116.4 L603.7,116.4 L621.3,116.4 L630.1,116.4 L638.9,120.0 L656.5,128.9 L674.1,137.1 L691.7,132.0 L709.2,118.4 L726.8,94.9 L744.4,64.7 L762.0,30.4 L779.6,14.0 L797.2,14.0 L814.7,14.0 L832.3,14.0 L849.9,15.8 L867.5,30.1 L885.1,45.5 L902.7,57.8 L920.2,67.2 L937.8,75.2 L955.4,82.1 L964.2,85.7" fill="none" stroke="#b36cff" stroke-width="1" stroke-opacity=".5" stroke-dasharray="5 4"/>
+<path d="M269.7,51.1 L287.2,58.8 L304.8,63.9 L322.4,67.2 L340.0,69.3 L357.6,72.9 L375.2,76.0 L392.7,81.8 L410.3,92.6 L427.9,105.1 L445.5,123.1 L463.1,140.2 L480.7,154.0 L498.2,164.8 L515.8,173.5 L533.4,181.4 L542.2,185.3 L551.0,158.1 L568.6,116.4 L586.2,116.4 L603.7,116.4 L621.3,116.4 L630.1,116.4 L638.9,120.2 L656.5,130.7 L674.1,140.7 L691.7,138.2 L709.2,128.4 L726.8,109.7 L744.4,85.2 L762.0,56.8 L779.6,30.4 L797.2,14.0 L814.7,14.0 L832.3,14.0 L849.9,18.6 L867.5,35.2 L885.1,52.7 L902.7,66.2 L920.2,77.0 L937.8,85.9 L955.4,93.9 L964.2,97.7" fill="none" stroke="#b36cff" stroke-width="3" stroke-dasharray="8 5"/>
+<path d="M79.2,116.4 L96.8,126.6 L114.3,136.9 L131.9,139.4 L149.5,85.7 L167.1,29.4 L184.7,16.6 L202.2,14.0 L219.8,16.6 L237.4,21.7 L255.0,44.7" fill="none" stroke="#42aaff" stroke-width="3"/>
+<line x1="255.0" x2="255.0" y1="14" y2="270" stroke="rgba(255,255,255,.4)" stroke-dasharray="2 3"/>
+</svg>
+<div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:4px;">
+<span style="color:#42aaff">━ ACTUAL SOC (sample sensor history)</span> &nbsp; <span style="color:#b36cff">╍ PREDICTED median, thin dashed = pessimistic / optimistic band</span> &nbsp;
+Preview approximation: in Home Assistant this is an apexcharts-card with the same series and annotations.</div></div></div></section><section class="grid"><div class="cell" style="grid-column:span 24"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);"><div class="ttl">Why</div><div class="fld"><div style="font-weight:800;margin-bottom:2px;">Reasons</div><div style="padding:2px 0;">• Charging to 60% by 05:30 keeps the battery above 45% (your 40% reserve plus a 5% margin) until the next cheap window, even if demand runs high and solar low. The expected-case need is 55%.</div><div style="padding:2px 0;">• Before the cheap window opens at 00:30 the battery is predicted to fall to 33% - below your 40% reserve. The target above cannot fix that: it needs an earlier top-up or less discharge.</div><div style="padding:2px 0;">• On the pessimistic path the battery would reach your 40% reserve at about 21:00 before the cheap window opens, needing about 5.8 kWh of peak-rate import. This is a risk to watch, not something the overnight target can change.</div><div style="padding:2px 0;">• Without grid charging the battery would reach 40% at about 23:00.</div><div style="padding:2px 0;">• About 0.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together.</div>
+    <div style="font-weight:800;margin:8px 0 2px;">Unusual load</div><div style="color:rgba(255,255,255,0.55)">No unusual load detected.</div>
+    
+    <details style="margin-top:8px;"><summary style="cursor:pointer;font-weight:700;color:rgba(255,255,255,0.7)">Assumptions</summary><div style="padding:2px 0;">• Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.</div><div style="padding:2px 0;">• Hourly resolution: sub-hour spikes are averaged out.</div><div style="padding:2px 0;">• Beyond tomorrow no PV is assumed (conservative).</div><div style="padding:2px 0;">• Grid charging is assumed available at up to 8 kW inside the cheap window.</div></details></div></div></div><div class="cell" style="grid-column:span 24"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);"><div class="ttl">Learning and accuracy</div><div class="fld"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <tr style="color:rgba(255,255,255,0.5)"><th style="text-align:left">Last 7 days</th><th>MAE kWh</th><th>Bias</th><th>In band (goal 80%)</th><th>n</th></tr><tr><td>Whole-day demand</td><td style="text-align:right">2.24</td>
+      <td style="text-align:right">-0.19</td>
+      <td style="text-align:right;color:inherit">86%</td><td style="text-align:right">7</td></tr><tr><td>Cheap-window demand</td><td style="text-align:right">0.46</td>
+      <td style="text-align:right">-0.10</td>
+      <td style="text-align:right;color:inherit">67%</td><td style="text-align:right">6</td></tr><tr><td>Next hour</td><td style="text-align:right">0.05</td>
+      <td style="text-align:right">+0.02</td>
+      <td style="text-align:right;color:inherit">100%</td><td style="text-align:right">7</td></tr><tr><td>Solar (day ahead)</td><td style="text-align:right">1.14</td>
+      <td style="text-align:right">-0.69</td>
+      <td style="text-align:right;color:inherit">100%</td><td style="text-align:right">7</td></tr></table>
+    <div style="margin:8px 0 2px;"><svg viewBox="0 0 340 120" width="100%" role="img" aria-label="Predicted versus actual whole-day demand, last 14 nights">
+      <text x="2" y="12" fill="rgba(255,255,255,0.5)" font-size="9">kWh/day</text>
+      <line x1="22" x2="22" y1="35.165354330708674" y2="86.3579098067287" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="22" cy="60.78883321403007" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="18.5" y="64.7419470293486" width="7" height="7" fill="#42aaff" />
+      <line x1="44.769230769230774" x2="44.769230769230774" y1="37.88546886184682" y2="87.17394416607014" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="44.769230769230774" cy="62.63851109520401" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="41.269230769230774" y="65.61238367931281" width="7" height="7" fill="#42aaff" />
+      <line x1="67.53846153846155" x2="67.53846153846155" y1="39.626342161775234" y2="88.47959914101646" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="67.53846153846155" cy="64.16177523264136" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="64.03846153846155" y="64.57874015748033" width="7" height="7" fill="#42aaff" />
+      <line x1="90.3076923076923" x2="90.3076923076923" y1="40.65998568360772" y2="89.02362204724409" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="90.3076923076923" cy="65.03221188260557" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="86.8076923076923" y="63.381889763779526" width="7" height="7" fill="#42aaff" />
+      <line x1="113.07692307692308" x2="113.07692307692308" y1="40.76879026485327" y2="91.30851825340014" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="113.07692307692308" cy="66.06585540443808" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="109.57692307692308" y="59.682534001431634" width="7" height="7" fill="#42aaff" />
+      <line x1="135.84615384615384" x2="135.84615384615384" y1="41.04080171796707" y2="88.42519685039369" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="135.84615384615384" cy="64.76020042949179" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="132.34615384615384" y="33.89584824624193" width="7" height="7" fill="#42aaff" stroke="#ff6376" stroke-width="2"/>
+      <line x1="158.6153846153846" x2="158.6153846153846" y1="32.445239799570516" y2="82.386542591267" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="158.6153846153846" cy="57.90551181102363" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="155.1153846153846" y="42.65461703650682" width="7" height="7" fill="#42aaff" />
+      <line x1="181.3846153846154" x2="181.3846153846154" y1="27.440229062276302" y2="78.85039370078741" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="181.3846153846154" cy="53.6621331424481" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="177.8846153846154" y="54.84073013600572" width="7" height="7" fill="#42aaff" />
+      <line x1="204.15384615384616" x2="204.15384615384616" y1="29.072297780959218" y2="80.04724409448819" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="204.15384615384616" cy="55.07659269863993" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="200.65384615384616" y="54.623120973514666" width="7" height="7" fill="#42aaff" />
+      <line x1="226.92307692307693" x2="226.92307692307693" y1="30.160343593414453" y2="80.59126700071582" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="226.92307692307693" cy="56.00143163922691" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="223.42307692307693" y="53.80708661417323" width="7" height="7" fill="#42aaff" />
+      <line x1="249.69230769230768" x2="249.69230769230768" y1="30.595561918396555" y2="81.6249105225483" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="249.69230769230768" cy="56.38224767358625" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="246.19230769230768" y="53.64387974230494" width="7" height="7" fill="#42aaff" />
+      <line x1="272.46153846153845" x2="272.46153846153845" y1="30.32355046528275" y2="82.87616320687187" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="272.46153846153845" cy="56.599856836077315" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="268.96153846153845" y="78.39692197566214" width="7" height="7" fill="#42aaff" />
+      <line x1="295.2307692307692" x2="295.2307692307692" y1="38.647100930565514" y2="89.73085182534001" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="295.2307692307692" cy="64.21617752326415" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="291.7307692307692" y="71.75984251968504" width="7" height="7" fill="#42aaff" />
+      <line x1="318" x2="318" y1="42.50966356478169" y2="92.5597709377237" stroke="#b36cff" stroke-width="5" stroke-opacity="0.28" stroke-linecap="round"/>
+      <circle cx="318" cy="67.53471725125269" r="3" fill="none" stroke="#b36cff" stroke-width="1.6"/>
+      <rect x="314.5" y="24.865068002863282" width="7" height="7" fill="#42aaff" stroke="#ff6376" stroke-width="2"/>
+      <text x="22" y="116" fill="rgba(255,255,255,0.5)" font-size="9">older</text>
+      <text x="300" y="116" fill="rgba(255,255,255,0.5)" font-size="9">latest</text></svg>
+      <div style="font-size:10px;color:rgba(255,255,255,0.55)">◯ predicted + p10–p90 band (violet) • ■ actual (blue) • red outline = outside the band</div></div>
+    <div style="font-weight:800;margin:6px 0 2px;">What I have learned about my own errors</div><div style="color:rgba(255,255,255,0.55)">No systematic bias found yet.</div></div></div></div><div class="cell" style="grid-column:span 48"><div class="card" style="border-radius:18px;padding:18px;background:linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));border:1px solid rgba(255,255,255,0.08);box-shadow:0 10px 30px rgba(0,0,0,0.22);"><div class="ttl">Technical detail</div><div class="fld"><details><summary style="cursor:pointer;font-weight:700;">Forecast table, model and data-quality facts</summary>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;">
+      <tr style="color:rgba(255,255,255,0.5)"><th style="text-align:left">forecast</th><th>p10</th><th>p50</th><th>p90</th><th style="text-align:left">label</th><th>n resid.</th><th>coverage</th></tr><tr><td>cheap_window</td>
+    <td style="text-align:right">3.78</td><td style="text-align:right"><b>4.45</b></td><td style="text-align:right">5.22</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.8</td></tr><tr><td>day</td>
+    <td style="text-align:right">27.73</td><td style="text-align:right"><b>32.65</b></td><td style="text-align:right">37.56</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.811</td></tr><tr><td>morning</td>
+    <td style="text-align:right">3.92</td><td style="text-align:right"><b>4.57</b></td><td style="text-align:right">5.3</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.8</td></tr><tr><td>next_1h</td>
+    <td style="text-align:right">1.13</td><td style="text-align:right"><b>1.34</b></td><td style="text-align:right">1.56</td>
+    <td>HIGH</td><td style="text-align:right">1218</td><td style="text-align:right">0.8</td></tr><tr><td>overnight</td>
+    <td style="text-align:right">13.13</td><td style="text-align:right"><b>14.78</b></td><td style="text-align:right">16.8</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.8</td></tr><tr><td>to_next_cheap</td>
+    <td style="text-align:right">23.74</td><td style="text-align:right"><b>28.2</b></td><td style="text-align:right">32.66</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.844</td></tr><tr><td>to_useful_pv_from_now</td>
+    <td style="text-align:right">0.06</td><td style="text-align:right"><b>0.07</b></td><td style="text-align:right">0.08</td>
+    <td>HIGH</td><td style="text-align:right">90</td><td style="text-align:right">0.8</td></tr></table>
+    <div style="margin-top:8px;">model <b>intel-v1.0.0-shadow</b> • config <b>6348bb3c9d004cd9</b> • mode <b>SHADOW</b> • applies nothing: <b>true</b></div>
+    <div>Minimum Battery Reserve <b>40%</b> <span style="color:rgba(255,255,255,0.55)">(default 40%)</span> • technical minimum <b>10%</b> • effective minimum <b>40%</b> • comfort margin to <b>45%</b></div>
+    
+    <div>weekday effect material: <b>false</b> (explains 5% of variance)</div>
+    <div style="color:rgba(255,255,255,0.55);margin-top:4px;">HA minimum-reserve helper currently reads
+      <b>15.0%</b>; Intelligence takes the highest of your reserve, the technical minimum and that helper (it can only raise the minimum).</div></details></div></div></div></section></body></html>

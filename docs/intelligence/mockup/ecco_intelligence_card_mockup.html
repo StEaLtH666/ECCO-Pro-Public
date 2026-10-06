@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ECCO Intelligence card mock (shadow mode)</title>
+<style>
+/* ECCO Intelligence card mock.
+   Design intent: a calm advisor's note, not a dashboard. Four kinds of statement are kept visibly apart
+   by shape and texture as well as colour:
+     Actual       solid ink, filled square, solid rules
+     Predicted    hatched / dashed, hollow circle, blue
+     Recommended  violet "shadow" tone, diamond, never applied
+     Confidence   neutral scale with words under it
+   Ground and radii follow the existing ECCO dashboard (navy #0d1728, 18px cards, Roboto / Segoe UI);
+   this mock adds a light theme. Palette marks were run through the dataviz validator (blue / red / violet:
+   CVD and normal-vision separation pass in both modes). */
+
+:root {
+  color-scheme: light;
+  --page: #e8ecf2;
+  --card1: #ffffff;
+  --card2: #f5f7fb;
+  --sunk: #eef2f8;
+  --line: rgba(16, 32, 60, .16);
+  --line2: rgba(16, 32, 60, .08);
+  --ink: #0f1b2d;
+  --ink2: #3f4f68;
+  --ink3: #5a6a82;
+  --pred: #1c6ad0;
+  --pred-w: rgba(28, 106, 208, .12);
+  --rec: #5a46c8;
+  --rec-w: rgba(90, 70, 200, .09);
+  --rec-ink: #4733b0;
+  --floor: #c2253f;
+  --floor-w: rgba(194, 37, 63, .08);
+  --warn-ink: #7d5200;
+  --warn-line: #b27300;
+  --warn-w: rgba(178, 115, 0, .11);
+  --shadow-bg: #4733b0;
+  --shadow-fg: #ffffff;
+  --halo: #ffffff;
+  --shadow-card: 0 10px 30px rgba(16, 32, 60, .10);
+  --sans: "Roboto", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #070d18;
+    --card1: #111c30;
+    --card2: #0b1424;
+    --sunk: rgba(255, 255, 255, .035);
+    --line: rgba(255, 255, 255, .14);
+    --line2: rgba(255, 255, 255, .07);
+    --ink: #eaf0fa;
+    --ink2: #b4c0d3;
+    --ink3: #8d9bb1;
+    --pred: #3f93f0;
+    --pred-w: rgba(63, 147, 240, .17);
+    --rec: #8f82ec;
+    --rec-w: rgba(143, 130, 236, .13);
+    --rec-ink: #c6beff;
+    --floor: #ee5a70;
+    --floor-w: rgba(238, 90, 112, .12);
+    --warn-ink: #ffcb69;
+    --warn-line: #ffbd3d;
+    --warn-w: rgba(255, 189, 61, .11);
+    --shadow-bg: #3a2f86;
+    --shadow-fg: #f0ecff;
+    --halo: #111c30;
+    --shadow-card: 0 10px 30px rgba(0, 0, 0, .28);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #070d18;
+  --card1: #111c30;
+  --card2: #0b1424;
+  --sunk: rgba(255, 255, 255, .035);
+  --line: rgba(255, 255, 255, .14);
+  --line2: rgba(255, 255, 255, .07);
+  --ink: #eaf0fa;
+  --ink2: #b4c0d3;
+  --ink3: #8d9bb1;
+  --pred: #3f93f0;
+  --pred-w: rgba(63, 147, 240, .17);
+  --rec: #8f82ec;
+  --rec-w: rgba(143, 130, 236, .13);
+  --rec-ink: #c6beff;
+  --floor: #ee5a70;
+  --floor-w: rgba(238, 90, 112, .12);
+  --warn-ink: #ffcb69;
+  --warn-line: #ffbd3d;
+  --warn-w: rgba(255, 189, 61, .11);
+  --shadow-bg: #3a2f86;
+  --shadow-fg: #f0ecff;
+  --halo: #111c30;
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, .28);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 var(--sans); }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 48px; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--pred); outline-offset: 2px; border-radius: 4px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+svg { display: block; }
+
+/* ---------- mock controls (not part of the card) ---------- */
+.lab { border: 1.5px dashed var(--line); border-radius: 14px; padding: 10px 12px 12px; margin: 4px 0 14px; background: var(--card2); }
+.lab h1 { margin: 0 0 2px; font-size: 13px; font-weight: 700; }
+.lab p { margin: 0 0 8px; font-size: 12px; color: var(--ink3); }
+.lab .grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.lab .grp > .gl { font-size: 11.5px; font-weight: 700; color: var(--ink3); flex: none; margin-right: 2px; }
+.chipbtn { font-size: 12px; font-weight: 600; padding: 6px 11px; min-height: 32px; border-radius: 999px; border: 1px solid var(--line); background: var(--card1); cursor: pointer; }
+.chipbtn[aria-pressed="true"] { background: var(--ink); color: var(--card1); border-color: var(--ink); }
+.chipbtn.syn { border-style: dashed; }
+.lab select { font: inherit; font-size: 12px; padding: 5px 8px; min-height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--card1); color: var(--ink); max-width: 100%; }
+.lab label { font-size: 11.5px; font-weight: 700; color: var(--ink3); display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- the card ---------- */
+.ecco { container-type: inline-size; container-name: ecco; background: linear-gradient(145deg, var(--card1), var(--card2)); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow-card); overflow: hidden; }
+.ecco-in { padding: 0 14px 18px; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--shadow-bg); color: var(--shadow-fg); font-weight: 900; font-size: 13.5px; letter-spacing: .02em; text-transform: uppercase; position: relative; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.09) 0 8px, transparent 8px 16px); }
+.banner svg { width: 20px; height: 20px; flex: none; }
+.banner .sub { display: block; font-weight: 500; font-size: 11.5px; text-transform: none; letter-spacing: 0; opacity: .88; margin-top: 1px; }
+
+.hd { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 14px 0 2px; }
+.hd h2 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: .005em; }
+.hd-l { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.hd-r { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--ink3); }
+.hd-r b { color: var(--ink2); font-weight: 600; }
+.mono { font-family: var(--mono); font-size: 11.5px; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; border: 1.5px solid var(--ink3); font-size: 12px; font-weight: 700; color: var(--ink); background: transparent; white-space: nowrap; }
+.pill svg { width: 14px; height: 14px; flex: none; }
+.pill.t-info { border-color: var(--pred); }
+.pill.t-warn { border-color: var(--warn-line); background: var(--warn-w); }
+.pill.t-hold { border-color: var(--floor); background: var(--floor-w); }
+
+.callout { display: grid; grid-template-columns: 22px 1fr; gap: 10px; margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--warn-line); background: var(--warn-w); font-size: 13px; }
+.callout svg { width: 20px; height: 20px; margin-top: 1px; }
+.callout b { display: block; font-size: 13.5px; }
+.callout p { margin: 2px 0 0; color: var(--ink2); }
+.callout.t-info { border-color: var(--pred); background: var(--pred-w); }
+.callout.t-hold { border-color: var(--floor); background: var(--floor-w); }
+.callout.t-quiet { border-color: var(--line); background: var(--sunk); }
+
+/* ---------- vocabulary chips ---------- */
+.vc { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; padding: 3px 10px 3px 7px; border-radius: 6px; white-space: nowrap; }
+.vc svg { width: 13px; height: 13px; flex: none; }
+.vc-actual { background: var(--ink); color: var(--card1); }
+.vc-pred { border: 1.5px dashed var(--pred); color: var(--ink); }
+.vc-pred svg { color: var(--pred); }
+.vc-rec { background: var(--rec-w); border: 1.5px solid var(--rec); color: var(--rec-ink); }
+.vc-conf { border: 1.5px solid var(--ink3); color: var(--ink); }
+.vc small { font-weight: 500; font-size: 11.5px; opacity: .85; }
+/* numbers in running text */
+.np { text-decoration: underline dashed; text-decoration-color: var(--pred); text-decoration-thickness: 1.5px; text-underline-offset: 4px; font-weight: 700; white-space: nowrap; }
+.nr { font-weight: 800; color: var(--rec-ink); background: linear-gradient(transparent 60%, var(--rec-w) 60%); padding: 0 2px; white-space: nowrap; }
+.na { font-weight: 800; white-space: nowrap; }
+
+/* ---------- layout ---------- */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+.blk { min-width: 0; border-radius: 14px; padding: 12px 12px 14px; }
+.blk > .bh { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 10px; }
+.blk > .bh .hint { font-size: 12px; color: var(--ink3); }
+h3 { margin: 0; font-size: 15px; font-weight: 800; }
+h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 800; }
+.b-actual { border: 1px solid var(--line); border-left: 5px solid var(--ink); background: var(--sunk); }
+.b-pred { align-self: start; border: 1.5px dashed color-mix(in srgb, var(--pred) 55%, var(--line)); background: color-mix(in srgb, var(--pred) 3%, transparent); }
+.b-rec { border: 1.5px solid var(--rec); background: linear-gradient(180deg, var(--rec-w), transparent 140px); position: relative; }
+.b-conf { border: 1px solid var(--line); background: var(--sunk); border-top: 4px double var(--ink3); }
+.b-plain { border: 1px solid var(--line); background: var(--sunk); }
+.is-old .b-pred, .is-old .b-rec, .is-old .b-chart { opacity: .5; }
+.is-old .b-pred, .is-old .b-rec { filter: grayscale(1); }
+
+/* expects */
+.expects { padding: 4px 2px 0; }
+.expects .lead { font: 400 19px/1.45 var(--serif); margin: 0; color: var(--ink); text-wrap: pretty; max-width: 68ch; }
+.expects .lead + .lead { margin-top: 8px; }
+.expects .adv { border-left: 3px solid var(--rec); padding-left: 12px; margin-top: 12px; }
+.expects .adv .tag { font: 700 11.5px var(--sans); color: var(--rec-ink); display: inline-flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.expects .adv .tag svg { width: 11px; height: 11px; }
+.expects .cav { font: 400 14px/1.45 var(--serif); color: var(--ink2); margin: 8px 0 0; max-width: 68ch; }
+.legend-inline { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: var(--ink3); margin-top: 10px; }
+
+/* actual tiles */
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tile { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 9px; background: var(--card1); min-width: 0; }
+.tile .k { font-size: 12px; color: var(--ink3); font-weight: 600; }
+.tile .v { font-size: 26px; font-weight: 800; line-height: 1.1; margin-top: 2px; letter-spacing: -.01em; }
+.tile .v small { font-size: 13px; font-weight: 600; color: var(--ink2); margin-left: 2px; letter-spacing: 0; }
+.tile .s { font-size: 11.5px; color: var(--ink3); margin-top: 2px; }
+.tile.na-tile { border-style: dashed; background: transparent; }
+.tile.na-tile .v { font-size: 15px; font-weight: 600; color: var(--ink3); padding-top: 6px; }
+.socbar { position: relative; height: 10px; border-radius: 3px; background: var(--line2); margin-top: 8px; border: 1px solid var(--line); }
+.socbar i { position: absolute; inset: 0 auto 0 0; background: var(--ink); border-radius: 2px 0 0 2px; }
+.socbar u { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--floor); text-decoration: none; }
+.socbar u.c { background: var(--ink3); width: 1px; top: -2px; bottom: -2px; }
+.socleg { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink3); margin-top: 3px; }
+.foot { font-size: 12px; color: var(--ink3); margin: 8px 0 0; }
+.foot.warn { color: var(--warn-ink); font-weight: 600; }
+
+/* chart */
+.b-chart { border: 1px solid var(--line); background: var(--card1); }
+.chwrap { position: relative; width: 100%; outline-offset: 3px; }
+.chwrap svg { width: 100%; height: auto; overflow: visible; }
+.tip { position: absolute; pointer-events: none; z-index: 5; min-width: 140px; max-width: 220px; padding: 7px 10px; border-radius: 8px; background: var(--card1); border: 1px solid var(--ink3); box-shadow: 0 6px 18px rgba(0,0,0,.25); font-size: 12px; line-height: 1.35; display: none; }
+.tip b { font-size: 14px; display: block; }
+.tip .tl { color: var(--ink3); }
+.tip .sw { display: inline-block; width: 14px; height: 0; border-top: 2px dashed var(--pred); vertical-align: middle; margin-right: 5px; }
+.keys { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: var(--ink2); margin-top: 8px; }
+.keys span { display: inline-flex; align-items: center; gap: 6px; }
+.keys svg { width: 24px; height: 12px; }
+.tbtn { font-size: 12px; font-weight: 600; padding: 4px 10px; min-height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--card1); cursor: pointer; margin-left: auto; }
+.tbtn[aria-pressed="true"] { background: var(--ink); color: var(--card1); }
+.c-grid { stroke: var(--line2); stroke-width: 1; }
+.c-axis { stroke: var(--line); stroke-width: 1; }
+.c-txt { fill: var(--ink3); font: 11px var(--sans); }
+.c-txt2 { fill: var(--ink2); font: 11px var(--sans); }
+.c-lbl { fill: var(--ink); font: 600 11px var(--sans); paint-order: stroke; stroke: var(--halo); stroke-width: 3.5px; stroke-linejoin: round; }
+.c-floor { stroke: var(--floor); stroke-width: 2; }
+.c-comfort { stroke: var(--ink3); stroke-width: 1.25; stroke-dasharray: 2 4; }
+.c-window { fill: var(--ink); opacity: .07; }
+.c-med { fill: none; stroke: var(--pred); stroke-width: 2; stroke-dasharray: 7 5; stroke-linecap: round; stroke-linejoin: round; }
+.c-band { fill: var(--pred-w); }
+.c-hatch { stroke: var(--pred); stroke-width: 1; opacity: .55; }
+.c-now { stroke: var(--ink); stroke-width: 1.5; }
+.c-dot { fill: var(--ink); stroke: var(--halo); stroke-width: 2; }
+.c-rec { fill: var(--rec); stroke: var(--halo); stroke-width: 2; }
+.c-sun { fill: none; stroke: var(--ink2); stroke-width: 1.4; stroke-linecap: round; }
+.c-pvbar { stroke: var(--ink2); stroke-width: 1.5; }
+.c-cross { stroke: var(--ink2); stroke-width: 1; }
+.weak .c-med, .weak .c-hatch { stroke: var(--ink3); }
+.weak .c-band { fill: var(--line2); }
+.weak-note { font-size: 12px; color: var(--warn-ink); font-weight: 600; margin: 6px 0 0; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { font-size: 12px; font-weight: 700; color: var(--ink3); text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line2); vertical-align: top; }
+th.n, td.n { text-align: right; font-variant-numeric: tabular-nums; padding-left: 8px; }
+.tw { overflow-x: auto; max-width: 100%; }
+.tw table { min-width: 460px; }
+caption { text-align: left; font-size: 12px; color: var(--ink3); padding-bottom: 6px; caption-side: top; }
+
+/* predicted rows */
+.rows { display: grid; gap: 0; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 9px 0; border-top: 1px solid var(--line2); }
+.row:first-child { border-top: 0; }
+.row .nm { font-weight: 700; font-size: 13.5px; }
+.row .cap { font-size: 12px; color: var(--ink3); }
+.row .val { text-align: right; font-size: 18px; font-weight: 800; white-space: nowrap; }
+.row .val small { font-size: 12px; font-weight: 600; color: var(--ink2); display: block; }
+.row .nm { grid-column: 1; grid-row: 1; }
+.row .cap { grid-column: 1; grid-row: 2; }
+.row .val { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+.row .bar { grid-column: 1 / -1; grid-row: 3; }
+.row .why { grid-column: 1 / -1; grid-row: 4; font-size: 12px; color: var(--ink2); }
+.row .why.w { color: var(--warn-ink); font-weight: 600; }
+.row.weakrow { opacity: .62; }
+.row.weakrow .val { color: var(--ink3); }
+.lab-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--ink2); }
+.lab-chip svg { width: 14px; height: 12px; }
+.band svg { width: 100%; height: 16px; }
+.pvline { margin: 0; font-size: 13.5px; }
+.pvbox { padding: 9px 0; border-top: 1px solid var(--line2); }
+.pvbox:first-of-type { border-top: 0; }
+.pvbox .nm { font-weight: 700; }
+.pvbox .note { font-size: 12px; color: var(--ink2); margin: 3px 0 0; }
+.pvbox .note.w { color: var(--warn-ink); font-weight: 600; }
+.pvx { display: inline-block; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); font-size: 12px; font-weight: 700; background: var(--card1); }
+.plist { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+.plist li { display: flex; justify-content: space-between; gap: 12px; }
+.plist li span:first-child { color: var(--ink2); }
+
+/* recommended */
+.rec-big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.rec-big .big { font-size: 34px; font-weight: 800; color: var(--rec-ink); letter-spacing: -.015em; line-height: 1.1; }
+.rec-big .what { font-size: 13px; color: var(--ink2); }
+.cases { display: grid; gap: 6px; margin: 10px 0 2px; }
+.case { display: grid; grid-template-columns: 112px 1fr 42px; align-items: center; gap: 8px; font-size: 12.5px; }
+.case .tr { height: 12px; border: 1px solid var(--rec); border-radius: 3px; position: relative; background: transparent; }
+.case .tr i { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(135deg, var(--rec) 0 3px, transparent 3px 6px); opacity: .85; }
+.case.pick .tr i { background: var(--rec); opacity: 1; }
+.case .tr u { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--floor); }
+.case b { text-align: right; font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: 1fr; gap: 0; margin: 10px 0 0; }
+.kv > div { padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--rec) 28%, transparent); }
+.kv .k { font-size: 12px; color: var(--ink3); font-weight: 600; }
+.kv .v { font-size: 15px; font-weight: 700; }
+.kv .v small { font-size: 12px; font-weight: 500; color: var(--ink2); display: block; margin-top: 1px; }
+.warnline { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--ink); background: var(--warn-w); border: 1px solid var(--warn-line); border-radius: 8px; padding: 6px 9px; margin-top: 8px; }
+.warnline svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.apply { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--rec); }
+.apply button { width: 100%; min-height: 44px; font-weight: 800; font-size: 14px; border-radius: 10px; border: 1.5px dashed var(--ink3); background: repeating-linear-gradient(135deg, transparent 0 7px, var(--line2) 7px 14px); color: var(--ink3); cursor: not-allowed; display: inline-flex; gap: 8px; align-items: center; justify-content: center; }
+.apply button svg { width: 16px; height: 16px; }
+.apply p { margin: 6px 0 0; font-size: 12px; color: var(--ink2); }
+
+/* confidence */
+.score { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.score .w { font-size: 26px; font-weight: 800; }
+.score .n { font-size: 14px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.meter { margin-top: 8px; position: relative; height: 12px; border: 1.5px solid var(--ink3); border-radius: 3px; }
+.meter i { position: absolute; inset: 0 auto 0 0; background: var(--ink); }
+.meter u { position: absolute; top: -3px; bottom: -3px; width: 1.5px; background: var(--card1); box-shadow: 0 0 0 1px var(--ink3); text-decoration: none; }
+.mlab { display: grid; grid-template-columns: repeat(4, 1fr); font-size: 11px; color: var(--ink3); margin-top: 4px; text-align: center; }
+.mlab span.on { color: var(--ink); font-weight: 800; }
+.subs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; font-size: 12px; color: var(--ink3); }
+.subs b { display: block; font-size: 15px; color: var(--ink); }
+.ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink); }
+.ul li { margin: 3px 0; }
+.ul.nb { list-style: none; padding: 0; }
+.muted { color: var(--ink3); }
+
+/* anomalies */
+.anom { display: grid; gap: 6px; }
+.an { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: baseline; font-size: 13px; }
+.sev { font-size: 11.5px; font-weight: 800; padding: 1px 8px; border-radius: 5px; border: 1.5px solid var(--ink3); white-space: nowrap; }
+.sev.watch { border-color: var(--warn-line); background: var(--warn-w); }
+.sev.abn { border-color: var(--floor); background: var(--floor-w); }
+.ok-line { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink2); }
+.ok-line svg { width: 16px; height: 16px; flex: none; }
+
+/* why */
+.why2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 24px; }
+.reason { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; padding: 8px 0; border-top: 1px solid var(--line2); font-size: 13px; }
+.reason:first-child { border-top: 0; }
+.rcode { font-size: 11px; font-weight: 700; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; height: fit-content; white-space: nowrap; font-family: var(--mono); }
+details { border-top: 1px solid var(--line2); }
+details > summary { cursor: pointer; padding: 9px 0; font-weight: 700; font-size: 13px; list-style: none; display: flex; align-items: center; gap: 8px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: ""; width: 7px; height: 7px; border-right: 2px solid var(--ink2); border-bottom: 2px solid var(--ink2); transform: rotate(-45deg); transition: transform .15s; margin: 0 3px 0 2px; }
+details[open] > summary::before { transform: rotate(45deg); }
+details > .dbody { padding: 2px 0 12px; }
+pre { margin: 0; padding: 10px; background: var(--sunk); border: 1px solid var(--line2); border-radius: 8px; overflow: auto; max-height: 260px; font: 11px/1.45 var(--mono); max-width: 100%; }
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12.5px; margin: 0 0 10px; }
+.dl dt { color: var(--ink3); }
+.dl dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+
+/* learning */
+.pillrow { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 8px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.sbtn { font-size: 12px; font-weight: 600; padding: 5px 10px; min-height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--card1); cursor: pointer; }
+.sbtn[aria-pressed="true"] { background: var(--ink); color: var(--card1); border-color: var(--ink); }
+.flag { font-size: 12px; font-weight: 700; color: var(--warn-ink); display: inline-flex; gap: 4px; align-items: center; }
+.insights { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+.insights li { padding-left: 12px; border-left: 3px solid var(--ink3); }
+.empty { font-size: 13px; color: var(--ink3); padding: 6px 0; }
+
+.tail { font-size: 11.5px; color: var(--ink3); margin: 14px 2px 0; }
+
+@container ecco (min-width: 560px) {
+  .ecco-in { padding: 0 20px 22px; }
+  .tiles { grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr)); }
+  .banner { padding: 12px 20px; }
+  .kv { grid-template-columns: 1fr 1fr; gap: 0 18px; }
+  .why2 { grid-template-columns: 1fr 1fr; }
+}
+@container ecco (min-width: 760px) {
+  .grid { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+  .g-full { grid-column: 1 / -1; }
+  .g-7 { grid-column: span 7; }
+  .g-5 { grid-column: span 5; }
+  .g-6 { grid-column: span 6; }
+  .side { display: grid; gap: 16px; align-content: start; }
+  .row { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) auto; align-items: center; }
+  .row .nm { grid-column: 1; grid-row: 1; }
+  .row .cap { grid-column: 1; grid-row: 2; }
+  .row .bar { grid-column: 2; grid-row: 1 / span 2; }
+  .row .val { grid-column: 3; grid-row: 1 / span 2; }
+  .row .why { grid-column: 1 / -1; grid-row: 3; }
+  .row .bar { align-self: center; }
+  .kv { grid-template-columns: 1fr; }
+  .expects .lead { font-size: 21px; }
+}
+@container ecco (min-width: 980px) {
+  .kv { grid-template-columns: 1fr 1fr; }
+}
+.side { display: grid; gap: 14px; align-content: start; min-width: 0; }
+.learn { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.learn .tw table { min-width: 0; }
+.nw { white-space: nowrap; }
+@container ecco (min-width: 900px) { .learn { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; } }
+@media (forced-colors: active) {
+  .c-hatch, .c-band { forced-color-adjust: none; }
+}
+@media print { .lab { display: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="lab" id="lab"></div>
+<div id="card" class="ecco" role="region"></div>
+</div>
+<script>
+(function () {
+'use strict';
+
+/* ======================================================================================================
+   DATA: engine output on a SYNTHETIC household, copied from docs/intelligence/examples/*.json (regenerate with
+   intelligence/tools/make_examples.py), plus the accuracy
+   history. Everything the card shows is computed from these objects in JS; nothing is hardcoded per
+   scenario. Synthetic state demos are made by mutating a COPY of an engine report (see mutate()).
+   ====================================================================================================== */
+const REPORTS = {"normal":{"_example":{"description":"Synthetic household, evening, normal conditions, autumn PV over-forecast.","name":"example_normal_evening","synthetic":true},"actual":{"inverter_ok":true,"load_w":1602.3803582856142,"pv_so_far_kwh":6.749293961627363,"pv_w":0.0,"soc_age_s":0.0,"soc_pct":62.0},"anomalies":{"abnormal_load_now":false,"anomalies":[{"code":"HIGH_OVERNIGHT_BASE","severity":"WATCH","since":null,"text":"Last night's base load was 1.06 kW versus a normal 0.84 kW (+218 W).","value":0.218}],"base_load_kw":1.062,"base_load_norm_kw":0.844,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":60,"label":"HIGH","overall":1.0,"pv":1.0,"usage":1.0},"config_hash":"6348bb3c9d004cd9","feature_hash":"343aa0c5c39a2cf8","forecast_records":[{"confidence":1.0,"explanation":{"n_days":60,"notes":["short-term persistence adjustment -0.00 kWh"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T21:30:00+00:00","horizon_start":"2030-10-04T20:30:00+00:00","kind":"load_kwh:next_1h","p10":0.9159424861846801,"p50":1.1023636730947528,"p90":1.3108783861948181,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T23:30:00+00:00","horizon_start":"2030-10-05T04:30:00+00:00","kind":"load_kwh:to_next_cheap","p10":23.188652266173566,"p50":27.542218203419083,"p90":31.895784140664595,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T04:30:00+00:00","horizon_start":"2030-10-04T23:30:00+00:00","kind":"load_kwh:cheap_window","p10":3.700790886575039,"p50":4.350851451156862,"p90":5.104843931317503,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T23:00:00+00:00","horizon_start":"2030-10-03T23:00:00+00:00","kind":"load_kwh:day","p10":27.088994815348844,"p50":31.893069654575942,"p90":36.69714449380304,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T08:00:00+00:00","horizon_start":"2030-10-05T04:30:00+00:00","kind":"load_kwh:morning","p10":3.880468223390485,"p50":4.524064623238279,"p90":5.241917334995232,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T06:07:43.661106+00:00","horizon_start":"2030-10-04T20:30:00+00:00","kind":"load_kwh:overnight","p10":8.15313689197668,"p50":9.198240933405193,"p90":10.450050612665589,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":["band includes uncertainty in WHEN useful PV starts"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T07:11:35.011645+00:00","horizon_start":"2030-10-04T20:30:00+00:00","kind":"load_kwh:to_useful_pv_from_now","p10":8.630528163116576,"p50":10.856964859772027,"p90":14.092063644836735,"unit":"kWh"},{"confidence":1.0,"explanation":{"ratio":0.609,"raw":14.13,"source":"solcast"},"horizon_end":"2030-10-05T23:00:00+00:00","horizon_start":"2030-10-04T23:00:00+00:00","kind":"pv_kwh:day","p10":7.18,"p50":8.61,"p90":10.02,"unit":"kWh"},{"confidence":1.0,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-10-04T23:00:00+00:00","horizon_start":"2030-10-04T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":54.400000000000006,"p50":55.2,"p90":55.95,"unit":"%"}],"generated_for":"2030-10-04T20:30:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":31.29,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":31.89,"ratio":1.019,"triggers":[],"uplift_day_kwh":0.14},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data"],"predicted":{"cheap_window":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.351,"median14":4.228,"slow":4.264},"kind":"cheap_window","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.701,"p50":4.351,"p90":5.105,"t0":"2030-10-04T23:30:00+00:00","t1":"2030-10-05T04:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":31.893,"median14":31.003,"slow":31.175},"kind":"day","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":27.089,"p50":31.893,"p90":36.697,"t0":"2030-10-03T23:00:00+00:00","t1":"2030-10-04T23:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":34.16,"day_so_far_kwh":31.65,"morning":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.524,"median14":4.54,"slow":4.479},"kind":"morning","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.88,"p50":4.524,"p90":5.242,"t0":"2030-10-05T04:30:00+00:00","t1":"2030-10-05T08:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":1.0,"empirical_coverage":0.799,"expert_preds":{"fast":1.106},"kind":"next_1h","label":"HIGH","n_days":60,"n_residuals":1047,"notes":["short-term persistence adjustment -0.00 kWh"],"p10":0.916,"p50":1.102,"p90":1.311,"t0":"2030-10-04T20:30:00+00:00","t1":"2030-10-04T21:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-10-05T06:07:43.661106+00:00","overnight":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":9.198,"median14":8.926,"slow":8.99},"kind":"overnight","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":8.153,"p50":9.198,"p90":10.45,"t0":"2030-10-04T20:30:00+00:00","t1":"2030-10-05T06:07:43.661106+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-10-04T06:06:05.238763+00:00","sunset":"2030-10-04T17:31:49.562827+00:00","to_next_cheap":{"confidence":1.0,"empirical_coverage":0.844,"expert_preds":{"fast":27.542,"median14":26.775,"slow":26.911},"kind":"to_next_cheap","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":23.189,"p50":27.542,"p90":31.896,"t0":"2030-10-05T04:30:00+00:00","t1":"2030-10-05T23:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":10.857,"median14":10.587,"slow":10.613},"kind":"to_useful_pv","label":"HIGH","n_days":60,"n_residuals":90,"notes":["band includes uncertainty in WHEN useful PV starts"],"p10":8.631,"p50":10.857,"p90":14.092,"t0":"2030-10-04T20:30:00+00:00","t1":"2030-10-05T07:11:35.011645+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-10-05T06:49:04.198274+00:00","late_p90":"2030-10-05T08:00:26.678866+00:00","p50":"2030-10-05T07:11:35.011645+00:00","threshold_w":500.0}},"pv":{"2030-10-04":{"confidence":1.0,"day":"2030-10-04","inflation":1.0,"label":"HIGH","mae_corrected":2.76,"mae_raw":9.81,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 9.8 kWh vs 2.8 kWh after correction"],"p10":5.98,"p50":7.17,"p90":8.35,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":11.77,"source":"solcast","usable":true},"2030-10-05":{"confidence":1.0,"day":"2030-10-05","inflation":1.0,"label":"HIGH","mae_corrected":2.83,"mae_raw":10.14,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 10.1 kWh vs 2.8 kWh after correction"],"p10":7.18,"p50":8.61,"p90":10.02,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":14.13,"source":"solcast","usable":true},"today_reanchor":{"factor":0.959,"live_ratio":0.941,"weight":0.7}},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":4.98,"expected_import_before_window_kwh_pessimistic":0.0,"feasible_on_pessimistic_path":false,"grid_charge_kwh_median":15.96,"grid_charge_needed":true,"median_case_target_soc_pct":100.0,"period_end":"2030-10-05T23:30:00+00:00","pessimistic_case_target_soc_pct":100.0,"recommended_target_soc_pct":100.0,"window":["2030-10-04T23:30:00+00:00","2030-10-05T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":100.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":37.03970206517976,"min_soc_after_charge_pessimistic":23.4504717476854,"min_soc_after_charge_time":"2030-10-05T23:30:00+00:00","pre_window_min_soc_median":52.226953967449326,"pv_overflow_kwh_median":0.0,"soc_at_charge_end_median":100.0,"soc_at_period_end_median":37.03970206517976,"soc_at_sunrise_median":93.72137760969053,"soc_at_useful_pv_median":88.77817149747702,"soc_at_useful_pv_pessimistic":87.38189519768811,"time_to_floor_without_grid_charging":"2030-10-05T04:00:00+00:00"},"reasons":[{"code":"SHORTFALL","text":"Even a full charge may dip below the 45% comfort level before the next cheap window if demand runs high and solar low: about 5.0 kWh of peak-rate import would be needed to stay at your 40% reserve. Recommend 100% (the maximum)."},{"code":"EXPORT","text":"About 1.7 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":1.7,"kwh_before_reductions":1.7},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":60.2,"soc_low":59.8,"soc_median":60.0,"t":"2030-10-04T21:00:00+00:00"},{"soc_high":57.3,"soc_low":56.1,"soc_median":56.7,"t":"2030-10-04T22:00:00+00:00"},{"soc_high":54.6,"soc_low":52.7,"soc_median":53.7,"t":"2030-10-04T23:00:00+00:00"},{"soc_high":53.3,"soc_low":51.1,"soc_median":52.2,"t":"2030-10-04T23:30:00+00:00"},{"soc_high":64.1,"soc_low":61.7,"soc_median":62.9,"t":"2030-10-05T00:00:00+00:00"},{"soc_high":85.8,"soc_low":82.7,"soc_median":84.2,"t":"2030-10-05T01:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T02:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T03:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T04:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T04:30:00+00:00"},{"soc_high":98.6,"soc_low":98.3,"soc_median":98.5,"t":"2030-10-05T05:00:00+00:00"},{"soc_high":95.0,"soc_low":93.7,"soc_median":94.4,"t":"2030-10-05T06:00:00+00:00"},{"soc_high":90.6,"soc_low":88.0,"soc_median":89.3,"t":"2030-10-05T07:00:00+00:00"},{"soc_high":88.5,"soc_low":84.7,"soc_median":86.6,"t":"2030-10-05T08:00:00+00:00"},{"soc_high":86.6,"soc_low":81.2,"soc_median":83.9,"t":"2030-10-05T09:00:00+00:00"},{"soc_high":85.7,"soc_low":78.4,"soc_median":82.0,"t":"2030-10-05T10:00:00+00:00"},{"soc_high":85.5,"soc_low":76.2,"soc_median":80.9,"t":"2030-10-05T11:00:00+00:00"},{"soc_high":85.9,"soc_low":74.7,"soc_median":80.4,"t":"2030-10-05T12:00:00+00:00"},{"soc_high":86.1,"soc_low":73.0,"soc_median":79.6,"t":"2030-10-05T13:00:00+00:00"},{"soc_high":86.1,"soc_low":71.1,"soc_median":78.6,"t":"2030-10-05T14:00:00+00:00"},{"soc_high":84.8,"soc_low":68.0,"soc_median":76.4,"t":"2030-10-05T15:00:00+00:00"},{"soc_high":81.7,"soc_low":63.1,"soc_median":72.5,"t":"2030-10-05T16:00:00+00:00"},{"soc_high":77.7,"soc_low":57.6,"soc_median":67.7,"t":"2030-10-05T17:00:00+00:00"},{"soc_high":72.0,"soc_low":50.3,"soc_median":61.2,"t":"2030-10-05T18:00:00+00:00"},{"soc_high":65.8,"soc_low":42.5,"soc_median":54.2,"t":"2030-10-05T19:00:00+00:00"},{"soc_high":61.0,"soc_low":36.6,"soc_median":48.9,"t":"2030-10-05T20:00:00+00:00"},{"soc_high":57.4,"soc_low":32.1,"soc_median":44.8,"t":"2030-10-05T21:00:00+00:00"},{"soc_high":54.5,"soc_low":28.4,"soc_median":41.5,"t":"2030-10-05T22:00:00+00:00"},{"soc_high":51.8,"soc_low":25.0,"soc_median":38.5,"t":"2030-10-05T23:00:00+00:00"},{"soc_high":50.5,"soc_low":23.5,"soc_median":37.0,"t":"2030-10-05T23:30:00+00:00"}],"uncertainty":[]},"status":"LEARNING_NORMALLY","weekday_effect":{"explained_variance":0.0491,"f_stat":0.97,"material":false,"n":120}},"poorpv":{"_example":{"description":"Synthetic household, afternoon on which PV is running far below forecast.","name":"example_poor_pv_afternoon","synthetic":true},"actual":{"inverter_ok":true,"load_w":1933.9409374767354,"pv_so_far_kwh":1.1121510351215764,"pv_w":241.13753051821803,"soc_age_s":0.0,"soc_pct":78.0},"anomalies":{"abnormal_load_now":false,"anomalies":[{"code":"HIGH_OVERNIGHT_BASE","severity":"WATCH","since":null,"text":"Last night's base load was 1.06 kW versus a normal 0.84 kW (+218 W).","value":0.218}],"base_load_kw":1.062,"base_load_norm_kw":0.844,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":60,"label":"HIGH","overall":1.0,"pv":1.0,"usage":1.0},"config_hash":"6348bb3c9d004cd9","feature_hash":"c9afd9f0dcbcec1f","forecast_records":[{"confidence":1.0,"explanation":{"n_days":60,"notes":["short-term persistence adjustment +0.18 kWh"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T14:00:00+00:00","horizon_start":"2030-10-04T13:00:00+00:00","kind":"load_kwh:next_1h","p10":1.3150359766930944,"p50":1.5515708585507522,"p90":1.8069393717671924,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T23:30:00+00:00","horizon_start":"2030-10-05T04:30:00+00:00","kind":"load_kwh:to_next_cheap","p10":23.188652266173566,"p50":27.542218203419083,"p90":31.895784140664595,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T04:30:00+00:00","horizon_start":"2030-10-04T23:30:00+00:00","kind":"load_kwh:cheap_window","p10":3.700790886575039,"p50":4.350851451156862,"p90":5.104843931317503,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T23:00:00+00:00","horizon_start":"2030-10-03T23:00:00+00:00","kind":"load_kwh:day","p10":27.088994815348844,"p50":31.893069654575942,"p90":36.69714449380304,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T08:00:00+00:00","horizon_start":"2030-10-05T04:30:00+00:00","kind":"load_kwh:morning","p10":3.880468223390485,"p50":4.524064623238279,"p90":5.241917334995232,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T06:07:43.661106+00:00","horizon_start":"2030-10-04T17:31:49.562827+00:00","kind":"load_kwh:overnight","p10":12.823064820767836,"p50":14.466780245302449,"p90":16.435597508289543,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":["band includes uncertainty in WHEN useful PV starts"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T07:11:35.011645+00:00","horizon_start":"2030-10-04T13:00:00+00:00","kind":"load_kwh:to_useful_pv_from_now","p10":19.294120386705497,"p50":23.617844050122635,"p90":29.291853467601232,"unit":"kWh"},{"confidence":1.0,"explanation":{"ratio":0.609,"raw":14.13,"source":"solcast"},"horizon_end":"2030-10-05T23:00:00+00:00","horizon_start":"2030-10-04T23:00:00+00:00","kind":"pv_kwh:day","p10":7.18,"p50":8.61,"p90":10.02,"unit":"kWh"},{"confidence":1.0,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-10-04T23:00:00+00:00","horizon_start":"2030-10-04T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":25.8,"p50":32.0,"p90":38.25,"unit":"%"}],"generated_for":"2030-10-04T13:00:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":31.29,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":31.89,"ratio":1.019,"triggers":[],"uplift_day_kwh":0.14},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data","PV is running at 40% of the corrected forecast so far today"],"predicted":{"cheap_window":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.351,"median14":4.228,"slow":4.264},"kind":"cheap_window","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.701,"p50":4.351,"p90":5.105,"t0":"2030-10-04T23:30:00+00:00","t1":"2030-10-05T04:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":31.893,"median14":31.003,"slow":31.175},"kind":"day","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":27.089,"p50":31.893,"p90":36.697,"t0":"2030-10-03T23:00:00+00:00","t1":"2030-10-04T23:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":33.34,"day_so_far_kwh":18.07,"morning":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.524,"median14":4.54,"slow":4.479},"kind":"morning","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.88,"p50":4.524,"p90":5.242,"t0":"2030-10-05T04:30:00+00:00","t1":"2030-10-05T08:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":1.371},"kind":"next_1h","label":"HIGH","n_days":60,"n_residuals":1029,"notes":["short-term persistence adjustment +0.18 kWh"],"p10":1.315,"p50":1.552,"p90":1.807,"t0":"2030-10-04T13:00:00+00:00","t1":"2030-10-04T14:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-10-05T06:07:43.661106+00:00","overnight":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":14.467,"median14":13.925,"slow":14.108},"kind":"overnight","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":12.823,"p50":14.467,"p90":16.436,"t0":"2030-10-04T17:31:49.562827+00:00","t1":"2030-10-05T06:07:43.661106+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-10-04T06:06:05.238763+00:00","sunset":"2030-10-04T17:31:49.562827+00:00","to_next_cheap":{"confidence":1.0,"empirical_coverage":0.844,"expert_preds":{"fast":27.542,"median14":26.775,"slow":26.911},"kind":"to_next_cheap","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":23.189,"p50":27.542,"p90":31.896,"t0":"2030-10-05T04:30:00+00:00","t1":"2030-10-05T23:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":23.618,"median14":22.812,"slow":23.066},"kind":"to_useful_pv","label":"HIGH","n_days":60,"n_residuals":90,"notes":["band includes uncertainty in WHEN useful PV starts"],"p10":19.294,"p50":23.618,"p90":29.292,"t0":"2030-10-04T13:00:00+00:00","t1":"2030-10-05T07:11:35.011645+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-10-05T06:49:04.198274+00:00","late_p90":"2030-10-05T08:00:26.678866+00:00","p50":"2030-10-05T07:11:35.011645+00:00","threshold_w":500.0}},"pv":{"2030-10-04":{"confidence":1.0,"day":"2030-10-04","inflation":1.0,"label":"HIGH","mae_corrected":2.76,"mae_raw":9.81,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 9.8 kWh vs 2.8 kWh after correction"],"p10":5.98,"p50":7.17,"p90":8.35,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":11.77,"source":"solcast","usable":true},"2030-10-05":{"confidence":1.0,"day":"2030-10-05","inflation":1.0,"label":"HIGH","mae_corrected":2.83,"mae_raw":10.14,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 10.1 kWh vs 2.8 kWh after correction"],"p10":7.18,"p50":8.61,"p90":10.02,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":14.13,"source":"solcast","usable":true},"today_reanchor":{"factor":0.58,"live_ratio":0.4,"weight":0.7}},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":4.98,"expected_import_before_window_kwh_pessimistic":5.26,"feasible_on_pessimistic_path":false,"grid_charge_kwh_median":23.71,"grid_charge_needed":true,"median_case_target_soc_pct":100.0,"period_end":"2030-10-05T23:30:00+00:00","pessimistic_case_target_soc_pct":100.0,"recommended_target_soc_pct":100.0,"window":["2030-10-04T23:30:00+00:00","2030-10-05T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":100.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":37.03970206517976,"min_soc_after_charge_pessimistic":23.4504717476854,"min_soc_after_charge_time":"2030-10-05T23:30:00+00:00","pre_window_min_soc_median":29.043293060804253,"pv_overflow_kwh_median":0.0,"soc_at_charge_end_median":100.0,"soc_at_period_end_median":37.03970206517976,"soc_at_sunrise_median":93.72137760969053,"soc_at_useful_pv_median":88.77817149747702,"soc_at_useful_pv_pessimistic":87.38189519768811,"time_to_floor_without_grid_charging":"2030-10-04T21:00:00+00:00"},"reasons":[{"code":"SHORTFALL","text":"Even a full charge may dip below the 45% comfort level before the next cheap window if demand runs high and solar low: about 5.0 kWh of peak-rate import would be needed to stay at your 40% reserve. Recommend 100% (the maximum)."},{"code":"PRE_WINDOW_FLOOR","text":"Before the cheap window opens at 00:30 the battery is predicted to fall to 29% - below your 40% reserve. The target above cannot fix that: it needs an earlier top-up or less discharge."},{"code":"PRE_WINDOW_RISK","text":"On the pessimistic path the battery would reach your 40% reserve at about 21:00 before the cheap window opens, needing about 5.3 kWh of peak-rate import. This is a risk to watch, not something the overnight target can change."},{"code":"FLOOR_ETA","text":"Without grid charging the battery would reach 40% at about 22:00."},{"code":"EXPORT","text":"About 0.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":0.0,"kwh_before_reductions":0.0},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":75.4,"soc_low":73.8,"soc_median":74.6,"t":"2030-10-04T14:00:00+00:00"},{"soc_high":72.0,"soc_low":68.9,"soc_median":70.5,"t":"2030-10-04T15:00:00+00:00"},{"soc_high":67.6,"soc_low":62.9,"soc_median":65.2,"t":"2030-10-04T16:00:00+00:00"},{"soc_high":62.9,"soc_low":56.7,"soc_median":59.8,"t":"2030-10-04T17:00:00+00:00"},{"soc_high":57.1,"soc_low":49.4,"soc_median":53.2,"t":"2030-10-04T18:00:00+00:00"},{"soc_high":50.8,"soc_low":41.6,"soc_median":46.2,"t":"2030-10-04T19:00:00+00:00"},{"soc_high":46.1,"soc_low":35.6,"soc_median":40.9,"t":"2030-10-04T20:00:00+00:00"},{"soc_high":42.5,"soc_low":31.1,"soc_median":36.8,"t":"2030-10-04T21:00:00+00:00"},{"soc_high":39.6,"soc_low":27.5,"soc_median":33.5,"t":"2030-10-04T22:00:00+00:00"},{"soc_high":36.9,"soc_low":24.1,"soc_median":30.5,"t":"2030-10-04T23:00:00+00:00"},{"soc_high":35.6,"soc_low":22.5,"soc_median":29.0,"t":"2030-10-04T23:30:00+00:00"},{"soc_high":46.4,"soc_low":33.0,"soc_median":39.7,"t":"2030-10-05T00:00:00+00:00"},{"soc_high":68.0,"soc_low":54.1,"soc_median":61.0,"t":"2030-10-05T01:00:00+00:00"},{"soc_high":89.5,"soc_low":75.0,"soc_median":82.3,"t":"2030-10-05T02:00:00+00:00"},{"soc_high":100.0,"soc_low":96.2,"soc_median":100.0,"t":"2030-10-05T03:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T04:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-05T04:30:00+00:00"},{"soc_high":98.6,"soc_low":98.3,"soc_median":98.5,"t":"2030-10-05T05:00:00+00:00"},{"soc_high":95.0,"soc_low":93.7,"soc_median":94.4,"t":"2030-10-05T06:00:00+00:00"},{"soc_high":90.6,"soc_low":88.0,"soc_median":89.3,"t":"2030-10-05T07:00:00+00:00"},{"soc_high":88.5,"soc_low":84.7,"soc_median":86.6,"t":"2030-10-05T08:00:00+00:00"},{"soc_high":86.6,"soc_low":81.2,"soc_median":83.9,"t":"2030-10-05T09:00:00+00:00"},{"soc_high":85.7,"soc_low":78.4,"soc_median":82.0,"t":"2030-10-05T10:00:00+00:00"},{"soc_high":85.5,"soc_low":76.2,"soc_median":80.9,"t":"2030-10-05T11:00:00+00:00"},{"soc_high":85.9,"soc_low":74.7,"soc_median":80.4,"t":"2030-10-05T12:00:00+00:00"},{"soc_high":86.1,"soc_low":73.0,"soc_median":79.6,"t":"2030-10-05T13:00:00+00:00"},{"soc_high":86.1,"soc_low":71.1,"soc_median":78.6,"t":"2030-10-05T14:00:00+00:00"},{"soc_high":84.8,"soc_low":68.0,"soc_median":76.4,"t":"2030-10-05T15:00:00+00:00"},{"soc_high":81.7,"soc_low":63.1,"soc_median":72.5,"t":"2030-10-05T16:00:00+00:00"},{"soc_high":77.7,"soc_low":57.6,"soc_median":67.7,"t":"2030-10-05T17:00:00+00:00"},{"soc_high":72.0,"soc_low":50.3,"soc_median":61.2,"t":"2030-10-05T18:00:00+00:00"},{"soc_high":65.8,"soc_low":42.5,"soc_median":54.2,"t":"2030-10-05T19:00:00+00:00"},{"soc_high":61.0,"soc_low":36.6,"soc_median":48.9,"t":"2030-10-05T20:00:00+00:00"},{"soc_high":57.4,"soc_low":32.1,"soc_median":44.8,"t":"2030-10-05T21:00:00+00:00"},{"soc_high":54.5,"soc_low":28.4,"soc_median":41.5,"t":"2030-10-05T22:00:00+00:00"},{"soc_high":51.8,"soc_low":25.0,"soc_median":38.5,"t":"2030-10-05T23:00:00+00:00"},{"soc_high":50.5,"soc_low":23.5,"soc_median":37.0,"t":"2030-10-05T23:30:00+00:00"}],"uncertainty":[]},"status":"PV_UNDERPERFORMING","weekday_effect":{"explained_variance":0.0528,"f_stat":1.05,"material":false,"n":120}},"afternoon":{"_example":{"description":"Synthetic household, late afternoon, normal conditions.","name":"example_afternoon","synthetic":true},"actual":{"inverter_ok":true,"load_w":1826.5842594039918,"pv_so_far_kwh":15.999057188007006,"pv_w":1059.8171095216114,"soc_age_s":0.0,"soc_pct":75.0},"anomalies":{"abnormal_load_now":false,"anomalies":[],"base_load_kw":0.751,"base_load_norm_kw":0.844,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":60,"label":"HIGH","overall":1.0,"pv":1.0,"usage":1.0},"config_hash":"6348bb3c9d004cd9","feature_hash":"baf5ad9e8486b13d","forecast_records":[{"confidence":1.0,"explanation":{"n_days":60,"notes":["short-term persistence adjustment +0.02 kWh"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-03T17:30:00+00:00","horizon_start":"2030-10-03T16:30:00+00:00","kind":"load_kwh:next_1h","p10":1.4453860288062332,"p50":1.6861657412767763,"p90":1.9444252056421405,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T23:30:00+00:00","horizon_start":"2030-10-04T04:30:00+00:00","kind":"load_kwh:to_next_cheap","p10":21.621037233414164,"p50":25.715973826634386,"p90":29.810910419854604,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T04:30:00+00:00","horizon_start":"2030-10-03T23:30:00+00:00","kind":"load_kwh:cheap_window","p10":3.4172019150011677,"p50":4.01744880120434,"p90":4.6767871964636285,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-03T23:00:00+00:00","horizon_start":"2030-10-02T23:00:00+00:00","kind":"load_kwh:day","p10":25.132603219384013,"p50":29.73342262783873,"p90":34.33424203629345,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T08:00:00+00:00","horizon_start":"2030-10-04T04:30:00+00:00","kind":"load_kwh:morning","p10":3.63434621824886,"p50":4.255660786869722,"p90":4.918653693930497,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T06:06:05.238763+00:00","horizon_start":"2030-10-03T17:34:05.858719+00:00","kind":"load_kwh:overnight","p10":11.841943188159135,"p50":13.302509831853,"p90":15.06303157016641,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":["band includes uncertainty in WHEN useful PV starts"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-04T07:08:27.044361+00:00","horizon_start":"2030-10-03T16:30:00+00:00","kind":"load_kwh:to_useful_pv_from_now","p10":13.488103663418888,"p50":16.6174283193885,"p90":20.554628405254462,"unit":"kWh"},{"confidence":1.0,"explanation":{"ratio":0.609,"raw":11.77,"source":"solcast"},"horizon_end":"2030-10-04T23:00:00+00:00","horizon_start":"2030-10-03T23:00:00+00:00","kind":"pv_kwh:day","p10":5.98,"p50":7.17,"p90":8.34,"unit":"kWh"},{"confidence":1.0,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-10-03T23:00:00+00:00","horizon_start":"2030-10-03T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":44.7,"p50":48.1,"p90":51.45,"unit":"%"}],"generated_for":"2030-10-03T16:30:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":30.89,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":29.73,"ratio":0.963,"triggers":[],"uplift_day_kwh":1.2},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data"],"predicted":{"cheap_window":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.017,"median14":4.19,"slow":4.189},"kind":"cheap_window","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.417,"p50":4.017,"p90":4.677,"t0":"2030-10-03T23:30:00+00:00","t1":"2030-10-04T04:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":1.0,"empirical_coverage":0.833,"expert_preds":{"fast":29.733,"median14":30.781,"slow":30.674},"kind":"day","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":25.133,"p50":29.733,"p90":34.334,"t0":"2030-10-02T23:00:00+00:00","t1":"2030-10-03T23:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":33.85,"day_so_far_kwh":24.94,"morning":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.256,"median14":4.519,"slow":4.421},"kind":"morning","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.634,"p50":4.256,"p90":4.919,"t0":"2030-10-04T04:30:00+00:00","t1":"2030-10-04T08:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":1.0,"empirical_coverage":0.799,"expert_preds":{"fast":1.666},"kind":"next_1h","label":"HIGH","n_days":60,"n_residuals":965,"notes":["short-term persistence adjustment +0.02 kWh"],"p10":1.445,"p50":1.686,"p90":1.944,"t0":"2030-10-03T16:30:00+00:00","t1":"2030-10-03T17:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-10-04T06:06:05.238763+00:00","overnight":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":13.303,"median14":13.672,"slow":13.748},"kind":"overnight","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":11.842,"p50":13.303,"p90":15.063,"t0":"2030-10-03T17:34:05.858719+00:00","t1":"2030-10-04T06:06:05.238763+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-10-03T06:04:27.121629+00:00","sunset":"2030-10-03T17:34:05.858719+00:00","to_next_cheap":{"confidence":1.0,"empirical_coverage":0.856,"expert_preds":{"fast":25.716,"median14":26.59,"slow":26.486},"kind":"to_next_cheap","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":21.621,"p50":25.716,"p90":29.811,"t0":"2030-10-04T04:30:00+00:00","t1":"2030-10-04T23:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":16.617,"median14":17.177,"slow":17.2},"kind":"to_useful_pv","label":"HIGH","n_days":60,"n_residuals":90,"notes":["band includes uncertainty in WHEN useful PV starts"],"p10":13.488,"p50":16.617,"p90":20.555,"t0":"2030-10-03T16:30:00+00:00","t1":"2030-10-04T07:08:27.044361+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-10-04T06:47:25.775931+00:00","late_p90":"2030-10-04T07:58:48.256523+00:00","p50":"2030-10-04T07:08:27.044361+00:00","threshold_w":500.0}},"pv":{"2030-10-03":{"confidence":1.0,"day":"2030-10-03","inflation":1.0,"label":"HIGH","mae_corrected":2.71,"mae_raw":9.36,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 9.4 kWh vs 2.7 kWh after correction"],"p10":15.46,"p50":18.52,"p90":21.54,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":30.41,"source":"solcast","usable":true},"2030-10-04":{"confidence":1.0,"day":"2030-10-04","inflation":1.0,"label":"HIGH","mae_corrected":2.77,"mae_raw":9.65,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 9.7 kWh vs 2.8 kWh after correction"],"p10":5.98,"p50":7.17,"p90":8.34,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.609,"raw_kwh":11.77,"source":"solcast","usable":true},"today_reanchor":{"factor":0.932,"live_ratio":0.902,"weight":0.7}},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":4.24,"expected_import_before_window_kwh_pessimistic":0.0,"feasible_on_pessimistic_path":false,"grid_charge_kwh_median":18.27,"grid_charge_needed":true,"median_case_target_soc_pct":100.0,"period_end":"2030-10-04T23:30:00+00:00","pessimistic_case_target_soc_pct":100.0,"recommended_target_soc_pct":100.0,"window":["2030-10-03T23:30:00+00:00","2030-10-04T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":100.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":38.32654780323303,"min_soc_after_charge_pessimistic":25.90600757261926,"min_soc_after_charge_time":"2030-10-04T23:30:00+00:00","pre_window_min_soc_median":45.33625648056958,"pv_overflow_kwh_median":0.0,"soc_at_charge_end_median":100.0,"soc_at_period_end_median":38.32654780323303,"soc_at_sunrise_median":94.15480885185377,"soc_at_useful_pv_median":89.52994804097138,"soc_at_useful_pv_pessimistic":88.24177513591964,"time_to_floor_without_grid_charging":"2030-10-04T02:00:00+00:00"},"reasons":[{"code":"SHORTFALL","text":"Even a full charge may dip below the 45% comfort level before the next cheap window if demand runs high and solar low: about 4.2 kWh of peak-rate import would be needed to stay at your 40% reserve. Recommend 100% (the maximum)."},{"code":"EXPORT","text":"About 0.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":0.0,"kwh_before_reductions":0.0},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":73.9,"soc_low":73.1,"soc_median":73.5,"t":"2030-10-03T17:00:00+00:00"},{"soc_high":68.9,"soc_low":66.6,"soc_median":67.8,"t":"2030-10-03T18:00:00+00:00"},{"soc_high":63.3,"soc_low":59.6,"soc_median":61.4,"t":"2030-10-03T19:00:00+00:00"},{"soc_high":58.9,"soc_low":54.1,"soc_median":56.5,"t":"2030-10-03T20:00:00+00:00"},{"soc_high":55.4,"soc_low":49.7,"soc_median":52.5,"t":"2030-10-03T21:00:00+00:00"},{"soc_high":52.7,"soc_low":46.3,"soc_median":49.5,"t":"2030-10-03T22:00:00+00:00"},{"soc_high":50.2,"soc_low":43.1,"soc_median":46.7,"t":"2030-10-03T23:00:00+00:00"},{"soc_high":49.0,"soc_low":41.7,"soc_median":45.3,"t":"2030-10-03T23:30:00+00:00"},{"soc_high":59.9,"soc_low":52.3,"soc_median":56.1,"t":"2030-10-04T00:00:00+00:00"},{"soc_high":81.6,"soc_low":73.5,"soc_median":77.6,"t":"2030-10-04T01:00:00+00:00"},{"soc_high":100.0,"soc_low":94.6,"soc_median":99.0,"t":"2030-10-04T02:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-04T03:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-04T04:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-10-04T04:30:00+00:00"},{"soc_high":98.6,"soc_low":98.3,"soc_median":98.5,"t":"2030-10-04T05:00:00+00:00"},{"soc_high":95.2,"soc_low":94.0,"soc_median":94.6,"t":"2030-10-04T06:00:00+00:00"},{"soc_high":91.1,"soc_low":88.7,"soc_median":89.9,"t":"2030-10-04T07:00:00+00:00"},{"soc_high":89.0,"soc_low":85.5,"soc_median":87.3,"t":"2030-10-04T08:00:00+00:00"},{"soc_high":86.7,"soc_low":81.7,"soc_median":84.2,"t":"2030-10-04T09:00:00+00:00"},{"soc_high":85.6,"soc_low":78.9,"soc_median":82.3,"t":"2030-10-04T10:00:00+00:00"},{"soc_high":85.0,"soc_low":76.6,"soc_median":80.8,"t":"2030-10-04T11:00:00+00:00"},{"soc_high":84.8,"soc_low":74.5,"soc_median":79.7,"t":"2030-10-04T12:00:00+00:00"},{"soc_high":84.6,"soc_low":72.6,"soc_median":78.6,"t":"2030-10-04T13:00:00+00:00"},{"soc_high":84.2,"soc_low":70.5,"soc_median":77.4,"t":"2030-10-04T14:00:00+00:00"},{"soc_high":82.6,"soc_low":67.3,"soc_median":75.0,"t":"2030-10-04T15:00:00+00:00"},{"soc_high":79.3,"soc_low":62.2,"soc_median":70.8,"t":"2030-10-04T16:00:00+00:00"},{"soc_high":75.8,"soc_low":57.4,"soc_median":66.6,"t":"2030-10-04T17:00:00+00:00"},{"soc_high":70.6,"soc_low":50.8,"soc_median":60.7,"t":"2030-10-04T18:00:00+00:00"},{"soc_high":65.0,"soc_low":43.8,"soc_median":54.4,"t":"2030-10-04T19:00:00+00:00"},{"soc_high":60.6,"soc_low":38.4,"soc_median":49.5,"t":"2030-10-04T20:00:00+00:00"},{"soc_high":57.1,"soc_low":33.9,"soc_median":45.5,"t":"2030-10-04T21:00:00+00:00"},{"soc_high":54.4,"soc_low":30.5,"soc_median":42.5,"t":"2030-10-04T22:00:00+00:00"},{"soc_high":51.9,"soc_low":27.4,"soc_median":39.6,"t":"2030-10-04T23:00:00+00:00"},{"soc_high":50.7,"soc_low":25.9,"soc_median":38.3,"t":"2030-10-04T23:30:00+00:00"}],"uncertainty":[]},"status":"LEARNING_NORMALLY","weekday_effect":{"explained_variance":0.0492,"f_stat":0.98,"material":false,"n":120}},"summer":{"_example":{"description":"Synthetic household, summer evening: lower targets and export become possible.","name":"example_summer_evening","synthetic":true},"actual":{"inverter_ok":true,"load_w":1423.5336534835842,"pv_so_far_kwh":48.16327575696774,"pv_w":363.28106987099784,"soc_age_s":0.0,"soc_pct":85.0},"anomalies":{"abnormal_load_now":false,"anomalies":[],"base_load_kw":0.705,"base_load_norm_kw":0.823,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":60,"label":"HIGH","overall":1.0,"pv":1.0,"usage":1.0},"config_hash":"6348bb3c9d004cd9","feature_hash":"914c87bdc5bc2a15","forecast_records":[{"confidence":1.0,"explanation":{"n_days":60,"notes":["short-term persistence adjustment -0.05 kWh"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-15T21:30:00+00:00","horizon_start":"2030-07-15T20:30:00+00:00","kind":"load_kwh:next_1h","p10":0.8109152954701803,"p50":0.9774545338481265,"p90":1.1535555457331337,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-16T23:30:00+00:00","horizon_start":"2030-07-16T04:30:00+00:00","kind":"load_kwh:to_next_cheap","p10":21.34359177431895,"p50":25.133362724770063,"p90":28.923133675221177,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-16T04:30:00+00:00","horizon_start":"2030-07-15T23:30:00+00:00","kind":"load_kwh:cheap_window","p10":3.2641979779860875,"p50":4.038073556996506,"p90":4.811949136006923,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-15T23:00:00+00:00","horizon_start":"2030-07-14T23:00:00+00:00","kind":"load_kwh:day","p10":24.537675720879133,"p50":29.171436281766574,"p90":33.80519684265402,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-16T08:00:00+00:00","horizon_start":"2030-07-16T04:30:00+00:00","kind":"load_kwh:morning","p10":3.6302838388907355,"p50":4.2821242011262015,"p90":4.933964563361667,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-16T04:02:07.681658+00:00","horizon_start":"2030-07-15T20:30:00+00:00","kind":"load_kwh:overnight","p10":5.487618148663076,"p50":6.314289092724019,"p90":7.090016724062066,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":["band includes uncertainty in WHEN useful PV starts"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-07-16T05:21:36.023636+00:00","horizon_start":"2030-07-15T20:30:00+00:00","kind":"load_kwh:to_useful_pv_from_now","p10":5.843511870477128,"p50":7.544521087178952,"p90":10.64706535232066,"unit":"kWh"},{"confidence":1.0,"explanation":{"ratio":1.0,"raw":22.97,"source":"solcast"},"horizon_end":"2030-07-16T23:00:00+00:00","horizon_start":"2030-07-15T23:00:00+00:00","kind":"pv_kwh:day","p10":20.33,"p50":22.98,"p90":25.93,"unit":"kWh"},{"confidence":1.0,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-07-15T23:00:00+00:00","horizon_start":"2030-07-15T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":78.35,"p50":79.0,"p90":79.65,"unit":"%"}],"generated_for":"2030-07-15T20:30:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":29.58,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":29.17,"ratio":0.986,"triggers":[],"uplift_day_kwh":0.63},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data"],"predicted":{"cheap_window":{"confidence":1.0,"empirical_coverage":0.933,"expert_preds":{"fast":4.038,"median14":4.051,"slow":4.064},"kind":"cheap_window","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.264,"p50":4.038,"p90":4.812,"t0":"2030-07-15T23:30:00+00:00","t1":"2030-07-16T04:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":1.0,"empirical_coverage":0.9,"expert_preds":{"fast":29.171,"median14":29.311,"slow":29.302},"kind":"day","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":24.538,"p50":29.171,"p90":33.805,"t0":"2030-07-14T23:00:00+00:00","t1":"2030-07-15T23:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":28.78,"day_so_far_kwh":26.53,"morning":{"confidence":1.0,"empirical_coverage":0.822,"expert_preds":{"fast":4.282,"median14":4.24,"slow":4.257},"kind":"morning","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.63,"p50":4.282,"p90":4.934,"t0":"2030-07-16T04:30:00+00:00","t1":"2030-07-16T08:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":1.0,"empirical_coverage":0.799,"expert_preds":{"fast":1.023},"kind":"next_1h","label":"HIGH","n_days":60,"n_residuals":844,"notes":["short-term persistence adjustment -0.05 kWh"],"p10":0.811,"p50":0.977,"p90":1.154,"t0":"2030-07-15T20:30:00+00:00","t1":"2030-07-15T21:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-07-16T04:02:07.681658+00:00","overnight":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":6.314,"median14":6.266,"slow":6.345},"kind":"overnight","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":5.488,"p50":6.314,"p90":7.09,"t0":"2030-07-15T20:30:00+00:00","t1":"2030-07-16T04:02:07.681658+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-07-15T04:00:55.337519+00:00","sunset":"2030-07-15T20:11:25.246029+00:00","to_next_cheap":{"confidence":1.0,"empirical_coverage":0.889,"expert_preds":{"fast":25.133,"median14":25.26,"slow":25.238},"kind":"to_next_cheap","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":21.344,"p50":25.133,"p90":28.923,"t0":"2030-07-16T04:30:00+00:00","t1":"2030-07-16T23:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":1.0,"empirical_coverage":0.795,"expert_preds":{"fast":7.545,"median14":7.516,"slow":7.581},"kind":"to_useful_pv","label":"HIGH","n_days":60,"n_residuals":88,"notes":["band includes uncertainty in WHEN useful PV starts"],"p10":5.844,"p50":7.545,"p90":10.647,"t0":"2030-07-15T20:30:00+00:00","t1":"2030-07-16T05:21:36.023636+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-07-16T04:57:50.426717+00:00","late_p90":"2030-07-16T06:32:02.245304+00:00","p50":"2030-07-16T05:21:36.023636+00:00","threshold_w":500.0}},"pv":{"2030-07-15":{"confidence":1.0,"day":"2030-07-15","inflation":1.0,"label":"HIGH","mae_corrected":2.65,"mae_raw":2.75,"n_pairs":7,"notes":[],"p10":36.37,"p50":41.22,"p90":46.28,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":137.36,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":1.0,"raw_kwh":41.2,"source":"solcast","usable":true},"2030-07-16":{"confidence":1.0,"day":"2030-07-16","inflation":1.0,"label":"HIGH","mae_corrected":2.72,"mae_raw":2.81,"n_pairs":7,"notes":[],"p10":20.33,"p50":22.98,"p90":25.93,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":137.36,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":1.0,"raw_kwh":22.97,"source":"solcast","usable":true},"today_reanchor":{"factor":1.118,"live_ratio":1.169,"weight":0.7}},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":0.0,"expected_import_before_window_kwh_pessimistic":0.0,"feasible_on_pessimistic_path":true,"grid_charge_kwh_median":0.0,"grid_charge_needed":false,"median_case_target_soc_pct":45.0,"period_end":"2030-07-16T23:30:00+00:00","pessimistic_case_target_soc_pct":69.0,"recommended_target_soc_pct":70.0,"window":["2030-07-15T23:30:00+00:00","2030-07-16T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":70.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":60.638360317011795,"min_soc_after_charge_pessimistic":46.326627165029166,"min_soc_after_charge_time":"2030-07-16T23:30:00+00:00","pre_window_min_soc_median":76.35651630659204,"pv_overflow_kwh_median":0.0,"soc_at_charge_end_median":70.0,"soc_at_period_end_median":60.638360317011795,"soc_at_sunrise_median":70.0,"soc_at_useful_pv_median":68.10241164586503,"soc_at_useful_pv_pessimistic":67.7382325934732,"time_to_floor_without_grid_charging":null},"reasons":[{"code":"TARGET","text":"Charging to 70% by 05:30 keeps the battery above 45% (your 40% reserve plus a 5% margin) until the next cheap window, even if demand runs high and solar low. The expected-case need is 45%."},{"code":"EXPORT","text":"About 9.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":9.0,"kwh_before_reductions":9.0},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":83.4,"soc_low":83.0,"soc_median":83.2,"t":"2030-07-15T21:00:00+00:00"},{"soc_high":80.8,"soc_low":79.7,"soc_median":80.2,"t":"2030-07-15T22:00:00+00:00"},{"soc_high":78.5,"soc_low":77.0,"soc_median":77.8,"t":"2030-07-15T23:00:00+00:00"},{"soc_high":77.3,"soc_low":75.4,"soc_median":76.4,"t":"2030-07-15T23:30:00+00:00"},{"soc_high":76.0,"soc_low":73.9,"soc_median":74.9,"t":"2030-07-16T00:00:00+00:00"},{"soc_high":73.6,"soc_low":70.9,"soc_median":72.3,"t":"2030-07-16T01:00:00+00:00"},{"soc_high":71.2,"soc_low":70.0,"soc_median":70.0,"t":"2030-07-16T02:00:00+00:00"},{"soc_high":70.0,"soc_low":70.0,"soc_median":70.0,"t":"2030-07-16T03:00:00+00:00"},{"soc_high":70.0,"soc_low":70.0,"soc_median":70.0,"t":"2030-07-16T04:00:00+00:00"},{"soc_high":70.0,"soc_low":70.0,"soc_median":70.0,"t":"2030-07-16T04:30:00+00:00"},{"soc_high":69.0,"soc_low":68.6,"soc_median":68.8,"t":"2030-07-16T05:00:00+00:00"},{"soc_high":67.6,"soc_low":66.1,"soc_median":66.8,"t":"2030-07-16T06:00:00+00:00"},{"soc_high":66.4,"soc_low":63.4,"soc_median":64.9,"t":"2030-07-16T07:00:00+00:00"},{"soc_high":67.5,"soc_low":62.9,"soc_median":65.2,"t":"2030-07-16T08:00:00+00:00"},{"soc_high":69.4,"soc_low":63.0,"soc_median":66.1,"t":"2030-07-16T09:00:00+00:00"},{"soc_high":72.5,"soc_low":64.3,"soc_median":68.3,"t":"2030-07-16T10:00:00+00:00"},{"soc_high":76.3,"soc_low":66.1,"soc_median":71.1,"t":"2030-07-16T11:00:00+00:00"},{"soc_high":80.3,"soc_low":68.0,"soc_median":74.0,"t":"2030-07-16T12:00:00+00:00"},{"soc_high":84.5,"soc_low":70.0,"soc_median":77.1,"t":"2030-07-16T13:00:00+00:00"},{"soc_high":88.3,"soc_low":71.9,"soc_median":79.9,"t":"2030-07-16T14:00:00+00:00"},{"soc_high":91.5,"soc_low":73.2,"soc_median":82.1,"t":"2030-07-16T15:00:00+00:00"},{"soc_high":92.9,"soc_low":72.5,"soc_median":82.5,"t":"2030-07-16T16:00:00+00:00"},{"soc_high":93.5,"soc_low":71.4,"soc_median":82.3,"t":"2030-07-16T17:00:00+00:00"},{"soc_high":91.8,"soc_low":67.8,"soc_median":79.6,"t":"2030-07-16T18:00:00+00:00"},{"soc_high":88.9,"soc_low":63.3,"soc_median":75.9,"t":"2030-07-16T19:00:00+00:00"},{"soc_high":85.0,"soc_low":58.3,"soc_median":71.4,"t":"2030-07-16T20:00:00+00:00"},{"soc_high":81.7,"soc_low":54.1,"soc_median":67.7,"t":"2030-07-16T21:00:00+00:00"},{"soc_high":79.0,"soc_low":50.7,"soc_median":64.6,"t":"2030-07-16T22:00:00+00:00"},{"soc_high":76.7,"soc_low":47.9,"soc_median":62.1,"t":"2030-07-16T23:00:00+00:00"},{"soc_high":75.4,"soc_low":46.3,"soc_median":60.6,"t":"2030-07-16T23:30:00+00:00"}],"uncertainty":[]},"status":"LEARNING_NORMALLY","weekday_effect":{"explained_variance":0.0455,"f_stat":0.78,"material":false,"n":105}},"cold":{"_example":{"description":"Synthetic household, 4 days of history: the engine must say it is not ready.","name":"example_cold_start","synthetic":true},"actual":{"inverter_ok":true,"load_w":1210.7242159666623,"pv_so_far_kwh":33.38726702096799,"pv_w":0.0,"soc_age_s":0.0,"soc_pct":62.0},"anomalies":{"abnormal_load_now":false,"anomalies":[],"base_load_kw":null,"base_load_norm_kw":null,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":4,"label":"INSUFFICIENT","overall":0.086,"pv":0.0,"usage":0.086},"config_hash":"6348bb3c9d004cd9","feature_hash":"b20bea980aeda014","forecast_records":[{"confidence":0.0,"explanation":{"ratio":null,"raw":null,"source":"none"},"horizon_end":"2030-04-06T23:00:00+00:00","horizon_start":"2030-04-05T23:00:00+00:00","kind":"pv_kwh:day","p10":0.0,"p50":0.0,"p90":0.0,"unit":"kWh"},{"confidence":0.086,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-04-05T23:00:00+00:00","horizon_start":"2030-04-05T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":55.3,"p50":56.35,"p90":57.3,"unit":"%"}],"generated_for":"2030-04-05T20:30:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":null,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":null,"note":"only 4 complete days of history: below the 14-day minimum, guard unavailable","ratio":null,"triggers":[],"uplift_day_kwh":0.0},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data"],"predicted":{"cheap_window":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":4.478,"median14":4.29,"slow":3.896},"kind":"cheap_window","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)"],"p10":2.756,"p50":4.478,"p90":6.2,"t0":"2030-04-05T23:30:00+00:00","t1":"2030-04-06T04:30:00+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":31.84,"median14":30.654,"slow":27.772},"kind":"day","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)"],"p10":23.679,"p50":31.84,"p90":40.001,"t0":"2030-04-04T23:00:00+00:00","t1":"2030-04-05T23:00:00+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":30.36,"day_so_far_kwh":28.0,"morning":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":4.628,"median14":4.59,"slow":3.981},"kind":"morning","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)"],"p10":2.848,"p50":4.628,"p90":6.407,"t0":"2030-04-06T04:30:00+00:00","t1":"2030-04-06T08:00:00+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":0.143,"empirical_coverage":0.806,"expert_preds":{"fast":1.031},"kind":"next_1h","label":"INSUFFICIENT","n_days":4,"n_residuals":31,"notes":["short-term persistence adjustment -0.16 kWh"],"p10":0.859,"p50":0.875,"p90":1.227,"t0":"2030-04-05T20:30:00+00:00","t1":"2030-04-05T21:30:00+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-04-06T05:23:48.508327+00:00","overnight":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":8.263,"median14":8.022,"slow":7.2},"kind":"overnight","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)"],"p10":6.145,"p50":8.263,"p90":10.381,"t0":"2030-04-05T20:30:00+00:00","t1":"2030-04-06T05:23:48.508327+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-04-05T05:26:03.356070+00:00","sunset":"2030-04-05T18:39:38.195862+00:00","to_next_cheap":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":27.362,"median14":26.364,"slow":23.876},"kind":"to_next_cheap","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)"],"p10":20.349,"p50":27.362,"p90":34.376,"t0":"2030-04-06T04:30:00+00:00","t1":"2030-04-06T23:30:00+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":0.086,"empirical_coverage":null,"expert_preds":{"fast":11.79,"median14":11.523,"slow":10.258},"kind":"to_useful_pv","label":"INSUFFICIENT","n_days":4,"n_residuals":0,"notes":["only 4 days of history: below the 7-day minimum","uncertainty from prior (too few walk-forward residuals)","band includes uncertainty in WHEN useful PV starts"],"p10":8.768,"p50":11.79,"p90":14.812,"t0":"2030-04-05T20:30:00+00:00","t1":"2030-04-06T07:53:48.508327+00:00","usable":false,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-04-06T07:53:48.508327+00:00","late_p90":"2030-04-06T07:53:48.508327+00:00","p50":"2030-04-06T07:53:48.508327+00:00","threshold_w":500.0}},"pv":{"2030-04-05":{"confidence":0.0,"day":"2030-04-05","inflation":1.0,"label":"INSUFFICIENT","mae_corrected":null,"mae_raw":null,"n_pairs":4,"notes":["no forecast source has enough scored history; using persistence","no PV history"],"p10":0.0,"p50":0.0,"p90":0.0,"plausibility":{"limits_kwh":{"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":null,"raw_kwh":null,"source":"none","usable":false},"2030-04-06":{"confidence":0.0,"day":"2030-04-06","inflation":1.0,"label":"INSUFFICIENT","mae_corrected":null,"mae_raw":null,"n_pairs":4,"notes":["no forecast source has enough scored history; using persistence","no PV history"],"p10":0.0,"p50":0.0,"p90":0.0,"plausibility":{"limits_kwh":{"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":null,"raw_kwh":null,"source":"none","usable":false},"today_reanchor":null},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":14.28,"expected_import_before_window_kwh_pessimistic":0.0,"feasible_on_pessimistic_path":false,"grid_charge_kwh_median":15.54,"grid_charge_needed":true,"median_case_target_soc_pct":100.0,"period_end":"2030-04-06T23:30:00+00:00","pessimistic_case_target_soc_pct":100.0,"recommended_target_soc_pct":100.0,"window":["2030-04-05T23:30:00+00:00","2030-04-06T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":100.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":9.015033427245683,"min_soc_after_charge_pessimistic":-7.475592354050443,"min_soc_after_charge_time":"2030-04-06T23:30:00+00:00","pre_window_min_soc_median":53.50784860370706,"pv_overflow_kwh_median":0.0,"soc_at_charge_end_median":100.0,"soc_at_period_end_median":9.015033427245683,"soc_at_sunrise_median":96.79221079065422,"soc_at_useful_pv_median":85.06555601953738,"soc_at_useful_pv_pessimistic":82.35875360799164,"time_to_floor_without_grid_charging":"2030-04-06T04:30:00+00:00"},"reasons":[{"code":"INSUFFICIENT_HISTORY","text":"Not enough clean history to justify a lower target: the advice is simply to retain the battery (100%). The model's own estimate would have been 100% on the pessimistic path."},{"code":"EXPORT_WITHHELD","text":"No export advice: history is insufficient."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":0.0,"withheld_because":"history is insufficient"},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":60.6,"soc_low":60.0,"soc_median":60.3,"t":"2030-04-05T21:00:00+00:00"},{"soc_high":58.4,"soc_low":56.9,"soc_median":57.7,"t":"2030-04-05T22:00:00+00:00"},{"soc_high":56.2,"soc_low":53.7,"soc_median":55.0,"t":"2030-04-05T23:00:00+00:00"},{"soc_high":55.0,"soc_low":52.0,"soc_median":53.5,"t":"2030-04-05T23:30:00+00:00"},{"soc_high":66.0,"soc_low":62.4,"soc_median":64.2,"t":"2030-04-06T00:00:00+00:00"},{"soc_high":87.8,"soc_low":83.3,"soc_median":85.6,"t":"2030-04-06T01:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-04-06T02:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-04-06T03:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-04-06T04:00:00+00:00"},{"soc_high":100.0,"soc_low":100.0,"soc_median":100.0,"t":"2030-04-06T04:30:00+00:00"},{"soc_high":98.7,"soc_low":98.1,"soc_median":98.4,"t":"2030-04-06T05:00:00+00:00"},{"soc_high":95.4,"soc_low":93.4,"soc_median":94.4,"t":"2030-04-06T06:00:00+00:00"},{"soc_high":91.0,"soc_low":87.0,"soc_median":89.0,"t":"2030-04-06T07:00:00+00:00"},{"soc_high":87.4,"soc_low":81.8,"soc_median":84.6,"t":"2030-04-06T08:00:00+00:00"},{"soc_high":82.9,"soc_low":75.3,"soc_median":79.1,"t":"2030-04-06T09:00:00+00:00"},{"soc_high":79.1,"soc_low":69.8,"soc_median":74.4,"t":"2030-04-06T10:00:00+00:00"},{"soc_high":75.1,"soc_low":64.1,"soc_median":69.6,"t":"2030-04-06T11:00:00+00:00"},{"soc_high":71.4,"soc_low":58.7,"soc_median":65.1,"t":"2030-04-06T12:00:00+00:00"},{"soc_high":67.1,"soc_low":52.5,"soc_median":59.8,"t":"2030-04-06T13:00:00+00:00"},{"soc_high":62.8,"soc_low":46.4,"soc_median":54.6,"t":"2030-04-06T14:00:00+00:00"},{"soc_high":58.8,"soc_low":40.5,"soc_median":49.6,"t":"2030-04-06T15:00:00+00:00"},{"soc_high":54.1,"soc_low":33.7,"soc_median":43.9,"t":"2030-04-06T16:00:00+00:00"},{"soc_high":49.8,"soc_low":27.5,"soc_median":38.7,"t":"2030-04-06T17:00:00+00:00"},{"soc_high":44.4,"soc_low":19.8,"soc_median":32.1,"t":"2030-04-06T18:00:00+00:00"},{"soc_high":39.2,"soc_low":12.3,"soc_median":25.7,"t":"2030-04-06T19:00:00+00:00"},{"soc_high":34.8,"soc_low":5.9,"soc_median":20.3,"t":"2030-04-06T20:00:00+00:00"},{"soc_high":31.6,"soc_low":1.3,"soc_median":16.5,"t":"2030-04-06T21:00:00+00:00"},{"soc_high":29.1,"soc_low":-2.2,"soc_median":13.5,"t":"2030-04-06T22:00:00+00:00"},{"soc_high":26.7,"soc_low":-5.7,"soc_median":10.5,"t":"2030-04-06T23:00:00+00:00"},{"soc_high":25.5,"soc_low":-7.5,"soc_median":9.0,"t":"2030-04-06T23:30:00+00:00"}],"uncertainty":[]},"status":"INSUFFICIENT_HISTORY","weekday_effect":{"explained_variance":null,"f_stat":null,"material":false,"n":4}},"live":{"_example":{"description":"Synthetic household with explicit live-style inputs (SOC, powers) on a morning.","name":"example_live_inputs","synthetic":true},"actual":{"inverter_ok":true,"load_w":1100.0,"pv_so_far_kwh":0.06313820111516043,"pv_w":200.0,"soc_age_s":0.0,"soc_pct":88.0},"anomalies":{"abnormal_load_now":false,"anomalies":[],"base_load_kw":0.922,"base_load_norm_kw":0.844,"excess_kw_now":0.0},"applies_nothing":true,"confidence":{"downgrade_reasons":[],"history_days":60,"label":"HIGH","overall":1.0,"pv":1.0,"usage":1.0},"config_hash":"6348bb3c9d004cd9","feature_hash":"42f06c6d3a7f0c1d","forecast_records":[{"confidence":1.0,"explanation":{"n_days":60,"notes":["short-term persistence adjustment +0.02 kWh"],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T08:10:00+00:00","horizon_start":"2030-10-05T07:10:00+00:00","kind":"load_kwh:next_1h","p10":1.1315933919609884,"p50":1.3360517749217748,"p90":1.5593663980709156,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-06T23:30:00+00:00","horizon_start":"2030-10-06T04:30:00+00:00","kind":"load_kwh:to_next_cheap","p10":23.740897371591565,"p50":28.198144861881264,"p90":32.65539235217096,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-06T04:30:00+00:00","horizon_start":"2030-10-05T23:30:00+00:00","kind":"load_kwh:cheap_window","p10":3.784348099037868,"p50":4.44908586381101,"p90":5.220102140179295,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T23:00:00+00:00","horizon_start":"2030-10-04T23:00:00+00:00","kind":"load_kwh:day","p10":27.72955608984119,"p50":32.647230725692275,"p90":37.56490536154336,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T08:00:00+00:00","horizon_start":"2030-10-05T04:30:00+00:00","kind":"load_kwh:morning","p10":3.921680088525371,"p50":4.57211169652458,"p90":5.297588243200555,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-06T06:09:22.399092+00:00","horizon_start":"2030-10-05T17:29:33.751686+00:00","kind":"load_kwh:overnight","p10":13.130550152872479,"p50":14.783643532044353,"p90":16.79558344557056,"unit":"kWh"},{"confidence":1.0,"explanation":{"n_days":60,"notes":[],"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"horizon_end":"2030-10-05T07:13:08.951023+00:00","horizon_start":"2030-10-05T07:10:00+00:00","kind":"load_kwh:to_useful_pv_from_now","p10":0.056160456606666936,"p50":0.06679993440829497,"p90":0.07956700694637965,"unit":"kWh"},{"confidence":1.0,"explanation":{"ratio":0.592,"raw":60.38,"source":"solcast"},"horizon_end":"2030-10-06T23:00:00+00:00","horizon_start":"2030-10-05T23:00:00+00:00","kind":"pv_kwh:day","p10":29.77,"p50":35.76,"p90":41.74,"unit":"kWh"},{"confidence":1.0,"explanation":{"note":"hour-mean SOC in the last full hour before the cheap window; independent of any charge decision"},"horizon_end":"2030-10-05T23:00:00+00:00","horizon_start":"2030-10-05T22:00:00+00:00","kind":"soc_pct:pre_window_hour","p10":24.05,"p50":36.150000000000006,"p90":48.1,"unit":"%"}],"generated_for":"2030-10-05T07:10:00+00:00","load_baseline_guard":{"active":false,"applies_to":"pessimistic and hard scenario paths only","baseline_day_kwh":31.53,"baseline_source":"max(slow expert, 30-day per-hour median)","fast_day_kwh":32.65,"ratio":1.036,"triggers":[],"uplift_day_kwh":0.04},"mode":"SHADOW","model_version":"intel-v1.0.0-shadow","notes":["cheap-window times come from site configuration, not from live tariff data"],"predicted":{"cheap_window":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.449,"median14":4.29,"slow":4.297},"kind":"cheap_window","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.784,"p50":4.449,"p90":5.22,"t0":"2030-10-05T23:30:00+00:00","t1":"2030-10-06T04:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day":{"confidence":1.0,"empirical_coverage":0.811,"expert_preds":{"fast":32.647,"median14":31.208,"slow":31.433},"kind":"day","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":27.73,"p50":32.647,"p90":37.565,"t0":"2030-10-04T23:00:00+00:00","t1":"2030-10-05T23:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"day_projection_kwh":32.08,"day_so_far_kwh":7.84,"morning":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":4.572,"median14":4.512,"slow":4.495},"kind":"morning","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":3.922,"p50":4.572,"p90":5.298,"t0":"2030-10-05T04:30:00+00:00","t1":"2030-10-05T08:00:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_1h":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":1.318},"kind":"next_1h","label":"HIGH","n_days":60,"n_residuals":1218,"notes":["short-term persistence adjustment +0.02 kWh"],"p10":1.132,"p50":1.336,"p90":1.559,"t0":"2030-10-05T07:10:00+00:00","t1":"2030-10-05T08:10:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"next_sunrise":"2030-10-06T06:09:22.399092+00:00","overnight":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":14.784,"median14":14.166,"slow":14.307},"kind":"overnight","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":13.131,"p50":14.784,"p90":16.796,"t0":"2030-10-05T17:29:33.751686+00:00","t1":"2030-10-06T06:09:22.399092+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"sunrise":"2030-10-05T06:07:43.661106+00:00","sunset":"2030-10-05T17:29:33.751686+00:00","to_next_cheap":{"confidence":1.0,"empirical_coverage":0.844,"expert_preds":{"fast":28.198,"median14":26.918,"slow":27.137},"kind":"to_next_cheap","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":23.741,"p50":28.198,"p90":32.655,"t0":"2030-10-06T04:30:00+00:00","t1":"2030-10-06T23:30:00+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"to_useful_pv_from_now":{"confidence":1.0,"empirical_coverage":0.8,"expert_preds":{"fast":0.067,"median14":0.063,"slow":0.064},"kind":"to_useful_pv","label":"HIGH","n_days":60,"n_residuals":90,"notes":[],"p10":0.056,"p50":0.067,"p90":0.08,"t0":"2030-10-05T07:10:00+00:00","t1":"2030-10-05T07:13:08.951023+00:00","usable":true,"weights":{"fast":1.0,"median14":0.0,"slow":0.0}},"useful_pv_start":{"early_p10":"2030-10-05T06:49:15.494942+00:00","late_p90":"2030-10-05T08:13:26.377134+00:00","p50":"2030-10-05T07:13:08.951023+00:00","threshold_w":500.0}},"pv":{"2030-10-05":{"confidence":1.0,"day":"2030-10-05","inflation":1.0,"label":"HIGH","mae_corrected":2.76,"mae_raw":9.97,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 10.0 kWh vs 2.8 kWh after correction"],"p10":6.99,"p50":8.37,"p90":9.75,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.592,"raw_kwh":14.13,"source":"solcast","usable":true},"2030-10-06":{"confidence":1.0,"day":"2030-10-06","inflation":1.0,"label":"HIGH","mae_corrected":2.61,"mae_raw":10.06,"n_pairs":7,"notes":["raw solcast forecast is unreliable here: trailing raw MAE 10.1 kWh vs 2.6 kWh after correction"],"p10":29.77,"p50":35.76,"p90":41.74,"plausibility":{"limits_kwh":{"history_max":71.24,"recent_max":112.18,"site_physical":76.0},"rejected":[],"verdict":"OK"},"ratio":0.592,"raw_kwh":60.38,"source":"solcast","usable":true},"today_reanchor":null},"recommended":{"assumptions":["Battery SOC arithmetic uses the configured capacity and round-trip efficiency; the true usable capacity is uncertain by several percent.","Hourly resolution: sub-hour spikes are averaged out.","Beyond tomorrow no PV is assumed (conservative).","Grid charging is assumed available at up to 8 kW inside the cheap window."],"desired_min_pct":45.0,"floor_pct":40.0,"overnight_target":{"expected_import_after_charge_kwh_pessimistic":0.0,"expected_import_before_window_kwh_pessimistic":5.81,"feasible_on_pessimistic_path":true,"grid_charge_kwh_median":9.0,"grid_charge_needed":true,"median_case_target_soc_pct":55.0,"period_end":"2030-10-06T23:30:00+00:00","pessimistic_case_target_soc_pct":56.0,"recommended_target_soc_pct":60.0,"window":["2030-10-05T23:30:00+00:00","2030-10-06T04:30:00+00:00"]},"predicted":{"assumed_target_soc_pct":60.0,"assumes_recommended_target_followed":true,"min_soc_after_charge_median":50.504772416099335,"min_soc_after_charge_pessimistic":49.06993010470094,"min_soc_after_charge_time":"2030-10-06T07:00:00+00:00","pre_window_min_soc_median":33.0675782232353,"pv_overflow_kwh_median":3.7,"soc_at_charge_end_median":60.0,"soc_at_period_end_median":67.3187638488957,"soc_at_sunrise_median":53.81988760471521,"soc_at_useful_pv_median":85.45805087030747,"soc_at_useful_pv_pessimistic":84.93763992401523,"time_to_floor_without_grid_charging":"2030-10-05T22:00:00+00:00"},"reasons":[{"code":"TARGET","text":"Charging to 60% by 05:30 keeps the battery above 45% (your 40% reserve plus a 5% margin) until the next cheap window, even if demand runs high and solar low. The expected-case need is 55%."},{"code":"PRE_WINDOW_FLOOR","text":"Before the cheap window opens at 00:30 the battery is predicted to fall to 33% - below your 40% reserve. The target above cannot fix that: it needs an earlier top-up or less discharge."},{"code":"PRE_WINDOW_RISK","text":"On the pessimistic path the battery would reach your 40% reserve at about 21:00 before the cheap window opens, needing about 5.8 kWh of peak-rate import. This is a risk to watch, not something the overnight target can change."},{"code":"FLOOR_ETA","text":"Without grid charging the battery would reach 40% at about 23:00."},{"code":"EXPORT","text":"About 0.0 kWh could be exported now while the pessimistic path still stays above 45% until the cheap window opens at 00:30, even with demand at its p90 and solar at its p10 together."}],"reserve":{"binding":"user_reserve","effective_pct":40.0,"ha_reserve_pct":null,"override_code":null,"override_reason":null,"technical_min_pct":10.0,"user_reserve_pct":40.0},"safe_export":{"assumes_refill_in_cheap_window":true,"kwh":0.0,"kwh_before_reductions":0.0},"safety_margin_pct":5.0,"saving_session":null,"status":"OK","trajectory":[{"soc_high":86.0,"soc_low":84.9,"soc_median":85.5,"t":"2030-10-05T08:00:00+00:00"},{"soc_high":83.8,"soc_low":81.1,"soc_median":82.5,"t":"2030-10-05T09:00:00+00:00"},{"soc_high":82.8,"soc_low":78.2,"soc_median":80.5,"t":"2030-10-05T10:00:00+00:00"},{"soc_high":82.4,"soc_low":75.9,"soc_median":79.2,"t":"2030-10-05T11:00:00+00:00"},{"soc_high":82.6,"soc_low":74.1,"soc_median":78.4,"t":"2030-10-05T12:00:00+00:00"},{"soc_high":82.3,"soc_low":71.7,"soc_median":77.0,"t":"2030-10-05T13:00:00+00:00"},{"soc_high":82.0,"soc_low":69.5,"soc_median":75.8,"t":"2030-10-05T14:00:00+00:00"},{"soc_high":80.7,"soc_low":66.4,"soc_median":73.5,"t":"2030-10-05T15:00:00+00:00"},{"soc_high":77.4,"soc_low":61.3,"soc_median":69.3,"t":"2030-10-05T16:00:00+00:00"},{"soc_high":73.2,"soc_low":55.5,"soc_median":64.4,"t":"2030-10-05T17:00:00+00:00"},{"soc_high":67.1,"soc_low":47.8,"soc_median":57.4,"t":"2030-10-05T18:00:00+00:00"},{"soc_high":61.0,"soc_low":40.3,"soc_median":50.7,"t":"2030-10-05T19:00:00+00:00"},{"soc_high":56.3,"soc_low":34.3,"soc_median":45.3,"t":"2030-10-05T20:00:00+00:00"},{"soc_high":52.6,"soc_low":29.6,"soc_median":41.1,"t":"2030-10-05T21:00:00+00:00"},{"soc_high":49.5,"soc_low":25.8,"soc_median":37.7,"t":"2030-10-05T22:00:00+00:00"},{"soc_high":46.7,"soc_low":22.3,"soc_median":34.6,"t":"2030-10-05T23:00:00+00:00"},{"soc_high":45.4,"soc_low":20.7,"soc_median":33.1,"t":"2030-10-05T23:30:00+00:00"},{"soc_high":56.2,"soc_low":31.2,"soc_median":43.7,"t":"2030-10-06T00:00:00+00:00"},{"soc_high":60.0,"soc_low":52.2,"soc_median":60.0,"t":"2030-10-06T01:00:00+00:00"},{"soc_high":60.0,"soc_low":60.0,"soc_median":60.0,"t":"2030-10-06T02:00:00+00:00"},{"soc_high":60.0,"soc_low":60.0,"soc_median":60.0,"t":"2030-10-06T03:00:00+00:00"},{"soc_high":60.0,"soc_low":60.0,"soc_median":60.0,"t":"2030-10-06T04:00:00+00:00"},{"soc_high":60.0,"soc_low":60.0,"soc_median":60.0,"t":"2030-10-06T04:30:00+00:00"},{"soc_high":58.6,"soc_low":58.3,"soc_median":58.5,"t":"2030-10-06T05:00:00+00:00"},{"soc_high":55.1,"soc_low":53.8,"soc_median":54.4,"t":"2030-10-06T06:00:00+00:00"},{"soc_high":51.9,"soc_low":49.1,"soc_median":50.5,"t":"2030-10-06T07:00:00+00:00"},{"soc_high":53.9,"soc_low":49.1,"soc_median":51.5,"t":"2030-10-06T08:00:00+00:00"},{"soc_high":59.2,"soc_low":51.4,"soc_median":55.3,"t":"2030-10-06T09:00:00+00:00"},{"soc_high":68.4,"soc_low":56.8,"soc_median":62.6,"t":"2030-10-06T10:00:00+00:00"},{"soc_high":80.2,"soc_low":64.2,"soc_median":72.2,"t":"2030-10-06T11:00:00+00:00"},{"soc_high":93.6,"soc_low":73.0,"soc_median":83.3,"t":"2030-10-06T12:00:00+00:00"},{"soc_high":100.0,"soc_low":81.0,"soc_median":93.6,"t":"2030-10-06T13:00:00+00:00"},{"soc_high":100.0,"soc_low":88.2,"soc_median":100.0,"t":"2030-10-06T14:00:00+00:00"},{"soc_high":100.0,"soc_low":92.7,"soc_median":100.0,"t":"2030-10-06T15:00:00+00:00"},{"soc_high":100.0,"soc_low":93.1,"soc_median":100.0,"t":"2030-10-06T16:00:00+00:00"},{"soc_high":99.3,"soc_low":90.1,"soc_median":98.2,"t":"2030-10-06T17:00:00+00:00"},{"soc_high":93.7,"soc_low":82.8,"soc_median":91.7,"t":"2030-10-06T18:00:00+00:00"},{"soc_high":87.7,"soc_low":75.3,"soc_median":84.9,"t":"2030-10-06T19:00:00+00:00"},{"soc_high":82.9,"soc_low":69.3,"soc_median":79.6,"t":"2030-10-06T20:00:00+00:00"},{"soc_high":79.2,"soc_low":64.7,"soc_median":75.4,"t":"2030-10-06T21:00:00+00:00"},{"soc_high":76.1,"soc_low":60.8,"soc_median":71.9,"t":"2030-10-06T22:00:00+00:00"},{"soc_high":73.4,"soc_low":57.3,"soc_median":68.8,"t":"2030-10-06T23:00:00+00:00"},{"soc_high":72.0,"soc_low":55.7,"soc_median":67.3,"t":"2030-10-06T23:30:00+00:00"}],"uncertainty":[]},"status":"LEARNING_NORMALLY","weekday_effect":{"explained_variance":0.0496,"f_stat":0.98,"material":false,"n":120}}};
+const ACC = {"_description":"SYNTHETIC: walk-forward replay of nightly 21:30 shadow runs on a seeded synthetic household (2030-08-05..2030-10-03, fictional year), scored against later synthetic history. Illustrative of what the scorecard will hold once live; not anybody's real accuracy.","_note_soc":"SOC forecast rows are excluded: a campaign replay only has the hourly-mean SOC as input, which lags true SOC by about an hour.","accuracy_last_7_days":{"load_kwh:cheap_window":{"band_nominal":0.8,"bias":-0.102,"coverage":0.667,"mae":0.459,"mape_pct":11.004,"n":6,"rmse":0.598,"unit":"kWh"},"load_kwh:day":{"band_nominal":0.8,"bias":-0.186,"coverage":0.857,"mae":2.243,"mape_pct":7.087,"n":7,"rmse":3.353,"unit":"kWh"},"load_kwh:morning":{"band_nominal":0.8,"bias":-0.11,"coverage":0.714,"mae":0.38,"mape_pct":9.319,"n":7,"rmse":0.585,"unit":"kWh"},"load_kwh:next_1h":{"band_nominal":0.8,"bias":0.017,"coverage":1.0,"mae":0.053,"mape_pct":4.785,"n":7,"rmse":0.068,"unit":"kWh"},"load_kwh:overnight":{"band_nominal":0.8,"bias":-0.062,"coverage":0.714,"mae":0.669,"mape_pct":7.778,"n":7,"rmse":0.858,"unit":"kWh"},"load_kwh:to_next_cheap":{"band_nominal":0.8,"bias":-0.399,"coverage":0.857,"mae":1.97,"mape_pct":7.279,"n":7,"rmse":2.756,"unit":"kWh"},"load_kwh:to_useful_pv_from_now":{"band_nominal":0.8,"bias":-0.084,"coverage":1.0,"mae":0.8,"mape_pct":8.074,"n":7,"rmse":1.074,"unit":"kWh"},"pv_kwh:day":{"band_nominal":0.8,"bias":-0.685,"coverage":1.0,"mae":1.136,"mape_pct":6.713,"n":7,"rmse":1.436,"unit":"kWh"}},"all_period_metrics":{"load_kwh:cheap_window":{"band_nominal":0.8,"bias":0.042,"coverage":0.763,"mae":0.436,"mape_pct":10.308,"n":59,"rmse":0.535,"unit":"kWh"},"load_kwh:day":{"band_nominal":0.8,"bias":0.278,"coverage":0.8,"mae":2.89,"mape_pct":9.534,"n":60,"rmse":3.674,"unit":"kWh"},"load_kwh:morning":{"band_nominal":0.8,"bias":0.048,"coverage":0.78,"mae":0.453,"mape_pct":10.262,"n":59,"rmse":0.583,"unit":"kWh"},"load_kwh:next_1h":{"band_nominal":0.8,"bias":0.002,"coverage":0.867,"mae":0.087,"mape_pct":8.482,"n":60,"rmse":0.115,"unit":"kWh"},"load_kwh:overnight":{"band_nominal":0.8,"bias":0.063,"coverage":0.797,"mae":0.631,"mape_pct":8.019,"n":59,"rmse":0.758,"unit":"kWh"},"load_kwh:to_next_cheap":{"band_nominal":0.8,"bias":0.309,"coverage":0.763,"mae":2.475,"mape_pct":9.379,"n":59,"rmse":3.157,"unit":"kWh"},"load_kwh:to_useful_pv_from_now":{"band_nominal":0.8,"bias":0.07,"coverage":1.0,"mae":0.74,"mape_pct":8.189,"n":59,"rmse":0.912,"unit":"kWh"},"pv_kwh:day":{"band_nominal":0.8,"bias":-1.381,"coverage":0.814,"mae":3.147,"mape_pct":10.66,"n":59,"rmse":4.133,"unit":"kWh"}},"insights":[],"series_last_14":{"load_kwh:cheap_window":[{"actual":3.89,"band_high":4.87,"band_low":3.49,"error":-0.26,"in_band":true,"predicted":4.15,"target_end_local":"2030-09-20 05:30","weekday":"Fri"},{"actual":4.06,"band_high":4.97,"band_low":3.54,"error":-0.19,"in_band":true,"predicted":4.24,"target_end_local":"2030-09-21 05:30","weekday":"Sat"},{"actual":4.22,"band_high":4.85,"band_low":3.49,"error":0.09,"in_band":true,"predicted":4.13,"target_end_local":"2030-09-22 05:30","weekday":"Sun"},{"actual":4.08,"band_high":4.82,"band_low":3.47,"error":-0.03,"in_band":true,"predicted":4.11,"target_end_local":"2030-09-23 05:30","weekday":"Mon"},{"actual":4.3,"band_high":4.86,"band_low":3.52,"error":0.16,"in_band":true,"predicted":4.14,"target_end_local":"2030-09-24 05:30","weekday":"Tue"},{"actual":4.68,"band_high":4.8,"band_low":3.51,"error":0.56,"in_band":true,"predicted":4.12,"target_end_local":"2030-09-25 05:30","weekday":"Wed"},{"actual":4.49,"band_high":4.86,"band_low":3.56,"error":0.32,"in_band":true,"predicted":4.18,"target_end_local":"2030-09-26 05:30","weekday":"Thu"},{"actual":4.54,"band_high":5.04,"band_low":3.69,"error":0.22,"in_band":true,"predicted":4.33,"target_end_local":"2030-09-27 05:30","weekday":"Fri"},{"actual":4.19,"band_high":5.1,"band_low":3.74,"error":-0.19,"in_band":true,"predicted":4.38,"target_end_local":"2030-09-28 05:30","weekday":"Sat"},{"actual":4.31,"band_high":5.15,"band_low":3.78,"error":-0.11,"in_band":true,"predicted":4.43,"target_end_local":"2030-09-29 05:30","weekday":"Sun"},{"actual":4.26,"band_high":5.07,"band_low":3.73,"error":-0.1,"in_band":true,"predicted":4.36,"target_end_local":"2030-09-30 05:30","weekday":"Mon"},{"actual":3.46,"band_high":5.06,"band_low":3.72,"error":-0.88,"in_band":false,"predicted":4.34,"target_end_local":"2030-10-01 05:30","weekday":"Tue"},{"actual":3.92,"band_high":5.03,"band_low":3.7,"error":-0.4,"in_band":true,"predicted":4.32,"target_end_local":"2030-10-02 05:30","weekday":"Wed"},{"actual":5.13,"band_high":4.73,"band_low":3.45,"error":1.07,"in_band":false,"predicted":4.06,"target_end_local":"2030-10-03 05:30","weekday":"Thu"}],"load_kwh:day":[{"actual":29.6,"band_high":35.68,"band_low":26.27,"error":-1.37,"in_band":true,"predicted":30.97,"target_end_local":"2030-09-21 00:00","weekday":"Sat"},{"actual":29.44,"band_high":35.18,"band_low":26.12,"error":-1.19,"in_band":true,"predicted":30.63,"target_end_local":"2030-09-22 00:00","weekday":"Sun"},{"actual":29.63,"band_high":34.86,"band_low":25.88,"error":-0.72,"in_band":true,"predicted":30.35,"target_end_local":"2030-09-23 00:00","weekday":"Mon"},{"actual":29.85,"band_high":34.67,"band_low":25.78,"error":-0.34,"in_band":true,"predicted":30.19,"target_end_local":"2030-09-24 00:00","weekday":"Tue"},{"actual":30.53,"band_high":34.65,"band_low":25.36,"error":0.53,"in_band":true,"predicted":30.0,"target_end_local":"2030-09-25 00:00","weekday":"Wed"},{"actual":35.27,"band_high":34.6,"band_low":25.89,"error":5.03,"in_band":false,"predicted":30.24,"target_end_local":"2030-09-26 00:00","weekday":"Thu"},{"actual":33.66,"band_high":36.18,"band_low":27.0,"error":2.16,"in_band":true,"predicted":31.5,"target_end_local":"2030-09-27 00:00","weekday":"Fri"},{"actual":31.42,"band_high":37.1,"band_low":27.65,"error":-0.86,"in_band":true,"predicted":32.28,"target_end_local":"2030-09-28 00:00","weekday":"Sat"},{"actual":31.46,"band_high":36.8,"band_low":27.43,"error":-0.57,"in_band":true,"predicted":32.02,"target_end_local":"2030-09-29 00:00","weekday":"Sun"},{"actual":31.61,"band_high":36.6,"band_low":27.33,"error":-0.25,"in_band":true,"predicted":31.85,"target_end_local":"2030-09-30 00:00","weekday":"Mon"},{"actual":31.64,"band_high":36.52,"band_low":27.14,"error":-0.14,"in_band":true,"predicted":31.78,"target_end_local":"2030-10-01 00:00","weekday":"Tue"},{"actual":27.09,"band_high":36.57,"band_low":26.91,"error":-4.65,"in_band":true,"predicted":31.74,"target_end_local":"2030-10-02 00:00","weekday":"Wed"},{"actual":28.31,"band_high":35.04,"band_low":25.65,"error":-2.04,"in_band":true,"predicted":30.34,"target_end_local":"2030-10-03 00:00","weekday":"Thu"},{"actual":36.93,"band_high":34.33,"band_low":25.13,"error":7.2,"in_band":false,"predicted":29.73,"target_end_local":"2030-10-04 00:00","weekday":"Fri"}],"load_kwh:morning":[{"actual":4.63,"band_high":5.13,"band_low":3.75,"error":0.2,"in_band":true,"predicted":4.43,"target_end_local":"2030-09-20 09:00","weekday":"Fri"},{"actual":4.29,"band_high":5.2,"band_low":3.8,"error":-0.2,"in_band":true,"predicted":4.48,"target_end_local":"2030-09-21 09:00","weekday":"Sat"},{"actual":4.39,"band_high":5.25,"band_low":3.84,"error":-0.14,"in_band":true,"predicted":4.53,"target_end_local":"2030-09-22 09:00","weekday":"Sun"},{"actual":4.49,"band_high":5.16,"band_low":3.78,"error":0.03,"in_band":true,"predicted":4.46,"target_end_local":"2030-09-23 09:00","weekday":"Mon"},{"actual":4.35,"band_high":5.14,"band_low":3.76,"error":-0.08,"in_band":true,"predicted":4.44,"target_end_local":"2030-09-24 09:00","weekday":"Tue"},{"actual":5.03,"band_high":5.15,"band_low":3.78,"error":0.58,"in_band":true,"predicted":4.45,"target_end_local":"2030-09-25 09:00","weekday":"Wed"},{"actual":4.76,"band_high":5.1,"band_low":3.77,"error":0.33,"in_band":true,"predicted":4.43,"target_end_local":"2030-09-26 09:00","weekday":"Thu"},{"actual":4.54,"band_high":5.32,"band_low":3.91,"error":-0.07,"in_band":true,"predicted":4.61,"target_end_local":"2030-09-27 09:00","weekday":"Fri"},{"actual":4.6,"band_high":5.37,"band_low":3.95,"error":-0.05,"in_band":true,"predicted":4.65,"target_end_local":"2030-09-28 09:00","weekday":"Sat"},{"actual":4.56,"band_high":5.34,"band_low":3.94,"error":-0.05,"in_band":true,"predicted":4.62,"target_end_local":"2030-09-29 09:00","weekday":"Sun"},{"actual":4.45,"band_high":5.33,"band_low":3.94,"error":-0.16,"in_band":true,"predicted":4.61,"target_end_local":"2030-09-30 09:00","weekday":"Mon"},{"actual":3.4,"band_high":5.31,"band_low":3.92,"error":-1.2,"in_band":false,"predicted":4.6,"target_end_local":"2030-10-01 09:00","weekday":"Tue"},{"actual":4.37,"band_high":5.26,"band_low":3.87,"error":-0.18,"in_band":true,"predicted":4.55,"target_end_local":"2030-10-02 09:00","weekday":"Wed"},{"actual":5.15,"band_high":4.86,"band_low":3.55,"error":0.95,"in_band":false,"predicted":4.2,"target_end_local":"2030-10-03 09:00","weekday":"Thu"}],"pv_kwh:day":[{"actual":29.92,"band_high":35.86,"band_low":25.83,"error":-1.04,"in_band":true,"predicted":30.96,"target_end_local":"2030-09-21 00:00","weekday":"Sat"},{"actual":28.88,"band_high":39.08,"band_low":28.08,"error":-4.78,"in_band":true,"predicted":33.66,"target_end_local":"2030-09-22 00:00","weekday":"Sun"},{"actual":19.7,"band_high":23.91,"band_low":17.17,"error":-0.88,"in_band":true,"predicted":20.58,"target_end_local":"2030-09-23 00:00","weekday":"Mon"},{"actual":19.43,"band_high":19.85,"band_low":14.24,"error":2.36,"in_band":true,"predicted":17.07,"target_end_local":"2030-09-24 00:00","weekday":"Tue"},{"actual":7.96,"band_high":10.48,"band_low":7.53,"error":-1.07,"in_band":true,"predicted":9.03,"target_end_local":"2030-09-25 00:00","weekday":"Wed"},{"actual":20.03,"band_high":23.69,"band_low":17.02,"error":-0.37,"in_band":true,"predicted":20.4,"target_end_local":"2030-09-26 00:00","weekday":"Thu"},{"actual":14.42,"band_high":20.07,"band_low":14.39,"error":-2.82,"in_band":true,"predicted":17.24,"target_end_local":"2030-09-27 00:00","weekday":"Fri"},{"actual":14.06,"band_high":17.88,"band_low":12.82,"error":-1.31,"in_band":true,"predicted":15.37,"target_end_local":"2030-09-28 00:00","weekday":"Sat"},{"actual":33.25,"band_high":39.34,"band_low":28.21,"error":-0.56,"in_band":true,"predicted":33.81,"target_end_local":"2030-09-29 00:00","weekday":"Sun"},{"actual":9.15,"band_high":10.95,"band_low":7.85,"error":-0.26,"in_band":true,"predicted":9.41,"target_end_local":"2030-09-30 00:00","weekday":"Mon"},{"actual":8.7,"band_high":10.56,"band_low":7.57,"error":-0.37,"in_band":true,"predicted":9.07,"target_end_local":"2030-10-01 00:00","weekday":"Tue"},{"actual":32.71,"band_high":36.23,"band_low":25.97,"error":1.58,"in_band":true,"predicted":31.13,"target_end_local":"2030-10-02 00:00","weekday":"Wed"},{"actual":16.28,"band_high":19.95,"band_low":14.32,"error":-0.88,"in_band":true,"predicted":17.16,"target_end_local":"2030-10-03 00:00","weekday":"Thu"},{"actual":16.03,"band_high":22.11,"band_low":15.87,"error":-2.99,"in_band":true,"predicted":19.02,"target_end_local":"2030-10-04 00:00","weekday":"Fri"}]}};
+
+/* ======================================================================================================
+   Helpers: time (always Europe/London, the site's local time), rounding, escaping
+   ====================================================================================================== */
+const TZ = 'Europe/London';
+const fT = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const fWd = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'short' });
+const fWdL = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'long' });
+const fDM = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: 'numeric', month: 'short' });
+const fKey = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+const fH = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
+const ms = (iso) => Date.parse(iso);
+const T = (x) => fT.format(typeof x === 'number' ? x : new Date(x));
+const key = (x) => fKey.format(typeof x === 'number' ? x : new Date(x));
+const hourOf = (x) => parseInt(fH.format(x), 10);
+const DAY = 86400e3;
+function dayWord(x, ref) {
+  const k = key(x), kr = key(ref);
+  if (k === kr) return 'today';
+  if (k === key(ref + DAY)) return 'tomorrow';
+  if (k === key(ref - DAY)) return 'yesterday';
+  return fWd.format(x);
+}
+/* "07:46" if same day as ref, else "07:46 tomorrow" */
+function when(x, ref) { const d = dayWord(x, ref); return d === 'today' ? T(x) : T(x) + ' ' + d; }
+function ago(min) {
+  if (min < 1) return 'just now';
+  if (min < 90) return Math.round(min) + ' min ago';
+  if (min < 48 * 60) return Math.round(min / 6) / 10 + ' h ago';
+  return Math.round(min / 1440) + ' days ago';
+}
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const r1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
+const r0 = (n) => String(Math.round(n));
+/* Precision rule: totals of 20 kWh or more are shown to the whole kWh (their typical error is several kWh);
+   everything else to 0.1 kWh. */
+const kw = (n, ref) => (Math.abs(ref == null ? n : ref) >= 20 ? r0(n) : r1(n));
+const pc = (n) => r0(n) + '%';
+const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const clone = (o) => JSON.parse(JSON.stringify(o));
+function power(w) { return Math.abs(w) < 1000 ? { v: r0(w), u: 'W' } : { v: r1(w / 1000), u: 'kW' }; }
+const num = (v) => typeof v === 'number' && isFinite(v);
+
+/* ======================================================================================================
+   Vocabulary, labels, icons (all inline SVG, no external assets)
+   ====================================================================================================== */
+const ICON = {
+  actual: '<svg viewBox="0 0 13 13" aria-hidden="true"><rect x="1.5" y="1.5" width="10" height="10" fill="currentColor"/></svg>',
+  pred: '<svg viewBox="0 0 13 13" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  rec: '<svg viewBox="0 0 13 13" aria-hidden="true"><path d="M6.5 .8 12.2 6.5 6.5 12.2 .8 6.5Z" fill="currentColor"/></svg>',
+  conf: '<svg viewBox="0 0 13 13" aria-hidden="true"><path d="M1.5 11.5v-3M5 11.5v-6M8.5 11.5v-9M12 11.5" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
+  shield: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.5 17 4v5.5c0 4.2-2.8 7.3-7 9-4.2-1.7-7-4.8-7-9V4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M6.8 10.2 9 12.4l4.2-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m5 8.2 2.2 2.2L11 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  learn: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 1.7a6.3 6.3 0 0 1 0 12.6Z" fill="currentColor"/></svg>',
+  empty: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.4 2.2"/></svg>',
+  tri: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 14.8 13.6H1.2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.3v3.4M8 11.3v.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  clock: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.2V8l2.6 1.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  sundown: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 11a5 5 0 0 1 10 0" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M1 13.6h14M8 4.2v3.6M6.2 6.4 8 8.2l1.8-1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  lock: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.3 7V5a2.7 2.7 0 0 1 5.4 0v2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  dia: '<svg viewBox="0 0 13 13" aria-hidden="true"><path d="M6.5 .8 12.2 6.5 6.5 12.2 .8 6.5Z" fill="currentColor"/></svg>',
+  info: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 7.2v4M8 4.6v.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+};
+const vc = (kind, label, sub) => {
+  const cls = { actual: 'vc-actual', pred: 'vc-pred', rec: 'vc-rec', conf: 'vc-conf' }[kind];
+  return `<span class="vc ${cls}">${ICON[kind]}${esc(label)}${sub ? ` <small>${esc(sub)}</small>` : ''}</span>`;
+};
+const LABELS = {
+  HIGH: { w: 'High', n: 3 }, MEDIUM: { w: 'Medium', n: 2 }, LOW: { w: 'Low', n: 1 }, INSUFFICIENT: { w: 'Insufficient', n: 0 },
+};
+function labelChip(l) {
+  const m = LABELS[l] || LABELS.INSUFFICIENT;
+  let bars = '';
+  for (let i = 0; i < 3; i++) {
+    const h = 4 + i * 3.5;
+    bars += `<rect x="${i * 5}" y="${12 - h}" width="3.4" height="${h}" ${i < m.n ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1"'}/>`;
+  }
+  return `<span class="lab-chip" title="Forecast confidence: ${m.w}"><svg viewBox="0 0 15 12" aria-hidden="true">${bars}</svg>${m.w}</span>`;
+}
+
+const STATUS = {
+  LEARNING_NORMALLY: { pill: 'Learning normally', icon: 'check', tone: '', title: null },
+  LEARNING: { pill: 'Still learning', icon: 'learn', tone: 't-info', title: 'Still learning' },
+  INSUFFICIENT_HISTORY: { pill: 'Not enough history', icon: 'empty', tone: 't-warn', title: 'Not enough history yet' },
+  ABNORMAL_DAY: { pill: 'Abnormal day', icon: 'tri', tone: 't-warn', title: 'Abnormal day' },
+  DATA_STALE: { pill: 'Data stale', icon: 'clock', tone: 't-warn', title: 'Data is stale' },
+  PV_UNDERPERFORMING: { pill: 'Solar under-performing', icon: 'sundown', tone: 't-warn', title: 'Solar is under-performing' },
+};
+function statusCopy(rep, ctx) {
+  const n = rep.confidence.history_days;
+  const pvLive = rep.pv && rep.pv.today_reanchor ? Math.round(rep.pv.today_reanchor.live_ratio * 100) : null;
+  switch (rep.status) {
+    case 'LEARNING':
+      return `${n} days of history so far. Forecasts are usable but their ranges are wide. ECCO reaches full confidence at 28 days.`;
+    case 'INSUFFICIENT_HISTORY':
+      return `${n} of the 7 days ECCO needs. It is not forecasting yet: greyed numbers are placeholders, and the cautious advice is simply to keep the battery charged.`;
+    case 'ABNORMAL_DAY':
+      return 'House load is well above its normal pattern. ECCO is treating today with extra caution: safe export is cut and confidence is lowered. It does not know the cause.';
+    case 'DATA_STALE':
+      return `The battery reading is ${Math.round(rep.actual.soc_age_s / 60)} min old. ECCO is withholding export advice and trusting its forecasts less until fresh data arrives.`;
+    case 'PV_UNDERPERFORMING':
+      return `Solar is running at ${pvLive == null ? 'well below' : pvLive + '% of'} ECCO's corrected forecast so far today. The rest of today's solar estimate has been scaled down to match.`;
+    default: return '';
+  }
+}
+
+/* ======================================================================================================
+   Scenarios: engine examples (synthetic household) + edited state demos
+   ====================================================================================================== */
+const SCEN = [
+  { id: 'normal', base: 'normal', label: 'Normal evening', sub: 'Fri 4 Oct 21:30', real: true },
+  { id: 'poorpv', base: 'poorpv', label: 'Poor PV afternoon', sub: 'Fri 4 Oct 14:00', real: true },
+  { id: 'afternoon', base: 'afternoon', label: 'Afternoon', sub: 'Thu 3 Oct 17:30', real: true },
+  { id: 'summer', base: 'summer', label: 'Summer evening', sub: '15 Jul 21:30', real: true },
+  { id: 'cold', base: 'cold', label: 'Cold start', sub: '4 days of history', real: true },
+  { id: 'live', base: 'live', label: 'Live-style inputs', sub: 'Sat 5 Oct 08:10', real: true },
+  { id: 'learning', base: 'normal', state: 'LEARNING', label: 'Still learning', sub: '20 days', real: false },
+  { id: 'abnormal', base: 'normal', state: 'ABNORMAL_DAY', label: 'Abnormal day', real: false },
+  { id: 'stale', base: 'normal', state: 'DATA_STALE', label: 'Data stale', real: false },
+  { id: 'session', base: 'normal', state: 'SESSION', label: 'Saving Session ahead', real: false },
+];
+const FORCE = [
+  { v: '', t: 'As reported by the engine' },
+  { v: 'LEARNING', t: 'Still learning (synthetic)' },
+  { v: 'ABNORMAL_DAY', t: 'Abnormal day (synthetic)' },
+  { v: 'DATA_STALE', t: 'Data stale (synthetic)' },
+  { v: 'PV_UNDERPERFORMING', t: 'Solar under-performing (synthetic)' },
+  { v: 'SESSION', t: 'Add a Saving Session (synthetic)' },
+  { v: 'INSUFFICIENT_HISTORY', t: 'Not enough history (loads cold start)' },
+];
+
+/* Synthetic states: edit a copy of an engine report the way the engine would (see intelligence/engine.py status
+   rules, advisor.py export rules). Nothing here is shown without the "synthetic" tag. */
+function mutate(src, state) {
+  const r = clone(src);
+  const fcs = () => Object.values(r.predicted).filter((v) => v && typeof v === 'object' && v.kind);
+  const rec = r.recommended;
+  const gen = ms(r.generated_for);
+  const setExportReason = (txt, code) => {
+    rec.reasons = rec.reasons.filter((x) => x.code !== 'EXPORT' && x.code !== 'EXPORT_WITHHELD');
+    rec.reasons.push({ code, text: txt });
+  };
+  switch (state) {
+    case 'LEARNING': {
+      r.status = 'LEARNING';
+      r.confidence = { overall: 0.62, label: 'MEDIUM', usage: 0.62, pv: 0.8, history_days: 20 };
+      fcs().forEach((f) => {
+        const k = 1.5;
+        f.p10 = Math.max(0, f.p50 - (f.p50 - f.p10) * k); f.p90 = f.p50 + (f.p90 - f.p50) * k;
+        f.label = 'MEDIUM'; f.confidence = 0.62; f.n_days = 20; f.n_residuals = Math.min(f.n_residuals, 13); f.empirical_coverage = null;
+        f.notes = f.notes.concat(['only 20 days of history: ranges widened until 28']);
+      });
+      rec.uncertainty = (rec.uncertainty || []).concat([{ code: 'FEW_DAYS', severity: 'MEDIUM', text: 'Only 20 days of history: forecast ranges are widened until ECCO has 28.' }]);
+      r.weekday_effect = { n: 20, explained_variance: null, f_stat: null, material: false };
+      break;
+    }
+    case 'ABNORMAL_DAY': {
+      r.status = 'ABNORMAL_DAY';
+      r.actual.load_w = 3640;
+      r.anomalies = {
+        abnormal_load_now: true, excess_kw_now: 1.4, base_load_kw: 0.95, base_load_norm_kw: 0.7,
+        anomalies: [
+          { code: 'SUSTAINED_HIGH_LOAD', severity: 'ABNORMAL', text: 'House load has been about 1.4 kW above its normal level for the last 3 hours (since 18:30).', value: 1.4, since: new Date(gen - 3 * 3600e3).toISOString() },
+          { code: 'HIGH_OVERNIGHT_BASE', severity: 'WATCH', text: "Last night's base load was 0.95 kW versus a normal 0.70 kW (+250 W).", value: 0.25, since: null },
+        ],
+      };
+      r.confidence = { overall: 0.8, label: 'HIGH', usage: 1, pv: 1, history_days: r.confidence.history_days };
+      const before = rec.safe_export.kwh;
+      rec.safe_export = { kwh: Math.floor(before * 5) / 10, kwh_before_reductions: before, reduced_for: ['abnormal load'], assumes_refill_in_cheap_window: true };
+      setExportReason(`About ${r1(rec.safe_export.kwh)} kWh could be exported now while the pessimistic path still stays above ${rec.desired_min_pct}% until the cheap window opens (reduced for abnormal load).`, 'EXPORT');
+      r.notes = r.notes.concat(['the abnormal load is assumed to persist for the next hours']);
+      break;
+    }
+    case 'DATA_STALE': {
+      r.status = 'DATA_STALE';
+      r.actual.soc_age_s = 42 * 60;
+      r.confidence = { overall: 0.3, label: 'LOW', usage: 0.3, pv: r.confidence.pv, history_days: r.confidence.history_days };
+      r.notes = r.notes.concat(['history is 8 h old']);
+      rec.uncertainty = (rec.uncertainty || []).concat([{ code: 'STALE_SOC', severity: 'HIGH', text: 'SOC reading is 42 min old; export advice is withheld.' }]);
+      rec.safe_export = { kwh: 0, withheld_because: 'SOC reading is stale', assumes_refill_in_cheap_window: true };
+      setExportReason('No export advice: SOC reading is stale.', 'EXPORT_WITHHELD');
+      break;
+    }
+    case 'PV_UNDERPERFORMING': {
+      r.status = 'PV_UNDERPERFORMING';
+      r.pv.today_reanchor = { live_ratio: 0.54, weight: 0.7, factor: 0.68 };
+      r.notes = r.notes.concat(['PV is running at 54% of the corrected forecast so far today']);
+      break;
+    }
+    case 'SESSION': {
+      const s0 = new Date(gen + 22.5 * 3600e3).toISOString(), e0 = new Date(gen + 23.5 * 3600e3).toISOString();
+      rec.saving_session = { start: s0, end: e0, soc_at_start_median: 84.4, covered_from_battery_pessimistic: false, min_soc_start_to_cover: 90 };
+      rec.reasons = rec.reasons.concat([{ code: 'SESSION', text: `Saving Session ${T(s0)}-${T(e0)}: the battery may not cover it from 84%; retain at least 90% at the start.` }]);
+      break;
+    }
+    default: break;
+  }
+  r._synthetic = state;
+  return r;
+}
+
+/* ======================================================================================================
+   Derived values
+   ====================================================================================================== */
+const usable = (f) => f && (f.label === 'HIGH' || f.label === 'MEDIUM');
+const shown = (f) => f && f.label !== 'INSUFFICIENT';
+const weak = (f) => !f || f.label === 'LOW' || f.label === 'INSUFFICIENT';
+/* shift a daily-repeating time (sunrise, useful PV start) by whole days until it is at or after `after` */
+function nextOccurrence(iso, after) { let t = ms(iso); while (t < after) t += DAY; while (t - DAY >= after) t -= DAY; return t; }
+function derive(rep, nowMs) {
+  const gen = ms(rep.generated_for);
+  const win = rep.recommended.overnight_target ? rep.recommended.overnight_target.window.map(ms) : null;
+  const ref = win ? win[0] : gen;
+  const p = rep.predicted;
+  return {
+    gen, now: nowMs, win,
+    sunrise: p.sunrise ? nextOccurrence(p.sunrise, ref) : null,
+    usefulPv: p.useful_pv_start ? nextOccurrence(p.useful_pv_start.p50, ref) : null,
+    todayKey: key(gen),
+    sunsetToday: p.sunset ? nextOccurrence(p.sunset, gen - 12 * 3600e3) : null,
+  };
+}
+
+/* ======================================================================================================
+   The "ECCO expects..." sentences, generated from the report (never hardcoded per scenario)
+   ====================================================================================================== */
+function narrative(rep, d) {
+  const P = rep.predicted, R = rep.recommended, ot = R.overnight_target, X = R.predicted || {};
+  const np = (t) => `<span class="np">${t}</span>`;
+  const nr = (t) => `<span class="nr">${t}</span>`;
+  const out = { lead: [], advice: [], caveat: [] };
+  const conf = rep.confidence.label;
+
+  /* demand */
+  const ov = P.overnight, tp = P.to_useful_pv_from_now;
+  if (conf === 'INSUFFICIENT' || (!shown(ov) && !shown(tp))) {
+    out.lead.push(`ECCO does not have enough history to forecast demand yet (${rep.confidence.history_days} days; it needs 7).`);
+  } else {
+    const parts = [];
+    if (shown(ov)) parts.push(`the house to use ${weak(ov) ? 'roughly ' : 'about '}${np(kw(ov.p50) + ' kWh')} overnight (range ${kw(ov.p10)} to ${kw(ov.p90)})`);
+    if (shown(tp)) {
+      const tu = ms(tp.t1), mins = (tu - d.gen) / 60e3;
+      parts.push(`${shown(ov) ? 'and ' : 'the house to use '}${weak(tp) ? 'roughly ' : 'about '}${np(kw(tp.p50) + ' kWh')} ${shown(ov) ? 'in total ' : ''}from now until useful solar starts around ${esc(when(tu, d.gen))}` + (mins > 0 && mins < 120 ? ` (${Math.round(mins)} min away)` : ''));
+    }
+    out.lead.push('ECCO expects ' + parts.join(', ') + '.');
+  }
+  /* SOC */
+  if (conf !== 'INSUFFICIENT' && (num(X.soc_at_sunrise_median) || num(X.soc_at_useful_pv_median))) {
+    const bits = [];
+    if (num(X.soc_at_sunrise_median) && d.sunrise) bits.push(`about ${np(pc(X.soc_at_sunrise_median))} at ${dayWord(d.sunrise, d.gen) === 'today' ? '' : (dayWord(d.sunrise, d.gen) + "'s ").replace('tomorrow', 'tomorrow')}sunrise (${esc(T(d.sunrise))})`.replace("tomorrow's sunrise", "tomorrow's sunrise"));
+    if (num(X.soc_at_useful_pv_median)) bits.push(`about ${np(pc(X.soc_at_useful_pv_median))} when useful solar starts` + (num(X.soc_at_useful_pv_pessimistic) ? ` (${np(pc(X.soc_at_useful_pv_pessimistic))} on a poor night)` : ''));
+    out.lead.push(`If the advice below were followed, the battery would be at ${bits.join(' and ')}.`);
+  } else if (conf === 'INSUFFICIENT') {
+    out.lead.push('It cannot predict the battery level reliably yet.');
+  }
+  /* PV */
+  const pv = pvDays(rep, d).find((x) => x.when === 'tomorrow') || pvDays(rep, d)[0];
+  if (pv && pv.fc.source !== 'none' && shown(pv.fc)) {
+    if (num(pv.fc.raw_kwh) && num(pv.fc.ratio)) {
+      const lower = pv.fc.ratio < 0.9, higher = pv.fc.ratio > 1.1;
+      out.lead.push(`Solar ${pv.when}: ${lower ? 'expect' : higher ? 'expect' : 'expect'} ${weak(pv.fc) ? 'roughly ' : 'about '}${np(r0(pv.fc.p50) + ' kWh')}${lower || higher ? `, not the ${r0(pv.fc.raw_kwh)} kWh ${esc(srcName(pv.fc.source))} says (learned correction x${pv.fc.ratio.toFixed(2)})` : `, in line with ${esc(srcName(pv.fc.source))}`}.`);
+    } else {
+      out.lead.push(`Solar ${pv.when}: roughly ${np(r0(pv.fc.p50) + ' kWh')}, from recent days only (no forecast source to correct).`);
+    }
+  }
+  /* advice */
+  if (ot) {
+    const w = `${esc(T(ot.window[0]))} to ${esc(T(ot.window[1]))}`;
+    if (ot.grid_charge_needed) {
+      let s = `Charge to ${nr(pc(ot.recommended_target_soc_pct))} in the cheap window (${w}), about ${nr(kw(ot.grid_charge_kwh_median) + ' kWh')} from the grid.`;
+      if (ot.median_case_target_soc_pct < ot.recommended_target_soc_pct - 0.5) s += ` ${pc(ot.median_case_target_soc_pct)} would do on a typical night; ${pc(ot.pessimistic_case_target_soc_pct)} covers a poor one.`;
+      out.advice.push(s);
+    } else {
+      out.advice.push(`No grid charging is needed: the battery should stay above the ${rec45(R)}% comfort level on its own (${nr('target ' + pc(ot.recommended_target_soc_pct))}).`);
+    }
+    if (!ot.feasible_on_pessimistic_path) {
+      out.advice.push(`Even a full battery may fall short on a poor night: about ${nr(kw(ot.expected_import_after_charge_kwh_pessimistic) + ' kWh')} of peak-rate import.`);
+    }
+    if (ot.expected_import_before_window_kwh_pessimistic > 0.2) {
+      out.advice.push(`Before the window opens, a poor night could already need about ${nr(kw(ot.expected_import_before_window_kwh_pessimistic) + ' kWh')} of peak-rate import; that is a risk to watch, not something the target changes.`);
+    }
+  } else {
+    out.advice.push('No charging advice: ' + esc((R.reasons[0] || {}).text || 'not available') );
+  }
+  const se = R.safe_export;
+  if (R.saving_session) {
+    const ss = R.saving_session;
+    out.advice.push(`A Saving Session runs ${esc(T(ms(ss.start)))} to ${esc(T(ms(ss.end)))} ${esc(dayWord(ms(ss.start), d.gen))}: ` + (ss.covered_from_battery_pessimistic ? 'the battery should cover it.' : `the battery may not cover it; keep at least ${nr(pc(ss.min_soc_start_to_cover))} at the start.`));
+  }
+  if (se) {
+    if (se.withheld_because) out.advice.push(`No export advice: ${esc(se.withheld_because)}.`);
+    else if (se.kwh > 0) out.advice.push(`About ${nr(kw(se.kwh) + ' kWh')} could be exported safely now` + (se.reduced_for ? ` (reduced for ${esc(se.reduced_for.join(', '))})` : '') + '.');
+    else out.advice.push('No safe export now: the battery is needed to cover the night.');
+  }
+  /* caveats */
+  if (rep.status !== 'LEARNING_NORMALLY' && STATUS[rep.status] && STATUS[rep.status].title) out.caveat.push(`Status: ${STATUS[rep.status].title.toLowerCase()}. See the note above.`);
+  return out;
+}
+const rec45 = (R) => r0(R.desired_min_pct);
+const srcName = (s) => ({ solcast: 'Solcast', persistence: 'recent days', none: 'no source' }[s] || s);
+
+function pvDays(rep, d) {
+  const out = [];
+  Object.keys(rep.pv || {}).filter((k) => /^\d{4}-/.test(k)).sort().forEach((k) => {
+    const fc = rep.pv[k];
+    const isToday = k === d.todayKey;
+    const isTomorrow = k === key(d.gen + DAY);
+    if (isToday && d.sunsetToday && d.gen > d.sunsetToday) return; // the sun has set: today's solar is history
+    out.push({ k, fc, when: isToday ? 'today' : isTomorrow ? 'tomorrow' : fWd.format(Date.parse(k + 'T12:00:00Z')), isToday });
+  });
+  return out;
+}
+
+/* ======================================================================================================
+   State
+   ====================================================================================================== */
+const S = { scen: 'normal', force: '', age: 'fresh', theme: 'auto', acc: 'load_kwh:day', table: false, step: null };
+const AGE_MIN = { fresh: 2, aging: 40, old: 240 };
+const card = document.getElementById('card');
+let REP = null, CTX = null;
+
+function build() {
+  const sc = SCEN.find((s) => s.id === S.scen);
+  let state = sc.state || null;
+  let baseKey = sc.base;
+  if (S.force) { if (S.force === 'INSUFFICIENT_HISTORY') baseKey = 'cold'; state = S.force === 'INSUFFICIENT_HISTORY' ? null : S.force; }
+  let rep = REPORTS[baseKey];
+  rep = state ? mutate(rep, state) : clone(rep);
+  const gen = ms(rep.generated_for);
+  const ageMin = Math.max(AGE_MIN[S.age], 0);
+  REP = rep;
+  CTX = { d: derive(rep, gen + ageMin * 60e3), ageMin, ageKey: S.age, synthetic: !!state, scen: sc };
+}
+
+/* ======================================================================================================
+   Card sections (each returns an HTML string)
+   ====================================================================================================== */
+function secBanner() {
+  return `<div class="banner" role="note" aria-label="Shadow mode">${ICON.shield}<div>SHADOW MODE - advice only, nothing is applied<span class="sub">ECCO Intelligence reads, learns, predicts and recommends. It never changes the inverter.</span></div></div>`;
+}
+function secHeader(rep, d) {
+  const st = STATUS[rep.status] || STATUS.LEARNING_NORMALLY;
+  const ageTxt = ago(CTX.ageMin);
+  return `<header class="hd"><div class="hd-l"><h2 id="ecco-title">ECCO Intelligence</h2>
+    <span class="pill ${st.tone}" role="status">${ICON[st.icon]}${esc(st.pill)}</span></div>
+    <div class="hd-r"><span>Report from <b>${esc(T(d.gen))} ${esc(dayWord(d.gen, d.gen + CTX.ageMin * 60e3))}</b></span><span><b>${esc(ageTxt)}</b></span><span class="mono">${esc(rep.model_version)}</span></div></header>`;
+}
+function secCallouts(rep, d) {
+  let h = '';
+  if (rep.mode !== 'SHADOW' || rep.applies_nothing !== true) {
+    h += `<div class="callout t-hold" role="alert">${ICON.lock}<div><b>Report is not marked shadow-only</b><p>The card hides all advice when the report does not say mode SHADOW and applies_nothing true.</p></div></div>`;
+  }
+  const st = STATUS[rep.status];
+  if (st && st.title) {
+    h += `<div class="callout ${st.tone === 't-info' ? 't-info' : ''}" role="status">${ICON[st.icon]}<div><b>${esc(st.title)}${CTX.synthetic ? ' (synthetic state demo)' : ''}</b><p>${esc(statusCopy(rep, CTX))}</p></div></div>`;
+  }
+  if (CTX.ageKey === 'aging') {
+    h += `<div class="callout t-quiet" role="status">${ICON.clock}<div><b>Report is ${esc(ago(CTX.ageMin).replace(' ago', ''))} old</b><p>ECCO normally publishes every few minutes. The figures below describe the time of the report, not now.</p></div></div>`;
+  } else if (CTX.ageKey === 'old') {
+    h += `<div class="callout t-hold" role="alert">${ICON.clock}<div><b>Report is ${esc(ago(CTX.ageMin).replace(' ago', ''))} old</b><p>Predictions and advice are greyed because they may no longer apply. Check that the ECCO Intelligence job is still running.</p></div></div>`;
+  }
+  return h;
+}
+function secExpects(rep, d) {
+  const n = narrative(rep, d);
+  const lead = n.lead.map((s) => `<p class="lead">${s}</p>`).join('');
+  const adv = n.advice.length ? `<div class="adv"><span class="tag">${ICON.dia}Shadow advice, not applied</span><p class="lead">${n.advice.join(' ')}</p></div>` : '';
+  return `<section class="expects" aria-label="Summary in plain English">${lead}${adv}
+    <div class="legend-inline" aria-label="How to read numbers"><span><span class="na">62%</span> solid: measured now</span><span><span class="np">~9 kWh</span> dashed underline: predicted</span><span><span class="nr">100%</span> highlighted: recommended</span></div></section>`;
+}
+function secActual(rep, d) {
+  const a = rep.actual;
+  const ld = power(a.load_w), pv = power(a.pv_w);
+  const stale = num(a.soc_age_s) && a.soc_age_s > 900;
+  const floor = rep.recommended.floor_pct, comf = rep.recommended.desired_min_pct;
+  return `<section class="blk b-actual" aria-labelledby="h-actual"><div class="bh">${vc('actual', 'Actual')}<h3 id="h-actual" class="sr">Actual, measured now</h3><span class="hint">Measured at report time. Nothing here is predicted.</span></div>
+   <div class="tiles">
+    <div class="tile"><div class="k">Battery charge</div><div class="v"><span aria-label="${r0(a.soc_pct)} percent">${r0(a.soc_pct)}<small>%</small></span></div>
+      <div class="socbar" role="img" aria-label="Battery ${r0(a.soc_pct)} percent; minimum reserve ${r0(floor)} percent"><i style="width:${Math.max(0, Math.min(100, a.soc_pct))}%"></i><u style="left:${floor}%"></u><u class="c" style="left:${comf}%"></u></div>
+      <div class="socleg"><span>0</span><span>floor ${r0(floor)}</span><span>100</span></div></div>
+    <div class="tile"><div class="k">House load</div><div class="v">${ld.v}<small>${ld.u}</small></div><div class="s">hourly average</div></div>
+    <div class="tile"><div class="k">Solar (PV)</div><div class="v">${pv.v}<small>${pv.u}</small></div><div class="s">${num(a.pv_so_far_kwh) ? r1(a.pv_so_far_kwh) + ' kWh so far today' : ''}</div></div>
+    <div class="tile na-tile" title="The report has no grid power field. The real card reads it from the live sensor (sensor.ecco_grid_power); this mock has no live sensors."><div class="k">Grid</div><div class="v">Live sensor only</div><div class="s">not in the report; mock shows no value</div></div>
+   </div>
+   <p class="foot${stale ? ' warn' : ''}">${stale ? `Battery reading is ${r0(a.soc_age_s / 60)} min old. ` : `Battery read ${a.soc_age_s < 60 ? 'just now' : r0(a.soc_age_s / 60) + ' min before the report'}. `}Inverter ${a.inverter_ok ? 'reporting normally' : 'NOT reporting normally'}.</p></section>`;
+}
+
+/* ---------------------------------------------------------------------------------------------- chart */
+function chartModel(rep, d) {
+  const tr = (rep.recommended.trajectory || []).map((p) => ({ t: ms(p.t), m: p.soc_median, lo: p.soc_low, hi: p.soc_high }));
+  return tr;
+}
+function describeChart(rep, d, tr) {
+  if (!tr.length) return 'No predicted battery path in this report.';
+  const lowest = tr.reduce((a, b) => (b.m < a.m ? b : a));
+  const lowLow = tr.reduce((a, b) => (b.lo < a.lo ? b : a));
+  return `Predicted battery charge, now ${pc(rep.actual.soc_pct)} actual. Median path lowest at ${pc(lowest.m)} around ${when(lowest.t, d.gen)}. Pessimistic path lowest at ${pc(lowLow.lo)} around ${when(lowLow.t, d.gen)}, against a ${pc(rep.recommended.floor_pct)} minimum reserve. Cheap charging window ${d.win ? T(d.win[0]) + ' to ' + T(d.win[1]) : 'unknown'}.`;
+}
+function secChart(rep, d) {
+  const tr = chartModel(rep, d);
+  const isWeak = ['LOW', 'INSUFFICIENT'].includes(rep.confidence.label);
+  const body = S.table ? chartTable(rep, d, tr) : `<div class="chwrap" id="chwrap" tabindex="0" role="group" aria-label="Battery charge chart. Use left and right arrow keys to step through predicted hours.">
+      <div id="chsvg"></div><div class="tip" id="tip" role="status" aria-live="polite"></div></div>`;
+  return `<section class="blk b-chart" aria-labelledby="h-chart"><div class="bh">${vc('pred', 'Predicted', 'battery path')}<h3 id="h-chart" class="sr">Battery charge: predicted path</h3><span class="hint">If the advice were followed. The only real value is the solid dot.</span>
+    <button class="tbtn" id="tbtn" type="button" aria-pressed="${S.table}">${S.table ? 'Show chart' : 'Show table'}</button></div>
+    ${body}
+    ${isWeak ? `<p class="weak-note">Confidence is ${esc(rep.confidence.label.toLowerCase())}: treat this path as a rough shape, not a forecast.</p>` : ''}
+    <div class="keys" aria-label="Chart key">
+      <span><svg viewBox="0 0 24 12"><circle cx="12" cy="6" r="4.5" class="c-dot"/></svg>Actual now</span>
+      <span><svg viewBox="0 0 24 12"><path d="M1 6h22" class="c-med"/></svg>Predicted median</span>
+      <span><svg viewBox="0 0 24 12"><rect x="1" y="1" width="22" height="10" class="c-band"/><path d="M4 11 10 1M10 11 16 1M16 11 22 1" class="c-hatch"/></svg>Pessimistic to optimistic range</span>
+      <span><svg viewBox="0 0 24 12"><path d="M1 6h22" class="c-floor"/></svg>${r0(rep.recommended.floor_pct)}% minimum reserve</span>
+      <span><svg viewBox="0 0 24 12"><path d="M1 6h22" class="c-comfort"/></svg>${r0(rep.recommended.desired_min_pct)}% comfort</span>
+      <span><svg viewBox="0 0 24 12"><rect x="2" y="1" width="20" height="10" class="c-window"/></svg>Cheap window</span>
+      <span><svg viewBox="0 0 24 12"><path d="M12 1 18 6 12 11 6 6Z" class="c-rec"/></svg>Recommended target</span>
+    </div></section>`;
+}
+function chartTable(rep, d, tr) {
+  const rows = tr.map((p) => `<tr><td>${esc(fWd.format(p.t))} ${esc(T(p.t))}</td><td class="n">${pc(p.m)}</td><td class="n">${pc(p.lo)}</td><td class="n">${pc(p.hi)}</td></tr>`).join('');
+  return `<div class="tw"><table><caption>Predicted battery charge by hour (all values predicted; the actual now is ${pc(rep.actual.soc_pct)}).</caption><thead><tr><th>Time</th><th class="n">Median</th><th class="n">Pessimistic</th><th class="n">Optimistic</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function drawChart() {
+  const host = document.getElementById('chsvg');
+  if (!host) return;
+  const rep = REP, d = CTX.d;
+  const tr0 = chartModel(rep, d);
+  const W = Math.max(280, Math.floor(host.clientWidth || host.parentElement.clientWidth || 340));
+  if (!tr0.length) { host.innerHTML = '<p class="empty">No predicted battery path in this report.</p>'; return; }
+  const H = W < 520 ? 300 : 330;
+  const M = { l: 38, r: 14, t: 30, b: 84 };
+  const now = d.gen, soc = rep.actual.soc_pct;
+  const pts = [{ t: now, m: soc, lo: soc, hi: soc }].concat(tr0.filter((p) => p.t > now));
+  const t0 = now - 1.5 * 3600e3, t1 = pts[pts.length - 1].t;
+  const floor = rep.recommended.floor_pct, comf = rep.recommended.desired_min_pct;
+  const minV = Math.min(...pts.map((p) => p.lo), floor);
+  const ymin = Math.max(0, Math.floor((minV - 4) / 10) * 10), ymax = 100;
+  const X = (t) => M.l + (t - t0) / (t1 - t0) * (W - M.l - M.r);
+  const Y = (v) => M.t + (ymax - v) / (ymax - ymin) * (H - M.t - M.b);
+  const pb = H - M.b;
+  const isWeak = ['LOW', 'INSUFFICIENT'].includes(rep.confidence.label);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(describeChart(rep, d, tr0))}" class="${isWeak ? 'weak' : ''}"><title>Predicted battery charge</title>
+   <defs><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" class="c-hatch"/></pattern></defs>`;
+  /* cheap window */
+  if (d.win) {
+    const x0 = Math.max(M.l, X(d.win[0])), x1 = Math.min(W - M.r, X(d.win[1]));
+    if (x1 > x0) {
+      s += `<rect x="${x0}" y="${M.t}" width="${x1 - x0}" height="${pb - M.t}" class="c-window"/>`;
+      const lab = `Cheap window ${T(d.win[0])} to ${T(d.win[1])}`;
+      const short = x1 - x0 < 130;
+      s += `<text x="${(x0 + x1) / 2}" y="${pb - 7}" text-anchor="middle" class="c-lbl">${short ? 'Cheap window' : lab}</text>`;
+    }
+  }
+  /* grid + y ticks */
+  for (let v = Math.ceil(ymin / 20) * 20; v <= 100; v += 20) {
+    s += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}" class="c-grid"/><text x="${M.l - 6}" y="${Y(v) + 4}" text-anchor="end" class="c-txt">${v}%</text>`;
+  }
+  s += `<line x1="${M.l}" x2="${W - M.r}" y1="${pb}" y2="${pb}" class="c-axis"/>`;
+  /* x ticks every 6 local hours */
+  let tk = Math.ceil(t0 / 3600e3) * 3600e3;
+  for (; tk <= t1; tk += 3600e3) {
+    const h = hourOf(tk);
+    if (h % 6) continue;
+    const x = X(tk);
+    if (x < M.l + 8 || x > W - M.r + 2) continue;
+    s += `<line x1="${x}" x2="${x}" y1="${pb}" y2="${pb + 4}" class="c-axis"/>`;
+    if (h === 0) s += `<line x1="${x}" x2="${x}" y1="${M.t}" y2="${pb}" class="c-grid"/>`;
+    s += `<text x="${x}" y="${pb + 16}" text-anchor="middle" class="c-txt">${String(h).padStart(2, '0')}:00</text>`;
+    if (h === 0) s += `<text x="${x}" y="${pb + 28}" text-anchor="middle" class="c-txt2" font-weight="700">${esc(fWd.format(tk + 3600e3))}</text>`;
+  }
+  /* comfort + floor */
+  s += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(comf)}" y2="${Y(comf)}" class="c-comfort"/>`;
+  s += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(floor)}" y2="${Y(floor)}" class="c-floor"/>`;
+  s += `<text x="${W - M.r - 3}" y="${Y(comf) - 5}" text-anchor="end" class="c-lbl">${r0(comf)}% comfort</text>`;
+  s += `<text x="${W - M.r - 3}" y="${Y(floor) - 5}" text-anchor="end" class="c-lbl">${r0(floor)}% minimum reserve</text>`;
+  /* ribbon */
+  const up = pts.map((p) => `${X(p.t).toFixed(1)},${Y(p.hi).toFixed(1)}`).join(' L');
+  const dn = pts.slice().reverse().map((p) => `${X(p.t).toFixed(1)},${Y(p.lo).toFixed(1)}`).join(' L');
+  s += `<path d="M${up} L${dn}Z" class="c-band"/><path d="M${up} L${dn}Z" fill="url(#hatch)"/>`;
+  /* median */
+  s += `<path d="M${pts.map((p) => `${X(p.t).toFixed(1)},${Y(p.m).toFixed(1)}`).join(' L')}" class="c-med"/>`;
+  /* low-case below floor marker */
+  const lowest = pts.reduce((a, b) => (b.lo < a.lo ? b : a));
+  if (lowest.lo < floor) {
+    const lx = X(lowest.t), ly = Y(lowest.lo);
+    const anchor = lx > W - 90 ? 'end' : 'start';
+    s += `<path d="M${lx - 5},${ly + 7} L${lx + 5},${ly + 7} L${lx},${ly - 2}Z" fill="var(--floor)" stroke="var(--halo)" stroke-width="1.5"/><text x="${lx + (anchor === 'end' ? -9 : 9)}" y="${ly + 8}" text-anchor="${anchor}" class="c-lbl">poor case ${pc(lowest.lo)}</text>`;
+  }
+  /* recommended target diamond */
+  const ot = rep.recommended.overnight_target;
+  if (ot && d.win && X(d.win[1]) <= W - M.r) {
+    const dx = X(d.win[1]), dy = Y(Math.min(100, ot.recommended_target_soc_pct));
+    s += `<path d="M${dx},${dy - 7} L${dx + 7},${dy} L${dx},${dy + 7} L${dx - 7},${dy}Z" class="c-rec"/><text x="${dx + 11}" y="${dy + 4}" class="c-lbl">target ${pc(ot.recommended_target_soc_pct)}</text>`;
+  }
+  /* now marker, actual dot */
+  const nx = X(now);
+  s += `<line x1="${nx}" x2="${nx}" y1="${M.t - 8}" y2="${pb}" class="c-now"/><text x="${nx + 6}" y="${M.t - 12}" class="c-lbl">Now: actual</text>`;
+  s += `<circle cx="${nx}" cy="${Y(soc)}" r="5.5" class="c-dot"/><text x="${nx + 9}" y="${Y(soc) - 8}" class="c-lbl">${pc(soc)}</text>`;
+  /* lane A: sunrise / sunset */
+  const laneA = pb + 46, laneB = pb + 66;
+  const sun = (x, up2, lab) => `<g><path d="M${x - 7},${laneA + 3} a7,7 0 0 1 14,0" class="c-sun"/><path d="M${x - 9},${laneA + 3}h18" class="c-sun"/><path d="${up2 ? `M${x},${laneA - 11}v-0` : ''}" class="c-sun"/><path d="${up2 ? `M${x - 3},${laneA - 6}l3,-3l3,3` : `M${x - 3},${laneA - 8}l3,3l3,-3`}" class="c-sun"/><text x="${x}" y="${laneA + 16}" text-anchor="middle" class="c-txt2">${lab}</text></g>`;
+  const p = rep.predicted;
+  if (p.sunrise) for (let k = -2; k <= 4; k++) { const t = ms(p.sunrise) + k * DAY; if (t >= t0 && t <= t1) { const x = X(t); if (x > M.l + 14 && x < W - M.r - 14) s += sun(x, true, T(t)); } }
+  if (p.sunset) for (let k = -2; k <= 4; k++) { const t = ms(p.sunset) + k * DAY; if (t >= t0 && t <= t1) { const x = X(t); if (x > M.l + 14 && x < W - M.r - 14) s += sun(x, false, T(t)); } }
+  /* lane B: useful PV */
+  const u = p.useful_pv_start;
+  if (u) for (let k = -2; k <= 4; k++) {
+    const tp = ms(u.p50) + k * DAY, te = ms(u.early_p10) + k * DAY, tl = ms(u.late_p90) + k * DAY;
+    if (tp >= now && tp <= t1) {
+      const x = X(tp), xe = Math.max(M.l, X(te)), xl = Math.min(W - M.r, X(tl));
+      const y = laneB + 14;
+      s += `<line x1="${xe}" x2="${xl}" y1="${y}" y2="${y}" class="c-pvbar"/><line x1="${xe}" x2="${xe}" y1="${y - 4}" y2="${y + 4}" class="c-pvbar"/><line x1="${xl}" x2="${xl}" y1="${y - 4}" y2="${y + 4}" class="c-pvbar"/><circle cx="${x}" cy="${y}" r="4" fill="var(--card1)" stroke="var(--ink2)" stroke-width="1.8"/>`;
+      const txt = T(te) === T(tl) ? `useful solar ~${T(tp)}` : `useful solar ~${T(tp)} (${T(te)} to ${T(tl)})`;
+      const right = x < W * 0.55;
+      s += `<text x="${right ? xl + 6 : xe - 6}" y="${y + 4}" text-anchor="${right ? 'start' : 'end'}" class="c-txt2">${W < 420 ? 'useful solar ~' + T(tp) : txt}</text>`;
+    }
+  }
+  s += `<line id="xh" x1="0" x2="0" y1="${M.t}" y2="${pb}" class="c-cross" style="display:none"/><circle id="xhd" r="5" fill="var(--card1)" stroke="var(--pred)" stroke-width="2" style="display:none"/></svg>`;
+  host.innerHTML = s;
+  /* interaction: nearest predicted point */
+  const wrap = document.getElementById('chwrap'), tip = document.getElementById('tip');
+  const hp = tr0.filter((q) => q.t > now);
+  const show = (i) => {
+    S.step = i;
+    const q = hp[i];
+    const xh = document.getElementById('xh'), xd = document.getElementById('xhd');
+    const x = X(q.t);
+    xh.setAttribute('x1', x); xh.setAttribute('x2', x); xh.style.display = '';
+    xd.setAttribute('cx', x); xd.setAttribute('cy', Y(q.m)); xd.style.display = '';
+    tip.innerHTML = `<span class="tl">${esc(fWd.format(q.t))} ${esc(T(q.t))}, predicted</span><b>${pc(q.m)} <span class="tl" style="font-weight:500;font-size:12px">median</span></b><span><span class="sw"></span>pessimistic ${pc(q.lo)}, optimistic ${pc(q.hi)}</span>${q.lo < floor ? `<br><span class="tl">below the ${r0(floor)}% floor in the poor case</span>` : ''}`;
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    let left = x + 12; if (left + tw > wrap.clientWidth) left = x - tw - 12;
+    tip.style.left = Math.max(0, left) + 'px'; tip.style.top = (M.t + 6) + 'px';
+  };
+  const hide = () => { tip.style.display = 'none'; const xh = document.getElementById('xh'), xd = document.getElementById('xhd'); if (xh) { xh.style.display = 'none'; xd.style.display = 'none'; } };
+  const near = (clientX) => {
+    const r = host.getBoundingClientRect(); const px = (clientX - r.left) * (W / r.width);
+    let bi = 0, bd = 1e9; hp.forEach((q, i) => { const dd = Math.abs(X(q.t) - px); if (dd < bd) { bd = dd; bi = i; } }); return bi;
+  };
+  wrap.onpointermove = (e) => { if (hp.length) show(near(e.clientX)); };
+  wrap.onpointerleave = () => { if (document.activeElement !== wrap) hide(); };
+  wrap.onblur = hide;
+  wrap.onkeydown = (e) => {
+    if (!hp.length) return;
+    let i = S.step == null ? -1 : S.step;
+    if (e.key === 'ArrowRight') i = Math.min(hp.length - 1, i + 1);
+    else if (e.key === 'ArrowLeft') i = Math.max(0, i < 0 ? 0 : i - 1);
+    else if (e.key === 'Home') i = 0; else if (e.key === 'End') i = hp.length - 1; else if (e.key === 'Escape') { hide(); return; } else return;
+    e.preventDefault(); show(i);
+  };
+}
+
+/* ------------------------------------------------------------------------------------------ predicted */
+function bandGlyph(f, tone) {
+  const hi = f.p90 * 1.1 || 1;
+  const x = (v) => (v / hi) * 100;
+  return `<svg viewBox="0 0 100 16" preserveAspectRatio="none" aria-hidden="true"><line x1="0" x2="100" y1="8" y2="8" stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <rect x="${x(f.p10)}" y="3" width="${Math.max(1, x(f.p90) - x(f.p10))}" height="10" fill="var(--pred-w)"/><rect x="${x(f.p10)}" y="3" width="${Math.max(1, x(f.p90) - x(f.p10))}" height="10" fill="url(#hatch2)"/></svg>`;
+}
+function bandRow(f, w) {
+  /* HTML-drawn so the circle stays round at any width */
+  const hi = f.p90 * 1.1 || 1;
+  const x = (v) => Math.max(0, Math.min(100, (v / hi) * 100));
+  return `<div class="bandh" style="position:relative;height:18px" aria-hidden="true">
+   <div style="position:absolute;left:0;right:0;top:8px;border-top:1px solid var(--line)"></div>
+   <div style="position:absolute;left:${x(f.p10)}%;width:${Math.max(1, x(f.p90) - x(f.p10))}%;top:3px;height:12px;background:repeating-linear-gradient(135deg, ${w ? 'var(--ink3)' : 'var(--pred)'} 0 1px, transparent 1px 5px), ${w ? 'var(--line2)' : 'var(--pred-w)'}"></div>
+   <div style="position:absolute;left:${x(f.p50)}%;top:4px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:var(--card1);border:2px solid ${w ? 'var(--ink3)' : 'var(--pred)'}"></div></div>`;
+}
+function noteText(f, d, kindUsefulPv) {
+  const out = [];
+  (f.notes || []).forEach((n) => {
+    let m;
+    if (f.label === 'INSUFFICIENT' && /^(short-term|band includes)/.test(n)) return;
+    if ((m = n.match(/^short-term persistence adjustment ([+-][\d.]+) kWh/))) out.push(`Nudged ${m[1]} kWh for the last hour's demand.`);
+    else if (/^band includes uncertainty in WHEN/.test(n)) { const u = d.usefulPv; out.push(`Range includes uncertainty in when useful solar starts${kindUsefulPv && REP.predicted.useful_pv_start ? ` (${T(nextOccurrence(REP.predicted.useful_pv_start.early_p10, d.gen - 3 * 3600e3))} to ${T(nextOccurrence(REP.predicted.useful_pv_start.late_p90, d.gen - 3 * 3600e3))})` : ''}.`); }
+    else if (/^only \d+ days of history/.test(n)) out.push(cap1(n) + '.');
+    else if (/^uncertainty from prior/.test(n)) out.push('Range is a wide default, not learned from this house yet.');
+    else out.push(cap1(n) + '.');
+  });
+  return out;
+}
+function predRow(f, name, capTxt, d, extra, kindUsefulPv) {
+  const wk = weak(f), none = f.label === 'INSUFFICIENT';
+  const notes = noteText(f, d, kindUsefulPv);
+  const why = none
+    ? `No estimate yet. ${notes.filter((n) => !/^Range is a wide/.test(n)).join(' ')}`
+    : wk ? `Low confidence: shown greyed. ${notes.join(' ')}` : notes.join(' ');
+  return `<div class="row${wk ? ' weakrow' : ''}">
+   <div class="nm">${esc(name)}</div><div class="cap">${esc(capTxt)} ${labelChip(f.label)}</div>
+   ${none ? '' : `<div class="bar">${bandRow(f, wk)}</div>`}
+   <div class="val">${none ? '<small style="font-size:14px;font-weight:600">No estimate yet</small>' : `<span aria-label="about ${kw(f.p50)} kilowatt hours, range ${kw(f.p10)} to ${kw(f.p90)}">~${kw(f.p50)} kWh</span><small>${kw(f.p10)} to ${kw(f.p90)}</small>`}</div>
+   ${(why || extra) ? `<div class="why${wk ? ' w' : ''}">${esc(why)}${extra ? ' ' + extra : ''}</div>` : ''}</div>`;
+}
+function secPredicted(rep, d) {
+  const P = rep.predicted;
+  const rows = [];
+  if (P.next_1h) rows.push(predRow(P.next_1h, 'Next hour', `${T(P.next_1h.t0)} to ${T(P.next_1h.t1)}`, d));
+  if (P.to_useful_pv_from_now) rows.push(predRow(P.to_useful_pv_from_now, 'Until useful solar', `now to ${when(ms(P.to_useful_pv_from_now.t1), d.gen)}`, d, '', true));
+  if (P.overnight) rows.push(predRow(P.overnight, 'Overnight', `${T(P.overnight.t0)} to ${when(ms(P.overnight.t1), d.gen)}`, d));
+  if (P.day) {
+    const soFar = num(P.day_so_far_kwh) && shown(P.day) ? `${r1(P.day_so_far_kwh)} kWh used so far today (actual).` : '';
+    rows.push(predRow(P.day, 'Whole day', `${T(P.day.t0)} to 24:00`, d, soFar));
+  }
+  const more = [];
+  if (P.cheap_window) more.push(predRow(P.cheap_window, 'Cheap-window demand', `${T(P.cheap_window.t0)} to ${T(P.cheap_window.t1)}`, d));
+  if (P.morning) more.push(predRow(P.morning, 'Morning', `${T(P.morning.t0)} to ${T(P.morning.t1)}`, d));
+  if (P.to_next_cheap) more.push(predRow(P.to_next_cheap, 'Until next cheap window', `${T(P.to_next_cheap.t0)} to ${when(ms(P.to_next_cheap.t1), d.gen)}`, d));
+
+  /* solar */
+  const pvs = pvDays(rep, d).map((x) => pvBox(x, rep, d)).join('');
+  const rea = rep.pv && rep.pv.today_reanchor && pvDays(rep, d).some((x) => x.isToday) ? rep.pv.today_reanchor : null;
+  const reaTxt = rea ? `<p class="pvbox note">Live check: solar so far is running at ${r0(rea.live_ratio * 100)}% of the corrected forecast. ECCO scaled the rest of today by x${rea.factor.toFixed(2)} (blend weight ${rea.weight.toFixed(2)}).</p>` : '';
+
+  /* predicted battery points */
+  const X = rep.recommended.predicted || {};
+  const bl = [];
+  const wl = (k, v) => bl.push(`<li><span>${k}</span><span class="np">${v}</span></li>`);
+  if (num(X.soc_at_charge_end_median) && d.win) wl(`Battery when charging ends (${T(d.win[1])})`, '~' + pc(X.soc_at_charge_end_median));
+  if (num(X.soc_at_sunrise_median) && d.sunrise) wl(`At sunrise (${when(d.sunrise, d.gen)})`, '~' + pc(X.soc_at_sunrise_median));
+  if (num(X.soc_at_useful_pv_median) && d.usefulPv) wl(`When useful solar starts (${when(d.usefulPv, d.gen)})`, '~' + pc(X.soc_at_useful_pv_median) + (num(X.soc_at_useful_pv_pessimistic) ? `, poor case ~${pc(X.soc_at_useful_pv_pessimistic)}` : ''));
+  if (num(X.min_soc_after_charge_median)) wl(`Lowest after charging (${X.min_soc_after_charge_time ? when(ms(X.min_soc_after_charge_time), d.gen) : ''})`, '~' + pc(X.min_soc_after_charge_median) + (num(X.min_soc_after_charge_pessimistic) ? `, poor case ~${pc(X.min_soc_after_charge_pessimistic)}` : ''));
+  const ttf = X.time_to_floor_without_grid_charging;
+  bl.push(`<li><span>Without grid charging, the ${r0(rep.recommended.floor_pct)}% minimum reserve is reached</span><span class="np">${ttf ? '~' + esc(when(ms(ttf), d.gen)) : 'not reached'}</span></li>`);
+  const batt = rep.confidence.label === 'INSUFFICIENT' ? '<p class="empty">Battery path predictions need at least 7 days of history.</p>' : `<ul class="plist">${bl.join('')}</ul>`;
+
+  return `<section class="blk b-pred g-7" aria-labelledby="h-pred"><div class="bh">${vc('pred', 'Predicted', 'with 80% ranges')}<h3 id="h-pred" class="sr">Predicted</h3><span class="hint">ECCO's forecast. Dot is the middle estimate; hatched bar is the range. Each bar has its own scale.</span></div>
+   <div class="rows">${rows.join('')}</div>
+   <details><summary>More windows</summary><div class="dbody"><div class="rows">${more.join('')}</div></div></details>
+   <h4>Solar</h4>${pvs}${reaTxt}
+   <h4>Battery, if the advice were followed</h4>${batt}</section>`;
+}
+function pvBox(x, rep, d) {
+  const f = x.fc;
+  const nm = x.isToday ? 'Today' : cap1(x.when);
+  let line, notes = [];
+  const wk = weak(f);
+  if (f.source === 'none') {
+    line = `No solar estimate: ECCO has no forecast source and no solar history yet.`;
+  } else if (num(f.raw_kwh) && num(f.ratio)) {
+    line = `${esc(srcName(f.source))} says <b>${r0(f.raw_kwh)} kWh</b>; ECCO expects <span class="np">~${r0(f.p50)} kWh</span> <span class="pvx" title="Learned correction factor: ECCO's expected PV divided by the raw forecast">x${f.ratio.toFixed(2)} learned</span>`;
+  } else {
+    line = `ECCO expects <span class="np">~${r0(f.p50)} kWh</span> from recent days only (no forecast source to correct)`;
+  }
+  const range = f.source === 'none' ? '' : `<p class="note">Range ${r0(f.p10)} to ${r0(f.p90)} kWh. ${labelChip(f.label)}${x.isToday && num(rep.actual.pv_so_far_kwh) ? ` Actual so far today: ${r1(rep.actual.pv_so_far_kwh)} kWh.` : ''}</p>`;
+  (f.notes || []).forEach((n) => {
+    let m;
+    if ((m = n.match(/^PV band widened x([\d.]+): it only held (\d+)% of the last (\d+) days/))) notes.push(`Range widened x${m[1]} because it only held ${m[2]}% of the last ${m[3]} days.`);
+    else if ((m = n.match(/^raw (\w+) forecast is unreliable here: trailing raw MAE ([\d.]+) kWh vs ([\d.]+) kWh after correction/))) notes.push(`Raw ${cap1(m[1])} has been off by ${m[2]} kWh on average; corrected, ${m[3]} kWh.`);
+    else notes.push(cap1(n) + '.');
+  });
+  return `<div class="pvbox${wk ? ' weakrow' : ''}"><div class="nm">${nm}</div><p class="pvline">${line}</p>${range}${notes.length ? `<p class="note ${wk ? 'w' : ''}">${esc(notes.join(' '))}</p>` : ''}</div>`;
+}
+
+/* ---------------------------------------------------------------------------------------- recommended */
+function secRecommended(rep, d) {
+  const R = rep.recommended, ot = R.overnight_target, se = R.safe_export, ss = R.saving_session;
+  let body = '';
+  if (!ot) {
+    body = `<p class="empty">No recommendation: ${esc((R.reasons[0] || {}).text || R.status || 'unavailable')}</p>`;
+  } else {
+    const floor = R.floor_pct;
+    const bar = (label, v, pick) => `<div class="case${pick ? ' pick' : ''}"><span>${label}</span><div class="tr" aria-hidden="true"><i style="width:${v}%"></i><u style="left:${floor}%"></u></div><b>${pc(v)}</b></div>`;
+    const rt = ot.recommended_target_soc_pct;
+    body += `<div class="rec-big"><span class="big">Charge to ${pc(rt)}</span><span class="what">in the cheap window, ${esc(T(ot.window[0]))} to ${esc(T(ot.window[1]))}</span></div>
+     <div class="cases" role="group" aria-label="Target in the typical case and the poor case">${bar('Typical night', ot.median_case_target_soc_pct, rt === ot.median_case_target_soc_pct)}${bar('Poor night', ot.pessimistic_case_target_soc_pct, rt === ot.pessimistic_case_target_soc_pct)}</div>
+     <p class="foot" style="margin-top:4px">The advice follows the poor-night case. Thin red mark: ${r0(floor)}% minimum reserve.</p>`;
+    if (!ot.feasible_on_pessimistic_path) {
+      const imp = ot.expected_import_after_charge_kwh_pessimistic, pre = ot.expected_import_before_window_kwh_pessimistic;
+      body += `<div class="warnline">${ICON.tri}<span>Even ${pc(rt)} may not be enough on a poor night: about ${kw(imp)} kWh of peak-rate import to hold the ${r0(floor)}% floor.${pre > 0.2 ? ` Before the window opens it could already need about ${kw(pre)} kWh.` : ''}</span></div>`;
+    }
+    const gc = ot.grid_charge_needed;
+    body += `<div class="kv"><div><div class="k">Charge from the grid?</div><div class="v">${gc ? 'Yes' : 'No'}<small>${gc ? `about ${kw(ot.grid_charge_kwh_median)} kWh on a typical night` : 'the battery stays above the comfort level without it'}</small></div></div>`;
+    /* export */
+    let ev, es;
+    if (se && se.withheld_because) { ev = 'None, withheld'; es = `Because: ${esc(se.withheld_because)}.`; }
+    else if (se && se.kwh > 0) { ev = `${kw(se.kwh)} kWh`; es = se.reduced_for ? `Reduced for ${esc(se.reduced_for.join(', '))}, from ${kw(se.kwh_before_reductions)} kWh.` : 'Safe to export now and refill in the cheap window.'; }
+    else { ev = 'None now'; es = 'The battery is needed to cover the night.'; }
+    if (se && num(se.net_value_p_per_kwh)) es += ` Net value about ${se.net_value_p_per_kwh.toFixed(1)} p/kWh (export rate minus the cost of buying it back).`;
+    body += `<div><div class="k">Safe export now</div><div class="v">${ev}<small>${es}</small></div></div>`;
+    /* saving session */
+    let sv;
+    if (ss) {
+      const sw = `${T(ms(ss.start))} to ${T(ms(ss.end))} ${dayWord(ms(ss.start), d.gen)}`;
+      sv = `<div class="v">${ss.covered_from_battery_pessimistic ? 'Battery should cover it' : 'Battery may not cover it'}<small>Saving Session ${esc(sw)}. Predicted ${pc(ss.soc_at_start_median)} at the start${ss.covered_from_battery_pessimistic ? '.' : `; keep at least ${pc(ss.min_soc_start_to_cover)} to be covered on a poor night.`}</small></div>`;
+    } else sv = `<div class="v" style="font-weight:500;color:var(--ink2)">No Saving Session in the next period</div>`;
+    body += `<div><div class="k">Saving Session cover</div>${sv}</div></div>`;
+  }
+  body += `<div class="apply"><button type="button" id="applybtn" aria-disabled="true" aria-describedby="applywhy" title="Not connected: ECCO Intelligence never writes to the inverter. The deterministic ESP safety layer stays in charge.">${ICON.lock}Apply recommendation</button>
+    <p id="applywhy">Not connected: ECCO Intelligence never writes to the inverter. The deterministic ESP safety layer stays in charge.</p></div>`;
+  return `<section class="blk b-rec" aria-labelledby="h-rec"><div class="bh">${vc('rec', 'Recommended', 'shadow, not applied')}<h3 id="h-rec" class="sr">Recommended</h3></div>${body}</section>`;
+}
+
+/* ------------------------------------------------------------------------------------------ confidence */
+function secConfidence(rep, d) {
+  const c = rep.confidence, L = LABELS[c.label] || LABELS.INSUFFICIENT;
+  const ord = ['INSUFFICIENT', 'LOW', 'MEDIUM', 'HIGH'];
+  const why = [], keep = [];
+  if (c.history_days < 28) why.push(`Only ${c.history_days} days of history. ECCO needs 7 to forecast at all and 28 for full confidence.`);
+  if (rep.status === 'DATA_STALE') why.push(`Data is stale, which caps confidence at 0.30.`);
+  if (rep.anomalies && rep.anomalies.abnormal_load_now) why.push('Abnormal load right now lowers confidence by a fifth.');
+  if (c.pv < 0.75) { const f = Object.keys(rep.pv || {}).filter((k) => /^\d{4}-/.test(k)).map((k) => rep.pv[k]).find((x) => weak(x) || x.confidence < 0.75); why.push(`Solar forecast trust is ${c.pv.toFixed(2)}${f && f.notes && f.notes.length ? ': ' + cap1(f.notes[0]) : ''}.`); }
+  if (c.usage < 0.75 && c.history_days >= 28 && rep.status !== 'DATA_STALE') why.push(`Demand forecast trust is ${c.usage.toFixed(2)}.`);
+  const lowF = Object.values(rep.predicted).filter((v) => v && v.kind && weak(v));
+  if (lowF.length && c.history_days >= 7) why.push(`${lowF.length} forecast${lowF.length > 1 ? 's are' : ' is'} rated low.`);
+  /* things to keep in mind even at HIGH */
+  Object.keys(rep.pv || {}).filter((k) => /^\d{4}-/.test(k)).forEach((k) => (rep.pv[k].notes || []).forEach((n) => { const m = n.match(/^PV band widened x([\d.]+): it only held (\d+)%/); if (m && !keep.some((q) => q.startsWith('Solar ranges'))) keep.push(`Solar ranges were widened x${m[1]}: they only held ${m[2]}% of recent days.`); }));
+  keep.push('Ranges are 80% ranges: about one outcome in five lands outside them.');
+  const pvAcc = ACC.accuracy_last_7_days['pv_kwh:day'];
+  if (c.history_days >= 28 && pvAcc && pvAcc.coverage < pvAcc.band_nominal - 0.2) keep.push(`Last 7 days, solar ranges held ${r0(pvAcc.coverage * 100)}% of the time against 80% intended (see Learning and accuracy).`);
+  const sub = (k, v) => `<div><b>${v}</b>${k}</div>`;
+  return `<section class="blk b-conf" aria-labelledby="h-conf"><div class="bh">${vc('conf', 'Confidence')}<h3 id="h-conf" class="sr">Confidence</h3></div>
+   <div class="score"><span class="w">${L.w}</span><span class="n">${c.overall.toFixed(2)} on a 0 to 1 scale</span></div>
+   <div class="meter" role="img" aria-label="Confidence ${c.overall.toFixed(2)} out of 1, ${L.w}"><i style="width:${c.overall * 100}%"></i><u style="left:25%"></u><u style="left:50%"></u><u style="left:75%"></u></div>
+   <div class="mlab" aria-hidden="true">${ord.map((o) => `<span class="${o === c.label ? 'on' : ''}">${LABELS[o].w}</span>`).join('')}</div>
+   <div class="subs">${sub('Demand', c.usage.toFixed(2))}${sub('Solar', c.pv.toFixed(2))}${sub('History', c.history_days + ' days')}</div>
+   ${why.length ? `<h4>Why it is not high</h4><ul class="ul">${why.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+   ${why.length ? '' : '<p class="foot" style="margin-top:10px">Nothing is lowering confidence.</p>'}<h4 style="margin-top:${why.length ? 14 : 4}px">${why.length ? 'Also worth knowing' : 'Still worth knowing'}</h4><ul class="ul">${keep.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></section>`;
+}
+
+/* -------------------------------------------------------------------------------------------- anomalies */
+function secAnomalies(rep, d) {
+  const A = rep.anomalies;
+  let body;
+  if (!A.anomalies.length) {
+    body = `<div class="ok-line">${ICON.check}<span>No unusual load pattern. Overnight base load ${num(A.base_load_kw) ? r1(A.base_load_kw) + ' kW against a normal ' + r1(A.base_load_norm_kw) + ' kW' : 'not measurable yet (needs 14 nights)'}.</span></div>`;
+  } else {
+    const nice = { INFO: ['Info', ''], WATCH: ['Watch', 'watch'], ABNORMAL: ['Abnormal', 'abn'] };
+    body = `<div class="anom">${A.anomalies.map((a) => `<div class="an"><span class="sev ${nice[a.severity][1]}">${nice[a.severity][0]}</span><span>${esc(a.text)}</span></div>`).join('')}</div>
+      <p class="foot">ECCO sees the whole-house pattern only. It cannot say which appliance or why.</p>`;
+  }
+  return `<section class="blk b-plain g-full" aria-labelledby="h-anom"><div class="bh"><h3 id="h-anom">Unusual load</h3><span class="hint">Neutral flags from the load pattern</span></div>${body}</section>`;
+}
+
+/* -------------------------------------------------------------------------------------------------- why */
+const REASON_NAME = { SHORTFALL: 'Shortfall risk', EXPORT: 'Export', EXPORT_WITHHELD: 'Export withheld', TARGET: 'Target', PRE_WINDOW_RISK: 'Before the window', PRE_WINDOW_FLOOR: 'Before the window', FLOOR_ETA: 'Floor ETA', SESSION: 'Saving Session', INSUFFICIENT_HISTORY: 'History', NO_SOC: 'No SOC', NO_WINDOW: 'No window' };
+function secWhy(rep, d) {
+  const R = rep.recommended;
+  const reasons = (R.reasons || []).map((r) => `<div class="reason"><span class="rcode" title="${esc(r.code)}">${esc(REASON_NAME[r.code] || r.code)}</span><span>${esc(r.text)}</span></div>`).join('') || '<p class="empty">No reasons given.</p>';
+  const unc = (R.uncertainty || []);
+  const notes = (rep.notes || []).map((n) => cap1(n) + '.');
+  const uncL = unc.map((u) => `<li>${esc(u.text)} <span class="muted">(${esc(u.severity.toLowerCase())})</span></li>`).concat(notes.map((n) => `<li>${esc(n)}</li>`));
+  const ass = (R.assumptions || []).map((a) => `<li>${esc(a)}</li>`).join('');
+  return `<section class="blk b-plain g-full" aria-labelledby="h-why"><div class="bh"><h3 id="h-why">Why</h3><span class="hint">Straight from the engine's own reasons</span></div>
+   <div class="why2"><div>${reasons}</div><div>
+     <h4 style="margin-top:0">What is uncertain</h4>${uncL.length ? `<ul class="ul">${uncL.join('')}</ul>` : '<p class="empty">Nothing flagged beyond the ranges shown.</p>'}
+     <details><summary>Assumptions (${(R.assumptions || []).length})</summary><div class="dbody"><ul class="ul">${ass}</ul></div></details></div></div>
+   ${technical(rep, d)}</section>`;
+}
+function technical(rep, d) {
+  const P = rep.predicted;
+  const fcs = Object.keys(P).filter((k) => P[k] && P[k].kind);
+  const frows = fcs.map((k) => { const f = P[k]; const wts = f.weights ? Object.keys(f.weights).map((e) => `${e} ${f.weights[e].toFixed(2)}`).join(', ') : ''; return `<tr><td>${esc(k)}</td><td class="n">${f.p10.toFixed(2)}</td><td class="n">${f.p50.toFixed(2)}</td><td class="n">${f.p90.toFixed(2)}</td><td>${esc(f.label)}</td><td class="n">${f.n_residuals}</td><td class="n">${num(f.empirical_coverage) ? f.empirical_coverage.toFixed(2) : 'n/a'}</td><td>${esc(wts)}</td></tr>`; }).join('');
+  const pk = Object.keys(rep.pv || {}).filter((k) => /^\d{4}-/.test(k));
+  const prows = pk.map((k) => { const f = rep.pv[k]; const f2 = (v, dp = 2) => (num(v) ? v.toFixed(dp) : 'n/a'); return `<tr><td>${esc(k)}</td><td>${esc(f.source)}</td><td class="n">${f2(f.raw_kwh)}</td><td class="n">${f2(f.ratio, 3)}</td><td class="n">${f2(f.p10)} / ${f2(f.p50)} / ${f2(f.p90)}</td><td class="n">${f.n_pairs}</td><td class="n">${f2(f.mae_corrected)} / ${f2(f.mae_raw)}</td><td class="n">${f.inflation}</td><td>${esc(f.label)}</td></tr>`; }).join('');
+  const w = rep.weekday_effect || {};
+  return `<details><summary>Technical detail</summary><div class="dbody">
+   <dl class="dl"><dt>Model version</dt><dd>${esc(rep.model_version)}</dd><dt>Feature hash</dt><dd>${esc(rep.feature_hash || 'not present')}</dd><dt>Config hash</dt><dd>${esc(rep.config_hash)}</dd>
+    <dt>Minimum battery reserve</dt><dd>${(rv => rv ? `your setting ${rv.user_reserve_pct}% (default 40%), technical minimum ${rv.technical_min_pct}%, effective ${rv.effective_pct}%` + (rv.override_reason ? ' - ' + esc(rv.override_reason) : '') : 'n/a')(rep.recommended.reserve)}</dd>
+    <dt>Mode</dt><dd>${esc(rep.mode)}, applies_nothing=${rep.applies_nothing}</dd><dt>Generated (UTC)</dt><dd>${esc(rep.generated_for)}</dd>
+    <dt>History</dt><dd>${rep.confidence.history_days} days; forecast records ${rep.forecast_records == null ? 'n/a' : rep.forecast_records}</dd>
+    <dt>Weekday effect</dt><dd>${w.n ? `n=${w.n}, explained variance ${num(w.explained_variance) ? w.explained_variance.toFixed(3) : 'n/a'}, ${w.material ? 'material' : 'not material'}` : 'n/a'}</dd></dl>
+   <div class="tw"><table><caption>Forecasts in kWh, with the engine's own labels (weights are the expert blend: fast, slow, median14)</caption><thead><tr><th>Forecast</th><th class="n">p10</th><th class="n">p50</th><th class="n">p90</th><th>Label</th><th class="n">n resid.</th><th class="n">Coverage</th><th>Expert weights</th></tr></thead><tbody>${frows}</tbody></table></div>
+   <div class="tw" style="margin-top:12px"><table><caption>Solar forecasts by day</caption><thead><tr><th>Day</th><th>Source</th><th class="n">Raw kWh</th><th class="n">Ratio</th><th class="n">p10 / p50 / p90</th><th class="n">Pairs</th><th class="n">MAE corr. / raw</th><th class="n">Widen</th><th>Label</th></tr></thead><tbody>${prows}</tbody></table></div>
+   <details><summary>Raw report JSON</summary><div class="dbody"><pre tabindex="0" aria-label="Raw report JSON">${esc(JSON.stringify(stripTraj(rep), null, 1))}</pre></div></details></div></details>`;
+}
+function stripTraj(rep) { const c = clone(rep); if (c.recommended && c.recommended.trajectory) c.recommended.trajectory = `[${c.recommended.trajectory.length} hourly points omitted here]`; return c; }
+
+/* ------------------------------------------------------------------------------------------ accuracy */
+const ACC_NAMES = { 'load_kwh:day': 'Whole-day demand', 'load_kwh:cheap_window': 'Cheap-window demand', 'load_kwh:next_1h': 'Next-hour demand', 'pv_kwh:day': 'Solar for the day', 'load_kwh:morning': 'Morning demand', 'load_kwh:overnight': 'Overnight demand', 'load_kwh:to_next_cheap': 'Until next cheap window', 'load_kwh:to_useful_pv_from_now': 'Until useful solar' };
+const ACC_MAIN = ['load_kwh:day', 'load_kwh:cheap_window', 'load_kwh:next_1h', 'pv_kwh:day'];
+const ACC_MORE = ['load_kwh:morning', 'load_kwh:overnight', 'load_kwh:to_next_cheap', 'load_kwh:to_useful_pv_from_now'];
+function accRow(k) {
+  const m = ACC.accuracy_last_7_days[k];
+  if (!m) return '';
+  const nom = m.band_nominal;
+  const low = m.coverage < nom - 0.2;
+  const bias = m.bias;
+  const biasW = Math.abs(bias) < m.mae * 0.25 ? 'about even' : bias > 0 ? 'under-forecast' : 'over-forecast';
+  return `<tr><td>${esc(ACC_NAMES[k] || k)}</td><td class="n">${m.n}</td><td class="n">${m.mae.toFixed(1)}</td><td class="n">${bias > 0 ? '+' : ''}${bias.toFixed(1)}<br><span class="muted nw" style="font-size:11px">${biasW}</span></td><td class="n">${r0(m.coverage * 100)}%${low ? `<br><span class="flag">${ICON.tri.replace('<svg', '<svg width="12" height="12"')}misses often</span>` : ''}</td></tr>`;
+}
+function accChart(k, W) {
+  const rows = ACC.series_last_14[k];
+  const H = 210, M = { l: 34, r: 8, t: 12, b: 36 };
+  const vals = rows.flatMap((r) => [r.band_low, r.band_high, r.actual]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const step = (hi - lo) > 20 ? 10 : (hi - lo) > 8 ? 5 : (hi - lo) > 4 ? 2 : 1;
+  lo = Math.floor((lo - 0.5) / step) * step; hi = Math.ceil((hi + 0.5) / step) * step;
+  const iw = W - M.l - M.r, ih = H - M.t - M.b, n = rows.length, cw = iw / n;
+  const X = (i) => M.l + cw * (i + 0.5), Y = (v) => M.t + (hi - v) / (hi - lo) * ih;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(ACC_NAMES[k])}: predicted versus actual for the last 14 days. ${rows.filter((r) => !r.in_band).length} of 14 actuals fell outside the predicted range."><defs><pattern id="hatch3" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="c-hatch"/></pattern></defs>`;
+  for (let v = lo; v <= hi + 1e-9; v += step) s += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}" class="c-grid"/><text x="${M.l - 5}" y="${Y(v) + 4}" text-anchor="end" class="c-txt">${v}</text>`;
+  rows.forEach((r, i) => {
+    const x = X(i), bw = Math.min(14, cw - 4);
+    s += `<rect x="${x - bw / 2}" y="${Y(r.band_high)}" width="${bw}" height="${Math.max(2, Y(r.band_low) - Y(r.band_high))}" class="c-band"/><rect x="${x - bw / 2}" y="${Y(r.band_high)}" width="${bw}" height="${Math.max(2, Y(r.band_low) - Y(r.band_high))}" fill="url(#hatch3)"/>`;
+    s += `<circle cx="${x}" cy="${Y(r.predicted)}" r="3.6" fill="var(--card1)" stroke="var(--pred)" stroke-width="1.8"/>`;
+    if (r.in_band) s += `<rect x="${x - 4}" y="${Y(r.actual) - 4}" width="8" height="8" class="c-dot"/>`;
+    else s += `<rect x="${x - 4.5}" y="${Y(r.actual) - 4.5}" width="9" height="9" class="c-dot"/><rect x="${x - 9}" y="${Y(r.actual) - 9}" width="18" height="18" rx="3" fill="none" stroke="var(--floor)" stroke-width="2"/>`;
+    const lab = dayLabel(r, k);
+    s += `<text x="${x}" y="${H - M.b + 14}" text-anchor="middle" class="c-txt" ${r.in_band ? '' : 'font-weight="800" style="fill:var(--ink)"'}>${lab.d}</text>`;
+    if (i === 0 || lab.wd === 'Mon') s += `<text x="${x}" y="${H - M.b + 27}" text-anchor="middle" class="c-txt">${lab.m}</text>`;
+  });
+  s += `<line x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}" class="c-axis"/><line id="axh" x1="0" x2="0" y1="${M.t}" y2="${H - M.b}" class="c-cross" style="display:none"/></svg>`;
+  return { s, X, cw, n, M };
+}
+function dayLabel(r, k) {
+  const m = r.target_end_local.match(/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d)$/);
+  let dt = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  if (m[4] === '00' && m[5] === '00') dt -= DAY; // a "day" series ends at midnight: it describes the day before
+  const dd = new Date(dt);
+  return { d: dd.getUTCDate(), m: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dd.getUTCMonth()], wd: dd.toLocaleString('en-GB', { weekday: 'short', timeZone: 'UTC' }), full: dd.toLocaleString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' }) };
+}
+function secLearning(rep, d) {
+  const st = STATUS[rep.status] || STATUS.LEARNING_NORMALLY;
+  const none = rep.status === 'INSUFFICIENT_HISTORY';
+  const pillTxt = rep.status === 'LEARNING_NORMALLY' ? 'Learning normally' : rep.status === 'INSUFFICIENT_HISTORY' ? 'Insufficient history' : rep.status === 'ABNORMAL_DAY' ? 'Abnormal day' : st.pill;
+  const lineTxt = { LEARNING_NORMALLY: `${rep.confidence.history_days} days of history, learning normally.`, LEARNING: `${rep.confidence.history_days} days of history. Scores below come from a short record and will settle.`, INSUFFICIENT_HISTORY: 'Scoring starts after 7 days of history.', ABNORMAL_DAY: "Today looks unusual, so ECCO treats today's figures with extra caution.", DATA_STALE: 'Learning is waiting for fresh data.', PV_UNDERPERFORMING: 'Solar has been below forecast today; ECCO is scaling the rest of today down.' }[rep.status];
+  let table, chart, ins;
+  if (none) {
+    table = `<p class="empty">No scored forecasts yet. The 7-day accuracy table appears once ECCO has scored a week of its own forecasts.</p>`;
+    chart = `<p class="empty">The predicted-versus-actual chart appears once forecasts have been scored.</p>`;
+    ins = `<ul class="insights"><li>No systematic bias found yet.</li></ul>`;
+  } else {
+    table = `<div class="tw"><table><caption>Last 7 days, kWh. MAE is the typical miss. Bias is actual minus predicted. Ranges are meant to hold 80% of the time.</caption><thead><tr><th>Forecast</th><th class="n">Scored</th><th class="n">Miss (MAE)</th><th class="n">Bias</th><th class="n">Range held</th></tr></thead><tbody>${ACC_MAIN.map(accRow).join('')}</tbody></table></div>
+      <details><summary>More forecasts</summary><div class="dbody"><div class="tw"><table><tbody>${ACC_MORE.map(accRow).join('')}</tbody></table></div></div></details>`;
+    chart = `<div class="seg" role="group" aria-label="Choose forecast to chart">${['load_kwh:day', 'load_kwh:cheap_window', 'pv_kwh:day'].map((k) => `<button type="button" class="sbtn" data-acc="${k}" aria-pressed="${S.acc === k}">${esc(ACC_NAMES[k])}</button>`).join('')}</div>
+      <div class="chwrap" id="accwrap" tabindex="0" role="group" aria-label="Last 14 days predicted versus actual. Use arrow keys to step through days."><div id="accsvg"></div><div class="tip" id="acctip" role="status" aria-live="polite"></div></div>
+      <div class="keys"><span><svg viewBox="0 0 24 12"><rect x="6" y="1" width="12" height="10" class="c-band"/><path d="M6 11 12 1M12 11 18 1" class="c-hatch"/></svg>Predicted range</span><span><svg viewBox="0 0 24 12"><circle cx="12" cy="6" r="4" fill="var(--card1)" stroke="var(--pred)" stroke-width="1.8"/></svg>Predicted</span><span><svg viewBox="0 0 24 12"><rect x="8" y="2" width="8" height="8" class="c-dot"/></svg>Actual</span><span><svg viewBox="0 0 24 12"><rect x="8" y="2" width="8" height="8" class="c-dot"/><rect x="5" y="-1" width="14" height="14" rx="3" fill="none" stroke="var(--floor)" stroke-width="2"/></svg>Outside the range</span></div>`;
+    const insights = ACC.insights || [];
+    ins = insights.length ? `<ul class="insights">${insights.map((t) => `<li>${esc(typeof t === 'string' ? t : t.text || JSON.stringify(t))}</li>`).join('')}</ul>` : `<ul class="insights"><li>No systematic bias found yet.</li></ul>`;
+  }
+  return `<section class="blk b-plain g-full" aria-labelledby="h-learn"><div class="bh"><h3 id="h-learn">Learning and accuracy</h3><span class="hint">How well past forecasts matched what happened${none ? '' : ' (example scorecard, 21:30 shadow runs)'}</span></div>
+   <div class="pillrow"><span class="pill ${st.tone}">${ICON[st.icon]}${esc(pillTxt)}</span><span class="muted" style="font-size:13px">${esc(lineTxt)}</span></div>
+   <div class="learn"><div>${table}${ins}</div><div>${chart}</div></div></section>`;
+}
+function drawAcc() {
+  const host = document.getElementById('accsvg'); if (!host) return;
+  const W = Math.max(260, Math.floor(host.clientWidth || host.parentElement.clientWidth || 320));
+  const { s, X, cw, n, M } = accChart(S.acc, W);
+  host.innerHTML = s;
+  const rows = ACC.series_last_14[S.acc];
+  const wrap = document.getElementById('accwrap'), tip = document.getElementById('acctip');
+  const unit = 'kWh';
+  const show = (i) => {
+    const r = rows[i], lab = dayLabel(r, S.acc), ax = document.getElementById('axh');
+    const x = X(i); ax.setAttribute('x1', x); ax.setAttribute('x2', x); ax.style.display = '';
+    const isWin = S.acc === 'load_kwh:cheap_window' ? 'Cheap window ending' : S.acc === 'load_kwh:morning' ? 'Morning of' : 'Day of';
+    tip.innerHTML = `<span class="tl">${esc(isWin)} ${esc(lab.full)}</span><b>Actual ${r.actual.toFixed(1)} ${unit}</b><span>Predicted ${r.predicted.toFixed(1)} (range ${r.band_low.toFixed(1)} to ${r.band_high.toFixed(1)})</span><br><span class="${r.in_band ? 'tl' : ''}" style="${r.in_band ? '' : 'font-weight:700'}">${r.in_band ? 'Inside the range' : 'Outside the range'}, ${r.error > 0 ? 'actual higher by ' : 'actual lower by '}${Math.abs(r.error).toFixed(1)}</span>`;
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth; let left = x + 12; if (left + tw > wrap.clientWidth) left = x - tw - 12;
+    tip.style.left = Math.max(0, left) + 'px'; tip.style.top = '10px'; S.accStep = i;
+  };
+  const hide = () => { tip.style.display = 'none'; const ax = document.getElementById('axh'); if (ax) ax.style.display = 'none'; };
+  wrap.onpointermove = (e) => { const r = host.getBoundingClientRect(); const px = (e.clientX - r.left) * (W / r.width); show(Math.max(0, Math.min(n - 1, Math.floor((px - M.l) / cw)))); };
+  wrap.onpointerleave = () => { if (document.activeElement !== wrap) hide(); };
+  wrap.onblur = hide;
+  wrap.onkeydown = (e) => {
+    let i = S.accStep == null ? -1 : S.accStep;
+    if (e.key === 'ArrowRight') i = Math.min(n - 1, i + 1); else if (e.key === 'ArrowLeft') i = Math.max(0, i < 0 ? 0 : i - 1); else if (e.key === 'Home') i = 0; else if (e.key === 'End') i = n - 1; else if (e.key === 'Escape') { hide(); return; } else return;
+    e.preventDefault(); show(i);
+  };
+}
+
+/* ======================================================================================================
+   Render
+   ====================================================================================================== */
+function render() {
+  build();
+  const rep = REP, d = CTX.d;
+  const defensive = rep.mode !== 'SHADOW' || rep.applies_nothing !== true;
+  card.className = 'ecco' + (CTX.ageKey === 'old' ? ' is-old' : '');
+  card.setAttribute('aria-labelledby', 'ecco-title');
+  card.innerHTML = `${secBanner()}<div class="ecco-in">${secHeader(rep, d)}${secCallouts(rep, d)}${defensive ? '' : `
+    <div class="grid">
+      <div class="g-full">${secExpects(rep, d)}</div>
+      <div class="g-full">${secActual(rep, d)}</div>
+      <div class="g-full">${secChart(rep, d)}</div>
+      ${secPredicted(rep, d)}
+      <div class="side g-5">${secRecommended(rep, d)}${secConfidence(rep, d)}</div>
+      ${secAnomalies(rep, d)}
+      ${secWhy(rep, d)}
+      ${secLearning(rep, d)}
+    </div>`}
+    <p class="tail">${CTX.scen.real ? 'Engine output on a synthetic household (docs/intelligence/examples).' : 'Synthetic state demo: an engine report edited in JavaScript to show this state.'} Layout and wording are a mock.</p></div>`;
+  card.querySelectorAll('.g-full').forEach(() => {});
+  wire();
+  drawChart(); drawAcc();
+  const ab = document.getElementById('applybtn');
+  if (ab) { ab.addEventListener('click', (e) => e.preventDefault()); ab.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.preventDefault(); }); }
+  syncLab();
+}
+function wire() {
+  const tb = document.getElementById('tbtn');
+  if (tb) tb.addEventListener('click', () => { S.table = !S.table; refreshChart(); });
+  card.querySelectorAll('[data-acc]').forEach((b) => b.addEventListener('click', () => { S.acc = b.dataset.acc; S.accStep = null; card.querySelectorAll('[data-acc]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.acc === S.acc))); drawAcc(); }));
+}
+function refreshChart() {
+  const old = card.querySelector('.b-chart');
+  const holder = old.parentElement;
+  holder.innerHTML = secChart(REP, CTX.d);
+  const tb = document.getElementById('tbtn'); tb.addEventListener('click', () => { S.table = !S.table; refreshChart(); }); tb.focus();
+  drawChart();
+}
+
+/* ---------------------------------------------------------------------------- mock controls (the lab) */
+const lab = document.getElementById('lab');
+function buildLab() {
+  const mk = (arr) => arr.map((s) => `<button type="button" class="chipbtn${s.real ? '' : ' syn'}" data-scen="${s.id}" aria-pressed="false" title="${s.real ? 'Engine output (synthetic household)' : 'Synthetic state demo: an engine report edited in JS'}">${esc(s.label)}${s.sub ? ` <span style="font-weight:400;opacity:.75">${esc(s.sub)}</span>` : ''}</button>`).join('');
+  lab.innerHTML = `<h1>Mock controls (not part of the card)</h1><p>Pick a scenario. Solid-outline buttons are engine output on a synthetic household; dashed ones are synthetic state demos made by editing a copy of an engine report.</p>
+   <div class="grp" role="group" aria-label="Engine scenarios"><span class="gl">Engine output</span>${mk(SCEN.filter((s) => s.real))}</div>
+   <div class="grp" role="group" aria-label="Synthetic state demos"><span class="gl">Synthetic state demo</span>${mk(SCEN.filter((s) => !s.real))}</div>
+   <div class="grp"><label>Force state <select id="force">${FORCE.map((f) => `<option value="${f.v}">${esc(f.t)}</option>`).join('')}</select></label>
+     <label>Report age <select id="age"><option value="fresh">2 min (fresh)</option><option value="aging">40 min</option><option value="old">4 hours</option></select></label>
+     <label>Theme <select id="theme"><option value="auto">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div>`;
+  lab.querySelectorAll('[data-scen]').forEach((b) => b.addEventListener('click', () => { S.scen = b.dataset.scen; S.force = ''; S.step = null; S.accStep = null; render(); }));
+  document.getElementById('force').addEventListener('change', (e) => { S.force = e.target.value; render(); });
+  document.getElementById('age').addEventListener('change', (e) => { S.age = e.target.value; render(); });
+  document.getElementById('theme').addEventListener('change', (e) => { S.theme = e.target.value; applyTheme(); });
+}
+function syncLab() {
+  lab.querySelectorAll('[data-scen]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scen === S.scen)));
+  document.getElementById('force').value = S.force;
+  document.getElementById('age').value = S.age;
+}
+function applyTheme() {
+  const r = document.documentElement;
+  if (S.theme === 'auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', S.theme);
+  try { localStorage.setItem('ecco-intel-mock-theme', S.theme); } catch (e) { /* storage may be blocked */ }
+  if (REP) { drawChart(); drawAcc(); }
+}
+
+/* redraw charts when the card width changes (container-style responsiveness) */
+let lastW = 0, raf = 0;
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    const w = Math.round(card.clientWidth);
+    if (Math.abs(w - lastW) < 2) return; lastW = w;
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { drawChart(); drawAcc(); });
+  }).observe(card);
+}
+try { const t = localStorage.getItem('ecco-intel-mock-theme'); if (t) S.theme = t; } catch (e) { /* ignore */ }
+buildLab();
+document.getElementById('theme').value = S.theme;
+applyTheme();
+const q = new URLSearchParams(location.search);
+if (q.get('s') && SCEN.some((s) => s.id === q.get('s'))) S.scen = q.get('s');
+if (q.get('force')) S.force = q.get('force');
+if (q.get('age')) S.age = q.get('age');
+if (q.get('theme')) { S.theme = q.get('theme'); document.getElementById('theme').value = S.theme; applyTheme(); }
+render();
+if (q.get('y')) { window.scrollTo(0, +q.get('y')); }
+if (q.get('open')) { document.querySelectorAll('details').forEach((x) => { x.open = true; }); }
+window.__ecco = { render, S, SCEN, REPORTS, ACC };
+})();
+
+</script>
+</body>
+</html>

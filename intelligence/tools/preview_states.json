@@ -1,0 +1,26 @@
+{
+ "_note": "SYNTHETIC sample sensor values (not read from any system) and a preceding hourly SOC series (last value = the live sensor), used only by preview_dashboard.py.",
+ "states": {
+  "sensor.ecco_battery_soc": 88.0,
+  "sensor.ecco_house_power": 1100.0,
+  "sensor.ecco_pv_power": 200.0,
+  "sensor.ecco_grid_power": 0.0,
+  "sensor.ecco_clock_dongle_ecco_battery_output_power": 900.0,
+  "sensor.ecco_import_rate": 30.0,
+  "sensor.ecco_supervision_status": "Healthy",
+  "input_number.ecco_minimum_reserve_soc": 15.0
+ },
+ "soc_history": [
+  60.0,
+  56.0,
+  52.0,
+  51.0,
+  72.0,
+  94.0,
+  99.0,
+  100.0,
+  99.0,
+  97.0,
+  88.0
+ ]
+}

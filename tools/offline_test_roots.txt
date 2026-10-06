@@ -7,4 +7,5 @@ registry/tests
 home-assistant/tests
 health/tests
 influxdb
+intelligence/tests
 tools/tests
