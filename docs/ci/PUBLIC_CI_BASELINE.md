@@ -37,11 +37,14 @@ review for `.github/**` via CODEOWNERS) is the control that closes that gap; it 
 
 `tools/build_ha_bundle.py` and `tools/validate_repo.py` share `tools/_safe_paths.py`. A manifest `source` is refused (exit 2,
 no bundle left behind) unless it is a clean repo-relative path (no `..`, `.`, absolute, backslash, drive, `~`, NUL, control
-character, trailing dot/space, `.git*` component), under `home-assistant/packages|dashboards`, `influxdb`, `frontend` or
-`firmware` with a `.yaml/.yml/.flux/.js/.json/.md` suffix (plus `VERSION.yaml` and the manifest), not credential-shaped
-(`secrets*`, `.env*`, `*_private.yaml`, `*.pem`, `*.key`), no component a symlink or junction, a regular file, resolving
-inside the repo root, and git-tracked as mode 100644/100755 (`--allow-untracked` relaxes only the tracked check, for a source
-archive). Every `source` anywhere in the manifest is bundled, which also fixes `frontend_assets` being listed but never copied.
+character, lone surrogate, trailing dot/space, `.git*` component), under `home-assistant/packages|dashboards`, `influxdb`,
+`frontend` or `firmware` with a `.yaml/.yml/.flux/.js/.json/.md` suffix (plus `VERSION.yaml` and the manifest), not
+credential-shaped (`secrets*`, `.env*`, `*_private.yaml`, `*.pem`, `*.key`), no component a symlink or junction, a regular
+file, resolving inside the repo root, and recorded by git as exactly one merged mode-100644/100755 entry for that exact path
+(`--literal-pathspecs`, `-z`, byte-exact: a committed symlink, mode 120000, is refused even where a `core.symlinks=false`
+checkout wrote it out as a plain file, and `x[1].yaml` cannot borrow a tracked `x1.yaml`). `--allow-untracked` relaxes only
+that git check, for a source archive. A filesystem error while inspecting a source is a refusal, never a crash. Every
+`source` anywhere in the manifest is bundled, which also fixes `frontend_assets` being listed but never copied.
 
 The bundle is **review only**. On a PR it is built from unreviewed code; it contains `REVIEW-ONLY.txt`, the artifact is named
 `ecco-ha-bundle-REVIEW-ONLY-not-for-deployment`, and no workflow consumes it. Deploy only from a reviewed, merged commit.

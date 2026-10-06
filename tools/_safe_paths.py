@@ -4,7 +4,9 @@
 Shared by tools/build_ha_bundle.py (copies the files) and tools/validate_repo.py (checks the manifest).
 The manifest is data a pull request can change, so every `source` is untrusted: it must name a regular,
 non-symlink file that lives inside the repository root, under an approved directory, with an approved
-suffix, and (for the bundle builder) is tracked by git. Nothing here reads file contents.
+suffix, and (for the bundle builder) is recorded by git as a regular file. Git's own record decides that last
+point, so a symlink committed to the tree is refused even where the checkout (core.symlinks=false) wrote it out
+as a plain file. Nothing here reads file contents.
 
 Every violation raises UnsafePathError; callers turn that into a non-zero exit. There is no "skip and continue".
 """
@@ -47,6 +49,10 @@ def check_relative_source(source: object, *, allowed_prefixes: tuple[str, ...] =
             raise UnsafePathError(f"source {source!r} contains forbidden character {bad!r}")
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in source):
         raise UnsafePathError(f"source {source!r} contains a control character")
+    try:
+        source.encode("utf-8")  # a lone surrogate (YAML "\ud800") names no portable file and cannot match git's UTF-8 paths
+    except UnicodeEncodeError:
+        raise UnsafePathError(f"source {source!r} is not valid Unicode text") from None
     if source.startswith("/"):
         raise UnsafePathError(f"source {source!r} is absolute")
     parts = source.split("/")
@@ -83,14 +89,26 @@ def is_link_like(path: Path) -> bool:
 
 
 def git_tracked_regular(root: Path, rel: str) -> bool:
-    """True iff `rel` is in the git index as a regular file (mode 100644 / 100755), not a symlink (120000)."""
+    """True iff the git index records exactly `rel` as ONE merged (stage 0) regular file (mode 100644 / 100755).
+
+    Exact, never pattern-matched: `--literal-pathspecs` switches off git's pathspec globbing (without it the source
+    `x[1].yaml` matches a tracked `x1.yaml`, so an untracked file passed) and the single NUL-terminated record's path
+    must equal `rel` byte for byte. A symlink (120000), gitlink (160000), unmerged or missing entry, a record for any
+    other path, or any git failure -> False (fail closed).
+    """
     try:
-        out = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "--error-unmatch", "--", rel],
-                             capture_output=True, text=True, timeout=60, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
+        want = rel.encode("utf-8")
+        out = subprocess.run(["git", "--literal-pathspecs", "-C", str(root), "ls-files", "--stage", "-z", "--error-unmatch",
+                              "--", rel], capture_output=True, timeout=60, check=True).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
-    modes = {line.split(" ", 1)[0] for line in out.splitlines() if line}
-    return bool(modes) and modes <= {"100644", "100755"}
+    records = [r for r in out.split(b"\0") if r]
+    if len(records) != 1:
+        return False
+    meta, tab, path = records[0].partition(b"\t")  # "<mode> <object> <stage>\t<path>"
+    fields = meta.split(b" ")
+    return (tab == b"\t" and path == want and len(fields) == 3
+            and fields[0] in (b"100644", b"100755") and fields[2] == b"0")
 
 
 def resolve_source(root: Path, source: object, *, require_tracked: bool = True, **lexical) -> Path:
@@ -104,11 +122,17 @@ def resolve_source(root: Path, source: object, *, require_tracked: bool = True, 
             if is_link_like(current):
                 raise UnsafePathError(f"source {source!r}: {current.relative_to(real_root).as_posix()} is a symlink/junction")
             mode = os.lstat(current).st_mode
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):  # ENOTDIR: a parent component is a file (POSIX; Windows says not-found)
             raise UnsafePathError(f"source {source!r} does not exist") from None
+        except OSError as exc:  # permission, loop, name too long...: not provably safe, so a refusal - never a crash
+            raise UnsafePathError(f"source {source!r}: cannot inspect {current.relative_to(real_root).as_posix()}: "
+                                  f"{exc.strerror or type(exc).__name__}") from None
     if not stat.S_ISREG(mode):
         raise UnsafePathError(f"source {source!r} is not a regular file")
-    resolved = current.resolve(strict=True)
+    try:
+        resolved = current.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:  # vanished or looped since the walk above
+        raise UnsafePathError(f"source {source!r} cannot be resolved ({type(exc).__name__})") from None
     if not resolved.is_relative_to(real_root):
         raise UnsafePathError(f"source {source!r} resolves outside the repository root")
     if require_tracked and not git_tracked_regular(real_root, rel.as_posix()):
