@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-24.04
     # registry/tests holds the slow host-compile suites. On contended hosted runners the slowest suite can exceed
     # 90 minutes even though the same commit passes on a faster runner, so keep job-level headroom above that.
-    timeout-minutes: 300
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
