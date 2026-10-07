@@ -108,10 +108,10 @@ ceiling. Consequences:
 
 - At the default 3000 W, W2 is exactly what it was.
 - At an 8000 W ceiling every uniform profile up to 8000 W raises W2. W2 is a confirmation, not a refusal.
-- **Known stale text.** The Home Assistant dashboard's Safety view (`home-assistant/dashboards/ecco_pro.yaml`) still words W2
-  as "at most 3000 W". That file is frozen by the public-export proof; it can change only through a declared post-export
-  entry ([post-export-edit-layer.md](post-export-edit-layer.md)). The fallback recovery card already uses wording without a
-  wattage.
+- **The same wording everywhere.** The fallback recovery card and the Home Assistant dashboard's Safety view
+  (`home-assistant/dashboards/ecco_pro.yaml`) both word W2 without a wattage ("no higher than the Dump to Grid ceiling").
+  The dashboard is frozen by the public-export proof, so `dtgp1` changes that one line as a declared post-export edit
+  ([post-export-edit-layer.md](post-export-edit-layer.md)); undone, it is the exported "at most 3000 W" line.
 - **Known stale header constant.** The capture header `firmware/include/ecco_fallback_capture.h` and its Python test mirror
   `registry/fallback_capture.py` still judge W2 against a fixed 3000 W (`DUMP_CONTROLLER_MAX_W`, commented as the controller's
   maximum ceiling). The firmware re-judges that one warning against the configured ceiling straight after the header's

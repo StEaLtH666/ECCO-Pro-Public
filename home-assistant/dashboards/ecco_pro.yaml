@@ -7845,7 +7845,7 @@ views:
               {% set warn = (R.split(';warn=')[1].split(';')[0] if ';warn=' in R else '-') %}
               {% set rid = states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_id') %}
               {% set head = {'READING': 'READING INVERTER (READ-ONLY)', 'CANDIDATE_READY': 'CANDIDATE READY', 'CANDIDATE_NOT_SAVEABLE': 'NOT SAVEABLE', 'SAVING': 'SAVING - RE-READING INVERTER'} %}
-              {% set wtext = {'W1': 'Looks like a Free Power overlay - confirm this is your normal setup.', 'W2': 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.', 'W3': "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.", 'W4': 'Grid charging is globally disabled (232) while slots select Grid.'} %}
+              {% set wtext = {'W1': 'Looks like a Free Power overlay - confirm this is your normal setup.', 'W2': 'All six slot powers are equal and no higher than the Dump to Grid ceiling - this resembles Dump to Grid residue; confirm.', 'W3': "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.", 'W4': 'Grid charging is globally disabled (232) while slots select Grid.'} %}
               {% set S = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_slots') ~ ';' %}
               {% set C = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review_context') ~ ';' %}
               {% set SV = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_slots') ~ ';' %}

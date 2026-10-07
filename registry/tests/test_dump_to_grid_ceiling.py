@@ -26,8 +26,8 @@ skip without one.
   [8] W2 follows the configured ceiling (the REVIEW lambda's re-judgement through a compiler and through the FB harness; the
       W2 header and its Python mirror unchanged)
   [9] the read-back sensor
-  [10] Home Assistant / UI: the target ranges accept 6000 / 8000 W, no 3000 W clamp, the card's W2 wording, and the one known
-       stale wording (the pub0-frozen dashboard line)
+  [10] Home Assistant / UI: the target ranges accept 6000 / 8000 W, no 3000 W clamp, the card's W2 wording, and the dashboard's
+       W2 line (the same wording: dtgp1's declared post-export edit of the pub0-frozen dashboard)
   [11] documentation proof levels
 
 What this proves: the firmware SOURCE does what the design says under simulated conditions, and the build refuses a bad
@@ -349,10 +349,12 @@ check("dtgp1 is a post-export (PEX) entry: not one of the closed ENTRIES, right 
       "fingerprint (test_pex_transition.py proves its value and its link to pex0)",
       "dtgp1" not in [e.id for e in chain.ENTRIES] and [e.id for e in chain.POST_EXPORT_ENTRIES][:2] == ["pex0", "dtgp1"]
       and re.fullmatch(r"[0-9a-f]{64}", E.fingerprint) is not None)
-check("dtgp1 declares exactly +1 sensor and +1 substitution (the backstop floor), and nothing else",
+check("dtgp1 declares exactly +1 sensor, +1 substitution (the backstop floor) and one frozen edit (the dashboard's W2 line), and "
+      "nothing else",
       dict(E.deltas) == {"sensors": 1, "substitutions": 1} and dict(E.subst_added) == {FLOOR_KEY: "3000"}
       and not E.subst_changed and not E.subst_removed and not E.includes_added and not E.op_paths_changed
-      and E.banned_fw_added == 0 and not E.frozen_reverts and not E.frozen_checkpoints)
+      and E.banned_fw_added == 0 and set(E.frozen_reverts) == set(E.frozen_checkpoints) == {DP.DASHBOARD_REL}
+      and E.frozen_reverts[DP.DASHBOARD_REL] is DP.pre_dtgp1_dashboard)
 check("every file dtgp1 declares as added exists", all((ROOT / f).is_file() for f in E.added_files), str(sorted(E.added_files)))
 older = sorted(f"registry/tests/{p.name}" for p in HERE.glob("*.py") if f"registry/tests/{p.name}" not in DP.ADDED_FILES
                and re.search(r"(?i)dtgp1", p.read_text(encoding="utf-8")))
@@ -772,9 +774,17 @@ w2 = re.search(r"  W2: '([^']*)'", recovery)
 check("the fallback recovery card's W2 wording names no wattage (it follows the configured ceiling)",
       w2 is not None and "Dump to Grid ceiling" in w2.group(1) and not re.search(r"\d+ ?W\b", w2.group(1)), w2.group(1) if w2 else "")
 dash = (ROOT / "home-assistant/dashboards/ecco_pro.yaml").read_text(encoding="utf-8")
-check("KNOWN STALE (recorded, not changed): the pub0-frozen dashboard still spells the W2 text with 'at most 3000 W' exactly once - "
-      "it changes only through a declared post-export (PEX) entry (registry/tests/_pex.py)",
-      dash.count("'W2': 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.'") == 1)
+check("the dashboard's W2 wording is the recovery card's, exactly once, and names no wattage (dtgp1's declared post-export edit)",
+      w2 is not None and dash.count(f"'W2': '{w2.group(1)}'") == 1 and "at most 3000 W" not in dash, w2.group(1) if w2 else "")
+try:
+    dash0 = DP.pre_dtgp1_dashboard(dash)
+except AssertionError as exc:
+    dash0 = f"<{exc}>"
+check("dtgp1 declares that one dashboard line as its only frozen edit: undone, it is the exported 'at most 3000 W' line again and "
+      "the round trip holds (test_pex_transition.py proves the dashboard as of pub0 is the export byte for byte)",
+      len(DP.DASHBOARD_EDITS) == 1 and getattr(E.frozen_reverts.get(DP.DASHBOARD_REL), "edits", None) == DP.DASHBOARD_EDITS
+      and dash0.count("'W2': 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.'") == 1
+      and DP.add_dtgp1_dashboard(dash0) == dash, dash0[:120] if dash0.startswith("<") else "")
 
 # ===========================================================================
 print("")

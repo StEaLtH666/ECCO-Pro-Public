@@ -1,5 +1,5 @@
 """dtgp1 (configurable Dump-to-Grid command ceiling) change scope: exactly what dtgp1 changes in
-firmware/ecco_clock_dongle_stage3_4_free_power.yaml, and its exact inverse.
+firmware/ecco_clock_dongle_stage3_4_free_power.yaml and in the dashboard's W2 line, and its exact inverse.
 
 Same technique as _fbd1_scope.py / _fbc2_scope.py: the verbatim edits are held HERE as the single source of truth, as exact
 (before, after) pairs, and a reverter raises unless every edit is present exactly once. The post-export chain entry `dtgp1`
@@ -34,9 +34,14 @@ global, interval or api action, NO durable record and NO new authority. It edits
                     residue") against the configured ceiling, right after ecco_fbcap::review_evaluate, instead of the
                     header's hard-coded 3000 W
 
-Nothing in the deployment manifest, the Home Assistant packages, the dashboard (frozen by pub0), the firmware headers or the
-firmware's other YAML files changes (test_failback_shadow_ha_contract.py, frozen by pub0, pins every git-tracked firmware file
-except this YAML: the W2 header keeps its generic 3000 W constant, and this YAML applies the configured one).
+FROZEN edit (PEX). The Home Assistant dashboard (home-assistant/dashboards/ecco_pro.yaml, a pub0 target) changes in exactly one
+line: the W2 entry of the Safety view's Review card text map uses the fallback recovery card's wording, which names no wattage.
+It is the chain entry's frozen edit, DASHBOARD_EDITS, undone exactly by pre_dtgp1_dashboard, so as of pub0 the dashboard is the
+export byte for byte.
+
+Nothing in the deployment manifest, the Home Assistant packages, the firmware headers or the firmware's other YAML files changes
+(test_failback_shadow_ha_contract.py, frozen by pub0, pins every git-tracked firmware file except this YAML: the W2 header keeps
+its generic 3000 W constant, and this YAML applies the configured one).
 
 This module imports no other scope module and not _scope_chain (the chain imports it). No I/O.
 """
@@ -256,6 +261,20 @@ W2_NEW = W2_OLD + _blk(r"""
 """)
 
 
+# ---- 8. (PEX frozen edit) the dashboard's W2 wording ----------------------------------------------------------------------------
+# home-assistant/dashboards/ecco_pro.yaml is a pub0 target, frozen by the export. dtgp1 changes exactly one line of it: the W2 entry of
+# the Safety view's Review card text map now uses the fallback recovery card's wording, which names no wattage. It is the chain entry's
+# frozen edit (_pex.FROZEN); pre_dtgp1_dashboard undoes it exactly, so as of pub0 the dashboard is the export byte for byte.
+DASHBOARD_REL = "home-assistant/dashboards/ecco_pro.yaml"
+DASHBOARD_W2_OLD = _blk(r"""
+              {% set wtext = {'W1': 'Looks like a Free Power overlay - confirm this is your normal setup.', 'W2': 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.', 'W3': "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.", 'W4': 'Grid charging is globally disabled (232) while slots select Grid.'} %}
+""")
+DASHBOARD_W2_NEW = _blk(r"""
+              {% set wtext = {'W1': 'Looks like a Free Power overlay - confirm this is your normal setup.', 'W2': 'All six slot powers are equal and no higher than the Dump to Grid ceiling - this resembles Dump to Grid residue; confirm.', 'W3': "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.", 'W4': 'Grid charging is globally disabled (232) while slots select Grid.'} %}
+""")
+DASHBOARD_EDITS = ((DASHBOARD_W2_OLD, DASHBOARD_W2_NEW),)
+
+
 @dataclass(frozen=True)
 class Edit:
     name: str
@@ -316,4 +335,24 @@ def pre_dtgp1_firmware(text: str) -> str:
         n = out.count(e.before)
         if n != 1:
             raise AssertionError(f"dtgp1 scope: the {e.name} anchor must be unique once the edit is removed, found {n}x")
+    return out
+
+
+def pre_dtgp1_dashboard(text: str) -> str:
+    """The dashboard with exactly dtgp1's one edit undone (the frozen reverter of chain entry dtgp1, PEX): the W2 line of the pub0
+    export. The edited line must occur exactly once, else AssertionError."""
+    out = text
+    for before, after in reversed(DASHBOARD_EDITS):
+        out = _swap(out, after, before, "dashboard W2 edit", "present")
+    return out
+
+
+pre_dtgp1_dashboard.edits = DASHBOARD_EDITS   # the PEX contract: a frozen reverter exposes its exact (before, after) pairs
+
+
+def add_dtgp1_dashboard(text: str) -> str:
+    """Applies dtgp1's dashboard edit to the exported dashboard (the round trip). The exported line must occur exactly once."""
+    out = text
+    for before, after in DASHBOARD_EDITS:
+        out = _swap(out, before, after, "dashboard W2 anchor", "found")
     return out

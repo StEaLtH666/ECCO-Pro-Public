@@ -491,6 +491,8 @@ PEX0 = Entry(
 # 3000 W constant: test_failback_shadow_ha_contract.py pins every git-tracked firmware file except this YAML, and a firmware header is
 # neither frozen nor chain-pinned). The reverter reproduces the FB-D1 firmware byte for byte (lic0, pub0 and pex0 edit no firmware),
 # so every older suite still sees it unchanged; none of them was re-hashed.
+# FROZEN edit (PEX): the dashboard's W2 wording, one line (_dtgp1_scope.DASHBOARD_EDITS: the recovery card's wording, no wattage); as
+# of pub0 the dashboard is the export byte for byte.
 # ONE older suite carries a minimal commented `DTGP1:` edit, no pin touched: test_fallback_durable_model.py takes the substitution keys
 # it sets aside from the entries up to its own anchor fbb0 (exactly FB-C1's five) instead of from every entry, because dtgp1 is the
 # first entry to declare a substitution outside the ecco_failback_shadow_* family. test_fbd1_liveness.py needs none: since pex0 it
@@ -505,8 +507,12 @@ DTGP1 = Entry(
     subst_added={_dtgp1.SUBSTITUTION[0]: _dtgp1.SUBSTITUTION[1]},
     banned_fw_added=_dtgp1.BANNED_FW_ADDED,
     added_files=_dtgp1.ADDED_FILES,
+    frozen_reverts={_dtgp1.DASHBOARD_REL: _dtgp1.pre_dtgp1_dashboard},
+    frozen_checkpoints={   # sha256 (LF) of the dashboard after dtgp1; as of pub0 it is its pub0 manifest result
+        _dtgp1.DASHBOARD_REL: "fa0efedfe686fcd9cf57adf7e4b5838987efa81929d966ffd945d37145b579c9",
+    },
     # _pex.fingerprint(DTGP1): hashes its parent pex0's fingerprint and every declaration above
-    fingerprint="e3d80de756679f95d8df17631ed401fc2e9695a9cd422e554642d83d9b97b1a6",
+    fingerprint="313f73eadd0c104cd1e81f35690fac52e0b065b0eef3eed35c9718f965baeb6c",
     note="configurable Dump-to-Grid command ceiling: ecco_dump_controller_max_ceiling_w stays the one source of truth (default "
          "3000 W) with compile-time validation (decimal, above the floor, a rounding multiple, <= the site TOU ceiling, <= 8000 W); "
          "the absolute runaway backstop follows the current command above the live-validated 3000 W level (identical at or below "

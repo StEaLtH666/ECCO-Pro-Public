@@ -27,9 +27,8 @@ Development before the first public release happened in a private repository; se
 - **The absolute runaway backstop follows the current command above 3000 W.** It was `configured ceiling + 750 W`. It is
   unchanged for any ceiling up to 3000 W, and never looser above it.
 - **The W2 fallback-capture warning ("resembles Dump to Grid residue") follows the configured ceiling** instead of a fixed
-  3000 W. The recovery card's W2 wording no longer names a wattage. The dashboard's Safety-view wording still reads
-  "at most 3000 W": that file is frozen by the public-export proof and changes only through a declared post-export (PEX)
-  entry (known stale text).
+  3000 W. The W2 wording of the recovery card and of the dashboard's Safety view no longer names a wattage; the dashboard
+  line is a declared post-export (PEX) edit of the export-frozen file.
 
 The transaction, ownership, stop and restore model and the Modbus write surface are unchanged.
 
