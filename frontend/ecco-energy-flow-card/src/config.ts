@@ -65,6 +65,14 @@ export interface BatteryNodeConfig extends NodeCommonConfig {
    * the default for those.
    */
   power_sign?: BatteryPowerSign;
+  /**
+   * Optional entity reporting the time until the battery reaches its
+   * reserve, as a duration (minutes by default; a `unit_of_measurement` of
+   * s/min/h/d is honoured, any other unit shows "--"). Shown as the battery
+   * node's tooltip. The card only displays this entity's own value - it
+   * never calculates a reserve level or an ETA. Inert when not configured.
+   */
+  time_to_reserve?: string;
 }
 
 export interface GridNodeConfig extends NodeCommonConfig {
@@ -299,13 +307,15 @@ export const HOME_FALLBACK_MIN_W = 150;
  * ordinary telemetry jitter), triggers the fallback - a genuine quiet site
  * (both native and derived near zero) is never overridden. Both inverterW
  * and gridW must themselves be available to derive anything; without them
- * this simply returns the native reading (or 0, the existing
- * degrade-gracefully behaviour). Never negative, regardless of source.
+ * this simply returns the native reading. When neither the native reading
+ * nor the derived balance is available, Home is unknown and this returns
+ * null (FE-0: displayed as "--", never as a fabricated 0W). Never
+ * negative, regardless of source.
  */
-export function resolveHomeW(nativeW: number | null, inverterW: number | null, gridW: number | null): number {
+export function resolveHomeW(nativeW: number | null, inverterW: number | null, gridW: number | null): number | null {
   const derived = inverterW !== null && gridW !== null ? Math.max(0, inverterW + gridW) : null;
   if (nativeW === null) {
-    return derived ?? 0;
+    return derived;
   }
   if (nativeW === 0 && derived !== null && derived > HOME_FALLBACK_MIN_W) {
     return derived;

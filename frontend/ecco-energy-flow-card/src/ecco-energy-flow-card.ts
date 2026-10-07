@@ -12,7 +12,8 @@ import {
   type EccoEnergyFlowCardConfig,
   type SolarNodeConfig,
 } from "./config";
-import { formatEnergy, formatPercent, formatPower, toNumber } from "./utils/format";
+import { formatDurationMinutes, formatEnergy, formatPercent, formatPower, toNumber } from "./utils/format";
+import { batteryStatus, classifyGridConnected, gridConnectedDisplay, resolveTimeToReserveMinutes, socDisplay } from "./utils/display";
 
 // Minimal shape of the pieces of `hass` this card actually reads. Avoids a
 // dependency on the (large, versioned) full Home Assistant frontend types.
@@ -670,7 +671,7 @@ export class EccoEnergyFlowCard extends LitElement {
     gridW: number | null,
     connectedRaw: string | undefined
   ): { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string } {
-    const isOff = connectedRaw === "off" || connectedRaw === "false";
+    const isOff = classifyGridConnected(connectedRaw) === "disconnected";
     const isUnknownSignal = connectedRaw === "unavailable" || connectedRaw === "unknown";
     if (isOff) {
       return { kind: "disconnected", colour: "grid-disconnected", statusLabel: "Disconnected" };
@@ -700,6 +701,13 @@ export class EccoEnergyFlowCard extends LitElement {
     const rawBatteryW = this._numeric(nodes.battery?.power);
     const batteryW = rawBatteryW === null ? null : normaliseBatteryPower(rawBatteryW, nodes.battery?.power_sign);
     const batterySoc = this._numeric(nodes.battery?.soc);
+    const batterySocConfigured = !!nodes.battery?.soc;
+    const timeToReserveId = nodes.battery?.time_to_reserve;
+    const timeToReserveMinutes = resolveTimeToReserveMinutes(
+      timeToReserveId,
+      this._numeric(timeToReserveId),
+      this._state(timeToReserveId)?.attributes?.unit_of_measurement
+    );
 
     const rawGridW = this._numeric(nodes.grid?.power);
     const gridW = rawGridW === null ? null : normaliseGridPower(rawGridW, nodes.grid?.power_sign);
@@ -758,6 +766,8 @@ export class EccoEnergyFlowCard extends LitElement {
               homeW,
               batteryW,
               batterySoc,
+              batterySocConfigured,
+              timeToReserveMinutes,
               gridW,
               gridState,
               generatorW,
@@ -976,7 +986,7 @@ export class EccoEnergyFlowCard extends LitElement {
     },
     powers: {
       solarPowers: number[];
-      homeW: number;
+      homeW: number | null;
       batteryW: number | null;
       gridW: number | null;
       gridState: { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string };
@@ -1037,7 +1047,7 @@ export class EccoEnergyFlowCard extends LitElement {
     // destination.
     const homePort = port("home");
     if (homePort) {
-      lines.push(this._routeLine("home", invHome, homePort, "v", "v", BEND_FRACTION_EARLY, powers.homeW, false, false, "home"));
+      lines.push(this._routeLine("home", invHome, homePort, "v", "v", BEND_FRACTION_EARLY, powers.homeW ?? 0, powers.homeW === null, false, "home"));
     }
 
     // Battery - now genuinely off the inverter's own Y (see this round's
@@ -1195,9 +1205,11 @@ export class EccoEnergyFlowCard extends LitElement {
     powers: {
       solarPowers: number[];
       inverterW: number | null;
-      homeW: number;
+      homeW: number | null;
       batteryW: number | null;
       batterySoc: number | null;
+      batterySocConfigured: boolean;
+      timeToReserveMinutes: number | null | undefined;
       gridW: number | null;
       gridState: { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string };
       generatorW: number | null;
@@ -1734,9 +1746,11 @@ export class EccoEnergyFlowCard extends LitElement {
   private _renderBottomNode(
     node: FlowNode,
     powers: {
-      homeW: number;
+      homeW: number | null;
       batteryW: number | null;
       batterySoc: number | null;
+      batterySocConfigured: boolean;
+      timeToReserveMinutes: number | null | undefined;
       gridW: number | null;
       gridState: { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string };
       generatorW: number | null;
@@ -1750,11 +1764,12 @@ export class EccoEnergyFlowCard extends LitElement {
     const dense = false; // home/battery/grid/generator each have their own dedicated cross-shape position now - never narrowed for crowding
 
     if (node.kind === "home") {
-      return this._renderNode(node, formatPower(powers.homeW, cfg.format), width, height, "home", dense, false, entityIds.home);
+      return this._renderNode(node, formatPower(powers.homeW ?? undefined, cfg.format), width, height, "home", dense, false, entityIds.home);
     }
     if (node.kind === "battery") {
-      const socText = powers.batterySoc !== null ? `${Math.round(powers.batterySoc)}%` : "";
-      const socPct = Math.max(0, Math.min(100, powers.batterySoc ?? 0));
+      // Unknown SOC has no fill at all (see socDisplay()) - never drawn as a
+      // genuine empty battery.
+      const { text: socText, fillPct: socPct } = socDisplay(powers.batterySoc, powers.batterySocConfigured);
       // Display-only: the Charging/Discharging/Idle status word already
       // conveys direction, so the number itself always reads as a plain
       // magnitude (never a signed "-197 W" for charging) - Math.abs() is
@@ -1762,28 +1777,31 @@ export class EccoEnergyFlowCard extends LitElement {
       // the real signed value everywhere else (status/colour/line
       // direction/animation all still key off its sign, unchanged).
       const flowText = formatPower(powers.batteryW !== null ? Math.abs(powers.batteryW) : undefined, cfg.format);
-      const discharging = powers.batteryW !== null && powers.batteryW >= IDLE_THRESHOLD_W;
-      const charging = powers.batteryW !== null && powers.batteryW <= -IDLE_THRESHOLD_W;
-      const status = discharging ? "Discharging" : charging ? "Charging" : "Idle";
       // Same "value >= 0 = discharging" convention as _buildLines() - one
       // source of truth for the battery's current state, never a second
       // independent guess. Idle gets its own subdued colour (see
-      // .colour-battery-idle in static styles), not just a fallback bucket.
-      const colour: FlowColourKind = discharging ? "battery-discharge" : charging ? "battery-charge" : "battery-idle";
+      // .colour-battery-idle in static styles), not just a fallback bucket;
+      // an unknown reading is "--", never "Idle" (see batteryStatus()).
+      const { label: status, colour } = batteryStatus(powers.batteryW, IDLE_THRESHOLD_W);
       const entityId = entityIds.battery;
       const clickable = !!entityId;
       // `--ecco-soc` drives the card's own very subtle SOC-proportional
       // background fill (see `.battery-box::after`) - an ambient, low-
       // opacity second representation of charge level alongside (not a
       // replacement for) the precise `.soc-track`/`.soc-fill` bar below.
-      const boxStyle = `--ecco-soc:${socPct}%`;
+      const boxStyle = socPct !== null ? `--ecco-soc:${socPct}%` : "";
+      // Optional time-to-reserve hook: the configured entity's own value as a
+      // tooltip, no layout change. Absent entity -> no attribute at all.
+      const reserveTitle =
+        powers.timeToReserveMinutes !== undefined ? `Time to reserve: ${formatDurationMinutes(powers.timeToReserveMinutes)}` : undefined;
       return html`
         <div class="node-html" style=${posStyle}>
           <div class="battery-shell">
             <span class="battery-terminal colour-${colour}" aria-hidden="true"></span>
             <div
-              class="node-box battery-box colour-${colour}${clickable ? " clickable" : ""}"
+              class="node-box battery-box colour-${colour}${clickable ? " clickable" : ""}${socPct === null ? " soc-unknown" : ""}"
               style=${boxStyle}
+              title=${ifDefined(reserveTitle)}
               tabindex=${ifDefined(clickable ? 0 : undefined)}
               role=${ifDefined(clickable ? "button" : undefined)}
               @click=${() => this._moreInfo(entityId)}
@@ -1799,7 +1817,7 @@ export class EccoEnergyFlowCard extends LitElement {
                 <div class="node-value">${flowText}</div>
                 <div class="node-sub">${status}</div>
               </div>
-              ${socText ? html`<div class="soc-track"><div class="soc-fill" style="width:${socPct}%"></div></div>` : nothing}
+              ${socPct !== null ? html`<div class="soc-track"><div class="soc-fill" style="width:${socPct}%"></div></div>` : nothing}
               <span class="node-port port-right" data-port="battery" aria-hidden="true"></span>
             </div>
           </div>
@@ -1909,17 +1927,14 @@ export class EccoEnergyFlowCard extends LitElement {
     // Reads the SAME configured binary_sensor `_renderDetails()` already
     // did - never invents state, just presents this one more prominently
     // (connected = quiet/healthy, disconnected = the card's existing
-    // fault colour, matching every other state-aware surface here).
+    // fault colour, matching every other state-aware surface here). Only an
+    // explicit off/false is a disconnection; unavailable/unknown is shown as
+    // "Unknown" with no fault styling (see classifyGridConnected()).
     if (d.grid_connected) {
       const s = this._state(d.grid_connected)?.state;
       if (s !== undefined) {
-        const connected = s === "on" || s === "true";
-        items.push({
-          icon: connected ? "mdi:check-circle-outline" : "mdi:alert-circle-outline",
-          label: "Grid Connected",
-          value: connected ? "Connected" : "Disconnected",
-          variant: connected ? "ok" : "fault",
-        });
+        const { value, icon, variant } = gridConnectedDisplay(classifyGridConnected(s));
+        items.push({ icon, label: "Grid Connected", value, variant });
       }
     }
     const freq = this._numeric(d.frequency);
@@ -2074,7 +2089,7 @@ export class EccoEnergyFlowCard extends LitElement {
     if (gridVoltage !== null) rows.push({ label: "Grid Voltage", value: `${gridVoltage.toFixed(0)} V` });
     if (d.grid_connected) {
       const s = this._state(d.grid_connected)?.state;
-      if (s !== undefined) rows.push({ label: "Grid Connected", value: s === "on" || s === "true" ? "Yes" : "No" });
+      if (s !== undefined) rows.push({ label: "Grid Connected", value: gridConnectedDisplay(classifyGridConnected(s)).detailValue });
     }
     const freq = this._numeric(d.frequency);
     if (freq !== null) rows.push({ label: "Frequency", value: `${freq.toFixed(2)} Hz` });
@@ -3082,6 +3097,10 @@ export class EccoEnergyFlowCard extends LitElement {
     }
     .battery-box.colour-battery-idle::after {
       background: color-mix(in srgb, var(--ecco-line-battery-idle) 10%, transparent);
+    }
+    /* Unknown SOC: no ambient fill at all, rather than a genuine-looking 0%. */
+    .battery-box.soc-unknown::after {
+      display: none;
     }
     /* Diagonal shimmer sweep, only while actually charging/discharging -
        visually suggests energy flowing in/out. Sits above the SOC fill but

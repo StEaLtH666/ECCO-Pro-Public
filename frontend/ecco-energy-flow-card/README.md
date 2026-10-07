@@ -69,6 +69,7 @@ nodes:
     power: sensor.battery_power
     soc: sensor.battery_soc
     power_sign: charge_positive      # or discharge_positive - see "Sign conventions" below
+    time_to_reserve: sensor.battery_time_to_reserve   # optional, see "Other diagram details" below
 
   grid:
     power: sensor.grid_power
@@ -213,6 +214,21 @@ corresponding `power_sign`.
   it - a real inverter's own losses/behaviour, not a bug in this card).
 - The battery node shows three separate lines: label+SOC, live power, and
   Charging/Discharging/Idle status - not squeezed onto one row.
+- An unknown or unavailable reading is shown as unknown, never as a
+  plausible real value: Home shows `--` (not 0 W) when neither its own
+  sensor nor the inverter+grid balance can be read; battery power shows
+  `--` for both the figure and the status (not "Idle"); an unknown SOC
+  shows `--` with no SOC bar and no ambient fill (never a genuine-looking
+  empty battery); and an unavailable/unknown `grid_connected` shows
+  "Unknown" with no fault colour - only an explicit off/false is shown as
+  disconnected.
+- `nodes.battery.time_to_reserve` (optional) names an entity reporting the
+  time until the battery reaches its reserve. Its value is shown as the
+  battery node's tooltip ("Time to reserve: 2 h 5 min"). The card only
+  displays that entity's own value - it never calculates a reserve level
+  or an ETA. The value is read as minutes unless the entity's
+  `unit_of_measurement` is `s`, `min`, `h` or `d`; any other unit, or an
+  unknown/negative value, shows `--`. Leave it out and nothing changes.
 - `features.self_sufficiency` (computed as `1 - today.import/today.load`)
   can be misleading on any installation with a battery, since imported
   energy may have charged the battery rather than covered load directly.
