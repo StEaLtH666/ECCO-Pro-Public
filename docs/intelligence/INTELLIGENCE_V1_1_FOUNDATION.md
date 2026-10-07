@@ -65,16 +65,20 @@ target = ceil_to_step( max(effective reserve + margin, desired morning SOC) + pl
     minimum, and raised but never lowered by a run-time HA reserve;
   - margin = `soc_safety_margin_pct` (5);
   - planned demand = the learner's planning value minus any PV credit the caller vouches for at MEDIUM or higher;
-  - charge window and current SOC, used only for what the window can reach and the grid energy needed.
+  - charge window and the SOC at the window START, used only for what the window can reach and the grid energy
+    needed. Once the window is open that is the current (fresh) SOC. Before it opens it is only a prediction the caller
+    supplies (`soc_at_window_start_pct`, for example from the V1 trajectory); without one, both are left unstated
+    (`WINDOW_NOT_OPEN`), because today's SOC is not the SOC at the window start.
 - **Output:**
   - the target and its unrounded value;
   - the binding constraint: `RESERVE`, `DESIRED_MORNING_SOC`, `DEMAND`, `MAX_SOC` (a shortfall: even full may not cover
-    the period) or `CHARGE_WINDOW` (the window cannot reach it from the current SOC);
+    the period) or `CHARGE_WINDOW` (the window cannot reach it from the SOC at its start);
   - grid energy, confidence, assumptions;
   - given the previous advice, `changed_from_previous`: each input that moved, with its effect in points, applied in a
     fixed order.
 - **Fail-safe:** INSUFFICIENT demand evidence gives the maximum SOC ("retain the battery"), as V1 does. A stale or
-  unknown SOC withholds only the grid energy and the reach check, not the target, which does not depend on the current SOC.
+  unknown SOC inside the window, or an unopened window with no predicted start SOC, withholds only the grid energy and
+  the reach check, never the target, which does not depend on the SOC.
 - **Difference from V1:** this is a closed-form budget, so it does not model when, inside the period, demand and PV
   happen. The V1 shadow report keeps its hourly simulated target. V1.1 is the explainable foundation a future
   dynamic-charging feature would start from.
@@ -91,7 +95,8 @@ For one event, on planning demand before, during and after it:
 
 **BLOCKED** when the SOC is stale or unknown (15-minute advisory limit), the inverter status is not known healthy, a
 demand figure is missing or rests on insufficient history, or the event is invalid or over. Unknown power limits
-withhold only the export amount.
+withhold only the export amount. An export below `min_export_kwh` is not advised; the default is 0.1 kWh, the advice's
+own rounding step.
 
 ## 5. Dynamic Dump-to-Grid advice (`intelligence/dump_advice.py`)
 
@@ -107,7 +112,7 @@ The answer reports `stop_set_by` (`RESERVE_AND_DEMAND`, `FEATURE_MINIMUM` or `AB
 
 - the SOC is stale or unknown (the controller's own START gate separately requires a reading under 90 s old);
 - the inverter status is not known healthy, or the charging window is open or its state unknown;
-- a Saving Session is running or due within 3 hours (the V1 rule);
+- a Saving Session is running or due within 3 hours (the V1 rule), or is given with naive or inverted times (`INVALID_SESSION`);
 - the demand figure is unknown or rests on insufficient history;
 - the refill time is not in the future.
 

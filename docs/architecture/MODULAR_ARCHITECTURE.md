@@ -110,8 +110,9 @@ registry records and its own proof), never an edit of this one.
 
 An `Observation` carries `value` (canonical unit and sign), `raw` (exactly as the source said it), `kind`
 (`raw` / `normalized` / `derived` + `derived_from`), `observed_at` (when the source observed it), `source` and `quality`
-flags. Unknown signal names, wrong units, non-finite values, naive times and an underived "derived" value are all refused
-at construction. A derived value sits **beside** its inputs, never instead of them. Sign conventions are the repository's
+flags. Unknown signal names, wrong units, non-finite values, a string or boolean given as a measured reading (an HA state
+such as `unavailable` is kept in `raw` with no value), naive times and an underived "derived" value are all refused at
+construction. A derived value sits **beside** its inputs, never instead of them. Sign conventions are the repository's
 existing ones: battery power positive = discharge, grid power positive = import.
 
 Freshness depends on the **purpose**: `control_gate` (may a controller-side action rely on it), `advisory` (may a
@@ -133,9 +134,11 @@ already uses. `ecco_core/tests/test_core_freshness.py` reads each one back from 
 | transaction.snapshot | control_gate | 30 s | design | `registry/transaction_state_machine.py` `Snapshot.max_age_seconds` |
 
 Anything the project never defined is explicitly **unresolved** and therefore never fresh. That covers the inverter
-status, house / PV / battery / grid power and the HA reserve for advisory use. An installation can resolve a limit with a
-`FreshnessPolicy` override, which then carries `site` standing. Assessment fails closed: no observation, no usable value,
-an unknown or future observation time, or an unresolved limit is never `fresh`.
+status, house / PV / battery / grid power and the HA reserve for advisory use. An installation can resolve an unresolved
+limit, or tighten a defined one, with a `FreshnessPolicy` override (per signal or per family such as `controller.owner.*`;
+it then carries `site` standing). An override that would **loosen** a defined limit is refused, just as a run-time reserve
+can only raise the reserve. Assessment fails closed: no observation, no usable value, an unknown or future observation
+time, or an unresolved limit is never `fresh`.
 
 ## 6. Write authority (`ecco_core/authority.py`)
 
@@ -194,7 +197,9 @@ compares it with a verbatim copy of the old implementation:
 The only differences are deliberate and tested. A reading that is not a finite number is dropped at the snapshot
 boundary rather than in the engine: for NaN or infinity the advice is unchanged and only an "is ignored" note
 disappears; a boolean SOC, previously read as 1 %, and a string SOC, previously a crash, now read as no SOC. The SOC's
-age is now computed from exact times instead of `now` truncated to whole seconds.
+age is now computed from exact times instead of `now` truncated to whole seconds. Two inputs the type hints already
+excluded are now refused loudly: a naive `now`, which would otherwise be read in the machine's own timezone, and a
+forecast source name that is not a string.
 
 ## 9. What is device-specific, and what is generic
 
