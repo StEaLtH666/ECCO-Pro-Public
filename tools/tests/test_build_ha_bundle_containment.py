@@ -7,12 +7,14 @@ and have it copied into the uploaded bundle. Every case below must be REFUSED (U
 no bundle behind, and the one valid case must still build. Runs in throw-away git repositories; touches nothing else.
 
 Symlink cases use real symlinks where the OS allows them (always on the Linux CI runner). Where it does not (Windows
-without the symlink privilege) they fall back to a junction (directory) and to a git-index mode-120000 entry (file), and the
-suite says so; on a POSIX host a failure to create a symlink is itself a failure.
+without the symlink privilege) they fall back to a junction (directory), and the suite says so; on a POSIX host a failure to
+create a symlink is itself a failure. The git-index mode-120000 cases run on every host under both core.symlinks settings,
+and each first asserts (FIXTURE) that git really records the state it names at build time: a later `git add` can rewrite it.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -122,15 +124,61 @@ def refused(repo: Repo, **kw) -> tuple[bool, str]:
     return False, "build succeeded"
 
 
-def refusal_case(label: str, sources: list[str], setup=None, want: str | None = None, **kw) -> None:
+def index_modes(r: Repo, rel: str) -> list[str]:
+    """Modes of git's index records for exactly `rel` (literal pathspec, exact path); [] when git records nothing."""
+    out = subprocess.run(["git", "--literal-pathspecs", "-C", str(r.root), "ls-files", "--stage", "-z", "--", rel],
+                         check=True, capture_output=True).stdout
+    return [meta.split(b" ")[0].decode() for meta, _, path in (rec.partition(b"\t") for rec in out.split(b"\0") if rec)
+            if path == rel.encode("utf-8")]
+
+
+def index_is(expected: dict[str, list[str]]):
+    """precondition: at build time git's index holds exactly these record modes for these paths."""
+    def holds(r: Repo) -> tuple[bool, str]:
+        got = {rel: index_modes(r, rel) for rel in expected}
+        return got == expected, f"git index at build time: {got}"
+    return holds
+
+
+def prepared(label: str, sources: list[str], setup, after_track, precondition) -> Repo:
+    """setup -> `git add -A` -> after_track (state the final add must not rewrite) -> FIXTURE check of the precondition."""
     r = Repo(track=False)
     try:
         r.set_manifest(sources)
         if setup:
             setup(r)
         r.track()
+        if after_track:
+            after_track(r)
+        if precondition:
+            held, detail = precondition(r)
+            check(f"FIXTURE: {label}", held, detail)
+    except BaseException:
+        r.close()
+        raise
+    return r
+
+
+def refusal_case(label: str, sources: list[str], setup=None, want: str | None = None, *, after_track=None,
+                 precondition=None, **kw) -> None:
+    r = prepared(label, sources, setup, after_track, precondition)
+    try:
         ok, msg = refused(r, **kw)
         check(f"REFUSED: {label}", ok and (want is None or want in msg), msg)
+    finally:
+        r.close()
+
+
+def accepted_case(label: str, sources: list[str], setup=None, *, after_track=None, precondition=None) -> None:
+    r = prepared(label, sources, setup, after_track, precondition)
+    try:
+        try:
+            out = bhb.build(r.root)
+            ok = all((out / s).read_bytes() == (r.root / s).read_bytes() for s in sources)
+            msg = "bundled byte-identical" if ok else "bundle content differs"
+        except Exception as exc:  # noqa: BLE001 - any refusal or crash fails this case
+            ok, msg = False, f"{type(exc).__name__}: {exc}"
+        check(f"ACCEPTED: {label}", ok, msg)
     finally:
         r.close()
 
@@ -215,13 +263,37 @@ def make_junction(r: Repo) -> None:
                    check=True, capture_output=True)
 
 
+LINK = "home-assistant/packages/link.yaml"
+
+
 def make_index_symlink(r: Repo) -> None:
-    """A mode-120000 index entry whose working file is a plain file (exactly what core.symlinks=false checkouts look like)."""
-    r.write("home-assistant/packages/link.yaml", str(r.outside / "secret.yaml"))
-    blob = subprocess.run(["git", "-C", str(r.root), "hash-object", "-w", "home-assistant/packages/link.yaml"],
+    """A mode-120000 index entry whose working file is a plain file holding the link text: exactly what a checkout with
+    core.symlinks=false (the Git for Windows default) writes for a committed symlink. The repo is configured that way
+    explicitly: under core.symlinks=true (the Linux default) the `git add -A` that refusal_case() runs after setup sees a
+    type change and re-stages the plain file as a REGULAR file (100644), so on the hosted Linux runner this case silently
+    built an ordinary tracked file (2026-10-06). Its FIXTURE precondition now pins the index state at build time."""
+    git(r.root, "config", "core.symlinks", "false")
+    r.write(LINK, str(r.outside / "secret.yaml"))
+    blob = subprocess.run(["git", "-C", str(r.root), "hash-object", "-w", LINK],
                           check=True, capture_output=True, text=True).stdout.strip()
     git(r.root, "add", "-A")
-    git(r.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},home-assistant/packages/link.yaml")
+    git(r.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},{LINK}")
+
+
+def link_text_file(r: Repo) -> None:
+    """A symlink-capable git (core.symlinks=true, the Linux default) and a plain working file holding a link text."""
+    git(r.root, "config", "core.symlinks", "true")
+    r.write(LINK, str(r.outside / "secret.yaml"))
+
+
+def index_records_link(rel: str, target: str):
+    """after_track: git records `rel` as a symlink to outside/`target` (mode 120000) while the working tree keeps what is
+    there - a type change for a plain file; for a real directory --replace drops the entries below it (one path, one entry)."""
+    def record(r: Repo) -> None:
+        blob = subprocess.run(["git", "-C", str(r.root), "hash-object", "-w", "--stdin"], input=str(r.outside / target).encode("utf-8"),
+                              check=True, capture_output=True).stdout.decode().strip()
+        git(r.root, "update-index", "--add", "--replace", "--cacheinfo", f"120000,{blob},{rel}")
+    return record
 
 
 if SYMLINKS_WORK:
@@ -234,8 +306,15 @@ elif os.name == "nt":
                  setup=make_junction, want="symlink")
     print("  SKIP  real file symlinks need the Windows symlink privilege; the Linux CI runner exercises them. "
           "Stand-in below: git-index mode 120000.")
-refusal_case("git-index symlink entry (mode 120000) for a file", ["home-assistant/packages/link.yaml"], setup=make_index_symlink,
-             want="not a git-tracked regular file")
+refusal_case("git-index symlink entry (mode 120000) for a file", [LINK], setup=make_index_symlink,
+             want="not a git-tracked regular file", precondition=index_is({LINK: ["120000"]}))
+refusal_case("git-index symlink entry (mode 120000) over a plain working file on a symlink-capable git (core.symlinks=true: a type change)",
+             [LINK], setup=link_text_file, after_track=index_records_link(LINK, "secret.yaml"),
+             want="not a git-tracked regular file", precondition=index_is({LINK: ["120000"]}))
+refusal_case("git-index symlink entry (mode 120000) for the PARENT directory (the working tree keeps a real directory)",
+             ["home-assistant/packages/a.yaml"], after_track=index_records_link("home-assistant/packages", "secretdir"),
+             want="not a git-tracked regular file",
+             precondition=index_is({"home-assistant/packages": ["120000"], "home-assistant/packages/a.yaml": []}))
 _t = tempfile.TemporaryDirectory()
 try:
     tgt = Path(_t.name) / "t"
@@ -252,6 +331,78 @@ try:
         check("is_link_like(): link/junction -> True, ordinary directory -> False", sp.is_link_like(lnk) and not sp.is_link_like(tgt))
 finally:
     _t.cleanup()
+
+# ---------------------------------------------------------------------------
+print("[4b] The git-index check is exact (no pathspec globbing, one merged entry); a path-walk error is a refusal, not a crash")
+# ---------------------------------------------------------------------------
+GLOB = "home-assistant/packages/x[1].yaml"
+
+
+def glob_hazard(r: Repo) -> tuple[bool, str]:
+    """precondition: x[1].yaml is untracked, yet git's DEFAULT (glob) pathspec for it matches the tracked x1.yaml."""
+    held, detail = index_is({GLOB: [], "home-assistant/packages/x1.yaml": ["100644"]})(r)
+    globbed = subprocess.run(["git", "-C", str(r.root), "ls-files", "--", GLOB], check=True, capture_output=True, text=True).stdout.split()
+    return (held and (r.root / GLOB).is_file() and globbed == ["home-assistant/packages/x1.yaml"],
+            f"{detail}; default pathspec {GLOB!r} matched {globbed}")
+
+
+def make_unmerged(rel: str):
+    """after_track: replace rel's merged entry by conflict stages 1-3 (what an unresolved merge leaves in the index)."""
+    def unmerge(r: Repo) -> None:
+        blob = subprocess.run(["git", "-C", str(r.root), "hash-object", "-w", rel], check=True, capture_output=True,
+                              text=True).stdout.strip()
+        info = f"0 {'0' * len(blob)}\t{rel}\n" + "".join(f"100644 {blob} {stage}\t{rel}\n" for stage in (1, 2, 3))
+        subprocess.run(["git", "-C", str(r.root), "update-index", "--index-info"], input=info.encode("utf-8"), check=True,
+                       capture_output=True)
+    return unmerge
+
+
+refusal_case("an UNTRACKED file whose name, read as a git glob, matches a tracked file ('x[1].yaml' vs 'x1.yaml')", [GLOB],
+             setup=lambda r: r.write("home-assistant/packages/x1.yaml", "x1: 1\n"), after_track=lambda r: r.write(GLOB, "UNTRACKED\n"),
+             want="not a git-tracked regular file", precondition=glob_hazard)
+refusal_case("an unmerged (conflicted) index entry: stages 1-3, no merged stage 0", ["home-assistant/packages/a.yaml"],
+             after_track=make_unmerged("home-assistant/packages/a.yaml"), want="not a git-tracked regular file",
+             precondition=index_is({"home-assistant/packages/a.yaml": ["100644", "100644", "100644"]}))
+refusal_case("a parent component that is a regular FILE ('a.yaml/x.yaml': ENOTDIR on POSIX)", ["home-assistant/packages/a.yaml/x.yaml"],
+             want="does not exist")
+
+
+def walk_error_refused(err: int) -> tuple[bool, str]:
+    """resolve_source() while every lstat() of the 'packages' component fails with `err` (deterministic on any host)."""
+    r = Repo()
+    target = os.path.normcase(str(r.root / "home-assistant" / "packages"))
+    real_lstat = os.lstat
+
+    def failing_lstat(path, *args, **kwargs):
+        if os.path.normcase(os.fspath(path)) == target:
+            raise OSError(err, os.strerror(err), os.fspath(path))
+        return real_lstat(path, *args, **kwargs)
+
+    os.lstat = failing_lstat
+    try:
+        sp.resolve_source(r.root, "home-assistant/packages/a.yaml")
+        return False, "accepted"
+    except sp.UnsafePathError as exc:
+        return True, str(exc)
+    except Exception as exc:  # noqa: BLE001 - a crash is exactly what this case guards against
+        return False, f"unexpected {type(exc).__name__}: {exc}"
+    finally:
+        os.lstat = real_lstat
+        r.close()
+
+
+for _name in ("ENOTDIR", "EACCES", "ELOOP"):
+    _ok, _msg = walk_error_refused(getattr(errno, _name))
+    check(f"an {_name} while inspecting a path component is a refusal (UnsafePathError), not a crash", _ok, _msg)
+
+accepted_case("a TRACKED source whose name holds git glob characters ('x[1].yaml' is matched literally)", [GLOB],
+              setup=lambda r: r.write(GLOB, "x: 1\n"), precondition=index_is({GLOB: ["100644"]}))
+accepted_case("a tracked executable source (mode 100755)", ["home-assistant/packages/a.yaml"],
+              after_track=lambda r: git(r.root, "update-index", "--chmod=+x", "home-assistant/packages/a.yaml"),
+              precondition=index_is({"home-assistant/packages/a.yaml": ["100755"]}))
+NON_ASCII = "home-assistant/packages/caf" + chr(0xE9) + ".yaml"
+accepted_case("a tracked source with a non-ASCII name (exact UTF-8 match)", [NON_ASCII],
+              setup=lambda r: r.write(NON_ASCII, "c: 1\n"), precondition=index_is({NON_ASCII: ["100644"]}))
 
 # ---------------------------------------------------------------------------
 print("[5] Untracked files, duplicate destinations, directories, missing files")
@@ -344,13 +495,15 @@ check("validate_repo rejects a missing source", any("does not exist" in e for e 
 check("validate_repo rejects '.git/config'", bool(validator_errors([".git/config"])))
 if SYMLINKS_WORK:
     check("validate_repo rejects a symlinked source", bool(validator_errors(["home-assistant/packages/link.yaml"], setup=make_file_symlink)))
+check("validate_repo reports (never crashes on) a source whose parent component is a file",
+      any("does not exist" in e for e in validator_errors(["home-assistant/packages/a.yaml/x.yaml"])))
 
 # ---------------------------------------------------------------------------
 print("[8] Lexical rules table")
 # ---------------------------------------------------------------------------
 LEX_OK = ["home-assistant/packages/ecco_pro.yaml", "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js",
           "influxdb/tasks/ecco_battery_outlook_5m.flux", "VERSION.yaml", "deployment/ha-manifest.yaml"]
-LEX_BAD = ["", "firmware/x" + chr(0) + ".yaml", "/abs.yaml", "a/../b.yaml", "..", "../x.yaml", "firmware/./x.yaml", "firmware\\x.yaml", "C:/x.yaml", "firmware/x.yaml ", "firmware/.git/x.yaml",
+LEX_BAD = ["", "firmware/x" + chr(0) + ".yaml", "firmware/x" + chr(0xD800) + ".yaml", "/abs.yaml", "a/../b.yaml", "..", "../x.yaml", "firmware/./x.yaml", "firmware\\x.yaml", "C:/x.yaml", "firmware/x.yaml ", "firmware/.git/x.yaml",
            ".github/workflows/x.yml", "firmware/secrets.yaml", "docs/readme.md", "firmware/x.exe", "firmware/x.yaml\n", None, 5, ["firmware/x.yaml"]]
 check("lexical accept list", all(_ok for _ok in (sp.check_relative_source(s) for s in LEX_OK)))
 bad_accepted = []
