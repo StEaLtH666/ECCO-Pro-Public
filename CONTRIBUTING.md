@@ -76,6 +76,10 @@ The public tree was produced from the private development tree by one declared t
 the proofs; only the tariff identifiers are deliberately irreversible, because their real values are not in this repository;
 see `registry/tests/_pub0_scope.py` and `tools/public/pub0.py`). Its manifest is generated and must not be hand-edited.
 
+Files `pub0` sanitised are frozen at their export state. To change one (or any chain-pinned artifact) after the export, declare it
+as a post-export chain entry in the post-export edit layer (PEX, `registry/tests/_pex.py`). See
+[docs/dev/post-export-edit-layer.md](docs/dev/post-export-edit-layer.md).
+
 ## Privacy
 
 Examples, tests and issues must use placeholders. Never commit or paste secrets, serial numbers, tariff / meter / MPAN /

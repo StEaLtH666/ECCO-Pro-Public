@@ -14,7 +14,8 @@ THE CHAIN. One ordered list of ENTRIES, in MERGE order on main, one per PR that
 edits a pinned artifact or that older pins must be told about:
 
     root (main @ 004040b) -> fba (#54) -> mtou1 (#53) -> dump_v2 (#52) -> fbc1 (#57) -> fbb0 (FB-B0) -> fbb1 (FB-B1) -> fbb2 (FB-B2) -> fbb3 (FB-B3) -> fbc2 (FB-C2) -> fbc3 (FB-C3) -> fbd1 (FB-D1) -> lic0 (v0.9.0 licence alignment)
-    [-> pub0 (the public-export sanitisation: in CHAIN only in the exported tree; see PUB0 below and _pub0_scope.py)]
+    [-> pub0 (the public-export sanitisation: in CHAIN only in the exported tree; see PUB0 below and _pub0_scope.py)
+     -> pex0 -> ... (the POST-EXPORT EDIT LAYER, schema ecco-pex/1: declared changes made ON the export; POST_EXPORT_ENTRIES, _pex.py)]
 
 Each entry carries
   * `reverts`     exact-match reverters, one per edited artifact (each raises
@@ -57,6 +58,21 @@ ADDING A PR (FB-C1, FB-B0, ...). Append ONE `Entry` at the END of ENTRIES:
 An edit that is not declared, or a declaration the measurement contradicts,
 fails test_scope_chain.py. No older suite is re-hashed, ever.
 
+ADDING A POST-EXPORT CHANGE (the public tree; PEX, registry/tests/_pex.py). The public tree IS the pub0 export: its 57 pub0 targets
+are frozen at pub0's result hashes (registry/tests/fixtures/pub0_manifest.json), and ENTRIES above are closed. A change made on the
+export is ONE Entry appended at the END of POST_EXPORT_ENTRIES (merge order on the public main), after pub0:
+  1. its exact-match reverters in its own `_<id>_scope.py` (generated from the real diff, verified by round trip): `reverts` /
+     `checkpoints` for the chain-pinned artifacts it edits (exactly as above), and `frozen_reverts` / `frozen_checkpoints` for the
+     frozen files it edits (_pex.FROZEN: the pub0 targets that are not chain-pinned, plus _pex.ENROLLED). Every frozen reverter
+     exposes its exact (before, after) pairs as `.edits`;
+  2. its declared deltas etc., as above (test_scope_chain measures the chain-pinned ones);
+  3. its `fingerprint`: _pex.fingerprint() of the entry, which hashes its parent's fingerprint (pub0's manifest fingerprint for the
+     first) - so an older entry can never be rewritten without changing every later one;
+  4. an older suite that pins the pub0-era state of a file the entry edits reads it through _pex.as_of_pub0() (a declared,
+     commented `PEX` edit, counted by test_pex_transition.py's ledger); live safety invariants keep reading the live file.
+test_pex_transition.py proves every post-export entry (exactness, checkpoints, live == newest, privacy, the deny-list, the
+fingerprint links, the ledger); test_pub0_transition.py proves the pub0 export on the files AS OF pub0.
+
 No I/O except reading repo files and a TemporaryDirectory for analyzer runs.
 """
 
@@ -88,6 +104,7 @@ import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
+import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 
@@ -162,6 +179,12 @@ class Entry:
     tags_promoted: frozenset = frozenset()       # subset of tags_declared that FB-A's model lists as PROSPECTIVE and this
                                                  # PR now declares for real (so they are not counted twice)
     note: str = ""
+    # PEX (post-export entries only, _pex.py): exact-match reverters and the sha256 right AFTER the entry of each FROZEN file it edits
+    # (a pub0 target that is not chain-pinned, or a _pex.ENROLLED file), and the entry's fingerprint (_pex.fingerprint: it hashes the
+    # parent entry's fingerprint, so the post-export entries form one hash-linked, append-only sequence).
+    frozen_reverts: Mapping[str, Reverter] = field(default_factory=dict)
+    frozen_checkpoints: Mapping[str, str] = field(default_factory=dict)
+    fingerprint: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +455,36 @@ PUB0 = Entry(
 )
 EXPORT_ENTRIES: tuple[Entry, ...] = (PUB0,)
 
+# ---------------------------------------------------------------------------
+# PEX: the POST-EXPORT EDIT LAYER (schema ecco-pex/1; registry/tests/_pex.py, docs/dev/post-export-edit-layer.md). The public tree is
+# the pub0 export and the development base: every later change is made ON the export. Each one is ONE Entry appended here, in merge
+# order on the public main, AFTER pub0 (never in ENTRIES, which are closed: test_pex_transition.py pins them). It declares its
+# chain-pinned edits exactly as above, its edits to the files pub0 froze (frozen_reverts / frozen_checkpoints), and its hash-linked
+# fingerprint. In CHAIN only in the export (like PUB0). _pex.as_of_pub0() undoes these entries newest first, sha256-checked at every
+# step: test_pub0_transition.py proves pub0 on the tree AS OF pub0 (byte for byte the 57 manifest result hashes), and an older suite
+# whose historical pin names a file a post-export entry may edit reads that file the same way (each such read is a commented `PEX`
+# edit, counted by test_pex_transition.py [8]); its live safety invariants keep reading the live file.
+# pex0 = the foundation: the layer itself and the routing of those historical pins (_pex0_scope.py). ZERO product / feature change:
+# no firmware, Home Assistant package, dashboard, manifest or registry edit (no chain-pinned reverter, no delta).
+# ---------------------------------------------------------------------------
+PEX0 = Entry(
+    id="pex0", pr="PEX0", commit="unmerged",
+    frozen_reverts={rel: _pex0.reverter(rel) for rel in _pex0.FROZEN_EDITS},
+    frozen_checkpoints={   # sha256 (LF) of each routed suite after pex0; as of pub0 each is its pub0 manifest result
+        "home-assistant/tests/test_ecco_fallback_packages.py": "cf06781407ba89f83c52099b2fed4fe1dbd7e1d1071153023c45c9d5a08ec34e",
+        "home-assistant/tests/test_ecco_shadow_check_ux.py": "8794ce164f410da7147466a77950b0e66b6e74515cc71a281463135f2502a632",
+        "registry/tests/test_fallback_recovery_dashboard.py": "a14cbf4771491f58ee3c0eac0ab94202f553dbc2f9c6f46753b8c0717516d43a",
+    },
+    added_files=_pex0.ADDED_FILES,
+    # _pex.fingerprint(PEX0): hashes its parent PUB0_FINGERPRINT and the before / after sha256 of the three routed suites
+    fingerprint="c91d3a5834cef6b69f692bd8c301a478138ac7627b29c53a0a0e35cac29b36f8",
+    note="PEX foundation (schema ecco-pex/1): the post-export edit layer and the routing of the historical pins of three older suites "
+         "through _pex.as_of_pub0; ZERO firmware, Home Assistant, dashboard, manifest or registry change, ZERO behaviour change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0,)
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
 
 class ChainError(AssertionError):
     pass
@@ -447,7 +500,22 @@ class Chain:
         ids = [e.id for e in entries]
         if len(set(ids)) != len(ids) or ROOT_ID in ids:
             raise ChainError(f"chain ids must be unique and not 'root': {ids}")
-        for e in entries:
+        export_at = ids.index(PUB0.id) if PUB0.id in ids else None
+        for i, e in enumerate(entries):
+            # PEX: frozen edits and the fingerprint exist only AFTER pub0 (a change made on the export); every such entry is fingerprinted.
+            if set(e.frozen_reverts) != set(e.frozen_checkpoints):
+                raise ChainError(f"{e.id}: every frozen reverter needs its result sha256 and every frozen checkpoint its reverter")
+            for p, h in e.frozen_checkpoints.items():
+                if not _posix_relative_exact(p) or p in PINNED:
+                    raise ChainError(f"{e.id}: frozen path {p!r} must be an exact repo-relative POSIX path that is NOT chain-pinned "
+                                     "(a chain-pinned artifact is declared through reverts / checkpoints)")
+                if not (isinstance(h, str) and _SHA256.fullmatch(h)):
+                    raise ChainError(f"{e.id}: the frozen checkpoint of {p} must be a 64-hex sha256")
+            if export_at is not None and i > export_at:
+                if not (isinstance(e.fingerprint, str) and _SHA256.fullmatch(e.fingerprint)):
+                    raise ChainError(f"{e.id}: a post-export entry carries its 64-hex PEX fingerprint (_pex.fingerprint)")
+            elif e.frozen_reverts or e.fingerprint:
+                raise ChainError(f"{e.id}: frozen edits and a PEX fingerprint belong to post-export entries only (after {PUB0.id!r})")
             for k in e.deltas:
                 if k not in METRICS:
                     raise ChainError(f"{e.id}: unknown delta metric {k!r}")
@@ -513,6 +581,14 @@ class Chain:
     def as_of_all(self, entry_id: str, live: Mapping[str, str] | None = None) -> dict[str, str]:
         live = live or {}
         return {p: self.as_of(p, entry_id, live[p] if p in live else read_live(p)) for p in PINNED}
+
+    def frozen_checkpoint(self, path: str, entry_id: str, base: str) -> str:
+        """PEX: sha256 a frozen file must have at `entry_id`: the newest frozen checkpoint at or before it, else `base` (the file's
+        pub0 state, _pex.base()). The exact, sha256-checked undo of the frozen reverters is _pex.as_of()."""
+        sha_ = base
+        for e in self.upto(entry_id):
+            sha_ = e.frozen_checkpoints.get(path, sha_)
+        return sha_
 
     def checkpoint(self, path: str, entry_id: str) -> str:
         """sha256 the artifact must have at `entry_id`: the newest checkpoint at
@@ -753,4 +829,5 @@ def integrity_report(chain: Chain, live: Mapping[str, str] | None = None) -> lis
     return rows
 
 
-CHAIN = Chain(ENTRIES + (EXPORT_ENTRIES if _pub0.EXPORTED else ()))
+# The export carries pub0 and then the post-export (PEX) entries; the private tree carries neither (PEX is public-tree-only).
+CHAIN = Chain(ENTRIES + (EXPORT_ENTRIES + POST_EXPORT_ENTRIES if _pub0.EXPORTED else ()))

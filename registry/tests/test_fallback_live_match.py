@@ -715,7 +715,9 @@ def strip_yaml_comments(text: str) -> str:
 def section_firmware() -> None:
     print("\n[4] firmware: RAW_CACHE_EXT, the assignment allowlist, B10, the third interval lambda, the write surface")
     import _scope_chain as chain
-    ch = chain.Chain()
+    # PEX0: the tree's real chain (it carries pub0 and the post-export entries), like read_fw(): a later declared edit to a chain-pinned
+    # artifact is then undone exactly before the as-of-fbb3 / as-of-fbb2 measurements below. Chain() is the twelve ENTRIES only.
+    ch = chain.CHAIN
     live_fw = read_fw()
     base_fw = scope.pre_fbb3_firmware(live_fw)   # FB-C2: live_fw is already the fbb3 state, so only fbb3 is reverted
     code = strip_yaml_comments(live_fw)

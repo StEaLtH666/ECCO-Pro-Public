@@ -9,7 +9,12 @@ Development before the first public release happened in a private repository; se
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Post-export edit layer (PEX, schema `ecco-pex/1`, foundation entry `pex0`). It is the declared, exact and hash-linked way to change
+  files that the `pub0` export froze. The `pub0` proof now runs on the files as of `pub0`, byte for byte. Test and proof
+  infrastructure only: no firmware, Home Assistant, dashboard or behaviour change. See
+  [docs/dev/post-export-edit-layer.md](docs/dev/post-export-edit-layer.md).
 
 ## [0.9.0] - first public pre-release
 
