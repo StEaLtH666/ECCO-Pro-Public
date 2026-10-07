@@ -9,3 +9,4 @@ health/tests
 influxdb
 intelligence/tests
 tools/tests
+ecco_core/tests
