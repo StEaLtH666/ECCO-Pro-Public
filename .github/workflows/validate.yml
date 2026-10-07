@@ -149,6 +149,11 @@ jobs:
           TEST_ROOT: ${{ matrix.root }}
           # Only registry/tests needs the extra per-suite headroom; all other roots keep the existing 90-minute cap.
           SUITE_TIMEOUT_SECONDS: ${{ matrix.root == 'registry/tests' && '7200' || '5400' }}
+          # registry/tests/test_fallback_save_durable.py spreads its fixed list of independent work items over this many spawn
+          # worker processes (its default is 4). Scheduling only: the items, the merge of their results and every check are the
+          # same for any count, and an unusable pool still runs every item in-process. The hosted runner has 4 vCPUs shared by
+          # two suites at once (--parallel 2), so 4 workers oversubscribe it; 2 leave the co-scheduled suite its share.
+          ECCO_DURABLE_WORKERS: '2'
         # Runs all suites to completion (no stop at first failure); fails if the root is unlisted or has no tests.
         run: python tools/run_offline_tests.py --root "$TEST_ROOT" --parallel 2 --timeout "$SUITE_TIMEOUT_SECONDS"
 
