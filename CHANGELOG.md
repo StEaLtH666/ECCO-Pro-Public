@@ -16,6 +16,22 @@ Development before the first public release happened in a private repository; se
   infrastructure only: no firmware, Home Assistant, dashboard or behaviour change. See
   [docs/dev/post-export-edit-layer.md](docs/dev/post-export-edit-layer.md).
 
+### Changed
+
+- **Dump-to-Grid command ceiling is configurable at build time.** `ecco_dump_controller_max_ceiling_w` stays the single
+  source of truth and keeps its 3000 W default, the only hardware-tested value. A build may select up to 8000 W; values that
+  are not a decimal multiple of 100 W, not above the 500 W floor, or above the site TOU ceiling or 8000 W are refused at
+  compile time. Above 3000 W everything is **offline only**: 6000 W is the first staged live checkpoint, and 7000-8000 W is
+  an architectural capability, not hardware proven. A diagnostic sensor reports the configured value. See
+  [docs/dev/dump-to-grid-ceiling.md](docs/dev/dump-to-grid-ceiling.md).
+- **The absolute runaway backstop follows the current command above 3000 W.** It was `configured ceiling + 750 W`. It is
+  unchanged for any ceiling up to 3000 W, and never looser above it.
+- **The W2 fallback-capture warning ("resembles Dump to Grid residue") follows the configured ceiling** instead of a fixed
+  3000 W. The W2 wording of the recovery card and of the dashboard's Safety view no longer names a wattage; the dashboard
+  line is a declared post-export (PEX) edit of the export-frozen file.
+
+The transaction, ownership, stop and restore model and the Modbus write surface are unchanged.
+
 ## [0.9.0] - first public pre-release
 
 Experimental. One reference installation; per-feature evidence levels are in [SUPPORTED_HARDWARE.md](SUPPORTED_HARDWARE.md).

@@ -262,7 +262,9 @@ test('blocker texts: every sv code, exact wording of design 5.4', () => {
 test('warning texts W1-W6 are exact; W5 names the off-grid slots', () => {
   const slots = [0, 530, 903, 1600, 1907, 2345].map((hhmm) => ({ hhmm, w: 1, soc: 1, src: 0 }));
   assert.equal(WARNING_TEXT.W1, 'Looks like a Free Power overlay - confirm this is your normal setup.');
-  assert.equal(WARNING_TEXT.W2, 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.');
+  // dtgp1: W2 follows the configured Dump ceiling (3000 W by default), so the text names no wattage.
+  assert.equal(WARNING_TEXT.W2, 'All six slot powers are equal and no higher than the Dump to Grid ceiling - this resembles Dump to Grid residue; confirm.');
+  assert.doesNotMatch(WARNING_TEXT.W2, /\d+ ?W\b/);
   assert.equal(WARNING_TEXT.W3, "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.");
   assert.equal(WARNING_TEXT.W4, 'Grid charging is globally disabled (232) while slots select Grid.');
   assert.equal(WARNING_TEXT.W6, 'Slot times are not a valid 24 h ring (duplicate or out-of-order start).');

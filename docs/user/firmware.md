@@ -31,6 +31,19 @@ esphome compile firmware/ecco_clock_dongle_stage3_4_free_power.yaml
 Use the `_esp32s3.yaml` file instead for an ESP32-S3 board. CI compiles both variants with placeholder secrets on every change
 (`.github/workflows/validate.yml`).
 
+### Dump-to-Grid command ceiling (build-time)
+
+Dump-to-Grid never commands more battery discharge than `ecco_dump_controller_max_ceiling_w`. The default is 3000 W, the only
+hardware-tested value. A different value is chosen when you build, never from Home Assistant:
+
+```
+esphome -s ecco_dump_controller_max_ceiling_w 6000 compile firmware/ecco_clock_dongle_stage3_4_free_power_esp32s3.yaml
+```
+
+The build refuses any value that is not a plain decimal integer above 500 W, in 100 W steps, at most the site TOU power
+ceiling and at most 8000 W. Read [docs/dev/dump-to-grid-ceiling.md](../dev/dump-to-grid-ceiling.md) before raising it: values above
+3000 W are not hardware tested, and ECCO cannot check your battery, inverter, cabling or export permission.
+
 ## Pinned artifacts
 
 The firmware YAML, its headers and `firmware/README.md` are pinned by sha256 and by exact-match reverters in the offline proof chain

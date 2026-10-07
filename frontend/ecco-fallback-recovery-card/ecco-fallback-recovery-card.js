@@ -822,7 +822,7 @@ export const FLOW_TEXT = Object.freeze({
 
 export const WARNING_TEXT = Object.freeze({
   W1: 'Looks like a Free Power overlay - confirm this is your normal setup.',
-  W2: 'All six slot powers are equal and at most 3000 W - this resembles Dump to Grid residue; confirm.',
+  W2: 'All six slot powers are equal and no higher than the Dump to Grid ceiling - this resembles Dump to Grid residue; confirm.',
   W3: "TOU schedule (248) is OFF: this profile's slot settings are inactive on the inverter.",
   W4: 'Grid charging is globally disabled (232) while slots select Grid.',
   W5: 'A slot start is off the 5-minute grid.',
