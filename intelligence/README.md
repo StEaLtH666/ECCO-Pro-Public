@@ -18,6 +18,13 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `scorecard.py` | SQLite forecast/outcome store, metrics, bias insights |
 | `synthetic.py` | seeded synthetic houses for tests |
 | `tools/` | read-only HA statistics exporter, quality report, HA-sensor renderer, dashboard preview, `make_examples.py` (synthetic examples) |
+| `inputs.py` | the one reading of system state: an `ecco_core` Snapshot -> `LiveInputs` (replays build their snapshot from History) |
+| `explain.py` | V1.1: the `Advice` answer format (status, confidence factors, reasons, assumptions, blockers, input ages; SHADOW only) |
+| `overnight.py` | V1.1: overnight demand learning, with conservative fallback and the return-from-away regime check |
+| `charge_target.py`, `events.py`, `dump_advice.py` | V1.1: charge-target, Saving Session / export-event and reserve-aware Dump-to-Grid advice (energy budgets, fail closed) |
+
+The V1.1 modules are a foundation: nothing consumes them yet and the V1 report is unchanged. See
+`docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md`; their suites are `tests/test_intelligence_v11_*.py`.
 | `profiles/` | `site_profile.example.json` template; copy to a git-ignored `<site>.local.json` with your own entity ids |
 
 Run the tests (each is a plain script, same convention as `health/tests`):

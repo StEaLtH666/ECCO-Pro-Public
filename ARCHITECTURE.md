@@ -68,6 +68,7 @@ Several features touch overlapping registers, or registers whose *meaning* depen
 | Supervision, fallback profile, shadow check | Heartbeat, save/invalidate/compare a known-good profile, observe-only evaluation | Hardware tested (profile, heartbeat, and the shadow check, which is observe-only). **Restore/failback not implemented** |
 | System Health | Home Assistant-side checks and reason codes | Hardware tested (on the reference installation's Home Assistant) |
 | Intelligence V1 | Advisory, shadow-only; recommendations respect the effective battery reserve; no write path | Offline only |
+| Host-side core (`ecco_core/`) and Intelligence V1.1 foundation | State / freshness / capability / authority model checked against the firmware; advisory overnight-demand, charge-target, Saving Session and reserve-aware Dump-to-Grid calculations; nothing consumes them yet | Offline only |
 
 ## 6. Home Assistant integration
 
@@ -92,9 +93,17 @@ The deterministic layer stays authoritative. If Intelligence is wrong, absent or
 - **Offline tests** are extensive (simulation, fault injection, static analysis of the firmware, host compile of headers, Home Assistant template tests, card tests). A proof-chain of pinned artifacts detects unintended changes.
 - **Hardware proof** is recorded separately, per feature, and is the only thing that moves a feature from *offline only* to *hardware tested*. A green test run is never permission to write to hardware.
 
-## 9. Future modularisation (direction, not a promise)
+## 9. Modularisation
 
-These are directions, not commitments, and none is implemented yet:
+**Started on the host side** ([docs/architecture/MODULAR_ARCHITECTURE.md](docs/architecture/MODULAR_ARCHITECTURE.md)):
+`ecco_core/` models state (raw, normalised and derived values with their observation time), one catalogue of the
+freshness limits the project already uses, device capabilities derived only from the capability registry, and the
+controller's write authority as one table that tests check against the firmware's own write surface. Intelligence reads
+system state only through it, and the V1.1 advisors
+([docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md](docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md)) build on it.
+It is offline only: the firmware is unchanged, the host side has no transport and no write path, and nothing is live-proven.
+
+Further directions, not commitments, none implemented yet:
 
 - Split the large single firmware YAML into reusable ESPHome packages and components, keeping the pure headers as the shared core.
 - A tariff-adapter layer so the Home Assistant packages stop referencing specific integration entity ids.

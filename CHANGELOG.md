@@ -15,6 +15,23 @@ Development before the first public release happened in a private repository; se
   files that the `pub0` export froze. The `pub0` proof now runs on the files as of `pub0`, byte for byte. Test and proof
   infrastructure only: no firmware, Home Assistant, dashboard or behaviour change. See
   [docs/dev/post-export-edit-layer.md](docs/dev/post-export-edit-layer.md).
+- `ecco_core/` (offline only; no firmware change; no new write path): a host-side reference model with five modules.
+  - **State:** raw, normalised and derived observations with source and observation time.
+  - **Freshness:** one catalogue of the freshness limits the project already uses, per signal and purpose, each checked
+    against its source; limits nobody defined stay unresolved.
+  - **Capability:** device capabilities derived only from the capability registry, with unsupported and unknown failing
+    closed, plus proof per controller variant.
+  - **Authority:** the controller's write authority as one table, checked against the firmware write surface, the
+    registry's `read_write` records and the transaction model; plus a pure reference decision model that never
+    authorises advisory code.
+  - **Bridge:** the single bridge to Intelligence.
+- Intelligence V1.1 foundation (shadow, synthetic tests, not yet consumed):
+  - the `Advice` explanation format;
+  - overnight demand learning with a return-from-away regime check;
+  - charge-target advice;
+  - Saving Session / export-event advice;
+  - reserve-aware Dump-to-Grid stop-level advice.
+- New offline test root `ecco_core/tests`.
 
 ### Changed
 
@@ -31,6 +48,16 @@ Development before the first public release happened in a private repository; se
   line is a declared post-export (PEX) edit of the export-frozen file.
 
 The transaction, ownership, stop and restore model and the Modbus write surface are unchanged.
+
+- `intelligence.replay.inputs_from_history` now builds its inputs through an `ecco_core` snapshot. The result is
+  identical for every finite input, and byte-identical engine reports are tested. A reading that is not a finite number
+  is now dropped at the snapshot boundary.
+
+### Fixed (documentation)
+
+- `docs/dev/register-provenance.md` swapped the evidence status of two registry records.
+- `docs/INVERTER_CAPABILITY_REGISTRY.md` had an out-of-date record count, a statement that no W3 record is writable
+  (register 244's policy record is), and an incomplete list of writing scripts.
 
 ## [0.9.0] - first public pre-release
 

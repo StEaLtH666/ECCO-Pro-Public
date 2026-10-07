@@ -20,9 +20,9 @@ machine-checkable register/bit-range/sharing declaration, and several
 previously-grouped records (six-slot TOU fields, battery
 configuration, PV strings, grid protection thresholds, energy
 counters) were exploded into one record per independently-addressable
-value. The registry grew from 35 to 158 records as a result - this was
-expected, not a regression; see "Grouped records" below for what
-grouping remains legitimate.
+value. The registry grew from 35 to 158 records as a result (165 today) -
+this was expected, not a regression; see "Grouped records" below for
+what grouping remains legitimate.
 
 **Task 005B** hardened the schema-v2 validator against edge cases a
 second review pass found: the registry file now declares
@@ -380,7 +380,7 @@ charge-curve values, PV strings, grid protection thresholds, and energy
 counters into single records was reviewed and found to hide distinct
 writeable-candidate/differently-addressed values; all were exploded
 into one record per independently-addressable value in schema v2 -
-this is why the registry grew from 35 to 158 records).
+this is why the registry grew from 35 to 158 records; 165 today).
 
 The grouped records that remain, and why each still qualifies:
 
@@ -409,15 +409,27 @@ registers this firmware ever writes is:
 
 - **22-24** - RTC (`rtc_clock`), written by `write_inverter_rtc`
 - **230, 232** - grid charge current and the grid-charge enable bit,
-  written by `start_free_power_override` / `restore_free_power_snapshot`
-  (register 232's bit 0 is also written by all six TOU slot writers)
+  written by the three Free Power writers (`start_free_power_override`,
+  `restore_free_power_snapshot_dispatch`,
+  `free_power_recovery_force_restore_dispatch`; register 232's bit 0 is
+  also written by all six TOU slot writers)
 - **244** - Load/Export Mode (`grid_export_policy`), written by
   `apply_reg244_settings` / `restore_reg244_snapshot`. **Added
   2026-09-21** by PR #12; live-hardware-proven, see
-  `docs/stage3_3-six-slot-hardware-test.md`.
+  `docs/stage3_3-six-slot-hardware-test.md`. Also written by
+  Dump-to-Grid (`start_dump_to_grid_override`,
+  `restore_dump_to_grid_snapshot`, `dump_lockout_containment`).
 - **250-261, 268-279** - all six TOU slots' start/end/power/soc/
-  source/mode fields, written by `apply_manual_slot1`-`6` and (for
-  268-279) by both Free Power paths
+  source/mode fields, written by `apply_manual_slot1`-`6`; 256-261 and
+  268-279 also by the three Free Power writers, and 256-261 also by
+  Dump-to-Grid (`start_dump_to_grid_override`, `dump_controller_tick`,
+  `restore_dump_to_grid_snapshot`)
+
+The same surface, per write path (ownership flags, arm switch, durable
+obligations, restore), is stated in `ecco_core/authority.py` and
+checked script by script against `tools/analyze_write_surface.py`, and
+against the `read_write` records of this registry, by
+`ecco_core/tests/test_core_authority.py`.
 
 **Nothing else in this firmware is ever written** - not battery
 charge-curve config (201-204, 210-211), not battery protection SOC
@@ -490,9 +502,13 @@ any UI or automation ECCO ships today, except the capabilities
 (`rtc_clock`, and everything under `free_power_transaction` /
 `grid_charge_current` / the TOU slot fields, all `current_access:
 read_write`) that are the pre-existing, already-live-proven write paths
-this task explicitly was told to audit, not to newly enable. Every W3
-record in this registry is `current_access: read_only` today - W3 is
-explicitly the class that stays non-actionable by design.
+this task explicitly was told to audit, not to newly enable, plus the two
+read_write records added since: `grid_export_policy` (register 244, W3,
+`live_proven_write` - the one W3 record with a write path, see "W3
+read/write proof consistency" above) and `dump_to_grid_transaction`
+(W2, `documented_not_live_proven`). Every other W3 record in this
+registry is `current_access: read_only` today - W3 stays the
+non-actionable class by default.
 
 ## Capability lifecycle
 

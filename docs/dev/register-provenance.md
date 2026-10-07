@@ -35,10 +35,14 @@ document or project: its origin is simply not recorded.
 | Energy management and export | 242-248 | 244 supervised write test | 244 compared with open-source integrations |
 | Time-of-use (six slots) | 250-279 | supervised six-slot write test | slot layout compared with an open-source integration |
 
-Records with status `unknown`: `register_330_reserved_bits` (330 bits 4-15), `dump_to_grid_transaction` (a transaction record
-over 244 and 256-261, not a register meaning) and five capabilities for which no register has been identified
-(`signal_island_mode`, `inverter_protocol_version`, `inverter_rated_power`, `inverter_serial_number`, `remote_lock`). One record
-is `documented_not_live_proven` (`smartdeye_battery_charge_voltage_parity`). None of these is written by ECCO.
+Records with status `unknown`: `register_330_reserved_bits` (330 bits 4-15), five capabilities for which no register has
+been identified (`signal_island_mode`, `inverter_protocol_version`, `inverter_rated_power`, `inverter_serial_number`,
+`remote_lock`) and `smartdeye_battery_charge_voltage_parity` (a tracking record for a parity candidate). None of these is
+written by ECCO. One record is `documented_not_live_proven`: `dump_to_grid_transaction`, the Dump-to-Grid transaction
+record over 244 and 256-261 (a transaction, not a register meaning). Dump-to-Grid does write those registers; the pinned
+record predates the feature's two hardware-tested scenarios in [SUPPORTED_HARDWARE.md](../../SUPPORTED_HARDWARE.md), so the
+host-side capability model keeps `control.dump_to_grid` at `unknown` until a declared chain entry updates it
+([docs/architecture/MODULAR_ARCHITECTURE.md](../architecture/MODULAR_ARCHITECTURE.md)).
 
 ## Cross-checks against open-source projects
 
