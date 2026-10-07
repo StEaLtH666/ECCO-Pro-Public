@@ -73,6 +73,22 @@ def _tagged(loader, suffix, node):
 _Loader.add_multi_constructor("!", _tagged)
 
 
+# The firmware loader: the same safe loader, backed by libyaml when PyYAML ships it. yaml.CSafeLoader is libyaml's scanner and
+# parser joined to yaml.SafeLoader's own SafeConstructor and Resolver classes, so every value, type and tag is still built by the
+# same Python code; only the scanning is native, several times faster on the 1.28 MB firmware that the registry suites parse
+# over a thousand times per run. Never an unsafe loader, and nothing is cached: every call parses its own text. Without libyaml
+# it IS _Loader. registry/tests/test_firmware_yaml_loader.py proves the two build identical trees (values, exact types incl.
+# LambdaStr, key order, alias sharing) on the firmware, real firmware mutants and a tag/type edge corpus, and fail alike.
+if getattr(yaml, "__with_libyaml__", False):
+    class _CLoader(yaml.CSafeLoader):
+        pass
+
+    _CLoader.add_multi_constructor("!", _tagged)
+    FIRMWARE_LOADER = _CLoader
+else:
+    FIRMWARE_LOADER = _Loader
+
+
 def load_firmware(path: Path) -> dict:
     return load_firmware_text(path.read_text(encoding="utf-8"))
 
@@ -81,7 +97,7 @@ def load_firmware_text(text: str) -> dict:
     """Same as load_firmware(), from source text - used by the mutation
     (sensitivity) checks to run scenarios against deliberately broken
     in-memory copies of the firmware."""
-    doc = yaml.load(text, Loader=_Loader)
+    doc = yaml.load(text, Loader=FIRMWARE_LOADER)
     subs = {k: str(v) for k, v in (doc.get("substitutions") or {}).items()}
     doc["_substitutions"] = subs
     doc["_text"] = text
