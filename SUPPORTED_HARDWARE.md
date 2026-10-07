@@ -38,7 +38,7 @@ All entries refer to the reference system(s) above only.
 | Free Power: normal start → automatic restore | Hardware tested | Grid charge current/enable (230, 232) and the TOU registers |
 | Free Power operator recovery (review / force restore / accept current state) | Offline only | Implemented and extensively simulated; not exercised on hardware |
 | Register 244 (load/export mode) policy write with durable restore | Hardware tested | Register 245 (export limit) is **read-only** in this firmware |
-| Dump-to-Grid | Hardware tested for two scenarios; **offline only** for every other path | Includes the closed-loop export controller. Measured battery discharge ran above the commanded ceiling by a few hundred watts in observations, cause not yet established |
+| Dump-to-Grid | Hardware tested for two scenarios, at the default **3000 W** command ceiling; **offline only** for every other path | Includes the closed-loop export controller. Measured battery discharge ran above the commanded ceiling by a few hundred watts in observations, cause not yet established. The command ceiling is a build-time setting (default 3000 W; [docs/dev/dump-to-grid-ceiling.md](docs/dev/dump-to-grid-ceiling.md)). Up to **6000 W**: **offline only**, the first staged live checkpoint, not hardware tested. 7000 W to **8000 W**: architectural capability only, **not hardware proven** |
 | Fallback profile: save, invalidate, live-match display | Hardware tested | |
 | Fallback restore / automatic failback | **Not implemented** | Stated here so it is not assumed |
 | Supervision heartbeat and shadow check | Hardware tested (observe-only) | Changes nothing on the inverter |

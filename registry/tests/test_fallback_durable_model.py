@@ -973,7 +973,10 @@ def firmware_yaml_files() -> dict:
 # PREFIX (FB-T0 forbids prefix / glob exemptions): only the EXACT key strings the chain entries declare are removed from the
 # text before the scan, so an undeclared `ecco_failback_shadow_extra_ms`, an `ecco_failback_provision_v1` or any other
 # ecco_fallback* / ecco_failback* token still counts.
-DECLARED_SUBST_KEYS = tuple(sorted(chain.CHAIN.declared_subst(), key=len, reverse=True))
+# DTGP1: the keys are the ones declared UP TO this suite's own entry, fbb0 (FW_TEXT is the firmware as of fbb0) - exactly
+# FB-C1's five. A later entry's key cannot occur in that text, and dtgp1's ecco_dump_runaway_backstop_floor_w is not an
+# FB-C1 key, so taking every entry's declared keys would fail the check below for a reason outside this suite.
+DECLARED_SUBST_KEYS = tuple(sorted({k for e in chain.CHAIN.upto("fbb0") for k in e.subst_added}, key=len, reverse=True))
 
 
 def without_declared_subst(text: str, keys=DECLARED_SUBST_KEYS) -> str:

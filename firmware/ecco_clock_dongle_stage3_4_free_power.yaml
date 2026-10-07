@@ -62,6 +62,20 @@ substitutions:
   # docs/DUMP_TO_GRID_V1.md "The 8.6kW anomaly".
   ecco_dump_runaway_absolute_margin_w: "750"
   ecco_dump_runaway_absolute_samples: "2"
+  # dtgp1 (2026-10-07): the absolute backstop above is anchored to the CURRENT
+  # command, not to ecco_dump_controller_max_ceiling_w. Its threshold is
+  # max(command, min(ecco_dump_controller_max_ceiling_w, this floor)) +
+  # ecco_dump_runaway_absolute_margin_w, where "command" is the commanded
+  # battery ceiling (the higher of the old and the new one for
+  # ecco_dump_runaway_transition_ms after a verified controller write, exactly
+  # like the ordinary guard). 3000 W is the highest controller ceiling at which
+  # "ceiling + margin" has been live-validated (2026-09-27), so for every
+  # configured ceiling up to it the backstop is exactly the fixed
+  # ceiling + margin threshold it always was; above it the threshold follows
+  # the command, so a higher configured ceiling never leaves the backstop
+  # parked above anything the inverter can actually do. An evidence level of
+  # this guard, not a second copy of the configured ceiling.
+  ecco_dump_runaway_backstop_floor_w: "3000"
   # Accept Current State's residue gate: maximum age of the post-operation
   # configuration readback it will trust (same 120s bound Free Power uses
   # for its own recovery review evidence).
@@ -106,6 +120,18 @@ substitutions:
   # the dynamic controller is additionally capped well below that pending
   # live proof at higher power. Raise only after a supervised live proof
   # exercises the controller at successively higher targets.
+  # dtgp1 (2026-10-07): THE single source of truth for the Dump-to-Grid command
+  # ceiling - the highest battery discharge ceiling ECCO ever writes to
+  # 256-261. 3000 W is the generic default and the only hardware-proven value.
+  # A site may select another value at BUILD time only, for example
+  # `esphome -s ecco_dump_controller_max_ceiling_w 6000 compile <yaml>`; Home
+  # Assistant can never change it at run time. on_boot's compile-time checks
+  # refuse a value that is not a plain decimal integer, is not above
+  # ecco_dump_controller_min_ceiling_w, is not a multiple of
+  # ecco_dump_controller_round_w, exceeds ecco_inverter_tou_power_ceiling_w or
+  # exceeds the architectural maximum: no firmware is produced. A value above
+  # 3000 W is NOT hardware-proven (SUPPORTED_HARDWARE.md); the runaway
+  # backstop follows the command above ecco_dump_runaway_backstop_floor_w.
   ecco_dump_controller_max_ceiling_w: "3000"
   # After the ACTIVE commit or any verified controller write, the controller
   # skips evaluation for this long before considering another correction -
@@ -1216,6 +1242,26 @@ esphome:
           ESP_LOGI("fbcap", "boot load: profile ld=%u witness ld=%u state ld=%u class=%u why=%u", (unsigned) lp, (unsigned) lw,
                    (unsigned) ls, (unsigned) e.cls, (unsigned) e.why);
           id(fallback_profile_boot_loaded) = true;
+      # dtgp1 (2026-10-07): compile-time validation of the Dump-to-Grid command
+      # ceiling, the single source of truth ecco_dump_controller_max_ceiling_w,
+      # and of the runaway backstop floor. Kept in its own lambda, like the
+      # heartbeat threshold checks above, so the offline simulators never have
+      # to model it. A value that fails any check produces no firmware: fail
+      # closed.
+      - lambda: |-
+          static_assert(${ecco_dump_controller_max_ceiling_w} == (long) ${ecco_dump_controller_max_ceiling_w}.0f,
+                        "Dump ceiling: ecco_dump_controller_max_ceiling_w must be a plain decimal integer (W)");
+          static_assert(${ecco_dump_controller_min_ceiling_w} < ${ecco_dump_controller_max_ceiling_w},
+                        "Dump ceiling: must be above the controller floor ecco_dump_controller_min_ceiling_w");
+          static_assert(${ecco_dump_controller_max_ceiling_w} % ${ecco_dump_controller_round_w} == 0,
+                        "Dump ceiling: must be a multiple of ecco_dump_controller_round_w");
+          static_assert(${ecco_dump_controller_max_ceiling_w} <= ${ecco_inverter_tou_power_ceiling_w},
+                        "Dump ceiling: must not exceed the site TOU power ceiling ecco_inverter_tou_power_ceiling_w");
+          static_assert(${ecco_dump_controller_max_ceiling_w} <= 8000,
+                        "Dump ceiling: 8000 W is the architectural maximum");
+          static_assert(${ecco_dump_runaway_backstop_floor_w} == (long) ${ecco_dump_runaway_backstop_floor_w}.0f &&
+                            ${ecco_dump_controller_min_ceiling_w} < ${ecco_dump_runaway_backstop_floor_w},
+                        "Dump runaway backstop floor: a plain decimal integer above the controller floor");
 
 esp32:
   variant: esp32
@@ -6096,6 +6142,22 @@ sensor:
     lambda: |-
       return (float) ${ecco_inverter_tou_power_ceiling_w};
 
+  # dtgp1 (2026-10-07): read-back of the configured Dump-to-Grid command ceiling
+  # (ecco_dump_controller_max_ceiling_w, compile-time; generic default 3000 W).
+  # Diagnostic only - no Modbus, no write, and Home Assistant cannot change it;
+  # it lets Home Assistant and a live-proof pre-flight confirm what a build was
+  # configured with.
+  - platform: template
+    name: "Dump to Grid Max Battery Ceiling"
+    id: dump_max_ceiling_sensor
+    unit_of_measurement: "W"
+    device_class: power
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      return (float) ${ecco_dump_controller_max_ceiling_w};
+
   - platform: template
     name: "Clock Difference"
     id: clock_difference
@@ -6505,7 +6567,22 @@ sensor:
             // materially above that (plus margin) has no legitimate
             // explanation under this feature regardless of what the
             // controller is doing right now.
-            if (!std::isnan(x) && x > ${ecco_dump_controller_max_ceiling_w}.0f + ${ecco_dump_runaway_absolute_margin_w}.0f) {
+            // dtgp1 (2026-10-07): the threshold is anchored to the CURRENT
+            // command, never below min(ecco_dump_controller_max_ceiling_w,
+            // ecco_dump_runaway_backstop_floor_w) - see that substitution. For
+            // every configured ceiling up to the floor this is exactly the
+            // fixed ceiling + margin threshold; above it the threshold follows
+            // the command (the higher of the old and the new one during a
+            // step-down transition, exactly like the ordinary guard below).
+            float backstop_ref = (float) id(dump_target_power);
+            if ((uint32_t) (millis() - id(dump_last_controller_update_ms)) < ${ecco_dump_runaway_transition_ms}UL &&
+                id(dump_runaway_ceiling_ref) > backstop_ref) {
+              backstop_ref = id(dump_runaway_ceiling_ref);
+            }
+            float backstop_floor = ${ecco_dump_runaway_backstop_floor_w}.0f;
+            if (backstop_floor > ${ecco_dump_controller_max_ceiling_w}.0f) backstop_floor = ${ecco_dump_controller_max_ceiling_w}.0f;
+            if (backstop_ref < backstop_floor) backstop_ref = backstop_floor;
+            if (!std::isnan(x) && x > backstop_ref + ${ecco_dump_runaway_absolute_margin_w}.0f) {
               id(dump_absolute_overpower_samples)++;
               id(dump_overpower_last_w) = x;
             } else {
@@ -19895,6 +19972,16 @@ script:
             ri.salt = id(fallback_profile_boot_salt);
             ri.seq_next = id(fallback_profile_cand_seq) + 1;
             ecco_fbcap::ReviewVerdict v = ecco_fbcap::review_evaluate(ri);
+            // dtgp1 (2026-10-07): W2 (resembles Dump to Grid residue: all six slot powers equal and at most the Dump
+            // controller ceiling) is judged against THIS build's configured ceiling, ecco_dump_controller_max_ceiling_w,
+            // instead of the header's generic 3000 W default (ecco_fbcap::DUMP_CONTROLLER_MAX_W). The header's own W2
+            // predicate with the configured ceiling; every other warning bit and the rest of the verdict are the header's.
+            {
+              bool w2_uniform = true;
+              for (int i=1;i<6;i++) w2_uniform = w2_uniform && ri.words[1 + i] == ri.words[1];
+              v.warnings = (uint16_t) (v.warnings & ~(1u << 1));
+              if (w2_uniform && ri.words[1] <= ${ecco_dump_controller_max_ceiling_w}) v.warnings = (uint16_t) (v.warnings | (1u << 1));
+            }
             // FB-B2: an arm turned on while this Review was reading is cancelled before the candidate exists.
             id(fallback_profile_arm).turn_off();
             id(fallback_profile_cand_words) = id(fallback_profile_pass2);
@@ -22266,7 +22353,17 @@ interval:
                       reason: !lambda |-
                         char msg[160];
                         if (id(dump_absolute_overpower_samples) >= ${ecco_dump_runaway_absolute_samples}) {
-                          snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY - battery discharge %.0fW sustained above the %uW V1.1 absolute backstop", id(dump_overpower_last_w), (unsigned) (${ecco_dump_controller_max_ceiling_w} + ${ecco_dump_runaway_absolute_margin_w}));
+                          // dtgp1: the backstop these samples were judged against - the same computation as
+                          // ecco_battery_power's on_value, verbatim (pinned equal by test_dump_to_grid_ceiling.py).
+                          float backstop_ref = (float) id(dump_target_power);
+                          if ((uint32_t) (millis() - id(dump_last_controller_update_ms)) < ${ecco_dump_runaway_transition_ms}UL &&
+                              id(dump_runaway_ceiling_ref) > backstop_ref) {
+                            backstop_ref = id(dump_runaway_ceiling_ref);
+                          }
+                          float backstop_floor = ${ecco_dump_runaway_backstop_floor_w}.0f;
+                          if (backstop_floor > ${ecco_dump_controller_max_ceiling_w}.0f) backstop_floor = ${ecco_dump_controller_max_ceiling_w}.0f;
+                          if (backstop_ref < backstop_floor) backstop_ref = backstop_floor;
+                          snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY - battery discharge %.0fW sustained above the %uW V1.1 absolute backstop", id(dump_overpower_last_w), (unsigned) (backstop_ref + ${ecco_dump_runaway_absolute_margin_w}.0f));
                         } else {
                           snprintf(msg, sizeof(msg), "POWER RUNAWAY - battery discharge %.0fW sustained above the %uW lease ceiling", id(dump_overpower_last_w), (unsigned) id(dump_target_power));
                         }

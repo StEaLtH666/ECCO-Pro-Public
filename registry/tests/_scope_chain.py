@@ -15,7 +15,8 @@ edits a pinned artifact or that older pins must be told about:
 
     root (main @ 004040b) -> fba (#54) -> mtou1 (#53) -> dump_v2 (#52) -> fbc1 (#57) -> fbb0 (FB-B0) -> fbb1 (FB-B1) -> fbb2 (FB-B2) -> fbb3 (FB-B3) -> fbc2 (FB-C2) -> fbc3 (FB-C3) -> fbd1 (FB-D1) -> lic0 (v0.9.0 licence alignment)
     [-> pub0 (the public-export sanitisation: in CHAIN only in the exported tree; see PUB0 below and _pub0_scope.py)
-     -> pex0 -> ... (the POST-EXPORT EDIT LAYER, schema ecco-pex/1: declared changes made ON the export; POST_EXPORT_ENTRIES, _pex.py)]
+     -> pex0 -> dtgp1 (configurable Dump-to-Grid ceiling) -> ... (the POST-EXPORT EDIT LAYER, schema ecco-pex/1: declared changes made ON the
+        export; POST_EXPORT_ENTRIES, _pex.py)]
 
 Each entry carries
   * `reverts`     exact-match reverters, one per edited artifact (each raises
@@ -92,6 +93,7 @@ for _p in (str(HERE), str(REPO / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import _dtgp1_scope as _dtgp1  # noqa: E402
 import _dump_v2_scope as _dv2  # noqa: E402
 import _fba_scope as _fba  # noqa: E402
 import _fbb1_scope as _fbb1  # noqa: E402
@@ -481,7 +483,37 @@ PEX0 = Entry(
     note="PEX foundation (schema ecco-pex/1): the post-export edit layer and the routing of the historical pins of three older suites "
          "through _pex.as_of_pub0; ZERO firmware, Home Assistant, dashboard, manifest or registry change, ZERO behaviour change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0,)
+# dtgp1 (configurable Dump-to-Grid command ceiling; _dtgp1_scope.py, docs/dev/dump-to-grid-ceiling.md): the first product change made
+# on the export after the foundation pex0. CHAIN-PINNED edit: the firmware YAML in seven places, _dtgp1_scope.EDITS - the source of
+# truth's comment, one substitution (the runaway backstop floor), the command-relative absolute backstop in ecco_battery_power's
+# on_value and its END text, a fifth compile-time-only on_boot lambda, one diagnostic read-back sensor and the REVIEW final lambda
+# re-judging W2 against the configured ceiling after review_evaluate. No other firmware file changes (the W2 header keeps its generic
+# 3000 W constant: test_failback_shadow_ha_contract.py pins every git-tracked firmware file except this YAML, and a firmware header is
+# neither frozen nor chain-pinned). The reverter reproduces the FB-D1 firmware byte for byte (lic0, pub0 and pex0 edit no firmware),
+# so every older suite still sees it unchanged; none of them was re-hashed.
+# ONE older suite carries a minimal commented `DTGP1:` edit, no pin touched: test_fallback_durable_model.py takes the substitution keys
+# it sets aside from the entries up to its own anchor fbb0 (exactly FB-C1's five) instead of from every entry, because dtgp1 is the
+# first entry to declare a substitution outside the ecco_failback_shadow_* family. test_fbd1_liveness.py needs none: since pex0 it
+# reads its FB-D1 baseline as of fbd1 through the chain.
+# Measured, not declared: ZERO Modbus reads / writes (64 / 52), zero commit / load / status / NVS sites, zero durable tags, zero
+# scripts / api actions / switches / buttons / numbers / selects / globals / intervals / text sensors, no op path.
+DTGP1 = Entry(
+    id="dtgp1", pr="DTGP1", commit="unmerged",
+    reverts={FIRMWARE: _dtgp1.pre_dtgp1_firmware},
+    checkpoints={FIRMWARE: "9e49b229b31568e059da353ef30fd7a3b8d8cf9af1068c3edb19b7cb0d044c55"},
+    deltas={"sensors": 1, "substitutions": 1},
+    subst_added={_dtgp1.SUBSTITUTION[0]: _dtgp1.SUBSTITUTION[1]},
+    banned_fw_added=_dtgp1.BANNED_FW_ADDED,
+    added_files=_dtgp1.ADDED_FILES,
+    # _pex.fingerprint(DTGP1): hashes its parent pex0's fingerprint and every declaration above
+    fingerprint="e3d80de756679f95d8df17631ed401fc2e9695a9cd422e554642d83d9b97b1a6",
+    note="configurable Dump-to-Grid command ceiling: ecco_dump_controller_max_ceiling_w stays the one source of truth (default "
+         "3000 W) with compile-time validation (decimal, above the floor, a rounding multiple, <= the site TOU ceiling, <= 8000 W); "
+         "the absolute runaway backstop follows the current command above the live-validated 3000 W level (identical at or below "
+         "it); W2 follows the configured ceiling; one read-back sensor; ZERO new Modbus operation, ZERO NVS access, ZERO new "
+         "inverter authority",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

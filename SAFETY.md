@@ -27,7 +27,7 @@ These are consequences of the settings, not hypothetical software faults:
 | Change | Possible effect |
 |---|---|
 | Grid charging on (Free Power) | The inverter imports from the grid to charge the battery, at the power you set, up to the limits of the system. Import can be expensive outside a cheap-rate window, and a high charge power can approach your supply or breaker limits |
-| Battery discharge ceilings and slot SOC targets (TOU, Dump-to-Grid) | The battery can discharge faster, slower or to a different level than your usual setup. It can reach low SOC sooner, leaving less energy for the evening or for backup |
+| Battery discharge ceilings and slot SOC targets (TOU, Dump-to-Grid) | The battery can discharge faster, slower or to a different level than your usual setup. It can reach low SOC sooner, leaving less energy for the evening or for backup. Dump-to-Grid never commands more than its build-time command ceiling: 3000 W by default, configurable up to 8000 W. Only 3000 W is hardware tested; see [docs/dev/dump-to-grid-ceiling.md](docs/dev/dump-to-grid-ceiling.md) for what to check before raising it |
 | Export / load mode (244) and Dump-to-Grid | The system can export energy to the grid, or stop exporting. Export may be restricted by your connection agreement or tariff (see [Grid operator requirements](#6-grid-operator-and-regulatory-requirements)) |
 | Clock correction (22-24) | A wrong inverter clock moves time-of-use slots. A correct clock correction normally helps, but a bad write can shift when charging and discharging happen |
 | Anything left half-applied | If an action is interrupted, the inverter can be left with temporary settings until they are restored, by ECCO after recovery, or by you |
@@ -62,7 +62,7 @@ ECCO's **fallback profile** saves a user-captured subset of settings in the cont
 ## 6. Grid operator and regulatory requirements
 
 - Grid-connected generation and storage are usually subject to local rules and to your connection agreement. In the UK, for example, an export-capable system may need to be notified to or approved by the distribution network operator (DNO) under the applicable engineering recommendation, may have an agreed export limit, and your tariff or export scheme may have its own conditions. Other countries have equivalent rules.
-- Features that **allow or increase export** (export mode, Dump-to-Grid) can take you outside those conditions. ECCO does not know your agreed limit and does not read it from your DNO.
+- Features that **allow or increase export** (export mode, Dump-to-Grid) can take you outside those conditions. ECCO does not know your agreed limit and does not read it from your DNO. Dump-to-Grid can export up to its configured command ceiling plus any PV, so a higher configured ceiling means more export.
 - Check with your installer, your DNO/grid operator and your energy supplier **before** enabling any export-related or grid-charging feature, and keep ECCO's power settings within what you are permitted to do.
 - Responsibility for compliance rests with the system owner.
 
