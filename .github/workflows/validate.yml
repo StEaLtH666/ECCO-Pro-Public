@@ -121,7 +121,8 @@ jobs:
     name: Offline tests (${{ matrix.root }})
     needs: plan-tests
     runs-on: ubuntu-24.04
-    # registry/tests holds the slow host-compile suites (about an hour on a 2 vCPU runner); the rest take minutes.
+    # registry/tests holds the slow host-compile suites. On contended hosted runners the slowest suite can exceed
+    # 90 minutes even though the same commit passes on a faster runner, so keep job-level headroom above that.
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -146,8 +147,10 @@ jobs:
       - name: Run every offline suite under this root
         env:
           TEST_ROOT: ${{ matrix.root }}
+          # Only registry/tests needs the extra per-suite headroom; all other roots keep the existing 90-minute cap.
+          SUITE_TIMEOUT_SECONDS: ${{ matrix.root == 'registry/tests' && '7200' || '5400' }}
         # Runs all suites to completion (no stop at first failure); fails if the root is unlisted or has no tests.
-        run: python tools/run_offline_tests.py --root "$TEST_ROOT" --parallel 2 --timeout 5400
+        run: python tools/run_offline_tests.py --root "$TEST_ROOT" --parallel 2 --timeout "$SUITE_TIMEOUT_SECONDS"
 
   firmware-compile:
     name: Firmware (${{ matrix.name }})
