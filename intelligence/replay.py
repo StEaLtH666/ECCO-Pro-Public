@@ -8,7 +8,8 @@ from .advisor import LiveInputs, TariffInfo, default_cheap_windows
 from .config import SiteConfig
 from .engine import IntelligenceEngine
 from .history import History
-from .timeutil import day_bounds, ts, utc_from_ts, zone, HOUR
+from .inputs import history_snapshot, live_inputs_from_snapshot
+from .timeutil import zone
 
 
 def inputs_from_history(history: History, cfg: SiteConfig, now: datetime,
@@ -16,23 +17,12 @@ def inputs_from_history(history: History, cfg: SiteConfig, now: datetime,
                         soc_override: float | None = None) -> LiveInputs:
     """Build LiveInputs for `now` from a (truncated) history: SOC and powers from the last complete hour,
     PV forecasts from the issue-time series for today and tomorrow (tomorrow's value is only the
-    pre-dawn issue of that day, which a real run would also have by the evening)."""
-    tz = zone(cfg.tz)
-    last_hour = ts(now) - (ts(now) % HOUR) - HOUR
-    rec = history.get(last_hour)
-    soc = soc_override if soc_override is not None else (rec.soc_mean if rec else None)
-    today = now.astimezone(tz).date()
-    f = forecasts or {}
-    raw_today = {s: v[today] for s, v in f.items() if today in v}
-    raw_tom = {s: v[today + timedelta(days=1)] for s, v in f.items() if (today + timedelta(days=1)) in v}
-    t0, _ = day_bounds(today, tz)
-    so_far, cov = history.energy("pv", t0, now)
-    return LiveInputs(
-        now=now, soc_pct=soc, soc_age_s=0.0 if soc_override is not None else (None if rec is None else (ts(now) - (last_hour + HOUR)) + 0.0),
-        load_w=None if rec is None else rec.load_w_mean, pv_w=None if rec is None else rec.pv_w_mean,
-        pv_raw_today=raw_today, pv_raw_tomorrow=raw_tom,
-        pv_actual_so_far_kwh=(so_far / cov) if cov > 0.7 else None,
-        tariff=TariffInfo(default_cheap_windows(cfg, now)), inverter_ok=True)
+    pre-dawn issue of that day, which a real run would also have by the evening).
+
+    Routed through the state model: the history becomes an ecco_core Snapshot (inputs.history_snapshot) and the
+    snapshot becomes LiveInputs (inputs.live_inputs_from_snapshot), the same single path any live source would use."""
+    return live_inputs_from_snapshot(history_snapshot(history, cfg, now, forecasts, soc_override),
+                                     tariff=TariffInfo(default_cheap_windows(cfg, now)))
 
 
 def replay(history: History, cfg: SiteConfig, now: datetime, forecasts: dict[str, dict[date, float]] | None = None,
