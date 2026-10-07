@@ -63,7 +63,11 @@ import rtc_policy as rp  # noqa: E402
 FAILURES: list[str] = []
 N_CHECKS = [0]
 LIVE = X.live_text()
-PRE = X.pre_text(LIVE)
+# PEX0: FB-D1's historical baseline is read AS OF fbd1 through the tree's chain (every later entry's declared firmware edits undone
+# exactly), so a later declared firmware entry never moves it; the liveness behaviour below keeps running on the live firmware.
+import _scope_chain as _chain  # noqa: E402
+LIVE_FBD1 = _chain.CHAIN.as_of(_chain.FIRMWARE, "fbd1", LIVE)
+PRE = X.pre_text(LIVE_FBD1)
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -1561,7 +1565,7 @@ def static_section(fw, live: bool = True):
           all(gid in gl and gl[gid]["type"] == t and str(gl[gid].get("initial_value")) == init and gl[gid].get("restore_value") is False
               for gid, t, init in scope.NEW_GLOBAL_SPECS))
     check("S-scope the pre-FB-D1 firmware used as the baseline is main exactly (sha == _fbd1_scope.BASE_FW_SHA) and round-trips",
-          scope.sha(PRE) == scope.BASE_FW_SHA and scope.add_fbd1_text(PRE) == LIVE)
+          scope.sha(PRE) == scope.BASE_FW_SHA and scope.add_fbd1_text(PRE) == LIVE_FBD1)   # PEX0: the FB-D1 firmware as of fbd1
 
 
 # ============================================================================================================================

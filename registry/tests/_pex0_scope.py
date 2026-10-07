@@ -22,9 +22,11 @@ registry byte, so the chain entry _scope_chain.PEX0 has no chain-pinned reverter
     registry/tests/test_pub0_transition.py               the four approved routings / restatements (owner decision O1): LIVE and the
                                                          chain-pinned artifacts read AS OF pub0; [1] restated (pub0 right after ENTRIES,
                                                          only declared post-export entries after it); [6] OWN names the PEX files
-  other    (not frozen, not chain-pinned) registry/tests/test_fallback_live_match.py: its one as-of measurement over the live
-           chain-pinned artifacts reads through the tree's CHAIN instead of Chain() (the twelve ENTRIES only), so a later declared
-           edit to a chain-pinned artifact is undone exactly first (found by the declared sweep: a manifest stanza)
+  other    (neither frozen nor chain-pinned; found by declared sweeps) two older suites anchored a historical baseline on the LIVE
+           chain-pinned text, so any later declared edit to it broke them: registry/tests/test_fallback_live_match.py (its one as-of
+           measurement reads through the tree's CHAIN instead of Chain(), the twelve ENTRIES only; found with a declared manifest
+           stanza) and registry/tests/test_fbd1_liveness.py (its pre-FB-D1 baseline reads the firmware as of fbd1; found with a
+           declared firmware edit). Their live behaviour checks still run on the live files
   added    ADDED_FILES: the layer, this module, its proof suite and the documentation page
   docs     CONTRIBUTING.md (one paragraph) and CHANGELOG.md ([Unreleased]); neither is frozen
 

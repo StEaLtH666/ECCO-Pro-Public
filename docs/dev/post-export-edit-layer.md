@@ -61,5 +61,21 @@ The `pub0` state of a frozen file is its manifest result hash, read from the man
 - `test_ecco_fallback_packages.py`;
 - `test_ecco_shadow_check_ux.py`.
 
-The routed pins cover the dashboard history and view list, the Energy Actions block, the manifest's package count and release
-string, and the `VERSION.yaml` facts. `pex0` changed no firmware, Home Assistant package, dashboard, manifest or registry content.
+The routed pins cover:
+
+- the dashboard history and view list;
+- the Energy Actions block;
+- the manifest's package count and release string;
+- the `VERSION.yaml` facts;
+- the set of packages that one control-surface pin covers. A package that a post-export entry declares as added is not part of
+  it; the package contents are still read live.
+
+The view-list pins kept their live part as a new live check: Fallback / Recovery, Safety and Manual Controls stay consecutive.
+
+Two suites now read their historical baselines through the tree's full chain, so a later declared edit to a chain-pinned file is
+undone first:
+
+- `test_fallback_live_match.py`, for its one as-of measurement;
+- `test_fbd1_liveness.py`, for its pre-FB-D1 firmware baseline.
+
+`pex0` changed no firmware, Home Assistant package, dashboard, manifest or registry content.
