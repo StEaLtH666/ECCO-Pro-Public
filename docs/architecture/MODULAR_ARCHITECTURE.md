@@ -1,7 +1,7 @@
 # Modular architecture: the host-side foundation (`ecco_core`) and its boundaries
 
 Status: **foundation, offline only.** Everything described here is Python that runs in tests and on a developer machine.
-The controller firmware is **unchanged** (byte-identical to the 0.9.0 candidate), no new write path exists anywhere, and
+This foundation changes **no firmware**, no new write path exists anywhere, and
 nothing in this document has been exercised on hardware. Intelligence V1.1 is described in
 [`docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md`](../intelligence/INTELLIGENCE_V1_1_FOUNDATION.md).
 

@@ -101,7 +101,7 @@ freshness limits the project already uses, device capabilities derived only from
 controller's write authority as one table that tests check against the firmware's own write surface. Intelligence reads
 system state only through it, and the V1.1 advisors
 ([docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md](docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md)) build on it.
-It is offline only: the firmware is unchanged, the host side has no transport and no write path, and nothing is live-proven.
+It is offline only: this foundation changes no firmware, the host side has no transport and no write path, and nothing is live-proven.
 
 Further directions, not commitments, none implemented yet:
 
