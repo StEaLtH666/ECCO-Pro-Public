@@ -893,6 +893,7 @@ import hashlib
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 import _pub0_scope as _pub0  # noqa: E402  (PUB0: the sha256 pins below hash the private text; the identity outside the public export)
 import _lic0_scope as _lic0  # noqa: E402  (LIC0: the declared v0.9.0 licence alignment of the Energy Actions card)
+import _pex  # noqa: E402  (PEX0: the historical pins below read their file AS OF pub0; live safety invariants read the live file)
 from datetime import datetime, timezone
 
 DASH = HA / "dashboards" / "ecco_pro.yaml"
@@ -948,11 +949,17 @@ check("the Safety view exists exactly once (by title and by path)",
       titles.count("Safety") == 1 and sum(1 for v in views if v.get("path") == "ecco-safety") == 1, str(titles))
 check("path is ecco-safety, icon mdi:shield-home-outline, type sections",
       safety.get("path") == "ecco-safety" and safety.get("icon") == "mdi:shield-home-outline" and safety.get("type") == "sections")
+# PEX0 (O4): the two view-list pins below are FB-B3's pub0-era layout, so they read the dashboard AS OF pub0; the live adjacency
+# Fallback / Recovery -> Safety -> Manual Controls they carried stays a live check (the third check).
+_titles0 = [v["title"] for v in yaml.load(_pex.as_of_pub0("home-assistant/dashboards/ecco_pro.yaml", dash_text), Loader=TaggedSafeLoader)["views"]]   # PEX0: as of pub0
 check("the Safety view sits immediately before Manual Controls (after Fallback / Recovery)",
-      titles[-2:] == ["Safety", "Manual Controls"] and titles[-3] == "Fallback / Recovery", str(titles))
+      _titles0[-2:] == ["Safety", "Manual Controls"] and _titles0[-3] == "Fallback / Recovery", str(_titles0))
 check("the original views keep their relative order",
-      [t for t in titles if t != "Safety"] == ["Overview", "Intelligence", "Tariffs", "Control", "Recommended", "System",
-                                                "Inverter / Advanced", "Fallback / Recovery", "Manual Controls"])
+      [t for t in _titles0 if t != "Safety"] == ["Overview", "Intelligence", "Tariffs", "Control", "Recommended", "System",
+                                                  "Inverter / Advanced", "Fallback / Recovery", "Manual Controls"])
+check("live: Fallback / Recovery, Safety and Manual Controls are consecutive views in this order (PEX0: the live part of the FB-B3 placement)",
+      "Fallback / Recovery" in titles and titles[titles.index("Fallback / Recovery"):titles.index("Fallback / Recovery") + 3]
+      == ["Fallback / Recovery", "Safety", "Manual Controls"], str(titles))
 check("the Safety view has the same view keys as the other sections views",
       set(safety) == {"title", "path", "icon", "type", "max_columns", "dense_section_placement", "sections"}, str(sorted(safety)))
 check("the existing frontend card and Fallback / Recovery view are still present once",
@@ -1132,7 +1139,7 @@ print("[19] Energy Actions card config and frontend unchanged")
 ea_start = dash_text.index("          - type: custom:ecco-energy-actions-card\n")
 ea_end = dash_text.index("          # ---- KNOWN-GOOD PROFILE (FB-B3; READ-ONLY tile) ----")
 EA_BLOCK_SHA = "784044c3fc4e9bb13811a384e687a2604d05fed1fff5ad161ef0d4ea953d361d"
-_dash_private = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", dash_text)   # PUB0: the pin is the private block's
+_dash_private = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", _pex.as_of_pub0("home-assistant/dashboards/ecco_pro.yaml", dash_text))   # PUB0: the pin is the private block's; PEX0: as of pub0
 _ea_private = _dash_private[_dash_private.index("          - type: custom:ecco-energy-actions-card\n"):
                             _dash_private.index("          # ---- KNOWN-GOOD PROFILE (FB-B3; READ-ONLY tile) ----")]
 check("the Energy Actions card config block is byte-identical to the pre-FB-B3 dashboard (sha256 pin)",
@@ -1172,7 +1179,9 @@ for src, dst in [("home-assistant/packages/ecco_fallback_status.yaml", "/config/
           len(ents) == 1 and ents[0] == {"source": src, "destination": dst, "method": "ssh_file_copy", "restart_required": True}, str(ents))
     check(f"{src} is named only in its own package stanza (source + destination)", man_text.count(Path(src).name) == 2, str(man_text.count(Path(src).name)))
     check(f"{src} exists", (ROOT / src).is_file())
-check("the manifest has exactly two new package entries (11 packages in total)", len(pk) == 11, str(len(pk)))
+_man0 = yaml.safe_load(_pex.as_of_pub0("deployment/ha-manifest.yaml", man_text))   # PEX0: FB-B3's package count and release are pub0-era pins
+check("the manifest has exactly two new package entries (11 packages in total)", len(_man0["home_assistant_packages"]) == 11,
+      str(len(_man0["home_assistant_packages"])))
 check("the existing fallback recovery frontend asset entry is kept",
       any("ecco-fallback-recovery-card" in a["source"] for a in man["frontend_assets"]) and len(man["frontend_assets"]) == 2)
 inf = man["influxdb"]
@@ -1183,7 +1192,7 @@ check("the manifest carries the firmware-first dependency note",
       "Fallback packages require firmware with FB-B1/FB-B2/FB-B3 entities; deploy firmware first, then packages, then the dashboard." in man["notes"])
 check("the unrelated ecco_tou_schedule manifest gap is left alone (still not listed)",
       "ecco_tou_schedule" not in man_text)
-check("the manifest release string is updated", man["release"] == "2026-10-02-fbb3-dashboard")
+check("the manifest release string is updated", _man0["release"] == "2026-10-02-fbb3-dashboard")   # PEX0: as of pub0
 
 # ---------------------------------------------------------------------------
 print("")
@@ -1204,7 +1213,7 @@ check("both excluded entities exist in the firmware (names derive to those ids)"
       'name: "ECCO Supervision Challenge"' in fw_text and 'name: "ECCO Fallback Profile Review ID"' in fw_text)
 check("v1.3 does not enumerate the dongle sensors individually (only the two exclusions are named)",
       lf(INF13).count(f"ecco_clock_dongle_ecco_") == 2)
-ver = yaml.safe_load(lf(VERSION))
+ver = yaml.safe_load(_pex.as_of_pub0("VERSION.yaml", lf(VERSION)))   # PEX0: the FB-B3 / FB-C3 version facts below are pub0-era pins
 # FB-C3: dashboard 7.18.0 is STAGED (7.17.0 was the live-tested one at LP-B3; its record is kept in VERSION.yaml's comments, same convention as 7.16.0 -> 7.17.0).
 check("VERSION.yaml: dashboard 7.18.0 (7.17.0 + FB-C3 shadow check) staged, NOT live-tested (7.17.0 was tested in HA at LP-B3, 2026-10-03); influx export config v1.3",
       ver["current"]["dashboard"]["version"] == "7.18.0" and ver["current"]["dashboard"]["tested_in_home_assistant"] is False

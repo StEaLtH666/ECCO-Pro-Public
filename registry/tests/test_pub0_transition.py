@@ -6,6 +6,11 @@ Test-only. No firmware build, no hardware, no Home Assistant, no network. I/O: r
 Runs in BOTH trees. In the private development tree (EXPORTED False) the live files are pub0's SOURCE: the export is built in memory
 with forward() and proven. In the public export (EXPORTED True) the live files ARE the export: the proof views are reversed exactly.
 
+PEX0 (the post-export edit layer, registry/tests/_pex.py, owner decision O1): in the public export, changes made on the export are
+declared post-export chain entries (_scope_chain.POST_EXPORT_ENTRIES, after pub0). Every file this suite proves is read AS OF pub0
+through the layer (each declared edit undone exactly, newest first, sha256-checked at every step; the identity in the private tree),
+so every check below runs on the pub0 export byte for byte. test_pex_transition.py proves the post-export entries themselves.
+
   [0] the declaration: target set, policies, manifest structure, fingerprint == _scope_chain.PUB0_FINGERPRINT, no private value in
       the manifest
   [1] mode: the tree is what EXPORTED says; private: the live tree is the declared source and the manifest is exactly what generate()
@@ -35,6 +40,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools"))
 import _pub0_scope as P  # noqa: E402
 import _scope_chain as sc  # noqa: E402
+import _pex  # noqa: E402  (PEX0: the post-export edit layer; the export's files are proven AS OF pub0)
 
 FAILURES: list[str] = []
 
@@ -62,7 +68,7 @@ def raises(fn, exc=AssertionError) -> bool:
 M = P.manifest()
 RECS = P.records(M)
 MANIFEST_TEXT = (ROOT / P.MANIFEST_REL).read_text(encoding="utf-8")
-LIVE = {rel: P.read_repo(rel) for rel in P.TARGETS}
+LIVE = {rel: _pex.as_of_pub0(rel, P.read_repo(rel)) for rel in P.TARGETS}   # PEX0: every target AS OF pub0 (exact; identity in the private tree)
 CAPS = sc.CAPABILITIES
 DASH = "home-assistant/dashboards/ecco_pro.yaml"
 OCTO = "home-assistant/packages/ecco_pro.yaml"
@@ -166,8 +172,12 @@ print(f"[1] mode: EXPORTED = {EXPORTED} ({'public export' if EXPORTED else 'priv
 # ===========================================================================
 check("the export flag is a plain bool spelled once in this module", isinstance(EXPORTED, bool)
       and len(P.EXPORT_FLAG_LINE.findall(LIVE[P.SELF_REL])) == 1)
-check("the chain carries pub0 exactly when the tree is the export", (sc.CHAIN.ids()[-1] == "pub0") == EXPORTED
-      and sc.CHAIN.ids().count("pub0") == int(EXPORTED))
+# PEX0 (O1): restated from `ids()[-1] == "pub0"`. pub0 sits immediately after the merge-ordered ENTRIES, exactly once, exactly when the
+# tree is the export, and only the declared post-export entries follow it (none in the private tree).
+_ids, _n = sc.CHAIN.ids(), len(sc.ENTRIES)
+check("the chain carries pub0 exactly when the tree is the export: the merge-ordered ENTRIES, then pub0, then only the declared "
+      "post-export (PEX) entries", _ids[:_n] == [e.id for e in sc.ENTRIES] and (_ids[_n:_n + 1] == ["pub0"]) == EXPORTED
+      and _ids.count("pub0") == int(EXPORTED) and _ids[_n + 1:] == ([e.id for e in sc.POST_EXPORT_ENTRIES] if EXPORTED else []))
 if not EXPORTED:
     drift = [rel for rel, t in PUBLIC.items() if t is None]
     check("PRIVATE TREE: every target is exactly the declared pub0 source (forward() accepts it). A failure here means a target changed "
@@ -278,7 +288,7 @@ check("the PUB0 checkpoint is the manifest's result hash of the capabilities fil
       E.checkpoints[CAPS] == RECS[CAPS]["result_sha256"] and RECS[CAPS]["source_sha256"] == sc.ROOT_SHA[CAPS])
 no_other = [p for p in sc.PINNED if p != CAPS and P.is_target(p)]
 check("no other chain-pinned artifact is a pub0 target (firmware, headers, state machine and ha-manifest are untouched)", not no_other, str(no_other))
-LIVE_PINNED = {p: sc.read_live(p) for p in sc.PINNED}
+LIVE_PINNED = {p: _pex.as_of_pub0(p, sc.read_live(p)) for p in sc.PINNED}   # PEX0: the chain-pinned artifacts AS OF pub0 (exact)
 EXPORT_PINNED = dict(LIVE_PINNED) if EXPORTED else {**LIVE_PINNED, CAPS: PUBLIC[CAPS]}
 CX = sc.Chain(sc.ENTRIES + sc.EXPORT_ENTRIES)
 rows = sc.integrity_report(CX, EXPORT_PINNED)
@@ -333,7 +343,9 @@ LEDGER = {   # file -> exact number of calls of each private_view flavour
     "home-assistant/tests/test_ecco_shadow_check_ux.py": {"private_view(": 1, "private_view_bytes(": 1, "private_view_edited(": 2},
 }
 OWN = {P.SELF_REL, "registry/tests/test_pub0_transition.py", "registry/tests/test_pub0_privacy.py", "tools/public/pub0.py",
-       "registry/tests/test_lic0_transition.py"}   # lic0 (v0.9.0) proves its own transition on the private text: not an older suite
+       "registry/tests/test_lic0_transition.py",   # lic0 (v0.9.0) proves its own transition on the private text: not an older suite
+       # PEX0: the post-export layer, pex0's own routing data (its exact hunks quote the routed lines) and its proofs: not older suites
+       "registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 callers = {}
 for d in ("registry", "home-assistant", "health", "influxdb", "tools"):
     for p in sorted((ROOT / d).rglob("*.py")):

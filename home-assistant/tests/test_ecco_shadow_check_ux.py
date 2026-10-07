@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 import _pub0_scope as _pub0  # noqa: E402  (PUB0: the sha256 pins below hash the private text; the identity outside the public export)
 import _lic0_scope as _lic0  # noqa: E402  (LIC0: the declared v0.9.0 licence alignment of the Energy Actions card)
+import _pex  # noqa: E402  (PEX0: the historical pins below read their file AS OF pub0; live safety invariants read the live file)
 
 HA = ROOT / "home-assistant"
 STATUS_PKG = HA / "packages" / "ecco_fallback_status.yaml"
@@ -767,7 +768,10 @@ check("14: the Safety view's perform-action set is unchanged: exactly the three 
       == ["script.ecco_fallback_profile_invalidate", "script.ecco_fallback_profile_replace_corrupt", "script.ecco_fallback_profile_save",
           "script.ecco_fallback_reset_high_water"])
 all_pkgs = {p.name: load_text(lf(p)) for p in (HA / "packages").glob("*.yaml")}
-PKG_SURFACE = {name: {k: len(v) for k, v in d.items() if k != "template"} for name, d in all_pkgs.items()}
+# PEX0 (O4): the per-package pin below is FB-C3's pub0-era package SET: a package a post-export entry declares as added is not part of
+# it (an undeclared new package still fails). The package contents stay live, and every other check here reads all packages.
+_pkgs_pub0 = {n: d for n, d in all_pkgs.items() if f"home-assistant/packages/{n}" not in _pex.post_export_added()}   # PEX0: the pub0-era set
+PKG_SURFACE = {name: {k: len(v) for k, v in d.items() if k != "template"} for name, d in _pkgs_pub0.items()}
 check("14: no new HA control surface: the per-package count of every non-template key (script / automation / input_*) is exactly the FB-B3 one",
       PKG_SURFACE == {
           "ecco_battery_outlook_influx.yaml": {"sensor": 1}, "ecco_canonical_telemetry.yaml": {},
@@ -918,7 +922,7 @@ print("[7] Energy Actions untouched; InfluxDB v1.3; version and record")
 EA_BLOCK_SHA = "784044c3fc4e9bb13811a384e687a2604d05fed1fff5ad161ef0d4ea953d361d"
 ea_start = dash_text.index("          - type: custom:ecco-energy-actions-card\n")
 ea_end = dash_text.index("          # ---- KNOWN-GOOD PROFILE (FB-B3; READ-ONLY tile) ----")
-_dash_private = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", dash_text)   # PUB0: the pin is the private block's
+_dash_private = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", _pex.as_of_pub0("home-assistant/dashboards/ecco_pro.yaml", dash_text))   # PUB0: the pin is the private block's; PEX0: as of pub0
 _ea_private = _dash_private[_dash_private.index("          - type: custom:ecco-energy-actions-card\n"):
                             _dash_private.index("          # ---- KNOWN-GOOD PROFILE (FB-B3; READ-ONLY tile) ----")]
 check("15: the Energy Actions card config block of the dashboard is byte-identical to the FB-B3 / main one (sha256 pin)", sha(_ea_private) == EA_BLOCK_SHA, sha(_ea_private))
@@ -947,16 +951,18 @@ check("InfluxDB v1.3 (unchanged) still exports all five shadow sensors for soak 
 check("InfluxDB v1.3: the decoder sensor and the flag are exported too (sensor.ecco_* / binary_sensor.ecco_* globs) - harmless", exported(CHECK) and exported(OPEN))
 
 ver = yaml.safe_load(lf(VERSION))
+_ver0_text = _pex.as_of_pub0("VERSION.yaml", lf(VERSION))   # PEX0: the three FB-C3 version / record pins below read VERSION.yaml AS OF pub0
+_ver0 = yaml.safe_load(_ver0_text)
 check("version: dashboard 7.18.0 is staged (FB-C3), NOT live-tested; firmware stays stage3.4 and hardware-verified",
-      ver["current"]["dashboard"]["version"] == "7.18.0" and ver["current"]["dashboard"]["tested_in_home_assistant"] is False
-      and ver["current"]["firmware"]["version"] == "stage3.4" and ver["current"]["firmware"]["hardware_verified"] is True)
+      _ver0["current"]["dashboard"]["version"] == "7.18.0" and _ver0["current"]["dashboard"]["tested_in_home_assistant"] is False
+      and _ver0["current"]["firmware"]["version"] == "stage3.4" and _ver0["current"]["firmware"]["hardware_verified"] is True)
 ver_text = lf(VERSION)
 # PUBLIC-EXPORT: the private-history "record:" checks (the verbatim LP-B3 live-proof prose in VERSION.yaml, the CHANGELOG.md /
 # CURRENT_STATE.md entries, the FB-C3 implementation-notes file) are process records of the private development archive and are
 # not part of the public tree (PUBLIC_RELEASE_BUILD_SPEC B.3). The behavioural facts they carried are kept as public invariants below.
 check("version: the previous dashboard release 7.17.0 (FB-B3) is recorded as tested in Home Assistant, 7.18.0 is not",
-      "previous dashboard release (7.17.0," in ver_text and "FB-B3" in ver_text and "tested_in_home_assistant is therefore false for 7.18.0" in ver_text)
-check("version: FB-C3 is recorded as OFFLINE / STAGED / NOT LIVE-PROVEN", "FB-C3" in ver_text and "OFFLINE / STAGED / NOT LIVE-PROVEN" in ver_text)
+      "previous dashboard release (7.17.0," in _ver0_text and "FB-B3" in _ver0_text and "tested_in_home_assistant is therefore false for 7.18.0" in _ver0_text)
+check("version: FB-C3 is recorded as OFFLINE / STAGED / NOT LIVE-PROVEN", "FB-C3" in _ver0_text and "OFFLINE / STAGED / NOT LIVE-PROVEN" in _ver0_text)
 check("version: VERSION.yaml carries no private development history (no commit SHA, branch / PR history or rollback branch)",
       "main_commit" not in ver_text and "branches" not in ver and "rollback" not in ver and not re.search(r"\b[0-9a-f]{40}\b", ver_text)
       and not re.search(r"PR #\d+|LP-[A-Z]\d", ver_text))

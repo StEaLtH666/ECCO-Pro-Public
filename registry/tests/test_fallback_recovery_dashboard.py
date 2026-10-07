@@ -60,6 +60,7 @@ import _fbb3_ha_scope as ha3  # noqa: E402  (FB-B3: the exact reverter of every 
 import _fbc3_scope as c3  # noqa: E402  (FB-C3: the exact reverter of every FB-C3 edit to the dashboard; applied BEFORE ha3's)
 import _pub0_scope as _pub0  # noqa: E402  (PUB0: the historical pins below run on the private text; the identity outside the public export)
 import _lic0_scope as _lic0  # noqa: E402  (LIC0: the declared v0.9.0 licence alignment of the Energy Actions card)
+import _pex  # noqa: E402  (PEX0: the historical pins below read the dashboard AS OF pub0; live safety invariants read the live file)
 
 FAILURES: list[str] = []
 
@@ -938,12 +939,20 @@ def main() -> int:
     check("exactly one view has the path", len(fb) == 1, str(fb))
     i = fb[0] if fb else -1
     # FB-B3: Safety is the ONLY view FB-B3 adds, and it sits immediately before Manual Controls, after Fallback / Recovery
+    # PEX0 (O4): the two view-list pins below are FB-B3's pub0-era layout, so they read the dashboard AS OF pub0; the live adjacency
+    # Fallback / Recovery -> Safety -> Manual Controls they carried stays a live check (the third check).
+    _views0 = yaml.safe_load(_pex.as_of_pub0("home-assistant/dashboards/ecco_pro.yaml", dash_text))["views"]   # PEX0: the dashboard as of pub0
+    _titles0 = [v["title"] for v in _views0]
+    _i0 = next((n for n, v in enumerate(_views0) if v.get("path") == VIEW_PATH), -1)
     check("title order: ... Inverter / Advanced, Fallback / Recovery, Safety, Manual Controls (FB-B3: Safety is immediately before Manual Controls)",
-          i > 0 and titles[i - 1] == "Inverter / Advanced" and titles[i] == VIEW_TITLE and titles[i + 1] == SAFETY_TITLE and titles[i + 2] == "Manual Controls"
-          and titles[-1] == "Manual Controls", str(titles))
+          _i0 > 0 and _titles0[_i0 - 1] == "Inverter / Advanced" and _titles0[_i0] == VIEW_TITLE and _titles0[_i0 + 1] == SAFETY_TITLE
+          and _titles0[_i0 + 2] == "Manual Controls" and _titles0[-1] == "Manual Controls", str(_titles0))
     check("the original eight views keep their relative order and Safety is the only new view (ten views in total)",
-          [t for t in titles if t not in (VIEW_TITLE, SAFETY_TITLE)] == ["Overview", "Intelligence", "Tariffs", "Control", "Recommended", "System", "Inverter / Advanced", "Manual Controls"]
-          and len(titles) == 10 and titles.count(SAFETY_TITLE) == 1 and [v.get("path") for v in views].count("ecco-safety") == 1, str(titles))
+          [t for t in _titles0 if t not in (VIEW_TITLE, SAFETY_TITLE)] == ["Overview", "Intelligence", "Tariffs", "Control", "Recommended", "System", "Inverter / Advanced", "Manual Controls"]
+          and len(_titles0) == 10 and _titles0.count(SAFETY_TITLE) == 1 and [v.get("path") for v in _views0].count("ecco-safety") == 1, str(_titles0))
+    check("live: Fallback / Recovery, Safety and Manual Controls are consecutive views in this order, Safety exactly once (PEX0: the live part of the FB-B3 placement)",
+          i > 0 and titles[i:i + 3] == [VIEW_TITLE, SAFETY_TITLE, "Manual Controls"] and titles.count(SAFETY_TITLE) == 1
+          and [v.get("path") for v in views].count("ecco-safety") == 1, str(titles))
     view = views[i]
     check("view keys are exactly the sections-view keys of the other views", set(view) == {"title", "path", "icon", "type", "max_columns", "dense_section_placement", "sections"}, str(sorted(view)))
     check("view path / icon / type / max_columns / dense_section_placement", (view["path"], view["icon"], view["type"], view["max_columns"], view["dense_section_placement"]) == (VIEW_PATH, VIEW_ICON, "sections", 4, True))
@@ -1304,7 +1313,8 @@ def main() -> int:
     # dashboard content outside the new view would pass every other suite. Cut the view out EXACTLY - from its '  - title: Fallback /
     # Recovery' line up to (not including) the '  - title: Manual Controls' line, in LF text - and compare with the pre-FB-B1 file.
     # PUB0: the FB-C3 / FB-B3 hunks and every hash below are the private dashboard's; in the public export they run on its exact private text.
-    lf_full = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", dash_text.replace("\r\n", "\n"))
+    # PEX0: every pin of this section is the FB-C3 / FB-B3 / FB-B1 history of the file, so it reads the dashboard AS OF pub0 (exact).
+    lf_full = _pub0.private_view("home-assistant/dashboards/ecco_pro.yaml", _pex.as_of_pub0("home-assistant/dashboards/ecco_pro.yaml", dash_text.replace("\r\n", "\n")))
     # FB-B3: undo exactly the declared FB-B3 edits (an exact-match reverter: it raises on ANY other change to those regions) and prove the
     # result is main @ 87e6151 byte for byte; every pin below then runs on that FB-B2 file exactly as before.
     # FB-C3: the FB-B3 reverter is exact over the whole Safety view, so it only applies to the dashboard AS OF FB-B3. Undo exactly the declared
