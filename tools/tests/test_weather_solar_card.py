@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression suite: the ECCO Weather & Solar card (frontend/ecco-weather-solar-card, read-only, not yet deployed).
+"""Regression suite: the ECCO Weather & Solar card (frontend/ecco-weather-solar-card, read-only; its dashboard view is entry wsc1).
 
   [1] the card folder: the expected files only, package / lock / hacs metadata, exact build-tool pins, text files only, LF
   [2] read-only allowlist over the source and the committed bundle: exactly two websocket message types
@@ -9,7 +9,8 @@
   [4] the card's default entity ids are the ones this repository defines (the ECCO blend, scorecard and canonical PV template
       sensors, the controller's PV energy counters); the blend is read, never re-weighted
   [5] the bundle and the example render correctly for any site slug (tools/ecco_site_render.py)
-  [6] the card's Node suite (node --test), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped
+  [6] the card's Node suite (node --test, TAP), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped.
+      Only the deterministic-rebuild test may skip, and only where esbuild is not installed (CI installs no npm package)
   [7] scope: one dashboard view right after Overview, declared by post-export entry wsc1; no manifest, package or version file
 
 The card's behaviour (forecast lifecycle, freshness, time zones, sun times, chart, fallbacks) is tested by its Node suite:
@@ -216,10 +217,27 @@ if ver is None or ver < (22, 18):
     print(f"  SKIP  node --test (needs Node 22.18+ for TypeScript tests; found {ver}) - run `npm test` in the card folder")
 else:
     tests = sorted(str(p.relative_to(CARD)) for p in (CARD / "test").glob("*.test.ts"))
-    r = subprocess.run([node, "--test", *tests], cwd=str(CARD), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
-    summary = dict(re.findall(r"^ℹ (tests|pass|fail) (\d+)$", r.stdout, re.M))
-    check(f"node --test: {summary.get('pass', '?')}/{summary.get('tests', '?')} card tests pass (at least 80)",
-          r.returncode == 0 and summary.get("fail") == "0" and int(summary.get("pass", "0")) >= 80, (r.stdout + r.stderr)[-800:])
+    # The TAP reporter is requested explicitly: Node's default reporter differs by version and by whether the output is a terminal
+    # (spec "ℹ tests N" locally, TAP "# tests N" on CI), and the summary must be read the same way everywhere.
+    r = subprocess.run([node, "--test", "--test-reporter=tap", *tests], cwd=str(CARD), capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=600)
+    counts = {k: int(v) for k, v in re.findall(r"^# (tests|pass|fail|cancelled|skipped|todo) (\d+)$", r.stdout, re.M)}
+    skips = re.findall(r"^\s*ok \d+ - (.+?) # SKIP (.*)$", r.stdout, re.M)
+    # The ONE test allowed to skip: the deterministic rebuild needs the pinned esbuild from `npm ci`, and CI installs no npm package
+    # (CONTRIBUTING.md: CI never runs npm). Wherever esbuild is installed it must run and pass; nothing else may ever skip.
+    BUILD_TEST = "rebuilding twice gives byte-identical output, equal to the committed dist"
+    have_esbuild = (CARD / "node_modules" / "esbuild" / "package.json").is_file()
+    allowed = [] if have_esbuild else [BUILD_TEST]
+    tail = (r.stdout + r.stderr)[-800:]
+    check("node --test reports a complete TAP summary (tests / pass / fail / cancelled / skipped / todo)",
+          set(counts) == {"tests", "pass", "fail", "cancelled", "skipped", "todo"}, tail)
+    check(f"node --test: {counts.get('pass', '?')} passed, {counts.get('fail', '?')} failed, {counts.get('skipped', '?')} skipped of "
+          f"{counts.get('tests', '?')} card tests; none failed, cancelled or todo; at least 80 passed",
+          r.returncode == 0 and counts.get("fail") == 0 and counts.get("cancelled") == 0 and counts.get("todo") == 0
+          and counts.get("pass", 0) >= 80 and counts.get("pass", 0) + counts.get("skipped", -1) == counts.get("tests"), tail)
+    check(f"skipped tests are exactly the allowed ones ({'none: esbuild is installed' if have_esbuild else 'the deterministic rebuild: esbuild is not installed'})",
+          sorted(n for n, _why in skips) == allowed and counts.get("skipped") == len(allowed)
+          and all("esbuild is not installed" in why for _n, why in skips), str(skips))
 
 # ===========================================================================
 print("")
