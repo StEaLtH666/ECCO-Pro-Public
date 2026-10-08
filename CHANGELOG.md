@@ -32,6 +32,13 @@ Development before the first public release happened in a private repository; se
   - Saving Session / export-event advice;
   - reserve-aware Dump-to-Grid stop-level advice.
 - New offline test root `ecco_core/tests`.
+- Public fallback design basis and stage status,
+  [docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md](docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md): the supervision
+  model, the durable fallback profile, the Review / Save / Invalidate boundary, Live Match, the zero-authority shadow evaluator
+  and its display, the RTC / poll liveness work, what is and is not authoritative, the status of every stage (implemented,
+  deployed, live-proven or partially live-proven) and the evidence still owed before operator Restore (FB-E) or automatic
+  failback (FB-F), neither of which is implemented. Records and documentation only, declared as post-export entry `fbrp1`:
+  no firmware, Home Assistant package, dashboard, frontend or behaviour change.
 
 ### Changed
 
@@ -58,6 +65,11 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
 - `docs/dev/register-provenance.md` swapped the evidence status of two registry records.
 - `docs/INVERTER_CAPABILITY_REGISTRY.md` had an out-of-date record count, a statement that no W3 record is writable
   (register 244's policy record is), and an incomplete list of writing scripts.
+- Stale fallback status in `VERSION.yaml` (the 7.18.0 dashboard comment), `README.md`, `SUPPORTED_HARDWARE.md` and
+  `ARCHITECTURE.md`: the FB-C3 shadow-check display was described as offline only. It is deployed on the reference
+  installation and its everyday display path was checked live; its supervision-loss (Shadow Recovery) path is not yet
+  live-proven, so `tested_in_home_assistant` stays `false` for dashboard 7.18.0. The RTC policy row now records the FB-D1
+  deployment and that its 7-day continuous run is still pending.
 
 ## [0.9.0] - first public pre-release
 

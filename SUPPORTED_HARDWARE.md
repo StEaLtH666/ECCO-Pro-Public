@@ -33,15 +33,15 @@ All entries refer to the reference system(s) above only.
 | Capability | Proof level | Notes |
 |---|---|---|
 | Read-only telemetry and configuration polling | Hardware tested | Single-phase low-voltage register blocks 22-24, 59-116, 150-196, 200-240, 241-293 and 330 |
-| Inverter clock (RTC, registers 22-24) correction | Hardware tested | Write/verify proven. The current drift-correction policy is deployed on the reference installation; not every one of its automatic correction windows had been observed when 0.9.0 was prepared |
+| Inverter clock (RTC, registers 22-24) correction | Hardware tested | Write/verify proven. The current drift-correction and poll-liveness policy (FB-D1) has been deployed on the reference installation since 2026-10-04: its post-update checks passed and a precision correction before a TOU zone start was observed working. Its 7-day continuous run and long-run counters are still pending ([fallback design basis](docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md)) |
 | Manual six-slot TOU (registers 250-261, 268-279) | Hardware tested | No automatic rollback of a manual apply |
 | Free Power: normal start → automatic restore | Hardware tested | Grid charge current/enable (230, 232) and the TOU registers |
 | Free Power operator recovery (review / force restore / accept current state) | Offline only | Implemented and extensively simulated; not exercised on hardware |
 | Register 244 (load/export mode) policy write with durable restore | Hardware tested | Register 245 (export limit) is **read-only** in this firmware |
 | Dump-to-Grid | Hardware tested for two scenarios, at the default **3000 W** command ceiling; **offline only** for every other path | Includes the closed-loop export controller. Measured battery discharge ran above the commanded ceiling by a few hundred watts in observations, cause not yet established. The command ceiling is a build-time setting (default 3000 W; [docs/dev/dump-to-grid-ceiling.md](docs/dev/dump-to-grid-ceiling.md)). Up to **6000 W**: **offline only**, the first staged live checkpoint, not hardware tested. 7000 W to **8000 W**: architectural capability only, **not hardware proven** |
-| Fallback profile: save, invalidate, live-match display | Hardware tested | |
-| Fallback restore / automatic failback | **Not implemented** | Stated here so it is not assumed |
-| Supervision heartbeat and shadow check | Hardware tested (observe-only) | Changes nothing on the inverter |
+| Fallback profile: save, invalidate, live-match display | Hardware tested | Replacing a damaged profile, and the EXPORT / OUT_OF_DOMAIN live-match states: offline only |
+| Fallback restore / automatic failback | **Not implemented** | Stated here so it is not assumed. The firmware refuses `RESTORE` and `ACKNOWLEDGE` |
+| Supervision heartbeat and shadow check | Hardware tested (observe-only) for the heartbeat and the everyday shadow evaluation and display; supervision-loss episodes and the Shadow Recovery display: **offline only** | Changes nothing on the inverter. An authorised Home Assistant loss drill is still owed ([fallback design basis](docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md)) |
 | System Health (Home Assistant checks and reason codes) | Hardware tested | On the reference installation's Home Assistant |
 | Intelligence V1 | Offline only | Shadow-only, synthetic data, no write path |
 | Battery Outlook via InfluxDB | Hardware tested | On the reference installation's Home Assistant and InfluxDB; a Home Assistant / InfluxDB feature, not an inverter write |
