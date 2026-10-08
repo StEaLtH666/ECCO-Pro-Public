@@ -9,9 +9,14 @@ current:
     path: home-assistant/dashboards/ecco_pro.yaml
     # v7.18.0 adds the FB-C3 Safety-view SHADOW CHECK line, the shadow-episode banner, the technical Failback
     # shadow evaluator block and the Shadow Recovery chip / tile tone (HA packages: canonical status row
-    # shadow_episode, FAILBACK_SHADOW_EPISODE, decoder sensor.ecco_shadow_check). FB-C3 is
-    # OFFLINE / STAGED / NOT LIVE-PROVEN: offline Jinja and contract tests only, no firmware change.
-    # tested_in_home_assistant is therefore false for 7.18.0. The previous dashboard release (7.17.0,
+    # shadow_episode, FAILBACK_SHADOW_EPISODE, decoder sensor.ecco_shadow_check), no firmware change. FB-C3 is
+    # DEPLOYED on the reference installation (2026-10-04) and PARTIALLY LIVE-PROVEN: its everyday display path was
+    # checked live (the readiness Verdict wording, the canonical Fallback status, the health rows and the Safety
+    # view, all from the real dongle strings). Its supervision-loss path (the Shadow Recovery status, the
+    # shadow-episode banner and the episode detail) has NOT been exercised in a live proof yet; that needs an
+    # authorised Home Assistant loss drill. tested_in_home_assistant therefore stays false for 7.18.0: the flag
+    # records a dashboard release exercised in full. Stage status:
+    # docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md. The previous dashboard release (7.17.0,
     # FB-B3: Safety view, Known-Good Profile tile, supervision/fallback chips and health rows) was tested
     # in Home Assistant on the reference installation.
     tested_in_home_assistant: false
