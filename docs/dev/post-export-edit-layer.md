@@ -20,10 +20,14 @@ The proofs then undo the declared changes exactly and check that what remains is
 
 - Every `pub0` target that is not already pinned by the scope chain. The pinned artifacts (firmware YAML, durable headers, capability
   registry, transaction state machine, `deployment/ha-manifest.yaml`) keep their own chain mechanism.
-- `VERSION.yaml`, which is enrolled because older suites pin its export-era content. The list of enrolled files only grows with
-  evidence.
+- The enrolled files, whose export-era content older suites pin. The list only grows with such evidence, by an owner decision
+  (O3):
+  - `VERSION.yaml`;
+  - since `esb1` (O3 amendment): the Energy Actions card's `package.json`, `package-lock.json` and built bundle
+    `dist/ecco-energy-actions-card.js`, which the FB-B3 / FB-C3 card-folder pins and the lic0 proofs pin.
 
-The `pub0` state of a frozen file is its manifest result hash, read from the manifest and never typed by hand.
+The `pub0` state of a frozen file is its manifest result hash, read from the manifest and never typed by hand. For an enrolled
+file it is the recorded hash of the file at the export commit (883068d).
 
 ## Making a change to a frozen or chain-pinned file
 
@@ -79,3 +83,12 @@ undone first:
 - `test_fbd1_liveness.py`, for its pre-FB-D1 firmware baseline.
 
 `pex0` changed no firmware, Home Assistant package, dashboard, manifest or registry content.
+
+## What esb1 changed
+
+`esb1` builds the Energy Actions card with esbuild 0.28.1 (`registry/tests/_esb1_scope.py`, proofs in
+`registry/tests/test_esb1_transition.py`). The bundle's executable code is byte-identical; only its trailing Lit licence block is
+regrouped. Its frozen edits are the three enrolled card files and one routing in each of the three suites that pin the card
+folder's FB-B3 state: their folder pin now reads a frozen card file as of `pub0` and every other file live, and the pinned value
+is unchanged. `test_lic0_transition.py` reads the lic0-era card files the same way; its live licence checks still read the live
+files.

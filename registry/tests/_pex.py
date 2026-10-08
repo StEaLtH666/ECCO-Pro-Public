@@ -9,9 +9,11 @@ such a change land WITHOUT touching that evidence: every change made on the expo
 entry AFTER pub0 (_scope_chain.POST_EXPORT_ENTRIES), and the proofs read the files AS OF pub0.
 
 WHAT IS FROZEN. FROZEN = the pub0 targets that are not chain-pinned, plus ENROLLED: files pub0 did not edit whose pub0-era state an older
-suite pins (owner decision O3: VERSION.yaml only; not broadened without evidence). The pub0 state of a frozen file (the PEX genesis) is
-base(): the manifest's result sha256 for a target (read from the manifest, never typed) and the recorded hash for an enrolled file. The
-chain-pinned artifacts keep their own mechanism (Entry.reverts / checkpoints); their pub0 state is the chain checkpoint as of pub0.
+suite pins (owner decision O3: VERSION.yaml; O3 amendment, esb1: the Energy Actions card's package.json, package-lock.json and
+bundle, whose pub0-era state the FB-B3 / FB-C3 folder pins and the lic0 suite pin; never broadened without such evidence). The pub0
+state of a frozen file (the PEX genesis) is base(): the manifest's result sha256 for a target (read from the manifest, never typed)
+and the recorded hash for an enrolled file. The chain-pinned artifacts keep their own mechanism (Entry.reverts / checkpoints); their
+pub0 state is the chain checkpoint as of pub0.
 
 THE CONTRACT (proven by test_pex_transition.py):
   as_of(rel, entry_id, live)  the live file with every post-export entry newer than entry_id undone, newest first. Fails closed: rel must
@@ -53,6 +55,12 @@ BASE_COMMIT = "883068daf63e51ff0e79c9f2cc427a3124f6cccb"
 # O3: files pub0 did not edit whose pub0-era state a frozen suite pins. sha256 (LF text) at BASE_COMMIT (`git show <commit>:<path>`).
 ENROLLED = {
     "VERSION.yaml": "4cbc651f9d7fcc7cc3af645360be5122cc102c7821bd2d9dc788962fef7d53e3",   # FB-B3 / FB-C3 version pins
+    # O3 amendment (esb1, owner-approved 2026-10-08): the three Energy Actions card files the esbuild 0.28.1 upgrade changes. Three
+    # frozen suites pin the card folder's pub0-era (FB-B3) state through lic0, and test_lic0_transition.py pins the lic0 bundle.
+    "frontend/ecco-energy-actions-card/package.json": "494c8c96ef80338b4613caf4f40eed1aa2bedde0220f7f2446c1751a1b57181b",
+    "frontend/ecco-energy-actions-card/package-lock.json": "aa389e0bb311846f87543eb0ca0023c87315faadad03bf5c8b7710f888a768fd",
+    "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js":
+        "c1bd37deb0dab7ad1933e5276e70388643b14b55ed57842f055eadfb1933c207",   # == _lic0_scope.DIST_POST_SHA256
 }
 FROZEN = (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(ENROLLED)
 

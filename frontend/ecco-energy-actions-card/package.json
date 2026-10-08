@@ -24,7 +24,7 @@
     "lit": "^3.1.4"
   },
   "devDependencies": {
-    "esbuild": "^0.21.5",
+    "esbuild": "^0.28.1",
     "typescript": "^5.5.4"
   }
 }

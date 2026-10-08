@@ -2,13 +2,16 @@
 """lic0 transition proofs: the v0.9.0 licence alignment of the Energy Actions card is exactly what _lic0_scope.py declares.
 
   [1] the declaration: five targets, each text edit present exactly once, the chain Entry lic0 has no reverter / checkpoint / delta
-  [2] the bundle: the live dist is the declared post-lic0 bytes; stripping the declared block gives the pre-lic0 bundle (the one the
-      FB-B3 pins were taken on), so the code bytes are unchanged; the block carries Lit's BSD-3-Clause notices and nothing else
+  [2] the bundle: as of pub0, the dist is the declared post-lic0 bytes; stripping the declared block gives the pre-lic0 bundle (the
+      one the FB-B3 pins were taken on), so the code bytes are unchanged; the block carries Lit's BSD-3-Clause notices and nothing else
   [3] the folder: the pre-lic0 view of the card's Git-tracked files reproduces the FB-B3 folder pin; the post-lic0 folder is pinned
   [4] the licence declarations: all three ECCO cards say GPL-3.0-or-later; the Lit licence text ships with the frontend; both
       bundled cards keep Lit's notices (legalComments "eof")
   [5] exactness: pre_lic0_bytes refuses a missing, altered or duplicated edit / block, and is the identity elsewhere
   [6] the older suites that pin the folder route it through pre_lic0_bytes (and nothing else does)
+
+[1]-[3] and [5] read the lic0-era files: a frozen card file (a pub0 target, or enrolled by the O3 amendment) AS OF pub0, so a
+declared post-export entry (esb1: esbuild 0.28.1) is undone exactly first; every other file, and [4], read the live tree
 
 Test-only, no network. I/O: reads repo files and `git ls-files`.
 """
@@ -28,6 +31,7 @@ sys.path.insert(0, str(HERE))
 import _lic0_scope as L  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _scope_chain as sc  # noqa: E402
+import _pex  # noqa: E402  (PEX, esb1: the lic0-era proofs read the frozen card files AS OF pub0; [4] reads the live files)
 
 FAILURES: list[str] = []
 
@@ -52,6 +56,12 @@ def lf(rel: str) -> bytes:
     return (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")
 
 
+def lic0_era(rel: str) -> bytes:
+    """`rel` (LF bytes) as lic0 left it: a frozen file AS OF pub0 (every post-export entry undone exactly), any other file live."""
+    data = lf(rel)
+    return _pex.as_of_pub0(rel, data.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else data   # PEX (esb1): as of pub0
+
+
 sha = L.sha
 # The FB-B3 folder pin (main @ 87e6151; the three older suites pin the same value) and the folder after lic0.
 FOLDER_PRE_SHA256 = "57c9798206d8a1850047474e9bdf89401523b03de89a2562a0cc18d81ac17471"
@@ -63,7 +73,7 @@ print("[1] the declaration")
 check("lic0 targets are exactly the card's build script, bundle, package.json, package-lock.json and README",
       L.TARGETS == tuple(sorted(L.CARD + f for f in ("build.mjs", "dist/ecco-energy-actions-card.js", "package.json", "package-lock.json",
                                                       "README.md"))), str(L.TARGETS))
-texts = {rel: _pub0.private_view_bytes(rel, lf(rel)).decode("utf-8") for rel in L.TEXT_EDITS}
+texts = {rel: _pub0.private_view_bytes(rel, lic0_era(rel)).decode("utf-8") for rel in L.TEXT_EDITS}
 check("every declared text edit is present exactly once and its pre-lic0 text is absent",
       all(texts[rel].count(after) == 1 and texts[rel].count(before) == 0 for rel, eds in L.TEXT_EDITS.items() for before, after in eds))
 entry = sc.CHAIN.entry("lic0")
@@ -77,10 +87,10 @@ check("lic0 declares the two files it adds", entry.added_files == {"registry/tes
 print("")
 print("[2] the bundle")
 # ===========================================================================
-dist = lf(L.DIST)
+dist = lic0_era(L.DIST)
 pre = L.pre_lic0_bytes(L.DIST, dist)
 block = dist[len(pre):]
-check("the live bundle is the declared post-lic0 bundle", sha(dist) == L.DIST_POST_SHA256, sha(dist))
+check("as of pub0 the bundle is the declared post-lic0 bundle", sha(dist) == L.DIST_POST_SHA256, sha(dist))
 check("stripping the declared block gives the pre-lic0 bundle exactly (the FB-B3 code bytes, unchanged)", sha(pre) == L.DIST_PRE_SHA256, sha(pre))
 check("the bundle is the pre-lic0 bundle followed by exactly one appended block (no byte of the code moved)",
       dist == pre + block and len(block) == L.DIST_BLOCK_LEN and sha(block) == L.DIST_BLOCK_SHA256 and dist.count(L.DIST_BLOCK_HEAD) == 1)
@@ -104,7 +114,7 @@ check("the folder enumeration is the Git-tracked files only and includes every l
       ls.returncode == 0 and set(L.TARGETS) <= set(tracked), str(len(tracked)))
 f_pre, f_post = hashlib.sha256(), hashlib.sha256()
 for rel in tracked:
-    data = _pub0.private_view_bytes(rel, lf(rel))
+    data = _pub0.private_view_bytes(rel, lic0_era(rel))
     f_pre.update(rel.encode())
     f_pre.update(L.pre_lic0_bytes(rel, data))
     f_post.update(rel.encode())
@@ -159,7 +169,7 @@ check("a text target without its edit is refused, and with the edit twice too",
       and raises(lambda: L.pre_lic0_bytes(L.CARD + "build.mjs", b'  legalComments: "eof",\n' * 2)))
 check("the forward direction round-trips every target", all(
     L.post_lic0_bytes(rel, L.pre_lic0_bytes(rel, d), block) == d
-    for rel, d in [(r, _pub0.private_view_bytes(r, lf(r))) for r in L.TARGETS]))
+    for rel, d in [(r, _pub0.private_view_bytes(r, lic0_era(r))) for r in L.TARGETS]))
 
 # ===========================================================================
 print("")

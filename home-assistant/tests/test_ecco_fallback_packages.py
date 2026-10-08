@@ -1161,7 +1161,9 @@ check("no untracked or git-ignored file is part of the pin's file set (node_modu
 fe_hash = hashlib.sha256()
 for rel in fe_tracked:
     fe_hash.update(rel.encode())                                   # repository-relative POSIX path
-    fe_hash.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, (ROOT / rel).read_bytes().replace(b"\r\n", b"\n"))))   # tracked content, LF (PUB0: private text); LIC0: pre-lic0 bytes
+    _fe_lf = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # tracked content, LF
+    _fe_lf = _pex.as_of_pub0(rel, _fe_lf.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else _fe_lf   # PEX (esb1): a frozen card file (pub0 target or enrolled) AS OF pub0
+    fe_hash.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, _fe_lf)))   # tracked content, LF (PUB0: private text); LIC0: pre-lic0 bytes
 FE_SHA = "57c9798206d8a1850047474e9bdf89401523b03de89a2562a0cc18d81ac17471"   # main @ 87e6151 == a clean GitHub checkout
 check("the Energy Actions frontend folder is unchanged (sha256 pin over every Git-tracked file)", fe_hash.hexdigest() == FE_SHA,
       f"{fe_hash.hexdigest()} over {len(fe_tracked)} tracked files: {fe_tracked}")

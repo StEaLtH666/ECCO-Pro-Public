@@ -73,6 +73,15 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   identical for every finite input, and byte-identical engine reports are tested. A reading that is not a finite number
   is now dropped at the snapshot boundary.
 
+### Security
+
+- **The Energy Actions card builds with esbuild 0.28.1** (was 0.21.5; advisory GHSA-67mh-4wv8-2f99, an esbuild development-server
+  issue fixed in 0.25.0). The card's build never starts that server, so the advisory was not reachable; the upgrade is
+  maintenance. The rebuilt bundle's executable code is byte-identical; only its trailing Lit licence block is regrouped, with the
+  same notices. Declared as post-export entry `esb1`, which enrols the card's `package.json`, `package-lock.json` and bundle in
+  the PEX frozen set (owner decision O3, amended); the historical card-folder and licence pins keep their values. Every tracked
+  card now resolves esbuild 0.28.1. No firmware, Home Assistant, dashboard or Modbus change.
+
 ### Fixed (documentation)
 
 - `docs/dev/register-provenance.md` swapped the evidence status of two registry records.

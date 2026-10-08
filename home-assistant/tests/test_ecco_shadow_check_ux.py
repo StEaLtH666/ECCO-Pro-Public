@@ -934,7 +934,9 @@ fe_tracked = sorted(f for f in ls.stdout.decode("utf-8").split("\0") if f)
 fe_hash = hashlib.sha256()
 for rel in fe_tracked:
     fe_hash.update(rel.encode())
-    fe_hash.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, (ROOT / rel).read_bytes().replace(b"\r\n", b"\n"))))   # PUB0: private text; LIC0: pre-lic0 bytes
+    _fe_lf = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # tracked content, LF
+    _fe_lf = _pex.as_of_pub0(rel, _fe_lf.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else _fe_lf   # PEX (esb1): a frozen card file (pub0 target or enrolled) AS OF pub0
+    fe_hash.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, _fe_lf)))   # PUB0: private text; LIC0: pre-lic0 bytes
 ENERGY_ACTIONS_SHA256 = "57c9798206d8a1850047474e9bdf89401523b03de89a2562a0cc18d81ac17471"
 check("15: frontend/ecco-energy-actions-card (git-tracked files) is byte-identical (sha256 pin, same recipe as the FB-B3 suites)",
       ls.returncode == 0 and fe_tracked and fe_hash.hexdigest() == ENERGY_ACTIONS_SHA256, fe_hash.hexdigest())

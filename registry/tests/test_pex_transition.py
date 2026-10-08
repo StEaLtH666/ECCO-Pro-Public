@@ -3,8 +3,8 @@
 
 Test-only. No firmware build, no hardware, no Home Assistant, no network. I/O: reads repo files and `git ls-files`.
 
-  [0]  the declaration: schema, the frozen set (the pub0 targets that are not chain-pinned, plus ENROLLED = VERSION.yaml only), the
-       deny-list, the chain shape (the twelve closed ENTRIES, then pub0, then the post-export entries), pex0 carries no product change
+  [0]  the declaration: schema, the frozen set (the pub0 targets that are not chain-pinned, plus ENROLLED = VERSION.yaml (O3) and the
+       three Energy Actions card files of the O3 amendment (esb1)), the deny-list, the chain shape (the twelve closed ENTRIES, then pub0, then the post-export entries), pex0 carries no product change
   [1]  T1 exactness: every post-export hunk (and the gate's) is exact - one altered character, a missing or a duplicated hunk raises
   [2]  T2 checkpoints: every entry reproduces its recorded checkpoints; undoing it lands on the declared state before it
   [3]  T3 nothing else moved: at every post-export state every frozen and chain-pinned file is exactly its declared state
@@ -74,6 +74,10 @@ def failing(rows) -> list:
 DASH = "home-assistant/dashboards/ecco_pro.yaml"
 TELEMETRY = "home-assistant/packages/ecco_canonical_telemetry.yaml"
 VERSION = "VERSION.yaml"
+# O3 amendment (esb1, owner-approved 2026-10-08): the three Energy Actions card files whose pub0-era state the FB-B3 / FB-C3 folder pins
+# and the lic0 suite pin. ENROLLED is exactly VERSION.yaml plus these; it grows only by such an explicit, evidenced owner decision.
+EA_ENROLLED = {"frontend/ecco-energy-actions-card/package.json", "frontend/ecco-energy-actions-card/package-lock.json",
+               "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js"}
 MANIFEST = sc.HA_MANIFEST
 CAPS = sc.CAPABILITIES
 RECS = _pub0.records()
@@ -93,11 +97,12 @@ print("[0] the declaration")
 check("this tree is the pub0 export (PEX is public-tree-only, owner decision O5)", _pub0.EXPORTED is True)
 check("schema ecco-pex/1; the genesis is pub0 of public main @ 883068d",
       X.SCHEMA == "ecco-pex/1" and X.EXPORT_ID == sc.PUB0.id == "pub0" and X.BASE_COMMIT == "883068daf63e51ff0e79c9f2cc427a3124f6cccb")
-check("ENROLLED is exactly VERSION.yaml (owner decision O3), a 64-hex hash, neither a pub0 target nor chain-pinned",
-      set(X.ENROLLED) == {VERSION} and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in X.ENROLLED.values())
+check("ENROLLED is exactly VERSION.yaml (owner decision O3) and the three Energy Actions card files (O3 amendment, esb1), each a "
+      "64-hex hash, neither a pub0 target nor chain-pinned",
+      set(X.ENROLLED) == {VERSION} | EA_ENROLLED and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in X.ENROLLED.values())
       and not set(X.ENROLLED) & set(_pub0.TARGETS) and not set(X.ENROLLED) & set(sc.PINNED))
-check("FROZEN is exactly the pub0 targets that are not chain-pinned, plus ENROLLED (56 + 1 files)",
-      X.FROZEN == (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(X.ENROLLED) and len(X.FROZEN) == 57
+check("FROZEN is exactly the pub0 targets that are not chain-pinned, plus ENROLLED (56 + 4 files)",
+      X.FROZEN == (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(X.ENROLLED) and len(X.FROZEN) == 60
       and set(_pub0.TARGETS) & set(sc.PINNED) == {CAPS})
 _scopes_now = set(subprocess.run(["git", "ls-files", "-z", "--", "registry/tests/_*_scope.py"], cwd=str(ROOT), capture_output=True)
                   .stdout.decode("utf-8").split("\0")) - {""}
@@ -193,7 +198,7 @@ _P0 = {rel: pub0_of(rel, LIVE[rel]) for rel in LIVE}
 _rec_bad = [rel for rel in _pub0.TARGETS if _P0[rel] is None or X.sha(_P0[rel]) != RECS[rel]["result_sha256"]]
 check(f"as_of_pub0 reconstructs every one of the {len(_pub0.TARGETS)} pub0 targets byte for byte: its sha256 is the manifest's result_sha256",
       len(_pub0.TARGETS) == 57 and not _rec_bad, str(_rec_bad[:5]))
-check("as_of_pub0 reconstructs the enrolled file's 883068d hash and every chain-pinned artifact's pub0 checkpoint",
+check("as_of_pub0 reconstructs every enrolled file's 883068d hash and every chain-pinned artifact's pub0 checkpoint",
       all(_P0[rel] is not None and X.sha(_P0[rel]) == X.base(rel) for rel in [*X.ENROLLED, *sc.PINNED])
       and X.base(MANIFEST) == sc.CHAIN.checkpoint(MANIFEST, "fbb3") and X.base(CAPS) == sc.PUB0.checkpoints[CAPS] == RECS[CAPS]["result_sha256"],
       str([rel for rel in [*X.ENROLLED, *sc.PINNED] if _P0[rel] is None or X.sha(_P0[rel]) != X.base(rel)]))
@@ -265,9 +270,12 @@ print("[8] T8 the PEX ledger")
 # ===========================================================================
 LEDGER = {   # file -> exact number of calls of each _pex function
     "registry/tests/test_pub0_transition.py": {"as_of_pub0": 2},
-    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 2},
-    "home-assistant/tests/test_ecco_fallback_packages.py": {"as_of_pub0": 4},
-    "home-assistant/tests/test_ecco_shadow_check_ux.py": {"as_of_pub0": 2, "post_export_added": 1},
+    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 3},              # esb1: +1 (the Energy Actions folder pin)
+    "home-assistant/tests/test_ecco_fallback_packages.py": {"as_of_pub0": 5},             # esb1: +1 (the Energy Actions folder pin)
+    "home-assistant/tests/test_ecco_shadow_check_ux.py": {"as_of_pub0": 3, "post_export_added": 1},   # esb1: +1 (the folder pin)
+    "registry/tests/test_lic0_transition.py": {"as_of_pub0": 1},                          # esb1: the lic0-era card files
+    "registry/tests/_esb1_scope.py": {"as_of_pub0": 3},   # esb1's exact hunks QUOTE the three routing lines (data, not calls)
+    "registry/tests/test_esb1_transition.py": {"read": 1, "as_of": 1, "historical_chain_sha": 1},   # esb1's own proofs
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")
@@ -293,7 +301,8 @@ def ledger_of(texts: dict) -> tuple[dict, list]:
 _py = [f for f in subprocess.run(["git", "ls-files", "-z", "--", "*.py"], cwd=str(ROOT), capture_output=True).stdout.decode("utf-8").split("\0") if f]
 _py_texts = {f: (ROOT / f).read_text(encoding="utf-8", errors="replace") for f in _py}
 _calls, _unc = ledger_of(_py_texts)
-check("exactly the declared older-suite reads call _pex (the PUB0 gate and the three routed suites), with exactly the declared counts",
+check("exactly the declared older-suite reads call _pex (the PUB0 gate, the three routed suites and the lic0 suite), with exactly the "
+      "declared counts",
       len(_py) > 50 and _calls == LEDGER, str(_calls))
 check("every _pex call carries a `PEX` comment on its line or within the two lines above", not _unc, str(_unc))
 check("the chain module documents the layer but never imports it (no cycle; _pex reads the chain)",
