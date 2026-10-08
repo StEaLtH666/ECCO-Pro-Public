@@ -391,9 +391,17 @@ checks:
       post-failure cooldown means a retry cannot occur sooner than 300s.
   dependencies:
   - rtc_correction_duration
-  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:5476/6101 (increment), 5482/6106 (5-minute
-    cooldown_until_ms after failure).
-  implementation_status: designed
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:21144 (verification failed after retries),
+    22597 (the 90 s RTC deadline breaker releases a stuck correction - "ABORTED - correction exceeded its
+    deadline"), 22647 (failed after communication errors); each also starts the 5-minute cooldown. Published
+    as "Failed Corrections Since Boot" (firmware:6186-6193, 60 s, 0 after every ESP boot). Represented by
+    sensor.ecco_health_rtc (home-assistant/packages/ecco_system_health.yaml) in Home Assistant form - the delta
+    is taken between consecutive observed values, never against a baseline that spans a reboot. An increase
+    between two numeric values is a failure; a decrease (reboot reset) or a first value after unknown is not.
+    WARNING holds for 1800 s after the last observed increase (its time is kept across a Home Assistant
+    restart by the trigger-based entity's state restore). An unreadable counter with no failure in the window
+    is UNKNOWN. A failure while the counter is unavailable to Home Assistant is not observed.
+  implementation_status: implemented_offline
   live_proof_status: unknown
 - id: rtc_drift_uncorrected
   subsystem: rtc_time
