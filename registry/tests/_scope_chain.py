@@ -104,6 +104,7 @@ import _fbc2_scope as _fbc2  # noqa: E402
 import _fbc3_scope as _fbc3  # noqa: E402
 import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
+import _fbrp1_scope as _fbrp1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
@@ -519,7 +520,30 @@ DTGP1 = Entry(
          "it); W2 follows the configured ceiling; one read-back sensor; ZERO new Modbus operation, ZERO NVS access, ZERO new "
          "inverter authority",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1)
+# fbrp1 (public fallback records / design basis; _fbrp1_scope.py, docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md): a records and
+# documentation change made on the export after dtgp1. It publishes the fallback design basis and the stage status (FB-B3 closed;
+# FB-C2 / FB-C3 / FB-D1 deployed and partially live-proven) and corrects public status text that still called the FB-C3 shadow display
+# offline only. FROZEN edit (PEX): VERSION.yaml's 7.18.0 dashboard comment, one block (_fbrp1_scope.VERSION_EDITS);
+# tested_in_home_assistant stays false; as of pub0 VERSION.yaml is the export byte for byte (its enrolled hash). README.md,
+# SUPPORTED_HARDWARE.md, ARCHITECTURE.md and CHANGELOG.md are not frozen. No older suite is edited: the pub0-era VERSION.yaml pins
+# already read the file through _pex.as_of_pub0 (pex0).
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package,
+# dashboard, frontend, deployment, registry, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52).
+FBRP1 = Entry(
+    id="fbrp1", pr="FBRP1", commit="unmerged",
+    added_files=_fbrp1.ADDED_FILES,
+    frozen_reverts={_fbrp1.VERSION_REL: _fbrp1.pre_fbrp1_version},
+    frozen_checkpoints={   # sha256 (LF) of VERSION.yaml after fbrp1; as of pub0 it is its enrolled hash
+        _fbrp1.VERSION_REL: "73566c51c016734d251fc5da0794aa16c2e3abdc7362e2238925d616c2cde980",
+    },
+    # _pex.fingerprint(FBRP1): hashes its parent dtgp1's fingerprint and every declaration above
+    fingerprint="46cf76256da78b24e2fd59692f0bf126eba059352c37006542708c64b38e8f8c",
+    note="public fallback records / design basis: the fallback design basis and stage status published "
+         "(docs/architecture/fallback/FALLBACK_DESIGN_BASIS.md) and the stale FB-C3 status corrected (VERSION.yaml comment; "
+         "tested_in_home_assistant stays false); records and documentation only: ZERO firmware, Home Assistant package, dashboard, "
+         "frontend, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, ZERO behaviour change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
