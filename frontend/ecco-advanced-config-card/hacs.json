@@ -1,0 +1,7 @@
+{
+  "name": "ECCO Advanced Configuration Card",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "ecco-advanced-config-card.js",
+  "homeassistant": "2024.8.0"
+}

@@ -1,0 +1,9 @@
+# Example Lovelace configuration for the ECCO Advanced / Experimental Configuration card (read-only).
+# Not deployed by ECCO yet: add it to a dashboard view of your own after adding the bundle as a Lovelace resource.
+# The device slug is quoted so tools/ecco_site_render.py renders it to your site's slug.
+type: custom:ecco-advanced-config-card
+title: Advanced / Experimental Configuration
+entity_prefix: "ecco_clock_dongle"
+# Optional: how old a value may be before it is no longer called live (seconds).
+max_age_telemetry_s: 120
+max_age_configuration_s: 300

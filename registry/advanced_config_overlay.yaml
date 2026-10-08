@@ -1,0 +1,323 @@
+# ECCO Advanced / Experimental Configuration card - presentation overlay (schema ecco-advanced-config-overlay/1).
+#
+# This file only decides how capability-registry records are PRESENTED: their section, danger class, lock reason and
+# explanation, plus the Global Power panel. Register facts, evidence and write policy come from
+# registry/inverter_capabilities.yaml and are never changed here.
+#
+# RESTRICT-ONLY RULE: `restrict` may only move a record DOWN the ladder
+#   PROVEN -> EXPERIMENTAL -> READ_ONLY -> LOCKED -> UNSUPPORTED
+# tools/build_advanced_config_catalogue.py refuses any overlay that would promote a record above the status its registry
+# evidence gives it. Nothing in this file can make a setting writable.
+#
+# Danger classes: D0 telemetry / display, D1 cost or tariff, D2 availability or comfort, D3 regulatory (export),
+# D4 equipment or safety.
+
+schema: ecco-advanced-config-overlay/1
+
+notes: >-
+  Read-only catalogue of the inverter registers ECCO knows about, generated from the capability registry. A register being
+  listed does not make it proven, and a register being writable elsewhere in ECCO does not make it safe. This card has no
+  write path of any kind.
+
+controller_note: >-
+  Write proofs in the registry were recorded on the reference installation with the classic ESP32 controller (H-001). On the
+  ESP32-S3 controller (H-002) every ECCO write path is offline-only until it has been re-proven on that controller.
+
+sections:
+  - id: battery_charging
+    title: Battery and Charging
+    summary: Battery state, charge curve, protection thresholds and grid / generator charging.
+  - id: grid_export
+    title: Grid and Export
+    summary: Grid measurements, the export policy, solar export and grid peak shaving.
+  - id: inverter_power
+    title: Inverter Power
+    summary: Inverter output, house load, the energy pattern and the Global Power / Export Limit setting.
+  - id: time_of_use
+    title: Time of Use
+    summary: The six time-of-use slots and the master time-of-use switch.
+  - id: generator_aux
+    title: Generator / AUX / Smart Load
+    summary: Generator charging and run times, the AUX port function and smart-load thresholds.
+  - id: solar_pv
+    title: Solar / PV
+    summary: PV string voltages, currents and power, and PV energy.
+  - id: protection_safety
+    title: Protection and Safety
+    summary: Grid protection thresholds, fault and warning words and transformer temperatures.
+  - id: comms_diagnostics
+    title: Communications and Diagnostics
+    summary: Inverter state, clock, basic settings and ECCO's own diagnostic counters.
+  - id: experimental
+    title: Experimental / Undocumented
+    summary: Records whose register or meaning is not established. Shown for completeness; never controls.
+
+category_sections:
+  battery: battery_charging
+  grid_charge: battery_charging
+  free_power: battery_charging
+  grid: grid_export
+  energy_management: grid_export
+  inverter_output: inverter_power
+  load: inverter_power
+  tou_schedule: time_of_use
+  generator: generator_aux
+  aux: generator_aux
+  pv: solar_pv
+  status: comms_diagnostics
+  diagnostic: comms_diagnostics
+  rtc: comms_diagnostics
+  energy: comms_diagnostics
+
+section_rules:
+  - id_pattern: "(day|total)_battery_.*"
+    section: battery_charging
+  - id_pattern: "(day|total)_grid_.*"
+    section: grid_export
+  - id_pattern: "(day|total)_load_.*"
+    section: inverter_power
+  - id_pattern: "(day|total)_pv_.*"
+    section: solar_pv
+  - id_pattern: "grid_(max|min)_(voltage|frequency)_threshold"
+    section: protection_safety
+  - id_pattern: "inverter_(fault|warning)_flags"
+    section: protection_safety
+  - id_pattern: "(dc|ac)_temperature"
+    section: protection_safety
+  - id_pattern: "grid_peak_shaving_.*"
+    section: grid_export
+  - id_pattern: "generator_peak_shaving_.*"
+    section: generator_aux
+
+category_danger:
+  battery: D0
+  grid_charge: D1
+  free_power: D1
+  grid: D0
+  energy_management: D3
+  inverter_output: D0
+  load: D0
+  tou_schedule: D1
+  generator: D2
+  aux: D2
+  pv: D0
+  status: D0
+  diagnostic: D0
+  rtc: D1
+  energy: D0
+
+records:
+  export_limit:
+    section: inverter_power
+    danger: D3
+    lock_reason: >-
+      Owner-confirmed Global Power setting, but read-only in this release: ECCO has no write path for register 245, writing
+      it is not proven on the ESP32-S3 controller, the inverter's hardware maximum for it is not verified and the regulatory
+      export allowance is not recorded.
+    explanation: >-
+      The inverter setting labelled "Export Limit", which the owner has confirmed is the Global Power setting. ECCO reads it
+      on every configuration poll and shows it here. Two published descriptions of this field disagree on whether it caps
+      only export to the grid or the inverter's combined Load and Grid output; that has not been proven on this
+      installation.
+    interactions:
+      - "Register 244 (export mode): decides whether export is allowed at all."
+      - "Register 247 (solar export): whether surplus solar may be exported in the zero-export modes."
+      - "TOU slot power (256-261): the battery charge/discharge ceiling for the active slot."
+      - "Dump-to-Grid: the achievable export is bounded by this setting as well as by its own command ceiling."
+  grid_export_policy:
+    danger: D3
+    explanation: >-
+      The inverter's export policy (Allow Export, Essentials, Zero Export). ECCO's register 244 proof control and
+      Dump-to-Grid can change it through their own guarded transactions; this card only displays it.
+    interactions:
+      - "It changes what TOU slot power (256-261) means."
+      - "Dump-to-Grid and Free Power both depend on it."
+  dump_to_grid_transaction:
+    danger: D3
+    explanation: >-
+      The Dump-to-Grid transaction record (registers 244 and 256-261). It is operated from the Energy Actions card, not here.
+  export_solar_enabled:
+    danger: D3
+  energy_management_model:
+    section: inverter_power
+    danger: D1
+    explanation: Whether PV power is used first for the battery or first for the house load.
+  time_of_use_enabled:
+    section: time_of_use
+    danger: D2
+    explanation: >-
+      The master time-of-use switch. Turning it off would make every time-of-use slot inactive, so it is the highest
+      blast-radius setting in this group.
+  gen_grid_signal_flags:
+    section: battery_charging
+    danger: D2
+  inverter_tou_power_ceiling_sensor:
+    section: inverter_power
+    explanation: >-
+      A value compiled into the ECCO firmware for this site (the time-of-use power ceiling). It bounds ECCO's own power
+      numbers; it is not a register and not a verified inverter hardware maximum.
+  grid_max_voltage_threshold:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Grid protection (grid code) setting. Permanently read-only in ECCO; changed only on the inverter by a competent person.
+  grid_min_voltage_threshold:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Grid protection (grid code) setting. Permanently read-only in ECCO; changed only on the inverter by a competent person.
+  grid_max_frequency_threshold:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Grid protection (grid code) setting. Permanently read-only in ECCO; changed only on the inverter by a competent person.
+  grid_min_frequency_threshold:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Grid protection (grid code) setting. Permanently read-only in ECCO; changed only on the inverter by a competent person.
+  battery_control_mode:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery type setting. Permanently read-only in ECCO; a wrong value can damage the battery.
+  battery_operation_mode:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery operating basis (voltage, capacity or no battery). Permanently read-only in ECCO.
+  battery_wake_up_lithium:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: >-
+      Lithium wake-up bit. Permanently read-only in ECCO; its polarity is reported differently by another tool, so the raw
+      word is shown alongside the decoded text.
+  battery_equalization_voltage:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery charge-curve voltage. Permanently read-only in ECCO; a wrong value can damage the battery.
+  battery_absorption_voltage:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery charge-curve voltage. Permanently read-only in ECCO; a wrong value can damage the battery.
+  battery_float_voltage:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery charge-curve voltage. Permanently read-only in ECCO; a wrong value can damage the battery.
+  battery_capacity_ah:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Battery capacity setting. Permanently read-only in ECCO.
+  battery_shutdown_soc:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: The battery's final protection threshold (SAFETY.md section 9). Permanently read-only in ECCO.
+  battery_restart_soc:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: The battery's final protection threshold (SAFETY.md section 9). Permanently read-only in ECCO.
+  battery_low_warning_soc:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: The battery's final protection threshold (SAFETY.md section 9). Permanently read-only in ECCO.
+  battery_max_charge_current:
+    danger: D4
+    lock_reason: >-
+      High-impact (W3) candidate with no ECCO write path. Any write path would need battery / BMS evidence, a dedicated
+      design and hardware proof first.
+  battery_max_discharge_current:
+    danger: D4
+    lock_reason: >-
+      High-impact (W3) candidate with no ECCO write path. Any write path would need battery / BMS evidence, a dedicated
+      design and hardware proof first.
+  battery_zero_export_trickle_feed:
+    danger: D2
+    explanation: >-
+      The small amount of power the inverter keeps drawing from the grid in the zero-export modes. The firmware shows its
+      magnitude (the register is signed on some firmware), so a raw value is not derived here.
+  aux_port_function:
+    danger: D4
+    restrict: LOCKED
+    lock_reason: AUX / generator port function depends on the physical wiring. Permanently read-only in ECCO.
+  on_grid_always_on_enabled:
+    section: generator_aux
+    danger: D4
+    restrict: LOCKED
+    lock_reason: Relay behaviour of the AUX / smart-load output. Permanently read-only in ECCO.
+  grid_peak_shaving_enabled:
+    danger: D2
+  grid_peak_shaving_power:
+    danger: D2
+  generator_peak_shaving_enabled:
+    danger: D2
+  generator_peak_shaving_power:
+    danger: D2
+  tou_slot_1_voltage:
+    danger: D4
+  tou_slot_2_voltage:
+    danger: D4
+  tou_slot_3_voltage:
+    danger: D4
+  tou_slot_4_voltage:
+    danger: D4
+  tou_slot_5_voltage:
+    danger: D4
+  tou_slot_6_voltage:
+    danger: D4
+  rtc_clock:
+    explanation: >-
+      The inverter's clock. ECCO's own clock policy corrects it from NTP through a verified write; there is no clock control
+      on this card.
+  register_330_reserved_bits:
+    section: experimental
+  signal_island_mode:
+    section: experimental
+  inverter_protocol_version:
+    section: experimental
+  inverter_rated_power:
+    section: experimental
+    explanation: >-
+      The inverter's rated (nameplate) power. ECCO has not identified or read a register for it, so it cannot be used as a
+      hardware maximum anywhere on this card.
+  inverter_serial_number:
+    section: experimental
+  remote_lock:
+    section: experimental
+  smartdeye_battery_charge_voltage_parity:
+    section: experimental
+
+# Records the registry does not link to an entity and the firmware decode cannot link unambiguously. Each target is a
+# firmware entity id; the generator checks that it exists and decodes the record's register.
+entity_links:
+  gen_grid_signal_flags: ecco_cfg_gen_grid_signal_raw
+
+global_power:
+  record: export_limit
+  register: 245
+  title: Global Power / Export Limit
+  owner_confirmation:
+    date: "2026-10-08"
+    statement: >-
+      The owner confirmed that the inverter setting labelled "Export Limit" (register 245) is the setting referred to as
+      Global Power and is the intended Global Power control.
+  hardware_maximum_w: null
+  hardware_maximum_note: >-
+    The inverter's actual maximum for this setting has not been verified on this installation, and ECCO never assumes one.
+    The firmware's time-of-use power ceiling is a site setting, not this setting's hardware maximum, and the inverter's
+    rated power has not been read.
+  regulatory_allowance_w: null
+  regulatory_note: >-
+    The export allowance in the connection agreement is a separate, regulatory limit. It is not recorded here and is never
+    inferred from what the inverter can do.
+  write_status: not_implemented
+  write_blockers:
+    - ECCO's firmware has no write path for register 245; the pinned write surface excludes it and safety tests forbid one.
+    - Writing register 245 is not proven on the ESP32-S3 controller, where no ECCO write feature has been re-proven yet.
+    - The inverter's hardware maximum for this setting is not verified.
+    - The regulatory export allowance is not recorded.
+  limitations:
+    - Read-only in this release. The controls below are a design preview and are permanently disabled in this version.
+    - The value comes from the ECCO controller's configuration poll. This card never talks to the inverter.
+    - The inverter's own screen, its app or a fault can change this setting without ECCO; the card only shows what the controller last read.
+  future_controls:
+    unlock: A time-limited unlock of the staging editor. Unlocking never grants write authority by itself.
+    staged_value: The value you intend to apply, checked against the permitted range before Apply is offered.
+    permitted_range: Bounded by the verified hardware maximum and, separately, by the recorded regulatory allowance. Unavailable until both are established.
+    apply: Hands the staged value to the controller's guarded transaction. Only the controller writes to the inverter.
+    verification: An exact readback by the controller, then a second read after the next configuration poll.
+    previous_value: The value read before the last change, offered only as a new staged change with the same confirmation.
+    history: Recorded changes and readbacks from Home Assistant history and the controller's audit counters.

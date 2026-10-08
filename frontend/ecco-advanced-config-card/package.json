@@ -1,0 +1,25 @@
+{
+  "name": "ecco-advanced-config-card",
+  "version": "0.1.0",
+  "description": "A read-only Home Assistant Lovelace card: a searchable catalogue of ECCO's inverter registers with the Global Power / Export Limit panel.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "inverter",
+    "configuration",
+    "read-only"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5",
+    "typescript": "5.9.3"
+  }
+}
