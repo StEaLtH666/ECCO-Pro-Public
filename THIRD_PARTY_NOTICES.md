@@ -29,7 +29,7 @@ These are used to build or test ECCO. They are installed by you or by CI and are
 
 | Component | Used for | Version | Licence | Verified from |
 |---|---|---|---|---|
-| esbuild | Bundling the two Lit-based cards | 0.21.5 | MIT | `LICENSE.md`, `package.json` |
+| esbuild | Bundling the two Lit-based cards | 0.28.1 (`ecco-energy-flow-card`) / 0.21.5 (`ecco-energy-actions-card`), each card's `package-lock.json` | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
 | TypeScript | Type-checking the two Lit-based cards | 5.9.3 | Apache-2.0 | `LICENSE.txt`, `package.json` |
 | Node.js | Running the card builds and tests | not pinned; tested with 24.x | MIT (plus the licences of its own bundled components) | Upstream `LICENSE` at the tested version |
 | PyYAML | Repository validation and tests | 6.0.3 (`requirements-ci.txt`) | MIT | Installed package `LICENSE` |
