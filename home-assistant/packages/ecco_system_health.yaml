@@ -360,23 +360,61 @@ template:
           - binary_sensor.ecco_clock_dongle_ntp_synced
       - trigger: time_pattern
         minutes: "/1"
+      # rtc_correction_failures_recent (FB-D1 follow-up): a change of the
+      # firmware's cumulative "Failed Corrections Since Boot" counter. Only
+      # a numeric-to-numeric INCREASE seen on this trigger is a failure (see
+      # the entity comment below); the id is what the templates test.
+      - trigger: state
+        id: rtc_failed_corrections_changed
+        entity_id: sensor.ecco_clock_dongle_failed_corrections_since_boot
+      # Re-renders exactly 1800 s after the counter's last change, so the
+      # warning window closes on time without waiting for another counter
+      # update. The one-minute time_pattern above is the backstop (for
+      # example after a Home Assistant restart, which cancels this timer).
+      - trigger: state
+        id: rtc_failure_window_elapsed
+        entity_id: sensor.ecco_clock_dongle_failed_corrections_since_boot
+        for:
+          seconds: 1800
     sensor:
       - name: "ECCO Health RTC"
         unique_id: ecco_health_rtc
-        # Implements three registry checks under subsystem rtc_time:
+        # Implements four registry checks under subsystem rtc_time:
         # rtc_correction_duration (transaction_state, 180s stuck bracket),
-        # rtc_stall_detected (boolean_expected: false) and rtc_ntp_synced
-        # (boolean_expected: true). Aggregates using the same rank/tie-break
-        # rule as health/system_health.py's evaluate_subsystem() /
-        # _resolve_flavor_at_rank(): the worst severity rank wins, and at a
-        # shared rank a real finding (WARNING/FAILED/DEGRADED) always beats
-        # UNKNOWN. rtc_read_freshness and rtc_drift_uncorrected (same
-        # subsystem) are deliberately NOT represented - see
-        # not_yet_implemented_checks. Correction COUNT alone is never
-        # evaluated here - only correction_in_progress's CURRENT duration -
-        # per Task 007's explicit instruction that frequent successful
-        # corrections are expected on this installation and must not be
-        # treated as a fault.
+        # rtc_stall_detected (boolean_expected: false), rtc_ntp_synced
+        # (boolean_expected: true) and rtc_correction_failures_recent
+        # (failure_counter_delta, 1800 s window, WARNING). Aggregates using
+        # the same rank/tie-break rule as health/system_health.py's
+        # evaluate_subsystem() / _resolve_flavor_at_rank(): the worst
+        # severity rank wins, and at a shared rank a real finding
+        # (WARNING/FAILED/DEGRADED) always beats UNKNOWN. rtc_read_freshness
+        # and rtc_drift_uncorrected (same subsystem) are deliberately NOT
+        # represented - see not_yet_implemented_checks. Correction COUNT
+        # alone is never evaluated here - only correction_in_progress's
+        # CURRENT duration and the FAILED-correction counter - per Task
+        # 007's explicit instruction that frequent successful corrections
+        # are expected on this installation and must not be treated as a
+        # fault.
+        #
+        # rtc_correction_failures_recent: the firmware increments
+        # failed_corrections when a correction fails after its retries,
+        # fails on communication errors, or is released by the 90 s RTC
+        # deadline breaker ("ABORTED - correction exceeded its deadline").
+        # Its sensor publishes every 60 s and restarts at 0 on every ESP
+        # boot. A failure is ONLY an observed numeric-to-numeric increase
+        # on the rtc_failed_corrections_changed trigger: a reboot reset
+        # (N -> 0, or N -> unavailable -> 0) and the first value after a
+        # Home Assistant restart (from unknown or none) never count. The
+        # time Home Assistant saw the increase is kept in last_failure_at
+        # (trigger-based template entities restore their state and
+        # attributes after a Home Assistant restart), and the check reports
+        # WARNING / RTC_CORRECTION_FAILURES_RECENT while less than 1800 s
+        # have passed since it; each further increase restarts the window.
+        # An unreadable counter with no failure in the window is UNKNOWN,
+        # never HEALTHY. Not observable, so never reported: a failure that
+        # happens while the counter is unavailable to Home Assistant, or
+        # while Home Assistant is down. last_failure_at can trail the
+        # firmware event by up to the sensor's 60 s publish interval.
         state: >-
           {% set e1 = 'binary_sensor.ecco_clock_dongle_rtc_correction_in_progress' %}
           {% set s1 = states(e1) %}
@@ -410,12 +448,26 @@ template:
           {% else %}
             {% set rank3 = 0 %}{% set state3 = 'HEALTHY' %}
           {% endif %}
-          {% set max_rank = [rank1, rank2, rank3] | max %}
+          {% set e4 = 'sensor.ecco_clock_dongle_failed_corrections_since_boot' %}
+          {% set s4 = states(e4) %}
+          {% set t = trigger if trigger is defined else none %}
+          {% set fresh = t is not none and t.id is defined and t.id == 'rtc_failed_corrections_changed' and t.from_state is not none and t.to_state is not none and (t.from_state.state | float(-1)) >= 0 and (t.to_state.state | float(-1)) > (t.from_state.state | float(-1)) %}
+          {% set prev = this.attributes.get('last_failure_at') if this is defined else none %}
+          {% set lf_ts = as_timestamp(t.to_state.last_changed) if fresh else as_timestamp(prev, none) %}
+          {% if lf_ts is not none and as_timestamp(now()) - lf_ts < 1800 %}
+            {% set rank4 = 2 %}{% set state4 = 'WARNING' %}
+          {% elif (s4 | float(-1)) < 0 %}
+            {% set rank4 = 2 %}{% set state4 = 'UNKNOWN' %}
+          {% else %}
+            {% set rank4 = 0 %}{% set state4 = 'HEALTHY' %}
+          {% endif %}
+          {% set max_rank = [rank1, rank2, rank3, rank4] | max %}
           {% set definite = {0: 'HEALTHY', 1: 'DEGRADED', 2: 'WARNING', 3: 'FAILED'}[max_rank] %}
           {% set states_at_max = [] %}
           {% if rank1 == max_rank %}{% set states_at_max = states_at_max + [state1] %}{% endif %}
           {% if rank2 == max_rank %}{% set states_at_max = states_at_max + [state2] %}{% endif %}
           {% if rank3 == max_rank %}{% set states_at_max = states_at_max + [state3] %}{% endif %}
+          {% if rank4 == max_rank %}{% set states_at_max = states_at_max + [state4] %}{% endif %}
           {% if definite in states_at_max %}
             {{ definite }}
           {% elif 'UNKNOWN' in states_at_max %}
@@ -427,12 +479,10 @@ template:
           subsystem: rtc_time
           partial_implementation: true
           sufficient_for_control_decision: false
-          represented_checks: "{{ ['rtc_correction_duration', 'rtc_stall_detected', 'rtc_ntp_synced'] }}"
+          represented_checks: "{{ ['rtc_correction_duration', 'rtc_stall_detected', 'rtc_ntp_synced', 'rtc_correction_failures_recent'] }}"
           not_yet_implemented_checks: >-
             rtc_read_freshness (needs a live clock_difference_valid
             age/timestamp entity, not confirmed available);
-            rtc_correction_failures_recent (needs a persisted failure-counter
-            baseline mechanism across Home Assistant restarts);
             rtc_drift_uncorrected (needs live correction_threshold and
             cooldown_until_ms entities, neither of which is currently exposed
             to Home Assistant - the raw clock_difference value is surfaced
@@ -446,8 +496,54 @@ template:
           source_entities: >-
             {{ ['binary_sensor.ecco_clock_dongle_rtc_correction_in_progress',
                 'binary_sensor.ecco_clock_dongle_rtc_stall_detected',
-                'binary_sensor.ecco_clock_dongle_ntp_synced'] }}
+                'binary_sensor.ecco_clock_dongle_ntp_synced',
+                'sensor.ecco_clock_dongle_failed_corrections_since_boot'] }}
           clock_difference_seconds_informational: "{{ states('sensor.ecco_clock_dongle_clock_difference') }}"
+          # rtc_correction_failures_recent detail. last_failure_at and
+          # last_result are captured when an increase is seen and kept
+          # (restored after a Home Assistant restart) until the next one;
+          # last_result is the firmware's "Last Correction Result" text at
+          # that moment (for a deadline-breaker release it begins with
+          # ABORTED). The lock max age and the counter are read live.
+          last_failure_at: >-
+            {% set t = trigger if trigger is defined else none %}
+            {% set fresh = t is not none and t.id is defined and t.id == 'rtc_failed_corrections_changed' and t.from_state is not none and t.to_state is not none and (t.from_state.state | float(-1)) >= 0 and (t.to_state.state | float(-1)) > (t.from_state.state | float(-1)) %}
+            {% set prev = this.attributes.get('last_failure_at') if this is defined else none %}
+            {% if fresh %}
+              {{ t.to_state.last_changed.isoformat() }}
+            {% elif prev is not none and as_timestamp(prev, none) is not none %}
+              {{ prev }}
+            {% else %}
+              none
+            {% endif %}
+          last_result: >-
+            {% set t = trigger if trigger is defined else none %}
+            {% set fresh = t is not none and t.id is defined and t.id == 'rtc_failed_corrections_changed' and t.from_state is not none and t.to_state is not none and (t.from_state.state | float(-1)) >= 0 and (t.to_state.state | float(-1)) > (t.from_state.state | float(-1)) %}
+            {% set prev = this.attributes.get('last_result') if this is defined else none %}
+            {% if fresh %}
+              {{ states('sensor.ecco_clock_dongle_last_correction_result') }}
+            {% elif prev is not none %}
+              {{ prev }}
+            {% else %}
+              none
+            {% endif %}
+          last_failure_kind: >-
+            {% set t = trigger if trigger is defined else none %}
+            {% set fresh = t is not none and t.id is defined and t.id == 'rtc_failed_corrections_changed' and t.from_state is not none and t.to_state is not none and (t.from_state.state | float(-1)) >= 0 and (t.to_state.state | float(-1)) > (t.from_state.state | float(-1)) %}
+            {% set prev = this.attributes.get('last_result') if this is defined else none %}
+            {% set r = (states('sensor.ecco_clock_dongle_last_correction_result') if fresh else prev) | string %}
+            {% if not fresh and (prev is none or prev == 'none') %}
+              none
+            {% elif r.startswith('ABORTED') %}
+              deadline_abort
+            {% elif r.startswith('FAILED') %}
+              failed
+            {% else %}
+              unrecognised
+            {% endif %}
+          failure_window_seconds: 1800
+          failed_corrections_since_boot: "{{ states('sensor.ecco_clock_dongle_failed_corrections_since_boot') }}"
+          correction_lock_max_age_seconds: "{{ states('sensor.ecco_clock_dongle_ecco_rtc_correction_lock_max_age_since_boot') }}"
           reason_codes: >-
             {% set e1 = 'binary_sensor.ecco_clock_dongle_rtc_correction_in_progress' %}
             {% set s1 = states(e1) %}
@@ -465,6 +561,13 @@ template:
             {% endif %}
             {% if states('binary_sensor.ecco_clock_dongle_ntp_synced') == 'off' %}
               {% set codes = codes + ['RTC_NTP_UNSYNCED'] %}
+            {% endif %}
+            {% set t = trigger if trigger is defined else none %}
+            {% set fresh = t is not none and t.id is defined and t.id == 'rtc_failed_corrections_changed' and t.from_state is not none and t.to_state is not none and (t.from_state.state | float(-1)) >= 0 and (t.to_state.state | float(-1)) > (t.from_state.state | float(-1)) %}
+            {% set prev = this.attributes.get('last_failure_at') if this is defined else none %}
+            {% set lf_ts = as_timestamp(t.to_state.last_changed) if fresh else as_timestamp(prev, none) %}
+            {% if lf_ts is not none and as_timestamp(now()) - lf_ts < 1800 %}
+              {% set codes = codes + ['RTC_CORRECTION_FAILURES_RECENT'] %}
             {% endif %}
             {{ codes }}
           blocks_manual_control: >-

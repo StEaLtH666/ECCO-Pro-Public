@@ -63,7 +63,7 @@ semantics invented):
 | Sensor | Subsystem | Checks represented | Checks still unrepresented in this subsystem |
 |---|---|---|---|
 | `sensor.ecco_health_manual_write_system` | manual_write_system | `manual_write_duration` | `manual_write_failures_recent`, `manual_write_arm_unexpected` |
-| `sensor.ecco_health_rtc` | rtc_time | `rtc_correction_duration`, `rtc_stall_detected`, `rtc_ntp_synced` | `rtc_read_freshness`, `rtc_correction_failures_recent`, `rtc_drift_uncorrected` |
+| `sensor.ecco_health_rtc` | rtc_time | `rtc_correction_duration`, `rtc_stall_detected`, `rtc_ntp_synced`; `rtc_correction_failures_recent` (added later, offline only - see below) | `rtc_read_freshness`, `rtc_drift_uncorrected` |
 | `sensor.ecco_health_free_power` | free_power | `free_power_operation_duration`, `free_power_active_state`, `free_power_snapshot_recovery` | `free_power_failures_recent`, `free_power_state_consistency` |
 | `sensor.ecco_health_configuration` | inverter_configuration | `config_cache_valid` | `configuration_freshness`, `configuration_failures_recent` |
 | `sensor.ecco_health_inverter_telemetry` | inverter_telemetry | `inverter_alarm_fault`, `inverter_grid_connected` | `telemetry_freshness`, `telemetry_failures_recent` |
@@ -71,9 +71,8 @@ semantics invented):
 Every excluded check needs one of two things this phase deliberately does
 not build: a persisted failure-counter baseline surviving Home Assistant
 restarts (`manual_write_failures_recent`, `configuration_failures_recent`,
-`rtc_correction_failures_recent`, `free_power_failures_recent`,
-`telemetry_failures_recent` - see section 6 and the live-validation
-checklist item 3, still unverified), or a live HA entity this task's
+`free_power_failures_recent`, `telemetry_failures_recent` - see section 6
+and the live-validation checklist item 3, still unverified), or a live HA entity this task's
 live-proven entity list does not include
 (`rtc_read_freshness`/`rtc_drift_uncorrected` need
 `clock_difference_valid`/`correction_threshold`/`cooldown_until_ms`;
@@ -83,6 +82,25 @@ live-proven entity list does not include
 60s/180s/180s/600s brackets need per-entity age tracking beyond what the
 existing Phase 1 `sensor.ecco_health_communications` online/offline
 simplification provides).
+
+**`rtc_correction_failures_recent` (FB-D1 follow-up, offline only, not
+live-proven).** `sensor.ecco_health_rtc` now also represents this check, from
+the existing firmware sensor "Failed Corrections Since Boot", which counts a
+correction that failed after its retries, failed on communication errors or
+was released by the 90 s RTC deadline breaker. It needs no persisted baseline:
+the delta is taken between consecutive observed values. An increase between
+two numeric values is a failure. A decrease (the counter restarts at 0 on every
+ESP boot) and the first value after an unknown state (a Home Assistant restart)
+are not. The check reports WARNING with `RTC_CORRECTION_FAILURES_RECENT` for
+1800 s after the last observed increase, and each further increase restarts the
+window. The time of that increase, and the "Last Correction Result" text at that
+moment (`ABORTED ...` for a breaker release), are kept as attributes, which
+Home Assistant restores for a trigger-based template entity after a restart.
+A trigger 1800 s after the counter's last change closes the window on time;
+the one-minute refresh is the backstop. An unreadable counter with no failure
+in the window reports UNKNOWN, never HEALTHY. A failure while the counter is
+unavailable to Home Assistant, or while Home Assistant is down, is not
+observed.
 
 **Current-operation duration** (`manual_write_duration`,
 `rtc_correction_duration`, `free_power_operation_duration`, and the derived
