@@ -35,6 +35,29 @@ export function formatPercent(fraction: number | null | undefined): string {
   return `${Math.round(clamped * 100)}%`;
 }
 
+/**
+ * Formats a duration given in minutes: "45 min", "2 h", "2 h 5 min", "1 d 3 h"
+ * (whole days drop the minutes). A positive value under half a minute is
+ * "<1 min", never a misleading "0 min". Unknown, non-finite or negative
+ * input is "--". Formatting only - it never estimates a duration.
+ */
+export function formatDurationMinutes(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined || !Number.isFinite(minutes) || minutes < 0) {
+    return "--";
+  }
+  const total = Math.round(minutes);
+  if (total === 0) return minutes > 0 ? "<1 min" : "0 min";
+  if (total < 60) return `${total} min`;
+  if (total < 1440) {
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    return m === 0 ? `${h} h` : `${h} h ${m} min`;
+  }
+  const d = Math.floor(total / 1440);
+  const h = Math.floor((total % 1440) / 60);
+  return h === 0 ? `${d} d` : `${d} d ${h} h`;
+}
+
 /** Parses a Home Assistant entity state to a finite number, or null if unavailable/unknown/non-numeric. */
 export function toNumber(state: string | undefined | null): number | null {
   if (state === undefined || state === null) return null;

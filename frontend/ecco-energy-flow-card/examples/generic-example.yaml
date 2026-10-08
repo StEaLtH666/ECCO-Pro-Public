@@ -53,6 +53,10 @@ nodes:
     # This installation's battery sensor reports positive = charging.
     # Set to "discharge_positive" if yours reports the opposite.
     power_sign: charge_positive
+    # Optional: an entity reporting time until the battery reaches its
+    # reserve (minutes, or s/min/h/d via unit_of_measurement). Shown as the
+    # battery node's tooltip; the card never calculates it. Omit if unused.
+    # time_to_reserve: sensor.battery_time_to_reserve
 
   grid:
     power: sensor.grid_power

@@ -12,10 +12,10 @@ test("native Home unavailable -> derived used", () => {
   assert.equal(resolveHomeW(null, 1240, 1810), 3050);
 });
 
-test("native Home unavailable and inputs also unavailable -> degrades to 0, never null/NaN", () => {
-  assert.equal(resolveHomeW(null, null, null), 0);
-  assert.equal(resolveHomeW(null, 1240, null), 0);
-  assert.equal(resolveHomeW(null, null, 1810), 0);
+test("native Home unavailable and inputs also unavailable -> unknown (null), never a fabricated 0W or NaN", () => {
+  assert.equal(resolveHomeW(null, null, null), null);
+  assert.equal(resolveHomeW(null, 1240, null), null);
+  assert.equal(resolveHomeW(null, null, 1810), null);
 });
 
 test("native Home exactly 0W while the balance clearly implies load -> derived used (the documented bug)", () => {
