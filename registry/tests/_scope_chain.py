@@ -95,6 +95,7 @@ for _p in (str(HERE), str(REPO / "tools")):
 
 import _dtgp1_scope as _dtgp1  # noqa: E402
 import _dump_v2_scope as _dv2  # noqa: E402
+import _esb1_scope as _esb1  # noqa: E402
 import _fba_scope as _fba  # noqa: E402
 import _fbb1_scope as _fbb1  # noqa: E402
 import _fbb2_scope as _fbb2  # noqa: E402
@@ -569,7 +570,36 @@ RTCF1 = Entry(
          "Assistant restart never count, unreadable is UNKNOWN); Home Assistant health and records only: ZERO firmware, frontend, "
          "dashboard, deployment, Intelligence or ecco_core change, ZERO Modbus operation, no new control surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1)
+# esb1 (security maintenance: the Energy Actions card builds with esbuild 0.28.1, Dependabot PR #12, GHSA-67mh-4wv8-2f99;
+# _esb1_scope.py): made on the export after rtcf1. The card's package.json / package-lock.json are PR #12's exact blobs and the bundle
+# is rebuilt: its code bytes before the licence block are IDENTICAL (lic0's pre-lic0 bundle, the FB-B3 code), only the trailing Lit
+# licence block is regrouped by the newer esbuild (the same files, the same BSD-3-Clause notices). FROZEN edits (PEX): the three card
+# files, enrolled by the owner-approved O3 amendment (_pex.ENROLLED; their pub0 state is their 883068d hash), and the three suites
+# that pin the card folder's FB-B3 state, whose folder pin now reads a frozen card file AS OF pub0 (the pin value is unchanged)
+# (_esb1_scope.FROZEN_REVERTERS); as of pub0 each file is the export byte for byte. test_lic0_transition.py, test_pex_transition.py,
+# _pex.py, THIRD_PARTY_NOTICES.md, CHANGELOG.md and docs/dev/post-export-edit-layer.md are not frozen.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package,
+# dashboard, deployment, registry, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); ZERO behaviour change.
+ESB1 = Entry(
+    id="esb1", pr="ESB1", commit="unmerged",
+    added_files=_esb1.ADDED_FILES,
+    frozen_reverts=dict(_esb1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after esb1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _esb1.PACKAGE_JSON_REL: "045e797d225140538f6b357683d8e5bd0a81fc4b92e10279d6dbd5a77a43933c",
+        _esb1.PACKAGE_LOCK_REL: "f7ca9d7f0e48cc1680e06fada91c84b6ba4285228d7bbe623bf61430f2f4b52d",
+        _esb1.BUNDLE_REL: "7674bc1acc13b5a305d37b6e0055b200cbb86c172395e07cb286567a76c07d2d",
+        _esb1.SUITE_FBP_REL: "eb774df00f1ef0c158bdb03c4e5f69068fea80cd23e88d3bf6774ab1aa3566b8",
+        _esb1.SUITE_SCU_REL: "25d13a54fd0bda3a67ef2835e3da50f41a1f5f98b7b00e0142bdb166e35df4fe",
+        _esb1.SUITE_FRD_REL: "436c177be2e8796d57559ea1378a258ac387e6f9008ca192894e07239bc5a029",
+    },
+    # _pex.fingerprint(ESB1): hashes its parent rtcf1's fingerprint and every declaration above
+    fingerprint="ee161454359816ee40e44c04dd0c009d0b96838ba912bcf606975bcb0049d528",
+    note="Energy Actions card esbuild 0.21.5 -> 0.28.1 (Dependabot PR #12, GHSA-67mh-4wv8-2f99): package.json / package-lock.json "
+         "(esbuild only) and the rebuilt bundle, whose code bytes are identical (only the Lit licence block is regrouped); the three "
+         "card files enrolled (O3 amendment) and the three FB-B3 / FB-C3 folder pins read them as of pub0 (pin unchanged): ZERO "
+         "firmware, Home Assistant, dashboard, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

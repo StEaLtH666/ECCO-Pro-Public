@@ -16,9 +16,10 @@ what is known about each licence. Only section 1 is redistributed by this reposi
 
 Nothing else third-party is bundled. In particular:
 
-- The esbuild bundles contain only the four Lit packages above (checked from the esbuild build graph); every other import is
-  ECCO's own source. `@types/trusted-types` 2.0.7 (MIT) is a type-declaration dependency of Lit and contains no runtime code;
-  `@lit-labs/ssr-dom-shim` 1.6.0 (BSD-3-Clause) is used only under Node and is not in the bundles.
+- The two Lit-based esbuild bundles contain only the four Lit packages above (checked from the esbuild build graph); every other
+  import is ECCO's own source. The bundle of `frontend/ecco-advanced-config-card` contains only ECCO's own source (no runtime
+  dependency; checked from its build graph). `@types/trusted-types` 2.0.7 (MIT) is a type-declaration dependency of Lit and
+  contains no runtime code; `@lit-labs/ssr-dom-shim` 1.6.0 (BSD-3-Clause) is used only under Node and is not in the bundles.
 - The inline SVG icons of `frontend/ecco-fallback-recovery-card` are simple geometric shapes drawn for this project (they replace
   an earlier icon table whose origin was not recorded). They are ECCO's own work under GPL-3.0-or-later.
 - No vendor document, register table or code from another project is included; see section 6.
@@ -29,8 +30,8 @@ These are used to build or test ECCO. They are installed by you or by CI and are
 
 | Component | Used for | Version | Licence | Verified from |
 |---|---|---|---|---|
-| esbuild | Bundling the two Lit-based cards | 0.28.1 (`ecco-energy-flow-card`) / 0.21.5 (`ecco-energy-actions-card`), each card's `package-lock.json` | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
-| TypeScript | Type-checking the two Lit-based cards | 5.9.3 | Apache-2.0 | `LICENSE.txt`, `package.json` |
+| esbuild | Bundling the three TypeScript cards (`ecco-energy-actions-card`, `ecco-energy-flow-card`, `ecco-advanced-config-card`) | 0.28.1 (each card's `package-lock.json`) | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
+| TypeScript | Type-checking the three TypeScript cards | 5.9.3 (each card's `package-lock.json`) | Apache-2.0 | `LICENSE.txt`, `package.json` |
 | Node.js | Running the card builds and tests | not pinned; tested with 24.x | MIT (plus the licences of its own bundled components) | Upstream `LICENSE` at the tested version |
 | PyYAML | Repository validation and tests | 6.0.3 (`requirements-ci.txt`) | MIT | Installed package `LICENSE` |
 | Jinja2 | Home Assistant template tests | 3.1.6 (`requirements-ci.txt`) | BSD-3-Clause | Installed package `LICENSE.txt` |

@@ -1478,7 +1478,9 @@ def main() -> int:
     fe = hashlib.sha256()
     for rel in fe_tracked:
         fe.update(rel.encode())                                        # repository-relative POSIX path
-        fe.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, (ROOT / rel).read_bytes().replace(b"\r\n", b"\n"))))  # tracked content, CRLF normalised to LF (PUB0: private text); LIC0: pre-lic0 bytes
+        _fe_lf = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # tracked content, LF
+        _fe_lf = _pex.as_of_pub0(rel, _fe_lf.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else _fe_lf   # PEX (esb1): a frozen card file (pub0 target or enrolled) AS OF pub0
+        fe.update(_lic0.pre_lic0_bytes(rel, _pub0.private_view_bytes(rel, _fe_lf)))  # tracked content, CRLF normalised to LF (PUB0: private text); LIC0: pre-lic0 bytes
     check("FB-B3: the Energy Actions frontend is byte-identical to main (sha256 over every Git-tracked file)", fe.hexdigest() == ENERGY_ACTIONS_SHA256,
           f"{fe.hexdigest()} over {len(fe_tracked)} tracked files: {fe_tracked}")
     check("the card guards every write action with the trusted-click check (five guarded actions, one isTrusted read)",
