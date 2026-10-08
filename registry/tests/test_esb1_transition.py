@@ -75,12 +75,14 @@ BLOCK_HEAD = "/*! Bundled license information:\n"
 
 # The successor pins (esb1 @ public main b093aa8 + this change; LF text).
 ESB1_FINGERPRINT = "ee161454359816ee40e44c04dd0c009d0b96838ba912bcf606975bcb0049d528"
-OLDER_FINGERPRINTS = {   # recorded on main before esb1; an older entry can never be rewritten
-    "pex0": "c91d3a5834cef6b69f692bd8c301a478138ac7627b29c53a0a0e35cac29b36f8",
-    "dtgp1": "313f73eadd0c104cd1e81f35690fac52e0b065b0eef3eed35c9718f965baeb6c",
-    "fbrp1": "46cf76256da78b24e2fd59692f0bf126eba059352c37006542708c64b38e8f8c",
-    "rtcf1": "02d4bf53955acc3788c9df5972327bb62d5af028d8b9e46e0aa872c4fc94b0a0",
-}
+# The four post-export fingerprints recorded on main before esb1, in chain order (pex0 first, rtcf1 last); an older entry can never
+# be rewritten. Kept by position: each entry's own suite owns the ledger of files that name it.
+OLDER_FINGERPRINTS = (
+    "c91d3a5834cef6b69f692bd8c301a478138ac7627b29c53a0a0e35cac29b36f8",
+    "313f73eadd0c104cd1e81f35690fac52e0b065b0eef3eed35c9718f965baeb6c",
+    "46cf76256da78b24e2fd59692f0bf126eba059352c37006542708c64b38e8f8c",
+    "02d4bf53955acc3788c9df5972327bb62d5af028d8b9e46e0aa872c4fc94b0a0",
+)
 HISTORICAL_CHAIN_SHA = "d61b7b6a231006b2913ce62733f07df562056cffd6b633b5d8035ec06217dd4e"
 DIST_SHA256 = "7674bc1acc13b5a305d37b6e0055b200cbb86c172395e07cb286567a76c07d2d"
 DIST_BLOCK_LEN = 1082
@@ -104,8 +106,8 @@ ESB1 = CHAIN.entry("esb1")
 print("[0] the declaration")
 # ===========================================================================
 ids = [e.id for e in POST]
-check("esb1 is a post-export entry appended right after rtcf1", "esb1" in ids and CHAIN.prev_id("esb1") == "rtcf1"
-      and ids[:5] == ["pex0", "dtgp1", "fbrp1", "rtcf1", "esb1"], str(ids))
+check("esb1 is the fifth post-export entry, appended right after rtcf1 (the fourth; pex0 is the first)",
+      "esb1" in ids and CHAIN.prev_id("esb1") == "rtcf1" and ids.index("esb1") == 4 and ids[0] == "pex0" and ids[3] == "rtcf1", str(ids))
 check("esb1 carries no chain-pinned change: no reverter / checkpoint / delta / op path / include / substitution / banned token / tag",
       not ESB1.reverts and not ESB1.checkpoints and not ESB1.deltas and not ESB1.op_paths_changed and not ESB1.includes_added
       and not ESB1.subst_added and not ESB1.subst_changed and not ESB1.subst_removed and not ESB1.banned_fw_added
@@ -121,7 +123,7 @@ check("esb1 declares the two files it adds, and each exists",
       ESB1.added_files == E.ADDED_FILES == {"registry/tests/_esb1_scope.py", "registry/tests/test_esb1_transition.py"}
       and all((ROOT / f).is_file() for f in ESB1.added_files))
 check("esb1's fingerprint is the pinned value; every older post-export fingerprint is its recorded value (none rewritten)",
-      ESB1.fingerprint == ESB1_FINGERPRINT and {e.id: e.fingerprint for e in POST if e.id in OLDER_FINGERPRINTS} == OLDER_FINGERPRINTS,
+      ESB1.fingerprint == ESB1_FINGERPRINT and tuple(e.fingerprint for e in POST[:4]) == OLDER_FINGERPRINTS,
       ESB1.fingerprint)
 # PEX: the closed pre-export record (root, the twelve ENTRIES and pub0) hashes to its 883068d value
 check("the closed pre-export chain record is unchanged", _pex.historical_chain_sha() == _pex.HISTORICAL_CHAIN_SHA == HISTORICAL_CHAIN_SHA)
