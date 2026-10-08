@@ -53,6 +53,13 @@ Development before the first public release happened in a private repository; se
   - **Scope:** Home Assistant health package, check registry and documentation only, declared as post-export entry
     `rtcf1`. No firmware, dashboard, frontend or Modbus change.
 
+- **ECCO Weather & Solar card** (`frontend/ecco-weather-solar-card`, read-only): current weather, the hourly and five-day Met.no
+  forecast, sun times, the ECCO blended solar forecast (today, remaining today, tomorrow) with its Solcast and Forecast.Solar
+  inputs, an hourly chart of Solcast's profile against actual PV with cloud cover and rain, forecast freshness, the existing
+  accuracy scorecard and explanatory notes. It sends only two read-only websocket messages (the forecast subscription and hourly
+  statistics); no service call, no new data provider, the blend weighting unchanged. It has its own dashboard view right after
+  Overview, declared as post-export entry `wsc1`.
+
 ### Changed
 
 - **Dump-to-Grid command ceiling is configurable at build time.** `ecco_dump_controller_max_ceiling_w` stays the single

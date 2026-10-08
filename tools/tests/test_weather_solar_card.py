@@ -10,7 +10,7 @@
       sensors, the controller's PV energy counters); the blend is read, never re-weighted
   [5] the bundle and the example render correctly for any site slug (tools/ecco_site_render.py)
   [6] the card's Node suite (node --test), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped
-  [7] scope: the card is on no dashboard and in no manifest, package or version file, and in no post-export chain entry
+  [7] scope: one dashboard view right after Overview, declared by post-export entry wsc1; no manifest, package or version file
 
 The card's behaviour (forecast lifecycle, freshness, time zones, sun times, chart, fallbacks) is tested by its Node suite:
 frontend/ecco-weather-solar-card/test (npm test).
@@ -223,15 +223,28 @@ else:
 
 # ===========================================================================
 print("")
-print("[7] scope: not deployed, no post-export entry")
+print("[7] scope: one dashboard view right after Overview (post-export entry wsc1); no manifest, package or version file")
 # ===========================================================================
-places = ["home-assistant/dashboards/ecco_pro.yaml", "deployment/ha-manifest.yaml", "VERSION.yaml",
+dash_rel = "home-assistant/dashboards/ecco_pro.yaml"
+places = ["deployment/ha-manifest.yaml", "VERSION.yaml",
           *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "home-assistant" / "packages").glob("*.yaml"))]
 found = [rel for rel in places if (ROOT / rel).is_file() and TAG in (ROOT / rel).read_text(encoding="utf-8")]
-check("the card is on no dashboard and in no manifest, package or version file (shipped undeployed)", not found, str(found))
+check("the card is in no manifest, package or version file (deployed as a manual Lovelace resource, like the flow card)", not found, str(found))
+dash = yaml.load((ROOT / dash_rel).read_text(encoding="utf-8"), Loader=Loader) or {}
+views = dash.get("views") or []
+titles = [v.get("title") for v in views if isinstance(v, dict)]
+uses = [i for i, v in enumerate(views) if isinstance(v, dict) and f"custom:{TAG}" in yaml.dump(v)]
+check("the dashboard has exactly one Weather & Solar view, immediately after Overview, and the card appears in no other view",
+      titles[:2] == ["Overview", "Weather & Solar"] and uses == [1], f"{titles[:3]} {uses}")
+wv = views[1] if len(views) > 1 and isinstance(views[1], dict) else {}
+cards = [c for s in (wv.get("sections") or []) for c in (s.get("cards") or [])]
+check("the view holds only the card, with its default entities (no entity id typed into the dashboard)",
+      wv.get("path") == "ecco-weather-solar" and wv.get("type") == "sections" and cards == [{"type": f"custom:{TAG}", "grid_options": {"columns": "full"}}],
+      str(cards))
 chain_mods = sorted((ROOT / "registry" / "tests").glob("_*.py"))
 named = [p.name for p in chain_mods if re.search(r"ecco-weather-solar-card|weather_solar", p.read_text(encoding="utf-8"))]
-check("no scope / chain module declares a card file (no competing post-export entry)", len(chain_mods) > 10 and not named, str(named))
+check("only the dashboard entry names the card: its scope module _wsc1_scope.py and its chain entry in _scope_chain.py",
+      named == ["_scope_chain.py", "_wsc1_scope.py"], str(named))
 
 print("")
 if FAILURES:

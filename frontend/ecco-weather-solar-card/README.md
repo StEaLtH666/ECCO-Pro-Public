@@ -114,18 +114,18 @@ stale:                      # hours
 - An unknown key or a malformed entity id is refused, and Home Assistant shows its error card.
 - The dongle-slug entity ids are rewritten for other installations by `tools/ecco_site_render.py`.
 
-## Integration (a later, separate step)
+## Deployment
 
-The card ships undeployed: it is on no dashboard and in no manifest. Adding it needs a reviewed post-export (PEX)
-entry, because the ECCO dashboard is frozen by the public export. The options are:
+The card has its own view on the ECCO dashboard, **Weather & Solar**, right after Overview. The view was added as the post-export
+entry `wsc1` (`registry/tests/_wsc1_scope.py`). The card is not in `deployment/ha-manifest.yaml`: like the other ECCO cards, it is
+deployed as a manual Lovelace resource.
 
-- the dashboard alone (a declared frozen edit), deploying the bundle like the flow card;
-- or a `deployment/ha-manifest.yaml` `frontend_assets` stanza as well. The manifest is chain-pinned, and two older
-  suites pin exactly two frontend assets.
-
-Until then, to try it by hand:
-1. Copy `dist/ecco-weather-solar-card.js` to `/config/www/`.
-2. Add it as a Lovelace resource (`/local/ecco-weather-solar-card.js`, JavaScript module).
+1. Render the site first (`tools/ecco_site_render.py`), so the card's dongle-slug defaults match the installation.
+2. Copy the rendered bundle with `tools/deploy-ha.ps1 frontend/ecco-weather-solar-card/dist/ecco-weather-solar-card.js`. It lands in
+   `/config/www/ecco/`.
+3. Register `/local/ecco/ecco-weather-solar-card.js` as a JavaScript module under Settings -> Dashboards -> Resources. The deploy
+   script never edits Home Assistant `.storage`.
+4. Deploy the dashboard.
 
 ## Development
 
