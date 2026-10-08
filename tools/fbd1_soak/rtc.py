@@ -291,7 +291,20 @@ def build_episodes(ctx: Ctx) -> list:
             if ep.err is None and ep.err_logged is not None:
                 ep.err = ep.err_logged
         else:
-            ep = cur if (cur is not None and cur.outcome == "incomplete") else open_ep(None, "unknown")
+            if cur is not None and cur.outcome == "incomplete":
+                ep = cur
+            elif cur is not None and cur.t_end is not None and (t - cur.t_end).total_seconds() <= 15 and (
+                    kind == "VSTART" or kind in TERMINAL and TERMINAL[kind] == cur.outcome):
+                # the other source's copy of a step of the episode that just closed (HA and the log order the same
+                # instant differently): attach it, never open an empty episode for it
+                cur.sources.update(src.split("+"))
+                cur.refs.extend(refs)
+                cur.steps.append((t, kind, src))
+                continue
+            elif kind == "VSTART":
+                continue  # a verification start with no correction in the evidence carries no information
+            else:
+                ep = open_ep(None, "unknown")
             if kind == "ACK":
                 ep.acks.append(t)
                 ep.attempts = max(ep.attempts, int(d.get("attempt", len(ep.acks))))
@@ -318,6 +331,11 @@ def build_episodes(ctx: Ctx) -> list:
         ep.refs.extend(refs)
         ep.steps.append((t, kind, src))
     return eps
+
+
+def _renumber(eps: list) -> None:
+    for i, e in enumerate(eps, 1):
+        e.idx = i
 
 
 def counter_episodes(ctx: Ctx) -> list:
@@ -835,6 +853,7 @@ def analyse(ctx: Ctx) -> dict:
                 break
     ctx.reads = reads
     in_win = [e for e in eps if e.t is not None and ctx.start <= e.t <= ctx.end]
+    _renumber(in_win)
     ctx.episodes = in_win
     for ep in in_win:
         if ep.t_start is not None and ep.kind == "auto":

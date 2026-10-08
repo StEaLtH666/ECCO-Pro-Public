@@ -138,7 +138,6 @@ def analyse(ctx: Ctx) -> dict:
             k = "NO_EVIDENCE" if smp is None else (smp.raw.strip() if not is_missing(smp.raw) else "UNAVAILABLE")
             sup[k] = sup.get(k, 0.0) + (b - a).total_seconds()
     prof = _changes(ctx, "profile_state")
-    shadow = _changes(ctx, "shadow_state")
     for t, a, b, ref in prof:
         ctx.event(t, "supervision", "WARNING", "profile-state-change", f"Fallback Profile State {a!r} -> {b!r} (durable state "
                   "disturbance?)", CONFIRMED, [ref])
@@ -259,7 +258,7 @@ def analyse(ctx: Ctx) -> dict:
     crit.append(Criterion("C-SUP-1", "supervision", "D1 supervision and durable state undisturbed", v,
                           CONFIRMED if have_sup else NONE, "; ".join(reasons[:2]), True, reasons,
                           {"suspect_events": sus.delta, "lost_events": lost.delta, "profile_changes": len(prof),
-                           "shadow_changes": len(shadow), "error_log_lines": len(errs)}))
+                           "error_log_lines": len(errs)}))
     return {
         "criteria": crit,
         "area": {
@@ -271,7 +270,6 @@ def analyse(ctx: Ctx) -> dict:
             "protected_changes": prot,
             "supervision_time_s": {k: round(x, 1) for k, x in sup.items()},
             "profile_state_changes": [{"time": stamp(t), "from": a, "to": b} for t, a, b, _ in prof],
-            "shadow_state_changes": len(shadow),
             "inverter_health_changes": warn_vals,
             "log_warnings_by_tag": warns,
             "log_errors": len(errs),

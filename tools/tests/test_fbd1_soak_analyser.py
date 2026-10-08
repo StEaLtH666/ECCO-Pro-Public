@@ -544,6 +544,29 @@ check("A3: normal read-to-read deltas exclude stalled pairs (night max 14 s = th
       and a3["stalled_read_pairs_excluded"] >= 3, json.dumps(a3["consecutive_read_delta_s"]))
 
 # --- S10 RTC abort ------------------------------------------------------------------------------------------------------------
+# --- the same evidence plus a firmware log of the -60/-60 correction: HA rows and log lines merge into one episode ----------------
+n_ha = len(episodes(rep))
+L60 = "\n".join([
+    "# esphome logs --device dongle.invalid  start=2026-10-04T23:20:00+01:00",
+    "[23:26:20.105][I][ecco:D802]: Inverter RTC: 2026-10-04 23:25:20 | Difference from NTP: -60 s",
+    "[23:26:20.106][W][ecco:D8A1]: RTC STALL detected - inverter advanced 6 s while NTP advanced 60 s",
+    "[23:27:20.101][I][ecco:D802]: Inverter RTC: 2026-10-04 23:26:20 | Difference from NTP: -60 s",
+    "[23:27:20.102][W][ecco:D951]: RTC correction queued - clock difference: -60 seconds",
+    "[23:27:20.102][I][ecco:D958]: RTC policy: background (threshold 30 s, full error -60 s)",
+    "[23:27:21.012][I][ecco:7509]: RTC write acknowledged - verification scheduled in 10 seconds",
+    "[23:27:31.020][I][ecco:F266]: Performing post-write RTC verification",
+    "[23:27:31.080][I][ecco:D802]: Inverter RTC: 2026-10-04 23:27:28 | Difference from NTP: -3 s",
+    "[23:27:31.081][I][ecco:D842]: RTC correction VERIFIED - error now -3 seconds"]) + "\n"
+rep = analyse(rt, logs=[(L60, None)])
+eps = episodes(rep)
+e60 = next(e for e in eps if e["start"]["local"].endswith("23:27:20 BST"))
+check("HA + log: the same correction seen in both sources is ONE episode (no phantom from the late verification line), ids 1..n",
+      len(eps) == n_ha and [e["id"] for e in eps] == list(range(1, n_ha + 1)) and e60["sources"] == ["ha", "log"]
+      and e60["threshold_logged_s"] == 30, json.dumps([(e["id"], e["sources"]) for e in eps]))
+check("HA + log: the stall verdict on the first confirming read now comes from the firmware log line",
+      e60["analysis"]["prior_read"]["source"] == "log" and e60["analysis"]["prior_read"]["stall_basis"].startswith("log ")
+      and e60["analysis"]["classification"] == "stale_first_read_candidate")
+
 # --- correction storm (the pre-FB-D1 cadence: a correction every 4 min) ------------------------------------------------------
 cs = S.Dongle(hours=7)
 base = S.START.replace(second=0) + timedelta(minutes=1, seconds=20)

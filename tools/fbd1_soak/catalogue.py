@@ -88,7 +88,6 @@ ENTITIES = (
     _e("heartbeat_age", "ecco_supervision_heartbeat_age", S, "numeric", "ECCO Supervision Heartbeat Age", "continuity", 60),
     _e("reset_reason", "ecco_reset_reason", S, "text", "ECCO Reset Reason", "continuity"),
     _e("wifi_signal", "wifi_signal", S, "numeric", "WiFi Signal", "continuity", 120),
-    _e("shadow_state", "ecco_failback_shadow_state", S, "text", "ECCO Failback Shadow State", "supervision"),
     _e("inverter_warning", "ecco_inverter_warning", S, "text", "ECCO Inverter Warning", "supervision"),
     _e("inverter_fault", "ecco_inverter_fault", S, "text", "ECCO Inverter Fault", "supervision"),
     # safety / write authority
