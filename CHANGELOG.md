@@ -39,6 +39,19 @@ Development before the first public release happened in a private repository; se
   deployed, live-proven or partially live-proven) and the evidence still owed before operator Restore (FB-E) or automatic
   failback (FB-F), neither of which is implemented. Records and documentation only, declared as post-export entry `fbrp1`:
   no firmware, Home Assistant package, dashboard, frontend or behaviour change.
+- **RTC correction-failure health alert** (FB-D1 follow-up; offline only, not live-proven). The `ECCO Health RTC` sensor
+  now represents the check `rtc_correction_failures_recent` using the existing firmware sensor "Failed Corrections Since
+  Boot". The 90 s RTC deadline breaker increments that same counter.
+  - **What triggers it:** an observed increase of the counter.
+  - **What it reports:** WARNING with `RTC_CORRECTION_FAILURES_RECENT` for 1800 s. Each further increase restarts the
+    window.
+  - **What never triggers it:** a reboot reset, the first value after a Home Assistant restart, and an attribute-only
+    update.
+  - **An unreadable counter** reports UNKNOWN, never HEALTHY.
+  - **New attributes:** the failure time, the correction result text at that moment, and the RTC lock max age.
+  - **Unchanged:** every other RTC health check and its presentation.
+  - **Scope:** Home Assistant health package, check registry and documentation only, declared as post-export entry
+    `rtcf1`. No firmware, dashboard, frontend or Modbus change.
 
 ### Changed
 
