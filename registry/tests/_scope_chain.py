@@ -109,6 +109,7 @@ import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
+import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 
 FIRMWARE = "firmware/ecco_clock_dongle_stage3_4_free_power.yaml"
@@ -543,7 +544,32 @@ FBRP1 = Entry(
          "tested_in_home_assistant stays false); records and documentation only: ZERO firmware, Home Assistant package, dashboard, "
          "frontend, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, ZERO behaviour change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1)
+# rtcf1 (FB-D1 follow-up: the RTC correction-failure health alert; _rtcf1_scope.py): a Home Assistant health change made on the export
+# after fbrp1. sensor.ecco_health_rtc represents the designed check rtc_correction_failures_recent from the EXISTING firmware sensor
+# "Failed Corrections Since Boot": WARNING / RTC_CORRECTION_FAILURES_RECENT for 1800 s after an observed numeric increase (never a
+# reboot reset or a first value after unknown), UNKNOWN for an unreadable counter, with last_failure_at / last_result attributes; the
+# other RTC checks, ranks, reason codes and presentation are unchanged. FROZEN edits (PEX): the health package, the check registry
+# record (designed -> implemented_offline) and docs/SYSTEM_HEALTH_ARCHITECTURE.md (_rtcf1_scope.FROZEN_REVERTERS); as of pub0 each is
+# the export byte for byte. CHANGELOG.md is not frozen. No older suite is edited.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, frontend, dashboard,
+# deployment, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); no HA control surface (template keys only).
+RTCF1 = Entry(
+    id="rtcf1", pr="RTCF1", commit="unmerged",
+    added_files=_rtcf1.ADDED_FILES,
+    frozen_reverts=dict(_rtcf1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after rtcf1; as of pub0 each is its pub0 manifest result
+        _rtcf1.HEALTH_PKG_REL: "a76d43a598cf1ce1639c1a0f67b8cc47eb4a433169f61024c2dd74243e81a165",
+        _rtcf1.CHECKS_REL: "12904c78b851923ad3252a4c2d7e9469538e0baf7381857f31865b5de2817855",
+        _rtcf1.ARCH_DOC_REL: "6e3609c16aacc97e5e2396d9a112f3e049b5f111980b0ac12774eb4b2332858f",
+    },
+    # _pex.fingerprint(RTCF1): hashes its parent fbrp1's fingerprint and every declaration above
+    fingerprint="02d4bf53955acc3788c9df5972327bb62d5af028d8b9e46e0aa872c4fc94b0a0",
+    note="RTC correction-failure health alert (FB-D1 follow-up): sensor.ecco_health_rtc represents rtc_correction_failures_recent from "
+         "the existing Failed Corrections Since Boot sensor (WARNING for 1800 s after an observed increase, reboot reset and Home "
+         "Assistant restart never count, unreadable is UNKNOWN); Home Assistant health and records only: ZERO firmware, frontend, "
+         "dashboard, deployment, Intelligence or ecco_core change, ZERO Modbus operation, no new control surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
