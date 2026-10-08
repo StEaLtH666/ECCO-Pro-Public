@@ -168,14 +168,22 @@ def analyse(ctx: Ctx) -> dict:
                 lock_iv.append((on, x.t))
                 on = None
     match_iv = [(a, b) for a, b, cat, _, _ in tl if cat == "MATCH"]
-    overlaps = []
+    # B10 is re-evaluated and published by the 10 s Fallback Profile housekeeping tick, so after the lock is taken the
+    # previous MATCH text stays in force until the next tick: an overlap of up to one tick (Rules.b10_tick_s) plus the
+    # receive-time tolerance is the designed refresh latency (INFO). Longer means a tick published MATCH under the lock.
+    overlaps, lag = [], []
     for a, b in lock_iv:
         o = overlap_s(a, b, match_iv)
-        if o > 2.0:
+        if o > r.b10_lock_overlap_fail_s:
             overlaps.append((a, b, o))
-            sev = "FAIL" if o > r.b10_lock_overlap_fail_s else "WARNING"
-            ctx.event(a, "b10", sev, "match-while-rtc-lock",
-                      f"B10 MATCH for {o:.0f} s while RTC Correction In Progress was on", CONFIRMED)
+            ctx.event(a, "b10", "FAIL", "match-while-rtc-lock",
+                      f"B10 MATCH for {o:.1f} s while RTC Correction In Progress was on (more than one {r.b10_tick_s:.0f} s "
+                      "refresh tick)", CONFIRMED)
+        elif o > 0.5:
+            lag.append((a, b, o))
+            ctx.event(a, "b10", "INFO", "b10-refresh-lag",
+                      f"B10 still MATCH for {o:.1f} s after the RTC lock was taken: within one {r.b10_tick_s:.0f} s refresh "
+                      "tick (designed latency)", CONFIRMED)
 
     for run in runs:
         if run["cats"] & {"NOT_MATCH"}:
@@ -222,9 +230,13 @@ def analyse(ctx: Ctx) -> dict:
             v = WARNING
         if low:
             reasons.append(f"day(s) under {pct(r.b10_match_fail)} % MATCH: {', '.join(low)}")
-    if overlaps and any(o > r.b10_lock_overlap_fail_s for _, _, o in overlaps):
+    if overlaps:
         v = FAIL
-        reasons.append(f"{len(overlaps)} RTC lock interval(s) with B10 MATCH (the firmware must never show MATCH under the lock)")
+        reasons.append(f"{len(overlaps)} RTC lock interval(s) with B10 MATCH for more than one refresh tick (the firmware must "
+                       "never publish MATCH under the lock)")
+    if lag:
+        reasons.append(f"{len(lag)} lock interval(s) with B10 MATCH carried over for at most one {r.b10_tick_s:.0f} s refresh "
+                       f"tick (longest {max(o for _, _, o in lag):.1f} s): designed latency, not a violation")
     crit.append(Criterion("C-B10-1", "b10", "B10 Live Match availability", v, basis,
                           f"MATCH {pct(match_obs)} % of observed time" if have else "no B10 evidence", True, reasons,
                           {"match_pct_observed": pct(match_obs), "match_pct_window": pct(match_win), "coverage_pct": pct(coverage),
@@ -267,6 +279,7 @@ def analyse(ctx: Ctx) -> dict:
             "interruption_causes": _count_causes(runs),
             "recovery_after_corrections": rec,
             "lock_overlaps": [{"from": stamp(a), "to": stamp(b), "match_s": round(o, 1)} for a, b, o in overlaps],
+            "lock_refresh_lag": [{"from": stamp(a), "to": stamp(b), "match_s": round(o, 1)} for a, b, o in lag],
             "daily": daily,
             "basis": INFERRED if not have else CONFIRMED,
         },

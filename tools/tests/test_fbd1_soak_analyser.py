@@ -328,12 +328,13 @@ CAP = ("# esphome logs --device dongle.invalid  start=2026-10-04T15:36:58.123456
        "[15:37:24.649][I][ecco:D802]: Inverter RTC: 2026-10-04 15:37:15 | Difference from NTP: -9 s\r\n"
        "[15:37:24.782][I][ecco:D842]: RTC correction VERIFIED - error now -9 seconds\r\n"
        "[15:37:59.795][S][sensor]: 'ECCO PV Power' >> 812 W\r\n"
-       "[15:38:13.005][I][ecco:D802]: Inverter RTC: 2026-10-04 15:38:10 | Difference from NTP: -3 s\r\n")
+       "[15:38:13.005][I][ecco:D802]: Inverter RTC: 2026-10-04 15:38:10 | Difference from NTP: -3 s\r\n"
+       "[15:38:14.020][I][energy:?078]: Day: PV 12.7 | Load 35.3\r\n")  # live: some tags print a `?` line number
 ev_c = Evidence()
 ic = ingest.load_log_text(CAP, ev_c)
 kinds = [e.kind for e in ev_c.logs]
 check("ESPHome 2026 capture: anchored from its header, hex line numbers and the [S] level accepted, milliseconds kept",
-      ic.accepted == 9 and ev_c.logs[0].t == datetime(2026, 10, 4, 14, 37, 13, 59000, tzinfo=UTC)
+      ic.accepted == 10 and ev_c.logs[-1].tag == "energy" and ev_c.logs[0].t == datetime(2026, 10, 4, 14, 37, 13, 59000, tzinfo=UTC)
       and kinds[:4] == ["rtc_read", "rtc_queued", "rtc_write_start", "rtc_write_ack"]
       and any(x.code == "log-anchor" and "header" in x.detail for x in ev_c.diagnostics), f"{ic} {kinds}")
 rep_c = run(ev_c, start=datetime(2026, 10, 4, 14, 36, tzinfo=UTC), end=datetime(2026, 10, 4, 14, 39, tzinfo=UTC),
@@ -403,6 +404,9 @@ b = rep["areas"]["b10"]
 check(f"perfect soak: B10 non-MATCH time equals the scenario's own sum ({nm:.0f} s) and MATCH % is exact",
       b["time_s"]["UNKNOWN"] == nm and abs(b["match_pct_window"] - 100 * (1 - nm / (7 * 86400))) < 1e-3,
       f"{b['time_s']} {b['match_pct_window']}")
+check("perfect soak: B10 still MATCH for 1 s after each lock is taken = one-tick refresh lag, INFO only (never a lock overlap)",
+      [x["match_s"] for x in b["lock_refresh_lag"]] == [1.0, 1.0] and not b["lock_overlaps"]
+      and len([e for e in rep["informational_events"] if e["code"] == "b10-refresh-lag"]) == 2)
 check("perfect soak: release-to-MATCH recovery is 31 s for both corrections",
       [x["match_after_s"] for x in b["recovery_after_corrections"]] == [31.0, 31.0])
 check("perfect soak: seven daily rows of exactly 24 h, D1 starting at the soak start",
@@ -466,6 +470,8 @@ bt = rs.at_bst(2, 10, 0, 0)
 rs.restart(bt)
 rs.set_offset(rs.at_bst(3, 0, 20), -12)
 rs.correction(rs.at_bst(3, 0, 23), "precision")  # after it
+rs.put("telemetry_online", bt + timedelta(seconds=5), "off")  # boot: Online off until the first poll
+rs.put("telemetry_online", bt + timedelta(seconds=45), "on")
 rs.run()
 rep = analyse(rs)
 v = verdicts(rep)
@@ -477,6 +483,10 @@ check("unexpected restart: exactly one restart, timed within 1 min of the boot, 
 check("unexpected restart: the verified counter delta is restart-aware (1 before + 1 after = 2)",
       rep["areas"]["rtc"]["counters"]["verified"]["delta"] == 2)
 check("unexpected restart: the daily table puts it in D2 (6 Oct 10:00 BST)", [r["restarts"] for r in rep["daily"]] == [0, 1, 0, 0, 0, 0, 0])
+check("unexpected restart: Telemetry Online off for 40 s right after the boot is initialisation (INFO), not a read fault",
+      crit(rep, "C-POLL-1")["metrics"]["telemetry_offline_intervals"] == 0
+      and crit(rep, "C-POLL-1")["metrics"]["boot_initialisation_intervals"] == 1
+      and any(e["code"] == "boot-initialisation" for e in rep["informational_events"]), json.dumps(crit(rep, "C-POLL-1")))
 check("unexpected restart: a FAIL event with references", any(e["code"] == "unexpected-restart" and e["severity"] == "FAIL"
                                                                and e["refs"] for e in rep["suspicious_events"]))
 
@@ -768,6 +778,53 @@ check("lease: the large (-400 s) correction inside the same lease is exempt (no 
       not any(c["check"] == "lease-hold" for c in next(e for e in episodes(rep) if e["reason"] == "large")["analysis"]["policy"]["checks"]))
 check("lease: the Free Power start is reported as a write operation needing attribution",
       any(e["code"] == "write-operation" for e in rep["suspicious_events"]))
+
+# --- the 300 s minimum gap: HA receive-time jitter at the boundary is tolerated (+-2 s), a real short gap is not ------------------
+def gap_scenario(shift_s):
+    g = S.Dongle(hours=48)
+    g.set_offset(g.at_bst(1, 13, 0), -35)
+    g.correction(g.at_bst(1, 13, 2), "background")
+    g.set_offset(g.at_bst(1, 13, 6), -35)
+    t2 = g.at_bst(1, 13, 7)  # exactly 300 s later on the dongle's own read grid
+    g.correction(t2, "background")
+    g.run()
+    eid = g.eid("last_correction_result")
+    g.rows[eid] = [(t + timedelta(seconds=shift_s) if t == t2 else t, st) for t, st in g.rows[eid]]
+    r_ = analyse(g)
+    e2 = next(e for e in episodes(r_) if e["id"] == 2)
+    return r_, next(c for c in e2["analysis"]["policy"]["checks"] if c["check"] == "min-gap")
+
+
+rg, mg = gap_scenario(-0.05)
+check("min-gap: corrections 299.95 s apart in HA rows (300 s on the dongle) are within the 2 s tolerance, not a violation",
+      mg["result"] == "ok-tolerance" and "299.950" in mg["detail"] and verdicts(rg)["C-RTC-2"] == "PASS"
+      and crit(rg, "C-RTC-2")["metrics"]["min_gap_within_tolerance"] == 1, json.dumps(mg))
+rg, mg = gap_scenario(-3.0)
+check("min-gap: a gap of 297 s (beyond the 2 s tolerance) is still a violation, C-RTC-2 FAIL",
+      mg["result"] == "violation" and verdicts(rg)["C-RTC-2"] == "FAIL", json.dumps(mg))
+
+# --- precision corrections act on ONE read: a stale read in a precision window --------------------------------------------------
+ps = S.Dongle(hours=48)
+tp1 = ps.at_bst(1, 0, 28)  # precision window of the 00:30 zone start
+ps.stale_read(tp1, -54)
+ps.correction(tp1, "precision")
+ps.set_offset(ps.at_bst(1, 5, 20), -12)  # a genuine -12 s before the 05:30 zone start
+ps.correction(ps.at_bst(1, 5, 28), "precision")
+ps.run()
+rep = analyse(ps)
+E = {e["start"]["local"][11:16]: e for e in episodes(rep)}
+check("precision: a single stale read (-54 s against a -6 s trend, stall on it) -> precision_stale_candidate, suspected no-op",
+      E["00:28"]["analysis"]["classification"] == "precision_stale_candidate" and E["00:28"]["analysis"]["suspected_noop"]
+      and E["00:28"]["analysis"]["stall_on_queue_read"], json.dumps(E["00:28"]["analysis"])[:400])
+check("precision: an on-trend -12 s precision read is consistent with drift (never a stale label)",
+      E["05:28"]["analysis"]["classification"] == "consistent_with_drift" and not E["05:28"]["analysis"]["suspected_noop"])
+pr = rep["a3_stall_veto"]["precision"]
+check("precision A3: V4 (stall veto on the precision read) holds 1/1 candidate and 0/1 genuine; C-RTC-4 WARNING",
+      pr["candidates"] == 1 and pr["drift_consistent"] == 1 and pr["variants"][0]["would_hold_candidates"] == 1
+      and pr["variants"][0]["would_hold_drift_consistent"] == 0 and verdicts(rep)["C-RTC-4"] == "WARNING"
+      and crit(rep, "C-RTC-4")["metrics"]["precision_candidates"] == 1, json.dumps(pr))
+check("triage: no confirmed failure here; C-RTC-4 is listed as suspected (inferred), not as a failure",
+      rep["triage"]["confirmed_failures"] == [] and "C-RTC-4" in rep["triage"]["suspected_inferred"], json.dumps(rep["triage"]))
 
 # --- S22 empty evidence -----------------------------------------------------------------------------------------------------------------
 rep = run(Evidence(), now=S.START + timedelta(days=8))

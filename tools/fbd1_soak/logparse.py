@@ -22,7 +22,7 @@ ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LINE = re.compile(
     r"^(?:(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s*)?"
     r"(?:\[(?P<hms>\d{2}:\d{2}:\d{2})(?P<frac>[.,]\d+)?\])?\s*"
-    r"\[(?P<lvl>[EWIDCVS]{1,2})\]\[(?P<tag>[A-Za-z0-9_.]+)(?::[0-9A-Fa-f]+)?\]:\s?(?P<msg>.*)$")
+    r"\[(?P<lvl>[EWIDCVS]{1,2})\]\[(?P<tag>[A-Za-z0-9_.]+)(?::[0-9A-Fa-f?]+)?\]:\s?(?P<msg>.*)$")
 
 # (kind, regex over the message). The first match wins. Groups are named after the firmware's printf arguments.
 PATTERNS = (

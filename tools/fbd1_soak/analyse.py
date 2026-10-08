@@ -151,6 +151,17 @@ def run(ev: Evidence, *, start: datetime = DEFAULT_SOAK_START, days: float = DEF
             for k in key:
                 row[k] = src[i].get(k)
         daily.append(row)
+    # triage: what is a CONFIRMED failure, what is only SUSPECTED (an inference), and what cannot be judged yet
+    cd = [c.to_dict() for c in crit]
+    ev_list = [e.to_dict() for e in ctx.events]
+    triage = {
+        "confirmed_failures": [c["id"] for c in cd if c["verdict"] == FAIL and c["basis"] in ("confirmed", "mixed")]
+        + [f"{e['code']} @ {(e['time'] or {}).get('local')}" for e in ev_list if e["severity"] == "FAIL" and e["basis"] == "confirmed"],
+        "confirmed_warnings": [c["id"] for c in cd if c["verdict"] == WARNING and c["basis"] in ("confirmed", "mixed")],
+        "suspected_inferred": [c["id"] for c in cd if c["verdict"] in (WARNING, FAIL) and c["basis"] == "inferred"],
+        "suspected_events": sum(1 for e in ev_list if e["severity"] in ("WARNING", "FAIL") and e["basis"] == "inferred"),
+        "insufficient_evidence": [c["id"] for c in cd if c["verdict"] == INSUFFICIENT],
+    }
     sev_rank = {"FAIL": 0, "WARNING": 1, "INFO": 2}
     events = sorted(ctx.events, key=lambda e: (e.t is None, e.t or start, sev_rank.get(e.severity, 3)))
     report = {
@@ -162,6 +173,7 @@ def run(ev: Evidence, *, start: datetime = DEFAULT_SOAK_START, days: float = DEF
         "overall": {"verdict": overall, "deciding_criteria": blocking,
                     "rule": "worst required criterion (FAIL > INSUFFICIENT_EVIDENCE > WARNING > PASS); optional criteria add "
                             "WARNING/FAIL only"},
+        "triage": triage,
         "criteria": [dict(c.to_dict(), confidence=confidence(c, cont["area"]["coverage_pct"], rules)) for c in crit],
         "daily": daily,
         "areas": areas,

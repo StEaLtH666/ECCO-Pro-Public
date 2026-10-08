@@ -35,6 +35,7 @@ class Rules:
     """Every decision threshold the analyser applies. All are reported in the JSON so a verdict can be re-derived by hand."""
     # window / continuity
     boot_grace_s: int = 600  # a boot this soon after the soak start is the soak's own (OTA) boot, not a restart
+    boot_init_s: int = 180  # after a boot, Telemetry/Configuration Online read off until the first poll: initialisation
     restart_cluster_s: int = 600  # restart signals this close together are one restart
     gap_s: int = 300  # no witness row for longer than this = an evidence gap
     gap_warn_s: int = 900
@@ -62,13 +63,14 @@ class Rules:
     aborts_fail: int = 2
     correction_lock_warn_s: float = 50.0  # legitimate holds are bounded at about 50 s
     correction_lock_fail_s: float = 100.0  # the 90 s breaker must have released by then
-    edge_tolerance_s: float = 2.0
+    edge_tolerance_s: float = 2.0  # Home Assistant receive-time tolerance at every policy boundary (quiet window, 300 s gap)
     # B10
     b10_match_pass: float = 0.95
     b10_match_fail: float = 0.80  # the FB-D1 harness floor (F3: >= 80 % MATCH under -7 s/min drift)
     b10_coverage_min: float = 0.90
     b10_recovery_warn_s: float = 120.0
-    b10_lock_overlap_fail_s: float = 12.0
+    b10_tick_s: float = 10.0  # the Fallback Profile housekeeping tick that re-evaluates and publishes B10
+    b10_lock_overlap_fail_s: float = 12.0  # one tick + the 2 s receive-time tolerance
     # polling
     block_b_gap_s: float = 150.0  # two missed 60 s polls
     block_b_fail_s: float = 600.0
@@ -151,6 +153,7 @@ class Ctx:
     gaps: list = field(default_factory=list)  # [(a, b)] evidence gaps inside the window
     unavailable: list = field(default_factory=list)  # [(a, b)] device-unavailable intervals
     restarts: list = field(default_factory=list)
+    boots: list = field(default_factory=list)  # every boot instant seen (the soak's own boot and any restart)
     reads: list = field(default_factory=list)
     episodes: list = field(default_factory=list)
     lease_intervals: list = field(default_factory=list)

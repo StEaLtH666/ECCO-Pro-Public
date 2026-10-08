@@ -83,11 +83,11 @@ All thresholds are fields of `model.Rules` and are printed in every report.
 | C-RTC-1 | No failed / aborted corrections | 3 or more failures, 2 consecutive, or 2 aborts. | Neither the counter nor result text / logs. A zero without a spanning counter. | Any failure or abort. | Counter +0, spanning the window. |
 | C-RTC-2 | Corrections follow the policy | A policy violation. | Reasons unknown (counter-only or pre-FB-D1 logs). | A manual correction, a window edge or an unchecked item. | Every check passes. |
 | C-RTC-3 | Rate and lock hold | More than 144 per 24 h, or lock > 100 s. | No lock-age evidence. | More than 48 per 24 h, or lock > 50 s. | Otherwise. |
-| C-RTC-4 (optional) | No stale-read false confirmation (A3) | - | Confirming reads missing. | Candidates found. | None. |
+| C-RTC-4 (optional) | No stale-read false confirmation (A3) | - | Confirming reads missing. | Background or precision candidates found. | None. |
 | C-RTC-5 (optional) | Stall detection accounted for | - | No stall evidence. | Counter < log lines, or a stall followed by a background correction. | Otherwise. |
-| C-B10-1 | B10 MATCH availability | MATCH < 80 % of observed time, or MATCH > 12 s under the RTC lock. | B10 coverage < 90 %. | MATCH < 95 %, any NOT MATCH, or a day < 80 %. | Otherwise. |
+| C-B10-1 | B10 MATCH availability | MATCH < 80 % of observed time, or MATCH under the RTC lock for longer than one 10 s refresh tick + 2 s (12 s). | B10 coverage < 90 %. | MATCH < 95 %, any NOT MATCH, or a day < 80 %. | Otherwise. |
 | C-B10-2 (optional) | Recovery after corrections | - | Release times unknown. | Release-to-MATCH > 120 s, or never. | Otherwise. |
-| C-POLL-1 | Read failures / online state | More than 50 failures per day, or offline > 10 min. | A counter missing or not spanning the window. | Any failure or offline period. | Both counters +0, spanning the window. |
+| C-POLL-1 | Read failures / online state | More than 50 failures per day, or offline > 10 min. | A counter missing or not spanning the window. | Any failure or offline period (except boot initialisation, below). | Both counters +0, spanning the window. |
 | C-POLL-2 | Block B continuity | A verifiable gap > 10 min. | No Last Configuration Update values. | A verifiable gap > 150 s. | Otherwise. |
 | C-POLL-3 (optional) | Block A/B/C errors | - | No firmware log. | Any error. | None. |
 | C-SAFE-1 | Write accounting | Modbus write lock > 180 s (leak). | RTC or other write counters missing. | Unexplained RTC writes (> 3 per correction), other write paths ran, write failures, protected-state or setting changes, or write lock > 60 s. | Otherwise. |
@@ -107,7 +107,26 @@ Each automatic correction is checked with `registry/rtc_policy.py`, the C++-exac
 - the 5 min gap;
 - for a background correction, the two confirming reads.
 
-A time within 2 s of a window edge is reported as `edge`, never as a violation.
+### Receive-time tolerance and designed latencies
+
+Home Assistant row times are when HA received a state, not the dongle's own clock. The analyser therefore applies one
+documented tolerance, `Rules.edge_tolerance_s` (2 s), at every policy boundary. It always keeps the raw timestamps and the raw
+gap in the output.
+
+- **Quiet windows:** a correction queued within 2 s of a quiet-window edge is reported as `edge` (WARNING: the HA time alone
+  cannot settle it; the firmware's `RTC policy:` log line can), never as a violation.
+- **5-min gap:** regular reads are 60 s apart, so a correction exactly five reads after the previous one sits on the 300 s
+  boundary that the firmware allows. A measured gap in [298, 300) s is `ok-tolerance` (consistent; counted in
+  `min_gap_within_tolerance`). Below 298 s it is a violation. On live data these gaps measured 299.932-299.997 s.
+- **B10 under the RTC lock:** B10 is re-evaluated and published by the 10 s housekeeping tick (`Rules.b10_tick_s`), so the
+  previous MATCH stays in force for up to one tick after the lock is taken. Up to 12 s is INFO `b10-refresh-lag`; longer is a
+  FAIL (a tick published MATCH under the lock).
+- **Boot initialisation:** at boot the firmware publishes Telemetry / Configuration Online = off until its first poll. An off
+  interval that starts at a boot and lasts no more than `Rules.boot_init_s` (180 s) is INFO `boot-initialisation`, not a read
+  fault. The boot itself is judged by C-CONT-1.
+
+Every report opens with a **triage** line: confirmed failures, confirmed warnings, suspected (inferred) findings and
+insufficient evidence, kept apart.
 
 ### Stale-read classification (C-RTC-4, A3)
 
@@ -124,6 +143,19 @@ non-stalled reads. The allowance is the measured drift for the PV level (night 0
 | `undetermined` | Not enough reads. |
 
 A candidate whose trend error is below the background threshold is a suspected no-op.
+
+**Precision corrections act on a single read** (no confirming pair), so they are classified separately against the trend of
+the reads before that one read:
+
+| Label | Meaning |
+|---|---|
+| `precision_stale_candidate` | The read jumps off the trend and the stall detector fired on it. |
+| `precision_offtrend_candidate` | Off-trend without a stall flag. |
+| `precision_stall_flag_only` | A stall flag, but the read is on-trend. |
+| `consistent_with_drift` | Genuine. |
+
+The A3 section adds two precision variants: V4 (veto a precision correction whose read is stall-flagged) and V5 (require a
+confirming read, as background corrections do).
 
 The A3 section replays three veto variants over the observed corrections:
 

@@ -502,6 +502,11 @@ def attach_reads(ctx: Ctx, eps: list, reads: list) -> None:
         v = [z for z in reads if z.verify and ep.t_start and ep.t_start < z.t <= (ep.t_end or ep.t_start) + timedelta(seconds=2)]
         a["verify_read"] = _rd(v[-1]) if v else None
         ep._q, ep._p, ep._trend = q, p, trend
+        # a precision correction acts on ONE read (no confirming pair): its trend is the reads before the queue read itself
+        tq_from = q.t - timedelta(seconds=ctx.rules.trend_window_s)
+        if prev_end is not None:
+            tq_from = max(tq_from, prev_end)
+        ep._trend_q = [z for z in reg if tq_from <= z.t < q.t and not z.stall and not z.computed_stall]
         prev_end = ep.t_end or prev_end
 
 
@@ -512,6 +517,65 @@ def _rd(z: Read | None):
             "computed_stall": z.computed_stall, "ntp_advance_s": z.ntp_adv, "inverter_advance_s": z.inv_adv, "ref": z.ref}
 
 
+PRECISION_CANDIDATES = ("precision_stale_candidate", "precision_offtrend_candidate")
+
+
+def classify_precision(ctx: Ctx, ep: Episode, pv) -> None:
+    """A precision correction is queued on a SINGLE read in [b-120 s, b-60 s) (no confirmation), so one stale read is enough.
+    Labels (all INFERRED): precision_stale_candidate (the read jumps off the trend AND the stall detector fired on it),
+    precision_offtrend_candidate (off-trend, no stall flag), precision_stall_flag_only (a stall flag but on-trend),
+    consistent_with_drift, undetermined (no trend reads)."""
+    a = ep.a
+    q, trend = getattr(ep, "_q", None), getattr(ep, "_trend_q", [])
+    if q is None:
+        a["classification"] = "undetermined"
+        a["why"] = "the precision read is not in the evidence"
+        return
+    rate = max_rate(ctx, pv)
+    stall_q = bool(q.stall) or bool(q.computed_stall)
+    a["stall_on_queue_read"] = stall_q
+    a["max_drift_s_per_min"] = rate
+    facts = []
+    if q.stall:
+        facts.append(f"stall detector fired on the precision read ({q.stall_basis})")
+    elif q.computed_stall:
+        facts.append(f"the stall rule recomputed from the reads fires on the precision read (inverter +{q.inv_adv} s vs NTP "
+                     f"+{q.ntp_adv} s)")
+    if not trend:
+        a["classification"] = "precision_stall_flag_only" if stall_q else "undetermined"
+        a["why"] = "no trend reads before the precision read"
+        a["facts"] = facts
+        a["suspected_noop"] = False
+        return
+    last3 = trend[-3:]
+    base = statistics.median(z.err for z in last3)
+    tb = last3[len(last3) // 2].t
+    allow = ctx.rules.staleness_allowance_s + rate * max(0.0, (q.t - tb).total_seconds()) / 60
+    jump = abs(q.err - base) > allow
+    a["trend_error_s"] = base
+    a["trend_allowance_s"] = round(allow, 1)
+    a["read_vs_trend_s"] = q.err - base
+    if jump:
+        facts.append(f"the precision read ({q.err:+d} s) is {q.err - base:+.0f} s away from the trend ({base:+.0f} s), beyond the "
+                     f"{allow:.1f} s allowance")
+    if jump and stall_q:
+        cls = "precision_stale_candidate"
+    elif jump:
+        cls = "precision_offtrend_candidate"
+    elif stall_q:
+        cls = "precision_stall_flag_only"
+    else:
+        cls = "consistent_with_drift"
+        facts.append(f"the precision read follows the trend ({base:+.0f} s) within the drift + staleness allowance")
+    a["classification"] = cls
+    a["facts"] = facts
+    thr, _ = threshold_at(ctx, ep.t_start)
+    need = RP.precision_threshold(RP.clamp_threshold(thr)) if thr is not None else RP.kPrecisionMinS
+    a["suspected_noop"] = bool(cls in PRECISION_CANDIDATES and abs(base) < need)
+    if a["suspected_noop"] and ep.residual is not None:
+        a["estimated_effective_correction_s"] = ep.residual - base
+
+
 def classify_pair(ctx: Ctx, ep: Episode) -> None:
     a = ep.a
     q, p, trend = getattr(ep, "_q", None), getattr(ep, "_p", None), getattr(ep, "_trend", [])
@@ -519,6 +583,9 @@ def classify_pair(ctx: Ctx, ep: Episode) -> None:
     a["daylight"] = is_day
     a["daylight_basis"] = dbasis
     a["pv_w"] = pv
+    if ep.reason == "precision":
+        classify_precision(ctx, ep, pv)
+        return
     if ep.reason != "background":
         a["classification"] = "not-applicable"
         return
@@ -662,9 +729,18 @@ def policy_check(ctx: Ctx, ep: Episode, eps: list) -> None:
                                "no Free Power / Dump to Grid lease active" if lease_ev else "lease state not in the evidence"))
         if reason == "background":
             prev = [e for e in eps if e is not ep and e.kind == "auto" and e.t_start and e.t_start < t]
-            if prev and (t - prev[-1].t_start).total_seconds() < RP.kMinGapMs / 1000:
-                checks.append(("min-gap", "violation", f"{(t - prev[-1].t_start).total_seconds():.0f} s after correction "
-                               f"#{prev[-1].idx}"))
+            gap = (t - prev[-1].t_start).total_seconds() if prev else None
+            need = RP.kMinGapMs / 1000
+            if gap is not None and gap < need - ctx.rules.edge_tolerance_s:
+                checks.append(("min-gap", "violation", f"{gap:.3f} s after correction #{prev[-1].idx} (minimum {need:.0f} s, "
+                               f"tolerance {ctx.rules.edge_tolerance_s:.0f} s)"))
+            elif gap is not None and gap < need:
+                # Regular reads are 60 s apart, so a correction exactly 5 reads after the previous one sits on the 300 s
+                # boundary that the firmware allows (since_last_auto_ms >= kMinGapMs, measured on its own clock); Home
+                # Assistant receive times add millisecond-to-second jitter (live: 299.932-299.997 s). Within the documented
+                # Rules.edge_tolerance_s this is consistent with the policy, never a violation; the raw gap is kept.
+                checks.append(("min-gap", "ok-tolerance", f"{gap:.3f} s after correction #{prev[-1].idx}: on the {need:.0f} s "
+                               f"boundary within the {ctx.rules.edge_tolerance_s:.0f} s receive-time tolerance"))
             else:
                 checks.append(("min-gap", "ok", "at least 5 min after the previous automatic correction"))
             q, p = getattr(ep, "_q", None), getattr(ep, "_p", None)
@@ -797,7 +873,24 @@ def a3_what_if(ctx: Ctx, eps: list, reads: list) -> dict:
                                 "would_hold_drift_consistent": sum(1 for e in genuine if f(e)),
                                 "held_candidate_ids": [e.idx for e in cands if f(e)],
                                 "held_genuine_ids": [e.idx for e in genuine if f(e)]})
+    prec = [e for e in eps if e.reason == "precision" and e.a.get("classification")]
+    p_cands = [e for e in prec if e.a["classification"] in PRECISION_CANDIDATES]
+    p_genuine = [e for e in prec if e.a["classification"] == "consistent_with_drift"]
+    pvars = [("V4 precision stall veto", "hold a single-read precision correction when the stall detector fired on its read",
+              lambda e: bool(e.a.get("stall_on_queue_read"))),
+             ("V5 precision confirm-read", "require a second read (as background does) before a precision correction: holds "
+              "every candidate whose read jumps off the trend", lambda e: e.a["classification"] in PRECISION_CANDIDATES)]
+    out["precision"] = {
+        "corrections": len(prec), "candidates": len(p_cands), "drift_consistent": len(p_genuine),
+        "candidate_ids": [e.idx for e in p_cands],
+        "variants": [{"name": n, "rule": d, "would_hold_candidates": sum(1 for e in p_cands if f(e)),
+                      "would_hold_drift_consistent": sum(1 for e in p_genuine if f(e))} for n, d, f in pvars],
+    }
     rec = []
+    if p_cands:
+        rec.append(f"{len(p_cands)} of {len(prec)} precision correction(s) acted on a read that jumps off the trend "
+                   f"({sum(1 for e in p_cands if e.a.get('stall_on_queue_read'))} with the stall detector firing on it): the "
+                   "single-read precision path is also exposed to stale reads, and a background-only A3 veto would not cover it.")
     if not bg:
         rec.append("No background correction is in the evidence, so the soak gives no data for or against A3.")
     elif not cands:
@@ -908,7 +1001,8 @@ def analyse(ctx: Ctx) -> dict:
             "aborts": len([e for e in de if e.outcome == "aborted"]),
             "night_background": len([e for e in de if e.reason == "background" and e.a.get("daylight") is False]),
             "stale_candidates": len([e for e in de if e.a.get("classification") in ("stale_first_read_candidate",
-                                                                                   "false_confirmation_candidate")]),
+                                                                                   "false_confirmation_candidate")
+                                      + PRECISION_CANDIDATES]),
         })
     hours = [0] * 24
     for e in in_win:
@@ -999,6 +1093,7 @@ def analyse(ctx: Ctx) -> dict:
                           CONFIRMED if (violations or (v == PASS)) else (NONE if v == INSUFFICIENT else MIXED),
                           f"{len(auto)} automatic correction(s): " + ", ".join(f"{k} {n}" for k, n in sorted(by_reason.items())),
                           True, reasons, {"by_reason": by_reason, "violations": len(violations), "unchecked_or_edge": len(pol_warn),
+                                          "min_gap_within_tolerance": sum(1 for e in in_win for c in e.a.get("policy", {}).get("checks", []) if c["result"] == "ok-tolerance"),
                                           "manual": len(ep_manual)}, [ref for e in violations for ref in e.refs[:2]]))
     # C-RTC-3
     reasons = []
@@ -1040,12 +1135,21 @@ def analyse(ctx: Ctx) -> dict:
     # C-RTC-4 stale-read false confirmations (A3 evidence)
     bg = [e for e in in_win if e.reason == "background"]
     undetermined = [e for e in bg if e.a.get("classification") == "undetermined"]
+    prec = [e for e in in_win if e.reason == "precision"]
+    p_cands = [e for e in prec if e.a.get("classification") in PRECISION_CANDIDATES]
+    for e in p_cands:
+        ctx.event(e.t_start, "rtc", "WARNING", e.a["classification"].replace("_", "-"),
+                  f"precision correction #{e.idx} acted on a single read of {e.a['queue_read']['error_s']:+d} s against a trend of "
+                  f"{e.a.get('trend_error_s', 0):+.0f} s" + (" (suspected no-op)" if e.a.get("suspected_noop") else ""),
+                  INFERRED, e.refs[:6], facts=e.a.get("facts", []))
     reasons = []
-    if cands:
+    if cands or p_cands:
         v, basis = WARNING, INFERRED
         reasons.append(f"{len(cands)} of {len(bg)} background correction(s) look like stale-read false confirmations "
                        f"({sum(1 for e in cands if e.a['classification'] == 'stale_first_read_candidate')} with a stall on the "
-                       f"first read); {len(noops)} suspected no-op(s); {len(night_bg)} background correction(s) at night")
+                       f"first read); {len(noops)} suspected no-op(s) in total; {len(night_bg)} background correction(s) at night")
+        if p_cands:
+            reasons.append(f"{len(p_cands)} of {len(prec)} single-read precision correction(s) acted on an off-trend read")
     elif bg and len(undetermined) == len(bg):
         v, basis = INSUFFICIENT, NONE
         reasons.append("background corrections happened but their confirming reads are not in the evidence")
@@ -1057,8 +1161,10 @@ def analyse(ctx: Ctx) -> dict:
         reasons.append(f"{len(bg)} background correction(s), none with a stale-read signature" if bg else
                        "no background correction in the window")
     crit.append(Criterion("C-RTC-4", "rtc", "No stale-read false confirmations (A3 watch item)", v, basis,
-                          f"{len(cands)} candidate(s), {len(noops)} suspected no-op(s)", False, reasons,
-                          {"background": len(bg), "candidates": len(cands), "suspected_noops": len(noops),
+                          f"{len(cands)} background + {len(p_cands)} precision candidate(s), {len(noops)} suspected no-op(s)",
+                          False, reasons,
+                          {"background": len(bg), "candidates": len(cands), "precision": len(prec),
+                           "precision_candidates": len(p_cands), "suspected_noops": len(noops),
                            "night_background": len(night_bg), "undetermined": len(undetermined)},
                           [ref for e in cands for ref in e.refs[:2]]))
 

@@ -52,6 +52,14 @@ def markdown(rep: dict) -> str:
         L.append(f"  - `{Path(i['path']).name}` ({i['format']}, sha256 `{i['sha256'][:16]}...`): {i['accepted']} accepted / "
                  f"{i['rejected']} rejected of {i['rows']} rows, {_t(i['first'])} to {_t(i['last'])}")
     L.append("")
+    t = rep.get("triage")
+    if t:
+        L.append("**Triage** - confirmed failures: " + (", ".join(t["confirmed_failures"]) or "none")
+                 + "; confirmed warnings: " + (", ".join(t["confirmed_warnings"]) or "none")
+                 + "; suspected (inferred, not proven): " + (", ".join(t["suspected_inferred"]) or "none")
+                 + f" ({t['suspected_events']} inferred event(s)); insufficient evidence: "
+                 + (", ".join(t["insufficient_evidence"]) or "none") + ".")
+        L.append("")
     L.append("## 1. Acceptance summary")
     L.append("")
     L += _table(["Criterion", "Verdict", "Basis", "Confidence", "Required", "Summary"],
@@ -208,6 +216,15 @@ def markdown(rep: dict) -> str:
     L += _table(["Variant", "Rule", "Holds candidates", "Holds drift-consistent"],
                 [[x["name"], x["rule"], f"{x['would_hold_candidates']}/{a3['candidates']}",
                   f"{x['would_hold_drift_consistent']}/{a3['drift_consistent']}"] for x in a3["variants"]])
+    pr = a3.get("precision")
+    if pr:
+        L.append("")
+        L.append(f"Precision corrections (single read, no confirmation): {pr['corrections']}; off-trend candidates "
+                 f"{pr['candidates']}; drift-consistent {pr['drift_consistent']}.")
+        L.append("")
+        L += _table(["Variant", "Rule", "Holds candidates", "Holds drift-consistent"],
+                    [[x["name"], x["rule"], f"{x['would_hold_candidates']}/{pr['candidates']}",
+                      f"{x['would_hold_drift_consistent']}/{pr['drift_consistent']}"] for x in pr["variants"]])
     L.append("")
     for x in a3["recommendations"]:
         L.append(f"- {x}")

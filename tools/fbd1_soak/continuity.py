@@ -224,6 +224,7 @@ def analyse(ctx: Ctx) -> dict:
     soak_boot = [c for c in clusters if ctx.start - timedelta(seconds=r.boot_grace_s) <= c["t"] <= grace_end]
     unexpected = [c for c in clusters if grace_end < c["t"] <= ctx.end]
     ctx.restarts = unexpected
+    ctx.boots = sorted(c["t"] for c in soak_boot + unexpected)
     for c in unexpected:
         ctx.event(c["t"], "continuity", "FAIL", "unexpected-restart",
                   "dongle restarted during the soak (" + "; ".join(c["details"][:4]) + ")", CONFIRMED, c["refs"],

@@ -84,6 +84,20 @@ def analyse(ctx: Ctx) -> dict:
     cfg = counter_delta(ev.get("configuration_failures"), ctx.start, ctx.end)
     cfg_off, cfg_unav = off_intervals(ctx, "configuration_online")
     tel_off, tel_unav = off_intervals(ctx, "telemetry_online")
+    # At boot the firmware publishes Telemetry / Configuration Online = off until its first successful poll. An off
+    # interval that starts at a boot (within 30 s before it to Rules.boot_init_s after it) and is no longer than
+    # Rules.boot_init_s is that initialisation, not a read fault (a restart itself is judged by C-CONT-1).
+    def boot_init(iv):
+        a, b = iv
+        return (b - a).total_seconds() <= r.boot_init_s and any(
+            -30 <= (a - t).total_seconds() <= r.boot_init_s for t in ctx.boots)
+    boot_off = [iv for iv in cfg_off + tel_off if boot_init(iv)]
+    cfg_off = [iv for iv in cfg_off if not boot_init(iv)]
+    tel_off = [iv for iv in tel_off if not boot_init(iv)]
+    for a, b in boot_off:
+        ctx.event(a, "polling", "INFO", "boot-initialisation",
+                  f"Online state off for {fmt_duration((b - a).total_seconds())} right after a boot, until the first poll",
+                  CONFIRMED)
     ctx.config_offline = cfg_off
     bb = cadence(ctx, "last_configuration_update", r.block_b_gap_s, r.catchup_early_s)
     tc = cadence(ctx, "last_telemetry_update", r.telemetry_gap_s, None)
@@ -139,6 +153,8 @@ def analyse(ctx: Ctx) -> dict:
         v = PASS
     if cfg_off or tel_off:
         reasons.append(f"Configuration Online off {len(cfg_off)}x, Telemetry Online off {len(tel_off)}x, longest {fmt_duration(worst_off)}")
+    if boot_off:
+        reasons.append(f"{len(boot_off)} off interval(s) at boot before the first poll (initialisation, not counted)")
     crit.append(Criterion("C-POLL-1", "polling", "Modbus read failures and online state", v,
                           CONFIRMED if (tel.available or cfg.available) else NONE,
                           f"telemetry failures {num(tel.delta) if tel.available else 'unavailable'}, configuration failures "
@@ -146,7 +162,7 @@ def analyse(ctx: Ctx) -> dict:
                           {"telemetry_failures": tel.delta, "configuration_failures": cfg.delta,
                            "telemetry_counter_available": tel.available, "configuration_counter_available": cfg.available,
                            "configuration_offline_intervals": len(cfg_off), "telemetry_offline_intervals": len(tel_off),
-                           "longest_offline_s": worst_off}))
+                           "longest_offline_s": worst_off, "boot_initialisation_intervals": len(boot_off)}))
     reasons = []
     real = [g for g in bb["gaps"] if not g["unverifiable"]]
     if not bb["stamps"]:
