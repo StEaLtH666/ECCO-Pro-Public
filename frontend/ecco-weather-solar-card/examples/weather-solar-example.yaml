@@ -1,0 +1,25 @@
+# ECCO Weather & Solar card - example Lovelace configuration (read-only card).
+# Every entity id below is the default; list only the ones that differ on your installation.
+type: custom:ecco-weather-solar-card
+title: Weather & Solar
+hourly_hours: 12
+daily_days: 5
+show_accuracy: true
+show_insights: true
+entities:
+  weather: weather.forecast_home
+  sun: sun.sun
+  blend_today: sensor.ecco_solar_forecast_today
+  blend_remaining: sensor.ecco_solar_forecast_remaining
+  blend_tomorrow: sensor.ecco_solar_forecast_tomorrow
+  solcast_today: sensor.solcast_pv_forecast_forecast_today
+  solcast_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
+  forecast_solar_today: sensor.energy_production_today
+  forecast_solar_tomorrow: sensor.energy_production_tomorrow
+  pv_power: sensor.ecco_pv_power
+  pv_today: "sensor.ecco_clock_dongle_ecco_day_pv_energy"
+  pv_energy_statistic: "sensor.ecco_clock_dongle_ecco_total_pv_energy"
+stale:
+  weather_hours: 3
+  solcast_hours: 24
+  forecast_solar_hours: 6

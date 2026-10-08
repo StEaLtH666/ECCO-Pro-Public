@@ -1,0 +1,26 @@
+{
+  "name": "ecco-weather-solar-card",
+  "version": "0.1.0",
+  "description": "A read-only Home Assistant Lovelace card: current weather, hourly and daily forecast, sun times and the ECCO blended solar forecast with an hourly solar chart.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "weather",
+    "solar",
+    "forecast",
+    "read-only"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  }
+}
