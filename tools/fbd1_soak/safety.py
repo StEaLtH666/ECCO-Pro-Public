@@ -82,12 +82,22 @@ def analyse(ctx: Ctx) -> dict:
                       f"fewer RTC write attempts (+{int(att.delta or 0)}) than verified corrections (+{int(ver.delta or 0)})",
                       CONFIRMED)
     other_writes = {k: C[k].delta for k in ("manual_write_attempts", "fp_start_attempts", "dtg_start_attempts") if C[k].available}
+    unattributed_writes = 0
+    attributed_events = []
     for k, d in other_writes.items():
         if d:
             for t, amount, ref in C[k].increments:
-                ctx.event(t, "safety", "WARNING", "write-operation",
-                          f"{catalogue.BY_KEY[k].firmware_name} +{int(amount)}: an inverter write path ran during the soak "
-                          "(owner must attribute it)", CONFIRMED, [ref])
+                note = ctx.attributed(t, "write-operation")
+                if note:
+                    attributed_events.append(t)
+                    ctx.event(t, "safety", "INFO", "write-operation-attributed",
+                              f"{catalogue.BY_KEY[k].firmware_name} +{int(amount)}: owner-confirmed authorised ({note})",
+                              CONFIRMED, [ref])
+                else:
+                    unattributed_writes += int(amount)
+                    ctx.event(t, "safety", "WARNING", "write-operation",
+                              f"{catalogue.BY_KEY[k].firmware_name} +{int(amount)}: an inverter write path ran during the soak "
+                              "(owner must attribute it)", CONFIRMED, [ref])
     fails = {k: C[k].delta for k in ("manual_write_failures", "fp_failures", "dtg_failures") if C[k].available}
     for k, d in fails.items():
         if d:
@@ -126,9 +136,18 @@ def analyse(ctx: Ctx) -> dict:
     prot = []
     for key in catalogue.PROTECTED_KEYS + catalogue.SETTING_KEYS:
         for t, a, b, ref in _changes(ctx, key):
-            prot.append({"time": stamp(t), "entity": catalogue.BY_KEY[key].firmware_name, "from": a, "to": b, "ref": ref})
-            ctx.event(t, "safety", "WARNING", "protected-state-change" if key in catalogue.PROTECTED_KEYS else "setting-change",
-                      f"{catalogue.BY_KEY[key].firmware_name}: {a!r} -> {b!r}", CONFIRMED, [ref])
+            code = "protected-state-change" if key in catalogue.PROTECTED_KEYS else "setting-change"
+            note = ctx.attributed(t, code)
+            prot.append({"time": stamp(t), "entity": catalogue.BY_KEY[key].firmware_name, "from": a, "to": b, "ref": ref,
+                         "attributed": note})
+            if note:
+                attributed_events.append(t)
+                ctx.event(t, "safety", "INFO", code + "-attributed",
+                          f"{catalogue.BY_KEY[key].firmware_name}: {a!r} -> {b!r}: owner-confirmed authorised ({note})",
+                          CONFIRMED, [ref])
+            else:
+                ctx.event(t, "safety", "WARNING", code, f"{catalogue.BY_KEY[key].firmware_name}: {a!r} -> {b!r}", CONFIRMED, [ref])
+    prot_open = [x for x in prot if not x["attributed"]]
 
     # --- supervision / durable state / health
     sup = {}
@@ -181,15 +200,19 @@ def analyse(ctx: Ctx) -> dict:
         if v == PASS:
             v = INSUFFICIENT
     if any(other_writes.values()):
-        v = WARNING if v in (PASS,) else v
+        if unattributed_writes:
+            v = WARNING if v in (PASS,) else v
         reasons.append("other write paths ran: " + ", ".join(f"{catalogue.BY_KEY[k].firmware_name} +{int(d)}"
-                                                             for k, d in other_writes.items() if d))
+                                                             for k, d in other_writes.items() if d)
+                       + (f" ({unattributed_writes} not attributed)" if unattributed_writes else " (all owner-attributed)"))
     if any(fails.values()):
         reasons.append("write failures: " + ", ".join(f"{catalogue.BY_KEY[k].firmware_name} +{int(d)}" for k, d in fails.items() if d))
         v = WARNING if v == PASS else v
-    if prot:
-        reasons.append(f"{len(prot)} protected control state / setting change(s) (see the events)")
+    if prot_open:
+        reasons.append(f"{len(prot_open)} protected control state / setting change(s) not attributed (see the events)")
         v = WARNING if v == PASS else v
+    if len(prot) > len(prot_open):
+        reasons.append(f"{len(prot) - len(prot_open)} protected / setting change(s) owner-attributed")
     if wl_max is not None and wl_max > r.write_lock_leak_s:
         v = FAIL
         reasons.append(f"Modbus write lock held {wl_max:.0f} s (leak > {r.write_lock_leak_s:.0f} s)")
@@ -202,7 +225,9 @@ def analyse(ctx: Ctx) -> dict:
                           f"paths {sum(int(d or 0) for d in other_writes.values()) if other_writes else 'unavailable'}", True,
                           reasons, {"rtc_write_attempts": att.delta, "episode_attempts": ep_attempts, "unexplained_rtc_writes": unexplained,
                                     "other_writes": other_writes, "write_failures": fails, "write_lock_max_s": wl_max,
-                                    "protected_changes": len(prot)}))
+                                    "protected_changes": len(prot), "protected_changes_unattributed": len(prot_open),
+                                    "unattributed_other_writes": unattributed_writes,
+                                    "attributed_events": len(attributed_events)}))
     # C-SAFE-2 lease / ownership
     reasons = []
     lease_ev = any(ev.has(k) for k in ("free_power_active", "dump_active", "free_power_op", "dump_op"))

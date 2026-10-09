@@ -119,11 +119,11 @@ LIMITATIONS = [
 
 
 def run(ev: Evidence, *, start: datetime = DEFAULT_SOAK_START, days: float = DEFAULT_SOAK_DAYS, end: datetime | None = None,
-        rules: Rules | None = None, now: datetime | None = None, inputs_note: str = "") -> dict:
+        rules: Rules | None = None, now: datetime | None = None, inputs_note: str = "", attributions=None) -> dict:
     rules = rules or Rules()
     ev.finalise()
     end = end or (start + timedelta(days=days))
-    ctx = Ctx(ev, rules, start, end, as_of=now)
+    ctx = Ctx(ev, rules, start, end, as_of=now, attributions=list(attributions or []))
     ctx.days = make_days(start, end)
     cont = continuity.analyse(ctx)
     r = rtc.analyse(ctx)
@@ -189,6 +189,8 @@ def run(ev: Evidence, *, start: datetime = DEFAULT_SOAK_START, days: float = DEF
             "diagnostics_total": len(ev.diagnostics),
             "note": inputs_note,
         },
+        "attributions": [{"from": stamp(a["from"]), "to": stamp(a["to"]), "codes": a.get("codes") or [],
+                          "note": a.get("note", "")} for a in ctx.attributions],
         "rules": rules.to_dict(),
         "limitations": LIMITATIONS,
     }

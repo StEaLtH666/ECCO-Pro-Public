@@ -57,6 +57,9 @@ def main(argv=None) -> int:
     ap.add_argument("--rules", help="JSON file overriding decision thresholds (keys of the report's `rules` block)")
     ap.add_argument("--format", choices=("ha-json", "csv", "log"), help="force the input format for every input")
     ap.add_argument("--verdict-exit-code", action="store_true", help="exit 0/10/20/30 for PASS/WARNING/INSUFFICIENT/FAIL")
+    ap.add_argument("--attributions", help="JSON list of owner-confirmed activity windows: "
+                    '[{"from": ISO, "to": ISO, "codes": ["write-operation", "setting-change"], "note": "..."}]; matching '
+                    "write / setting events become INFO and are reported as attributed (the raw rows are unchanged)")
     a = ap.parse_args(argv)
     try:
         start = parse_ts(a.start, naive_is_local=True) if a.start else DEFAULT_SOAK_START
@@ -89,7 +92,16 @@ def main(argv=None) -> int:
             return 2
         info = ingest.load(path, ev, overrides=overrides, fmt=a.format, log_date=d)
         print(f"read {path.name}: {info.fmt}, {info.accepted} accepted, {info.rejected} rejected of {info.rows} rows")
-    rep = run(ev, start=start, days=a.days, end=end, rules=rules, now=now)
+    attributions = []
+    if a.attributions:
+        try:
+            for x in json.loads(Path(a.attributions).read_text(encoding="utf-8")):
+                attributions.append({"from": parse_ts(x["from"], naive_is_local=True), "to": parse_ts(x["to"], naive_is_local=True),
+                                     "codes": list(x.get("codes") or []), "note": str(x.get("note", ""))})
+        except (OSError, ValueError, KeyError, TypeError, TimeParseError) as exc:
+            print(f"error: bad --attributions file: {exc}", file=sys.stderr)
+            return 2
+    rep = run(ev, start=start, days=a.days, end=end, rules=rules, now=now, attributions=attributions)
     files = write_all(rep, a.out)
     print(summary_line(rep))
     for k, v in files.items():

@@ -154,6 +154,7 @@ class Ctx:
     unavailable: list = field(default_factory=list)  # [(a, b)] device-unavailable intervals
     restarts: list = field(default_factory=list)
     boots: list = field(default_factory=list)  # every boot instant seen (the soak's own boot and any restart)
+    attributions: list = field(default_factory=list)  # owner-confirmed activity: [{"from", "to", "codes", "note"}]
     reads: list = field(default_factory=list)
     episodes: list = field(default_factory=list)
     lease_intervals: list = field(default_factory=list)
@@ -167,6 +168,15 @@ class Ctx:
         e = Event(t, area, severity, code, summary, basis, list(refs or []), details)
         self.events.append(e)
         return e
+
+    def attributed(self, t: datetime | None, code: str) -> str | None:
+        """The owner's note when an event of `code` at `t` falls inside an owner-confirmed attribution window."""
+        if t is None:
+            return None
+        for a in self.attributions:
+            if a["from"] <= t <= a["to"] and (not a.get("codes") or code in a["codes"]):
+                return a.get("note") or "owner-confirmed"
+        return None
 
     def day_of(self, t: datetime) -> Day | None:
         for d in self.days:

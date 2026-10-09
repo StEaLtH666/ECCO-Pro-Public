@@ -17,6 +17,12 @@ Other options:
 - `--entity KEY=entity_id`: maps a renamed entity to its catalogue key.
 - `--rules rules.json`: overrides decision thresholds.
 - `--verdict-exit-code`: exits with 0 / 10 / 20 / 30 for PASS / WARNING / INSUFFICIENT_EVIDENCE / FAIL.
+- `--attributions attributions.json`: owner-confirmed activity windows, given as
+  `[{"from": ISO, "to": ISO, "codes": ["write-operation", "setting-change"], "note": "..."}]`.
+  - A write or setting event inside a window, of a listed code, becomes INFO `*-attributed`, and it no longer makes
+    C-SAFE-1 a WARNING.
+  - The raw rows are unchanged, and every window is echoed in the report under `attributions`.
+  - An attribution never hides a policy, lease or ownership violation: C-RTC-2 and C-SAFE-2 ignore it.
 
 ## Outputs
 
@@ -77,9 +83,9 @@ All thresholds are fields of `model.Rules` and are printed in every report.
 | Id | Criterion | FAIL | INSUFFICIENT | WARNING | PASS |
 |---|---|---|---|---|---|
 | C-CONT-1 | No unexpected restart | A confirmed restart signal after start + 10 min. | No witness spans the window (unavailable periods are then listed as possible restarts). | - | One boot nonce, or the heartbeat count never resets, across the window. |
-| C-CONT-2 | Evidence coverage | - | Coverage < 90 %, a gap > 2 h, or a day < 50 %. | Coverage < 98 %, a gap > 15 min, a device-unavailable period, or no periodic witness. | Otherwise. |
+| C-CONT-2 | Evidence coverage | - | Coverage < 90 %, a gap > 2 h, or a day < 50 %. | Coverage < 98 %, a gap > 15 min, a device-unavailable period outside a boot, or no periodic witness. | Otherwise. |
 | C-CONT-3 | Evidence reaches the scheduled end | - | Evidence starts after the start or ends before the end (more than 5 min). | - | Evidence spans the window. |
-| C-CONT-4 (optional) | Timestamp / clock integrity | - | No NTP Time rows. | NTP-vs-HA offset jumps > 5 s, rejected rows or out-of-order rows. | Otherwise. |
+| C-CONT-4 (optional) | Timestamp / clock integrity | - | No NTP Time rows. | A clock step (2 or more consecutive NTP Time rows more than 5 s off the median), rejected rows, or out-of-order rows. A single late row is INFO `late-delivery`. | Otherwise. |
 | C-RTC-1 | No failed / aborted corrections | 3 or more failures, 2 consecutive, or 2 aborts. | Neither the counter nor result text / logs. A zero without a spanning counter. | Any failure or abort. | Counter +0, spanning the window. |
 | C-RTC-2 | Corrections follow the policy | A policy violation. | Reasons unknown (counter-only or pre-FB-D1 logs). | A manual correction, a window edge or an unchecked item. | Every check passes. |
 | C-RTC-3 | Rate and lock hold | More than 144 per 24 h, or lock > 100 s. | No lock-age evidence. | More than 48 per 24 h, or lock > 50 s. | Otherwise. |

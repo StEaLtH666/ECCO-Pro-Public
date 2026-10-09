@@ -487,6 +487,9 @@ check("unexpected restart: Telemetry Online off for 40 s right after the boot is
       crit(rep, "C-POLL-1")["metrics"]["telemetry_offline_intervals"] == 0
       and crit(rep, "C-POLL-1")["metrics"]["boot_initialisation_intervals"] == 1
       and any(e["code"] == "boot-initialisation" for e in rep["informational_events"]), json.dumps(crit(rep, "C-POLL-1")))
+check("unexpected restart: the unavailable period at the reboot is attributed to the boot (C-CONT-1), not to coverage",
+      any("at a boot" in x for x in crit(rep, "C-CONT-2")["reasons"])
+      and not any("outside a boot" in x for x in crit(rep, "C-CONT-2")["reasons"]), json.dumps(crit(rep, "C-CONT-2")["reasons"]))
 check("unexpected restart: a FAIL event with references", any(e["code"] == "unexpected-restart" and e["severity"] == "FAIL"
                                                                and e["refs"] for e in rep["suspicious_events"]))
 
@@ -672,6 +675,19 @@ rep = analyse(ck)
 check("clock discontinuity: one NTP-vs-HA jump of 120 s found, C-CONT-4 WARNING",
       verdicts(rep)["C-CONT-4"] == "WARNING" and len(rep["areas"]["continuity"]["clock"]["discontinuities"]) == 1
       and rep["areas"]["continuity"]["clock"]["discontinuities"][0]["offset_s"] == 120)
+# one late Home Assistant row (the next row is normal) is a late delivery, not a clock event
+lk1 = S.Dongle(hours=24)
+lk1.run()
+eid1 = lk1.eid("ntp_time")
+late_t = lk1.at_bst(0, 23, 50, 0) + timedelta(hours=3)
+lk1.rows[eid1] = [(t + timedelta(seconds=9) if t == late_t else t, s_) for t, s_ in lk1.rows[eid1]]
+rep_l = analyse(lk1)
+check("clock: ONE row received 9 s late is an INFO late delivery, not a clock discontinuity; C-CONT-4 PASS",
+      verdicts(rep_l)["C-CONT-4"] == "PASS" and not rep_l["areas"]["continuity"]["clock"]["discontinuities"]
+      and len(rep_l["areas"]["continuity"]["clock"]["late_deliveries"]) == 1
+      and any(e["code"] == "late-delivery" for e in rep_l["informational_events"]), json.dumps(rep_l["areas"]["continuity"]["clock"]))
+check("clock: the 30-min 120 s shift is ONE clock step of 30 consecutive samples",
+      rep["areas"]["continuity"]["clock"]["discontinuities"][0]["samples"] == 30)
 with tempfile.TemporaryDirectory() as td:
     lines = ck.long_csv().splitlines()
     pth = Path(td) / "ooo.csv"
@@ -778,6 +794,21 @@ check("lease: the large (-400 s) correction inside the same lease is exempt (no 
       not any(c["check"] == "lease-hold" for c in next(e for e in episodes(rep) if e["reason"] == "large")["analysis"]["policy"]["checks"]))
 check("lease: the Free Power start is reported as a write operation needing attribution",
       any(e["code"] == "write-operation" for e in rep["suspicious_events"]))
+ev_a = Evidence()
+ingest.load_object(ls.ha_history(), ev_a)
+att = [{"from": l0 - timedelta(minutes=2), "to": l0 + timedelta(minutes=2), "codes": ["write-operation"], "note": "owner test"}]
+rep_a = run(ev_a, start=S.START, days=2, now=S.START + timedelta(days=3), attributions=att)
+m_a = crit(rep_a, "C-SAFE-1")["metrics"]
+check("attributions: an owner-confirmed write inside the window becomes INFO `write-operation-attributed`; nothing else changes",
+      not any(e["code"] == "write-operation" for e in rep_a["suspicious_events"])
+      and any(e["code"] == "write-operation-attributed" for e in rep_a["informational_events"])
+      and m_a["unattributed_other_writes"] == 0 and m_a["attributed_events"] == 1
+      and verdicts(rep_a)["C-SAFE-2"] == "FAIL" and rep_a["attributions"][0]["note"] == "owner test", json.dumps(m_a))
+att_wrong = [{"from": l0 + timedelta(hours=2), "to": l0 + timedelta(hours=3), "codes": ["write-operation"], "note": "x"}]
+rep_w = run(ev_a, start=S.START, days=2, now=S.START + timedelta(days=3), attributions=att_wrong)
+check("attributions: a window that does not cover the event attributes nothing",
+      any(e["code"] == "write-operation" for e in rep_w["suspicious_events"])
+      and crit(rep_w, "C-SAFE-1")["metrics"]["unattributed_other_writes"] == 1)
 
 # --- the 300 s minimum gap: HA receive-time jitter at the boundary is tolerated (+-2 s), a real short gap is not ------------------
 def gap_scenario(shift_s):

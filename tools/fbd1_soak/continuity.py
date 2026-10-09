@@ -172,7 +172,7 @@ def nonce_witness(ctx: Ctx, soak_boot_end: datetime) -> dict:
 
 def clock_integrity(ctx: Ctx) -> dict:
     s = ctx.ev.get("ntp_time")
-    out = {"available": False, "median_offset_s": None, "discontinuities": []}
+    out = {"available": False, "median_offset_s": None, "discontinuities": [], "late_deliveries": []}
     if not s:
         return out
     offs = []
@@ -189,12 +189,25 @@ def clock_integrity(ctx: Ctx) -> dict:
     srt = sorted(o for _, o, _ in offs)
     med = srt[len(srt) // 2]
     out.update(available=True, median_offset_s=round(med, 3), samples=len(offs))
-    prev_bad = False
+    # A NTP Time row normally lands within about 1 s of the dongle's own wall time. One displaced row followed by normal
+    # rows is a late Home Assistant delivery (the row was received late), not a clock event. Two or more consecutive
+    # displaced rows (each published 60 s apart) mean the dongle's wall clock itself was off: a clock step.
+    runs, cur = [], []
     for t, o, ref in offs:
-        bad = abs(o - med) > ctx.rules.clock_skew_warn_s
-        if bad and not prev_bad:
-            out["discontinuities"].append({"t": t, "offset_s": round(o, 3), "ref": ref})
-        prev_bad = bad
+        if abs(o - med) > ctx.rules.clock_skew_warn_s:
+            cur.append((t, o, ref))
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    for run in runs:
+        t0, o0, ref0 = run[0]
+        if len(run) >= 2:
+            out["discontinuities"].append({"t": t0, "end": run[-1][0], "samples": len(run), "offset_s": round(o0, 3),
+                                           "median_run_offset_s": round(sorted(x[1] for x in run)[len(run) // 2], 3), "ref": ref0})
+        else:
+            out["late_deliveries"].append({"t": t0, "offset_s": round(o0, 3), "ref": ref0})
     return out
 
 
@@ -274,8 +287,12 @@ def analyse(ctx: Ctx) -> dict:
     clk = clock_integrity(ctx)
     for dsc in clk["discontinuities"]:
         ctx.event(dsc["t"], "continuity", "WARNING", "clock-discontinuity",
-                  f"dongle NTP wall time differs from the Home Assistant row time by {dsc['offset_s']} s (median "
-                  f"{clk['median_offset_s']} s)", CONFIRMED, [dsc["ref"]])
+                  f"dongle NTP wall time off by about {dsc['median_run_offset_s']} s for {dsc['samples']} consecutive minute(s) "
+                  f"(median offset {clk['median_offset_s']} s): a clock step", CONFIRMED, [dsc["ref"]])
+    for dsc in clk["late_deliveries"]:
+        ctx.event(dsc["t"], "continuity", "INFO", "late-delivery",
+                  f"one NTP Time row received {abs(dsc['offset_s']):.1f} s late; the next row is normal (HA delivery, not "
+                  "a clock event)", CONFIRMED, [dsc["ref"]])
     rejected = sum(i.rejected for i in ctx.ev.inputs)
     ooo = sum(1 for d in ctx.ev.diagnostics if d.code == "out-of-order")
 
@@ -296,13 +313,15 @@ def analyse(ctx: Ctx) -> dict:
                           [ref for c in unexpected for ref in c["refs"]]))
     # C-CONT-2
     longest = max(((b - a).total_seconds() for a, b in gaps), default=0.0)
+    at_boot = [(a, b) for a, b in unav if any(-30 <= (t - a).total_seconds() <= (b - a).total_seconds() + 30 for t in ctx.boots)]
+    unav_other = [iv for iv in unav if iv not in at_boot]
     reasons = []
     if not tl:
         v = INSUFFICIENT
         reasons.append("no FB-D1 row and no firmware log in the window: recording continuity cannot be measured")
     elif coverage < r.coverage_min or longest > r.gap_insufficient_s or low_days:
         v = INSUFFICIENT
-    elif coverage < r.coverage_pass or longest > r.gap_warn_s or unav or not have_witness:
+    elif coverage < r.coverage_pass or longest > r.gap_warn_s or unav_other or not have_witness:
         v = WARNING
     else:
         v = PASS
@@ -315,8 +334,11 @@ def analyse(ctx: Ctx) -> dict:
         reasons.append(f"{len(gaps)} gap(s) > {r.gap_s} s, longest {fmt_duration(longest)}")
         if low_days:
             reasons.append(f"soak day(s) under {pct(r.day_coverage_min)} % coverage: {', '.join(low_days)}")
-        if unav:
-            reasons.append(f"{len(unav)} device-unavailable period(s), {fmt_duration(sum((b - a).total_seconds() for a, b in unav))} total")
+        if unav_other:
+            reasons.append(f"{len(unav_other)} device-unavailable period(s) outside a boot, "
+                           f"{fmt_duration(sum((b - a).total_seconds() for a, b in unav_other))} total")
+        if at_boot:
+            reasons.append(f"{len(at_boot)} unavailable period(s) at a boot (the boot itself; judged by C-CONT-1)")
     crit.append(Criterion("C-CONT-2", "continuity", "Evidence coverage of the soak window", v,
                           CONFIRMED if have_witness else (INFERRED if tl else NONE),
                           f"{pct(coverage)} % of the window has evidence ({coverage_basis})" if tl else "coverage cannot be measured",
@@ -339,20 +361,24 @@ def analyse(ctx: Ctx) -> dict:
     # C-CONT-4 (not required for acceptance on its own)
     reasons = []
     if clk["discontinuities"]:
-        reasons.append(f"{len(clk['discontinuities'])} NTP-vs-Home-Assistant clock discontinuities")
+        reasons.append(f"{len(clk['discontinuities'])} dongle clock step(s) (2 or more consecutive displaced NTP Time rows)")
     if rejected:
         reasons.append(f"{rejected} malformed row(s) rejected at import")
     if ooo:
         reasons.append(f"{ooo} out-of-order row(s) in the input files")
+    warn = bool(reasons)  # late deliveries below are informational only
+    if clk["late_deliveries"]:
+        reasons.append(f"{len(clk['late_deliveries'])} single late Home Assistant row(s) (informational, not clock events)")
     if not clk["available"]:
         v, basis = INSUFFICIENT, NONE
         reasons.append("no NTP Time rows: the dongle clock cannot be compared with the export timestamps")
     else:
-        v, basis = (WARNING if reasons else PASS), CONFIRMED
+        v, basis = (WARNING if warn else PASS), CONFIRMED
     crit.append(Criterion("C-CONT-4", "continuity", "Timestamp and clock integrity", v, basis,
                           "; ".join(reasons) or f"dongle clock within {r.clock_skew_warn_s} s of the export timestamps "
                           f"(median offset {clk['median_offset_s']} s)", False, reasons,
                           {"median_ntp_offset_s": clk["median_offset_s"], "discontinuities": len(clk["discontinuities"]),
+                           "late_deliveries": len(clk["late_deliveries"]),
                            "rejected_rows": rejected, "out_of_order_rows": ooo}))
 
     return {
@@ -366,7 +392,9 @@ def analyse(ctx: Ctx) -> dict:
             "soak_boot": [{"time": stamp(c["t"]), "signals": sorted(c["kinds"]), "details": c["details"]} for c in soak_boot],
             "continuity_witnesses": witnesses, "continuity_proven": proven,
             "clock": {"median_ntp_offset_s": clk["median_offset_s"],
-                      "discontinuities": [{"time": stamp(d["t"]), "offset_s": d["offset_s"]} for d in clk["discontinuities"]]},
+                      "discontinuities": [{"time": stamp(d["t"]), "end": stamp(d["end"]), "samples": d["samples"],
+                                           "offset_s": d["median_run_offset_s"]} for d in clk["discontinuities"]],
+                      "late_deliveries": [{"time": stamp(d["t"]), "offset_s": d["offset_s"]} for d in clk["late_deliveries"]]},
             "first_evidence": stamp(first_ev), "last_evidence": stamp(last_ev),
             "daily": days,
         },
