@@ -109,6 +109,7 @@ import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
+import _ovw1_scope as _ovw1  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
@@ -653,7 +654,46 @@ ACFG1 = Entry(
          "manifest (values unchanged): ZERO firmware, Home Assistant package, registry, Intelligence or ecco_core change, ZERO "
          "Modbus operation, the card cannot write",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1)
+# ovw1 (ECCO Overview V2: the dashboard's Overview view rebuilt as nine sections; _ovw1_scope.py): made on the export after acfg1. The
+# Overview becomes nine `type: grid` sections (spans 4, 4, 3, 1, 2, 2, 3, 1, 4): the compact status banner (the hero's JavaScript state
+# machine, pills and vocabulary kept verbatim, now also reading the Dump to Grid lease states), the Weather & Solar card's solar strip
+# and compact daily layouts, the Energy Flow card beside a slim status column, the Energy Actions card in its new presentation-only
+# `layout: tabbed` followed directly by the Known-Good Profile bar, decision support from existing entities, the Power Flow chart beside
+# an electrical detail list and one merged System Health card. FROZEN edits (PEX): the dashboard (the v7.20.0 header note and the whole
+# Overview block), VERSION.yaml (dashboard 7.20.0, staged), the Energy Actions card's source and config (NEW enrolments, the owner-
+# approved O3 amendment of 2026-10-09: the FB-B3 / FB-C3 folder pins and the lic0 suite pin their pub0-era state), its README (a pub0
+# target) and its rebuilt bundle (enrolled by esb1), and the three suites whose folder pin now skips the files a post-export entry added (the pin value is
+# unchanged) (_ovw1_scope.FROZEN_REVERTERS); as of pub0 each file is the export byte for byte. The Weather & Solar card and its suite,
+# test_lic0_transition.py, test_pex_transition.py, _pex.py, CHANGELOG.md and docs/dev/post-export-edit-layer.md are not frozen.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package,
+# deployment, registry, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); no new service call (the card's
+# callService sites and (domain, service) pairs are unchanged); no manifest stanza.
+OVW1 = Entry(
+    id="ovw1", pr="OVW1", commit="unmerged",
+    added_files=_ovw1.ADDED_FILES,
+    frozen_reverts=dict(_ovw1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ovw1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ovw1.DASHBOARD_REL: "030c60d87e3148b927c6b353392fe0d5becc818e92d8346ca11943d2dbeb7367",
+        _ovw1.VERSION_REL: "e3ed8a36a109b2f0e84dfc9b44c672f6965d1d7ec84cbdc8eb71f8f624e74c7e",
+        _ovw1.CARD_SRC_REL: "d8be18eea439db76badc0f3a25980b9582c6b971aa61fdc9548b6cd992bb35da",
+        _ovw1.CARD_CONFIG_REL: "2e6d66839e7ac0a6714f2734a9287dffcc4835bc9c49983e1ab3496be40549a8",
+        _ovw1.CARD_README_REL: "520c5f5f1ffa83d21af0a68e15eecfc5c4e062ed17e379276a79d8ade48a1adb",
+        _ovw1.BUNDLE_REL: "2f5f6f9bbd8fa05347a7ca63a4dab94b6c533a69e01ad679dec4927c7952fa01",
+        _ovw1.SUITE_FBP_REL: "969dd6fa2f20324f4d7022740a6d1c14b52af79247260a6bed084068553e526e",
+        _ovw1.SUITE_SCU_REL: "ebc277766e17c57d599ba06a7a2193310261520f29bbb0648de2bc3c3d4e8340",
+        _ovw1.SUITE_FRD_REL: "02f43e171584696e6749048d8e4add21fe0e80efb18a60ce8653b2adae54304b",
+    },
+    # _pex.fingerprint(OVW1): hashes its parent acfg1's fingerprint and every declaration above
+    fingerprint="9b1445186fe4fb0448b6e911a940ca6ff901dbecd92fba1432b2e438a0c114ed",
+    note="ECCO Overview V2: the Overview view rebuilt as nine sections (compact status banner with the hero's state machine kept "
+         "verbatim and the Dump to Grid lease states added, the Weather & Solar solar strip and compact daily layouts, Energy Flow "
+         "beside a slim status column, the Energy Actions card in its presentation-only tabbed layout followed by the Known-Good "
+         "Profile bar, decision support, the Power Flow chart beside an electrical detail list, one merged System Health card), "
+         "dashboard 7.20.0 staged; the card's source and config enrolled (O3 amendment) and the FB-B3 / FB-C3 folder pins "
+         "skip the two files it adds (pin unchanged): ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
+         "ecco_core change, ZERO Modbus operation, no new service call, no manifest stanza",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

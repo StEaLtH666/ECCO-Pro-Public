@@ -32,6 +32,16 @@ import {
 import { classifyRecoveryAction } from "./recoveryPresentation";
 import { isInterlocked, canActWhileInterlocked, interlockMessage } from "./interlock";
 import {
+  canChooseTrack,
+  initialTrack,
+  hiddenTrackAlert,
+  alertTone,
+  trackName,
+  hiddenTrackAlertText,
+  type Track,
+  type TrackSummary,
+} from "./trackSelection";
+import {
   classifySchedule,
   isScheduleRejected,
   isScheduleBlocked,
@@ -89,6 +99,8 @@ export class EccoEnergyActionsCard extends LitElement {
   @state() private _nowMs = Date.now();
   /** NOW/LATER selector - purely local UI state, never derived from hass. Manual staging (NOW) is always the default. */
   @state() private _mode: "now" | "later" = "now";
+  /** `layout: tabbed` only - the visible track. null until willUpdate() picks it once from both tracks' states (see trackSelection.ts); after that only a tab click changes it. */
+  @state() private _track: Track | null = null;
 
   private _confirmTimer?: ReturnType<typeof setTimeout>;
   private _confirmDumpTimer?: ReturnType<typeof setTimeout>;
@@ -289,6 +301,20 @@ export class EccoEnergyActionsCard extends LitElement {
       }
       this._lastDumpVisualState = visualState;
     }
+
+    // `layout: tabbed` only: the visible track is chosen ONCE, on the first
+    // update in which a track has a real state, by state priority
+    // (trackSelection.ts) - after that only a tab click changes it, never a
+    // state change. An all-"unavailable" snapshot (device offline, entities
+    // not registered yet) is not a choice: _renderTabbed() shows Free Power
+    // provisionally until a state arrives, so a Dump to Grid recovery that
+    // surfaces when the device reconnects still wins the initial tab.
+    if (this._config?.layout === "tabbed" && this._track === null && this.hass) {
+      const tracks = this._trackSummary();
+      if (canChooseTrack(tracks.fp.state, tracks.dump.state)) {
+        this._track = initialTrack(tracks.fp.state, tracks.dump.state);
+      }
+    }
   }
 
   protected updated(): void {
@@ -387,6 +413,7 @@ export class EccoEnergyActionsCard extends LitElement {
   protected render(): TemplateResult {
     if (!this._config) return html``;
     const title = this._config.title ?? DEFAULT_TITLE;
+    if (this._config.layout === "tabbed") return this._renderTabbed(title);
 
     return html`
       <ha-card>
@@ -394,6 +421,109 @@ export class EccoEnergyActionsCard extends LitElement {
         <div class="actions-grid">
           ${this._renderFreePowerTile()}
           ${this._renderDumpToGridTile()}
+        </div>
+      </ha-card>
+    `;
+  }
+
+  // ---------------------------------------------------------------------
+  // `layout: tabbed` (OVW1) - presentation only. One track (Free Power or
+  // Dump to Grid) is visible at a time, but BOTH tracks' display states are
+  // still computed on every render with the tiles' own classifiers and
+  // overlays, so the header chips, the initial tab and the cross-track alert
+  // can never hide the other track's live state. The two tiles render
+  // exactly as in the side-by-side layout; no service call, entity read or
+  // handler is added or shared between them. See src/trackSelection.ts.
+  // ---------------------------------------------------------------------
+
+  /** Both tracks' display states, labels and firmware status text - the same resolveDisplayState / resolveDumpDisplayState + interlock chain the two tiles run, never short-circuited for the hidden track. */
+  private _trackSummary(): { fp: TrackSummary; dump: TrackSummary } {
+    const fpVisual = this._freePowerVisualStateForInterlock();
+    const dumpVisual = this._dumpVisualStateForInterlock();
+
+    let fp: TrackSummary = { state: "unavailable", pill: "unavailable", label: "Unavailable", statusText: undefined };
+    const fpEntities = this._config?.free_power;
+    if (fpVisual !== null && fpEntities) {
+      const schedule = this._config?.schedule;
+      const scheduled: FreePowerDisplayState = schedule
+        ? resolveDisplayState(fpVisual, classifySchedule({ armed: toBoolean(this._entityState(schedule.armed)) }))
+        : fpVisual;
+      const state: FreePowerDisplayState = isInterlocked(fpVisual, dumpVisual) ? "interlocked" : scheduled;
+      fp = { state, pill: state, label: this._labelFor(state), statusText: this._entityState(fpEntities.status) };
+    }
+
+    // the locked preview shell exactly when _renderDumpToGridTile() renders it: Dump not configured, or hass not arrived yet
+    const dumpEntities = this._config?.dump_to_grid;
+    let dump: TrackSummary = dumpEntities && this.hass
+      ? { state: "unavailable", pill: "unavailable", label: "Unavailable", statusText: undefined }
+      : { state: "unavailable", pill: "locked", label: "Coming Soon", statusText: undefined };
+    if (dumpVisual !== null && dumpEntities) {
+      const dumpSchedule = dumpEntities.schedule;
+      const scheduled = resolveDumpDisplayState(dumpVisual, dumpSchedule ? toBoolean(this._entityState(dumpSchedule.armed)) : null);
+      const state: DumpDisplayState = isInterlocked(dumpVisual, fpVisual) ? "interlocked" : scheduled;
+      dump = { state, pill: state, label: dumpDisplayStateLabel(state), statusText: this._entityState(dumpEntities.status) };
+    }
+    return { fp, dump };
+  }
+
+  /** The tab click handler. Switching tracks cancels any pending two-tap End & Restore confirmation of BOTH modes, so a stale "tap again" can never apply to the other mode; NOW/LATER, staged values and every entity stay per-mode and untouched. */
+  private _selectTrack(track: Track): void {
+    if (this._confirmTimer) clearTimeout(this._confirmTimer);
+    if (this._confirmDumpTimer) clearTimeout(this._confirmDumpTimer);
+    this._confirmEndRestore = false;
+    this._confirmEndDump = false;
+    this._track = track;
+  }
+
+  private _renderTabbed(title: string): TemplateResult {
+    const tracks = this._trackSummary();
+    // _track is null until willUpdate() pins it on the first update with a real state - render the same choice provisionally meanwhile.
+    const track: Track = this._track ?? initialTrack(tracks.fp.state, tracks.dump.state);
+    const hiddenTrack: Track = track === "free_power" ? "dump_to_grid" : "free_power";
+    const hidden = track === "free_power" ? tracks.dump : tracks.fp;
+    const tone = alertTone(hiddenTrackAlert(hidden.state));
+    const alertIcon = tone === "fault" ? "mdi:alert-circle-outline" : tone === "warning" ? "mdi:alert-outline" : "mdi:information-outline";
+
+    return html`
+      <ha-card>
+        <div class="tabbed-header">
+          <h1 class="card-title">${title}</h1>
+          <div class="track-strip">
+            <span class="state-pill state-${tracks.fp.pill}">Free Power · ${tracks.fp.label}</span>
+            <span class="state-pill state-${tracks.dump.pill}">Dump to Grid · ${tracks.dump.label}</span>
+          </div>
+        </div>
+        <div class="mode-selector track-selector" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            class="mode-tab track-tab ${track === "free_power" ? "is-active" : ""}"
+            aria-selected=${track === "free_power"}
+            @click=${() => this._selectTrack("free_power")}
+          >
+            <ha-icon icon="mdi:flash"></ha-icon> Free Power
+          </button>
+          <button
+            type="button"
+            role="tab"
+            class="mode-tab track-tab ${track === "dump_to_grid" ? "is-active" : ""}"
+            aria-selected=${track === "dump_to_grid"}
+            @click=${() => this._selectTrack("dump_to_grid")}
+          >
+            <ha-icon icon="mdi:transmission-tower-export"></ha-icon> Dump to Grid
+          </button>
+        </div>
+        ${tone
+          ? html`
+              <div class="track-alert track-alert-${tone}" role="status">
+                <ha-icon icon=${alertIcon}></ha-icon>
+                <div class="track-alert-text">${hiddenTrackAlertText(trackName(hiddenTrack), hidden.label, hidden.statusText)}</div>
+                <button type="button" class="track-alert-show" @click=${() => this._selectTrack(hiddenTrack)}>Show</button>
+              </div>
+            `
+          : nothing}
+        <div class="actions-grid is-tabbed">
+          ${track === "free_power" ? this._renderFreePowerTile() : this._renderDumpToGridTile()}
         </div>
       </ha-card>
     `;
@@ -2607,6 +2737,94 @@ export class EccoEnergyActionsCard extends LitElement {
       }
       .dump-to-grid-tile {
         padding: 12px 14px 14px;
+      }
+    }
+
+    /* ---- layout: tabbed (OVW1) - one track visible at a time. The track
+       tabs reuse the NOW/LATER selector's look, the header chips reuse the
+       state-pill tones, and the cross-track alert banner mirrors the
+       schedule banner's shape in the hidden track's own tone. ---- */
+    .tabbed-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin-bottom: 12px;
+    }
+    .tabbed-header .card-title {
+      margin: 0;
+    }
+    .track-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .track-selector {
+      border-radius: 12px;
+      margin-bottom: 10px;
+    }
+    .track-tab {
+      min-height: 44px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .track-tab ha-icon {
+      --mdc-icon-size: 17px;
+    }
+    .track-alert {
+      --eaa-alert: var(--eaa-accent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--eaa-alert) 14%, var(--eaa-surface));
+      border: 1px solid color-mix(in srgb, var(--eaa-alert) 45%, var(--eaa-border));
+      margin-bottom: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+    .track-alert-warning {
+      --eaa-alert: var(--eaa-warning);
+    }
+    .track-alert-fault {
+      --eaa-alert: var(--eaa-fault);
+    }
+    .track-alert ha-icon {
+      --mdc-icon-size: 19px;
+      color: var(--eaa-alert);
+      flex-shrink: 0;
+    }
+    .track-alert-text {
+      min-width: 0;
+      flex: 1 1 auto;
+      word-break: break-word;
+    }
+    .track-alert-show {
+      flex: 0 0 auto;
+      min-height: 36px;
+      padding: 7px 12px;
+      font-size: 11px;
+      background: transparent;
+      color: var(--eaa-alert);
+      border-color: color-mix(in srgb, var(--eaa-alert) 45%, var(--eaa-border));
+    }
+    .actions-grid.is-tabbed {
+      /* minmax(0, 1fr), not 1fr: a bare 1fr track is min-content-sized and lets a long nowrap line (the armed
+         schedule banner) push the single tile wider than the card on a phone. Scoped to the tabbed layout. */
+      grid-template-columns: minmax(0, 1fr);
+    }
+    @container (max-width: 620px) {
+      .tabbed-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .track-tab {
+        padding: 7px 8px;
+        font-size: 12px;
       }
     }
   `;

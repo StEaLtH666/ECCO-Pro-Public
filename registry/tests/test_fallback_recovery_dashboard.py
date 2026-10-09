@@ -1477,6 +1477,8 @@ def main() -> int:
           ls.returncode == 0 and len(fe_tracked) > 0 and all(f.startswith(fe_dir) for f in fe_tracked), f"rc={ls.returncode} files={len(fe_tracked)}")
     fe = hashlib.sha256()
     for rel in fe_tracked:
+        if rel in _pex.post_export_added():   # PEX (ovw1): a file a post-export entry added is not in the pub0-era folder (the pin's file set)
+            continue
         fe.update(rel.encode())                                        # repository-relative POSIX path
         _fe_lf = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # tracked content, LF
         _fe_lf = _pex.as_of_pub0(rel, _fe_lf.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else _fe_lf   # PEX (esb1): a frozen card file (pub0 target or enrolled) AS OF pub0

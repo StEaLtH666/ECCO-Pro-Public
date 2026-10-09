@@ -5,8 +5,14 @@ project_version: "0.9.0"
 
 current:
   dashboard:
-    version: "7.19.0"
+    version: "7.20.0"
     path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.20.0 (OVW1) rebuilds the Overview view as nine sections: a compact status banner that also reads the Dump to
+    # Grid lease states, the Weather & Solar card's two compact layouts, the Energy Actions card in its tabbed layout
+    # with the Known-Good Profile bar, decision-support cards from existing entities, an electrical detail list in
+    # place of the four gauges and one merged System Health card. Display only: no control path, firmware, package or
+    # automation changed. It is STAGED: tested_in_home_assistant stays false until the new Overview is exercised on
+    # the reference installation. The 7.19.0 record follows.
     # v7.19.0 (ACFG1) adds the read-only Advanced / Experimental Configuration card as section 13 of the
     # Inverter / Advanced view (display only; the card cannot write). It also carries the read-only Weather & Solar
     # view after Overview (wsc1), which changed the dashboard without a version bump of its own. It is STAGED:

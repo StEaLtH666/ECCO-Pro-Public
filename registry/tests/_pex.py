@@ -10,7 +10,8 @@ entry AFTER pub0 (_scope_chain.POST_EXPORT_ENTRIES), and the proofs read the fil
 
 WHAT IS FROZEN. FROZEN = the pub0 targets that are not chain-pinned, plus ENROLLED: files pub0 did not edit whose pub0-era state an older
 suite pins (owner decision O3: VERSION.yaml; O3 amendment, esb1: the Energy Actions card's package.json, package-lock.json and
-bundle, whose pub0-era state the FB-B3 / FB-C3 folder pins and the lic0 suite pin; never broadened without such evidence). The pub0
+bundle, and - O3 amendment, ovw1 - its source and config, whose pub0-era state the FB-B3 / FB-C3 folder pins and the lic0 suite
+pin; never broadened without such evidence). The pub0
 state of a frozen file (the PEX genesis) is base(): the manifest's result sha256 for a target (read from the manifest, never typed)
 and the recorded hash for an enrolled file. The chain-pinned artifacts keep their own mechanism (Entry.reverts / checkpoints); their
 pub0 state is the chain checkpoint as of pub0.
@@ -61,6 +62,11 @@ ENROLLED = {
     "frontend/ecco-energy-actions-card/package-lock.json": "aa389e0bb311846f87543eb0ca0023c87315faadad03bf5c8b7710f888a768fd",
     "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js":
         "c1bd37deb0dab7ad1933e5276e70388643b14b55ed57842f055eadfb1933c207",   # == _lic0_scope.DIST_POST_SHA256
+    # O3 amendment (ovw1, owner-approved 2026-10-09): the two Energy Actions card source files the presentation-only `layout: tabbed`
+    # option changes. The same three frozen suites and test_lic0_transition.py pin the card folder's pub0-era (FB-B3) state through lic0.
+    # (The card's README.md, which ovw1 also edits, is a pub0 target: frozen through the manifest, never enrolled.)
+    "frontend/ecco-energy-actions-card/src/ecco-energy-actions-card.ts": "1aa8b65fe658545616411da8891c6f19ac39127faf6d60e49c395e0311e877b7",
+    "frontend/ecco-energy-actions-card/src/config.ts": "3628471e4d4e957b49cdbaf17d3e325a80679dc8526e3f620f1f4b4fb2da96ba",
 }
 FROZEN = (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(ENROLLED)
 

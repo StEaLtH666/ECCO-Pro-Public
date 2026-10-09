@@ -252,8 +252,31 @@ dash = yaml.load((ROOT / dash_rel).read_text(encoding="utf-8"), Loader=Loader) o
 views = dash.get("views") or []
 titles = [v.get("title") for v in views if isinstance(v, dict)]
 uses = [i for i, v in enumerate(views) if isinstance(v, dict) and f"custom:{TAG}" in yaml.dump(v)]
-check("the dashboard has exactly one Weather & Solar view, immediately after Overview, and the card appears in no other view",
-      titles[:2] == ["Overview", "Weather & Solar"] and uses == [1], f"{titles[:3]} {uses}")
+# OVW1: the Overview compact layouts
+check("the dashboard has exactly one Weather & Solar view, immediately after Overview, and the card appears only there and in the Overview",
+      titles[:2] == ["Overview", "Weather & Solar"] and uses == [0, 1], f"{titles[:3]} {uses}")
+
+
+def walk(node):
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from walk(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from walk(v)
+
+
+ov_inst = [c for s in ((views[0] if views and isinstance(views[0], dict) else {}).get("sections") or []) for c in (s.get("cards") or [])
+           if isinstance(c, dict) and c.get("type") == f"custom:{TAG}"]
+check("the Overview holds exactly two instances: the solar strip and the compact daily (7 days) layout, each full-width with auto rows",
+      ov_inst == [{"type": f"custom:{TAG}", "layout": "solar_strip", "grid_options": {"columns": "full", "rows": "auto"}},
+                  {"type": f"custom:{TAG}", "layout": "daily_compact", "daily_days": 7, "grid_options": {"columns": "full", "rows": "auto"}}],
+      str(ov_inst))
+all_inst = [n for v in views for n in walk(v) if isinstance(n, dict) and n.get("type") == f"custom:{TAG}"]
+check("every instance in the dashboard is a type / grid_options pair plus, in the Overview only, layout (and daily_days): no entity id typed in",
+      len(all_inst) == 3 and all("grid_options" in c and set(c) <= {"type", "grid_options", "layout", "daily_days"} for c in all_inst)
+      and all("layout" not in c for c in all_inst if c not in ov_inst), str(all_inst))
 wv = views[1] if len(views) > 1 and isinstance(views[1], dict) else {}
 cards = [c for s in (wv.get("sections") or []) for c in (s.get("cards") or [])]
 check("the view holds only the card, with its default entities (no entity id typed into the dashboard)",
@@ -261,8 +284,9 @@ check("the view holds only the card, with its default entities (no entity id typ
       str(cards))
 chain_mods = sorted((ROOT / "registry" / "tests").glob("_*.py"))
 named = [p.name for p in chain_mods if re.search(r"ecco-weather-solar-card|weather_solar", p.read_text(encoding="utf-8"))]
-check("only the dashboard entry names the card: its scope module _wsc1_scope.py and its chain entry in _scope_chain.py",
-      named == ["_scope_chain.py", "_wsc1_scope.py"], str(named))
+check("only the dashboard entries name the card: its scope module _wsc1_scope.py, its chain entry in _scope_chain.py, and the Overview "
+      "rebuild entry _ovw1_scope.py (its verbatim Overview block quotes the two compact instances)",
+      named == ["_ovw1_scope.py", "_scope_chain.py", "_wsc1_scope.py"], str(named))
 
 print("")
 if FAILURES:
