@@ -69,6 +69,15 @@ Development before the first public release happened in a private repository; se
 
 ### Changed
 
+- **The Overview is rebuilt** (dashboard 7.20.0, staged) as nine sections: a compact status banner that keeps the hero's state
+  machine, pills and vocabulary and now also reads the Dump to Grid lease states; the Weather & Solar card's new solar strip and
+  compact daily layouts; the Energy Flow card beside a slim Grid Status / Current Plan / Tariff column; the Energy Actions card in
+  its new presentation-only `layout: tabbed` (one track visible at a time, both tracks' states always classified, a cross-track
+  alert for the hidden one) followed directly by the Known-Good Profile bar; decision support from existing entities; the Power
+  Flow chart beside an electrical detail list in place of the four gauges; and one merged System Health card. Display only: no
+  control path, firmware, package, automation or service call changed. Declared as post-export entry `ovw1`, which enrols the
+  Energy Actions card's source and config in the PEX frozen set (owner decision O3, amended 2026-10-09); the historical
+  card-folder and licence pins keep their values and skip the two files the entry adds.
 - **Dump-to-Grid command ceiling is configurable at build time.** `ecco_dump_controller_max_ceiling_w` stays the single
   source of truth and keeps its 3000 W default, the only hardware-tested value. A build may select up to 8000 W; values that
   are not a decimal multiple of 100 W, not above the 500 W floor, or above the site TOU ceiling or 8000 W are refused at
