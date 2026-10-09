@@ -113,7 +113,8 @@ The card's own suite pins the live integration: one use of the card, one manifes
 `registry/tests/test_ovw1_transition.py`). It edits no chain-pinned artifact: the manifest is untouched. Its frozen edits are:
 
 - the dashboard: the v7.20.0 header note, and the whole Overview view block as one pair (the compact status banner keeps the
-  hero's state machine, pills and vocabulary verbatim; the Energy Actions card uses its new `layout: tabbed` and is followed
+  hero's state machine, pills and vocabulary verbatim and adds the Dump to Grid lease states and both recovery-state sensors as
+  inputs; the Energy Flow card's configuration is byte-for-byte the previous one; the Energy Actions card uses its new `layout: tabbed` and is followed
   directly by the Known-Good Profile bar; the Weather & Solar card's solar strip and compact daily layouts; one merged System
   Health card). Every other view is byte-identical;
 - `VERSION.yaml`: dashboard 7.20.0, staged;

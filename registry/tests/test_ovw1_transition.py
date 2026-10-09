@@ -28,9 +28,12 @@ Test-only. No firmware build, no hardware, no Home Assistant, no network, no npm
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -114,7 +117,7 @@ ADDED = {"registry/tests/_ovw1_scope.py", "registry/tests/test_ovw1_transition.p
          CARD + "src/trackSelection.ts", CARD + "test/trackSelection.test.ts"}
 
 # The successor pins (ovw1 @ public main 42baa20 + this change; LF text).
-OVW1_FINGERPRINT = "9b1445186fe4fb0448b6e911a940ca6ff901dbecd92fba1432b2e438a0c114ed"
+OVW1_FINGERPRINT = "1a56962c110b98a28537a649998b40f9c2635176de756ac505eda0513a972f3a"
 # The seven post-export fingerprints recorded on main before ovw1, in chain order (pex0 first, acfg1 last); an older entry can never
 # be rewritten. Kept by position: each entry's own suite owns the ledger of files that name it.
 OLDER_FINGERPRINTS = (
@@ -129,8 +132,8 @@ OLDER_FINGERPRINTS = (
 HISTORICAL_CHAIN_SHA = "d61b7b6a231006b2913ce62733f07df562056cffd6b633b5d8035ec06217dd4e"
 # sha256 (LF) of every frozen file AFTER ovw1 (the entry's frozen checkpoints, restated here as the successor pins).
 AFTER = {
-    DASH: "030c60d87e3148b927c6b353392fe0d5becc818e92d8346ca11943d2dbeb7367",
-    VERSION: "e3ed8a36a109b2f0e84dfc9b44c672f6965d1d7ec84cbdc8eb71f8f624e74c7e",
+    DASH: "8f0da9f9ed3597e3128325b04cd54ca11698512d7f52c6d9598ec1ff26ac5c2e",
+    VERSION: "04b7b66b85688f7a40ab0d893505de65e45a0d283a93eae80c3fcdab4aad9c7a",
     SRC: "d8be18eea439db76badc0f3a25980b9582c6b971aa61fdc9548b6cd992bb35da",
     CONFIG: "2e6d66839e7ac0a6714f2734a9287dffcc4835bc9c49983e1ab3496be40549a8",
     README: "520c5f5f1ffa83d21af0a68e15eecfc5c4e062ed17e379276a79d8ade48a1adb",
@@ -297,6 +300,103 @@ check("the hero's headline logic reads the three Dump to Grid lease states (D4: 
       and "'DUMP TO GRID ACTIVE'" in hero_js and hero_js.count("Shadow Recovery") == 1 and "Applying" not in hero_js
       and all(w in hero_js for w in ["'Ready'", "'Drifted'", "'Not Captured'", "'Invalidated'", "'Blocked'", "'Healthy'", "'Recovering'",
                                      "'Suspect'", "'Lost'"]))
+_req_line = next((l for l in hero_js.splitlines() if l.strip().startswith("const required =")), "")
+_hard = hero_js[hero_js.index("const hardAttention"):hero_js.index("const busy")] if "const hardAttention" in hero_js and "const busy" in hero_js else ""
+check("the hero reads both recovery-state sensors STRUCTURALLY (firmware enums: NONE and ACCEPTED are settled, anything else is a recovery "
+      "condition, no status-text matching): both count as unavailable inputs with their own test (NONE is the idle value), both raise ATTENTION and turn the RECOVERY chip",
+      all(f"get('sensor.ecco_clock_dongle_{k}_recovery_state')" in hero_js for k in ("free_power", "dump_to_grid"))
+      and "freeRecovery" not in _req_line and "dumpRecovery" not in _req_line
+      and "const hasUnknown = required.some(unknown) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery);" in hero_js
+      and "const recoveryUnavailable = v => ['unknown','unavailable',''].includes(String(v).toLowerCase());" in hero_js
+      and "freeRecoveryAttention ||" in _hard and "dumpRecoveryAttention ||" in _hard
+      and "const recoverySettled = v => v === 'NONE' || String(v).startsWith('ACCEPTED');" in hero_js
+      and "!freeRecoveryAttention && !dumpRecoveryAttention" in hero_js
+      and not re.search(r"(START|VERIFY) ?FAILED|RECOVERY REQUIRED|OPERATOR DECISION|RESTORE BLOCKED|DEFERRED", hero_js))
+
+# The hero's headline matrix, executed with Node (the template is plain JavaScript over a `states` map; no Home Assistant needed).
+_HERO_IDS = sorted(set(re.findall(r"get\('([a-z_]+\.[a-z0-9_]+)'\)", hero_js)))
+
+
+def _default(eid: str) -> str:
+    if eid.endswith(("telemetry_online", "configuration_online", "ntp_synced", "raw_cache_valid")):
+        return "on"
+    if eid.startswith("binary_sensor."):
+        return "off"
+    if eid.startswith("sensor.ecco_health_"):
+        return "HEALTHY"
+    if eid.endswith("inverter_system_state"):
+        return "normal"
+    if eid.endswith("inverter_warning"):
+        return "00000000"
+    if eid.endswith("inverter_fault"):
+        return "0000000000000000"
+    if eid.endswith("_recovery_state"):
+        return "NONE"
+    if eid == "sensor.ecco_supervision_status":
+        return "Healthy"
+    if eid == "sensor.ecco_fallback_status":
+        return "Ready"
+    return "2026-10-09 06:57:20"
+
+
+def _states(over: dict) -> dict:
+    base = {eid: _default(eid) for eid in _HERO_IDS}
+    base.update(over)
+    return {eid: {"state": v, "attributes": {}} for eid, v in base.items()}
+
+
+_D = "sensor.ecco_clock_dongle_dump_to_grid_recovery_state"
+_F = "sensor.ecco_clock_dongle_free_power_recovery_state"
+_SCENARIOS = [
+    ("nominal", {}, "SYSTEMS NOMINAL"),
+    ("dump active", {"binary_sensor.ecco_clock_dongle_dump_to_grid_active": "on"}, "DUMP TO GRID ACTIVE"),
+    ("dump transaction in flight", {"binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress": "on"}, "OPERATION IN PROGRESS"),
+    ("dump restore obligation (snapshot pending, idle)", {"binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid": "on"}, "ATTENTION"),
+    ("dump recovery LOCKED (metadata unavailable; no snapshot flag)", {_D: "LOCKED - durable recovery metadata unavailable"}, "ATTENTION"),
+    ("dump recovery LOCKED (operator decision)", {_D: "LOCKED - operator decision required"}, "ATTENTION"),
+    ("dump recovery NEITHER (fail-closed default)", {_D: "NEITHER (fail-closed default) - repeated restore verify mismatch"}, "ATTENTION"),
+    ("dump recovery PENDING at boot", {_D: "PENDING - outstanding snapshot found at boot; automatic restore expected"}, "ATTENTION"),
+    ("dump recovery ACCEPTED (settled)", {_D: "ACCEPTED - operator chose to keep the live inverter state"}, "SYSTEMS NOMINAL"),
+    ("dump active while a recovery condition is latched (attention wins)",
+     {"binary_sensor.ecco_clock_dongle_dump_to_grid_active": "on", _D: "LOCKED - operator decision required"}, "ATTENTION"),
+    ("free power active", {"binary_sensor.ecco_clock_dongle_free_power_active": "on"}, "FREE POWER ACTIVE"),
+    ("free power recovery LOCKED_NEITHER", {_F: "LOCKED_NEITHER"}, "ATTENTION"),
+    ("free power recovery LOCKED_ORIGINAL", {_F: "LOCKED_ORIGINAL"}, "ATTENTION"),
+    ("free power accept running", {_F: "ACCEPT_RUNNING"}, "ATTENTION"),
+    ("free power restore obligation", {"binary_sensor.ecco_clock_dongle_free_power_snapshot_valid": "on"}, "ATTENTION"),
+    ("dump recovery state unavailable", {_D: "unavailable"}, "STATUS PARTIAL"),
+    ("free power recovery state unknown", {_F: "unknown"}, "STATUS PARTIAL"),
+    ("supervision lost", {"sensor.ecco_supervision_status": "Lost"}, "ATTENTION"),
+    ("inverter fault", {"sensor.ecco_clock_dongle_ecco_inverter_fault": "0000000000000001"}, "ATTENTION"),
+]
+_NODE_SCRIPT = (
+    "const inp = JSON.parse(require('fs').readFileSync(0, 'utf8'));"
+    "const fn = new Function('states', inp.body);"
+    "const out = {};"
+    "for (const s of inp.scenarios) { const html = String(fn(s.states));"
+    "  const m = html.match(/STATUS PARTIAL|DUMP TO GRID ACTIVE|FREE POWER ACTIVE|OPERATION IN PROGRESS|SYSTEMS NOMINAL|ATTENTION/);"
+    "  out[s.name] = m ? m[0] : null; }"
+    "process.stdout.write(JSON.stringify(out));"
+)
+_node = shutil.which("node")
+check("Node is available to execute the hero's headline matrix (the dashboard's JavaScript is plain; the Weather & Solar suite needs Node too)",
+      bool(_node), str(_node))
+_got: dict = {}
+if _node and hero_js.strip().startswith("[[[") and hero_js.strip().endswith("]]]"):
+    _body = hero_js.strip()[3:-3]
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as _tf:
+        _tf.write(_NODE_SCRIPT)
+    try:
+        _run = subprocess.run([_node, _tf.name], input=json.dumps({"body": _body, "scenarios": [{"name": n, "states": _states(o)} for n, o, _e in _SCENARIOS]}),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        _got = json.loads(_run.stdout) if _run.returncode == 0 and _run.stdout else {"<node>": (_run.stderr or "")[:300]}
+    finally:
+        Path(_tf.name).unlink(missing_ok=True)
+_bad = [(n, e, _got.get(n)) for n, _o, e in _SCENARIOS if _got.get(n) != e]
+check(f"hero headline matrix ({len(_SCENARIOS)} scenarios, executed with Node over a states map): every Dump to Grid / Free Power lease, "
+      "restore-obligation and recovery-state case raises its headline, attention outranks an active lease, the settled values stay "
+      "SYSTEMS NOMINAL, an unavailable recovery sensor is STATUS PARTIAL", not _bad and bool(_got), str(_bad[:4] or _got))
+
 health = [n for n in walk(ov) if isinstance(n, dict) and n.get("name") == "System Health"]
 health_js = health[0].get("custom_fields", {}).get("health", "") if len(health) == 1 else ""
 diag = health_js[health_js.find("const diag = ["):health_js.find("];", health_js.find("const diag = ["))] if "const diag = [" in health_js else ""
@@ -336,6 +436,23 @@ doc1 = yaml.load(P1[DASH], Loader=TaggedSafeLoader) if P1[DASH] is not None else
 check("the view list is unchanged and every view but the Overview is identical to acfg1's (YAML structure)",
       [v.get("title") for v in views] == [v.get("title") for v in doc1["views"]] and len(views) == 11
       and all(yaml.dump(views[i]) == yaml.dump(doc1["views"][i]) for i in range(1, len(views))))
+def _flow_card(view):
+    return next((c for s in (view.get("sections") or []) for c in (s.get("cards") or [])
+                 if isinstance(c, dict) and c.get("type") == "custom:ecco-energy-flow-card"), None)
+
+
+def _sans_grid(card):
+    return {k: v for k, v in card.items() if k != "grid_options"} if isinstance(card, dict) else None
+
+
+_flow_now, _flow_then = _flow_card(ov), (_flow_card(doc1["views"][0]) if doc1["views"] else None)
+check("the Energy Flow card's configuration is byte-for-byte acfg1's (entities, animation, today strip, inverter details, features, format, "
+      "card_mod): only its grid placement changed (columns 32 -> full; rows auto both)",
+      _flow_now is not None and _flow_then is not None and _sans_grid(_flow_now) == _sans_grid(_flow_then)
+      and _flow_then.get("grid_options") == {"columns": 32, "rows": "auto"} and _flow_now.get("grid_options") == {"columns": "full", "rows": "auto"}
+      and (_flow_now.get("features") or {}).get("animate_flow") is True and "inverter_details" in _flow_now and "today" in _flow_now,
+      str({k for k in set(_sans_grid(_flow_now) or {}) | set(_sans_grid(_flow_then) or {})
+           if (_sans_grid(_flow_now) or {}).get(k) != (_sans_grid(_flow_then) or {}).get(k)}))
 check("the dashboard reverter is two pairs: the v7.20.0 header note and the whole Overview view block (title line to the line before the "
       "Weather & Solar view); the first line of the file and `&ecco_card_mod` are untouched",
       len(O.DASHBOARD_EDITS) == 2 and O.DASHBOARD_EDITS[1][0].startswith("  - title: Overview\n") and O.DASHBOARD_EDITS[1][1] == ov_text

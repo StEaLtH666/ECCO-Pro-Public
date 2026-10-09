@@ -24,7 +24,7 @@
 # 7.19.0 also carries the read-only Weather & Solar view after Overview (wsc1), added without a version bump of
 # its own.
 # v7.20.0 (OVW1, STAGED / NOT LIVE-PROVEN) rebuilds the Overview as nine sections: a compact status banner (now also
-# reading the Dump to Grid lease states), the Weather & Solar card's solar strip and compact daily layouts, the Energy
+# reading the Dump to Grid lease states and both recovery-state sensors), the Weather & Solar card's solar strip and compact daily layouts, the Energy
 # Flow card beside a slim Grid Status / Current Plan / Tariff column, the Energy Actions card in its tabbed layout with
 # the Known-Good Profile bar, decision support (ECCO Today, battery estimate, scheduled sessions), the Power Flow chart
 # beside an electrical detail list, and one merged System Health card. Display only: no control, no firmware change.
@@ -177,6 +177,16 @@ views:
                   // OVW1 (D4): the Dump to Grid lease states join the same inputs (display only).
                   const dumpSnapshot = get('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid');
                   const dumpSnapshotPending = dumpSnapshot === 'on' && !dumpActive && !dumpBusy;
+                  // OVW1: the two recovery-state text sensors are firmware enums (Free Power: NONE / LOCKED_* / ACCEPT_RUNNING; Dump to Grid:
+                  // NONE / PENDING / LOCKED / NEITHER / ACCEPTED). Read structurally: anything but the settled values NONE and
+                  // ACCEPTED is a recovery condition, whatever the free-text status says. Display only.
+                  const freeRecovery = get('sensor.ecco_clock_dongle_free_power_recovery_state');
+                  const dumpRecovery = get('sensor.ecco_clock_dongle_dump_to_grid_recovery_state');
+                  // (their own availability test: the generic unknown() helper treats the word none as unknown, and NONE is the idle value)
+                  const recoveryUnavailable = v => ['unknown','unavailable',''].includes(String(v).toLowerCase());
+                  const recoverySettled = v => v === 'NONE' || String(v).startsWith('ACCEPTED');
+                  const freeRecoveryAttention = !recoveryUnavailable(freeRecovery) && !recoverySettled(freeRecovery);
+                  const dumpRecoveryAttention = !recoveryUnavailable(dumpRecovery) && !recoverySettled(dumpRecovery);
                   // FB-B3: display words only (sensor.ecco_supervision_status / sensor.ecco_fallback_status).
                   // Deliberately NOT in `required` (a fallback Unknown must not turn the headline into
                   // STATUS PARTIAL) and only supervision Lost is hardAttention; fallback states are not.
@@ -184,7 +194,7 @@ views:
                   const fb = get('sensor.ecco_fallback_status');
 
                   const required = [comm,runtime,telemetry,configOnline,ntp,cache,inverter,warning,fault,manualState,rtcState,freeOpState,freeActiveState,snapshot,dumpOpState,dumpActiveState,dumpSnapshot];
-                  const hasUnknown = required.some(unknown);
+                  const hasUnknown = required.some(unknown) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery);
                   const hardAttention =
                     comm !== 'HEALTHY' ||
                     runtime !== 'HEALTHY' ||
@@ -197,6 +207,8 @@ views:
                     fault !== '0000000000000000' ||
                     snapshotPending ||
                     dumpSnapshotPending ||
+                    freeRecoveryAttention ||
+                    dumpRecoveryAttention ||
                     sup === 'Lost';
                   const busy = manualBusy || rtcBusy || freeBusy || freeActive || dumpBusy || dumpActive;
 
@@ -254,7 +266,7 @@ views:
                   const invChip = chipState(String(inverter).toLowerCase() === 'normal' && warning === '00000000' && fault === '0000000000000000', false, unknown(inverter) || unknown(warning) || unknown(fault));
                   const txUnknown = unknown(manualState) || unknown(freeOpState) || unknown(freeActiveState) || unknown(dumpOpState) || unknown(dumpActiveState);
                   const txChip = chipState(true, manualBusy || freeBusy || freeActive || dumpBusy || dumpActive, txUnknown);
-                  const recoveryChip = chipState(!snapshotPending && !dumpSnapshotPending, false, unknown(snapshot) || unknown(freeActiveState) || unknown(dumpSnapshot) || unknown(dumpActiveState));
+                  const recoveryChip = chipState(!snapshotPending && !dumpSnapshotPending && !freeRecoveryAttention && !dumpRecoveryAttention, false, unknown(snapshot) || unknown(freeActiveState) || unknown(dumpSnapshot) || unknown(dumpActiveState) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery));
                   const supChips = {'Healthy': ['HEALTHY', 'good'], 'Recovering': ['RECOVERING', 'info'], 'Awaiting Heartbeat': ['AWAITING', 'muted'], 'Suspect': ['SUSPECT', 'warn'], 'Lost': ['LOST', 'warn']};
                   const supChip = supChips[sup] || ['UNKNOWN', 'muted'];
                   const fbChips = {'Ready': ['READY', 'good'], 'Drifted': ['DRIFTED', 'warn'], 'Not Captured': ['NOT SAVED', 'muted'], 'Invalidated': ['INVALIDATED', 'muted'], 'Blocked': ['BLOCKED', 'warn'], 'Shadow Recovery': ['SHADOW', 'warn']};
@@ -369,6 +381,13 @@ views:
               export: sensor.ecco_clock_dongle_ecco_day_grid_export
               battery_charge: sensor.ecco_clock_dongle_ecco_day_battery_charge
               battery_discharge: sensor.ecco_clock_dongle_ecco_day_battery_discharge
+
+            inverter_details:
+              grid_voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
+              ac_temperature: sensor.ecco_clock_dongle_ecco_temperature_ac_transformer
+              dc_temperature: sensor.ecco_clock_dongle_ecco_temperature_dc_transformer
+              grid_connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
+              frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
 
             features:
               self_sufficiency: false

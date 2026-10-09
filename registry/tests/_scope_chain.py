@@ -673,8 +673,8 @@ OVW1 = Entry(
     added_files=_ovw1.ADDED_FILES,
     frozen_reverts=dict(_ovw1.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after ovw1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
-        _ovw1.DASHBOARD_REL: "030c60d87e3148b927c6b353392fe0d5becc818e92d8346ca11943d2dbeb7367",
-        _ovw1.VERSION_REL: "e3ed8a36a109b2f0e84dfc9b44c672f6965d1d7ec84cbdc8eb71f8f624e74c7e",
+        _ovw1.DASHBOARD_REL: "8f0da9f9ed3597e3128325b04cd54ca11698512d7f52c6d9598ec1ff26ac5c2e",
+        _ovw1.VERSION_REL: "04b7b66b85688f7a40ab0d893505de65e45a0d283a93eae80c3fcdab4aad9c7a",
         _ovw1.CARD_SRC_REL: "d8be18eea439db76badc0f3a25980b9582c6b971aa61fdc9548b6cd992bb35da",
         _ovw1.CARD_CONFIG_REL: "2e6d66839e7ac0a6714f2734a9287dffcc4835bc9c49983e1ab3496be40549a8",
         _ovw1.CARD_README_REL: "520c5f5f1ffa83d21af0a68e15eecfc5c4e062ed17e379276a79d8ade48a1adb",
@@ -684,7 +684,7 @@ OVW1 = Entry(
         _ovw1.SUITE_FRD_REL: "02f43e171584696e6749048d8e4add21fe0e80efb18a60ce8653b2adae54304b",
     },
     # _pex.fingerprint(OVW1): hashes its parent acfg1's fingerprint and every declaration above
-    fingerprint="9b1445186fe4fb0448b6e911a940ca6ff901dbecd92fba1432b2e438a0c114ed",
+    fingerprint="1a56962c110b98a28537a649998b40f9c2635176de756ac505eda0513a972f3a",
     note="ECCO Overview V2: the Overview view rebuilt as nine sections (compact status banner with the hero's state machine kept "
          "verbatim and the Dump to Grid lease states added, the Weather & Solar solar strip and compact daily layouts, Energy Flow "
          "beside a slim status column, the Energy Actions card in its presentation-only tabbed layout followed by the Known-Good "

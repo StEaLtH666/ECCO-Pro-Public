@@ -70,8 +70,9 @@ Development before the first public release happened in a private repository; se
 ### Changed
 
 - **The Overview is rebuilt** (dashboard 7.20.0, staged) as nine sections: a compact status banner that keeps the hero's state
-  machine, pills and vocabulary and now also reads the Dump to Grid lease states; the Weather & Solar card's new solar strip and
-  compact daily layouts; the Energy Flow card beside a slim Grid Status / Current Plan / Tariff column; the Energy Actions card in
+  machine, pills and vocabulary and now also reads the Dump to Grid lease states and both recovery-state sensors (a recovery
+  condition raises ATTENTION even when no lease flag is set); the Weather & Solar card's new solar strip and compact daily layouts;
+  the Energy Flow card, its configuration unchanged, beside a slim Grid Status / Current Plan / Tariff column; the Energy Actions card in
   its new presentation-only `layout: tabbed` (one track visible at a time, both tracks' states always classified, a cross-track
   alert for the hidden one) followed directly by the Known-Good Profile bar; decision support from existing entities; the Power
   Flow chart beside an electrical detail list in place of the four gauges; and one merged System Health card. Display only: no
