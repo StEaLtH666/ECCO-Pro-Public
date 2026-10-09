@@ -77,7 +77,9 @@ Development before the first public release happened in a private repository; se
   Flow chart beside an electrical detail list in place of the four gauges; and one merged System Health card. Display only: no
   control path, firmware, package, automation or service call changed. Declared as post-export entry `ovw1`, which enrols the
   Energy Actions card's source and config in the PEX frozen set (owner decision O3, amended 2026-10-09); the historical
-  card-folder and licence pins keep their values and skip the two files the entry adds.
+  card-folder and licence pins keep their values and skip the two files the entry adds. **Deployment prerequisite:** the Overview
+  now uses the Weather & Solar card, which stays a manual Lovelace resource (it is not in the deployment manifest); register its
+  bundle and redeploy the rebuilt Energy Actions bundle before the 7.20.0 dashboard, or the two Overview cards show as missing.
 - **Dump-to-Grid command ceiling is configurable at build time.** `ecco_dump_controller_max_ceiling_w` stays the single
   source of truth and keeps its 3000 W default, the only hardware-tested value. A build may select up to 8000 W; values that
   are not a decimal multiple of 100 W, not above the 500 W floor, or above the site TOU ceiling or 8000 W are refused at

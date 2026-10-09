@@ -425,7 +425,8 @@ check("...and an undeclared byte in the card source, the bundle or VERSION.yaml"
       raises(lambda: at(SRC, "acfg1", TXT[SRC] + " ")) and raises(lambda: at(DIST, "acfg1", "!" + TXT[DIST][1:]))
       and raises(lambda: at(VERSION, "acfg1", TXT[VERSION].replace('"7.20.0"', '"7.21.0"', 1))))
 check("ovw1's bundle reverter refuses the esb1-era bundle, and its dashboard reverter the acfg1-era dashboard (their hunks are not ovw1's)",
-      P1[DIST] is not None and raises(lambda: O.pre_ovw1_bundle(P1[DIST])) and raises(lambda: O.pre_ovw1_dashboard(P1[DASH])))
+      P1[DIST] is not None and P1[DASH] is not None and raises(lambda: O.pre_ovw1_bundle(P1[DIST]))
+      and raises(lambda: O.pre_ovw1_dashboard(P1[DASH])))
 
 print("")
 if FAILURES:

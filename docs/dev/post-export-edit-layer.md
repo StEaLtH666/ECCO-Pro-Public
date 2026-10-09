@@ -127,3 +127,6 @@ The card's own suite pins the live integration: one use of the card, one manifes
 
 The card's `callService` sites and `(domain, service)` pairs are unchanged; the new tab selection module has no regex literal and
 no runtime import. `ovw1` changed no firmware, Home Assistant package, deployment, registry or behaviour.
+
+Deployment order for dashboard 7.20.0: the Weather & Solar bundle (a manual Lovelace resource, not in the manifest) and the rebuilt
+Energy Actions bundle (listed in the manifest; bump the resource URL's `?v=` so browsers reload it) go first, then the dashboard.
