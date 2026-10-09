@@ -933,6 +933,8 @@ ls = subprocess.run(["git", "ls-files", "-z", "--", FE_DIR], cwd=str(ROOT), capt
 fe_tracked = sorted(f for f in ls.stdout.decode("utf-8").split("\0") if f)
 fe_hash = hashlib.sha256()
 for rel in fe_tracked:
+    if rel in _pex.post_export_added():   # PEX (ovw1): a file a post-export entry added is not in the pub0-era folder (the pin's file set)
+        continue
     fe_hash.update(rel.encode())
     _fe_lf = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # tracked content, LF
     _fe_lf = _pex.as_of_pub0(rel, _fe_lf.decode("utf-8")).encode("utf-8") if rel in _pex.FROZEN else _fe_lf   # PEX (esb1): a frozen card file (pub0 target or enrolled) AS OF pub0

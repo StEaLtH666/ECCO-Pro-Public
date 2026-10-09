@@ -4,7 +4,7 @@
 Test-only. No firmware build, no hardware, no Home Assistant, no network. I/O: reads repo files and `git ls-files`.
 
   [0]  the declaration: schema, the frozen set (the pub0 targets that are not chain-pinned, plus ENROLLED = VERSION.yaml (O3) and the
-       three Energy Actions card files of the O3 amendment (esb1)), the deny-list, the chain shape (the twelve closed ENTRIES, then pub0, then the post-export entries), pex0 carries no product change
+       five Energy Actions card files of the O3 amendments (esb1, ovw1)), the deny-list, the chain shape (the twelve closed ENTRIES, then pub0, then the post-export entries), pex0 carries no product change
   [1]  T1 exactness: every post-export hunk (and the gate's) is exact - one altered character, a missing or a duplicated hunk raises
   [2]  T2 checkpoints: every entry reproduces its recorded checkpoints; undoing it lands on the declared state before it
   [3]  T3 nothing else moved: at every post-export state every frozen and chain-pinned file is exactly its declared state
@@ -75,9 +75,12 @@ DASH = "home-assistant/dashboards/ecco_pro.yaml"
 TELEMETRY = "home-assistant/packages/ecco_canonical_telemetry.yaml"
 VERSION = "VERSION.yaml"
 # O3 amendment (esb1, owner-approved 2026-10-08): the three Energy Actions card files whose pub0-era state the FB-B3 / FB-C3 folder pins
-# and the lic0 suite pin. ENROLLED is exactly VERSION.yaml plus these; it grows only by such an explicit, evidenced owner decision.
+# and the lic0 suite pin; O3 amendment (ovw1, owner-approved 2026-10-09): the same card's source and config, for the same pins (its README
+# is a pub0 target, frozen through the manifest). ENROLLED is exactly VERSION.yaml plus these five; it grows only by such an explicit,
+# evidenced owner decision.
 EA_ENROLLED = {"frontend/ecco-energy-actions-card/package.json", "frontend/ecco-energy-actions-card/package-lock.json",
-               "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js"}
+               "frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js",
+               "frontend/ecco-energy-actions-card/src/ecco-energy-actions-card.ts", "frontend/ecco-energy-actions-card/src/config.ts"}
 MANIFEST = sc.HA_MANIFEST
 CAPS = sc.CAPABILITIES
 RECS = _pub0.records()
@@ -97,12 +100,12 @@ print("[0] the declaration")
 check("this tree is the pub0 export (PEX is public-tree-only, owner decision O5)", _pub0.EXPORTED is True)
 check("schema ecco-pex/1; the genesis is pub0 of public main @ 883068d",
       X.SCHEMA == "ecco-pex/1" and X.EXPORT_ID == sc.PUB0.id == "pub0" and X.BASE_COMMIT == "883068daf63e51ff0e79c9f2cc427a3124f6cccb")
-check("ENROLLED is exactly VERSION.yaml (owner decision O3) and the three Energy Actions card files (O3 amendment, esb1), each a "
+check("ENROLLED is exactly VERSION.yaml (owner decision O3) and the five Energy Actions card files (O3 amendments, esb1 and ovw1), each a "
       "64-hex hash, neither a pub0 target nor chain-pinned",
       set(X.ENROLLED) == {VERSION} | EA_ENROLLED and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in X.ENROLLED.values())
       and not set(X.ENROLLED) & set(_pub0.TARGETS) and not set(X.ENROLLED) & set(sc.PINNED))
-check("FROZEN is exactly the pub0 targets that are not chain-pinned, plus ENROLLED (56 + 4 files)",
-      X.FROZEN == (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(X.ENROLLED) and len(X.FROZEN) == 60
+check("FROZEN is exactly the pub0 targets that are not chain-pinned, plus ENROLLED (56 + 6 files)",
+      X.FROZEN == (frozenset(_pub0.TARGETS) - frozenset(sc.PINNED)) | frozenset(X.ENROLLED) and len(X.FROZEN) == 62
       and set(_pub0.TARGETS) & set(sc.PINNED) == {CAPS})
 _scopes_now = set(subprocess.run(["git", "ls-files", "-z", "--", "registry/tests/_*_scope.py"], cwd=str(ROOT), capture_output=True)
                   .stdout.decode("utf-8").split("\0")) - {""}
@@ -270,13 +273,16 @@ print("[8] T8 the PEX ledger")
 # ===========================================================================
 LEDGER = {   # file -> exact number of calls of each _pex function
     "registry/tests/test_pub0_transition.py": {"as_of_pub0": 2},
-    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 4},              # esb1: +1 (the Energy Actions folder pin); acfg1: +1 ([10], the pub0-era manifest)
-    "home-assistant/tests/test_ecco_fallback_packages.py": {"as_of_pub0": 5},             # esb1: +1 (the Energy Actions folder pin)
-    "home-assistant/tests/test_ecco_shadow_check_ux.py": {"as_of_pub0": 3, "post_export_added": 1},   # esb1: +1 (the folder pin)
-    "registry/tests/test_lic0_transition.py": {"as_of_pub0": 1},                          # esb1: the lic0-era card files
+    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 4, "post_export_added": 1},   # esb1: +1 as_of_pub0 (the Energy Actions folder pin); acfg1: +1 ([10], the pub0-era manifest); ovw1: +1 post_export_added (the folder pin skips added files)
+    "home-assistant/tests/test_ecco_fallback_packages.py": {"as_of_pub0": 5, "post_export_added": 1},   # esb1: +1 as_of_pub0 (the Energy Actions folder pin); ovw1: +1 post_export_added (the folder pin skips added files)
+    "home-assistant/tests/test_ecco_shadow_check_ux.py": {"as_of_pub0": 3, "post_export_added": 2},   # esb1: +1 as_of_pub0 (the folder pin); ovw1: +1 post_export_added (the folder pin skips added files)
+    "registry/tests/test_lic0_transition.py": {"as_of_pub0": 1, "post_export_added": 1},   # esb1: the lic0-era card files; ovw1: [3] skips the added files
     "registry/tests/_esb1_scope.py": {"as_of_pub0": 3},   # esb1's exact hunks QUOTE the three routing lines (data, not calls)
-    "registry/tests/test_esb1_transition.py": {"read": 1, "as_of": 1, "historical_chain_sha": 1},   # esb1's own proofs
+    "registry/tests/test_esb1_transition.py": {"read": 1, "as_of": 1, "historical_chain_sha": 1, "post_export_added": 1},   # esb1's own proofs; ovw1: [2] skips the added files
     "registry/tests/_acfg1_scope.py": {"as_of_pub0": 1},  # acfg1's exact hunk QUOTES the [10] routing line (data, not a call)
+    "registry/tests/_ovw1_scope.py": {"post_export_added": 3},   # ovw1's exact hunks QUOTE the three routing lines (data, not calls)
+    "registry/tests/test_ovw1_transition.py": {"read": 3, "as_of": 1, "fingerprint": 1, "record": 1, "historical_chain_sha": 1, "checkpoint": 1,
+                                               "post_export_added": 2, "base": 1, "exact_pairs": 1},   # ovw1's own proofs (one post_export_added is a quoted routing line)
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")

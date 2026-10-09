@@ -134,6 +134,55 @@ sub-field maps directly to one existing Home Assistant entity - see
 [`examples/ecco-example.yaml`](examples/ecco-example.yaml) for the real ECCO
 installation's entity ids. No entity id is ever hard-coded in `src/`.
 
+### Layouts
+
+`layout:` is optional and presentation-only: it changes no entity mapping
+and no service call.
+
+```yaml
+type: custom:ecco-energy-actions-card
+layout: tabbed        # optional - side-by-side (default) | tabbed
+```
+
+- **`side-by-side`** (the default, and what any other value falls back to -
+  the card does not reject unknown values) renders both tiles in one grid,
+  exactly as before this option existed.
+- **`tabbed`** (used by the ECCO Pro Overview) shows one mode at a time:
+  - The title row carries a **track strip**: one chip per mode (`Free Power
+    · Ready`, `Dump to Grid · Scheduled`, ...) in the same state tones as the
+    tiles' own pills. Both chips are always visible, and both modes' display
+    states are classified on every render exactly as the tiles do (hardware
+    state, then the schedule overlay, then the sibling interlock) - the
+    hidden mode is never short-circuited.
+  - A **Free Power / Dump to Grid** selector (`role="tablist"`, 44 px
+    targets, the NOW/LATER selector's look) picks which mode's full tile
+    renders beneath it. The tile itself is unchanged: the same NOW/LATER
+    panels, staged sliders, ARM / START / END & RESTORE, banners, recovery
+    panel and firmware status line as in the side-by-side layout.
+  - **Initial tab:** chosen once, on the first render in which at least
+    one mode has a real state, by state priority `recovery_attention >
+    deferred > busy > active > armed > scheduled > interlocked > ready >
+    unavailable`; a tie goes to Free Power. While both modes are
+    unavailable (device offline, entities not registered yet) Free Power
+    shows provisionally and the choice waits, so a recovery that surfaces
+    on reconnect still wins the first tab. After that only a tap on a tab
+    changes it - the card never switches tabs by itself, even when the
+    hidden mode's state changes (you may be mid-edit).
+  - **Cross-mode alert banner** (not dismissible) directly under the
+    selector whenever the hidden mode is **active** (accent), **busy** or
+    **deferred** (amber) or in **recovery attention** (red): it names the
+    mode, its state label and the firmware's literal status text, with a
+    **Show** button that switches to that tab. A hidden mode that is armed,
+    scheduled, interlocked, ready or unavailable is announced by its chip
+    only. The rules live in `src/trackSelection.ts` (pure, no regex
+    literal) and are pinned by `test/trackSelection.test.ts`.
+  - **Nothing transfers between modes.** ARM toggles only the visible
+    mode's own write-enable switch, START / END & RESTORE press only its
+    own buttons, NOW/LATER and staged values stay per mode, and switching
+    tabs cancels any pending two-tap End & Restore confirmation of *both*
+    modes so a stale "tap again" can never apply to the other one. The
+    firmware's own mutual-exclusion preconditions apply unchanged.
+
 ## The safety model
 
 Two-step, deliberately never collapsible into one click:

@@ -11,7 +11,8 @@
   [6] the older suites that pin the folder route it through pre_lic0_bytes (and nothing else does)
 
 [1]-[3] and [5] read the lic0-era files: a frozen card file (a pub0 target, or enrolled by the O3 amendment) AS OF pub0, so a
-declared post-export entry (esb1: esbuild 0.28.1) is undone exactly first; every other file, and [4], read the live tree
+declared post-export entry (esb1: esbuild 0.28.1; ovw1: the tabbed layout) is undone exactly first; every other file, and [4], read the
+live tree. [3] skips the files a post-export entry added (ovw1: src/trackSelection.ts, test/trackSelection.test.ts): neither folder pin saw them
 
 Test-only, no network. I/O: reads repo files and `git ls-files`.
 """
@@ -114,6 +115,8 @@ check("the folder enumeration is the Git-tracked files only and includes every l
       ls.returncode == 0 and set(L.TARGETS) <= set(tracked), str(len(tracked)))
 f_pre, f_post = hashlib.sha256(), hashlib.sha256()
 for rel in tracked:
+    if rel in _pex.post_export_added():   # PEX (ovw1): a file a post-export entry added is not in the lic0-era folder (neither pin saw it)
+        continue
     data = _pub0.private_view_bytes(rel, lic0_era(rel))
     f_pre.update(rel.encode())
     f_pre.update(L.pre_lic0_bytes(rel, data))

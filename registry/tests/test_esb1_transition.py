@@ -189,10 +189,11 @@ check("each suite keeps the FB-B3 folder pin value (nothing re-hashed) and route
 tracked = sorted(f for f in subprocess.run(["git", "ls-files", "-z", "--", CARD], cwd=str(ROOT), capture_output=True)
                  .stdout.decode("utf-8").split("\0") if f)
 folder = hashlib.sha256()
-for rel in tracked:
+esb1_files = [f for f in tracked if f not in _pex.post_export_added()]   # PEX (ovw1): files a later entry added were not in the folder as of esb1
+for rel in esb1_files:
     folder.update(rel.encode())
-    folder.update((TXT[rel] if rel in TXT else (ROOT / rel).read_bytes().replace(b"\r\n", b"\n").decode("utf-8")).encode("utf-8"))
-check("the card folder as of esb1 is pinned (26 Git-tracked files: path and LF text)", len(tracked) == 26 and set(CARD_FILES) <= set(tracked)
+    folder.update((TXT[rel] if rel in TXT else at(rel, "esb1") if rel in _pex.FROZEN else (ROOT / rel).read_bytes().replace(b"\r\n", b"\n").decode("utf-8")).encode("utf-8"))   # PEX (ovw1): a frozen card file AS OF esb1
+check("the card folder as of esb1 is pinned (26 Git-tracked files: path and LF text)", len(esb1_files) == 26 and set(CARD_FILES) <= set(esb1_files)
       and folder.hexdigest() == FOLDER_ESB1_SHA256, folder.hexdigest())
 
 # ===========================================================================

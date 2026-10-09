@@ -153,6 +153,15 @@ export interface EccoEnergyActionsCardConfig {
   schedule?: ScheduleEntities;
   /** Optional - omit to keep the static "Coming Soon" Dump to Grid preview shell. */
   dump_to_grid?: DumpToGridEntities;
+  /**
+   * Presentation only. "side-by-side" (the default, and what any other value
+   * falls back to) renders both tiles in one grid exactly as before;
+   * "tabbed" shows one track at a time behind a Free Power / Dump to Grid
+   * selector with a per-track state chip strip and a cross-track alert
+   * banner (see README "Layouts"). No entity mapping or service call differs
+   * between the two.
+   */
+  layout?: "side-by-side" | "tabbed";
 }
 
 export const DEFAULT_TITLE = "Energy Actions";

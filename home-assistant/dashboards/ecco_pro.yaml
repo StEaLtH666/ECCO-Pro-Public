@@ -23,6 +23,11 @@
 # Global Power / Export Limit register 245 panel). Display only: the card cannot write; no control, no firmware change.
 # 7.19.0 also carries the read-only Weather & Solar view after Overview (wsc1), added without a version bump of
 # its own.
+# v7.20.0 (OVW1, STAGED / NOT LIVE-PROVEN) rebuilds the Overview as nine sections: a compact status banner (now also
+# reading the Dump to Grid lease states and both recovery-state sensors), the Weather & Solar card's solar strip and compact daily layouts, the Energy
+# Flow card beside a slim Grid Status / Current Plan / Tariff column, the Energy Actions card in its tabbed layout with
+# the Known-Good Profile bar, decision support (ECCO Today, battery estimate, scheduled sessions), the Power Flow chart
+# beside an electrical detail list, and one merged System Health card. Display only: no control, no firmware change.
 # Built for Home Assistant Sections view + Flexible Horseshoe Card + Sunsynk Power Flow Card (secondary/detail views) + ApexCharts + card-mod
 # Entity IDs matched from the ECCO entity dump captured 2026-09-12.
 
@@ -118,36 +123,16 @@ views:
     max_columns: 4
     dense_section_placement: true
     sections:
+      # ================= S1 STATUS BANNER (span 4) =================
       - type: grid
         column_span: 4
         cards:
-          - type: heading
-            heading: ECCO Pro • Overview
-            heading_style: title
-            icon: mdi:view-dashboard
-            badges:
-              - type: entity
-                entity: binary_sensor.ecco_clock_dongle_telemetry_online
-                name: Telemetry
-                show_state: true
-                color: green
-              - type: entity
-                entity: binary_sensor.ecco_clock_dongle_configuration_online
-                name: Config
-                show_state: true
-                color: green
-              - type: entity
-                entity: binary_sensor.ecco_clock_dongle_ntp_synced
-                name: NTP
-                show_state: true
-                color: green
-            grid_options:
-              columns: 48
-              rows: auto
-
           # ---- ECCO STATUS HERO — READ-ONLY MONITORING ----
           # Visual summary only. This card is NOT a control-readiness gate and
           # does not call services or write any inverter setting.
+          # OVW1: the same state machine, pills and vocabulary as before; compact (headline row + eight pills), the
+          # live BATTERY / SOLAR / HOUSE / GRID tiles removed (the Energy Flow card shows them), and the Dump to Grid
+          # lease states added to the inputs (D4) so an active or stuck Dump lease is visible at the top of the page.
           - type: custom:button-card
             section_mode: true
             name: ECCO Pro
@@ -179,20 +164,37 @@ views:
                   const rtcState = get('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress');
                   const freeOpState = get('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress');
                   const freeActiveState = get('binary_sensor.ecco_clock_dongle_free_power_active');
+                  const dumpOpState = get('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress');
+                  const dumpActiveState = get('binary_sensor.ecco_clock_dongle_dump_to_grid_active');
                   const manualBusy = manualState === 'on';
                   const rtcBusy = rtcState === 'on';
                   const freeBusy = freeOpState === 'on';
                   const freeActive = freeActiveState === 'on';
+                  const dumpBusy = dumpOpState === 'on';
+                  const dumpActive = dumpActiveState === 'on';
                   const snapshot = get('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid');
                   const snapshotPending = snapshot === 'on' && !freeActive && !freeBusy;
+                  // OVW1 (D4): the Dump to Grid lease states join the same inputs (display only).
+                  const dumpSnapshot = get('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid');
+                  const dumpSnapshotPending = dumpSnapshot === 'on' && !dumpActive && !dumpBusy;
+                  // OVW1: the two recovery-state text sensors are firmware enums (Free Power: NONE / LOCKED_* / ACCEPT_RUNNING; Dump to Grid:
+                  // NONE / PENDING / LOCKED / NEITHER / ACCEPTED). Read structurally: anything but the settled values NONE and
+                  // ACCEPTED is a recovery condition, whatever the free-text status says. Display only.
+                  const freeRecovery = get('sensor.ecco_clock_dongle_free_power_recovery_state');
+                  const dumpRecovery = get('sensor.ecco_clock_dongle_dump_to_grid_recovery_state');
+                  // (their own availability test: the generic unknown() helper treats the word none as unknown, and NONE is the idle value)
+                  const recoveryUnavailable = v => ['unknown','unavailable',''].includes(String(v).toLowerCase());
+                  const recoverySettled = v => v === 'NONE' || String(v).startsWith('ACCEPTED');
+                  const freeRecoveryAttention = !recoveryUnavailable(freeRecovery) && !recoverySettled(freeRecovery);
+                  const dumpRecoveryAttention = !recoveryUnavailable(dumpRecovery) && !recoverySettled(dumpRecovery);
                   // FB-B3: display words only (sensor.ecco_supervision_status / sensor.ecco_fallback_status).
                   // Deliberately NOT in `required` (a fallback Unknown must not turn the headline into
                   // STATUS PARTIAL) and only supervision Lost is hardAttention; fallback states are not.
                   const sup = get('sensor.ecco_supervision_status');
                   const fb = get('sensor.ecco_fallback_status');
 
-                  const required = [comm,runtime,telemetry,configOnline,ntp,cache,inverter,warning,fault,manualState,rtcState,freeOpState,freeActiveState,snapshot];
-                  const hasUnknown = required.some(unknown);
+                  const required = [comm,runtime,telemetry,configOnline,ntp,cache,inverter,warning,fault,manualState,rtcState,freeOpState,freeActiveState,snapshot,dumpOpState,dumpActiveState,dumpSnapshot];
+                  const hasUnknown = required.some(unknown) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery);
                   const hardAttention =
                     comm !== 'HEALTHY' ||
                     runtime !== 'HEALTHY' ||
@@ -204,8 +206,11 @@ views:
                     warning !== '00000000' ||
                     fault !== '0000000000000000' ||
                     snapshotPending ||
+                    dumpSnapshotPending ||
+                    freeRecoveryAttention ||
+                    dumpRecoveryAttention ||
                     sup === 'Lost';
-                  const busy = manualBusy || rtcBusy || freeBusy || freeActive;
+                  const busy = manualBusy || rtcBusy || freeBusy || freeActive || dumpBusy || dumpActive;
 
                   let headline, subline, colour, bg, border, icon;
                   if (hasUnknown) {
@@ -223,7 +228,7 @@ views:
                     border = 'rgba(255,189,61,.30)';
                     icon = 'mdi:alert-outline';
                   } else if (busy) {
-                    headline = freeActive ? 'FREE POWER ACTIVE' : 'OPERATION IN PROGRESS';
+                    headline = freeActive ? 'FREE POWER ACTIVE' : dumpActive ? 'DUMP TO GRID ACTIVE' : 'OPERATION IN PROGRESS';
                     subline = 'ECCO is healthy and a legitimate transaction is active';
                     colour = '#66b3ff';
                     bg = 'rgba(102,179,255,.10)';
@@ -259,36 +264,29 @@ views:
                   const runtimeChip = chipState(runtime === 'HEALTHY', false, unknown(runtime));
                   const rtcChip = chipState(ntp === 'on', rtcBusy, unknown(ntp) || unknown(rtcState));
                   const invChip = chipState(String(inverter).toLowerCase() === 'normal' && warning === '00000000' && fault === '0000000000000000', false, unknown(inverter) || unknown(warning) || unknown(fault));
-                  const txUnknown = unknown(manualState) || unknown(freeOpState) || unknown(freeActiveState);
-                  const txChip = chipState(true, manualBusy || freeBusy || freeActive, txUnknown);
-                  const recoveryChip = chipState(!snapshotPending, false, unknown(snapshot) || unknown(freeActiveState));
+                  const txUnknown = unknown(manualState) || unknown(freeOpState) || unknown(freeActiveState) || unknown(dumpOpState) || unknown(dumpActiveState);
+                  const txChip = chipState(true, manualBusy || freeBusy || freeActive || dumpBusy || dumpActive, txUnknown);
+                  const recoveryChip = chipState(!snapshotPending && !dumpSnapshotPending && !freeRecoveryAttention && !dumpRecoveryAttention, false, unknown(snapshot) || unknown(freeActiveState) || unknown(dumpSnapshot) || unknown(dumpActiveState) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery));
                   const supChips = {'Healthy': ['HEALTHY', 'good'], 'Recovering': ['RECOVERING', 'info'], 'Awaiting Heartbeat': ['AWAITING', 'muted'], 'Suspect': ['SUSPECT', 'warn'], 'Lost': ['LOST', 'warn']};
                   const supChip = supChips[sup] || ['UNKNOWN', 'muted'];
                   const fbChips = {'Ready': ['READY', 'good'], 'Drifted': ['DRIFTED', 'warn'], 'Not Captured': ['NOT SAVED', 'muted'], 'Invalidated': ['INVALIDATED', 'muted'], 'Blocked': ['BLOCKED', 'warn'], 'Shadow Recovery': ['SHADOW', 'warn']};
                   const fbChip = fbChips[fb] || ['UNKNOWN', 'muted'];
 
-                  const soc = num('sensor.ecco_clock_dongle_ecco_battery_soc');
-                  const pv = num('sensor.ecco_clock_dongle_ecco_pv_power');
-                  const load = num('sensor.ecco_clock_dongle_ecco_load_power');
-                  const grid = num('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp');
-                  const kw = v => v === null ? '--' : (Math.abs(v)/1000).toFixed(2) + ' kW';
-                  const gridText = grid === null ? '--' : Math.abs(grid) <= 40 ? 'Neutral' : grid > 0 ? `Import ${kw(grid)}` : `Export ${kw(grid)}`;
-
                   return `<div>
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 15px;border-radius:15px;background:${bg};border:1px solid ${border};">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 12px;border-radius:12px;background:${bg};border:1px solid ${border};">
                       <div style="display:flex;align-items:center;gap:12px;min-width:0;">
-                        <ha-icon icon="${icon}" style="width:30px;height:30px;color:${colour};flex:0 0 auto;"></ha-icon>
+                        <ha-icon icon="${icon}" style="width:26px;height:26px;color:${colour};flex:0 0 auto;"></ha-icon>
                         <div style="min-width:0;">
-                          <div style="font-size:26px;font-weight:900;letter-spacing:.25px;color:${colour};">${headline}</div>
+                          <div style="font-size:22px;font-weight:900;letter-spacing:.25px;color:${colour};">${headline}</div>
                           <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:2px;">${subline}</div>
                         </div>
                       </div>
-                      <div style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.42);text-align:right;line-height:1.4;">
+                      <div style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.42);text-align:right;line-height:1.4;flex:0 0 auto;">
                         MONITORING ONLY<br>NOT A CONTROL GATE
                       </div>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:7px;margin-top:9px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:6px;margin-top:8px;">
                       ${pill('COMMS', commChip[0], commChip[1])}
                       ${pill('RUNTIME CONFIG', runtimeChip[0], runtimeChip[1])}
                       ${pill('RTC / NTP', rtcChip[0], rtcChip[1])}
@@ -298,57 +296,56 @@ views:
                       ${pill('SUPERVISION', supChip[0], supChip[1])}
                       ${pill('FALLBACK', fbChip[0], fbChip[1])}
                     </div>
-
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:7px;margin-top:9px;">
-                      <div style="padding:9px 10px;border-radius:11px;background:rgba(255,255,255,.035);">
-                        <div style="font-size:9px;color:rgba(255,255,255,.42);font-weight:800;letter-spacing:.5px;">BATTERY</div>
-                        <div style="font-size:17px;color:#fff;font-weight:800;margin-top:2px;">${soc === null ? '--' : soc.toFixed(0) + '%'}</div>
-                      </div>
-                      <div style="padding:9px 10px;border-radius:11px;background:rgba(255,255,255,.035);">
-                        <div style="font-size:9px;color:rgba(255,255,255,.42);font-weight:800;letter-spacing:.5px;">SOLAR</div>
-                        <div style="font-size:17px;color:#fff;font-weight:800;margin-top:2px;">${kw(pv)}</div>
-                      </div>
-                      <div style="padding:9px 10px;border-radius:11px;background:rgba(255,255,255,.035);">
-                        <div style="font-size:9px;color:rgba(255,255,255,.42);font-weight:800;letter-spacing:.5px;">HOUSE</div>
-                        <div style="font-size:17px;color:#fff;font-weight:800;margin-top:2px;">${kw(load)}</div>
-                      </div>
-                      <div style="padding:9px 10px;border-radius:11px;background:rgba(255,255,255,.035);">
-                        <div style="font-size:9px;color:rgba(255,255,255,.42);font-weight:800;letter-spacing:.5px;">GRID</div>
-                        <div style="font-size:17px;color:#fff;font-weight:800;margin-top:2px;">${gridText}</div>
-                      </div>
-                    </div>
                   </div>`;
                 ]]]
             styles:
               card:
-                - border-radius: 22px
-                - padding: 17px 18px
-                - background: linear-gradient(145deg, rgba(20,28,45,0.99), rgba(10,15,27,0.99))
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
                 - border: 1px solid rgba(255,255,255,0.08)
-                - box-shadow: 0 14px 38px rgba(0,0,0,0.25)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
               grid:
                 - grid-template-areas: '"i n" "body body"'
-                - grid-template-columns: 38px 1fr
+                - grid-template-columns: 30px 1fr
                 - grid-template-rows: min-content 1fr
-                - row-gap: 10px
+                - row-gap: 8px
               icon:
-                - width: 27px
+                - width: 22px
                 - color: '#8f7cff'
               name:
                 - justify-self: start
                 - align-self: center
-                - font-size: 21px
-                - font-weight: 800
-                - color: rgba(255,255,255,0.94)
+                - font-size: 15px
+                - font-weight: 700
+                - color: rgba(255,255,255,0.92)
               custom_fields:
                 body:
                   - justify-self: stretch
                   - align-self: start
                   - width: 100%
             grid_options:
-              columns: 48
-              rows: 5
+              columns: full
+              rows: auto
 
+      # ================= S2 PV FORECAST STRIP (span 4) =================
+      # The read-only Weather & Solar card in its compact solar layout: the ECCO blend totals (today / remaining /
+      # tomorrow with their Solcast and Forecast.Solar inputs), the hourly curve and the source freshness. It reads
+      # the blend sensors exactly as the full card on the Weather & Solar view does and sends no command. Entity ids
+      # are the card's own defaults.
+      - type: grid
+        column_span: 4
+        cards:
+          - type: custom:ecco-weather-solar-card
+            layout: solar_strip
+            grid_options:
+              columns: full
+              rows: auto
+
+      # ================= S3 ENERGY FLOW (span 3) =================
+      - type: grid
+        column_span: 3
+        cards:
           # ---- LIVE ENERGY FLOW — PRIMARY OVERVIEW ----
           - type: custom:ecco-energy-flow-card
             title: ECCO Energy Flow
@@ -405,7 +402,7 @@ views:
               power_unit: auto
 
             grid_options:
-              columns: 32
+              columns: full
               rows: auto
             card_mod:
               style: |
@@ -415,316 +412,364 @@ views:
                 }
 
 
-          # ---- GRID STATUS + CURRENT PLAN (right-hand stack) ----
-          - type: vertical-stack
+      # ================= S4 RIGHT COLUMN (span 1): grid status, current plan, next days, tariff =================
+      - type: grid
+        column_span: 1
+        cards:
+          # ---- GRID / OUTAGE STATUS (slim) ----
+          - type: custom:button-card
+            section_mode: true
+            name: Grid Status
+            icon: mdi:transmission-tower
+            show_name: true
+            show_icon: true
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              body: >
+                [[[
+                  const gridState = states['binary_sensor.ecco_clock_dongle_ecco_grid_connected']?.state;
+                  const on = gridState === 'on';
+                  const n = id => {
+                    const v = Number(states[id]?.state);
+                    return Number.isFinite(v) ? v : null;
+                  };
+                  const voltage = n('sensor.ecco_clock_dongle_ecco_grid_voltage_l1');
+                  const freq = n('sensor.ecco_clock_dongle_ecco_grid_frequency');
+                  const grid = n('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp');
+                  const battery = n('sensor.ecco_clock_dongle_ecco_battery_output_power');
+                  const fmt = (v,d=0) => v === null ? '--' : v.toFixed(d);
+                  const absGrid = grid === null ? null : Math.abs(grid);
+                  const absBatt = battery === null ? null : Math.abs(battery);
+                  const gridNeutral = grid !== null && Math.abs(grid) <= 40;
+                  const battDischarging = battery !== null && battery > 100;
+                  const battCharging = battery !== null && battery < -100;
+
+                  let flow, detail, colour, bg, border;
+                  if (!on) {
+                    flow = 'GRID OUTAGE';
+                    detail = 'Mains supply lost';
+                    colour = '#ff5f6d';
+                    bg = 'rgba(255,95,109,.12)';
+                    border = 'rgba(255,95,109,.40)';
+                  } else if (grid === null) {
+                    flow = 'GRID POWER UNKNOWN';
+                    detail = 'No CT power reading';
+                    colour = '#ffbd3d';
+                    bg = 'rgba(255,189,61,.10)';
+                    border = 'rgba(255,189,61,.30)';
+                  } else if (grid < -40) {
+                    flow = `EXPORTING ${(absGrid/1000).toFixed(2)} kW`;
+                    detail = 'Sending surplus power to the grid';
+                    colour = '#c07cff';
+                    bg = 'rgba(192,124,255,.12)';
+                    border = 'rgba(192,124,255,.42)';
+                  } else if (grid > 40) {
+                    flow = `IMPORTING ${(absGrid/1000).toFixed(2)} kW`;
+                    detail = 'Drawing power from the grid';
+                    colour = '#66b3ff';
+                    bg = 'rgba(102,179,255,.11)';
+                    border = 'rgba(102,179,255,.36)';
+                  } else if (gridNeutral && battDischarging) {
+                    flow = `BATTERY SUPPLYING HOUSE ${(absBatt/1000).toFixed(2)} kW`;
+                    detail = `Grid near zero • ${fmt(grid)} W grid • battery carrying the load`;
+                    colour = '#55e58e';
+                    bg = 'rgba(85,229,142,.08)';
+                    border = 'rgba(85,229,142,.24)';
+                  } else if (gridNeutral && battCharging) {
+                    flow = `BATTERY CHARGING ${(absBatt/1000).toFixed(2)} kW`;
+                    detail = `Grid near zero • ${fmt(grid)} W grid • battery absorbing surplus`;
+                    colour = '#42aaff';
+                    bg = 'rgba(66,170,255,.10)';
+                    border = 'rgba(66,170,255,.30)';
+                  } else {
+                    flow = 'GRID NEUTRAL';
+                    detail = 'Import/export near zero • battery near idle';
+                    colour = '#55e58e';
+                    bg = 'rgba(85,229,142,.08)';
+                    border = 'rgba(85,229,142,.24)';
+                  }
+                  const gridWord = on ? 'Grid connected' : gridState === 'off' ? 'Grid disconnected' : 'Unknown';
+                  const gridTone = on ? ['#55e58e','rgba(85,229,142,.08)','rgba(85,229,142,.22)']
+                    : gridState === 'off' ? ['#ff5f6d','rgba(255,95,109,.12)','rgba(255,95,109,.40)']
+                    : ['#aab4c3','rgba(170,180,195,.06)','rgba(170,180,195,.15)'];
+                  const chip = (text, t) => `<span style="display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap;color:${t[0]};background:${t[1]};border:1px solid ${t[2]};">${text}</span>`;
+                  const muted = ['#aab4c3','rgba(170,180,195,.06)','rgba(170,180,195,.15)'];
+                  return `<div>
+                    <div style="padding:9px 11px;border-radius:11px;background:${bg};border:1px solid ${border};">
+                      <div style="font-size:20px;font-weight:900;letter-spacing:.3px;color:${colour};">${flow}</div>
+                      <div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:2px;">${detail}</div>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+                      ${chip(`${fmt(voltage,1)} V`, muted)}
+                      ${chip(`${fmt(freq,2)} Hz`, muted)}
+                      ${chip(gridWord, gridTone)}
+                    </div>
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"i n" "body body"'
+                - grid-template-columns: 30px 1fr
+                - grid-template-rows: min-content 1fr
+                - row-gap: 8px
+              icon:
+                - width: 20px
+                - color: '#7ab8ff'
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 15px
+                - font-weight: 700
+                - color: rgba(255,255,255,0.92)
+              custom_fields:
+                body:
+                  - justify-self: stretch
+                  - width: 100%
             grid_options:
-              columns: 16
+              columns: full
               rows: auto
-            cards:
-              # ---- GRID / OUTAGE STATUS ----
-              - type: custom:button-card
-                section_mode: true
-                name: Grid Status
-                icon: mdi:transmission-tower
-                show_name: true
-                show_icon: true
-                show_state: false
-                tap_action:
-                  action: none
-                custom_fields:
-                  body: >
-                    [[[
-                      const on = states['binary_sensor.ecco_clock_dongle_ecco_grid_connected']?.state === 'on';
-                      const n = id => {
-                        const v = Number(states[id]?.state);
-                        return Number.isFinite(v) ? v : null;
-                      };
-                      const voltage = n('sensor.ecco_clock_dongle_ecco_grid_voltage_l1');
-                      const freq = n('sensor.ecco_clock_dongle_ecco_grid_frequency');
-                      const grid = n('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp');
-                      const battery = n('sensor.ecco_clock_dongle_ecco_battery_output_power');
-                      const soc = n('sensor.ecco_clock_dongle_ecco_battery_soc');
-                      const load = n('sensor.ecco_clock_dongle_ecco_load_power');
-                      const fmt = (v,d=0) => v === null ? '--' : v.toFixed(d);
-                      const absGrid = grid === null ? null : Math.abs(grid);
-                      const absBatt = battery === null ? null : Math.abs(battery);
-                      const gridNeutral = grid !== null && Math.abs(grid) <= 40;
-                      const battDischarging = battery !== null && battery > 100;
-                      const battCharging = battery !== null && battery < -100;
 
-                      let flow, detail, colour, bg, border;
-                      if (!on) {
-                        flow = 'GRID OUTAGE';
-                        detail = 'Mains supply lost';
-                        colour = '#ff5f6d';
-                        bg = 'rgba(255,95,109,.12)';
-                        border = 'rgba(255,95,109,.40)';
-                      } else if (grid === null) {
-                        flow = 'GRID POWER UNKNOWN';
-                        detail = 'No CT power reading';
-                        colour = '#ffbd3d';
-                        bg = 'rgba(255,189,61,.10)';
-                        border = 'rgba(255,189,61,.30)';
-                      } else if (grid < -40) {
-                        flow = `EXPORTING ${(absGrid/1000).toFixed(2)} kW`;
-                        detail = 'Sending surplus power to the grid';
-                        colour = '#c07cff';
-                        bg = 'rgba(192,124,255,.12)';
-                        border = 'rgba(192,124,255,.42)';
-                      } else if (grid > 40) {
-                        flow = `IMPORTING ${(absGrid/1000).toFixed(2)} kW`;
-                        detail = 'Drawing power from the grid';
-                        colour = '#66b3ff';
-                        bg = 'rgba(102,179,255,.11)';
-                        border = 'rgba(102,179,255,.36)';
-                      } else if (gridNeutral && battDischarging) {
-                        flow = `BATTERY SUPPLYING HOUSE ${(absBatt/1000).toFixed(2)} kW`;
-                        detail = `Grid near zero • ${fmt(grid)} W grid • battery carrying the load`;
-                        colour = '#55e58e';
-                        bg = 'rgba(85,229,142,.08)';
-                        border = 'rgba(85,229,142,.24)';
-                      } else if (gridNeutral && battCharging) {
-                        flow = `BATTERY CHARGING ${(absBatt/1000).toFixed(2)} kW`;
-                        detail = `Grid near zero • ${fmt(grid)} W grid • battery absorbing surplus`;
-                        colour = '#42aaff';
-                        bg = 'rgba(66,170,255,.10)';
-                        border = 'rgba(66,170,255,.30)';
-                      } else {
-                        flow = 'GRID NEUTRAL';
-                        detail = 'Import/export near zero • battery near idle';
-                        colour = '#55e58e';
-                        bg = 'rgba(85,229,142,.08)';
-                        border = 'rgba(85,229,142,.24)';
-                      }
-                      return `<div>
-                        <div style="padding:13px 14px;border-radius:12px;background:${bg};border:1px solid ${border};">
-                          <div style="font-size:26px;font-weight:900;letter-spacing:.3px;color:${colour};">${flow}</div>
-                          <div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:4px;">${detail}</div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
-                          <div style="padding:8px;border-radius:10px;background:rgba(255,255,255,.035);"><span style="font-size:10px;color:rgba(255,255,255,.48);">GRID STATUS</span><br><b>${on ? 'Connected' : 'Disconnected'} • ${fmt(voltage,1)} V • ${fmt(freq,2)} Hz</b></div>
-                          <div style="padding:8px;border-radius:10px;background:rgba(255,255,255,.035);"><span style="font-size:10px;color:rgba(255,255,255,.48);">BATTERY / HOUSE</span><br><b>${fmt(soc)}% • ${fmt(load)} W load</b></div>
-                        </div>
-                      </div>`;
-                    ]]]
-                styles:
-                  card:
-                    - border-radius: 20px
-                    - padding: 16px 18px
-                    - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
-                    - border: 1px solid rgba(255,255,255,0.08)
-                    - box-shadow: 0 12px 32px rgba(0,0,0,0.22)
-                  grid:
-                    - grid-template-areas: '"i n" "body body"'
-                    - grid-template-columns: 34px 1fr
-                    - grid-template-rows: min-content 1fr
-                    - row-gap: 10px
-                  icon:
-                    - width: 24px
-                    - color: '#7ab8ff'
-                  name:
-                    - justify-self: start
-                    - align-self: center
-                    - font-size: 20px
-                    - font-weight: 700
-                    - color: rgba(255,255,255,0.92)
-                  custom_fields:
-                    body:
-                      - justify-self: stretch
-                      - width: 100%
+          # ---- CURRENT TOU / OPERATING PLAN (slim) ----
+          - type: custom:button-card
+            section_mode: true
+            name: Current Plan
+            icon: mdi:calendar-clock
+            show_name: true
+            show_icon: true
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              mode: >
+                [[[
+                  const em = states['sensor.ecco_clock_dongle_ecco_energy_management_model']?.state ?? 'Unknown';
+                  const tou = states['binary_sensor.ecco_clock_dongle_ecco_time_of_use_enabled']?.state === 'on';
+                  return `<span style="display:inline-block;padding:5px 10px;border-radius:999px;
+                    background:rgba(143,124,255,0.12);border:1px solid rgba(143,124,255,0.28);
+                    color:#b8adff;font-size:12px;font-weight:700;">
+                    ${em}${tou ? ' • TOU active' : ' • TOU off'}
+                  </span>`;
+                ]]]
+              slot: >
+                [[[
+                  const read = (i, type) => states[`sensor.ecco_clock_dongle_ecco_timezone${i}_${type}`]?.state ?? '--';
+                  const toMin = (t) => {
+                    const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+                    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+                  };
+                  const now = new Date();
+                  const cur = now.getHours()*60 + now.getMinutes();
+                  const slots = [];
 
-              # ---- CURRENT TOU / OPERATING PLAN ----
-              - type: custom:button-card
-                section_mode: true
-                name: Current Plan
-                icon: mdi:calendar-clock
-                show_name: true
-                show_icon: true
-                show_state: false
-                tap_action:
-                  action: none
-                custom_fields:
-                  mode: >
-                    [[[
-                      const em = states['sensor.ecco_clock_dongle_ecco_energy_management_model']?.state ?? 'Unknown';
-                      const tou = states['binary_sensor.ecco_clock_dongle_ecco_time_of_use_enabled']?.state === 'on';
-                      return `<span style="display:inline-block;padding:5px 10px;border-radius:999px;
-                        background:rgba(143,124,255,0.12);border:1px solid rgba(143,124,255,0.28);
-                        color:#b8adff;font-size:12px;font-weight:700;">
-                        ${em}${tou ? ' • TOU active' : ' • TOU off'}
-                      </span>`;
-                    ]]]
-                  slot: >
-                    [[[
-                      const read = (i, type) => states[`sensor.ecco_clock_dongle_ecco_timezone${i}_${type}`]?.state ?? '--';
-                      const toMin = (t) => {
-                        const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
-                        return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-                      };
-                      const now = new Date();
-                      const cur = now.getHours()*60 + now.getMinutes();
-                      const slots = [];
+                  for (let i=1; i<=6; i++) {
+                    const next = i === 6 ? 1 : i + 1;
+                    const startText = read(i,'time');
+                    const endText = read(next,'time');
+                    const start = toMin(startText);
+                    const end = toMin(endText);
+                    if (start === null || end === null) continue;
+                    const active = end > start ? (cur >= start && cur < end) : (cur >= start || cur < end);
+                    slots.push({
+                      i, active, startText, endText,
+                      power: Number(read(i,'power')),
+                      soc: Number(read(i,'soc')),
+                      charge: read(i,'charge')
+                    });
+                  }
 
-                      for (let i=1; i<=6; i++) {
-                        const next = i === 6 ? 1 : i + 1;
-                        const startText = read(i,'time');
-                        const endText = read(next,'time');
-                        const start = toMin(startText);
-                        const end = toMin(endText);
-                        if (start === null || end === null) continue;
-                        const active = end > start ? (cur >= start && cur < end) : (cur >= start || cur < end);
-                        slots.push({
-                          i, active, startText, endText,
-                          power: Number(read(i,'power')),
-                          soc: Number(read(i,'soc')),
-                          charge: read(i,'charge')
-                        });
-                      }
+                  const s = slots.find(x => x.active) ?? slots[0];
+                  if (!s) return 'TOU schedule unavailable';
+                  const power = Number.isFinite(s.power) ? `${(s.power/1000).toFixed(1)} kW ceiling` : '';
+                  const charging = s.charge !== 'None';
+                  const line1 = charging ? `${s.charge} charge enabled` : 'No forced charge';
+                  const line2 = charging && Number.isFinite(s.soc)
+                    ? `${s.soc.toFixed(0)}% charge target${power ? ` • ${power}` : ''}`
+                    : power;
+                  const detailLine = [line1, line2].filter(Boolean).join(' • ');
 
-                      const s = slots.find(x => x.active) ?? slots[0];
-                      if (!s) return 'TOU schedule unavailable';
+                  return `<div>
+                    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+                      <span style="font-size:20px;font-weight:800;color:#ffffff;">Slot ${s.i}</span>
+                      <span style="font-size:14px;font-weight:700;color:#b8adff;">${s.startText}–${s.endText}</span>
+                    </div>
+                    <div style="font-size:12px;color:rgba(255,255,255,0.64);margin-top:2px;line-height:1.5;">${detailLine}</div>
+                  </div>`;
+                ]]]
+              next: >
+                [[[
+                  const read = (i, type) => states[`sensor.ecco_clock_dongle_ecco_timezone${i}_${type}`]?.state ?? '--';
+                  const toMin = (t) => {
+                    const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+                    return m ? Number(m[1])*60 + Number(m[2]) : null;
+                  };
+                  const now = new Date();
+                  const cur = now.getHours()*60 + now.getMinutes();
+                  let best = null;
+                  for (let i=1; i<=6; i++) {
+                    const t = read(i,'time');
+                    const mins = toMin(t);
+                    if (mins === null) continue;
+                    let delta = mins-cur;
+                    if (delta <= 0) delta += 1440;
+                    if (!best || delta < best.delta) best = {i,t,delta};
+                  }
+                  if (!best) return '';
+                  const h = Math.floor(best.delta/60), m = best.delta%60;
+                  const left = h ? `${h}h ${m}m` : `${m}m`;
+                  return `<div style="padding:7px 10px;border-radius:10px;
+                    background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
+                    font-size:12px;color:rgba(255,255,255,0.67);">
+                    Next transition <b style="color:#fff;">${best.t}</b> • ${left}
+                  </div>`;
+                ]]]
+              access: >
+                [[[
+                  return `<div style="display:flex;align-items:center;gap:5px;text-align:right;line-height:1.25;
+                    color:#55e58e;font-size:10px;font-weight:800;letter-spacing:.45px;text-transform:uppercase;">
+                    <ha-icon icon="mdi:shield-check" style="width:14px;flex:none;"></ha-icon>
+                    <span>Observe only<br>no setting writes</span>
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"i n mode" "slot slot slot" "next next access"'
+                - grid-template-columns: 30px 1fr auto
+                - grid-template-rows: min-content 1fr min-content
+                - row-gap: 8px
+                - column-gap: 8px
+              icon:
+                - width: 20px
+                - color: '#b8adff'
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 15px
+                - font-weight: 700
+                - color: rgba(255,255,255,0.92)
+              custom_fields:
+                mode:
+                  - justify-self: end
+                  - align-self: center
+                slot:
+                  - justify-self: stretch
+                next:
+                  - justify-self: stretch
+                access:
+                  - justify-self: end
+                  - align-self: center
+            grid_options:
+              columns: full
+              rows: auto
 
-                      const power = Number.isFinite(s.power) ? `${(s.power/1000).toFixed(1)} kW ceiling` : '';
-                      const charging = s.charge !== 'None';
-                      const line1 = charging ? `${s.charge} charge enabled` : 'No forced charge';
-                      const line2 = charging && Number.isFinite(s.soc)
-                        ? `${s.soc.toFixed(0)}% charge target${power ? ` • ${power}` : ''}`
-                        : power;
+          # ---- NEXT DAYS (the Weather & Solar card's compact daily layout; Met.no, read-only) ----
+          - type: custom:ecco-weather-solar-card
+            layout: daily_compact
+            daily_days: 7
+            grid_options:
+              columns: full
+              rows: auto
 
-                      return `<div>
-                        <div style="font-size:26px;font-weight:800;color:#ffffff;">Slot ${s.i}</div>
-                        <div style="font-size:14px;font-weight:700;color:#b8adff;margin-top:2px;">${s.startText}–${s.endText}</div>
-                        <div style="font-size:12px;color:rgba(255,255,255,0.64);margin-top:7px;line-height:1.5;">
-                          ${line1}<br>${line2}
-                        </div>
-                      </div>`;
-                    ]]]
-                  next: >
-                    [[[
-                      const read = (i, type) => states[`sensor.ecco_clock_dongle_ecco_timezone${i}_${type}`]?.state ?? '--';
-                      const toMin = (t) => {
-                        const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
-                        return m ? Number(m[1])*60 + Number(m[2]) : null;
-                      };
-                      const now = new Date();
-                      const cur = now.getHours()*60 + now.getMinutes();
-                      let best = null;
-                      for (let i=1; i<=6; i++) {
-                        const t = read(i,'time');
-                        const mins = toMin(t);
-                        if (mins === null) continue;
-                        let delta = mins-cur;
-                        if (delta <= 0) delta += 1440;
-                        if (!best || delta < best.delta) best = {i,t,delta};
-                      }
-                      if (!best) return '';
-                      const h = Math.floor(best.delta/60), m = best.delta%60;
-                      const left = h ? `${h}h ${m}m` : `${m}m`;
-                      return `<div style="margin-top:10px;padding:9px 11px;border-radius:11px;
-                        background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
-                        font-size:12px;color:rgba(255,255,255,0.67);">
-                        Next transition <b style="color:#fff;">${best.t}</b> • ${left}
-                      </div>`;
-                    ]]]
-                  access: >
-                    [[[
-                      return `<div style="display:flex;align-items:center;gap:7px;margin-top:9px;
-                        color:#55e58e;font-size:11px;font-weight:700;">
-                        <ha-icon icon="mdi:shield-check" style="width:16px;"></ha-icon>
-                        Observe only • no setting writes
-                      </div>`;
-                    ]]]
-                styles:
-                  card:
-                    - border-radius: 20px
-                    - padding: 16px 18px
-                    - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
-                    - border: 1px solid rgba(255,255,255,0.08)
-                    - box-shadow: 0 12px 32px rgba(0,0,0,0.22)
-                  grid:
-                    - grid-template-areas: '"i n" "mode mode" "slot slot" "next next" "access access"'
-                    - grid-template-columns: 34px 1fr
-                    - grid-template-rows: min-content min-content 1fr min-content min-content
-                    - row-gap: 8px
-                  icon:
-                    - width: 24px
-                    - color: '#b8adff'
-                  name:
-                    - justify-self: start
-                    - align-self: center
-                    - font-size: 20px
-                    - font-weight: 700
-                    - color: rgba(255,255,255,0.92)
-                  custom_fields:
-                    mode:
-                      - justify-self: start
-                    slot:
-                      - justify-self: stretch
-                    next:
-                      - justify-self: stretch
-                    access:
-                      - justify-self: stretch
+          # ---- TARIFF NOW (the ECCO tariff template sensors; display only) ----
+          - type: custom:button-card
+            section_mode: true
+            name: Tariff now
+            icon: mdi:cash-clock
+            show_name: true
+            show_icon: true
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              band: >
+                [[[
+                  const raw = states['sensor.ecco_tariff_band']?.state;
+                  const unknown = raw === undefined || ['unknown','unavailable','none',''].includes(String(raw).toLowerCase());
+                  const band = unknown ? '--' : String(raw);
+                  const key = band.toLowerCase();
+                  const t = key === 'peak' ? ['#ff5f6d','rgba(255,95,109,.12)','rgba(255,95,109,.40)']
+                    : key === 'cheap' ? ['#55e58e','rgba(85,229,142,.08)','rgba(85,229,142,.22)']
+                    : key === 'standard' ? ['#66b3ff','rgba(102,179,255,.08)','rgba(102,179,255,.22)']
+                    : ['#aab4c3','rgba(170,180,195,.06)','rgba(170,180,195,.15)'];
+                  return `<span style="display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.45px;white-space:nowrap;color:${t[0]};background:${t[1]};border:1px solid ${t[2]};">${band.toUpperCase()}</span>`;
+                ]]]
+              body: >
+                [[[
+                  const n = id => {
+                    const v = Number(states[id]?.state);
+                    return Number.isFinite(v) ? v : null;
+                  };
+                  const p = (v, d=1) => v === null ? '--' : v.toFixed(d);
+                  const imp = n('sensor.ecco_import_rate');
+                  const exp = n('sensor.ecco_export_rate');
+                  const cheap = n('sensor.ecco_today_cheap_import_rate');
+                  const peak = n('sensor.ecco_today_peak_import_rate');
+                  const spread = n('sensor.ecco_import_export_spread');
+                  const next = n('sensor.ecco_next_import_rate');
+                  const tile = (label, value, colour) => `<div style="padding:8px 10px;border-radius:11px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);min-width:0;">
+                    <div style="font-size:10px;font-weight:700;letter-spacing:.45px;color:rgba(255,255,255,.46);">${label}</div>
+                    <div style="font-size:17px;font-weight:800;color:${colour};margin-top:1px;">${value} <span style="font-size:11px;color:rgba(255,255,255,.62);font-weight:700;">p/kWh</span></div>
+                  </div>`;
+                  return `<div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                      ${tile('IMPORT', p(imp), '#7ab8ff')}
+                      ${tile('EXPORT', p(exp), '#b36cff')}
+                    </div>
+                    <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:6px;">Today ${p(cheap)}–${p(peak)} p/kWh • spread ${p(spread)} p • next rate ${p(next)} p</div>
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"i n band" "body body body"'
+                - grid-template-columns: 30px 1fr auto
+                - grid-template-rows: min-content 1fr
+                - row-gap: 8px
+                - column-gap: 8px
+              icon:
+                - width: 20px
+                - color: '#b36cff'
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 15px
+                - font-weight: 700
+                - color: rgba(255,255,255,0.92)
+              custom_fields:
+                band:
+                  - justify-self: end
+                  - align-self: center
+                body:
+                  - justify-self: stretch
+                  - width: 100%
+            grid_options:
+              columns: full
+              rows: auto
 
-              # ---- SYSTEM HEALTH (compact summary - see the full System
-              # Health cards elsewhere in this dashboard for the older,
-              # unrelated raw-sensor view; this one reads the five
-              # dedicated Task 007 subsystem sensors directly) ----
-              - type: custom:button-card
-                section_mode: true
-                name: System Health
-                show_icon: false
-                show_state: false
-                tap_action:
-                  action: none
-                custom_fields:
-                  health: >
-                    [[[
-                      const tone = s => s === 'HEALTHY' ? '#39d27a' : s === 'DEGRADED' ? '#66b3ff' : s === 'WARNING' ? '#ffbd3d' : s === 'FAILED' ? '#ff5f6d' : '#aab4c3';
-                      const read = id => {
-                        const s = states[id]?.state;
-                        return ['HEALTHY', 'DEGRADED', 'WARNING', 'FAILED'].includes(s) ? s : 'UNKNOWN';
-                      };
-                      const rows = [
-                        ['Manual Write', read('sensor.ecco_health_manual_write_system')],
-                        ['RTC', read('sensor.ecco_health_rtc')],
-                        ['Free Power', read('sensor.ecco_health_free_power')],
-                        ['Configuration', read('sensor.ecco_health_configuration')],
-                        ['Inverter Telemetry', read('sensor.ecco_health_inverter_telemetry')],
-                        ['Supervision', read('sensor.ecco_health_supervision')],
-                        ['Fallback', read('sensor.ecco_health_fallback')]
-                      ];
-                      return `<div style="display:grid;gap:6px;">
-                        ${rows.map(r => `<div style="display:grid;grid-template-columns:8px 1fr auto;align-items:center;gap:7px;">
-                          <span style="width:7px;height:7px;border-radius:50%;background:${tone(r[1])};"></span>
-                          <span style="font-size:11px;color:rgba(255,255,255,.62);">${r[0]}</span>
-                          <span style="font-size:11px;font-weight:700;color:${tone(r[1])};">${r[1]}</span>
-                        </div>`).join('')}
-                      </div>`;
-                    ]]]
-                styles:
-                  card:
-                    - border-radius: 14px
-                    - padding: 10px 12px
-                    - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
-                    - border: 1px solid rgba(255,255,255,0.08)
-                    - box-shadow: 0 8px 20px rgba(0,0,0,0.18)
-                  grid:
-                    - grid-template-areas: '"n" "health"'
-                    - grid-template-columns: 1fr
-                    - grid-template-rows: min-content min-content
-                    - row-gap: 6px
-                  name:
-                    - justify-self: start
-                    - font-size: 11px
-                    - font-weight: 700
-                    - text-transform: uppercase
-                    - letter-spacing: 0.05em
-                    - color: rgba(255,255,255,0.5)
-                  custom_fields:
-                    health:
-                      - width: 100%
-
-
+      # ================= S5 ENERGY ACTIONS (tabbed) + KNOWN-GOOD PROFILE (span 2) =================
+      # OVW1: the Known-Good Profile tile (directly after the Energy Actions card, behind its FB-B3 marker) renders as
+      # one slim bar: label · state word · subline and saved summary · OPEN THE SAFETY TAB.
+      - type: grid
+        column_span: 2
+        cards:
           # ---- ENERGY ACTIONS (v7.16.0) - supersedes BOTH the v7.14.0
           # compact Free Power control strip AND the v7.14.0 Scheduled Free
           # Power strip that used to sit beneath it. Free Power is a
@@ -744,6 +789,7 @@ views:
           # duplicated here - this card only presents and drives them.
           - type: custom:ecco-energy-actions-card
             title: Energy Actions
+            layout: tabbed
 
             free_power:
               active: binary_sensor.ecco_clock_dongle_free_power_active
@@ -811,7 +857,7 @@ views:
                 cancel: script.ecco_dump_to_grid_cancel_schedule
 
             grid_options:
-              columns: 48
+              columns: full
               rows: auto
             card_mod:
               style: |
@@ -850,725 +896,54 @@ views:
                   const colour = tones[word] || '#aab4c3';
                   const when = at === '0' ? 'capture time unknown' : new Date(Number(at) * 1000).toLocaleString();
                   const saved = g === '-' ? 'No profile saved yet' : `Saved ${when} · generation ${g} · ID ${id.slice(0, 8)}`;
-                  return `<div>
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                      <div style="font-size:22px;font-weight:900;letter-spacing:.3px;color:${colour};">${String(word).toUpperCase()}</div>
-                      <div style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.42);">OPEN THE SAFETY TAB</div>
-                    </div>
-                    <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:4px;">${saved}</div>
-                    <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:2px;">${sub}</div>
+                  const line = [sub, saved].filter(Boolean).join(' · ');
+                  return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0;">
+                    <div style="font-size:20px;font-weight:900;letter-spacing:.3px;color:${colour};white-space:nowrap;">${String(word).toUpperCase()}</div>
+                    <div style="flex:1 1 220px;min-width:0;font-size:12px;color:rgba(255,255,255,.62);">${line}</div>
+                    <div style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.42);white-space:nowrap;">OPEN THE SAFETY TAB</div>
                   </div>`;
                 ]]]
             styles:
               card:
-                - border-radius: 18px
-                - padding: 14px 16px
+                - border-radius: 16px
+                - padding: 10px 14px
                 - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
                 - border: 1px solid rgba(255,255,255,0.08)
                 - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
               grid:
-                - grid-template-areas: '"i n" "body body"'
-                - grid-template-columns: 34px 1fr
-                - grid-template-rows: min-content 1fr
-                - row-gap: 8px
+                - grid-template-areas: '"i n body"'
+                - grid-template-columns: 22px auto 1fr
+                - grid-template-rows: min-content
+                - column-gap: 10px
               icon:
-                - width: 24px
+                - width: 18px
                 - color: '#8f7cff'
               name:
                 - justify-self: start
                 - align-self: center
-                - font-size: 13px
-                - font-weight: 700
+                - font-size: 11px
+                - font-weight: 800
                 - text-transform: uppercase
                 - letter-spacing: 0.05em
                 - color: rgba(255,255,255,0.5)
               custom_fields:
                 body:
                   - justify-self: stretch
-                  - align-self: start
+                  - align-self: center
                   - width: 100%
             grid_options:
-              columns: 48
-              rows: 3
+              columns: full
+              rows: auto
 
-          # ---- ECCO BLENDED PV FORECAST HEADLINES ----
-          - type: custom:button-card
-            section_mode: true
-            name: PV Forecast
-            icon: mdi:weather-partly-cloudy
-            show_name: true
-            show_icon: true
-            show_state: false
-            tap_action:
-              action: none
-            custom_fields:
-              body: >
-                [[[
-                  const val = (id) => {
-                    const v = Number(states[id]?.state);
-                    return Number.isFinite(v) ? v : null;
-                  };
-                  const attr = (id, name) => {
-                    const v = Number(states[id]?.attributes?.[name]);
-                    return Number.isFinite(v) ? v : null;
-                  };
-                  const fmt = (v) => v === null ? '--' : v.toFixed(1);
-
-                  const todayId = 'sensor.ecco_solar_forecast_today';
-                  const tomorrowId = 'sensor.ecco_solar_forecast_tomorrow';
-                  const today = val(todayId);
-                  const tomorrow = val(tomorrowId);
-                  const todayFs = attr(todayId, 'forecast_solar_kwh');
-                  const todaySc = attr(todayId, 'solcast_kwh');
-                  const tomorrowFs = attr(tomorrowId, 'forecast_solar_kwh');
-                  const tomorrowSc = attr(tomorrowId, 'solcast_kwh');
-
-                  const panel = (label, value, fs, sc, icon) => `
-                    <div style="flex:1;min-width:0;padding:10px 14px;border-radius:14px;
-                      background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);">
-                      <div style="display:flex;align-items:center;gap:8px;color:rgba(255,255,255,.60);font-size:12px;font-weight:700;">
-                        <ha-icon icon="${icon}" style="width:18px;color:#ffbd3d;"></ha-icon>${label}
-                      </div>
-                      <div style="margin-top:4px;font-size:25px;line-height:1.05;font-weight:800;color:#ffbd3d;">
-                        ${fmt(value)} <span style="font-size:13px;color:rgba(255,255,255,.70);">kWh</span>
-                      </div>
-                      <div style="margin-top:5px;font-size:10px;color:rgba(255,255,255,.48);line-height:1.45;">
-                        ECCO 50/50 blend
-                        ${fs !== null || sc !== null ? `<br>Forecast.Solar ${fmt(fs)} • Solcast ${fmt(sc)}` : ''}
-                      </div>
-                    </div>`;
-
-                  return `<div style="display:flex;gap:12px;width:100%;">
-                    ${panel('Today', today, todayFs, todaySc, 'mdi:white-balance-sunny')}
-                    ${panel('Tomorrow', tomorrow, tomorrowFs, tomorrowSc, 'mdi:weather-sunset-up')}
-                  </div>`;
-                ]]]
-            styles:
-              card:
-                - border-radius: 20px
-                - padding: 16px 18px
-                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
-                - border: 1px solid rgba(255,255,255,0.08)
-                - box-shadow: 0 12px 32px rgba(0,0,0,0.22)
-              grid:
-                - grid-template-areas: '"i n" "body body"'
-                - grid-template-columns: 34px 1fr
-                - grid-template-rows: min-content 1fr
-                - row-gap: 10px
-              icon:
-                - width: 24px
-                - color: '#ffbd3d'
-              name:
-                - justify-self: start
-                - align-self: center
-                - font-size: 20px
-                - font-weight: 700
-                - color: rgba(255,255,255,0.92)
-              custom_fields:
-                body:
-                  - justify-self: stretch
-                  - width: 100%
-            grid_options:
-              columns: 48
-              rows: 3
-
-          - type: custom:flex-horseshoe-card
-            entities:
-              - entity: sensor.ecco_clock_dongle_ecco_battery_soc
-                name: Battery
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_battery_voltage
-                name: Voltage
-                decimals: 1
-              - entity: sensor.ecco_clock_dongle_ecco_battery_output_current
-                name: Current
-                decimals: 1
-              - entity: sensor.ecco_clock_dongle_ecco_battery_output_power
-                name: Power
-                decimals: 0
-            layout:
-              names:
-                - id: title
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 11
-                  styles:
-                    - font-size: 1.08em
-                    - font-weight: 700
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.92)
-                - id: voltage_name
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: current_name
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: power_name
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-              states:
-                - id: soc
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  styles:
-                    - font-size: 2.5em
-                    - font-weight: 800
-                    - fill: '#55e58e'
-                - id: voltage
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: current
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: power
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-              icons:
-                - id: battery_icon
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 30
-                  icon_size: 1.6
-                  styles:
-                    - fill: '#39d27a'
-              horseshoes:
-                - id: battery_gauge
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  radius: 34
-                  arc_degrees: 255
-                  horseshoe_scale:
-                    min: 0
-                    max: 100
-                    styles:
-                      - opacity: 0.24
-                  horseshoe_state:
-                    width: 8
-                    styles:
-                      - filter: drop-shadow(0 0 3px rgba(57,210,122,0.55))
-                  show:
-                    horseshoe_style: colorstopgradient
-                  color_stops:
-                    colors:
-                      0: '#ff5f6d'
-                      25: '#ffb347'
-                      55: '#d7e75d'
-                      75: '#55e58e'
-                      100: '#29d979'
-            grid_options:
-              columns: 12
-              rows: 7
-            card_mod:
-              style: |
-                :host {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                }
-
-                ha-card {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  --ha-card-background: #0d1728 !important;
-                  --card-background-color: #0d1728 !important;
-                  border-radius: 20px;
-                  border: 1px solid rgba(255,255,255,0.08);
-                  background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                  overflow: hidden;
-                }
-                .card-header {
-                  color: rgba(255,255,255,0.92) !important;
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  font-size: 20px !important;
-                  font-weight: 700 !important;
-                  letter-spacing: 0 !important;
-                  text-transform: none !important;
-                }
-                svg text {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  text-transform: none !important;
-                  letter-spacing: 0 !important;
-                }
-          - type: custom:flex-horseshoe-card
-            entities:
-              - entity: sensor.ecco_clock_dongle_ecco_load_power
-                name: House Load
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_load_voltage_l1
-                name: Voltage
-                decimals: 1
-              - entity: sensor.ecco_clock_dongle_ecco_load_frequency
-                name: Frequency
-                decimals: 2
-              - entity: sensor.ecco_clock_dongle_ecco_inverter_output_current_l1
-                name: Current
-                decimals: 1
-            layout:
-              names:
-                - id: title
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 11
-                  styles:
-                    - font-size: 1.08em
-                    - font-weight: 700
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.92)
-                - id: voltage_name
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: frequency_name
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: current_name
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-              states:
-                - id: load
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  styles:
-                    - font-size: 2.3em
-                    - font-weight: 800
-                    - fill: '#5bbcff'
-                - id: voltage
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: frequency
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: current
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-              icons:
-                - id: house_icon
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 30
-                  icon_size: 1.6
-                  styles:
-                    - fill: '#42aaff'
-              horseshoes:
-                - id: house_gauge
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  radius: 34
-                  arc_degrees: 255
-                  horseshoe_scale:
-                    min: 0
-                    max: 8000
-                    styles:
-                      - opacity: 0.24
-                  horseshoe_state:
-                    width: 8
-                    styles:
-                      - filter: drop-shadow(0 0 3px rgba(66,170,255,0.5))
-                  show:
-                    horseshoe_style: colorstopgradient
-                  color_stops:
-                    colors:
-                      0: '#42aaff'
-                      3000: '#56c5ff'
-                      5500: '#ffc857'
-                      7000: '#ff7657'
-                      8000: '#ff5263'
-            grid_options:
-              columns: 12
-              rows: 7
-            card_mod:
-              style: |
-                :host {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                }
-
-                ha-card {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  --ha-card-background: #0d1728 !important;
-                  --card-background-color: #0d1728 !important;
-                  border-radius: 20px;
-                  border: 1px solid rgba(255,255,255,0.08);
-                  background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                  overflow: hidden;
-                }
-                .card-header {
-                  color: rgba(255,255,255,0.92) !important;
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  font-size: 20px !important;
-                  font-weight: 700 !important;
-                  letter-spacing: 0 !important;
-                  text-transform: none !important;
-                }
-                svg text {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  text-transform: none !important;
-                  letter-spacing: 0 !important;
-                }
-          - type: custom:flex-horseshoe-card
-            entities:
-              - entity: sensor.ecco_clock_dongle_ecco_pv_power
-                name: Solar PV
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_pv1_power
-                name: PV1
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_pv2_power
-                name: PV2
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_day_pv_energy
-                name: Today
-                decimals: 1
-            layout:
-              names:
-                - id: title
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 11
-                  styles:
-                    - font-size: 1.08em
-                    - font-weight: 700
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.92)
-                - id: pv1_name
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: pv2_name
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: today_name
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-              states:
-                - id: pv_total
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  styles:
-                    - font-size: 2.3em
-                    - font-weight: 800
-                    - fill: '#ffd05f'
-                - id: pv1
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: '#ffd05f'
-                - id: pv2
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: '#ffd05f'
-                - id: today
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-              icons:
-                - id: solar_icon
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 30
-                  icon_size: 1.6
-                  styles:
-                    - fill: '#ffbd3d'
-              horseshoes:
-                - id: solar_gauge
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  radius: 34
-                  arc_degrees: 255
-                  horseshoe_scale:
-                    min: 0
-                    max: 9500
-                    styles:
-                      - opacity: 0.24
-                  horseshoe_state:
-                    width: 8
-                    styles:
-                      - filter: drop-shadow(0 0 3px rgba(255,189,61,0.52))
-                  show:
-                    horseshoe_style: colorstopgradient
-                  color_stops:
-                    colors:
-                      0: '#9b7a2d'
-                      1000: '#d89a2d'
-                      3500: '#ffbd3d'
-                      6500: '#ffd95c'
-                      9500: '#fff18b'
-            grid_options:
-              columns: 12
-              rows: 7
-            card_mod:
-              style: |
-                :host {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                }
-
-                ha-card {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  --ha-card-background: #0d1728 !important;
-                  --card-background-color: #0d1728 !important;
-                  border-radius: 20px;
-                  border: 1px solid rgba(255,255,255,0.08);
-                  background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                  overflow: hidden;
-                }
-                .card-header {
-                  color: rgba(255,255,255,0.92) !important;
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  font-size: 20px !important;
-                  font-weight: 700 !important;
-                  letter-spacing: 0 !important;
-                  text-transform: none !important;
-                }
-                svg text {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  text-transform: none !important;
-                  letter-spacing: 0 !important;
-                }
-          - type: custom:flex-horseshoe-card
-            entities:
-              - entity: sensor.ecco_clock_dongle_ecco_inverter_output_power
-                name: Inverter
-                icon: mdi:solar-power-variant-outline
-                decimals: 0
-              - entity: sensor.ecco_clock_dongle_ecco_temperature_ac_transformer
-                name: AC Temp
-                decimals: 1
-              - entity: sensor.ecco_clock_dongle_ecco_inverter_output_frequency
-                name: Frequency
-                decimals: 2
-              - entity: sensor.ecco_clock_dongle_ecco_inverter_system_state
-                name: Status
-            layout:
-              names:
-                - id: title
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 11
-                  styles:
-                    - font-size: 1.08em
-                    - font-weight: 700
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.92)
-                - id: temp_name
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: frequency_name
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-                - id: status_name
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 89
-                  styles:
-                    - font-size: 0.72em
-                    - font-weight: 500
-                    - text-transform: none
-                    - fill: rgba(255,255,255,0.60)
-              states:
-                - id: inverter_power
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  styles:
-                    - font-size: 2.3em
-                    - font-weight: 800
-                    - fill: '#9c8cff'
-                - id: temp
-                  entity_index: 1
-                  xpos: 18
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: frequency
-                  entity_index: 2
-                  xpos: 50
-                  ypos: 80
-                  styles:
-                    - font-size: 0.95em
-                    - fill: rgba(255,255,255,0.88)
-                - id: status
-                  entity_index: 3
-                  xpos: 82
-                  ypos: 80
-                  styles:
-                    - font-size: 0.86em
-                    - font-weight: 700
-                    - fill: '#55e58e'
-              icons:
-                - id: inverter_icon
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 30
-                  icon_size: 1.6
-                  styles:
-                    - fill: '#8f7cff'
-              horseshoes:
-                - id: inverter_gauge
-                  entity_index: 0
-                  xpos: 50
-                  ypos: 50
-                  radius: 34
-                  arc_degrees: 255
-                  horseshoe_scale:
-                    min: 0
-                    max: 8000
-                    styles:
-                      - opacity: 0.24
-                  horseshoe_state:
-                    width: 8
-                    styles:
-                      - filter: drop-shadow(0 0 3px rgba(143,124,255,0.5))
-                  show:
-                    horseshoe_style: colorstopgradient
-                  color_stops:
-                    colors:
-                      0: '#7263d7'
-                      3000: '#8f7cff'
-                      6000: '#b29dff'
-                      8000: '#d3c7ff'
-            grid_options:
-              columns: 12
-              rows: 7
-            card_mod:
-              style: |
-                :host {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                }
-
-                ha-card {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  --ha-card-background: #0d1728 !important;
-                  --card-background-color: #0d1728 !important;
-                  border-radius: 20px;
-                  border: 1px solid rgba(255,255,255,0.08);
-                  background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98));
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                  overflow: hidden;
-                }
-                .card-header {
-                  color: rgba(255,255,255,0.92) !important;
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  font-size: 20px !important;
-                  font-weight: 700 !important;
-                  letter-spacing: 0 !important;
-                  text-transform: none !important;
-                }
-                svg text {
-                  font-family: "Roboto", "Segoe UI", Arial, sans-serif !important;
-                  text-transform: none !important;
-                  letter-spacing: 0 !important;
-                }
-
-
+      # ================= S6 DECISION SUPPORT (span 2): ECCO Today, battery estimate, scheduled sessions =================
+      - type: grid
+        column_span: 2
+        cards:
           # ---- ECCO TODAY / DECISION ENGINE ----
           # Dashboard-only modelling. It reads ECCO + Forecast.Solar + sun.sun.
           # No inverter setting writes are performed.
+          # OVW1: the status chip and the recommendation stay as they were; the five metric boxes and the Solar model
+          # line are gone (the Energy Flow card and the PV forecast strip show those values).
           - type: custom:button-card
             section_mode: true
             name: ECCO Today
@@ -1615,85 +990,6 @@ views:
                     <span style="width:8px;height:8px;border-radius:50%;background:${colour};box-shadow:0 0 8px ${colour};"></span>
                     ${label}
                   </span>`;
-                ]]]
-              metrics: >
-                [[[
-                  const n = (id) => Number(states[id]?.state ?? 0);
-                  const fmt = (v, d=1) => Number.isFinite(v) ? v.toFixed(d) : '--';
-                  const pvToday = n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
-                  const loadToday = n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const importToday = n('sensor.ecco_clock_dongle_ecco_day_grid_import');
-                  const exportToday = n('sensor.ecco_clock_dongle_ecco_day_grid_export');
-                  const battCharge = n('sensor.ecco_clock_dongle_ecco_day_battery_charge');
-                  const battDischarge = n('sensor.ecco_clock_dongle_ecco_day_battery_discharge');
-                  const soc = n('sensor.ecco_clock_dongle_ecco_battery_soc');
-                  const netGrid = importToday - exportToday;
-                  const throughput = battCharge + battDischarge;
-
-                  const gridLabel = netGrid >= 0 ? 'Net Import' : 'Net Export';
-                  const gridValue = `${fmt(Math.abs(netGrid))} kWh`;
-                  const gridColour = netGrid >= 0 ? '#7ab8ff' : '#b36cff';
-
-                  const boxes = [
-                    ['PV Today', `${fmt(pvToday)} kWh`, '#ffbd3d'],
-                    ['House Today', `${fmt(loadToday)} kWh`, '#42aaff'],
-                    [gridLabel, gridValue, gridColour],
-                    ['Battery SOC', `${fmt(soc,0)}%`, '#39d27a'],
-                    ['Battery Throughput', `${fmt(throughput)} kWh`, '#55e58e']
-                  ];
-
-                  return `<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;width:100%;">
-                    ${boxes.map(([k,v,c]) => `
-                      <div style="background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.07);
-                        border-radius:12px;padding:10px 12px;">
-                        <div style="font-size:11px;color:rgba(255,255,255,0.58);font-weight:600;">${k}</div>
-                        <div style="font-size:19px;color:${c};font-weight:800;margin-top:2px;">${v}</div>
-                      </div>`).join('')}
-                  </div>`;
-                ]]]
-              forecast: >
-                [[[
-                  const sensors = Object.values(states).filter(s => s.entity_id.startsWith('sensor.'));
-                  const friendly = (s) => String(s?.attributes?.friendly_name ?? s?.entity_id ?? '').toLowerCase();
-                  const find = (need, exclude=[]) => sensors.find(s => {
-                    const name = friendly(s);
-                    return need.every(x => name.includes(x)) && !exclude.some(x => name.includes(x));
-                  });
-                  const num = (s) => {
-                    const v = Number(s?.state);
-                    return Number.isFinite(v) ? v : null;
-                  };
-
-                  const today = num(states['sensor.ecco_solar_forecast_today']);
-                  const remaining = num(states['sensor.ecco_solar_forecast_remaining']);
-                  const tomorrow = num(states['sensor.ecco_solar_forecast_tomorrow']);
-                  const forecastNow = num(states['sensor.ecco_solar_forecast_power_now']);
-                  const actualNow = Number(states['sensor.ecco_clock_dongle_ecco_pv_power']?.state ?? 0);
-
-                  if (today === null && remaining === null && forecastNow === null) {
-                    return `<div style="padding:10px 12px;border-radius:12px;background:rgba(255,189,61,0.06);
-                      border:1px solid rgba(255,189,61,0.18);color:rgba(255,255,255,0.70);font-size:12px;">
-                      <b style="color:#ffbd3d;">Solar forecast not linked yet.</b>
-                      ECCO is waiting for a valid solar forecast source.
-                    </div>`;
-                  }
-
-                  let nowCompare = '';
-                  if (forecastNow !== null && forecastNow > 0) {
-                    const pct = Math.round((actualNow / forecastNow) * 100);
-                    const diff = actualNow - forecastNow;
-                    nowCompare = ` • actual now <b style="color:${diff >= 0 ? '#55e58e' : '#ffbd3d'}">${pct}%</b> of forecast`;
-                  }
-
-                  return `<div style="padding:10px 12px;border-radius:12px;background:rgba(255,189,61,0.055);
-                    border:1px solid rgba(255,189,61,0.16);color:rgba(255,255,255,0.72);font-size:12px;line-height:1.55;">
-                    <b style="color:#ffbd3d;">Solar model</b>
-                    ${today !== null ? ` • <b>${today.toFixed(1)} kWh</b> today` : ''}
-                    ${remaining !== null ? ` • <b>${remaining.toFixed(1)} kWh</b> remaining` : ''}
-                    ${forecastNow !== null ? ` • <b>${Math.round(forecastNow)} W</b> forecast now` : ''}
-                    ${nowCompare}
-                    ${tomorrow !== null ? ` • next day <b>${tomorrow.toFixed(1)} kWh</b>` : ''}
-                  </div>`;
                 ]]]
               recommendation: >
                 [[[
@@ -1862,35 +1158,31 @@ views:
                 ]]]
             styles:
               card:
-                - border-radius: 20px
-                - padding: 14px 16px
+                - border-radius: 16px
+                - padding: 12px 14px
                 - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
                 - border: 1px solid rgba(255,255,255,0.08)
-                - box-shadow: 0 12px 32px rgba(0,0,0,0.22)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
                 - overflow: hidden
               grid:
-                - grid-template-areas: '"i n status" "metrics metrics metrics" "forecast forecast forecast" "recommendation recommendation recommendation"'
-                - grid-template-columns: 34px 1fr auto
-                - grid-template-rows: min-content min-content min-content min-content
+                - grid-template-areas: '"i n status" "recommendation recommendation recommendation"'
+                - grid-template-columns: 30px 1fr auto
+                - grid-template-rows: min-content min-content
                 - row-gap: 8px
                 - column-gap: 10px
               icon:
-                - width: 25px
+                - width: 20px
                 - color: '#b8adff'
               name:
                 - justify-self: start
                 - align-self: center
-                - font-size: 20px
+                - font-size: 15px
                 - font-weight: 700
                 - color: rgba(255,255,255,0.92)
               custom_fields:
                 status:
                   - justify-self: end
                   - align-self: center
-                metrics:
-                  - width: 100%
-                forecast:
-                  - width: 100%
                 recommendation:
                   - width: 100%
                   - white-space: normal
@@ -1899,15 +1191,155 @@ views:
                   - word-break: normal
                   - line-height: 1.45
             grid_options:
-              columns: 48
-              rows: 5
+              columns: full
+              rows: auto
 
+          # ---- BATTERY ESTIMATE (existing ECCO template sensors; display only) ----
+          - type: custom:button-card
+            section_mode: true
+            name: Battery estimate
+            show_icon: false
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              body: >
+                [[[
+                  const n = id => {
+                    const v = Number(states[id]?.state);
+                    return Number.isFinite(v) ? v : null;
+                  };
+                  const f = (v, d=1) => v === null ? '--' : v.toFixed(d);
+                  const kwh = n('sensor.ecco_battery_energy_estimate');
+                  const soc = n('sensor.ecco_battery_soc');
+                  const cap = n('sensor.ecco_config_battery_capacity');
+                  const reserve = n('sensor.ecco_config_minimum_reserve_soc');
+                  const predicted = n('sensor.ecco_predicted_soc_plus_1_hour_baseline');
+                  return `<div>
+                    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+                      <span style="font-size:17px;font-weight:800;color:#39d27a;white-space:nowrap;">${f(kwh)} kWh</span>
+                      <span style="font-size:12px;color:rgba(255,255,255,.62);">stored · ${f(soc,0)} % of ${f(cap)} kWh</span>
+                    </div>
+                    <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:4px;">Reserve floor <b style="color:#fff;">${f(reserve,0)} %</b> · predicted SOC +1 h <b style="color:#fff;">${f(predicted,1)} %</b></div>
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"n" "body"'
+                - grid-template-columns: 1fr
+                - grid-template-rows: min-content 1fr
+                - row-gap: 6px
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 11px
+                - font-weight: 800
+                - text-transform: uppercase
+                - letter-spacing: 0.05em
+                - color: rgba(255,255,255,0.5)
+              custom_fields:
+                body:
+                  - justify-self: stretch
+                  - width: 100%
+            grid_options:
+              columns: 12
+              rows: auto
+
+          # ---- SCHEDULED SESSIONS (the two schedule packages' helpers; display only, no tap action, no service) ----
+          # Arming and cancelling stay in the Energy Actions card above; this row only shows both schedules at once
+          # because the tabbed card shows one mode at a time.
+          - type: custom:button-card
+            section_mode: true
+            name: Scheduled sessions
+            show_icon: false
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              body: >
+                [[[
+                  const st = id => states[id]?.state;
+                  const unknown = v => v === undefined || ['unknown','unavailable','none',''].includes(String(v).toLowerCase());
+                  const num = id => {
+                    const v = Number(st(id));
+                    return Number.isFinite(v) ? v : null;
+                  };
+                  const when = t => {
+                    const s = String(t ?? '');
+                    if (s.length === 19 && s[10] === ' ') return s.slice(0, 16);
+                    if (s.length === 8 && s[2] === ':') return s.slice(0, 5);
+                    return s;
+                  };
+                  const word = v => unknown(v) ? '--' : String(v);
+                  const row = (label, armedId, startId, powerId, durationId, stopSocId, statusId) => {
+                    const armedRaw = st(armedId);
+                    const armed = armedRaw === 'on';
+                    const start = st(startId), power = num(powerId), duration = num(durationId);
+                    const stopSoc = stopSocId ? num(stopSocId) : null;
+                    const status = st(statusId);
+                    const last = states[statusId]?.attributes?.last_result;
+                    const parts = armed
+                      ? ['armed', unknown(start) ? '--' : when(start), power === null ? '--' : `${power.toFixed(0)} W`, duration === null ? '--' : `${duration.toFixed(0)} min`]
+                      : [unknown(armedRaw) ? 'armed state unknown' : 'not armed'];
+                    if (armed && stopSocId) parts.push(stopSoc === null ? 'stop SOC --' : `stop SOC ${stopSoc.toFixed(0)} %`);
+                    const tone = armed ? '#c07cff' : unknown(armedRaw) ? '#aab4c3' : 'rgba(170,180,195,.6)';
+                    return `<div style="display:grid;grid-template-columns:8px 1fr;align-items:start;gap:7px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+                      <span style="width:7px;height:7px;border-radius:50%;background:${tone};margin-top:5px;"></span>
+                      <div style="min-width:0;">
+                        <div style="font-size:12px;color:rgba(255,255,255,.86);"><b>${label}</b> · ${parts.join(' · ')} <span style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.46);">${word(status).toUpperCase()}</span></div>
+                        <div style="font-size:11px;color:rgba(255,255,255,.52);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Last result: ${unknown(last) ? '--' : String(last)}</div>
+                      </div>
+                    </div>`;
+                  };
+                  return `<div style="display:grid;gap:4px;">
+                    ${row('Free Power', 'input_boolean.ecco_free_power_schedule_armed', 'input_datetime.ecco_free_power_schedule_start', 'input_number.ecco_free_power_schedule_power', 'input_number.ecco_free_power_schedule_duration', null, 'sensor.ecco_free_power_schedule_status')}
+                    ${row('Dump to Grid', 'input_boolean.ecco_dump_to_grid_schedule_armed', 'input_datetime.ecco_dump_to_grid_schedule_start', 'input_number.ecco_dump_to_grid_schedule_power', 'input_number.ecco_dump_to_grid_schedule_duration', 'input_number.ecco_dump_to_grid_schedule_stop_soc', 'sensor.ecco_dump_to_grid_schedule_status')}
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"n" "body"'
+                - grid-template-columns: 1fr
+                - grid-template-rows: min-content 1fr
+                - row-gap: 6px
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 11px
+                - font-weight: 800
+                - text-transform: uppercase
+                - letter-spacing: 0.05em
+                - color: rgba(255,255,255,0.5)
+              custom_fields:
+                body:
+                  - justify-self: stretch
+                  - width: 100%
+            grid_options:
+              columns: 12
+              rows: auto
+
+      # ================= S7 POWER FLOW TODAY (span 3) =================
+      - type: grid
+        column_span: 3
+        cards:
           # ---- MAIN POWER GRAPH ----
           - type: custom:apexcharts-card
             section_mode: true
             grid_options:
-              columns: 32
-              rows: 8
+              columns: full
+              rows: 7
             header:
               show: true
               title: Power Flow Today • 00:00–24:00
@@ -2127,7 +1559,93 @@ views:
                   font-weight: 700 !important;
                 }
 
-          # ---- TIME OF USE TABLE ----
+      # ================= S8 ELECTRICAL DETAIL (span 1) =================
+      # OVW1 (D8): the readings the four horseshoe gauges used to show, as one list; every value is a dongle sensor.
+      - type: grid
+        column_span: 1
+        cards:
+          - type: custom:button-card
+            section_mode: true
+            name: Electrical detail
+            icon: mdi:sine-wave
+            show_name: true
+            show_icon: true
+            show_state: false
+            tap_action:
+              action: none
+            custom_fields:
+              body: >
+                [[[
+                  const n = id => {
+                    const v = Number(states[id]?.state);
+                    return Number.isFinite(v) ? v : null;
+                  };
+                  const s = id => {
+                    const v = states[id]?.state;
+                    return v === undefined || ['unknown','unavailable','none',''].includes(String(v).toLowerCase()) ? '--' : String(v);
+                  };
+                  const f = (v, d=0, unit='') => v === null ? '--' : `${v.toFixed(d)}${unit}`;
+                  const battW = n('sensor.ecco_clock_dongle_ecco_battery_output_power');
+                  const battWord = battW === null ? '--' : `${Math.abs(battW).toFixed(0)} W ${battW > 0 ? 'discharging' : battW < 0 ? 'charging' : 'idle'}`;
+                  const rows = [
+                    ['Battery voltage', f(n('sensor.ecco_clock_dongle_ecco_battery_voltage'), 1, ' V'), '#39d27a'],
+                    ['Battery current', f(n('sensor.ecco_clock_dongle_ecco_battery_output_current'), 1, ' A'), '#39d27a'],
+                    ['Battery power', battWord, '#39d27a'],
+                    ['Load voltage L1 / frequency', `${f(n('sensor.ecco_clock_dongle_ecco_load_voltage_l1'), 1, ' V')} · ${f(n('sensor.ecco_clock_dongle_ecco_load_frequency'), 2, ' Hz')}`, '#42aaff'],
+                    ['Inverter output current L1', f(n('sensor.ecco_clock_dongle_ecco_inverter_output_current_l1'), 1, ' A'), '#42aaff'],
+                    ['PV1 / PV2', `${f(n('sensor.ecco_clock_dongle_ecco_pv1_power'), 0, ' W')} · ${f(n('sensor.ecco_clock_dongle_ecco_pv2_power'), 0, ' W')}`, '#ffbd3d'],
+                    ['Inverter output / state', `${f(n('sensor.ecco_clock_dongle_ecco_inverter_output_power'), 0, ' W')} · ${s('sensor.ecco_clock_dongle_ecco_inverter_system_state')}`, '#66b3ff'],
+                    ['Inverter output frequency', f(n('sensor.ecco_clock_dongle_ecco_inverter_output_frequency'), 2, ' Hz'), '#66b3ff'],
+                    ['AC / DC transformer', `${f(n('sensor.ecco_clock_dongle_ecco_temperature_ac_transformer'), 1, ' °C')} · ${f(n('sensor.ecco_clock_dongle_ecco_temperature_dc_transformer'), 1, ' °C')}`, '#ffbd3d'],
+                    ['Generator port', f(n('sensor.ecco_clock_dongle_ecco_generator_port_power'), 0, ' W'), '#aab4c3'],
+                    ['Dongle Wi-Fi', f(n('sensor.ecco_clock_dongle_wifi_signal'), 0, ' dBm'), '#55e58e'],
+                    ['Battery capacity', f(n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah'), 0, ' Ah'), '#55e58e']
+                  ];
+                  return `<div style="display:grid;gap:3px;">
+                    ${rows.map(r => `<div style="display:grid;grid-template-columns:8px 1fr auto;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+                      <span style="width:7px;height:7px;border-radius:50%;background:${r[2]};"></span>
+                      <span style="font-size:12px;color:rgba(255,255,255,.62);">${r[0]}</span>
+                      <span style="font-size:12px;font-weight:700;color:rgba(255,255,255,.92);text-align:right;">${r[1]}</span>
+                    </div>`).join('')}
+                  </div>`;
+                ]]]
+            styles:
+              card:
+                - border-radius: 16px
+                - padding: 12px 14px
+                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
+                - border: 1px solid rgba(255,255,255,0.08)
+                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
+              grid:
+                - grid-template-areas: '"i n" "body body"'
+                - grid-template-columns: 30px 1fr
+                - grid-template-rows: min-content 1fr
+                - row-gap: 8px
+              icon:
+                - width: 20px
+                - color: '#8f7cff'
+              name:
+                - justify-self: start
+                - align-self: center
+                - font-size: 15px
+                - font-weight: 700
+                - color: rgba(255,255,255,0.92)
+              custom_fields:
+                body:
+                  - justify-self: stretch
+                  - width: 100%
+            grid_options:
+              columns: full
+              rows: auto
+
+      # ================= S9 SYSTEM HEALTH (span 4) =================
+      # OVW1: ONE System Health card. Column (a) is the former compact summary (the seven subsystem sensors, with the
+      # reason codes of any row that is not HEALTHY); column (b) is the former raw diagnostics card (the dongle
+      # entities) plus the correction-failures counter; column (c) holds the notes and the last update times.
+      # Monitoring only: nothing here gates a control.
+      - type: grid
+        column_span: 4
+        cards:
           - type: custom:button-card
             section_mode: true
             name: System Health
@@ -2138,6 +1656,25 @@ views:
             custom_fields:
               health: >
                 [[[
+                  const tone = s => s === 'HEALTHY' ? '#39d27a' : s === 'DEGRADED' ? '#66b3ff' : s === 'WARNING' ? '#ffbd3d' : s === 'FAILED' ? '#ff5f6d' : '#aab4c3';
+                  const read = id => {
+                    const s = states[id]?.state;
+                    return ['HEALTHY', 'DEGRADED', 'WARNING', 'FAILED'].includes(s) ? s : 'UNKNOWN';
+                  };
+                  const rows = [
+                    ['Manual Write', read('sensor.ecco_health_manual_write_system')],
+                    ['RTC', read('sensor.ecco_health_rtc')],
+                    ['Free Power', read('sensor.ecco_health_free_power')],
+                    ['Configuration', read('sensor.ecco_health_configuration')],
+                    ['Inverter Telemetry', read('sensor.ecco_health_inverter_telemetry')],
+                    ['Supervision', read('sensor.ecco_health_supervision')],
+                    ['Fallback', read('sensor.ecco_health_fallback')]
+                  ];
+                  const ids = ['sensor.ecco_health_manual_write_system', 'sensor.ecco_health_rtc', 'sensor.ecco_health_free_power', 'sensor.ecco_health_configuration', 'sensor.ecco_health_inverter_telemetry', 'sensor.ecco_health_supervision', 'sensor.ecco_health_fallback'];
+                  const codes = id => {
+                    const c = states[id]?.attributes?.reason_codes;
+                    return Array.isArray(c) && c.length ? c.join(', ') : '';
+                  };
                   const telemetry = states['binary_sensor.ecco_clock_dongle_telemetry_online']?.state === 'on';
                   const config = states['binary_sensor.ecco_clock_dongle_configuration_online']?.state === 'on';
                   const ntp = states['binary_sensor.ecco_clock_dongle_ntp_synced']?.state === 'on';
@@ -2146,27 +1683,48 @@ views:
                   const wifi = Number(states['sensor.ecco_clock_dongle_wifi_signal']?.state);
                   const tf = Number(states['sensor.ecco_clock_dongle_telemetry_read_failures_since_boot']?.state);
                   const cf = Number(states['sensor.ecco_clock_dongle_configuration_read_failures_since_boot']?.state);
-                  const rows = [
+                  const fixes = Number(states['sensor.ecco_clock_dongle_failed_corrections_since_boot']?.state);
+                  const diag = [
                     ['Telemetry', telemetry ? 'Connected' : 'Offline', telemetry],
                     ['Configuration', config ? 'Connected' : 'Offline', config],
                     ['NTP Sync', ntp ? 'Synced' : 'Not synced', ntp],
                     ['RTC Stall', stall ? 'Detected' : 'Clear', !stall],
                     ['Clock Error', Number.isFinite(clock) ? `${clock.toFixed(0)} s` : '--', Number.isFinite(clock) && Math.abs(clock) < 20],
                     ['Wi‑Fi', Number.isFinite(wifi) ? `${wifi.toFixed(0)} dBm` : '--', Number.isFinite(wifi) && wifi > -80],
-                    ['Read Failures', `${Number.isFinite(tf) ? tf.toFixed(0) : '--'} / ${Number.isFinite(cf) ? cf.toFixed(0) : '--'}`, Number.isFinite(tf) && Number.isFinite(cf) && tf === 0 && cf === 0]
+                    ['Read Failures', `${Number.isFinite(tf) ? tf.toFixed(0) : '--'} / ${Number.isFinite(cf) ? cf.toFixed(0) : '--'}`, Number.isFinite(tf) && Number.isFinite(cf) && tf === 0 && cf === 0],
+                    ['Correction Failures', Number.isFinite(fixes) ? fixes.toFixed(0) : '--', Number.isFinite(fixes) && fixes === 0]
                   ];
-                  return `<div style="display:grid;gap:13px;padding-top:8px;">
-                    ${rows.map(r => `<div style="display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:4px 2px;border-bottom:1px solid rgba(255,255,255,.05);">
-                      <span style="width:10px;height:10px;border-radius:50%;background:${r[2] ? '#39d27a' : '#ff6376'};box-shadow:0 0 10px ${r[2] ? 'rgba(57,210,122,.45)' : 'rgba(255,99,118,.45)'};"></span>
-                      <span style="font-size:13px;color:rgba(255,255,255,.68);">${r[0]}</span>
-                      <span style="font-size:13px;font-weight:700;color:${r[2] ? '#7ceaa6' : '#ff8b98'};">${r[1]}</span>
-                    </div>`).join('')}
+                  const text = id => {
+                    const v = states[id]?.state;
+                    return v === undefined || ['unknown','unavailable','none',''].includes(String(v).toLowerCase()) ? '--' : String(v);
+                  };
+                  const label = t => `<div style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:4px;">${t}</div>`;
+                  const line = (dot, name, value, colour, why) => `<div style="display:grid;grid-template-columns:8px 1fr auto;align-items:center;gap:7px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+                    <span style="width:7px;height:7px;border-radius:50%;background:${dot};"></span>
+                    <span style="font-size:12px;color:rgba(255,255,255,.62);min-width:0;">${name}${why ? ` <span style="font-size:10px;color:rgba(255,255,255,.46);">· ${why}</span>` : ''}</span>
+                    <span style="font-size:12px;font-weight:700;color:${colour};text-align:right;">${value}</span>
+                  </div>`;
+                  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
+                    <div>
+                      ${label('Subsystems')}
+                      ${rows.map((r, i) => line(tone(r[1]), r[0], r[1], tone(r[1]), r[1] === 'HEALTHY' ? '' : codes(ids[i]))).join('')}
+                    </div>
+                    <div>
+                      ${label('Dongle diagnostics')}
+                      ${diag.map(r => line(r[2] ? '#39d27a' : '#ff6376', r[0], r[1], r[2] ? '#7ceaa6' : '#ff8b98', '')).join('')}
+                    </div>
+                    <div>
+                      ${label('Notes')}
+                      <div style="font-size:10px;font-weight:800;letter-spacing:.45px;color:rgba(255,255,255,.42);">MONITORING ONLY · NOT A CONTROL GATE</div>
+                      <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:6px;line-height:1.55;">Reason codes appear beside any subsystem row that is not HEALTHY. The subsystem rows are the ECCO health sensors; the diagnostics are the raw dongle entities.</div>
+                      <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:6px;line-height:1.55;">Last telemetry update <b style="color:#fff;">${text('sensor.ecco_clock_dongle_last_telemetry_update')}</b><br>Last configuration update <b style="color:#fff;">${text('sensor.ecco_clock_dongle_last_configuration_update')}</b></div>
+                    </div>
                   </div>`;
                 ]]]
             styles:
               card:
-                - border-radius: 18px
-                - padding: 16px 18px 14px 18px
+                - border-radius: 16px
+                - padding: 12px 14px
                 - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
                 - border: 1px solid rgba(255,255,255,0.08)
                 - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
@@ -2174,82 +1732,18 @@ views:
                 - grid-template-areas: '"n" "health"'
                 - grid-template-columns: 1fr
                 - grid-template-rows: min-content 1fr
+                - row-gap: 8px
               name:
                 - justify-self: start
-                - font-size: 20px
+                - font-size: 15px
                 - font-weight: 700
                 - color: rgba(255,255,255,0.92)
-                - padding-bottom: 4px
               custom_fields:
                 health:
                   - width: 100%
             grid_options:
-              columns: 16
-              rows: 8
-
-
-          # ---- TEMPERATURE GRAPH ----
-          - type: custom:button-card
-            section_mode: true
-            name: Daily Energy Totals
-            show_icon: false
-            show_state: false
-            show_label: false
-            tap_action:
-              action: none
-            custom_fields:
-              bars: >
-                [[[
-                  const defs = [
-                    ['PV', 'sensor.ecco_clock_dongle_ecco_day_pv_energy', '#ffbd3d', 'rgba(255,189,61,.28)'],
-                    ['Load', 'sensor.ecco_clock_dongle_ecco_day_load_energy', '#42aaff', 'rgba(66,170,255,.28)'],
-                    ['Import', 'sensor.ecco_clock_dongle_ecco_day_grid_import', '#ff6376', 'rgba(255,99,118,.25)'],
-                    ['Export', 'sensor.ecco_clock_dongle_ecco_day_grid_export', '#b36cff', 'rgba(179,108,255,.25)'],
-                    ['Batt<br>Charge', 'sensor.ecco_clock_dongle_ecco_day_battery_charge', '#39d27a', 'rgba(57,210,122,.25)'],
-                    ['Batt<br>Discharge', 'sensor.ecco_clock_dongle_ecco_day_battery_discharge', '#65e39a', 'rgba(101,227,154,.25)']
-                  ];
-                  const vals = defs.map(d => {
-                    const v = Number(states[d[1]]?.state);
-                    return Number.isFinite(v) ? Math.max(v, 0) : 0;
-                  });
-                  const maxVal = Math.max(...vals, 1);
-                  return `<div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:end;height:195px;padding:4px 4px 0 4px;">
-                    ${defs.map((d,i) => {
-                      const v = vals[i];
-                      const pct = v <= 0 ? 1 : Math.max(6, Math.round((v / maxVal) * 100));
-                      const opacity = v <= 0 ? 0.25 : 1;
-                      return `<div style="height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:0;">
-                        <div style="font-size:15px;font-weight:700;color:rgba(255,255,255,.92);margin-bottom:2px;">${v.toFixed(1)}</div>
-                        <div style="font-size:10px;color:rgba(255,255,255,.52);margin-bottom:7px;">kWh</div>
-                        <div style="width:62%;height:${pct}%;min-height:3px;max-height:128px;border-radius:9px 9px 3px 3px;background:${d[2]};opacity:${opacity};box-shadow:0 0 18px ${d[3]};"></div>
-                        <div style="font-size:11px;font-weight:600;text-align:center;line-height:1.15;color:rgba(255,255,255,.68);margin-top:8px;min-height:27px;">${d[0]}</div>
-                      </div>`;
-                    }).join('')}
-                  </div>`;
-                ]]]
-            styles:
-              card:
-                - border-radius: 18px
-                - padding: 16px 18px 12px 18px
-                - background: linear-gradient(145deg, rgba(20,28,45,0.98), rgba(10,15,27,0.98))
-                - border: 1px solid rgba(255,255,255,0.08)
-                - box-shadow: 0 10px 30px rgba(0,0,0,0.22)
-              grid:
-                - grid-template-areas: '"n" "bars"'
-                - grid-template-columns: 1fr
-                - grid-template-rows: min-content 1fr
-              name:
-                - justify-self: start
-                - font-size: 20px
-                - font-weight: 700
-                - color: rgba(255,255,255,0.92)
-                - padding-bottom: 4px
-              custom_fields:
-                bars:
-                  - width: 100%
-            grid_options:
-              columns: 48
-              rows: 4
+              columns: full
+              rows: auto
 
 
   - title: Weather & Solar

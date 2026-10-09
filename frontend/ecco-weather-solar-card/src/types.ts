@@ -75,8 +75,14 @@ export interface StaleConfig {
   forecast_solar_hours: number;
 }
 
+/** Which sections the card renders, and so which of its two read-only messages it sends: `full` is the dedicated view
+ *  (both forecast subscriptions and the statistics query); `solar_strip` is the Overview's PV forecast strip (statistics
+ *  only); `daily_compact` is the Overview's "Next days" block (the daily forecast subscription only). */
+export type Layout = "full" | "solar_strip" | "daily_compact";
+
 export interface CardConfig {
   title: string;
+  layout: Layout;
   entities: EntityConfig;
   hourly_hours: number;
   daily_days: number;

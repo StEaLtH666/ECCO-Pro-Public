@@ -13,6 +13,7 @@ import type {
   FreshnessView,
   HaConfigLike,
   HourPoint,
+  Layout,
   Num,
   SolarTotals,
   StaleConfig,
@@ -50,6 +51,10 @@ export const DEFAULT_ENTITIES: EntityConfig = {
 };
 
 export const DEFAULT_STALE: StaleConfig = { weather_hours: 3, solcast_hours: 24, forecast_solar_hours: 6 };
+
+export const LAYOUTS: readonly Layout[] = ["full", "solar_strip", "daily_compact"];
+/** The title each layout shows when the configuration gives none (an empty `title` hides it in the compact layouts). */
+export const DEFAULT_TITLES: Record<Layout, string> = { full: "Weather & Solar", solar_strip: "Solar forecast", daily_compact: "Next days" };
 
 export const HOUR_MS = 3600000;
 export const MINUTE_MS = 60000;
@@ -92,12 +97,15 @@ export function normalizeConfig(raw: unknown): CardConfig {
     if (typeof v !== "boolean") throw new Error(`ecco-weather-solar-card: ${key} must be true or false`);
     return v;
   };
-  const title = c.title === undefined ? "Weather & Solar" : String(c.title).slice(0, 80);
-  const known = new Set(["type", "title", "entities", "hourly_hours", "daily_days", "show_accuracy", "show_insights", "stale",
+  const layout: Layout | null = c.layout === undefined ? "full" : (LAYOUTS as readonly unknown[]).includes(c.layout) ? (c.layout as Layout) : null;
+  if (layout === null) throw new Error(`ecco-weather-solar-card: layout must be one of ${LAYOUTS.join(", ")}`);
+  const title = c.title === undefined ? DEFAULT_TITLES[layout] : String(c.title).slice(0, 80);
+  const known = new Set(["type", "title", "layout", "entities", "hourly_hours", "daily_days", "show_accuracy", "show_insights", "stale",
     "grid_options", "view_layout", "visibility"]);
   for (const k of Object.keys(c)) if (!known.has(k)) throw new Error(`ecco-weather-solar-card: unknown option \`${k}\``);
   return {
     title,
+    layout,
     entities,
     hourly_hours: int("hourly_hours", 12, 1, 48),
     daily_days: int("daily_days", 5, 1, 7),

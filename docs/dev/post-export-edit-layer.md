@@ -24,7 +24,9 @@ The proofs then undo the declared changes exactly and check that what remains is
   (O3):
   - `VERSION.yaml`;
   - since `esb1` (O3 amendment): the Energy Actions card's `package.json`, `package-lock.json` and built bundle
-    `dist/ecco-energy-actions-card.js`, which the FB-B3 / FB-C3 card-folder pins and the lic0 proofs pin.
+    `dist/ecco-energy-actions-card.js`, which the FB-B3 / FB-C3 card-folder pins and the lic0 proofs pin;
+  - since `ovw1` (O3 amendment, 2026-10-09): the same card's `src/ecco-energy-actions-card.ts` and `src/config.ts`, pinned by
+    the same card-folder pins and lic0 proofs (the card's `README.md` is a `pub0` target, frozen already).
 
 The `pub0` state of a frozen file is its manifest result hash, read from the manifest and never typed by hand. For an enrolled
 file it is the recorded hash of the file at the export commit (883068d).
@@ -104,3 +106,28 @@ chain-pinned edit is one `frontend_assets` stanza in `deployment/ha-manifest.yam
   FB-B3 fact, so it now reads the manifest as of `pub0`, and the pinned values are unchanged.
 
 The card's own suite pins the live integration: one use of the card, one manifest stanza and the declaring entry.
+
+## What ovw1 changed
+
+`ovw1` rebuilds the dashboard's Overview view as nine sections (`registry/tests/_ovw1_scope.py`, proofs in
+`registry/tests/test_ovw1_transition.py`). It edits no chain-pinned artifact: the manifest is untouched. Its frozen edits are:
+
+- the dashboard: the v7.20.0 header note, and the whole Overview view block as one pair (the compact status banner keeps the
+  hero's state machine, pills and vocabulary verbatim and adds the Dump to Grid lease states and both recovery-state sensors as
+  inputs; the Energy Flow card's configuration is byte-for-byte the previous one; the Energy Actions card uses its new `layout: tabbed` and is followed
+  directly by the Known-Good Profile bar; the Weather & Solar card's solar strip and compact daily layouts; one merged System
+  Health card). Every other view is byte-identical;
+- `VERSION.yaml`: dashboard 7.20.0, staged;
+- the Energy Actions card's `src/ecco-energy-actions-card.ts` and `src/config.ts` (the presentation-only `layout` option; newly
+  enrolled, see above), its `README.md` (a `pub0` target) and its rebuilt bundle `dist/ecco-energy-actions-card.js` (enrolled by
+  `esb1`);
+- one routing in each of the three suites that pin the card folder's FB-B3 state: their folder pin skips the files a post-export
+  entry adds (`src/trackSelection.ts`, `test/trackSelection.test.ts`), so the pinned value is unchanged. Every changed card file
+  is enrolled and read as of `pub0`. `test_lic0_transition.py` skips the added files the same way, and its two folder pins keep
+  their values.
+
+The card's `callService` sites and `(domain, service)` pairs are unchanged; the new tab selection module has no regex literal and
+no runtime import. `ovw1` changed no firmware, Home Assistant package, deployment, registry or behaviour.
+
+Deployment order for dashboard 7.20.0: the Weather & Solar bundle (a manual Lovelace resource, not in the manifest) and the rebuilt
+Energy Actions bundle (listed in the manifest; bump the resource URL's `?v=` so browsers reload it) go first, then the dashboard.

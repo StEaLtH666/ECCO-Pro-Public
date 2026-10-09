@@ -39,7 +39,7 @@ import {
   weatherByHour,
   weatherFreshness,
 } from "../src/model.ts";
-import { DEFAULT_STALE } from "../src/model.ts";
+import { DEFAULT_STALE, DEFAULT_TITLES, LAYOUTS } from "../src/model.ts";
 import { HA_CONFIG, NOW, TZ, bst, dailyForecast, hourlyForecast, solcastDay, statRows, states } from "./fixtures.ts";
 
 const E = DEFAULT_ENTITIES;
@@ -64,6 +64,27 @@ describe("configuration", () => {
       { daily_days: 0 }, { daily_days: 8 }, { hourly_hours: 2.5 }, { show_accuracy: "yes" }, { stale: { weather_hours: -1 } }, { stale: { x: 1 } }, { colour: "red" }]) {
       assert.throws(() => normalizeConfig(bad), JSON.stringify(bad));
     }
+  });
+  it("layout: full by default; solar_strip and daily_compact are the two compact layouts; anything else is refused", () => {
+    assert.deepEqual(LAYOUTS, ["full", "solar_strip", "daily_compact"]);
+    assert.equal(normalizeConfig({ type: "custom:ecco-weather-solar-card" }).layout, "full");
+    for (const l of LAYOUTS) assert.equal(normalizeConfig({ layout: l }).layout, l, "`layout` is a known key and every listed value is accepted");
+    for (const bad of ["strip", "", "Full", "solar-strip", "compact", 1, null, true, ["full"], { full: true }]) {
+      assert.throws(() => normalizeConfig({ layout: bad }), JSON.stringify(bad));
+    }
+    assert.throws(() => normalizeConfig({ layout: "solar_strip", colour: "red" }), "unknown keys are still refused beside a valid layout");
+  });
+  it("the default title follows the layout; a given title (even an empty one) is kept as is", () => {
+    assert.deepEqual(DEFAULT_TITLES, { full: "Weather & Solar", solar_strip: "Solar forecast", daily_compact: "Next days" });
+    assert.equal(normalizeConfig({}).title, "Weather & Solar");
+    assert.equal(normalizeConfig({ layout: "full" }).title, "Weather & Solar");
+    assert.equal(normalizeConfig({ layout: "solar_strip" }).title, "Solar forecast");
+    assert.equal(normalizeConfig({ layout: "daily_compact" }).title, "Next days");
+    assert.equal(normalizeConfig({ layout: "solar_strip", title: "" }).title, "");
+    assert.equal(normalizeConfig({ layout: "daily_compact", title: "Week" }).title, "Week");
+  });
+  it("`layout: full` is the same configuration as no layout at all", () => {
+    assert.deepEqual(normalizeConfig({ layout: "full", daily_days: 3 }), normalizeConfig({ daily_days: 3 }));
   });
 });
 
