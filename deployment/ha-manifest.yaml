@@ -84,6 +84,15 @@ frontend_assets:
     restart_required: false
     resource_registration: manual
     resource_url: /local/ecco/ecco-fallback-recovery-card.js
+  # Advanced / Experimental Configuration card - ACFG1 (read-only register catalogue with
+  # the Global Power / Export Limit register 245 panel; it cannot write). Copying the file
+  # and registering the resource stay deliberate manual steps.
+  - source: frontend/ecco-advanced-config-card/dist/ecco-advanced-config-card.js
+    destination: /config/www/ecco/ecco-advanced-config-card.js
+    method: ssh_file_copy
+    restart_required: false
+    resource_registration: manual
+    resource_url: /local/ecco/ecco-advanced-config-card.js
 
 firmware:
   source: firmware/ecco_clock_dongle_stage3_4_free_power.yaml

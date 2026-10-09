@@ -18,6 +18,11 @@
 # line, a shadow-episode banner, a Failback shadow evaluator block behind the existing technical-detail toggle, and a
 # SHADOW chip / tile tone for the new Shadow Recovery status. Display only (it reads sensor.ecco_shadow_check, a decoder of
 # the five existing dongle shadow strings); no control, no Energy Actions change.
+# v7.19.0 (ACFG1, STAGED / NOT LIVE-PROVEN) adds section 13 to the Inverter / Advanced view: the read-only Advanced /
+# Experimental Configuration card (every capability-registry record with its live value, evidence and lock reason, and the
+# Global Power / Export Limit register 245 panel). Display only: the card cannot write; no control, no firmware change.
+# 7.19.0 also carries the read-only Weather & Solar view after Overview (wsc1), added without a version bump of
+# its own.
 # Built for Home Assistant Sections view + Flexible Horseshoe Card + Sunsynk Power Flow Card (secondary/detail views) + ApexCharts + card-mod
 # Entity IDs matched from the ECCO entity dump captured 2026-09-12.
 
@@ -7554,6 +7559,20 @@ views:
 
               ℹ️ These are the inverter's stored voltage-mode baselines. ECCO currently uses the SOC targets for the live lithium/capacity TOU schedule; the voltage values are retained for diagnostics/reference.
             card_mod: *ecco_card_mod
+
+      # ================= 13. ADVANCED / EXPERIMENTAL CONFIGURATION (read-only) =================
+      # The read-only register catalogue (frontend/ecco-advanced-config-card, a manual Lovelace resource): every
+      # capability-registry record with its live value, evidence and lock reason, and the Global Power / Export Limit
+      # (register 245) panel. The card reads states only; it has no write path and its Global Power controls are disabled.
+      - type: grid
+        column_span: 4
+        cards:
+          - type: custom:ecco-advanced-config-card
+            title: 13 · Advanced / Experimental Configuration
+            entity_prefix: "ecco_clock_dongle"
+            grid_options:
+              columns: 48
+              rows: auto
   - title: Fallback / Recovery
     path: ecco-fallback-recovery
     icon: mdi:shield-refresh-outline

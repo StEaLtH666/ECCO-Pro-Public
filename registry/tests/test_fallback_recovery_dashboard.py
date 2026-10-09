@@ -1135,7 +1135,7 @@ def main() -> int:
 
     # =====================================================================================================
     print("[10] the manifest carries one new frontend_assets stanza")
-    man_text = read(MANIFEST)
+    man_text = _pex.as_of_pub0("deployment/ha-manifest.yaml", read(MANIFEST))   # PEX (acfg1): FB-B1's stanza pins are pub0-era (acfg1 adds a third asset)
     man = yaml.safe_load(man_text)
     assets = man["frontend_assets"]
     mine = [a for a in assets if "ecco-fallback-recovery-card" in a.get("source", "")]

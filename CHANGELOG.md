@@ -60,6 +60,13 @@ Development before the first public release happened in a private repository; se
   statistics); no service call, no new data provider, the blend weighting unchanged. It has its own dashboard view right after
   Overview, declared as post-export entry `wsc1`.
 
+- **The Advanced / Experimental Configuration card is on the dashboard** (dashboard 7.19.0, staged; 7.19.0 also carries the
+  Weather & Solar view). It is section 13 of the Inverter / Advanced view: the read-only catalogue of every capability-registry
+  record, with live values, evidence and lock reasons, and the Global Power / Export Limit (register 245) panel. The deployment
+  manifest lists its bundle (manual copy and resource registration, like the other cards). Declared as post-export entry `acfg1`;
+  two older suites' "exactly two frontend assets" pins now read the export-era manifest, with their values unchanged. The card
+  cannot write: no Home Assistant service, no Modbus, no firmware change.
+
 ### Changed
 
 - **Dump-to-Grid command ceiling is configurable at build time.** `ecco_dump_controller_max_ceiling_w` stays the single

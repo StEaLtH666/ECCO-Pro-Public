@@ -10,7 +10,8 @@
   [6] register mapping: every entity link agrees with the firmware's entity names and steady-poll decode
   [7] no write vocabulary in the card's source, generated catalogue or bundle; no reserved fallback / shadow token in any card file
   [8] the bundle embeds this catalogue, and the bundle and example render correctly for any site slug
-  [9] Phase 1A scope: the card is on no dashboard, in no manifest, package or version file, and in no post-export chain entry
+  [9] integration (acfg1): the card is used once, alone in a full-width section of the Inverter / Advanced view, with a configuration it
+      accepts; the manifest lists its bundle once (manual copy and registration); it arrived with dashboard 7.19.0; acfg1 declares it
 
 The card's own behaviour (values, freshness, search, filters, the disabled Global Power controls, the DOM event handlers) is tested
 by its Node suite: frontend/ecco-advanced-config-card/test (npm test).
@@ -469,17 +470,76 @@ for p in (DIST, EXAMPLE):
 
 # ===========================================================================
 print("")
-print("[9] Phase 1A scope: not deployed, no post-export entry")
+print("[9] integration (acfg1): one card on the dashboard, one manifest stanza, declared by the acfg1 entry")
 # ===========================================================================
 TAG = "ecco-advanced-config-card"
-places = ["home-assistant/dashboards/ecco_pro.yaml", "deployment/ha-manifest.yaml", "VERSION.yaml",
-          *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "home-assistant" / "packages").glob("*.yaml"))]
-found = [rel for rel in places if (ROOT / rel).is_file() and TAG in (ROOT / rel).read_text(encoding="utf-8")]
-check("the card is on no dashboard and in no manifest, package or version file (Phase 1A ships it undeployed)", not found, str(found))
+DASH_REL, MAN_REL, VER_REL = "home-assistant/dashboards/ecco_pro.yaml", "deployment/ha-manifest.yaml", "VERSION.yaml"
+CARD_KEYS = {"title", "entity_prefix", "max_age_telemetry_s", "max_age_configuration_s", "max_age_rtc_s"}
+LAYOUT_KEYS = {"type", "view_layout", "grid_options", "visibility", "layout_options"}
+
+
+class _TagLoader(yaml.SafeLoader):
+    """SafeLoader that keeps Home Assistant's custom tags as plain values (the dashboard parses like the other suites read it)."""
+
+
+_TagLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+
+
+def _walk(node):
+    yield node
+    if isinstance(node, dict):
+        for v in node.values():
+            yield from _walk(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk(v)
+
+
+dash_text = (ROOT / DASH_REL).read_text(encoding="utf-8")
+dash = yaml.load(dash_text, Loader=_TagLoader)
+uses = [n for n in _walk(dash) if isinstance(n, dict) and n.get("type") == f"custom:{TAG}"]
+inv = next((v for v in dash["views"] if v.get("title") == "Inverter / Advanced"), {})
+card = uses[0] if len(uses) == 1 else {}
+home = [s for s in (inv.get("sections") or []) if any(c is card for c in (s.get("cards") or []))]
+check("the dashboard uses the card exactly once, alone in a full-width grid section of the Inverter / Advanced view",
+      len(uses) == 1 and dash_text.count(f"type: custom:{TAG}") == 1 and len(home) == 1 and home[0].get("type") == "grid"
+      and home[0].get("column_span") == 4 and home[0].get("cards") == [card], str(len(uses)))
+check("its configuration is one the card accepts: title, the quoted default device slug (site-rendered) and the grid layout only - no "
+      "action, service or entity key",
+      set(card) == {"type", "title", "entity_prefix", "grid_options"} and set(card) <= CARD_KEYS | LAYOUT_KEYS
+      and card.get("entity_prefix") == G.DEFAULT_SLUG and f'entity_prefix: "{G.DEFAULT_SLUG}"' in dash_text
+      and isinstance(card.get("title"), str) and 0 < len(card["title"]) <= 120 and card.get("grid_options") == {"columns": 48, "rows": "auto"})
+man_text = (ROOT / MAN_REL).read_text(encoding="utf-8")
+man = yaml.safe_load(man_text)
+mine = [a for a in man["frontend_assets"] if TAG in a.get("source", "")]
+ea = [a for a in man["frontend_assets"] if "ecco-energy-actions-card" in a.get("source", "")]
+check("the manifest lists the bundle exactly once, in the Energy Actions stanza's shape (copy and resource registration stay manual)",
+      len(mine) == 1 and len(ea) == 1 and set(mine[0]) == set(ea[0])
+      and mine[0] == {"source": f"frontend/{TAG}/dist/{TAG}.js", "destination": f"/config/www/ecco/{TAG}.js", "method": "ssh_file_copy",
+                      "restart_required": False, "resource_registration": "manual", "resource_url": f"/local/ecco/{TAG}.js"}
+      and (ROOT / mine[0]["source"]).is_file() and man_text.count(TAG) == 4, str(mine))
+ver_text = (ROOT / VER_REL).read_text(encoding="utf-8")
+ver = yaml.safe_load(ver_text)
+check("the card arrived with dashboard 7.19.0: VERSION.yaml is at 7.19.0 or later and keeps the 7.19.0 note, the dashboard header "
+      "keeps its v7.19.0 note; no Home Assistant package mentions the card",
+      tuple(int(x) for x in str(ver["current"]["dashboard"]["version"]).split(".")) >= (7, 19, 0)
+      and "# v7.19.0 (ACFG1)" in ver_text and "# v7.19.0 (ACFG1" in dash_text.split("views:")[0]
+      and not [p.name for p in (ROOT / "home-assistant" / "packages").glob("*.yaml") if TAG in p.read_text(encoding="utf-8")])
+sys.path.insert(0, str(ROOT / "registry" / "tests"))
+import _scope_chain as _sc  # noqa: E402
+
+_e = _sc.CHAIN.entry("acfg1")
+_ids = _sc.CHAIN.ids()
+check("the acfg1 entry, a post-export entry after esb1, declares the manifest as its one chain-pinned edit, the dashboard, VERSION.yaml "
+      "and the two routed suites as its frozen edits, and its scope module as its one added file",
+      "esb1" in _ids and _ids.index("acfg1") > _ids.index("esb1") and set(_e.reverts) == set(_e.checkpoints) == {MAN_REL}
+      and set(_e.frozen_reverts) == set(_e.frozen_checkpoints) == {DASH_REL, VER_REL, "home-assistant/tests/test_ecco_fallback_packages.py",
+                                                                   "registry/tests/test_fallback_recovery_dashboard.py"}
+      and _e.added_files == {"registry/tests/_acfg1_scope.py"} and not _e.deltas and not _e.banned_files)
 chain_mods = sorted((ROOT / "registry" / "tests").glob("_*.py"))
 named = [p.name for p in chain_mods if re.search(r"ecco-advanced-config-card|advanced_config", p.read_text(encoding="utf-8"))]
-check("no scope / chain module declares a card, generator or overlay file (no competing post-export entry)",
-      len(chain_mods) > 10 and not named, str(named))
+check("exactly the acfg1 scope module and the chain (its entry) name the card among the scope / chain modules",
+      len(chain_mods) > 10 and named == ["_acfg1_scope.py", "_scope_chain.py"], str(named))
 
 print("")
 if FAILURES:
