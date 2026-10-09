@@ -186,9 +186,9 @@ OVW1 = CHAIN.entry("ovw1")
 print("[0] the declaration")
 # ===========================================================================
 ids = [e.id for e in POST]
-check("ovw1 is the eighth post-export entry, appended right after acfg1 (the seventh; pex0 is the first)",
-      "ovw1" in ids and CHAIN.prev_id("ovw1") == "acfg1" and ids.index("ovw1") == 7 and ids[0] == "pex0" and ids[6] == "acfg1"
-      and CHAIN.ids()[-1] == "ovw1", str(ids))
+check("ovw1 is the eighth post-export entry, appended right after acfg1 (the seventh; pex0 is the first); later entries follow it",
+      "ovw1" in ids and CHAIN.prev_id("ovw1") == "acfg1" and ids.index("ovw1") == 7 and ids[0] == "pex0" and ids[6] == "acfg1",
+      str(ids))
 check("ovw1 carries no chain-pinned change: no reverter / checkpoint / delta / op path / include / substitution / banned token / tag",
       not OVW1.reverts and not OVW1.checkpoints and not OVW1.deltas and not OVW1.op_paths_changed and not OVW1.includes_added
       and not OVW1.subst_added and not OVW1.subst_changed and not OVW1.subst_removed and not OVW1.banned_fw_added

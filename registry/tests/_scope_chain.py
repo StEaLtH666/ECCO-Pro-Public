@@ -107,6 +107,7 @@ import _fbc3_scope as _fbc3  # noqa: E402
 import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
+import _fe1_scope as _fe1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -693,7 +694,39 @@ OVW1 = Entry(
          "skip the two files it adds (pin unchanged): ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
          "ecco_core change, ZERO Modbus operation, no new service call, no manifest stanza",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1)
+# fe1 (FE-1: the batteries' time to reserve on the Energy Flow card; _fe1_scope.py): made on the export after ovw1. A new read-only
+# Home Assistant package (home-assistant/packages/ecco_battery_runtime.yaml, template entities only) estimates how long the batteries can
+# keep discharging before they reach the configured reserve (input_number.ecco_minimum_reserve_soc) from the existing battery power and
+# SOC telemetry: a median-and-average discharge level plus a 3-hour spike allowance, the configured capacity until the energy per SOC
+# percent has been measured, and explicit stale / insufficient-data / charging / holding / at-reserve states. The Energy Flow card's
+# battery node shows it through its FE-0 hook (nodes.battery.time_to_reserve). CHAIN-PINNED edit: the deployment manifest, one package
+# stanza (_fe1_scope.PINNED_REVERTERS). FROZEN edits (PEX): the dashboard (the v7.21.0 header note, the battery node's time_to_reserve
+# line and the battery estimate card's line) and VERSION.yaml (dashboard 7.21.0, staged; the package path)
+# (_fe1_scope.FROZEN_REVERTERS); as of pub0 each file is the export byte for byte. The card's source, README and bundle,
+# test_ovw1_transition.py, test_pex_transition.py and CHANGELOG.md are not frozen.
+# Measured, not declared: no delta, no op path, no substitution, no banned token; ZERO firmware, registry, Intelligence or ecco_core
+# byte; ZERO Modbus reads / writes (64 / 52); no service call, script, automation or action in the package.
+FE1 = Entry(
+    id="fe1", pr="FE1", commit="unmerged",
+    reverts=dict(_fe1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after fe1
+        HA_MANIFEST: "15bb5c1ac247c519cf79d00e0cf1fc2c1133592333222bd2dd4754154f59b19c",
+    },
+    added_files=_fe1.ADDED_FILES,
+    frozen_reverts=dict(_fe1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after fe1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _fe1.DASHBOARD_REL: "82469f9f06d7792d11bb7fc0d75bebb0bd1916573727e5a7f2c0baa3e62c8226",
+        _fe1.VERSION_REL: "c4cf1288a3f37b9f06850009135337d2934c8f99cbe3fd8c34c7a2e24cfa3588",
+    },
+    # _pex.fingerprint(FE1): hashes its parent ovw1's fingerprint and every declaration above
+    fingerprint="211221b095bcdb61b2e7a2cfdd38fb28c871319d46d9acaf6e4f315a690de57e",
+    note="FE-1 battery time to reserve: a read-only Home Assistant estimate (template entities only) of the time until the batteries "
+         "reach the configured reserve at recent usage, with stale / insufficient-data / charging / holding / at-reserve states, shown "
+         "on the Energy Flow card's battery node (nodes.battery.time_to_reserve) and the battery estimate card; dashboard 7.21.0 "
+         "staged, one package stanza in the manifest: ZERO firmware, registry, Intelligence or ecco_core change, ZERO Modbus "
+         "operation, no service call, no new control surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -223,12 +223,29 @@ corresponding `power_sign`.
   "Unknown" with no fault colour - only an explicit off/false is shown as
   disconnected.
 - `nodes.battery.time_to_reserve` (optional) names an entity reporting the
-  time until the battery reaches its reserve. Its value is shown as the
-  battery node's tooltip ("Time to reserve: 2 h 5 min"). The card only
-  displays that entity's own value - it never calculates a reserve level
-  or an ETA. The value is read as minutes unless the entity's
+  time until the battery reaches its reserve. The battery node then shows one
+  small extra line under its status, with a tooltip:
+  - while discharging, an approximate duration such as "≈5h 20m to reserve"
+    ("Over 3 days" when the entity marks its value as capped); the tooltip
+    says "Approximately ...", gives the entity's likely range
+    (`minutes_low` / `minutes_high`) when it reports one, flags a
+    solar-assisted discharge (`solar_assisted`) and ends with "an estimate,
+    not a guarantee";
+  - otherwise the entity's own `status`: "At reserve", "Charging",
+    "Holding", "Insufficient data" or "Telemetry stale" (missing and stale
+    data are visibly subdued), with the entity's `summary` as the tooltip.
+
+  The card only displays that entity's own value and status - it never
+  calculates a reserve level, an ETA or a status, and never reads SOC, power
+  or capacity for this line. The value is read as minutes unless the entity's
   `unit_of_measurement` is `s`, `min`, `h` or `d`; any other unit, or an
-  unknown/negative value, shows `--`. Leave it out and nothing changes.
+  unknown/negative value, counts as no value. An entity without a `status`
+  attribute (any plain duration sensor) shows its duration while it has one
+  and "Insufficient data" otherwise. The line is static (no animation) and
+  the battery's status colour, glow and flow lines are unchanged. Leave it out
+  and nothing changes. ECCO's own entity is `sensor.ecco_battery_time_to_reserve`
+  from `home-assistant/packages/ecco_battery_runtime.yaml`; see
+  `docs/BATTERY_TIME_TO_RESERVE.md`.
 - `features.self_sufficiency` (computed as `1 - today.import/today.load`)
   can be misleading on any installation with a battery, since imported
   energy may have charged the battery rather than covered load directly.
