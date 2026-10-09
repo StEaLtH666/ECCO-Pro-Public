@@ -5,9 +5,9 @@ searchable and filterable. Each setting shows its live value from the ECCO contr
 register, its raw and decoded value, its status, the evidence behind that status, a danger class and the reason it is
 not writable here. A dedicated panel covers **Global Power / Export Limit (register 245)**.
 
-**Phase 1A status.** The card is built and tested, but it is **not deployed**. It is on no dashboard and in no
-deployment manifest. Global Power writing is **not implemented**: the future write controls are shown as a disabled
-design preview.
+**Status.** The card is section 13 of the dashboard's Inverter / Advanced view (dashboard 7.19.0, post-export entry
+`acfg1`), staged and not yet exercised in Home Assistant. Global Power writing is **not implemented**: the future write
+controls are shown as a disabled design preview.
 
 ## The read-only guarantee
 
@@ -183,20 +183,19 @@ Unknown options are refused, so there is no hidden switch.
 Entity ids are built at run time as `<domain>.<entity_prefix>_<object id>`. The catalogue therefore carries no device
 slug. `tools/ecco_site_render.py` renders the quoted slug in `examples/advanced-config-example.yaml` for your site.
 
-## Integration (a later phase)
+## On the ECCO dashboard
 
-This phase adds the card as new files only. Making it available on the ECCO dashboard is a separate, declared change.
-It needs:
+The post-export entry `acfg1` (`registry/tests/_acfg1_scope.py`) puts the card on the dashboard:
 
-- a dashboard view or card entry;
-- a `frontend_assets` stanza in `deployment/ha-manifest.yaml` (copy the bundle, register the Lovelace resource);
-- the matching updates to the dashboard and manifest suites;
-- a post-export chain entry that declares those edits.
+- **Dashboard.** Section 13 of the Inverter / Advanced view holds the card alone, with
+  `entity_prefix: "ecco_clock_dongle"` quoted so `tools/ecco_site_render.py` renders it for your site. This is dashboard
+  7.19.0, staged.
+- **Manifest.** `deployment/ha-manifest.yaml` lists the bundle as a `frontend_assets` stanza: copy it to
+  `/config/www/ecco/ecco-advanced-config-card.js` and register the Lovelace resource `/local/ecco/ecco-advanced-config-card.js`
+  (JavaScript module) by hand, as for the other ECCO cards.
 
-Section [9] of `tools/tests/test_advanced_config_catalogue.py` holds Phase 1A to "not deployed" until that change.
-
-Until then, the card can be evaluated on a test dashboard. Copy `dist/ecco-advanced-config-card.js` into Home Assistant's
-`www` folder and add it as a Lovelace resource by hand. Being read-only, it cannot change anything.
+Section [9] of `tools/tests/test_advanced_config_catalogue.py` pins exactly this: one use of the card, one manifest stanza and the
+entry that declares them.
 
 ## Development
 

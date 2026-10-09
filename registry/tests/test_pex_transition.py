@@ -270,12 +270,13 @@ print("[8] T8 the PEX ledger")
 # ===========================================================================
 LEDGER = {   # file -> exact number of calls of each _pex function
     "registry/tests/test_pub0_transition.py": {"as_of_pub0": 2},
-    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 3},              # esb1: +1 (the Energy Actions folder pin)
+    "registry/tests/test_fallback_recovery_dashboard.py": {"as_of_pub0": 4},              # esb1: +1 (the Energy Actions folder pin); acfg1: +1 ([10], the pub0-era manifest)
     "home-assistant/tests/test_ecco_fallback_packages.py": {"as_of_pub0": 5},             # esb1: +1 (the Energy Actions folder pin)
     "home-assistant/tests/test_ecco_shadow_check_ux.py": {"as_of_pub0": 3, "post_export_added": 1},   # esb1: +1 (the folder pin)
     "registry/tests/test_lic0_transition.py": {"as_of_pub0": 1},                          # esb1: the lic0-era card files
     "registry/tests/_esb1_scope.py": {"as_of_pub0": 3},   # esb1's exact hunks QUOTE the three routing lines (data, not calls)
     "registry/tests/test_esb1_transition.py": {"read": 1, "as_of": 1, "historical_chain_sha": 1},   # esb1's own proofs
+    "registry/tests/_acfg1_scope.py": {"as_of_pub0": 1},  # acfg1's exact hunk QUOTES the [10] routing line (data, not a call)
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")

@@ -1185,7 +1185,8 @@ _man0 = yaml.safe_load(_pex.as_of_pub0("deployment/ha-manifest.yaml", man_text))
 check("the manifest has exactly two new package entries (11 packages in total)", len(_man0["home_assistant_packages"]) == 11,
       str(len(_man0["home_assistant_packages"])))
 check("the existing fallback recovery frontend asset entry is kept",
-      any("ecco-fallback-recovery-card" in a["source"] for a in man["frontend_assets"]) and len(man["frontend_assets"]) == 2)
+      any("ecco-fallback-recovery-card" in a["source"] for a in man["frontend_assets"])
+      and len(_man0["frontend_assets"]) == 2)   # PEX (acfg1): the asset count is a pub0-era pin (acfg1 adds a third asset)
 inf = man["influxdb"]
 check("the InfluxDB reference points at v1.3 (reference_only) and no longer at v1.2",
       {"source": "influxdb/ecco_influxdb_options_v1_3.yaml", "destination": "home_assistant_influx_export_configuration", "method": "reference_only"} in inf

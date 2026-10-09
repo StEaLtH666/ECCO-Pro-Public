@@ -93,6 +93,7 @@ for _p in (str(HERE), str(REPO / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import _acfg1_scope as _acfg1  # noqa: E402
 import _dtgp1_scope as _dtgp1  # noqa: E402
 import _dump_v2_scope as _dv2  # noqa: E402
 import _esb1_scope as _esb1  # noqa: E402
@@ -620,7 +621,39 @@ WSC1 = Entry(
          "chart, the existing accuracy scorecard); ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
          "ecco_core change, ZERO Modbus operation, no manifest stanza, no VERSION.yaml change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1)
+# acfg1 (the read-only Advanced Configuration card on the dashboard; _acfg1_scope.py): made on the export after wsc1. The card
+# (frontend/ecco-advanced-config-card, new files of the Phase 1A change, which needed no entry) becomes section 13 of the Inverter /
+# Advanced view and is listed for deployment. CHAIN-PINNED edit: the deployment manifest, one frontend_assets stanza
+# (_acfg1_scope.PINNED_REVERTERS; copy and resource registration stay manual). FROZEN edits (PEX): the dashboard (the section and the
+# v7.19.0 header note, which also records the Weather & Solar view of wsc1), VERSION.yaml (dashboard 7.19.0, staged) and the two older
+# suites whose live "exactly two frontend assets" pins are pub0-era facts, which now read that count as of pub0 with every pinned
+# value unchanged (_acfg1_scope.FROZEN_REVERTERS); as of pub0 each file is the export byte for byte. The card's suite and README,
+# test_pex_transition.py, CHANGELOG.md and docs/dev/post-export-edit-layer.md are not frozen.
+# Measured, not declared: no delta, no op path, no substitution, no banned token; ZERO firmware, Home Assistant package, registry,
+# Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); the card cannot write.
+ACFG1 = Entry(
+    id="acfg1", pr="ACFG1", commit="unmerged",
+    reverts=dict(_acfg1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after acfg1
+        HA_MANIFEST: "694f4a71b1f72089f64912c41e32d739ab9aaf3089e1c9785905b8c9dc6963c2",
+    },
+    added_files=_acfg1.ADDED_FILES,
+    frozen_reverts=dict(_acfg1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after acfg1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _acfg1.DASHBOARD_REL: "afae2a2b2e206355474d553567127546568ece6c43df83dc3ea57a117b1d2cac",
+        _acfg1.VERSION_REL: "f47a36ba97fa5869891872b7e563bdf7600983ed2befae2b7c6fc5cfcc9bd3f1",
+        _acfg1.SUITE_FBP_REL: "97800ea41b530243922385b7193bf67c0fde051ad1235b2965da159d8c0c3301",
+        _acfg1.SUITE_FRD_REL: "7fefccfd13dc31b85a2cc3245d4e4f7f8a7e3ab2cdd258449e42c85677a727ae",
+    },
+    # _pex.fingerprint(ACFG1): hashes its parent wsc1's fingerprint and every declaration above
+    fingerprint="43331ffff6819253b6106e1af9056253aa5105cec3b77be0a2c3b6ccf9554286",
+    note="read-only Advanced / Experimental Configuration card on the dashboard: section 13 of the Inverter / Advanced view (the "
+         "card alone, quoted default device slug), dashboard 7.19.0 staged (also recording the Weather & Solar view of wsc1), one "
+         "manual frontend_assets stanza in the manifest; the two older live 'exactly two frontend assets' pins read the pub0-era "
+         "manifest (values unchanged): ZERO firmware, Home Assistant package, registry, Intelligence or ecco_core change, ZERO "
+         "Modbus operation, the card cannot write",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -92,3 +92,15 @@ regrouped. Its frozen edits are the three enrolled card files and one routing in
 folder's FB-B3 state: their folder pin now reads a frozen card file as of `pub0` and every other file live, and the pinned value
 is unchanged. `test_lic0_transition.py` reads the lic0-era card files the same way; its live licence checks still read the live
 files.
+
+## What acfg1 changed
+
+`acfg1` puts the read-only Advanced / Experimental Configuration card on the dashboard (`registry/tests/_acfg1_scope.py`). Its
+chain-pinned edit is one `frontend_assets` stanza in `deployment/ha-manifest.yaml`. Its frozen edits are:
+
+- the dashboard: section 13 of the Inverter / Advanced view, and the v7.19.0 header note;
+- `VERSION.yaml`: dashboard 7.19.0, staged;
+- one edit in each of the two suites that pinned "exactly two frontend assets" on the live manifest. That count is an FB-B1 /
+  FB-B3 fact, so it now reads the manifest as of `pub0`, and the pinned values are unchanged.
+
+The card's own suite pins the live integration: one use of the card, one manifest stanza and the declaring entry.
