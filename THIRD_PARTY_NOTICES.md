@@ -30,8 +30,8 @@ These are used to build or test ECCO. They are installed by you or by CI and are
 
 | Component | Used for | Version | Licence | Verified from |
 |---|---|---|---|---|
-| esbuild | Bundling the three TypeScript cards (`ecco-energy-actions-card`, `ecco-energy-flow-card`, `ecco-advanced-config-card`) | 0.28.1 (each card's `package-lock.json`) | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
-| TypeScript | Type-checking the three TypeScript cards | 5.9.3 (each card's `package-lock.json`) | Apache-2.0 | `LICENSE.txt`, `package.json` |
+| esbuild | Bundling the four TypeScript cards (`ecco-energy-actions-card`, `ecco-energy-flow-card`, `ecco-advanced-config-card`, `ecco-weather-solar-card`) | 0.28.1 (each card's `package-lock.json`) | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
+| TypeScript | Type-checking the four TypeScript cards | 5.9.3 (each card's `package-lock.json`) | Apache-2.0 | `LICENSE.txt`, `package.json` |
 | Node.js | Running the card builds and tests | not pinned; tested with 24.x | MIT (plus the licences of its own bundled components) | Upstream `LICENSE` at the tested version |
 | PyYAML | Repository validation and tests | 6.0.3 (`requirements-ci.txt`) | MIT | Installed package `LICENSE` |
 | Jinja2 | Home Assistant template tests | 3.1.6 (`requirements-ci.txt`) | BSD-3-Clause | Installed package `LICENSE.txt` |

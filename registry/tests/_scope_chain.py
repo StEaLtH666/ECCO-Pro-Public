@@ -112,6 +112,7 @@ import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
+import _wsc1_scope as _wsc1  # noqa: E402
 
 FIRMWARE = "firmware/ecco_clock_dongle_stage3_4_free_power.yaml"
 DURABLE_HEADER = "firmware/include/ecco_durable_snapshot.h"
@@ -599,7 +600,27 @@ ESB1 = Entry(
          "card files enrolled (O3 amendment) and the three FB-B3 / FB-C3 folder pins read them as of pub0 (pin unchanged): ZERO "
          "firmware, Home Assistant, dashboard, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1)
+# wsc1 (the ECCO Weather & Solar card on the dashboard; _wsc1_scope.py): a dashboard change made on the export after esb1. One new
+# view, "Weather & Solar", immediately after Overview, holding the read-only custom:ecco-weather-solar-card (added earlier as new files
+# under frontend/ecco-weather-solar-card). FROZEN edit (PEX): the dashboard, one inserted view block (_wsc1_scope.DASHBOARD_EDITS); as
+# of pub0 the dashboard is the export. No manifest stanza, no VERSION.yaml change, no older suite edited.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package,
+# deployment, registry, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52).
+WSC1 = Entry(
+    id="wsc1", pr="WSC1", commit="unmerged",
+    added_files=_wsc1.ADDED_FILES,
+    frozen_reverts={_wsc1.DASHBOARD_REL: _wsc1.pre_wsc1_dashboard},
+    frozen_checkpoints={   # sha256 (LF) of the dashboard after wsc1; as of pub0 it is its pub0 manifest result
+        _wsc1.DASHBOARD_REL: "f5f66efca4057a1aced7d7cf301b2cb0907f9e3da50818d4fab2fd712d2b4362",
+    },
+    # _pex.fingerprint(WSC1): hashes its parent esb1's fingerprint and every declaration above
+    fingerprint="462f44d25c0c5dc7aa9df86c8865f6474b56193d80553804daaf3e3ff34feb5d",
+    note="the read-only ECCO Weather & Solar card on the dashboard: one new view immediately after Overview with "
+         "custom:ecco-weather-solar-card (Met.no forecast, sun times, the ECCO blended solar forecast, an hourly Solcast / actual PV "
+         "chart, the existing accuracy scorecard); ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
+         "ecco_core change, ZERO Modbus operation, no manifest stanza, no VERSION.yaml change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

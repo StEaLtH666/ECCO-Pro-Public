@@ -2247,6 +2247,26 @@ views:
               rows: 4
 
 
+  - title: Weather & Solar
+    path: ecco-weather-solar
+    icon: mdi:weather-partly-cloudy
+    type: sections
+    max_columns: 4
+    dense_section_placement: true
+    sections:
+      # ================= WEATHER & SOLAR (read-only) =================
+      # One read-only custom card (frontend/ecco-weather-solar-card, registered as a manual Lovelace
+      # resource): Met.no weather and forecast, sun times, the ECCO blended solar forecast with its
+      # Solcast and Forecast.Solar inputs, an hourly solar chart and the existing accuracy scorecard.
+      # It sends no command. Entity ids are the card's own defaults (see its README).
+      - type: grid
+        column_span: 4
+        cards:
+          - type: custom:ecco-weather-solar-card
+            grid_options:
+              columns: full
+
+
   - title: Intelligence
     path: ecco-intelligence
     icon: mdi:brain
