@@ -2,6 +2,7 @@
 # Every entity id below is the default; list only the ones that differ on your installation.
 type: custom:ecco-weather-solar-card
 title: Weather & Solar
+# layout: full              # full (default, the dedicated view) | solar_strip | daily_compact (the two Overview blocks)
 hourly_hours: 12
 daily_days: 5
 show_accuracy: true

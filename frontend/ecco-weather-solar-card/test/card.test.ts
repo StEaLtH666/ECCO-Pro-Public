@@ -297,6 +297,182 @@ describe("errors and fallbacks", () => {
   });
 });
 
+describe("layouts: each compact instance sends only the message its section needs", () => {
+  it("solar_strip: the statistics query only - no forecast subscription at all", async () => {
+    const r = rig(undefined, { layout: "solar_strip" });
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    assert.deepEqual(r.rec.messages.map((m) => m.type), ["recorder/statistics_during_period"]);
+    assert.deepEqual(statMsgs(r.rec)[0]!.statistic_ids, [STAT_ID]);
+    assert.deepEqual(r.rec.subscriptions, []);
+    assert.deepEqual(r.rec.calls, []);
+    assert.deepEqual([...r.root.regions.keys()], ["totals", "curve", "fresh"]);
+    assert.ok(r.root.region("totals").includes('<div class="lbl">Today</div><div class="big blend">20.5 kWh</div>'));
+    assert.ok(r.root.region("totals").includes("Solcast 23.0") && r.root.region("totals").includes("generated so far 9.8 kWh"));
+    assert.ok(r.root.region("curve").includes('<svg class="spark"') && r.root.region("curve").includes("12:00 actual 2.10 kWh"), r.root.region("curve"));
+    assert.ok(r.root.region("fresh").includes("Solcast: 2 h ago") && r.root.region("fresh").includes("Forecast.Solar: 25 min ago"));
+    assert.ok(!r.root.region("fresh").includes("Met.no"), "no weather section, so no weather chip");
+    assert.ok(r.root.innerHTML.includes('<div class="stitle">Solar forecast</div>'));
+    assert.equal(r.card.getCardSize(), 2);
+  });
+  it("solar_strip: statistics are still re-queried at most every 10 minutes, and never a subscription", async () => {
+    const r = rig(undefined, { layout: "solar_strip" });
+    r.card.connectedCallback();
+    for (let i = 0; i < 20; i++) {
+      r.clock.t = NOW + i * 1000;
+      r.push();
+      await flush();
+    }
+    assert.equal(r.rec.messages.length, 1);
+    r.clock.t = NOW + STATS_REFRESH_MS + 1;
+    r.push();
+    await flush();
+    assert.deepEqual(r.rec.messages.map((m) => m.type), ["recorder/statistics_during_period", "recorder/statistics_during_period"]);
+  });
+  it("solar_strip: unknown totals show --, missing Solcast detail shows the plain message instead of a curve", async () => {
+    const r = rig({ statistics: {} }, { layout: "solar_strip" });
+    r.card.connectedCallback();
+    r.push({});
+    await flush();
+    assert.equal((r.root.region("totals").match(/<div class="big blend">--<\/div>/g) ?? []).length, 3);
+    assert.ok(!r.root.region("totals").includes("0.0 kWh"));
+    assert.ok(r.root.region("totals").includes("generated so far --"));
+    assert.ok(!r.root.region("curve").includes("<svg"));
+    assert.ok(r.root.region("curve").includes("Solcast sensor sensor.solcast_pv_forecast_forecast_today not found or unavailable."));
+    assert.ok(r.root.region("fresh").includes("Solcast: update time unknown"));
+    const r2 = rig({ statistics: {} }, { layout: "solar_strip" });
+    r2.card.connectedCallback();
+    r2.push(states({ "sensor.solcast_pv_forecast_forecast_today": { state: "23.0", attributes: { estimate: 23.0 } } }));
+    await flush();
+    assert.ok(!r2.root.region("curve").includes("<svg"));
+    assert.ok(r2.root.region("curve").includes("Solcast hourly detail is not available"));
+  });
+  it("solar_strip: failed statistics keep the Solcast curve, drop the bars and explain in the tooltip", async () => {
+    const r = rig({ statisticsError: { code: "unknown_statistic", message: "no such statistic" } }, { layout: "solar_strip" });
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    const curve = r.root.region("curve");
+    assert.ok(curve.includes('title="Actual PV history unavailable: no such statistic"'));
+    assert.ok(curve.includes('class="sc-l"') && !curve.includes('class="act"'));
+  });
+  it("daily_compact: the daily forecast subscription only - no hourly subscription, no statistics query", async () => {
+    const r = rig(undefined, { layout: "daily_compact", daily_days: 7 });
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    assert.deepEqual(r.rec.messages, [{ type: "weather/subscribe_forecast", entity_id: "weather.forecast_home", forecast_type: "daily" }]);
+    assert.deepEqual(r.rec.calls, []);
+    assert.deepEqual([...r.root.regions.keys()], ["fresh", "daily"]);
+    assert.ok(r.root.innerHTML.includes('<div class="title">Next days</div>'));
+    assert.ok(r.root.region("fresh").includes("Met.no weather: 20 min ago"), r.root.region("fresh"));
+    assert.ok(r.root.region("daily").includes("Loading daily forecast"));
+    r.rec.subscriptions[0]!.callback({ type: "daily", forecast: dailyForecast() });
+    const daily = r.root.region("daily");
+    assert.equal((daily.match(/class="dc"/g) ?? []).length, 6, "six entries give six rows: daily_days 7 is never padded");
+    assert.ok(daily.includes("15° / 8°") && daily.includes("4.2 mm"));
+    assert.ok(!daily.includes('class="pp"'), "Met.no: no probability column");
+    assert.equal(r.rec.messages.length, 1, "the forecast event sent nothing");
+    assert.equal(r.card.getCardSize(), 5);
+  });
+  it("daily_compact: a failed subscription is shown and retried after 5 minutes, still daily only", async () => {
+    const r = rig({ subscribeError: { code: "not_found", message: "Entity not found: weather.forecast_home" }, statistics: {} }, { layout: "daily_compact" });
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    assert.ok(r.root.region("daily").includes("Daily forecast unavailable: Entity not found: weather.forecast_home"));
+    r.clock.t = NOW + FORECAST_RETRY_MS + 1000;
+    r.push();
+    await flush();
+    assert.deepEqual(r.rec.messages.map((m) => [m.type, m.forecast_type]), [["weather/subscribe_forecast", "daily"], ["weather/subscribe_forecast", "daily"]]);
+  });
+  it("daily_compact without a websocket connection explains itself and sends nothing", async () => {
+    const rec = newRecorder();
+    const card = new EccoWeatherSolarCard();
+    card.now = () => NOW;
+    card.setConfig({ layout: "daily_compact" });
+    card.connectedCallback();
+    (card as unknown as { hass: unknown }).hass = recordingHass(states(), rec, undefined, HA_CONFIG);
+    await flush();
+    const root = card.shadowRoot as unknown as FakeRoot;
+    assert.ok(root.region("daily").includes("no Home Assistant websocket connection"));
+    assert.equal(rec.messages.length, 0);
+    assert.deepEqual(rec.calls, []);
+  });
+  it("full (explicit) is the unchanged set: two subscriptions and one statistics query, identical regions", async () => {
+    const a = rig(undefined, { layout: "full" });
+    const b = rig();
+    for (const r of [a, b]) {
+      r.card.connectedCallback();
+      r.push();
+      await flush();
+      r.rec.subscriptions[0]!.callback({ forecast: hourlyForecast(NOW, 48) });
+      r.rec.subscriptions[1]!.callback({ forecast: dailyForecast() });
+    }
+    assert.deepEqual(a.rec.messages, b.rec.messages);
+    assert.equal(a.rec.messages.length, 3);
+    assert.equal(a.root.innerHTML, b.root.innerHTML, "the same shell");
+    assert.deepEqual([...a.root.regions.keys()], [...b.root.regions.keys()]);
+    for (const name of a.root.regions.keys()) assert.equal(a.root.region(name), b.root.region(name), name);
+    assert.equal(a.card.getCardSize(), 14);
+  });
+  it("changing the layout moves the subscriptions to exactly what the new layout needs", async () => {
+    const r = rig();
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    assert.equal(r.rec.messages.length, 3);
+    r.card.setConfig({ layout: "solar_strip" });
+    await flush();
+    assert.deepEqual(r.rec.subscriptions.map((s) => s.unsubscribed), [true, true], "both forecast subscriptions are dropped");
+    assert.equal(r.rec.messages.length, 3, "the strip re-uses the statistics already fetched; nothing new is sent");
+    r.card.setConfig({ layout: "daily_compact" });
+    await flush();
+    assert.deepEqual(r.rec.messages.slice(3), [{ type: "weather/subscribe_forecast", entity_id: "weather.forecast_home", forecast_type: "daily" }]);
+    assert.deepEqual(r.rec.subscriptions.map((s) => [s.message.forecast_type, s.unsubscribed]), [["hourly", true], ["daily", true], ["daily", false]]);
+    r.card.disconnectedCallback();
+    assert.deepEqual(r.rec.subscriptions.map((s) => s.unsubscribed), [true, true, true]);
+  });
+  it("daily_compact -> solar_strip on a live card queries the statistics at once, without waiting for the next hass update", async () => {
+    const r = rig(undefined, { layout: "daily_compact" });
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    assert.deepEqual(r.rec.messages.map((m) => m.type), ["weather/subscribe_forecast"]);
+    r.card.setConfig({ layout: "solar_strip" });
+    await flush();
+    assert.deepEqual(r.rec.messages.map((m) => m.type), ["weather/subscribe_forecast", "recorder/statistics_during_period"]);
+    assert.deepEqual(r.rec.subscriptions.map((s) => s.unsubscribed), [true], "the daily subscription is dropped, none is added");
+    assert.ok(r.root.region("curve").includes("12:00 actual 2.10 kWh"), "the actual bars are drawn before any further hass update");
+    // The throttle still holds: the same configuration again sends nothing new.
+    r.card.setConfig({ layout: "solar_strip" });
+    await flush();
+    assert.equal(r.rec.messages.length, 2);
+    // A new statistic id is queried at once as well.
+    r.card.setConfig({ layout: "solar_strip", entities: { pv_energy_statistic: "sensor.other_total_pv_energy" } });
+    await flush();
+    assert.deepEqual(statMsgs(r.rec).map((m) => m.statistic_ids), [[STAT_ID], ["sensor.other_total_pv_energy"]]);
+    assert.deepEqual(r.rec.calls, []);
+  });
+  it("the compact layouts use no timer and keep neither hass nor its connection", async () => {
+    for (const layout of ["solar_strip", "daily_compact"]) {
+      const r = rig(undefined, { layout });
+      shim.noTimers(() => {
+        r.card.connectedCallback();
+        r.push();
+        r.push();
+        r.card.disconnectedCallback();
+      });
+      await flush();
+      assert.deepEqual(shim.rec.calls.filter((c) => /Timeout|Interval|AnimationFrame/.test(c)), [], layout);
+      const held = Object.values(r.card as unknown as Record<string, unknown>);
+      assert.ok(!held.includes(r.conn), layout);
+      assert.deepEqual(r.rec.calls, [], layout);
+    }
+  });
+});
+
 describe("read-only by construction", () => {
   it("keeps neither the hass object, its connection nor its config object", async () => {
     const r = rig();

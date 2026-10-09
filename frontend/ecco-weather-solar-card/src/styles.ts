@@ -63,3 +63,33 @@ ul.ins{margin:0;padding-left:18px;font-size:.85rem;display:flex;flex-direction:c
 .wrap{padding:12px}
 .chart .ax{font-size:18px}.chart .axl{display:none}}
 `;
+
+/** Added to STYLES for the two compact layouts: the Overview's PV forecast strip (`solar_strip`, one ~84 px row that wraps on
+ *  narrow cards) and its "Next days" block (`daily_compact`). */
+export const COMPACT_STYLES = `
+.wrap.strip{padding:10px 14px;gap:0}
+.srow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.stitle{font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ews-muted);max-width:6.5em;line-height:1.2}
+.stotals{display:contents}
+.stot{min-width:0}.stot .lbl{font-size:.72rem;font-weight:600;color:var(--ews-muted);white-space:nowrap}
+.stot .big{font-size:1.45rem;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap}
+.srcl,.gen{font-size:10px;line-height:1.3;color:var(--ews-muted);margin-top:2px;white-space:nowrap}.srcl .basis{font-size:10px}
+.scurve{flex:1 1 220px;min-width:160px;align-self:center}
+.spark-box{position:relative;width:100%}
+svg.spark{width:100%;height:48px;display:block}
+.spark .sc-a{fill:var(--ews-blend);opacity:.18}.spark .sc-l{fill:none;stroke:var(--ews-blend);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.spark .act{fill:var(--ews-solar);opacity:.85}
+.spark .nowl{stroke:var(--ews-fs);stroke-width:1.2;stroke-dasharray:3 2;vector-effect:non-scaling-stroke}
+.spark .sun-t{stroke:var(--ews-muted);stroke-width:1.2;vector-effect:non-scaling-stroke}
+.nowlbl{position:absolute;top:0;margin-left:3px;font-size:.62rem;font-weight:600;color:var(--ews-fs);white-space:nowrap;pointer-events:none}
+.nowlbl.l{margin-left:-3px;transform:translateX(-100%)}
+.sfresh{margin-left:auto;justify-content:flex-end}
+.wrap.compact{padding:12px 14px;gap:8px}
+.dc{display:grid;grid-template-columns:2.8em 22px minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--ews-line);font-size:.82rem}
+.dc.p{grid-template-columns:2.8em 22px minmax(0,1fr) auto auto auto}
+.dc:first-child{border-top:0}.dc .cl{color:var(--ews-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc .hl,.dc .rn,.dc .pp{font-variant-numeric:tabular-nums;white-space:nowrap}.dc .rn,.dc .pp{color:var(--ews-rain)}
+.dc ha-icon{--mdc-icon-size:20px}
+@container (max-width: 560px){
+.srow{gap:8px 12px}.scurve{flex-basis:100%}.sfresh{margin-left:0;justify-content:flex-start}}
+`;

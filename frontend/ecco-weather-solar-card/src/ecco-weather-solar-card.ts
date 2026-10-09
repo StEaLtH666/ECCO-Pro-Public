@@ -9,6 +9,10 @@
 // messages (weather/subscribe_forecast and recorder/statistics_during_period). Neither the Home Assistant object nor its
 // connection is ever stored, so no service / action call is reachable. The only event handled is the Today / Tomorrow chart switch, which
 // changes local view state. No timers: the card re-renders from Home Assistant's own state updates.
+//
+// LAYOUTS: `full` (default, the dedicated view) sends both forecast subscriptions and the statistics query. The Overview's two
+// compact instances send only what they show: `solar_strip` the statistics query alone (no forecast subscription at all),
+// `daily_compact` the daily forecast subscription alone (no hourly subscription, no statistics query).
 import {
   HOUR_MS,
   MINUTE_MS,
@@ -40,18 +44,21 @@ import {
   renderAccuracy,
   renderChart,
   renderDaily,
+  renderDailyCompact,
   renderFreshness,
   renderHourly,
   renderInsights,
   renderNow,
   renderShell,
   renderSolar,
+  renderSolarStrip,
+  renderStripChart,
   renderSun,
   unit,
 } from "./render.ts";
 import type { CurrentWeather } from "./render.ts";
-import { STYLES } from "./styles.ts";
-import type { CardConfig, ForecastEntry, HaConfigLike, StatRow, StatesLike } from "./types.ts";
+import { COMPACT_STYLES, STYLES } from "./styles.ts";
+import type { CardConfig, EntityLike, ForecastEntry, HaConfigLike, Layout, StatRow, StatesLike } from "./types.ts";
 
 export const CARD_TAG = "ecco-weather-solar-card";
 export const CARD_VERSION = "0.1.0";
@@ -94,6 +101,14 @@ const errText = (e: unknown): string => {
   return s.slice(0, 160);
 };
 
+/** The forecast subscriptions a layout needs: the strip shows no weather at all, the compact daily list only the daily one. */
+const kindsFor = (layout: Layout): Kind[] => (layout === "full" ? ["hourly", "daily"] : layout === "daily_compact" ? ["daily"] : []);
+
+/** Why a day has no Solcast hourly profile, or null when it has one (the same message in every layout). */
+const solcastNoteFor = (entity: EntityLike | undefined, id: string, hours: Map<string, unknown>): string | null =>
+  !entity || !isAvailable(entity) ? `Solcast sensor ${id} not found or unavailable.`
+    : hours.size === 0 ? "Solcast hourly detail is not available (enable the detailed forecast attributes in the Solcast integration options)." : null;
+
 export class EccoWeatherSolarCard extends HTMLElement {
   /** Clock; replaceable in tests. */
   now: () => number = () => Date.now();
@@ -121,10 +136,14 @@ export class EccoWeatherSolarCard extends HTMLElement {
   setConfig(config: unknown): void {
     const next = normalizeConfig(config);
     const weatherChanged = !this._config || this._config.entities.weather !== next.entities.weather;
+    const layoutChanged = !this._config || this._config.layout !== next.layout;
     this._config = next;
     this._buildShell();
-    if (weatherChanged) this._resubscribe();
+    if (weatherChanged || layoutChanged) this._resubscribe();
     if (this._statsFor !== next.entities.pv_energy_statistic) this._statsAt = 0;
+    // A layout or statistic change on a live card is served now rather than on the next hass update; before the first
+    // hass update there is no reader yet, and the usual throttle still applies.
+    this._maybeFetchStats();
     this._render(true);
   }
 
@@ -163,7 +182,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
   }
 
   getCardSize(): number {
-    return 14;
+    const layout = this._config ? this._config.layout : "full";
+    return layout === "solar_strip" ? 2 : layout === "daily_compact" ? 5 : 14;
   }
 
   getGridOptions(): Record<string, unknown> {
@@ -195,10 +215,11 @@ export class EccoWeatherSolarCard extends HTMLElement {
   private _ensureSubscribed(): void {
     if (!this._config || !this._connected) return;
     const entity = this._config.entities.weather;
+    const kinds = kindsFor(this._config.layout);
     if (!this._reader) {
       // Before the first hass update there is simply nothing yet: only a hass without a connection is an error.
       if (!this._hassSeen) return;
-      for (const kind of ["hourly", "daily"] as Kind[]) {
+      for (const kind of kinds) {
         const s = this._forecast[kind];
         if (!s.unsub && !s.pending) {
           s.error = "no Home Assistant websocket connection (the forecast needs Home Assistant 2023.9 or newer)";
@@ -213,7 +234,7 @@ export class EccoWeatherSolarCard extends HTMLElement {
       this._forecastFor = entity;
     }
     const gen = this._gen;
-    for (const kind of ["hourly", "daily"] as Kind[]) {
+    for (const kind of kinds) {
       const slot = this._forecast[kind];
       if (slot.unsub || slot.pending) continue;
       if (slot.error && this.now() - slot.errorAt < FORECAST_RETRY_MS) continue;
@@ -244,6 +265,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
 
   private _maybeFetchStats(): void {
     if (!this._config || !this._connected || !this._reader || this._statsInFlight) return;
+    // The compact daily list shows no PV at all, so it never queries the recorder.
+    if (this._config.layout === "daily_compact") return;
     const id = this._config.entities.pv_energy_statistic;
     const now = this.now();
     if (this._statsFor === id && now - this._statsAt < STATS_REFRESH_MS) return;
@@ -272,7 +295,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
   private _buildShell(): void {
     if (!this._config) return;
     const root = (this.shadowRoot ?? this.attachShadow({ mode: "open" })) as unknown as RootLike;
-    root.innerHTML = renderShell(this._config.title, STYLES);
+    const layout = this._config.layout;
+    root.innerHTML = renderShell(this._config.title, layout === "full" ? STYLES : STYLES + COMPACT_STYLES, layout);
     if (!this._listening) {
       root.addEventListener("click", this._onClick);
       this._listening = true;
@@ -295,15 +319,37 @@ export class EccoWeatherSolarCard extends HTMLElement {
     return parts.join("\u0002");
   }
 
+  private _set(name: string, html: string): void {
+    const r = this._region(name);
+    if (r && r.innerHTML !== html) r.innerHTML = html;
+  }
+
+  /** Why today's actual-PV bars are missing, or null when they are not. */
+  private _actualNote(actual: Map<string, number>): string | null {
+    if (!this._config) return null;
+    if (this._statsError) return `Actual PV history unavailable: ${this._statsError}`;
+    if (!this._reader) return "Actual PV history needs the Home Assistant websocket connection.";
+    if (this._stats && actual.size === 0) return `No hourly statistics for ${this._config.entities.pv_energy_statistic} yet (it needs a total_increasing energy sensor recorded in long-term statistics).`;
+    return null;
+  }
+
   private _render(force: boolean): void {
     if (!this._config || !this._root) return;
     const now = this.now();
     const sig = this._sig(now);
     if (!force && sig === this._signature) return;
     this._signature = sig;
+    const tz = haTimeZone(this._haConfig);
+    if (this._config.layout === "solar_strip") {
+      this._renderStrip(now, tz);
+      return;
+    }
+    if (this._config.layout === "daily_compact") {
+      this._renderCompact(now, tz);
+      return;
+    }
     const e = this._config.entities;
     const st = this._states;
-    const tz = haTimeZone(this._haConfig);
     const hourly = this._forecast.hourly.entries;
     const daily = this._forecast.daily.entries;
 
@@ -343,21 +389,10 @@ export class EccoWeatherSolarCard extends HTMLElement {
     const todayPoints = buildDayPoints(todayKey, tz, scToday, actual, wByHour);
     const tomorrowPoints = buildDayPoints(tomorrowKey, tz, scTomorrow, new Map(), wByHour);
     const dayEntity = this._day === "today" ? e.solcast_today : e.solcast_tomorrow;
-    const scMap = this._day === "today" ? scToday : scTomorrow;
-    const scEntity = stateOf(st, dayEntity);
-    const solcastNote = !scEntity || !isAvailable(scEntity) ? `Solcast sensor ${dayEntity} not found or unavailable.`
-      : scMap.size === 0 ? "Solcast hourly detail is not available (enable the detailed forecast attributes in the Solcast integration options)." : null;
-    let actualNote: string | null = null;
-    if (this._day === "today") {
-      if (this._statsError) actualNote = `Actual PV history unavailable: ${this._statsError}`;
-      else if (!this._reader) actualNote = "Actual PV history needs the Home Assistant websocket connection.";
-      else if (this._stats && actual.size === 0) actualNote = `No hourly statistics for ${e.pv_energy_statistic} yet (it needs a total_increasing energy sensor recorded in long-term statistics).`;
-    }
+    const solcastNote = solcastNoteFor(stateOf(st, dayEntity), dayEntity, this._day === "today" ? scToday : scTomorrow);
+    const actualNote = this._day === "today" ? this._actualNote(actual) : null;
 
-    const set = (name: string, html: string): void => {
-      const r = this._region(name);
-      if (r && r.innerHTML !== html) r.innerHTML = html;
-    };
+    const set = (name: string, html: string): void => this._set(name, html);
     const stale = this._config.stale;
     set("fresh", renderFreshness([
       weatherFreshness(st, e, hourly, now, stale),
@@ -390,6 +425,53 @@ export class EccoWeatherSolarCard extends HTMLElement {
     set("accuracy", renderAccuracy(acc, this._config.show_accuracy));
     set("insights", renderInsights(this._config.show_insights ? insights({ today, tomorrow, todayPoints, tomorrowPoints, now, tz, accuracy: acc, pvToday }) : [],
       this._config.show_insights));
+  }
+
+  /** `solar_strip`: the three blend totals, today's Solcast / actual-PV sparkline and the two solar freshness chips. Reads the
+   *  same sensors and attributes as the full layout; no weather section, so no forecast subscription and no Met.no chip. */
+  private _renderStrip(now: number, tz: string): void {
+    if (!this._config) return;
+    const e = this._config.entities;
+    const st = this._states;
+    const stale = this._config.stale;
+    const today = solarTotals(st, e.blend_today, e.solcast_today, e.forecast_solar_today);
+    const remaining = solarTotals(st, e.blend_remaining, e.solcast_remaining, e.forecast_solar_remaining);
+    const tomorrow = solarTotals(st, e.blend_tomorrow, e.solcast_tomorrow, e.forecast_solar_tomorrow);
+    const actual = statisticsByHour(this._stats, tz);
+    const scToday = solcastHourly(stateOf(st, e.solcast_today), tz);
+    const points = buildDayPoints(dateKey(now, tz), tz, scToday, actual, new Map());
+    const sun = sunView(st, e.sun, this._haConfig, now, tz);
+    this._set("fresh", renderFreshness([solcastFreshness(st, e, now, stale), forecastSolarFreshness(st, e, now, stale)]));
+    this._set("totals", renderSolarStrip({ today, remaining, tomorrow, pvToday: entityNum(st, e.pv_today) }));
+    this._set("curve", renderStripChart({
+      points,
+      now,
+      tz,
+      solcastNote: solcastNoteFor(stateOf(st, e.solcast_today), e.solcast_today, scToday),
+      actualNote: this._actualNote(actual),
+      sunrise: sun.sunrise,
+      sunset: sun.sunset,
+    }));
+  }
+
+  /** `daily_compact`: the weather freshness chip in the header and one row per available day (never padded). */
+  private _renderCompact(now: number, tz: string): void {
+    if (!this._config) return;
+    const e = this._config.entities;
+    const st = this._states;
+    const w = stateOf(st, e.weather);
+    const wa = (w && w.attributes) || {};
+    const fd = this._forecast.daily;
+    this._set("fresh", renderFreshness([weatherFreshness(st, e, null, now, this._config.stale)]));
+    this._set("daily", renderDailyCompact({
+      entries: upcomingDays(fd.entries, now, this._config.daily_days, tz),
+      tz,
+      error: fd.error,
+      loading: fd.entries === null && !fd.error,
+      tempUnit: unit(wa.temperature_unit, "°C"),
+      windUnit: unit(wa.wind_speed_unit, "km/h"),
+      rainUnit: unit(wa.precipitation_unit, "mm"),
+    }));
   }
 
   private _onClick = (ev: Event): void => {

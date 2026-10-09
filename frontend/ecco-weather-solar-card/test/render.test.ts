@@ -10,15 +10,20 @@ import {
   renderAccuracy,
   renderChart,
   renderDaily,
+  renderDailyCompact,
   renderFreshness,
   renderHourly,
   renderInsights,
   renderNow,
   renderShell,
   renderSolar,
+  renderSolarStrip,
+  renderStripChart,
   renderSun,
 } from "../src/render.ts";
-import type { CurrentWeather } from "../src/render.ts";
+import type { CurrentWeather, StripChartInput } from "../src/render.ts";
+import { COMPACT_STYLES, STYLES } from "../src/styles.ts";
+import type { ForecastEntry } from "../src/types.ts";
 import { HA_CONFIG, NOW, TZ, dailyForecast, hourlyForecast, statRows, states } from "./fixtures.ts";
 
 const E = DEFAULT_ENTITIES;
@@ -50,9 +55,138 @@ describe("escaping", () => {
       renderInsights([XSS], true),
       renderFreshness([{ label: XSS, status: "stale", ageMs: 1, detail: XSS }]),
       renderChart({ day: "today", points: [], now: NOW, tz: TZ, solcastNote: XSS, actualNote: XSS, fsCurrentHour: null, fsNextHour: null, sunrise: null, sunset: null }),
+      renderShell(XSS, "", "solar_strip"),
+      renderShell(XSS, "", "daily_compact"),
+      renderStripChart({ points: [], now: NOW, tz: TZ, solcastNote: XSS, actualNote: null, sunrise: null, sunset: null }),
+      renderStripChart({ points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: XSS, sunrise: null, sunset: null }),
+      renderDailyCompact({ entries: [{ datetime: "2026-10-08T11:00:00Z", condition: XSS }], tz: TZ, error: null, loading: false, tempUnit: XSS, windUnit: "km/h", rainUnit: XSS }),
+      renderDailyCompact({ entries: [], tz: TZ, error: XSS, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" }),
     ].join("");
     assert.ok(!html.includes("<img"), "raw markup leaked");
     assert.ok(!html.includes('onerror="'), "raw attribute leaked");
+  });
+});
+
+describe("layouts", () => {
+  const strip = (over: Partial<StripChartInput> = {}): string =>
+    renderStripChart({ points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: null, sunrise: Date.parse("2026-10-08T06:12:51Z"), sunset: Date.parse("2026-10-08T17:22:40Z"), ...over });
+  const regions = (html: string): string[] => [...html.matchAll(/data-region="([a-z]+)"/g)].map((m) => m[1] as string);
+  const dailyBase = { tz: TZ, error: null, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" };
+
+  it("full: the shell is the existing one, whether `layout` is omitted or given", () => {
+    assert.equal(renderShell("T", STYLES, "full"), renderShell("T", STYLES));
+    assert.deepEqual(regions(renderShell("T", STYLES)), ["fresh", "now", "sun", "solar", "chart", "hourly", "daily", "accuracy", "insights"]);
+    assert.ok(renderShell("T", STYLES).includes("Read-only: this card displays forecasts"));
+  });
+  it("solar_strip shell: totals, curve and freshness regions in one row; the title is a small label, hidden when empty", () => {
+    const html = renderShell("Solar forecast", STYLES + COMPACT_STYLES, "solar_strip");
+    assert.deepEqual(regions(html), ["totals", "curve", "fresh"]);
+    assert.ok(html.includes('<div class="stitle">Solar forecast</div>'));
+    assert.ok(!renderShell("", STYLES + COMPACT_STYLES, "solar_strip").includes('<div class="stitle">'));
+    assert.ok(!html.includes('data-region="now"') && !html.includes('data-region="hourly"') && !html.includes('data-region="daily"'), "no weather, sun, hourly, daily, accuracy or insights section");
+    assert.ok(!html.includes('data-region="accuracy"') && !html.includes('data-region="insights"'));
+  });
+  it("daily_compact shell: a header (title + weather freshness chip) and the daily region only", () => {
+    const html = renderShell("Next days", STYLES + COMPACT_STYLES, "daily_compact");
+    assert.deepEqual(regions(html), ["fresh", "daily"]);
+    assert.ok(html.includes('<div class="title">Next days</div>'));
+    assert.ok(!renderShell("", STYLES + COMPACT_STYLES, "daily_compact").includes('class="title"'));
+  });
+  it("strip totals: unknown is -- (never 0), a real zero is zero, the source line and basis are the blend sensor's own", () => {
+    const html = renderSolarStrip({
+      today: { blend: null, solcast: null, forecastSolar: null, basis: "none" },
+      remaining: { blend: 0, solcast: 0, forecastSolar: 0, basis: "both" },
+      tomorrow: { blend: 10, solcast: 10, forecastSolar: null, basis: "solcast" },
+      pvToday: null,
+    });
+    assert.equal((html.match(/class="stot"/g) ?? []).length, 3);
+    assert.ok(html.includes('<div class="lbl">Today</div><div class="big blend">--</div>'));
+    assert.ok(html.includes('<span class="sc">Solcast --</span> · <span class="fs">Forecast.Solar --</span> · <span class="basis warn">unavailable</span>'));
+    assert.ok(html.includes('<div class="lbl">Remaining today</div><div class="big blend">0.0 kWh</div>'), "a real zero is shown as zero");
+    assert.ok(html.includes('<span class="basis ">50/50 blend</span>'));
+    assert.ok(html.includes('<div class="gen">generated so far --</div>'), "generated so far sits beneath Remaining");
+    assert.equal((html.match(/class="gen"/g) ?? []).length, 1);
+    assert.ok(html.includes('<div class="lbl">Tomorrow</div><div class="big blend">10.0 kWh</div>'));
+    assert.ok(html.includes('<span class="sc">Solcast 10.0</span> · <span class="fs">Forecast.Solar --</span> · <span class="basis warn">Solcast only</span>'));
+    const real = renderSolarStrip({
+      today: solarTotals(states(), E.blend_today, E.solcast_today, E.forecast_solar_today),
+      remaining: solarTotals(states(), E.blend_remaining, E.solcast_remaining, E.forecast_solar_remaining),
+      tomorrow: solarTotals(states(), E.blend_tomorrow, E.solcast_tomorrow, E.forecast_solar_tomorrow),
+      pvToday: 9.8,
+    });
+    assert.ok(real.includes("20.5 kWh") && real.includes("Solcast 23.0") && real.includes("Forecast.Solar 18.0") && real.includes("generated so far 9.8 kWh"));
+    assert.ok(!real.includes("warn"));
+  });
+  it("strip chart: a 220 x 48 sparkline stretched to its cell, Solcast area + line, actual bars, now marker, sun ticks, no axis", () => {
+    const html = strip();
+    assert.ok(html.includes('<svg class="spark" viewBox="0 0 220 48" role="img"'));
+    assert.ok(html.includes('preserveAspectRatio="none"'));
+    assert.equal((html.match(/class="sc-a"/g) ?? []).length, 1, "one Solcast area");
+    assert.equal((html.match(/class="sc-l"/g) ?? []).length, 1, "one Solcast line");
+    assert.equal((html.match(/class="act"/g) ?? []).length, 7, "hours 06-12 have statistics rows (06 is a real 0 kWh, drawn as a zero bar)");
+    assert.ok(html.includes("12:00 actual 2.10 kWh"));
+    assert.equal((html.match(/class="nowl"/g) ?? []).length, 1);
+    assert.ok(/<span class="nowlbl[ l]*" style="left:\d+\.\d%">now 13:30<\/span>/.test(html), "the now label is HTML, so it is not stretched with the SVG");
+    assert.ok(html.includes("<title>sunrise 07:12</title>") && html.includes("<title>sunset 18:22</title>"));
+    assert.ok(!/class="ax"/.test(html) && !/<text/.test(html), "no axis labels inside the stretched SVG");
+    assert.ok(!html.includes("data-action") && !html.includes("<button"), "nothing to tap");
+    assert.ok(!html.includes('class="band"') && !html.includes('class="cloud"') && !html.includes('class="rain"'));
+  });
+  it("strip chart: the actual-PV note travels as a tooltip; the now marker and sun ticks appear only inside the drawn hours", () => {
+    assert.ok(strip({ actualNote: "Actual PV history unavailable: x" }).includes('<div class="spark-box" title="Actual PV history unavailable: x">'));
+    assert.ok(!strip().includes("spark-box\" title"));
+    const night = strip({ now: Date.parse("2026-10-08T23:30:00Z"), sunrise: Date.parse("2026-10-08T02:00:00Z"), sunset: Date.parse("2026-10-08T23:00:00Z") });
+    assert.ok(!night.includes('class="nowl"') && !night.includes("nowlbl") && !night.includes("sun-t"));
+    const late = strip({ now: Date.parse("2026-10-08T18:30:00Z") });
+    assert.ok(late.includes('class="nowlbl l"'), "a label near the right edge is anchored to its left");
+  });
+  it("strip chart: without Solcast's hourly detail the cell shows the plain message, never a made-up curve", () => {
+    const html = strip({ solcastNote: "Solcast hourly detail is not available" });
+    assert.ok(!html.includes("<svg"));
+    assert.ok(html.includes('<span class="na">Solcast hourly detail is not available</span>'));
+    const missing = strip({ solcastNote: "Solcast sensor sensor.x not found or unavailable." });
+    assert.ok(!missing.includes("<svg") && missing.includes("not found or unavailable"));
+    const empty = points("2026-10-08").map((p) => ({ ...p, solcast: null, p10: null, p90: null, actual: null }));
+    const nothing = strip({ points: empty });
+    assert.ok(!nothing.includes("<svg") && nothing.includes("No hourly solar data for this day yet."));
+    const noActual = strip({ points: points("2026-10-08", false) });
+    assert.ok(noActual.includes("<svg") && !noActual.includes('class="act"') && noActual.includes('class="sc-l"'));
+  });
+  it("daily compact: exactly one row per entry (six for six), weekday, condition, hi / lo and rain; no padding to daily_days", () => {
+    const html = renderDailyCompact({ ...dailyBase, entries: dailyForecast() });
+    assert.equal((html.match(/class="dc"/g) ?? []).length, 6);
+    assert.ok(html.includes('<span class="d">Thu</span>'));
+    assert.ok(html.includes('icon="mdi:weather-cloudy"') && html.includes('<span class="cl">Cloudy</span>'));
+    assert.ok(html.includes('<span class="hl" title="°C">15° / 8°</span>'));
+    assert.ok(html.includes('<span class="rn">4.2 mm</span>'));
+    assert.ok(!html.includes('class="pp"') && !html.includes("%"), "Met.no supplies no rain probability, so there is no probability column");
+    assert.ok(!html.includes("<h3>") && !html.includes("km/h"), "no heading of its own and no wind column");
+    assert.equal((renderDailyCompact({ ...dailyBase, entries: dailyForecast().slice(0, 2) }).match(/class="dc"/g) ?? []).length, 2);
+  });
+  it("daily compact: the probability column appears when the entries carry precipitation_probability", () => {
+    const entries = dailyForecast().map((f, i) => ({ ...f, precipitation_probability: i === 0 ? undefined : 10 * i }));
+    const html = renderDailyCompact({ ...dailyBase, entries });
+    assert.equal((html.match(/class="dc p"/g) ?? []).length, 6);
+    assert.equal((html.match(/class="pp"/g) ?? []).length, 6);
+    assert.ok(html.includes('<span class="pp">--</span>') && html.includes('<span class="pp">30%</span>'));
+  });
+  it("daily compact: a row with missing or unknown values shows -- (never 0), and a low just below zero is 0, not -0", () => {
+    const day = (over: Record<string, unknown>) => renderDailyCompact({ ...dailyBase, entries: [{ datetime: "2026-10-08T11:00:00Z", condition: "sunny", ...over } as ForecastEntry] });
+    const sparse = day({});
+    assert.ok(sparse.includes('<span class="hl" title="°C">--° / --°</span><span class="rn">--</span>'), sparse);
+    assert.ok(!sparse.includes("0°") && !sparse.includes(" mm"), "no 0 stands in for a missing temperature or rain amount");
+    const strings = day({ temperature: "unknown", templow: "unavailable", precipitation: "" });
+    assert.ok(strings.includes('<span class="hl" title="°C">--° / --°</span><span class="rn">--</span>'), strings);
+    const partial = day({ temperature: 15, precipitation: 0 });
+    assert.ok(partial.includes('<span class="hl" title="°C">15° / --°</span><span class="rn">0.0 mm</span>'), "a real zero is shown as zero");
+    const nearZero = day({ temperature: 0.3, templow: -0.4, precipitation: 0.04 });
+    assert.ok(nearZero.includes('<span class="hl" title="°C">0° / 0°</span><span class="rn">0.0 mm</span>'), nearZero);
+    assert.ok(day({ temperature: -0.6, templow: -3 }).includes('<span class="hl" title="°C">-1° / -3°</span>'), "real negatives keep their sign");
+  });
+  it("daily compact: loading, error and empty states are the existing messages", () => {
+    assert.ok(renderDailyCompact({ ...dailyBase, entries: [], loading: true }).includes("Loading daily forecast..."));
+    assert.ok(renderDailyCompact({ ...dailyBase, entries: [], error: "not_found" }).includes("Daily forecast unavailable: not_found"));
+    assert.ok(renderDailyCompact({ ...dailyBase, entries: [] }).includes("Daily forecast unavailable."));
   });
 });
 
@@ -187,5 +321,14 @@ describe("the only interactive element", () => {
     assert.deepEqual([...new Set([...all.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))], ["chart-day"]);
     assert.equal((all.match(/<button /g) ?? []).length, 2);
     assert.ok(!/<(?:input|select|form|a )/.test(all));
+  });
+  it("the compact layouts have none at all", () => {
+    const all = [
+      renderShell("S", STYLES + COMPACT_STYLES, "solar_strip"), renderShell("D", STYLES + COMPACT_STYLES, "daily_compact"),
+      renderSolarStrip({ today: solarTotals(states(), E.blend_today, E.solcast_today, E.forecast_solar_today), remaining: solarTotals(states(), E.blend_remaining, E.solcast_remaining, E.forecast_solar_remaining), tomorrow: solarTotals(states(), E.blend_tomorrow, E.solcast_tomorrow, E.forecast_solar_tomorrow), pvToday: 9.8 }),
+      renderStripChart({ points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: null, sunrise: null, sunset: null }),
+      renderDailyCompact({ entries: dailyForecast(), tz: TZ, error: null, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" }),
+    ].join("");
+    assert.ok(!all.includes("data-action") && !/<(?:button|input|select|form|a )/.test(all));
   });
 });

@@ -89,6 +89,7 @@ hours, and the tests cover both.
 ```yaml
 type: custom:ecco-weather-solar-card
 title: Weather & Solar      # optional
+layout: full                # full (default) | solar_strip | daily_compact - see "Layouts"
 hourly_hours: 12            # 1-48
 daily_days: 5               # 1-7
 show_accuracy: true
@@ -113,6 +114,32 @@ stale:                      # hours
   - `best_source`, `learning_days`.
 - An unknown key or a malformed entity id is refused, and Home Assistant shows its error card.
 - The dongle-slug entity ids are rewritten for other installations by `tools/ecco_site_render.py`.
+
+## Layouts
+
+`layout` chooses which sections the card renders, and with them which of its two read-only messages it sends. Every
+layout reads the same entities in the same way; nothing is recomputed. An unknown value is refused like any other option.
+
+| `layout` | Shows | Sends |
+|---|---|---|
+| `full` (default) | Everything above: current weather, sun, the blend totals, the hourly chart with its Today / Tomorrow switch, the hourly and daily lists, freshness, accuracy, insights. The dedicated **Weather & Solar** view uses this | `weather/subscribe_forecast` (hourly **and** daily) and `recorder/statistics_during_period` |
+| `solar_strip` | One compact row (about 84 px wide-screen, wrapping on narrow cards): the blend totals Today / Remaining today / Tomorrow, each with its "Solcast x.x · Forecast.Solar y.y · basis" line (a single-source basis in amber), "generated so far" beneath Remaining, a 220 x 48 sparkline of today's Solcast profile with actual PV bars, a "now" marker and sunrise / sunset ticks, and the Solcast and Forecast.Solar freshness chips. No weather, sun, hourly, daily, accuracy or insights section. Without Solcast's hourly detail the sparkline cell shows the plain message; a curve is never made up | `recorder/statistics_during_period` only - **no forecast subscription** |
+| `daily_compact` | A header (title and the Met.no freshness chip) and one row per available day - weekday, condition, high / low, rain amount - never padded to `daily_days` (Met.no gives six days). The rain-probability column appears only when the weather entity supplies one | `weather/subscribe_forecast` (daily) only - **no hourly subscription, no statistics query** |
+
+The ECCO Overview uses the two compact layouts (the PV forecast strip and the "Next days" block); the dedicated view uses
+`full`. The default `title` follows the layout ("Weather & Solar", "Solar forecast", "Next days"); an empty `title` hides
+it in the compact layouts.
+
+```yaml
+# Overview, PV forecast strip
+type: custom:ecco-weather-solar-card
+layout: solar_strip
+
+# Overview, Next days
+type: custom:ecco-weather-solar-card
+layout: daily_compact
+daily_days: 7
+```
 
 ## Deployment
 

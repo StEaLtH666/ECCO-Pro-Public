@@ -3,7 +3,7 @@
 // state only.
 import { HOUR_MS, compass, condition, fmtAge, fmtDuration, fmtKwh, fmtNum, fmtTime, fmtWeekday, hasRainProbability, parseTime, toNum } from "./model.ts";
 import type { AccuracyView } from "./model.ts";
-import type { ForecastEntry, FreshnessView, HourPoint, Num, SolarTotals, SunView } from "./types.ts";
+import type { ForecastEntry, FreshnessView, HourPoint, Layout, Num, SolarTotals, SunView } from "./types.ts";
 
 export function esc(v: unknown): string {
   return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -13,7 +13,23 @@ const icon = (name: string, cls = ""): string => `<ha-icon class="${esc(cls)}" i
 const muted = (text: string): string => `<span class="na">${esc(text)}</span>`;
 const unit = (v: unknown, fallback: string): string => (typeof v === "string" && v.length <= 12 ? v : fallback);
 
-export function renderShell(title: string, styles: string): string {
+/** The card's static frame with one empty region per section. `full` is the dedicated view; the two compact layouts hold
+ *  only the regions their sections need (strip: totals / curve / fresh; next days: fresh / daily). */
+export function renderShell(title: string, styles: string, layout: Layout = "full"): string {
+  if (layout === "solar_strip") {
+    return `<style>${styles}</style><ha-card><div class="wrap strip"><div class="srow">` +
+      (title ? `<div class="stitle">${esc(title)}</div>` : "") +
+      `<div class="stotals" data-region="totals"></div>` +
+      `<div class="scurve" data-region="curve"></div>` +
+      `<div class="fresh sfresh" data-region="fresh"></div>` +
+      `</div></div></ha-card>`;
+  }
+  if (layout === "daily_compact") {
+    return `<style>${styles}</style><ha-card><div class="wrap compact">` +
+      `<div class="head">${title ? `<div class="title">${esc(title)}</div>` : ""}<div class="fresh" data-region="fresh"></div></div>` +
+      `<section class="days" data-region="daily"></section>` +
+      `</div></ha-card>`;
+  }
   return `<style>${styles}</style><ha-card><div class="wrap">` +
     `<div class="head"><div class="title">${esc(title)}</div><div class="fresh" data-region="fresh"></div></div>` +
     `<div class="grid top"><section class="panel" data-region="now"></section><section class="panel" data-region="sun"></section></div>` +
@@ -96,9 +112,13 @@ export interface SolarPanel {
   pvNow: Num;
 }
 
+/** What the ECCO blend was built from, as the blend sensor itself reports it. */
+const basisText = (t: SolarTotals): string =>
+  t.basis === "both" ? "50/50 blend" : t.basis === "solcast" ? "Solcast only" : t.basis === "forecast_solar" ? "Forecast.Solar only" : "unavailable";
+
 export function renderSolar(p: SolarPanel): string {
   const col = (label: string, t: SolarTotals): string => {
-    const basis = t.basis === "both" ? "50/50 blend" : t.basis === "solcast" ? "Solcast only" : t.basis === "forecast_solar" ? "Forecast.Solar only" : "unavailable";
+    const basis = basisText(t);
     return `<div class="tot"><div class="lbl">${esc(label)}</div><div class="big blend">${esc(fmtKwh(t.blend))}</div>` +
       `<div class="basis ${t.basis === "both" ? "" : "warn"}">${esc(basis)}</div>` +
       `<div class="src"><span class="sc">Solcast ${esc(fmtKwh(t.solcast))}</span><span class="fs">Forecast.Solar ${esc(fmtKwh(t.forecastSolar))}</span></div></div>`;
@@ -106,6 +126,91 @@ export function renderSolar(p: SolarPanel): string {
   return `<h3>Solar forecast <span class="sub">ECCO blend</span></h3><div class="grid three">` +
     `${col("Today", p.today)}${col("Remaining today", p.remaining)}${col("Tomorrow", p.tomorrow)}</div>` +
     `<div class="sub">Generated today ${esc(fmtKwh(p.pvToday))} - PV now ${p.pvNow === null ? "--" : `${esc(Math.round(p.pvNow))} W`}</div>`;
+}
+
+export interface StripTotals {
+  today: SolarTotals;
+  remaining: SolarTotals;
+  tomorrow: SolarTotals;
+  pvToday: Num;
+}
+
+/** The `solar_strip` totals: Today / Remaining today / Tomorrow from the same blend sensors (and their source attributes)
+ *  as the full layout, one 10 px source line each; "generated so far" beneath Remaining. Unknown is "--", never 0. */
+export function renderSolarStrip(p: StripTotals): string {
+  const col = (label: string, t: SolarTotals, extra: string): string =>
+    `<div class="stot"><div class="lbl">${esc(label)}</div><div class="big blend">${esc(fmtKwh(t.blend))}</div>` +
+    `<div class="srcl"><span class="sc">Solcast ${esc(fmtNum(t.solcast))}</span> · <span class="fs">Forecast.Solar ${esc(fmtNum(t.forecastSolar))}</span>` +
+    ` · <span class="basis ${t.basis === "both" ? "" : "warn"}">${esc(basisText(t))}</span></div>${extra}</div>`;
+  return col("Today", p.today, "") +
+    col("Remaining today", p.remaining, `<div class="gen">generated so far ${esc(fmtKwh(p.pvToday))}</div>`) +
+    col("Tomorrow", p.tomorrow, "");
+}
+
+export interface StripChartInput {
+  /** today's points (Solcast estimate and actual PV per local hour) */
+  points: HourPoint[];
+  now: number;
+  tz: string;
+  solcastNote: string | null;
+  actualNote: string | null;
+  sunrise: number | null;
+  sunset: number | null;
+}
+
+/** The `solar_strip` sparkline (220 x 48 drawing units, stretched to its cell): today's Solcast profile as an area and
+ *  line, actual PV per completed hour as bars, a "now" marker and sunrise / sunset ticks. Without Solcast's hourly detail
+ *  the cell shows the plain message instead; a curve is never made up. */
+export function renderStripChart(c: StripChartInput): string {
+  if (c.solcastNote) return muted(c.solcastNote);
+  const pts = c.points;
+  const has = (p: HourPoint): boolean => (p.solcast !== null && p.solcast > 0) || (p.actual !== null && p.actual > 0);
+  const firstIdx = pts.findIndex(has);
+  if (firstIdx < 0) return muted("No hourly solar data for this day yet.");
+  let lastIdx = pts.length - 1;
+  while (lastIdx > firstIdx && !has(pts[lastIdx]!)) lastIdx--;
+  const view = pts.slice(Math.max(0, firstIdx - 1), Math.min(pts.length - 1, lastIdx + 1) + 1);
+  let maxV = 0;
+  for (const p of view) maxV = Math.max(maxV, p.solcast ?? 0, p.actual ?? 0);
+  const yMax = niceAxis(maxV * 1.05).max;
+  const W = 220, H = 48, T = 3, B = 5;
+  const ph = H - T - B;
+  const slot = W / view.length;
+  const base = view[0]!.start;
+  const span = view.length * HOUR_MS;
+  const xt = (t: number): number => ((t - base) / HOUR_MS) * slot;
+  const y = (v: number): number => T + ph - (Math.min(v, yMax) / yMax) * ph;
+  const parts: string[] = [];
+  const line = view.filter((p) => p.solcast !== null);
+  if (line.length) {
+    const coords = line.map((p) => `${(xt(p.start) + slot / 2).toFixed(1)},${y(p.solcast as number).toFixed(1)}`);
+    const floor = (T + ph).toFixed(1);
+    parts.push(`<polygon class="sc-a" points="${(xt(line[0]!.start) + slot / 2).toFixed(1)},${floor} ${coords.join(" ")} ${(xt(line[line.length - 1]!.start) + slot / 2).toFixed(1)},${floor}"/>`);
+  }
+  for (const p of view) {
+    if (p.actual === null) continue;
+    const bw = slot * 0.56;
+    const cx = xt(p.start) + slot / 2;
+    parts.push(`<rect class="act" x="${(cx - bw / 2).toFixed(1)}" y="${y(p.actual).toFixed(1)}" width="${bw.toFixed(1)}" height="${(T + ph - y(p.actual)).toFixed(1)}">` +
+      `<title>${esc(fmtTime(p.start, c.tz))} actual ${esc(p.actual.toFixed(2))} kWh</title></rect>`);
+  }
+  if (line.length) {
+    parts.push(`<polyline class="sc-l" points="${line.map((p) => `${(xt(p.start) + slot / 2).toFixed(1)},${y(p.solcast as number).toFixed(1)}`).join(" ")}"/>`);
+  }
+  for (const [t, what] of [[c.sunrise, "sunrise"], [c.sunset, "sunset"]] as Array<[number | null, string]>) {
+    if (t === null || t < base || t > base + span) continue;
+    parts.push(`<line class="sun-t" x1="${xt(t).toFixed(1)}" x2="${xt(t).toFixed(1)}" y1="${H - B}" y2="${H}"><title>${esc(what)} ${esc(fmtTime(t, c.tz))}</title></line>`);
+  }
+  let nowLabel = "";
+  if (c.now >= base && c.now < base + span) {
+    const nx = xt(c.now);
+    parts.push(`<line class="nowl" x1="${nx.toFixed(1)}" x2="${nx.toFixed(1)}" y1="${T}" y2="${T + ph}"><title>now</title></line>`);
+    const pct = (nx / W) * 100;
+    nowLabel = `<span class="nowlbl${pct > 70 ? " l" : ""}" style="left:${pct.toFixed(1)}%">now ${esc(fmtTime(c.now, c.tz))}</span>`;
+  }
+  const aria = `Hourly solar today: Solcast estimate${view.some((p) => p.actual !== null) ? " and actual generation" : ""}`;
+  return `<div class="spark-box"${c.actualNote ? ` title="${esc(c.actualNote)}"` : ""}>` +
+    `<svg class="spark" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}" preserveAspectRatio="none">${parts.join("")}</svg>${nowLabel}</div>`;
 }
 
 export interface ChartInput {
@@ -282,6 +387,32 @@ export function renderDaily(i: WeatherListInput): string {
       `<span class="wd">${esc(fmtNum(toNum(f.wind_speed), 0))} ${esc(i.windUnit)} ${esc(compass(f.wind_bearing))}</span></div>`;
   }).join("");
   return `${head}<div class="days">${rows}</div>`;
+}
+
+/** The `daily_compact` rows: one per entry (never padded), weekday / condition / high and low / rain amount, and the
+ *  rain-probability column only when the weather source supplies one. Loading / error / empty states as the full list. */
+export function renderDailyCompact(i: WeatherListInput): string {
+  const st = forecastState(i, "Daily forecast");
+  if (st) return st;
+  const prob = hasRainProbability(i.entries);
+  // Whole degrees, "--" for unknown; a value in (-0.5, 0) is "0", never "-0".
+  const deg = (v: Num): string => {
+    if (v === null) return "--";
+    const s = v.toFixed(0);
+    return s === "-0" ? "0" : s;
+  };
+  return i.entries.map((f) => {
+    const t = parseTime(f.datetime);
+    const c = condition(f.condition);
+    const hiT = toNum(f.temperature);
+    const loT = toNum(f.templow);
+    const rain = toNum(f.precipitation);
+    const pp = toNum(f.precipitation_probability);
+    return `<div class="dc${prob ? " p" : ""}"><span class="d">${esc(t === null ? "--" : fmtWeekday(t, i.tz))}</span>${icon(c.icon)}<span class="cl">${esc(c.label)}</span>` +
+      `<span class="hl" title="${esc(i.tempUnit)}">${esc(deg(hiT))}° / ${esc(deg(loT))}°</span>` +
+      `<span class="rn">${esc(rain === null ? "--" : `${rain.toFixed(1)} ${i.rainUnit}`)}</span>` +
+      `${prob ? `<span class="pp">${esc(pp === null ? "--" : `${Math.round(pp)}%`)}</span>` : ""}</div>`;
+  }).join("");
 }
 
 export function renderAccuracy(a: AccuracyView, show: boolean): string {
