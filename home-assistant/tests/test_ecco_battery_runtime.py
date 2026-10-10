@@ -24,7 +24,7 @@ rendered attribute.
   [10] boundary and numerical stability: horizon cap, the hold threshold, huge / tiny / garbage values, irregular and backwards
        clocks, a simulated week without drift
   [11] the presentation sensor (what the Energy Flow card reads): lookups only, a model that stops updating is not shown as current
-  [12] an independent Python oracle agrees with the templates on seeded random traces
+  [12] a second, plain-Python implementation of the documented method agrees with the templates on seeded random traces
   [13] wiring: the manifest deploys the package, the Overview Energy Flow card reads the sensor, the card's status vocabulary
        equals the package's
   [14] mutation: each named mutant of the package is caught by the scenarios above; equivalent rewrites survive
@@ -70,11 +70,12 @@ E_POWER = "sensor.ecco_clock_dongle_ecco_battery_output_power"
 E_SOC = "sensor.ecco_clock_dongle_ecco_battery_soc"
 E_PV = "sensor.ecco_clock_dongle_ecco_pv_power"
 E_ONLINE = "binary_sensor.ecco_clock_dongle_telemetry_online"
+E_POLLED = "sensor.ecco_clock_dongle_last_telemetry_update"   # text: the poll time to the second, changes on every good poll
 E_RESERVE = "input_number.ecco_minimum_reserve_soc"
 E_CAPACITY = "input_number.ecco_battery_model_capacity"
 E_MODEL = "sensor.ecco_battery_runtime_model"
 E_TTR = "sensor.ecco_battery_time_to_reserve"
-INPUTS = (E_POWER, E_SOC, E_PV, E_ONLINE, E_RESERVE, E_CAPACITY)
+INPUTS = (E_POWER, E_SOC, E_PV, E_ONLINE, E_POLLED, E_RESERVE, E_CAPACITY)
 STATUSES = {"discharging", "at_reserve", "charging", "holding", "insufficient_data", "stale"}
 
 T0 = datetime(2026, 10, 10, 18, 0, 0, tzinfo=timezone.utc)
@@ -195,33 +196,34 @@ class Sim:
     """One Home Assistant instance: the input entities, the clock and the two FE-1 entities."""
 
     def __init__(self, pkg: Package, power=1000, soc=80, pv=0, reserve=20.0, capacity=31.7, online="on", start=T0,
-                 with_last_reported=True):
+                 with_last_reported=True, ntp=True):
         self.pkg = pkg
         self.now = start
         self.with_last_reported = with_last_reported
+        self.ntp = ntp             # the dongle publishes its poll timestamp only while it has NTP time
         self.ent: dict = {}
         self.model = None          # the model entity's `model` attribute (restored after a restart)
         self.model_state = "unknown"
         self.model_seen = None     # when the model entity last rendered
         for eid, v in ((E_POWER, power), (E_SOC, soc), (E_PV, pv), (E_RESERVE, reserve), (E_CAPACITY, capacity),
-                       (E_ONLINE, online)):
+                       (E_ONLINE, online), (E_POLLED, self._poll_text() if ntp else "Waiting")):
             self.set(eid, v)
 
+    def _poll_text(self):
+        return self.now.strftime("%Y-%m-%d %H:%M:%S")
+
     # ---- inputs ----------------------------------------------------------------------------------------------------------
-    def set(self, eid, value, report=True):
+    def set(self, eid, value):
+        """A new value. Like ESPHome (homeassistant/components/esphome/entry_data.py async_update_state drops a state equal to
+        the cached one unless force_update) and like a helper set to its current value, an UNCHANGED value never reaches the
+        state machine: none of last_changed / last_updated / last_reported moves."""
         v = value if isinstance(value, str) else (str(float(value)) if isinstance(value, float) else str(value))
         e = self.ent.get(eid)
         if e is None:
             self.ent[eid] = {"state": v, "changed": self.now, "updated": self.now, "reported": self.now}
             return
         if e["state"] != v:
-            e["state"], e["changed"], e["updated"] = v, self.now, self.now
-        if report:
-            e["reported"] = self.now
-
-    def report(self, eid):
-        """The device re-publishes an unchanged value (only last_reported moves)."""
-        self.ent[eid]["reported"] = self.now
+            e["state"], e["changed"], e["updated"], e["reported"] = v, self.now, self.now, self.now
 
     # ---- rendering ---------------------------------------------------------------------------------------------------------
     def _ctx(self, trigger_id):
@@ -247,14 +249,17 @@ class Sim:
         return out
 
     def tick(self, power=None, soc=None, pv=None, seconds=60, reported=True):
-        """Advance the clock; the dongle re-publishes (unless `reported` is False); the minute trigger fires."""
+        """Advance the clock and fire the minute trigger. `reported` = the dongle's polls succeeded meanwhile: the values
+        it publishes reach HA only when they changed (ESPHome), and its poll timestamp (to the second) always changes. A
+        failed or skipped poll (`reported=False`) publishes nothing at all."""
         self.now += timedelta(seconds=seconds)
-        if power is not None:
-            self.set(E_POWER, power, report=reported)
-        elif reported:
-            self.report(E_POWER)
-        if soc is not None:
-            self.set(E_SOC, soc, report=reported)
+        if reported:
+            if power is not None:
+                self.set(E_POWER, power)
+            if soc is not None:
+                self.set(E_SOC, soc)
+            if self.ntp:
+                self.set(E_POLLED, self._poll_text())
         if pv is not None:
             self.set(E_PV, pv)
         return self.fire("tick")
@@ -288,6 +293,15 @@ def expected_minutes(soc, reserve, wh_per_pct, power):
     return step_round((soc - reserve) * wh_per_pct / power * 60)
 
 
+def one_step_apart(a, b) -> bool:
+    """Equal, or neighbours on the documented rounding grid (the template's decay constants vs exp() differ in the last bits)."""
+    if a == b:
+        return True
+    if a is None or b is None:
+        return False
+    return abs(a - b) <= (1 if max(a, b) < 10 else (5 if max(a, b) < 120 else 10))
+
+
 # ===========================================================================
 print("[0] static: read only, triggers, entities, inputs, renderer rules")
 # ===========================================================================
@@ -317,8 +331,12 @@ def fw_slug(name: str) -> str:
 
 fw_names = {fw_slug(n) for n in re.findall(r'^\s+name:\s*"([^"]+)"\s*$', FIRMWARE, re.M)}
 check("every dongle input exists in the firmware (entity ids derived from the ESPHome names, default slug)",
-      all(e.split(".", 1)[1].removeprefix("ecco_clock_dongle_") in fw_names for e in (E_POWER, E_SOC, E_PV, E_ONLINE)),
-      str([e for e in (E_POWER, E_SOC, E_PV, E_ONLINE) if e.split(".", 1)[1].removeprefix("ecco_clock_dongle_") not in fw_names]))
+      all(e.split(".", 1)[1].removeprefix("ecco_clock_dongle_") in fw_names for e in (E_POWER, E_SOC, E_PV, E_ONLINE, E_POLLED)),
+      str([e for e in (E_POWER, E_SOC, E_PV, E_ONLINE, E_POLLED)
+           if e.split(".", 1)[1].removeprefix("ecco_clock_dongle_") not in fw_names]))
+check("the liveness timestamp is the dongle's per-poll text (strftime to the second, published on every successful poll while "
+      "NTP time is valid), so it changes even when every reading is unchanged",
+      'id(last_telemetry_update).publish_state(now.strftime("%Y-%m-%d %H:%M:%S"));' in FIRMWARE)
 inp = re.search(r"\ninput_number:\n((?:  .*\n|\n)*)", CORE_PKG)
 helper_ids = set(re.findall(r"^  ([a-z0-9_]+):\s*$", inp.group(1), re.M)) if inp else set()
 check("the reserve and capacity helpers exist in ecco_pro.yaml (input_number.ecco_minimum_reserve_soc, "
@@ -478,8 +496,9 @@ mean_rel = sum(errors(rows, 30)) / len(abs_err)
 # The level lags by about 14 minutes (the 9-minute median's ~4 plus the 10-minute constant): on a 250 W swing with a 5-hour
 # period that bounds the error near 250 * 14 / 47 = 75 W, largest in relative terms at the 350 W troughs.
 check(f"(a) a slowly varying load (600 +/- 250 W, a 5-hour cycle) is tracked within 90 W (15 % of its mean) every minute "
-      f"(worst {max(map(abs, abs_err)):.0f} W) with no bias (mean error {mean_rel:+.1%})",
-      max(map(abs, abs_err)) <= 90 and abs(mean_rel) < 0.03)
+      f"(worst {max(map(abs, abs_err)):.0f} W), erring on the short side on average by design (fast attack via the median, slow "
+      f"release via the level: mean error {mean_rel:+.1%}, between 0 and +6 %)",
+      max(map(abs, abs_err)) <= 90 and 0 <= mean_rel < 0.06)
 s, rows = run_trace(lambda m: 600, 0.05, 2600, 600, 12)
 err = errors(rows, 240)
 med = sorted(err)[len(err) // 2]
@@ -532,6 +551,40 @@ check("solar covering the load and charging: 'charging', not solar-assisted", ou
 s = Sim(PKG, power=1200, pv=0)
 out = warm(s, 12)
 check("no solar: not flagged solar-assisted", out["solar_assisted"] is False)
+rng = random.Random(41)
+s = Sim(PKG, power=600, soc=60)
+for _ in range(180):
+    s.tick(600 + (2600 if rng.random() < 0.05 else 0))
+allow = s.model["spike_allowance_w"]
+seq = [s.tick(rng.choice([-3, 0, 3]))["status"] for _ in range(60)]
+check(f"(review S1) idle after three hours of spiky discharge (allowance {allow} W): 'holding' within 6 minutes and from then on, "
+      "never a days-long 'discharging' estimate", allow > 50 and seq[5:] == ["holding"] * 55, str(seq[:8]))
+s = Sim(PKG, power=-1500, soc=50)
+for k in range(120):
+    s.tick(-1500 - (1800 if k % 11 == 0 else 0) + (1200 if k % 17 == 0 else 0))
+check("(review S2/S3) brief sun bursts and cloud dips while charging do not change the allowance (it learns only while "
+      "discharging)", s.model["spike_allowance_w"] == 0, str(s.model["spike_allowance_w"]))
+outs = [s.tick(150) for _ in range(12)]
+check("(review S3) a real 150 W discharge after charging: 'discharging' within 6 minutes, never held at 'charging'",
+      [o["status"] for o in outs[5:]] == ["discharging"] * 7, str([o["status"] for o in outs]))
+outs = [s.tick(400) for _ in range(40)]
+check("(review S3) a real 400 W discharge is estimated within 2 % of 400 W (no carried-over negative allowance; only the small, "
+      "decaying allowance of the step itself) and the minutes follow that discharge: not 2x optimistic",
+      abs(outs[-1]["discharge_w"] / 400 - 1) <= 0.02
+      and one_step_apart(outs[-1]["minutes"], expected_minutes(50, 20, 317, outs[-1]["discharge_w"])),
+      f"{outs[-1]['discharge_w']} {outs[-1]['minutes']}")
+s = Sim(PKG, power=500, soc=60)
+s.tick(3000)
+outs = [s.tick(500) for _ in range(10)]
+check("(review: seeding) a kettle minute as the very first sample after a start does not linger: at the end of the warm-up the "
+      "estimate is the 500 W one", outs[-1]["status"] == "discharging" and outs[-1]["minutes"] == expected_minutes(60, 20, 317, 500),
+      f"{outs[-1]['minutes']} vs {expected_minutes(60, 20, 317, 500)}")
+s = Sim(PKG, power=500, soc=60)
+warm(s, 20)
+outs = [s.tick(1500) for _ in range(8)]
+check("fast attack: a sustained rise 500 -> 1500 W is in the discharge estimate within 6 minutes (the median turns), before the "
+      "level catches up: the estimate errs on the short side", outs[5]["discharge_w"] >= 1500 and outs[5]["level_w"] < 1100,
+      f"{outs[5]['discharge_w']} level {outs[5]['level_w']}")
 s = Sim(PKG, power=-1500)
 warm(s, 12)
 seq = [s.tick(1500)["status"] for _ in range(25)]
@@ -601,12 +654,23 @@ check("reports stop although the online flag stays on (a skipped poll keeps old 
       "180 s old", seq[:3] == ["discharging"] * 3 and seq[3:] == ["stale"] * 3, str(seq))
 check("...and stale samples are never taken into the history (12 + the 3 still-fresh minutes)", s.model["n"] == 15,
       str(s.model["n"]))
-for flavour in ("without last_reported", "with last_reported"):
-    s = Sim(PKG, with_last_reported=(flavour == "with last_reported"))
-    warm(s, 12)
-    out = [s.tick()["status"] for _ in range(3)]
-    check(f"an unchanged power value that is re-reported stays fresh ({flavour}: last_reported, else last_updated)",
-          out == ["discharging"] * 3 if flavour == "with last_reported" else out[-1] == "stale", str(out))
+s = Sim(PKG, power=0, soc=60)
+seq = [s.tick(0)["status"] for _ in range(70)]
+check("an unchanged reading (0 W while idle for over an hour, which ESPHome never re-sends): 'holding' throughout after the "
+      "warm-up, never 'stale' (liveness is the per-poll timestamp, not the power value)",
+      seq[9:] == ["holding"] * 61 and s.model["telemetry_age_s"] <= 60, str(sorted(set(seq[9:]))))
+s = Sim(PKG, power=900, soc=20, reserve=20)
+seq = [s.tick(900)["status"] for _ in range(40)]
+check("...and an unchanged reading at the reserve stays 'at_reserve' (reachable, not masked as stale)",
+      seq[9:] == ["at_reserve"] * 31, str(sorted(set(seq[9:]))))
+s = Sim(PKG, power=0, soc=60, ntp=False)
+seq = [s.tick(0)["status"] for _ in range(15)]
+check("without NTP time the dongle publishes no poll timestamp ('Waiting'): the power report age is the fallback, so a constant "
+      "reading turns 'stale' after 180 s (documented limitation)", seq[1] != "stale" and seq[-1] == "stale", str(seq))
+s = Sim(PKG, power=500, soc=60, ntp=False)
+rng = random.Random(3)
+seq = [s.tick(500 + rng.choice([-7, -3, 2, 5, 9]))["status"] for _ in range(15)]
+check("...while a changing reading stays fresh on the fallback", seq[-3:] == ["discharging"] * 3, str(seq))
 s = Sim(PKG)
 warm(s, 12)
 for _ in range(9):
@@ -671,6 +735,25 @@ out = s.tick(-1200, soc=s.model["soc_sample"])
 check("charging ends the current segment but keeps what was learned", out["learn_anchor_soc"] is None
       and out["learned_wh_per_pct"] == learned and out["learn_obs"] == obs)
 s = Sim(PKG, power=1500, soc=80, capacity=31.7)
+discharge_run(s, 285.0, 1500, 380, 80.999)
+before = (s.model["capacity_basis"], s.model["learned_wh_per_pct"])
+s.set(E_CAPACITY, 15.0)
+out = s.fire("config")
+check("(review) a change of the configured capacity restarts the measuring: the configured value is the basis again",
+      before[0] == "measured" and out["capacity_basis"] == "configured" and out["learned_wh_per_pct"] is None
+      and out["learn_obs"] == 0 and out["capacity_kwh"] == 15.0 and out["learn_restarts"] == 1, f"{before} -> {out['capacity_basis']}")
+s = Sim(PKG, power=1500, soc=80, capacity=31.7)
+out = discharge_run(s, 285.0, 1500, 380, 80.999)
+learned = out["learned_wh_per_pct"]
+out = discharge_run(s, 190.0, 1500, 120, s.model["soc_sample"] + 0.999)
+check("(review) a measurement more than 20 % away from the measured value (a module lost: 285 -> 190 Wh/%) restarts the "
+      "measuring: the configured value is the basis until 3 new measurements, never the stale measured one",
+      out["learn_restarts"] >= 1 and out["learned_wh_per_pct"] != learned and out["capacity_basis"] == "configured",
+      f"{learned} -> {out['learned_wh_per_pct']} {out['capacity_basis']} obs {out['learn_obs']}")
+out = discharge_run(s, 190.0, 1500, 200, s.model["soc_sample"] + 0.999)
+check("...and the new value is used once it is confirmed (190 Wh/% within 3 %)",
+      out["capacity_basis"] == "measured" and abs(out["learned_wh_per_pct"] / 190 - 1) < 0.03, str(out["learned_wh_per_pct"]))
+s = Sim(PKG, power=1500, soc=80, capacity=31.7)
 out = discharge_run(s, 100.0, 1500, 120, 80.999)
 check("an implausible measurement (100 Wh/% against 317 configured) is rejected, the configured value stays the basis",
       out["learn_rejected"] >= 1 and out["learn_obs"] == 0 and out["capacity_basis"] == "configured", str(out["learn_rejected"]))
@@ -720,13 +803,17 @@ check("a clock that jumps backwards restarts the history instead of producing a 
       out["reset_reason"] == "gap" and out["n"] == 1)
 s = Sim(PKG, power=700, soc=90)
 rng = random.Random(7)
-lows = []
+days, acc = [], []
 for minute in range(7 * 1440):
     out = s.tick(int(700 + rng.gauss(0, 80)))
+    acc.append(out["discharge_w"])
     if minute % 1440 == 1439:
-        lows.append(out["discharge_w"])
-check("a simulated week: no drift, no overflow (the smoothed value stays near 700 W every day, n is bounded)",
-      all(abs(v - 700) < 60 for v in lows) and s.model["n"] == 7 * 1440 and len(s.model["samples"]) == 9, str(lows))
+        days.append(sum(acc) / len(acc))
+        acc = []
+check("a simulated week of a noisy 700 W load: every day's mean estimate within 0 to +5 % of 700 W (short-side by design), no "
+      f"drift from day 1 to day 7, no overflow, n and the window bounded (daily means {[round(d) for d in days]})",
+      all(700 <= d <= 735 for d in days) and abs(days[-1] - days[0]) < 10 and s.model["n"] == 7 * 1440
+      and len(s.model["samples"]) == 9)
 check("the model attribute stays small (under 2 kB rendered) for the recorder", len(repr(s.model)) < 2000, str(len(repr(s.model))))
 
 # ===========================================================================
@@ -745,8 +832,11 @@ check("the presentation sensor carries the estimate note (not a guarantee, enfor
       "not a guarantee" in at["estimate_note"])
 s.now += timedelta(minutes=4)
 st, at = s.presented()
-check("a model that stopped updating (over 180 s) is reported as insufficient data, never as the last estimate",
-      st is None and at["status"] == "insufficient_data" and at["reason"] == "model_not_updating")
+check("a model that stopped updating (over 180 s) is reported as insufficient data, never as the last estimate, and every "
+      "value it carried is withheld (range, discharge, capacity, reserve, energy)",
+      st is None and at["status"] == "insufficient_data" and at["reason"] == "model_not_updating"
+      and all(at[k] is None for k in ("minutes_low", "minutes_high", "discharge_w", "capacity_kwh", "capacity_basis", "reserve_soc",
+                                      "energy_above_reserve_kwh")) and at["beyond_horizon"] is False and at["history_minutes"] == 0)
 s.model = None
 st, at = s.presented()
 check("no model at all: insufficient data", st is None and at["status"] == "insufficient_data")
@@ -757,7 +847,7 @@ check("the presentation templates contain no arithmetic on SOC, power, reserve o
 
 # ===========================================================================
 print("")
-print("[12] an independent oracle")
+print("[12] a second implementation (consistency with the documented method)")
 # ===========================================================================
 
 
@@ -766,7 +856,7 @@ class Oracle:
 
     def __init__(self):
         self.samples, self.ema, self.dev, self.n, self.last, self.soc_s = [], None, 0.0, 0, None, None
-        self.exc = 0.0
+        self.exc, self.med = 0.0, None
         self.anchor, self.e_wh, self.wh, self.obs = None, 0.0, None, 0
 
     def step(self, t, p, soc, reserve, cap_kwh, fresh=True):
@@ -776,17 +866,23 @@ class Oracle:
             jump = self.soc_s is not None and abs(soc - self.soc_s) > 5
             if dt is None or dt <= 0 or dt > 300 or jump or self.ema is None:
                 self.samples, self.ema, self.dev, self.n, self.anchor, self.e_wh = [round(p)], float(p), 0.0, 1, None, 0.0
+                self.med = float(p)
             else:
                 p_prev = self.samples[-1]
                 self.samples = (self.samples + [round(p)])[-9:]
                 srt = sorted(self.samples)
                 c = len(srt)
                 med = srt[(c - 1) // 2] if c % 2 else (srt[c // 2 - 1] + srt[c // 2]) / 2
-                k = math.exp(-dt / 600.0)
-                d = abs(med - self.ema)
-                self.ema = med + (self.ema - med) * k
-                self.dev = d + (self.dev - d) * k
-                self.exc = (p - med) + (self.exc - (p - med)) * math.exp(-dt / 10800.0)
+                if self.n < 5:                       # seeded from the median, not one raw sample
+                    self.ema, self.dev = med, 0.0
+                else:
+                    k = math.exp(-dt / 600.0)
+                    d = abs(med - self.ema)
+                    self.ema = med + (self.ema - med) * k
+                    self.dev = d + (self.dev - d) * k
+                self.med = med
+                if med >= 50:                        # the allowance learns only while discharging, never below zero
+                    self.exc = max(0.0, (p - med) + (self.exc - (p - med)) * math.exp(-dt / 10800.0))
                 self.n += 1
                 e_step = (p + p_prev) / 2 * dt / 3600
                 if p < -100 or soc > self.soc_s:
@@ -796,32 +892,24 @@ class Oracle:
                     if soc < self.soc_s and self.anchor - soc >= 5:
                         s_ = self.e_wh / (self.anchor - soc)
                         if prior * 0.5 <= s_ <= prior * 1.5:
-                            self.wh = s_ if self.obs == 0 else self.wh + 0.3 * (s_ - self.wh)
-                            self.obs += 1
+                            if self.obs == 0 or abs(s_ - self.wh) > 0.2 * self.wh:
+                                self.wh, self.obs = s_, 1
+                            else:
+                                self.wh, self.obs = self.wh + 0.3 * (s_ - self.wh), self.obs + 1
                         self.anchor, self.e_wh = soc, 0.0
                 elif soc < self.soc_s:
                     self.anchor, self.e_wh = soc, 0.0
             self.last, self.soc_s = t, soc
         wh = self.wh if (self.wh is not None and self.obs >= 3) else prior
-        total = self.ema + self.exc
         if self.n < 10:
             return "insufficient_data", None
-        if total <= -50:
+        if self.med <= -50:
             return "charging", None
         if soc <= reserve:
             return "at_reserve", 0
-        if total < 50:
+        if self.med < 50:
             return "holding", None
-        return "discharging", step_round((soc - reserve) * wh / total * 60)
-
-
-def one_step_apart(a, b) -> bool:
-    """Equal, or neighbours on the documented rounding grid (the template's decay constants vs exp() differ in the last bits)."""
-    if a == b:
-        return True
-    if a is None or b is None:
-        return False
-    return abs(a - b) <= (1 if max(a, b) < 10 else (5 if max(a, b) < 120 else 10))
+        return "discharging", step_round((soc - reserve) * wh / (max(self.ema, self.med) + self.exc) * 60)
 
 
 agree, total, exact, worst = 0, 0, 0, []
@@ -844,8 +932,10 @@ for seed in range(6):
             exact += out["minutes"] == want[1]
         else:
             worst.append((seed, minute, (out["status"], out["minutes"]), want))
-check(f"the templates and the oracle agree on the status at every one of {total} minutes of six random traces (discharge, "
-      "charge, idle, heavy load, spikes, learning) and on the minutes to within one rounding step", agree == total, str(worst[:3]))
+check(f"a second, plain-Python implementation of the documented algorithm agrees with the templates on the status at every one "
+      f"of {total} minutes of six random traces (discharge, charge, idle, heavy load, spikes, learning) and on the minutes to within "
+      "one rounding step (a consistency check of the templates against the written method; it cannot catch a flaw in the method)",
+      agree == total, str(worst[:3]))
 check(f"...with exactly equal minutes in {exact / total:.2%} of them (only rounding-boundary neighbours differ)",
       exact / total > 0.98)
 
@@ -910,6 +1000,15 @@ def scenario_suite(pkg: Package) -> dict:
         r["holding"] = warm(s, 12)["status"] == "holding"
         s = Sim(pkg, power=900, soc=20, reserve=20)
         r["at_reserve"] = warm(s, 12)["status"] == "at_reserve"
+        s = Sim(pkg, power=0, soc=60)
+        r["idle_fresh"] = [s.tick(0)["status"] for _ in range(20)][-1] == "holding"
+        s = Sim(pkg, power=-1500, soc=50)
+        for k in range(60):
+            s.tick(-1500 + (1800 if k % 7 == 0 else 0))
+        r["charge_allowance"] = s.model["spike_allowance_w"] == 0
+        s = Sim(pkg, power=500, soc=60)
+        s.tick(3000)
+        r["seeding"] = [s.tick(500) for _ in range(10)][-1]["minutes"] == expected_minutes(60, 20, 317, 500)
     except Exception as exc:  # noqa: BLE001 - a mutant that crashes the templates is caught too
         r["crash"] = f"{type(exc).__name__}: {exc}"
     return r
@@ -921,12 +1020,17 @@ MUTANTS = [
     ("median removed (spikes pass straight through)", "{%- set med = srt[(c - 1) // 2] if c % 2 == 1 else (srt[c // 2 - 1] + srt[c // 2]) / 2 -%}",
      "{%- set med = p -%}", "spike"),
     ("staleness ignored", "age is not none and age <= 180", "age is not none and age <= 999999", "stale"),
-    ("charging band inverted", "{%- elif ema <= -50 -%}", "{%- elif ema >= 50 -%}", "charging"),
+    ("charging band inverted", "{%- elif med <= -50 -%}", "{%- elif med >= 50 -%}", "charging"),
     ("reserve hard-coded", "{%- set reserve = states(e_reserve) | float(none) -%}", "{%- set reserve = 20.0 -%}", "reserve"),
     ("warm-up removed", "ns.n >= 10 and last_ts", "ns.n >= 1 and last_ts", "warmup"),
     ("measured capacity never used", "ns.obs >= 3 -%}", "ns.obs >= 99999 -%}", "learning"),
     ("gap reset removed", "dt <= 0 or dt > 300 or jump", "dt <= 0 or dt > 999999 or jump", "gap"),
-    ("hold band removed", "{%- elif ema < 50 -%}", "{%- elif ema < 0 -%}", "holding"),
+    ("hold band removed", "{%- elif med < 50 -%}", "{%- elif med < 0 -%}", "holding"),
+    ("liveness from the battery power value only (the ESPHome trap)",
+     "{%- if states(e_polled) not in ['unknown', 'unavailable', 'none', '', 'Waiting'] -%}", "{%- if false -%}", "idle_fresh"),
+    ("allowance learning while charging", "{%- if med >= 50 -%}\n                  {%- set ns.exc", "{%- if true -%}\n                  {%- set ns.exc",
+     "charge_allowance"),
+    ("level seeded from one raw sample", "{%- if ns.n < 5 -%}", "{%- if false -%}", "seeding"),
     ("reserve comparison off by one", "{%- elif soc <= reserve -%}", "{%- elif soc < reserve -%}", "at_reserve"),
 ]
 for name, anchor, repl, key in MUTANTS:
@@ -939,7 +1043,7 @@ for name, anchor, repl, key in MUTANTS:
 CONTROLS = [
     ("equivalent: median written with a different but equal index form", "srt[(c - 1) // 2] if c % 2 == 1",
      "srt[c // 2] if c % 2 == 1"),
-    ("equivalent: hold threshold written as a float", "{%- elif ema < 50 -%}", "{%- elif ema < 50.0 -%}"),
+    ("equivalent: hold threshold written as a float", "{%- elif med < 50 -%}", "{%- elif med < 50.0 -%}"),
 ]
 for name, anchor, repl in CONTROLS:
     res = scenario_suite(Package(PKG_TEXT.replace(anchor, repl, 1), sandboxed=True))

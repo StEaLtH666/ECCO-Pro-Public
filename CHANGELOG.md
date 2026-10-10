@@ -70,17 +70,21 @@ Development before the first public release happened in a private repository; se
 - **Battery time to reserve (FE-1, STAGED / NOT LIVE-PROVEN).** A read-only Home Assistant package,
   `home-assistant/packages/ecco_battery_runtime.yaml`, estimates how long the batteries can keep discharging at recent usage
   before they reach the configured reserve (`input_number.ecco_minimum_reserve_soc`, whatever it is set to).
-  - **Method:** one battery-power sample a minute while telemetry is fresh. The discharge estimate is a robust level (a 9-minute
-    median, so a kettle or a pump start does not move it, then a 10-minute average) plus a 3-hour spike allowance, so frequent
-    short loads still count at their real average.
+  - **Method:** one battery-power sample a minute while telemetry is fresh. Freshness comes from the dongle's per-poll
+    timestamp, because ESPHome does not re-send an unchanged reading.
+  - **Direction:** the median of the last 9 minutes decides charging, holding or discharging, so short loads never flip it.
+  - **Discharge:** the larger of that median and its 10-minute average, plus a 3-hour spike allowance that learns only while
+    discharging. It errs on the short side.
   - **Capacity:** the configured capacity until the energy per SOC percent has been measured over 15 points of real discharge.
-  - **States:** explicit stale, insufficient-data, charging, holding and at-reserve states; never a guessed number.
+    Measuring restarts on a capacity change or a measurement more than 20 % off.
+  - **States:** explicit stale, insufficient-data, charging, holding and at-reserve states.
   - **Display:** the Energy Flow card's battery node shows it through its FE-0 hook (`nodes.battery.time_to_reserve`) as one small
     static line such as "≈5h 20m to reserve", with the likely range and "an estimate, not a guarantee" in the tooltip. The
     Overview's battery estimate card adds the summary. Dashboard 7.21.0 is staged.
   - **Safety:** display only. The package has no service call, script, automation or action. No firmware, registry or Modbus
     change.
-  - **Bookkeeping:** declared as post-export entry `fe1`. See [docs/BATTERY_TIME_TO_RESERVE.md](docs/BATTERY_TIME_TO_RESERVE.md).
+  - **Bookkeeping:** declared as post-export entry `fe1`. See [docs/BATTERY_TIME_TO_RESERVE.md](docs/BATTERY_TIME_TO_RESERVE.md)
+    for the method and its limitations.
 
 ### Changed
 
