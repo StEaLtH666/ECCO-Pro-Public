@@ -28,6 +28,10 @@
 # Flow card beside a slim Grid Status / Current Plan / Tariff column, the Energy Actions card in its tabbed layout with
 # the Known-Good Profile bar, decision support (ECCO Today, battery estimate, scheduled sessions), the Power Flow chart
 # beside an electrical detail list, and one merged System Health card. Display only: no control, no firmware change.
+# v7.21.0 (FE1, STAGED / NOT LIVE-PROVEN) shows the batteries' time to reserve: the Overview Energy Flow card's battery
+# node reads sensor.ecco_battery_time_to_reserve (nodes.battery.time_to_reserve) and the battery estimate card adds its
+# summary. The estimate comes from the read-only package ecco_battery_runtime.yaml. Display only: no control, no
+# firmware change.
 # Built for Home Assistant Sections view + Flexible Horseshoe Card + Sunsynk Power Flow Card (secondary/detail views) + ApexCharts + card-mod
 # Entity IDs matched from the ECCO entity dump captured 2026-09-12.
 
@@ -369,6 +373,7 @@ views:
                 power: sensor.ecco_clock_dongle_ecco_battery_output_power
                 soc: sensor.ecco_battery_soc
                 power_sign: discharge_positive
+                time_to_reserve: sensor.ecco_battery_time_to_reserve
 
               grid:
                 power: sensor.ecco_grid_power
@@ -1215,12 +1220,15 @@ views:
                   const cap = n('sensor.ecco_config_battery_capacity');
                   const reserve = n('sensor.ecco_config_minimum_reserve_soc');
                   const predicted = n('sensor.ecco_predicted_soc_plus_1_hour_baseline');
+                  const ttr = states['sensor.ecco_battery_time_to_reserve']?.attributes?.summary;
+                  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
                   return `<div>
                     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
                       <span style="font-size:17px;font-weight:800;color:#39d27a;white-space:nowrap;">${f(kwh)} kWh</span>
                       <span style="font-size:12px;color:rgba(255,255,255,.62);">stored · ${f(soc,0)} % of ${f(cap)} kWh</span>
                     </div>
                     <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:4px;">Reserve floor <b style="color:#fff;">${f(reserve,0)} %</b> · predicted SOC +1 h <b style="color:#fff;">${f(predicted,1)} %</b></div>
+                    <div style="font-size:12px;color:rgba(255,255,255,.62);margin-top:4px;">Time to reserve <b style="color:#fff;">${ttr ? esc(ttr) : '--'}</b></div>
                   </div>`;
                 ]]]
             styles:

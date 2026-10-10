@@ -56,6 +56,12 @@ home_assistant_packages:
     destination: /config/packages/ecco_fallback_profile_actions.yaml
     method: ssh_file_copy
     restart_required: true
+  # Battery time to reserve - FE1 (read-only estimate for the Energy Flow card's battery node;
+  # no service call, no control; NOT live-proven). Deploy before dashboard 7.21.0.
+  - source: home-assistant/packages/ecco_battery_runtime.yaml
+    destination: /config/packages/ecco_battery_runtime.yaml
+    method: ssh_file_copy
+    restart_required: true
 
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml

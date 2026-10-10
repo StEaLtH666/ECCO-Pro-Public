@@ -12,8 +12,16 @@ import {
   type EccoEnergyFlowCardConfig,
   type SolarNodeConfig,
 } from "./config";
-import { formatDurationMinutes, formatEnergy, formatPercent, formatPower, toNumber } from "./utils/format";
-import { batteryStatus, classifyGridConnected, gridConnectedDisplay, resolveTimeToReserveMinutes, socDisplay } from "./utils/display";
+import { formatEnergy, formatPercent, formatPower, reserveRuntimeLine, reserveRuntimeTooltip, toNumber } from "./utils/format";
+import {
+  batteryStatus,
+  classifyGridConnected,
+  gridConnectedDisplay,
+  resolveReserveRuntime,
+  resolveTimeToReserveMinutes,
+  socDisplay,
+  type ReserveRuntime,
+} from "./utils/display";
 
 // Minimal shape of the pieces of `hass` this card actually reads. Avoids a
 // dependency on the (large, versioned) full Home Assistant frontend types.
@@ -708,6 +716,8 @@ export class EccoEnergyFlowCard extends LitElement {
       this._numeric(timeToReserveId),
       this._state(timeToReserveId)?.attributes?.unit_of_measurement
     );
+    // FE-1: the same entity's own status / range / summary attributes (display only).
+    const reserveRuntime = resolveReserveRuntime(timeToReserveId, timeToReserveMinutes, this._state(timeToReserveId)?.attributes);
 
     const rawGridW = this._numeric(nodes.grid?.power);
     const gridW = rawGridW === null ? null : normaliseGridPower(rawGridW, nodes.grid?.power_sign);
@@ -767,7 +777,7 @@ export class EccoEnergyFlowCard extends LitElement {
               batteryW,
               batterySoc,
               batterySocConfigured,
-              timeToReserveMinutes,
+              reserveRuntime,
               gridW,
               gridState,
               generatorW,
@@ -1209,7 +1219,7 @@ export class EccoEnergyFlowCard extends LitElement {
       batteryW: number | null;
       batterySoc: number | null;
       batterySocConfigured: boolean;
-      timeToReserveMinutes: number | null | undefined;
+      reserveRuntime: ReserveRuntime | undefined;
       gridW: number | null;
       gridState: { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string };
       generatorW: number | null;
@@ -1750,7 +1760,7 @@ export class EccoEnergyFlowCard extends LitElement {
       batteryW: number | null;
       batterySoc: number | null;
       batterySocConfigured: boolean;
-      timeToReserveMinutes: number | null | undefined;
+      reserveRuntime: ReserveRuntime | undefined;
       gridW: number | null;
       gridState: { kind: "importing" | "exporting" | "connected-idle" | "disconnected" | "unavailable"; colour: FlowColourKind; statusLabel: string };
       generatorW: number | null;
@@ -1790,10 +1800,11 @@ export class EccoEnergyFlowCard extends LitElement {
       // opacity second representation of charge level alongside (not a
       // replacement for) the precise `.soc-track`/`.soc-fill` bar below.
       const boxStyle = socPct !== null ? `--ecco-soc:${socPct}%` : "";
-      // Optional time-to-reserve hook: the configured entity's own value as a
-      // tooltip, no layout change. Absent entity -> no attribute at all.
-      const reserveTitle =
-        powers.timeToReserveMinutes !== undefined ? `Time to reserve: ${formatDurationMinutes(powers.timeToReserveMinutes)}` : undefined;
+      // Optional time-to-reserve hook (FE-0 tooltip, FE-1 visible line): the
+      // configured entity's own value, status and range, shown as given. The
+      // card estimates nothing. Absent entity -> no tooltip and no line at all.
+      const runtime = powers.reserveRuntime;
+      const reserveTitle = runtime !== undefined ? reserveRuntimeTooltip(runtime) : undefined;
       return html`
         <div class="node-html" style=${posStyle}>
           <div class="battery-shell">
@@ -1816,6 +1827,7 @@ export class EccoEnergyFlowCard extends LitElement {
                 <div class="node-label">${DEFAULT_LABELS.battery} ${socText}</div>
                 <div class="node-value">${flowText}</div>
                 <div class="node-sub">${status}</div>
+                ${runtime !== undefined ? html`<div class="node-runtime runtime-${runtime.status}">${reserveRuntimeLine(runtime)}</div>` : nothing}
               </div>
               ${socPct !== null ? html`<div class="soc-track"><div class="soc-fill" style="width:${socPct}%"></div></div>` : nothing}
               <span class="node-port port-right" data-port="battery" aria-hidden="true"></span>
@@ -3071,6 +3083,23 @@ export class EccoEnergyFlowCard extends LitElement {
       font-size: 0.68rem;
       color: var(--ecco-text);
       opacity: 0.78;
+    }
+    /* FE-1 runtime line: the configured time-to-reserve entity's own value or
+       status, small and static (no animation, no colour of its own: the
+       battery's status colour and glow are unchanged). Wraps inside the box
+       at the narrow breakpoint. Missing or stale data is visibly subdued. */
+    .battery-box .node-runtime {
+      font-size: 0.62rem;
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--ecco-text);
+      opacity: 0.88;
+      font-variant-numeric: tabular-nums;
+    }
+    .battery-box .node-runtime.runtime-insufficient_data,
+    .battery-box .node-runtime.runtime-stale {
+      opacity: 0.55;
+      font-style: italic;
     }
     /* Very subtle SOC-proportional background fill (bottom-up) - an
        ambient, low-opacity second representation of charge level, always

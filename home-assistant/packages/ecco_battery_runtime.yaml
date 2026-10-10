@@ -1,0 +1,478 @@
+# ECCO Pro - Battery Time to Reserve (FE-1)
+# Replace /config/packages/ecco_battery_runtime.yaml with this file.
+#
+# *** STAGED / NOT LIVE-PROVEN - offline template tests only
+#     (home-assistant/tests/test_ecco_battery_runtime.py) ***
+#
+# READ ONLY. An explainable ESTIMATE of how long the batteries can keep
+# discharging before they reach the configured reserve, at recent usage.
+# This file contains no service calls, scripts, automations or actions; it
+# reads existing entities and writes nothing to the inverter, the dongle or
+# any helper. It is NOT a control gate: nothing here enforces the reserve
+# (see SAFETY.md) and nothing should act on this estimate.
+#
+# Inputs (all existing entities; default device slug, render per site):
+#   battery power  sensor.ecco_clock_dongle_ecco_battery_output_power
+#                  (register 190, W, POSITIVE = DISCHARGE, negative = charge)
+#   battery SOC    sensor.ecco_clock_dongle_ecco_battery_soc (register 184, integer %)
+#   liveness       binary_sensor.ecco_clock_dongle_telemetry_online and the dongle's
+#                  sensor.ecco_clock_dongle_last_telemetry_update, whose text carries
+#                  the poll time to the second and so changes on EVERY successful
+#                  poll. ESPHome passes on only a CHANGED value, so an unchanged
+#                  battery power (such as 0 W while idle) is never re-reported and
+#                  cannot show liveness. Telemetry counts as fresh while that text
+#                  has CHANGED, as seen by this model, within the last 180 s (a
+#                  reconnect that replays an old text does not count). It is
+#                  published only while the dongle has NTP time; until then (or
+#                  while that diagnostic entity is disabled) the battery power
+#                  report age is the fallback.
+#   solar          sensor.ecco_clock_dongle_ecco_pv_power (labelling only)
+#   reserve        input_number.ecco_minimum_reserve_soc (THE configured reserve;
+#                  whatever value it holds is used, never a built-in default)
+#   capacity       input_number.ecco_battery_model_capacity (the configured
+#                  capacity; used only until the energy per SOC percent has
+#                  been measured, see "Capacity" below)
+#
+# How the estimate is made (documented in docs/BATTERY_TIME_TO_RESERVE.md):
+#   Sampling   once a minute (the tick trigger), only while telemetry is fresh,
+#              into a window of the last 30 one-minute samples.
+#   Usage      the WINSORIZED MEAN of that window: the 4 highest samples are
+#              clipped to the 5th highest and the 4 lowest to the 5th lowest
+#              (fully from 9 samples on). Up to 4 one-minute samples of a load
+#              (a kettle, a pump start, a sun burst) are therefore clipped, while
+#              a load present in 5 or more of the window's minutes counts in
+#              full. A sustained change counts from about its 5th minute and in
+#              full within about 27 minutes.
+#   Direction  a SUSTAINED RUN, all of the last 8 samples on one side (each at or
+#              above +60 W, each within -60..+60 W, or each at or below -60 W),
+#              sets discharging, holding or charging at once. Otherwise (a cycling
+#              or mixed load) the winsorized mean does: charging below -60 W,
+#              discharging above +60 W, holding between, and a state is left only
+#              past -40 W / +40 W (hysteresis).
+#   Discharge  the winsorized mean, raised (never lowered) to the lower median (the
+#              4th smallest of 8) of a sustained discharging run, so a sustained
+#              rise (an oven) counts within about 5-8 minutes while a fall relaxes
+#              over the window (it
+#              errs on the short side), plus a SPIKE ALLOWANCE: the 3-hour
+#              average, over discharging minutes with full history, of exactly the
+#              energy the clipping removed from the window, spread over its 30
+#              minutes (never negative). It gives back, over hours, the energy of
+#              short loads the clipping leaves out; a single kettle moves the
+#              estimate by only a few percent, and a long load or its end neither
+#              feeds nor wipes it.
+#   Capacity   while the battery discharges, the energy it delivers (power x
+#              time) is accumulated between SOC steps; every 5 SOC points
+#              observed gives one measurement of the energy per percent. After
+#              3 measurements the measured value replaces the configured
+#              capacity. A measurement outside half to one and a half times the
+#              configured value is rejected. Two consecutive measurements that
+#              agree with each other but are more than 20 % away from the
+#              measured value, or a change of the configured capacity, restart
+#              the measuring (the configured value is the basis again until 3 new
+#              measurements). Charging or a gap restarts only the current segment.
+#   Estimate   minutes = (SOC - reserve) x energy per percent / discharge,
+#              rounded (to 1 min below 10, 5 min below 2 h, 10 min above),
+#              capped at 72 h. The likely range uses the second-heaviest and
+#              second-lightest 5-minute blocks of the clipped window and one SOC
+#              point of resolution; it does not cover capacity uncertainty.
+#   Status     stale (telemetry offline or not refreshed for 180 s),
+#              insufficient_data (missing or inconsistent SOC / reserve /
+#              capacity, or fewer than 10 minutes of contiguous history),
+#              charging, at_reserve (SOC at or below the reserve while not
+#              charging), holding, discharging.
+#   History    a gap of more than 5 minutes between samples (restart, outage,
+#              stale telemetry) or an SOC jump of more than 5 points in a
+#              minute discards the window. The spike allowance (an average over
+#              discharging minutes) and the learned capacity describe the
+#              household and the battery and are kept.
+#
+# Entities:
+#   sensor.ecco_battery_runtime_model     the model (state: last evaluation
+#                                         time; attribute `model`: smoothing
+#                                         and learning state plus the estimate)
+#   sensor.ecco_battery_time_to_reserve   the estimate in minutes (unknown unless
+#                                         discharging or at the reserve) with
+#                                         `status`, `summary`, the likely range
+#                                         and its basis as attributes. The Energy
+#                                         Flow card reads this one
+#                                         (nodes.battery.time_to_reserve).
+
+template:
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/1"
+        id: tick
+      - trigger: homeassistant
+        event: start
+        id: start
+      - trigger: state
+        entity_id: input_number.ecco_minimum_reserve_soc
+        id: config
+      - trigger: state
+        entity_id: input_number.ecco_battery_model_capacity
+        id: config
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+        id: liveness
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_ecco_battery_soc
+        id: soc
+    sensor:
+      - name: ECCO Battery Runtime Model
+        unique_id: ecco_battery_runtime_model
+        icon: mdi:battery-clock-outline
+        device_class: timestamp
+        state: "{{ now().isoformat() }}"
+        attributes:
+          model: >-
+            {%- set e_power = 'sensor.ecco_clock_dongle_ecco_battery_output_power' -%}
+            {%- set e_soc = 'sensor.ecco_clock_dongle_ecco_battery_soc' -%}
+            {%- set e_pv = 'sensor.ecco_clock_dongle_ecco_pv_power' -%}
+            {%- set e_online = 'binary_sensor.ecco_clock_dongle_telemetry_online' -%}
+            {%- set e_polled = 'sensor.ecco_clock_dongle_last_telemetry_update' -%}
+            {%- set e_reserve = 'input_number.ecco_minimum_reserve_soc' -%}
+            {%- set e_capacity = 'input_number.ecco_battery_model_capacity' -%}
+            {%- set prev = this.attributes.get('model') if this is defined and this.attributes is defined else none -%}
+            {%- set pm = prev if prev is mapping else {} -%}
+            {%- set t = trigger if trigger is defined else none -%}
+            {%- set tick = t is not none and t.id is defined and t.id == 'tick' -%}
+            {%- set now_ts = as_timestamp(now()) -%}
+            {%- set p = states(e_power) | float(none) -%}
+            {%- set p_ok = p is number and p == p and (p | abs) < 100000 -%}
+            {%- set soc = states(e_soc) | float(none) -%}
+            {%- set soc_num = soc is number and soc == soc and (soc | abs) < 100000 -%}
+            {%- set soc_ok = soc_num and soc >= 0 and soc <= 100 -%}
+            {%- set pv = states(e_pv) | float(none) -%}
+            {%- set pv_ok = pv is number and pv == pv and (pv | abs) < 1000000 -%}
+            {%- set reserve = states(e_reserve) | float(none) -%}
+            {%- set reserve_ok = reserve is number and reserve == reserve and reserve >= 0 and reserve < 100 -%}
+            {%- set cap_kwh = states(e_capacity) | float(none) -%}
+            {%- set cap_ok = cap_kwh is number and cap_kwh == cap_kwh and cap_kwh >= 1 and cap_kwh <= 1000 -%}
+            {%- set prior_wh = cap_kwh * 10 if cap_ok else none -%}
+            {%- set online = is_state(e_online, 'on') -%}
+            {%- set poll_text = states(e_polled) -%}
+            {%- set poll_valid = poll_text not in ['unknown', 'unavailable', 'none', '', 'Waiting'] -%}
+            {%- set prev_poll_text = pm.get('poll_text') -%}
+            {%- set prev_poll_at = pm.get('poll_seen_at') if pm.get('poll_seen_at') is number else none -%}
+            {%- set poll_seen_at = now_ts if (poll_valid and poll_text != prev_poll_text) else prev_poll_at -%}
+            {%- set seen = namespace(ts=[]) -%}
+            {%- if poll_valid and poll_seen_at is number -%}
+              {%- set seen.ts = seen.ts + [poll_seen_at] -%}
+            {%- elif states(e_power) not in ['unknown', 'unavailable', 'none', ''] -%}
+              {%- set ps = states[e_power] -%}
+              {%- set seen.ts = seen.ts + [as_timestamp(ps.last_reported if ps.last_reported is defined and ps.last_reported is not none else ps.last_updated, 0)] -%}
+            {%- endif -%}
+            {%- set age = (now_ts - (seen.ts | max)) if seen.ts | count > 0 else none -%}
+            {%- set fresh = online and p_ok and age is not none and age <= 180 -%}
+            {%- set prev_last = as_timestamp(pm.get('last_sample_at'), none) -%}
+            {%- set prev_soc = pm.get('soc_sample') -%}
+            {%- set prev_soc = prev_soc if prev_soc is number else none -%}
+            {%- set learned_for = pm.get('learned_for_capacity_kwh') -%}
+            {%- set cap_changed = cap_ok and learned_for is number and learned_for != cap_kwh -%}
+            {%- set ns = namespace(
+                  window=(pm.get('window') or []) | select('number') | list,
+                  exc=pm.get('excess_w') if pm.get('excess_w') is number else 0,
+                  n=pm.get('n') | int(0),
+                  last=pm.get('last_sample_at'),
+                  soc_s=prev_soc,
+                  reset=pm.get('reset_reason'),
+                  direction=pm.get('direction'),
+                  anchor=pm.get('learn_anchor_soc') if pm.get('learn_anchor_soc') is number else none,
+                  e_wh=pm.get('learn_energy_wh') if pm.get('learn_energy_wh') is number else 0,
+                  wh=pm.get('learned_wh_per_pct') if pm.get('learned_wh_per_pct') is number else none,
+                  obs=pm.get('learn_obs') | int(0),
+                  rejected=pm.get('learn_rejected') | int(0),
+                  restarts=pm.get('learn_restarts') | int(0),
+                  pending=pm.get('learn_outlier_wh') if pm.get('learn_outlier_wh') is number else none,
+                  learned_for=learned_for if learned_for is number else none,
+                  added_dt=none) -%}
+            {%- if cap_changed -%}
+              {%- set ns.wh = none -%}{%- set ns.obs = 0 -%}{%- set ns.anchor = none -%}{%- set ns.e_wh = 0 -%}{%- set ns.pending = none -%}
+              {%- set ns.learned_for = none -%}{%- set ns.restarts = [ns.restarts + 1, 100000] | min -%}
+            {%- elif cap_ok and ns.wh is number and ns.learned_for is none -%}
+              {%- set ns.learned_for = cap_kwh -%}
+            {%- endif -%}
+            {%- macro tmean(w) -%}
+              {%- set srt = w | sort -%}
+              {%- set c = srt | count -%}
+              {%- set k = [4, (c - 1) // 2] | min -%}
+              {{- ((srt[k:c - k] | sum) + k * srt[k] + k * srt[c - 1 - k]) / c -}}
+            {%- endmacro -%}
+            {%- if tick and fresh and soc_ok -%}
+              {%- set dt = (now_ts - prev_last) if prev_last is number else none -%}
+              {%- set jump = prev_soc is number and ((soc - prev_soc) | abs) > 5 -%}
+              {%- if dt is none or dt <= 0 or dt > 300 or jump or ns.window | count == 0 -%}
+                {%- set ns.reset = 'soc_jump' if jump else ('start' if dt is none else 'gap') -%}
+                {%- set ns.window = [p | round(0) | int] -%}
+                {%- set ns.n = 1 -%}
+                {%- set ns.anchor = none -%}
+                {%- set ns.e_wh = 0 -%}
+              {%- else -%}
+                {%- set p_prev = ns.window[-1] -%}
+                {%- set ns.window = (ns.window + [p | round(0) | int])[-30:] -%}
+                {%- set ns.added_dt = dt -%}
+                {%- set ns.n = [ns.n + 1, 100000] | min -%}
+                {%- set e_step = (p + p_prev) / 2 * dt / 3600 -%}
+                {%- if p < -100 or (prev_soc is number and soc > prev_soc) -%}
+                  {%- set ns.anchor = none -%}
+                  {%- set ns.e_wh = 0 -%}
+                {%- elif ns.anchor is number -%}
+                  {%- set ns.e_wh = ns.e_wh + e_step -%}
+                  {%- if prev_soc is number and soc < prev_soc and ns.anchor - soc >= 5 -%}
+                    {%- set s = ns.e_wh / (ns.anchor - soc) -%}
+                    {%- set lo = prior_wh * 0.5 if prior_wh is number else 50 -%}
+                    {%- set hi = prior_wh * 1.5 if prior_wh is number else 2000 -%}
+                    {%- if s < lo or s > hi -%}
+                      {%- set ns.rejected = [ns.rejected + 1, 100000] | min -%}
+                    {%- elif ns.obs == 0 or ns.wh is none -%}
+                      {%- set ns.wh = s -%}{%- set ns.obs = 1 -%}{%- set ns.pending = none -%}
+                      {%- set ns.learned_for = cap_kwh if cap_ok else none -%}
+                    {%- elif ((s - ns.wh) | abs) <= 0.2 * ns.wh -%}
+                      {%- set ns.wh = ns.wh + 0.3 * (s - ns.wh) -%}
+                      {%- set ns.obs = [ns.obs + 1, 100000] | min -%}
+                      {%- set ns.pending = none -%}
+                    {%- elif ns.pending is number and ((s - ns.pending) | abs) <= 0.2 * ns.pending -%}
+                      {%- set ns.wh = (s + ns.pending) / 2 -%}{%- set ns.obs = 2 -%}{%- set ns.pending = none -%}
+                      {%- set ns.learned_for = cap_kwh if cap_ok else none -%}
+                      {%- set ns.restarts = [ns.restarts + 1, 100000] | min -%}
+                    {%- else -%}
+                      {%- set ns.pending = s -%}
+                      {%- set ns.rejected = [ns.rejected + 1, 100000] | min -%}
+                    {%- endif -%}
+                    {%- set ns.anchor = soc -%}
+                    {%- set ns.e_wh = 0 -%}
+                  {%- endif -%}
+                {%- elif prev_soc is number and soc < prev_soc -%}
+                  {%- set ns.anchor = soc -%}
+                  {%- set ns.e_wh = 0 -%}
+                {%- endif -%}
+              {%- endif -%}
+              {%- set ns.last = now().isoformat() -%}
+              {%- set ns.soc_s = soc -%}
+            {%- endif -%}
+            {%- set last_ts = as_timestamp(ns.last, none) -%}
+            {%- set wn = ns.window | count -%}
+            {%- set history_ok = wn > 0 and ns.n >= 10 and last_ts is number and (now_ts - last_ts) <= 180 -%}
+            {%- set use_learned = ns.wh is number and ns.obs >= 3 -%}
+            {%- set wh = ns.wh if use_learned else prior_wh -%}
+            {%- set usage = (tmean(ns.window) | float) if wn > 0 else none -%}
+            {%- set ws = ns.window | sort -%}
+            {%- set wk = [4, (wn - 1) // 2] | min -%}
+            {%- set clip_lo = ws[wk] if wn > 0 else none -%}
+            {%- set clip_hi = ws[wn - 1 - wk] if wn > 0 else none -%}
+            {%- set clipped_w = (((ws[wn - wk:] | sum) - wk * clip_hi) / 30) if (wn > 0 and wk > 0) else 0 -%}
+            {%- set last8 = ns.window[-8:] if wn >= 8 else [] -%}
+            {%- set run = 'discharging' if (last8 | count == 8 and (last8 | min) >= 60) else (
+                  'charging' if (last8 | count == 8 and (last8 | max) <= -60) else (
+                  'holding' if (last8 | count == 8 and (last8 | min) > -60 and (last8 | max) < 60) else none)) -%}
+            {%- set r8 = last8 | sort -%}
+            {%- set run_med = r8[3] if run == 'discharging' else none -%}
+            {%- if usage is number and history_ok -%}
+              {%- if run is not none -%}
+                {%- set ns.direction = run -%}
+              {%- elif usage <= -60 or (ns.direction == 'charging' and usage <= -40) -%}
+                {%- set ns.direction = 'charging' -%}
+              {%- elif usage >= 60 or (ns.direction == 'discharging' and usage >= 40) -%}
+                {%- set ns.direction = 'discharging' -%}
+              {%- else -%}
+                {%- set ns.direction = 'holding' -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- set base = ([usage, run_med] | max) if run_med is number else usage -%}
+            {%- if ns.added_dt is number and history_ok and ns.direction == 'discharging' -%}
+              {%- set ns.exc = clipped_w + (ns.exc - clipped_w) * (0.994459848 ** (ns.added_dt / 60)) -%}
+            {%- endif -%}
+            {%- set dis = (base + ns.exc) if base is number else none -%}
+            {%- set blocks = namespace(v=[]) -%}
+            {%- for i in range(0, wn, 5) -%}
+              {%- set b0 = [wn - i - 5, 0] | max -%}
+              {%- set b = ns.window[b0:wn - i] -%}
+              {%- if b | count == 5 -%}
+                {%- set bc = namespace(t=0) -%}
+                {%- for x in b -%}{%- set bc.t = bc.t + ([[x, clip_lo] | max, clip_hi] | min) -%}{%- endfor -%}
+                {%- set blocks.v = blocks.v + [bc.t / 5] -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set bs = blocks.v | sort -%}
+            {%- set heavy = (bs[-2] if bs | count >= 3 else (bs[-1] if bs | count > 0 else none)) -%}
+            {%- set light = (bs[1] if bs | count >= 3 else (bs[0] if bs | count > 0 else none)) -%}
+            {%- set out = namespace(status='insufficient_data', reason=none, minutes=none, low=none, high=none, horizon=false) -%}
+            {%- if not online -%}
+              {%- set out.status = 'stale' -%}{%- set out.reason = 'telemetry_offline' -%}
+            {%- elif not p_ok -%}
+              {%- set out.status = 'stale' -%}{%- set out.reason = 'battery_power_unavailable' -%}
+            {%- elif not fresh -%}
+              {%- set out.status = 'stale' -%}{%- set out.reason = 'telemetry_old' -%}
+            {%- elif not soc_num -%}
+              {%- set out.reason = 'soc_unavailable' -%}
+            {%- elif not soc_ok -%}
+              {%- set out.reason = 'soc_out_of_range' -%}
+            {%- elif soc == 0 and usage is number and usage > 300 -%}
+              {%- set out.reason = 'soc_zero_suspect' -%}
+            {%- elif not reserve_ok -%}
+              {%- set out.reason = 'reserve_unavailable' -%}
+            {%- elif wh is not number -%}
+              {%- set out.reason = 'capacity_unavailable' -%}
+            {%- elif not history_ok -%}
+              {%- set out.reason = 'warming_up' -%}
+            {%- elif ns.direction == 'charging' -%}
+              {%- set out.status = 'charging' -%}
+            {%- elif soc <= reserve -%}
+              {%- set out.status = 'at_reserve' -%}
+              {%- set out.minutes = 0 -%}{%- set out.low = 0 -%}{%- set out.high = 0 -%}
+            {%- elif ns.direction != 'discharging' -%}
+              {%- set out.status = 'holding' -%}
+            {%- else -%}
+              {%- set out.status = 'discharging' -%}
+              {%- set d_heavy = [dis, (heavy + ns.exc) if heavy is number else dis] | max -%}
+              {%- set d_light = [[dis, (light + ns.exc) if light is number else dis] | min, 40] | max -%}
+              {%- set raw = (soc - reserve) * wh / ([dis, 40] | max) * 60 -%}
+              {%- set raw_low = ([soc - 1 - reserve, 0] | max) * wh / ([d_heavy, 40] | max) * 60 -%}
+              {%- set raw_high = (soc - reserve) * wh / d_light * 60 -%}
+              {%- set out.horizon = raw > 4320 -%}
+              {%- set rr = namespace(v=[]) -%}
+              {%- for x in [raw, raw_low, raw_high] -%}
+                {%- set x = [x, 4320] | min -%}
+                {%- set step = 1 if x < 10 else (5 if x < 120 else 10) -%}
+                {%- set rr.v = rr.v + [((x / step) | round(0) * step) | int] -%}
+              {%- endfor -%}
+              {%- set out.minutes = rr.v[0] -%}{%- set out.low = rr.v[1] -%}{%- set out.high = rr.v[2] -%}
+            {%- endif -%}
+            {%- macro dur(m) -%}
+              {%- set mm = m | int -%}
+              {%- if mm < 60 -%}{{ mm }} min
+              {%- elif mm < 1440 -%}{{ mm // 60 }} h{{ (' ' ~ (mm % 60) ~ ' min') if mm % 60 else '' }}
+              {%- else -%}{{ mm // 1440 }} d{{ (' ' ~ ((mm % 1440) // 60) ~ ' h') if (mm % 1440) // 60 else '' }}
+              {%- endif -%}
+            {%- endmacro -%}
+            {%- set rtxt = (reserve | round(0) | int) ~ ' %' if reserve_ok else 'configured' -%}
+            {%- if out.status == 'discharging' and out.horizon -%}
+              {%- set summary = 'More than 3 days to the ' ~ rtxt ~ ' reserve at recent usage (estimate)' -%}
+            {%- elif out.status == 'discharging' -%}
+              {%- set summary = 'About ' ~ dur(out.minutes) ~ ' to the ' ~ rtxt ~ ' reserve at recent usage (estimate, likely ' ~ dur(out.low) ~ ' to ' ~ dur(out.high) ~ ')' -%}
+            {%- elif out.status == 'at_reserve' -%}
+              {%- set summary = 'At or below the ' ~ rtxt ~ ' reserve' -%}
+            {%- elif out.status == 'charging' -%}
+              {%- set summary = 'Charging' -%}
+            {%- elif out.status == 'holding' -%}
+              {%- set summary = 'Holding: the batteries are neither charging nor discharging significantly' -%}
+            {%- elif out.status == 'stale' -%}
+              {%- set summary = 'Telemetry stale: estimate paused until fresh inverter data arrives' -%}
+            {%- elif out.reason == 'warming_up' -%}
+              {%- set summary = 'Insufficient data: collecting recent usage (' ~ ([ns.n, 10] | min) ~ ' of 10 minutes)' -%}
+            {%- else -%}
+              {%- set summary = 'Insufficient data (' ~ (out.reason | replace('_', ' ')) ~ ')' -%}
+            {%- endif -%}
+            {%- set model = {
+                  'v': 3,
+                  'status': out.status,
+                  'reason': out.reason,
+                  'minutes': out.minutes,
+                  'minutes_low': out.low,
+                  'minutes_high': out.high,
+                  'beyond_horizon': out.horizon,
+                  'summary': summary,
+                  'discharge_w': (dis | round(0) | int) if dis is number else none,
+                  'usage_w': (usage | round(0) | int) if usage is number else none,
+                  'run': run,
+                  'run_median_w': run_med,
+                  'spike_allowance_w': ns.exc | round(0) | int,
+                  'clipped_w': clipped_w | round(1),
+                  'direction': ns.direction,
+                  'soc': soc if soc_num else none,
+                  'reserve_soc': reserve if reserve_ok else none,
+                  'energy_above_reserve_kwh': (([soc - reserve, 0] | max) * wh / 1000) | round(2) if (soc_ok and reserve_ok and wh is number) else none,
+                  'capacity_basis': 'measured' if use_learned else ('configured' if prior_wh is number else none),
+                  'capacity_kwh': (wh / 10) | round(1) if wh is number else none,
+                  'configured_capacity_kwh': cap_kwh if cap_ok else none,
+                  'solar_assisted': out.status == 'discharging' and pv_ok and pv > 100,
+                  'pv_w': (pv | round(0) | int) if pv_ok else none,
+                  'telemetry_age_s': (age | round(0) | int) if age is number else none,
+                  'history_minutes': ns.n,
+                  'window': ns.window,
+                  'excess_w': ns.exc | round(2),
+                  'n': ns.n,
+                  'last_sample_at': ns.last,
+                  'soc_sample': ns.soc_s,
+                  'reset_reason': ns.reset,
+                  'poll_text': poll_text if poll_valid else prev_poll_text,
+                  'poll_seen_at': (poll_seen_at | round(1)) if poll_seen_at is number else none,
+                  'learn_anchor_soc': ns.anchor,
+                  'learn_energy_wh': ns.e_wh | round(1),
+                  'learned_wh_per_pct': (ns.wh | round(2)) if ns.wh is number else none,
+                  'learned_for_capacity_kwh': ns.learned_for,
+                  'learn_obs': ns.obs,
+                  'learn_rejected': ns.rejected,
+                  'learn_restarts': ns.restarts,
+                  'learn_outlier_wh': (ns.pending | round(2)) if ns.pending is number else none,
+                  'evaluated_at': now().isoformat()
+                } -%}
+            {{ model }}
+
+  # The estimate, for dashboards and the Energy Flow card. Lookups only: every
+  # value comes from the model above. Every value is withheld when the model
+  # is older than 180 s (not updating): the status is then insufficient data.
+  - sensor:
+      - name: ECCO Battery Time to Reserve
+        unique_id: ecco_battery_time_to_reserve
+        icon: mdi:battery-clock-outline
+        unit_of_measurement: min
+        device_class: duration
+        state: >-
+          {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+          {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+          {{ m.get('minutes') if ok and m.get('minutes') is number else none }}
+        attributes:
+          status: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('status') if ok else 'insufficient_data' }}
+          reason: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('reason') if ok else 'model_not_updating' }}
+          summary: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('summary') if ok else 'Insufficient data (model not updating)' }}
+          minutes_low: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('minutes_low') if ok else none }}
+          minutes_high: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('minutes_high') if ok else none }}
+          beyond_horizon: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('beyond_horizon') if ok else false }}
+          reserve_soc: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('reserve_soc') if ok else none }}
+          discharge_w: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('discharge_w') if ok else none }}
+          energy_above_reserve_kwh: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('energy_above_reserve_kwh') if ok else none }}
+          capacity_basis: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('capacity_basis') if ok else none }}
+          capacity_kwh: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('capacity_kwh') if ok else none }}
+          solar_assisted: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('solar_assisted') if ok else false }}
+          history_minutes: >-
+            {%- set m = state_attr('sensor.ecco_battery_runtime_model', 'model') -%}
+            {%- set ok = m is mapping and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 180 -%}
+            {{ m.get('history_minutes') if ok else 0 }}
+          estimate_note: "Projection at recent usage, not a guarantee. Reads only; enforces nothing."

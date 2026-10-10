@@ -67,6 +67,28 @@ Development before the first public release happened in a private repository; se
   two older suites' "exactly two frontend assets" pins now read the export-era manifest, with their values unchanged. The card
   cannot write: no Home Assistant service, no Modbus, no firmware change.
 
+- **Battery time to reserve (FE-1, STAGED / NOT LIVE-PROVEN).** A read-only Home Assistant package,
+  `home-assistant/packages/ecco_battery_runtime.yaml`, estimates how long the batteries can keep discharging at recent usage
+  before they reach the configured reserve (`input_number.ecco_minimum_reserve_soc`, whatever it is set to).
+  - **Method:** one battery-power sample a minute while telemetry is fresh. Freshness comes from the dongle's per-poll
+    timestamp, which must actually change, because ESPHome does not re-send an unchanged reading.
+  - **Usage:** the winsorized mean of the last 30 minutes. Up to 4 one-minute samples of a load (a kettle) are clipped,
+    while a load present in 5 or more minutes of the half hour (an oven or hob switching) counts in full.
+  - **Direction:** a sustained 8-minute run decides at once; otherwise the usage decides, with hysteresis.
+  - **Discharge:** the usage, raised to a sustained run's level, plus a 3-hour allowance for the energy the clipping removes
+    (learned only while discharging). The method and its measured error in both directions (short for long on-phases, long for
+    a new or a rarely recurring load) are in the documentation.
+  - **Capacity:** the configured capacity until the energy per SOC percent has been measured over 15 points of real discharge.
+    Measuring restarts on a capacity change or on two agreeing measurements more than 20 % off.
+  - **States:** explicit stale, insufficient-data, charging, holding and at-reserve states.
+  - **Display:** the Energy Flow card's battery node shows it through its FE-0 hook (`nodes.battery.time_to_reserve`) as one small
+    static line such as "≈5h 20m to reserve", with the likely range and "an estimate, not a guarantee" in the tooltip. The
+    Overview's battery estimate card adds the summary. Dashboard 7.21.0 is staged.
+  - **Safety:** display only. The package has no service call, script, automation or action. No firmware, registry or Modbus
+    change.
+  - **Bookkeeping:** declared as post-export entry `fe1`. See [docs/BATTERY_TIME_TO_RESERVE.md](docs/BATTERY_TIME_TO_RESERVE.md)
+    for the method and its limitations.
+
 ### Changed
 
 - **The Overview is rebuilt** (dashboard 7.20.0, staged) as nine sections: a compact status banner that keeps the hero's state

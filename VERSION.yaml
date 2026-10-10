@@ -5,8 +5,13 @@ project_version: "0.9.0"
 
 current:
   dashboard:
-    version: "7.20.0"
+    version: "7.21.0"
     path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.21.0 (FE1) shows the batteries' time to reserve: the Overview Energy Flow card's battery node reads
+    # sensor.ecco_battery_time_to_reserve (nodes.battery.time_to_reserve) and the battery estimate card adds its
+    # summary. The estimate is the new read-only package ecco_battery_runtime.yaml (offline template tests only).
+    # Display only: no control path or firmware changed. It is STAGED: tested_in_home_assistant stays false until
+    # the estimate is observed on the reference installation. The 7.20.0 record follows.
     # v7.20.0 (OVW1) rebuilds the Overview view as nine sections: a compact status banner that also reads the Dump to
     # Grid lease states and both recovery-state sensors, the Weather & Solar card's two compact layouts (the Energy
     # Flow card's own configuration is unchanged), the Energy Actions card in its tabbed layout
@@ -41,6 +46,7 @@ current:
     runtime_config: home-assistant/packages/ecco_runtime_config.yaml
     free_power_schedule: home-assistant/packages/ecco_free_power_schedule.yaml
     battery_outlook_readback: home-assistant/packages/ecco_battery_outlook_influx.yaml
+    battery_runtime: home-assistant/packages/ecco_battery_runtime.yaml
   influxdb:
     export_config: influxdb/ecco_influxdb_options_v1_3.yaml
     battery_outlook_task: influxdb/tasks/ecco_battery_outlook_5m.flux
