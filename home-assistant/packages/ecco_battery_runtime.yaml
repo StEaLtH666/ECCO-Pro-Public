@@ -38,12 +38,11 @@
 #              into a window of the last 30 one-minute samples.
 #   Usage      the WINSORIZED MEAN of that window: the 4 highest samples are
 #              clipped to the 5th highest and the 4 lowest to the 5th lowest
-#              (fewer while the window is short). A one-off load of up to 4
-#              minutes (a kettle, a pump start, a sun burst) is therefore
-#              ignored, while a load that recurs 5 or more times in the window
-#              (an oven or a hob switching, a heat pump) counts in full, at its
-#              real average. It follows a sustained change from about its 5th
-#              minute, fully within about 27 minutes.
+#              (fully from 9 samples on). Up to 4 one-minute samples of a load
+#              (a kettle, a pump start, a sun burst) are therefore clipped, while
+#              a load present in 5 or more of the window's minutes counts in
+#              full. A sustained change counts from about its 5th minute and in
+#              full within about 27 minutes.
 #   Direction  a SUSTAINED RUN, all of the last 8 samples on one side (each at or
 #              above +60 W, each within -60..+60 W, or each at or below -60 W),
 #              sets discharging, holding or charging at once. Otherwise (a cycling
@@ -55,10 +54,11 @@
 #              rise (an oven) counts within about 5-8 minutes while a fall relaxes
 #              over the window (it
 #              errs on the short side), plus a SPIKE ALLOWANCE: the 3-hour
-#              average, over discharging minutes only and never below zero, of how
-#              far each minute was above that base. It gives back the energy of
-#              sparse short loads that the clipping leaves out; a single kettle
-#              moves the estimate by only a few percent.
+#              average, over discharging minutes with full history, of exactly the
+#              energy the clipping removed from the window (never negative). It
+#              gives back, over hours, the energy of short loads the clipping
+#              leaves out; a single kettle moves the estimate by only a few
+#              percent, and a long load or its end leaves it untouched.
 #   Capacity   while the battery discharges, the energy it delivers (power x
 #              time) is accumulated between SOC steps; every 5 SOC points
 #              observed gives one measurement of the energy per percent. After
@@ -72,8 +72,8 @@
 #   Estimate   minutes = (SOC - reserve) x energy per percent / discharge,
 #              rounded (to 1 min below 10, 5 min below 2 h, 10 min above),
 #              capped at 72 h. The likely range uses the second-heaviest and
-#              second-lightest 5-minute blocks of the window and one SOC point
-#              of resolution; it does not cover capacity uncertainty.
+#              second-lightest 5-minute blocks of the clipped window and one SOC
+#              point of resolution; it does not cover capacity uncertainty.
 #   Status     stale (telemetry offline or not refreshed for 180 s),
 #              insufficient_data (missing or inconsistent SOC / reserve /
 #              capacity, or fewer than 10 minutes of contiguous history),
@@ -194,7 +194,7 @@ template:
             {%- macro tmean(w) -%}
               {%- set srt = w | sort -%}
               {%- set c = srt | count -%}
-              {%- set k = [4, c // 4] | min -%}
+              {%- set k = [4, (c - 1) // 2] | min -%}
               {{- ((srt[k:c - k] | sum) + k * srt[k] + k * srt[c - 1 - k]) / c -}}
             {%- endmacro -%}
             {%- if tick and fresh and soc_ok -%}
@@ -255,6 +255,11 @@ template:
             {%- set use_learned = ns.wh is number and ns.obs >= 3 -%}
             {%- set wh = ns.wh if use_learned else prior_wh -%}
             {%- set usage = (tmean(ns.window) | float) if wn > 0 else none -%}
+            {%- set ws = ns.window | sort -%}
+            {%- set wk = [4, (wn - 1) // 2] | min -%}
+            {%- set clip_lo = ws[wk] if wn > 0 else none -%}
+            {%- set clip_hi = ws[wn - 1 - wk] if wn > 0 else none -%}
+            {%- set clipped_w = (((ws[wn - wk:] | sum) - wk * clip_hi) / wn) if (wn > 0 and wk > 0) else 0 -%}
             {%- set last8 = ns.window[-8:] if wn >= 8 else [] -%}
             {%- set run = 'discharging' if (last8 | count == 8 and (last8 | min) >= 60) else (
                   'charging' if (last8 | count == 8 and (last8 | max) <= -60) else (
@@ -273,15 +278,19 @@ template:
               {%- endif -%}
             {%- endif -%}
             {%- set base = ([usage, run_med] | max) if run_med is number else usage -%}
-            {%- if ns.added_dt is number and base is number and ns.direction == 'discharging' -%}
-              {%- set ns.exc = [0, (p - base) + (ns.exc - (p - base)) * (0.994459848 ** (ns.added_dt / 60))] | max -%}
+            {%- if ns.added_dt is number and history_ok and ns.direction == 'discharging' -%}
+              {%- set ns.exc = clipped_w + (ns.exc - clipped_w) * (0.994459848 ** (ns.added_dt / 60)) -%}
             {%- endif -%}
             {%- set dis = (base + ns.exc) if base is number else none -%}
             {%- set blocks = namespace(v=[]) -%}
             {%- for i in range(0, wn, 5) -%}
               {%- set b0 = [wn - i - 5, 0] | max -%}
               {%- set b = ns.window[b0:wn - i] -%}
-              {%- if b | count == 5 -%}{%- set blocks.v = blocks.v + [(b | sum) / 5] -%}{%- endif -%}
+              {%- if b | count == 5 -%}
+                {%- set bc = namespace(t=0) -%}
+                {%- for x in b -%}{%- set bc.t = bc.t + ([[x, clip_lo] | max, clip_hi] | min) -%}{%- endfor -%}
+                {%- set blocks.v = blocks.v + [bc.t / 5] -%}
+              {%- endif -%}
             {%- endfor -%}
             {%- set bs = blocks.v | sort -%}
             {%- set heavy = (bs[-2] if bs | count >= 3 else (bs[-1] if bs | count > 0 else none)) -%}
@@ -367,6 +376,7 @@ template:
                   'run': run,
                   'run_median_w': run_med,
                   'spike_allowance_w': ns.exc | round(0) | int,
+                  'clipped_w': clipped_w | round(1),
                   'direction': ns.direction,
                   'soc': soc if soc_num else none,
                   'reserve_soc': reserve if reserve_ok else none,

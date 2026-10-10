@@ -436,22 +436,28 @@ print("[3] short load spikes and sustained steps")
 # ===========================================================================
 for spike_min, spike_w, max_change in ((1, 3000, 0.04), (3, 3000, 0.09), (4, 9000, 0.30)):
     s = Sim(PKG, power=500)
-    base = warm(s, 20)["minutes"]
-    outs = [s.tick(spike_w if k < spike_min else 500) for k in range(20)]
-    allowance = (spike_w - 500) * spike_min / 180.0          # the spike's excess energy spread over the 3-hour allowance
+    base = warm(s, 30)["minutes"]
+    outs = [s.tick(spike_w if k < spike_min else 500) for k in range(40)]
+    # The clipped energy (excess x minutes / 30) stays in the 30-minute window for 30 minutes and feeds the 3-hour average each
+    # minute: the allowance takes about excess x minutes / 180 W in total (a little less for the decay meanwhile).
+    allowance = (spike_w - 500) * spike_min / 180.0
     worst = max(abs(o["minutes"] / base - 1) for o in outs)
-    check(f"a {spike_min}-minute {spike_w} W spike on a 500 W base: the winsorized usage never moves, the allowance takes its energy "
-          f"(about {allowance:.0f} W, spread over 3 h) and the estimate moves by at most {max_change:.0%} ({worst:.1%})",
-          all(o["usage_w"] == 500 for o in outs) and abs(outs[spike_min - 1]["spike_allowance_w"] / allowance - 1) < 0.05
-          and worst <= max_change, f"{[o['spike_allowance_w'] for o in outs[:spike_min + 1]]} {worst:.3f}")
+    peak = max(o["spike_allowance_w"] for o in outs)
+    check(f"a {spike_min}-minute {spike_w} W spike on a 500 W base: the winsorized usage never moves, the allowance takes its clipped "
+          f"energy (about {allowance:.0f} W over 3 h; peak {peak} W) and the estimate moves by at most {max_change:.0%} ({worst:.1%})",
+          all(o["usage_w"] == 500 for o in outs) and 0.85 <= peak / allowance <= 1.02 and worst <= max_change,
+          f"{[o['spike_allowance_w'] for o in outs[:35:5]]} {worst:.3f}")
 s = Sim(PKG, power=500)
-warm(s, 20)
+warm(s, 30)
 s.tick(3000)
 s.tick(3000)
 s.tick(3000)
-after = [s.tick(500)["spike_allowance_w"] for _ in range(180)]
-check("...a single kettle's allowance decays with the 3-hour time constant (37 % left after 3 h, never negative)",
-      abs(after[-1] / after[0] - math.exp(-179 / 180)) < 0.05 and min(after) >= 0, f"{after[0]} -> {after[-1]}")
+after = [s.tick(500)["spike_allowance_w"] for _ in range(210)]
+check("...a single kettle's allowance builds while it is in the window (30 minutes), then decays with the 3-hour time constant "
+      "(never negative)", 24 <= after.index(max(after)) <= 30, str(after[22:32]))
+pk = after.index(max(after))
+check("...from its peak, 150 minutes later it holds exp(-150/180) of it", abs(after[pk + 150] / after[pk] - math.exp(-150 / 180)) < 0.08
+      and min(after) >= 0, f"{after[pk]} -> {after[pk + 150]}")
 s = Sim(PKG, power=500)
 warm(s, 20)
 outs = [s.tick(2000) for _ in range(50)]
@@ -577,6 +583,45 @@ seq = [s.tick(50 + rng.randint(-15, 15))["status"] for _ in range(60)]
 flips = sum(1 for a, b in zip(seq[10:], seq[11:]) if a != b)
 check(f"(review N3) a load hovering at 50 +/- 15 W does not flap between holding and discharging (hysteresis): {flips} changes "
       "in 50 minutes", flips <= 1, str(seq[10:]))
+rng = random.Random(77)
+s = Sim(PKG, power=600, soc=80)
+for _ in range(240):
+    s.tick(600 + (2600 if rng.random() < 0.05 else 0))
+learned = s.model["spike_allowance_w"]
+for _ in range(60):
+    s.tick(3100)
+outs = [s.tick(600 + (2600 if rng.random() < 0.05 else 0)) for _ in range(120)]
+kept = min(o["spike_allowance_w"] for o in outs)
+late = [o["discharge_w"] / 730 - 1 for o in outs[60:]]
+check(f"(review A) a 60-minute oven in a kettle household does not wipe the allowance (learned {learned} W, lowest afterwards "
+      f"{kept} W), and 1-2 h after it the estimate is within 12 % of the true 730 W on average ({sum(late) / len(late):+.1%})",
+      learned > 60 and kept >= 0.6 * learned and abs(sum(late) / len(late)) <= 0.12, f"{learned} {kept}")
+s = Sim(PKG, power=500, soc=60)
+s.tick(500)
+for _ in range(3):
+    s.tick(3000)
+outs = [s.tick(500) for _ in range(8)]
+check("(review E) a kettle in the 2nd-4th minute after a start is clipped out of the usage by the end of the warm-up (usage exactly "
+      "500 W; before, it leaked in at 2.5x); its energy enters only the 3-hour allowance, so the first estimates are within 5 % of "
+      "the 500 W ones", all(o["usage_w"] == 500 for o in outs[-3:]) and outs[-1]["status"] == "discharging"
+      and all(abs(o["minutes"] / expected_minutes(60, 20, 317, 500) - 1) <= 0.05 for o in outs[-3:]),
+      str([(o["usage_w"], o["minutes"]) for o in outs]))
+s = Sim(PKG, power=500, soc=60)
+warm(s, 40)
+s.tick(3000)
+s.tick(3000)
+s.tick(3000)
+outs = [s.tick(500) for _ in range(30)]
+check("(review F) one kettle does not halve the short end of the likely range: within 85 % of the estimate throughout the next "
+      "30 minutes (the range is built from the clipped window)", all(o["minutes_low"] >= 0.85 * o["minutes"] for o in outs),
+      str(min(o["minutes_low"] / o["minutes"] for o in outs)))
+s = Sim(PKG, power=500, soc=60)
+base = warm(s, 40)["minutes"]
+outs = [s.tick(3000 if k < 5 else 500) for k in range(36)]
+check("(documented, review C) a single 5-minute 2.5 kW load counts as real usage at once: the estimate is short while it is in the "
+      "recent minutes, and back within 10 % of the 500 W one within about 30 minutes of its start",
+      min(o["minutes"] for o in outs[:8]) < 0.5 * base and abs(outs[-1]["minutes"] / base - 1) <= 0.10,
+      f"{base} {[o['minutes'] for o in outs[::5]]}")
 
 # ===========================================================================
 print("")
@@ -639,7 +684,8 @@ s = Sim(PKG, power=500, soc=60)
 s.tick(3000)
 outs = [s.tick(500) for _ in range(10)]
 check("(review: seeding) a kettle minute as the very first sample after a start does not linger: at the end of the warm-up the "
-      "estimate is the 500 W one (it is trimmed)", outs[-1]["status"] == "discharging" and outs[-1]["minutes"] == expected_minutes(60, 20, 317, 500),
+      "estimate is the 500 W one (it is clipped)", outs[-1]["status"] == "discharging"
+      and one_step_apart(outs[-1]["minutes"], expected_minutes(60, 20, 317, 500)),
       f"{outs[-1]['minutes']} vs {expected_minutes(60, 20, 317, 500)}")
 s = Sim(PKG, power=500, soc=60)
 warm(s, 20)
@@ -953,9 +999,16 @@ class Oracle:
     def tmean(w):
         """Winsorized mean: the k highest clipped to the (k+1)-th highest, the k lowest to the (k+1)-th lowest."""
         srt = sorted(w)
-        k = min(4, len(srt) // 4)
+        k = min(4, (len(srt) - 1) // 2)
         lo, hi = srt[k], srt[len(srt) - 1 - k]
         return sum(min(max(x, lo), hi) for x in srt) / len(srt)
+
+    @staticmethod
+    def clipped(w):
+        """The energy the upper clipping removes, as an average over the window."""
+        srt = sorted(w)
+        k = min(4, (len(srt) - 1) // 2)
+        return (sum(srt[len(srt) - k:]) - k * srt[len(srt) - 1 - k]) / len(srt) if k > 0 else 0.0
 
     def step(self, t, p, soc, reserve, cap_kwh):
         prior = cap_kwh * 10
@@ -1009,8 +1062,9 @@ class Oracle:
             else:
                 self.direction = "holding"
         base = max(usage, sorted(last8)[3]) if run == "discharging" else usage
-        if added is not None and self.direction == "discharging":      # spike energy above the base, discharging only
-            self.exc = max(0.0, (p - base) + (self.exc - (p - base)) * math.exp(-added / 10800.0))
+        if added is not None and self.n >= 10 and self.direction == "discharging":   # the clipped energy, discharging only
+            c = self.clipped(self.w)
+            self.exc = c + (self.exc - c) * math.exp(-added / 10800.0)
         wh = self.wh if (self.wh is not None and self.obs >= 3) else prior
         if self.n < 10:
             return "insufficient_data", None
@@ -1119,7 +1173,7 @@ def scenario_suite(pkg: Package) -> dict:
         r["charge_allowance"] = s.model["spike_allowance_w"] == 0
         s = Sim(pkg, power=500, soc=60)
         s.tick(3000)
-        r["seeding"] = [s.tick(500) for _ in range(10)][-1]["minutes"] == expected_minutes(60, 20, 317, 500)
+        r["seeding"] = one_step_apart([s.tick(500) for _ in range(10)][-1]["minutes"], expected_minutes(60, 20, 317, 500))
         s = Sim(pkg, power=0, soc=60)
         r["duty_cycle"] = [s.tick(2500 if m % 5 < 2 else 0)["status"] for m in range(45)][-1] == "discharging"
         s = Sim(pkg, power=600, soc=60)
@@ -1139,7 +1193,8 @@ def scenario_suite(pkg: Package) -> dict:
 baseline = scenario_suite(PKG)
 check("the mutation battery holds on the real package", all(v is True for v in baseline.values()), str(baseline))
 MUTANTS = [
-    ("clipping removed (spikes pass straight into the usage)", "{%- set k = [4, c // 4] | min -%}", "{%- set k = 0 -%}", "spike"),
+    ("clipping removed (spikes pass straight into the usage)", "{%- set k = [4, (c - 1) // 2] | min -%}", "{%- set k = 0 -%}",
+     "spike"),
     ("staleness ignored", "age is not none and age <= 180", "age is not none and age <= 999999", "stale"),
     ("charging shown as holding", "{%- set out.status = 'charging' -%}", "{%- set out.status = 'holding' -%}", "charging"),
     ("direction from a median-like run only (the N1 trap: cycling loads look idle)",
@@ -1155,8 +1210,8 @@ MUTANTS = [
     ("holding shown as discharging", "{%- elif ns.direction != 'discharging' -%}", "{%- elif false -%}", "holding"),
     ("liveness from the battery power value only (the ESPHome trap)", "{%- if poll_valid and poll_seen_at is number -%}",
      "{%- if false -%}", "idle_fresh"),
-    ("allowance learning while charging", "{%- if ns.added_dt is number and base is number and ns.direction == 'discharging' -%}",
-     "{%- if ns.added_dt is number and base is number -%}", "charge_allowance"),
+    ("allowance learning while charging", "{%- if ns.added_dt is number and history_ok and ns.direction == 'discharging' -%}",
+     "{%- if ns.added_dt is number -%}", "charge_allowance"),
     ("reserve comparison off by one", "{%- elif soc <= reserve -%}", "{%- elif soc < reserve -%}", "at_reserve"),
 ]
 for name, anchor, repl, key in MUTANTS:
@@ -1167,8 +1222,8 @@ for name, anchor, repl, key in MUTANTS:
     res = scenario_suite(Package(PKG_TEXT.replace(anchor, repl), sandboxed=True))
     check(f"mutant '{name}' is caught by the '{key}' scenario", res.get(key) is not True or "crash" in res, str(res))
 CONTROLS = [
-    ("equivalent: the clip count written with a filter", "{%- set k = [4, c // 4] | min -%}",
-     "{%- set k = [4, (c / 4) | int] | min -%}"),
+    ("equivalent: the clip count written with a filter", "{%- set k = [4, (c - 1) // 2] | min -%}",
+     "{%- set k = [4, ((c - 1) / 2) | int] | min -%}"),
     ("equivalent: the usage threshold written as a float", "{%- elif usage >= 60 or (ns.direction == 'discharging' and usage >= 40) -%}",
      "{%- elif usage >= 60.0 or (ns.direction == 'discharging' and usage >= 40.0) -%}"),
 ]

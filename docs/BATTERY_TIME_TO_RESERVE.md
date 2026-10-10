@@ -50,9 +50,11 @@ The model therefore takes freshness from the dongle's `last_telemetry_update`. I
 it changes on every successful poll even when every reading is the same.
 
 Telemetry counts as fresh while that text has **changed, as seen by the model, within the last 180 s**. A reconnect that replays
-the old text with a new timestamp does not count. The dongle publishes it only while it has NTP time ("Waiting" before that).
-Until then, or while that diagnostic entity is disabled, the battery power's report age is the fallback, and a constant reading
-then reads as stale after 180 s.
+the old text with a new timestamp does not count. The model checks this once a minute, so staleness is declared 180 to 240 s after
+the last successful poll.
+
+The dongle publishes this text only while it has NTP time ("Waiting" before that). Until then, or while that diagnostic entity is
+disabled, the battery power's report age is the fallback, and a constant reading then reads as stale after 180 s.
 
 No BMS value, battery-current sign, inverter rated power or register-204 capacity is used. The firmware publishes no BMS value
 and no rated power, and the sign of register 191 is not documented.
@@ -63,10 +65,15 @@ Every minute, while telemetry is fresh, the model adds one sample of battery pow
 
 **Usage: the winsorized mean of the window.**
 
-- The 4 highest samples are clipped to the 5th highest, and the 4 lowest to the 5th lowest (fewer while the window is short).
-- A one-off load of up to 4 minutes (a kettle, a pump start, a sun burst) is therefore ignored.
-- A load that recurs 5 or more times in the window counts in full, at its real average: an oven or hob switching on and off, a
-  regular pump, a heat pump.
+- The 4 highest samples are clipped to the 5th highest, and the 4 lowest to the 5th lowest. Clipping is full from 9 samples
+  on; before that, the warm-up shows no estimate.
+- **Up to 4 one-minute samples of a load are clipped**: a kettle, a pump start or a sun burst does not enter the usage. Their
+  energy comes back through the spike allowance (below), over hours.
+- **A load present in 5 or more of the window's minutes counts in full**: an oven or hob switching on and off within a few
+  minutes, a regular pump.
+- So there is a deliberate step between 4 and 5 occurrences. A load that shows up in exactly 4 or fewer minutes of every half
+  hour is clipped again and again and enters only through the allowance; until that has learned, the estimate reads long
+  (about 1.5x for the first half hour in the offline test, more for a heavier load).
 - It counts a sustained change from about its 5th minute and in full within about 27 minutes.
 
 **Direction.**
@@ -81,11 +88,12 @@ Every minute, while telemetry is fresh, the model adds one sample of battery pow
 - **Base.** The usage, raised (never lowered) to the lower median (the 4th smallest of 8) of a sustained discharging run.
 - A sustained rise in load (an oven) shortens the estimate within about 5 to 8 minutes. A fall relaxes it only as the window
   moves on, so the estimate errs on the short side meanwhile.
-- **Spike allowance.** The 3-hour average, over discharging minutes only and never below zero, of how far each minute was above
-  the base.
-  - It gives back the energy of sparse short loads that the clipping leaves out. In the offline test with kettle-size spikes in
-    5 % of minutes, the usage alone would be about 17 % low.
+- **Spike allowance.** The 3-hour average of exactly the energy the clipping removed from the window.
+  - It is learned only while discharging and with full history, and it is never negative.
+  - It gives back the energy of short loads that the clipping leaves out. In the offline test with kettle-size spikes in 5 % of
+    minutes, the usage alone would be about 17 % low; with the allowance the estimate is unbiased.
   - A single 3-minute kettle moves the estimate by less than 10 %.
+  - A long load, or its end, leaves it untouched: in the offline test a 60-minute oven in a kettle household kept two thirds of it.
   - It does not learn while charging or holding, so solar bursts and cloud dips cannot bend it.
   - It is kept across gaps and solar days, because it describes the household. After a long outage or a solar day it can make
     the estimate short until it re-learns.
@@ -112,19 +120,22 @@ Every minute, while telemetry is fresh, the model adds one sample of battery pow
 - They are rounded so they do not look more precise than they are: to 1 minute below 10, to 5 minutes below 2 hours, and to
   10 minutes above that. They are capped at 72 hours (`beyond_horizon`).
 - **The likely range covers usage variation and SOC resolution only.**
-  - It uses the second-heaviest and second-lightest 5-minute blocks of the window, plus the allowance, and one SOC point less for
-    the short end.
+  - It uses the second-heaviest and second-lightest 5-minute blocks of the **clipped** window, plus the allowance, and one SOC
+    point less for the short end. A single kettle therefore does not widen it.
   - It does **not** cover capacity uncertainty. While `capacity_basis` is `configured`, the configured value may be the nominal
     rather than the usable capacity, and the true time can lie outside the range.
 
-**Measured behaviour in the offline tests** (synthetic loads, not a live proof):
+**Measured behaviour in the offline tests** (synthetic loads, not a live proof). The estimate errs both ways depending on the
+load:
 
 | Load | Result |
 |---|---|
 | Steady or slowly varying | Within 15 % of the load's mean, 0 to +6 % on average (short side) |
-| Ovens and hobs switching on and off, regular cycling loads | Within 15 % of their true average after 30 to 60 minutes |
+| A switching oven or hob, on for 2 of every 5 minutes, or 4 of every 9 | Within 15 % of the true average after 30 minutes. A new cycling load reads **long** at first: about 3x for its first 5 minutes, 1.5x at 15 minutes, 1.2-1.3x at 20. |
 | Random kettle-size spikes (5 % of minutes) | Unbiased once the allowance has learned; within 25 % in 95 % of minutes. A cluster of 5 or more spikes in 30 minutes counts in full as real recent usage. |
 | A random 35 %-duty hob | Unbiased; within two window standard deviations in 93 % of minutes |
+| Any load on for 5 minutes or more at a time | Counts at once as real usage, so the estimate reads **short**. A single 5-minute 2.5 kW load on 500 W shows about a sixth of the time at worst, and the estimate is back within 10 % 30 minutes after the load started. A 6-on / 6-off or 20-on / 20-off cycle (+1.5 kW on 400 W) reads 13-18 % short on average and swings between about 0.6x and 1.3x of the true time with the cycle. |
+| A load in exactly 4 or fewer minutes of every half hour | Clipped; it enters only through the allowance and reads **long** until that has learned. With +2 kW for 3 or 4 minutes of every 30 on 500 W: about 1.4-1.5x for the first half hour (1.7x at +3 kW), 1.2x after 2 hours, about 1.1x after 4 hours. |
 
 ## States
 
@@ -166,8 +177,13 @@ few minutes after a change of direction, and at small powers inside the ±60 W h
   its Python configuration, and the inverter's own shutdown SOC (register 217) is not consulted. Several Overview planning
   scripts still assume their own reserve; they are unchanged.
 - **Warm-up.** After a start, or a gap of more than 5 minutes, the status is "Insufficient data" for 10 minutes.
-- **Long cycles.** A load cycling slower than the window (a heat pump at 20 minutes on, 20 off) makes the estimate swing with the
-  cycle. It errs on the short side on average.
+- **Long on-phases.** Any load on for 5 minutes or more at a time counts at once. With a heat pump at 20 minutes on, 20 off,
+  or a 6-on / 6-off cycle, the estimate swings with the cycle and reads short on average.
+- **The 4-versus-5 step.** A load present in exactly 4 or fewer minutes of every half hour is clipped and enters only through the
+  3-hour allowance, so it reads long for hours (see the table).
+- **After a cycling load ends.** "Holding" returns 8 minutes after the load's last on-minute while the idle reading stays within
+  ±60 W. An idle reading that strays beyond ±60 W (for example ±80 W of noise) prevents a sustained idle run, and a time can
+  then still be shown for up to about 20 minutes.
 - **Reload.** A template reload that fires a trigger before the entity is added skips the restore. The model then starts again,
   including the learned capacity.
 - **Around a restart.** The presentation sensor is restored with its last state until Home Assistant has started and re-renders
