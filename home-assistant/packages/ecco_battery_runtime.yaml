@@ -55,10 +55,11 @@
 #              over the window (it
 #              errs on the short side), plus a SPIKE ALLOWANCE: the 3-hour
 #              average, over discharging minutes with full history, of exactly the
-#              energy the clipping removed from the window (never negative). It
-#              gives back, over hours, the energy of short loads the clipping
-#              leaves out; a single kettle moves the estimate by only a few
-#              percent, and a long load or its end leaves it untouched.
+#              energy the clipping removed from the window, spread over its 30
+#              minutes (never negative). It gives back, over hours, the energy of
+#              short loads the clipping leaves out; a single kettle moves the
+#              estimate by only a few percent, and a long load or its end neither
+#              feeds nor wipes it.
 #   Capacity   while the battery discharges, the energy it delivers (power x
 #              time) is accumulated between SOC steps; every 5 SOC points
 #              observed gives one measurement of the energy per percent. After
@@ -259,7 +260,7 @@ template:
             {%- set wk = [4, (wn - 1) // 2] | min -%}
             {%- set clip_lo = ws[wk] if wn > 0 else none -%}
             {%- set clip_hi = ws[wn - 1 - wk] if wn > 0 else none -%}
-            {%- set clipped_w = (((ws[wn - wk:] | sum) - wk * clip_hi) / wn) if (wn > 0 and wk > 0) else 0 -%}
+            {%- set clipped_w = (((ws[wn - wk:] | sum) - wk * clip_hi) / 30) if (wn > 0 and wk > 0) else 0 -%}
             {%- set last8 = ns.window[-8:] if wn >= 8 else [] -%}
             {%- set run = 'discharging' if (last8 | count == 8 and (last8 | min) >= 60) else (
                   'charging' if (last8 | count == 8 and (last8 | max) <= -60) else (

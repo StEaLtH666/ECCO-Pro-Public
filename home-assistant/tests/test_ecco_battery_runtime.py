@@ -518,7 +518,7 @@ med = sorted(err)[len(err) // 2]
 lvl = sorted(out["usage_w"] / expect - 1 for minute, expect, out in rows if minute >= 240)[len(err) // 2]
 p95 = sorted(map(abs, err))[int(len(err) * 0.95)]
 check(f"(b) frequent kettle-size spikes (2.6 kW in 5 % of minutes at random, a true mean of 730 W): once the 3-hour allowance has "
-      f"learned, the estimate is unbiased (median error {med:+.1%}; the winsorized usage alone would be {lvl:+.1%}) and within 25 % "
+      f"learned, the median error is within 6 % ({med:+.1%}; the winsorized usage alone would be {lvl:+.1%}) and within 25 % "
       f"in 95 % of minutes ({p95:.1%}); the worst minutes ({max(map(abs, err)):.0%}) are windows where 5 or more spikes cluster "
       "within 30 minutes (Poisson, about 2 % of windows), which then count in full as real recent usage",
       abs(med) < 0.06 and lvl < -0.10 and p95 <= 0.25 and max(map(abs, err)) < 0.75)
@@ -615,6 +615,30 @@ outs = [s.tick(500) for _ in range(30)]
 check("(review F) one kettle does not halve the short end of the likely range: within 85 % of the estimate throughout the next "
       "30 minutes (the range is built from the clipped window)", all(o["minutes_low"] >= 0.85 * o["minutes"] for o in outs),
       str(min(o["minutes_low"] / o["minutes"] for o in outs)))
+# A 3-minute +2.5 kW kettle is 7500 W-minutes of clipped energy, 250 W over the 30-minute window. At steady state it feeds the
+# 3-hour average for 30 minutes, so the allowance peaks at 250 * (1 - 0.994459848 ** 30) = 38.4 W.
+KETTLE_PEAK = 2500 * 3 / 30 * (1 - 0.994459848 ** 30)
+peaks = {}
+for enter in (1, 5, 10, 15, 20, None):
+    s = Sim(PKG, power=500, soc=60)
+    warm(s, 40)
+    if enter is not None:
+        s.now += timedelta(minutes=12)                      # a gap: the window restarts, the allowance (0 here) is kept
+        s.tick(500)
+        for _ in range(enter - 1):
+            s.tick(500)
+    outs = [s.tick(3000 if k < 3 else 500) for k in range(45)]
+    peaks[enter] = max(o["spike_allowance_w"] for o in outs)
+    if enter is not None and enter < 10:
+        before = [o["spike_allowance_w"] for o in outs[:9 - enter]]   # the samples up to the 9th: still warming up
+        peaks[f"warm-up {enter}"] = max(before) if before else 0
+check(f"(review 4) a kettle's allowance is its clipped energy over the 30-minute window also while the window refills after a "
+      f"gap: the peak is never above the steady-state {KETTLE_PEAK:.1f} W, and the steady-state peak matches it "
+      f"(peaks by the number of 500 W samples before it, None = no gap: {peaks})",
+      all(peaks[e] <= KETTLE_PEAK + 1 for e in (1, 5, 10, 15, 20)) and abs(peaks[None] - KETTLE_PEAK) <= 1.5
+      and all(peaks[e] >= 0.9 * KETTLE_PEAK for e in (10, 15, 20)))
+check("(review 4) the allowance does not learn during the warm-up after a gap: a kettle in its 2nd-8th sample leaves it at 0 W "
+      "through the 9th", peaks["warm-up 1"] == 0 and peaks["warm-up 5"] == 0, str(peaks))
 s = Sim(PKG, power=500, soc=60)
 base = warm(s, 40)["minutes"]
 outs = [s.tick(3000 if k < 5 else 500) for k in range(36)]
@@ -1005,10 +1029,10 @@ class Oracle:
 
     @staticmethod
     def clipped(w):
-        """The energy the upper clipping removes, as an average over the window."""
+        """The energy the upper clipping removes, spread over the 30-minute window (also while it refills)."""
         srt = sorted(w)
         k = min(4, (len(srt) - 1) // 2)
-        return (sum(srt[len(srt) - k:]) - k * srt[len(srt) - 1 - k]) / len(srt) if k > 0 else 0.0
+        return (sum(srt[len(srt) - k:]) - k * srt[len(srt) - 1 - k]) / 30.0 if k > 0 else 0.0
 
     def step(self, t, p, soc, reserve, cap_kwh):
         prior = cap_kwh * 10
@@ -1179,6 +1203,13 @@ def scenario_suite(pkg: Package) -> dict:
         s = Sim(pkg, power=600, soc=60)
         warm(s, 30)
         r["idle_fast"] = [s.tick(0)["status"] for _ in range(10)][-1] == "holding"
+        s = Sim(pkg, power=500, soc=60)
+        warm(s, 40)
+        s.now += timedelta(minutes=12)
+        s.tick(500)
+        outs = [s.tick(3000 if k < 3 else 500) for k in range(40)]
+        r["warmup_allowance"] = outs[7]["spike_allowance_w"] == 0          # the 9th sample: still warming up
+        r["refill_allowance"] = max(o["spike_allowance_w"] for o in outs) <= KETTLE_PEAK + 1
         s = Sim(pkg, power=700, soc=60)
         warm(s, 12)
         s.tick(reported=False)
@@ -1213,6 +1244,10 @@ MUTANTS = [
     ("allowance learning while charging", "{%- if ns.added_dt is number and history_ok and ns.direction == 'discharging' -%}",
      "{%- if ns.added_dt is number -%}", "charge_allowance"),
     ("reserve comparison off by one", "{%- elif soc <= reserve -%}", "{%- elif soc < reserve -%}", "at_reserve"),
+    ("allowance learning during the warm-up", "{%- if ns.added_dt is number and history_ok and ns.direction == 'discharging' -%}",
+     "{%- if ns.added_dt is number and ns.direction == 'discharging' -%}", "warmup_allowance"),
+    ("clipped energy averaged over the samples present (a kettle over-counted while the window refills)",
+     "/ 30) if (wn > 0 and wk > 0)", "/ wn) if (wn > 0 and wk > 0)", "refill_allowance"),
 ]
 for name, anchor, repl, key in MUTANTS:
     n = PKG_TEXT.count(anchor)
