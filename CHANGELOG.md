@@ -71,12 +71,14 @@ Development before the first public release happened in a private repository; se
   `home-assistant/packages/ecco_battery_runtime.yaml`, estimates how long the batteries can keep discharging at recent usage
   before they reach the configured reserve (`input_number.ecco_minimum_reserve_soc`, whatever it is set to).
   - **Method:** one battery-power sample a minute while telemetry is fresh. Freshness comes from the dongle's per-poll
-    timestamp, because ESPHome does not re-send an unchanged reading.
-  - **Direction:** the median of the last 9 minutes decides charging, holding or discharging, so short loads never flip it.
-  - **Discharge:** the larger of that median and its 10-minute average, plus a 3-hour spike allowance that learns only while
+    timestamp, which must actually change, because ESPHome does not re-send an unchanged reading.
+  - **Usage:** the winsorized mean of the last 30 minutes. A one-off load of up to 4 minutes (a kettle) is ignored, while
+    cycling and regular loads (an oven or hob switching, a heat pump) count at their real average.
+  - **Direction:** a sustained 8-minute run decides at once; otherwise the usage decides, with hysteresis.
+  - **Discharge:** the usage, raised to a sustained run's level, plus a 3-hour spike allowance that learns only while
     discharging. It errs on the short side.
   - **Capacity:** the configured capacity until the energy per SOC percent has been measured over 15 points of real discharge.
-    Measuring restarts on a capacity change or a measurement more than 20 % off.
+    Measuring restarts on a capacity change or on two agreeing measurements more than 20 % off.
   - **States:** explicit stale, insufficient-data, charging, holding and at-reserve states.
   - **Display:** the Energy Flow card's battery node shows it through its FE-0 hook (`nodes.battery.time_to_reserve`) as one small
     static line such as "≈5h 20m to reserve", with the likely range and "an estimate, not a guarantee" in the tooltip. The
