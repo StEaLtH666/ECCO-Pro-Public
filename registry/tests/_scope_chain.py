@@ -744,10 +744,10 @@ FPS1 = Entry(
     added_files=_fps1.ADDED_FILES,
     frozen_reverts=dict(_fps1.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of the file after fps1; as of pub0 it is its pub0 state (manifest result)
-        _fps1.PACKAGE_REL: "dc413cc8da70095778cc3d9f69bf01c6d30c28da47b4c1574891fa9e7926f7f8",
+        _fps1.PACKAGE_REL: "b8734bd9e59333b47cafd12d36fef0e75b529a87562e3a81a21f5afcbcf7c949",
     },
     # _pex.fingerprint(FPS1): hashes its parent fe1's fingerprint and every declaration above
-    fingerprint="a18bb93457131c22148bbe65fd05e4e2d9d73395eaca201ffe18b04a1cf72f61",
+    fingerprint="1e8aa9e4fc0e5907ef7331003eb9cfb427dc0c6925bcb277c85b08e1c7798284",
     note="Scheduled Free Power reliability (11 Oct 2026 incident): bounded, unevenly spaced retries of a transient start-gate refusal, "
          "no retry once a start transaction began, positive confirmation, a start deadline and duration clamp inside the authorised "
          "window, a readiness check, a missed-trigger watchdog, persistent notifications and STARTING / FAILED / COMPLETED states: "

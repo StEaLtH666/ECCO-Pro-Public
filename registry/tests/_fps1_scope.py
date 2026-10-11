@@ -687,7 +687,8 @@ script:
                                and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == (duration_now | float(-2))
                                and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == (requested_power | float(-2))
                                and is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
-                               and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) <= (run_started | float(0)) }}
+                               and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) <= (run_started | float(0))
+                               and (states('sensor.ecco_config_maximum_grid_charge_power') | int(0)) >= (requested_power | int(0)) }}
                       then:
                         # The firmware counts a start attempt only when its gate passes (published every 30 s).
                         - variables:
@@ -862,6 +863,7 @@ script:
                   {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
                   {{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
                      and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('BLOCKED')
+                     and not r.startswith('ARMED')
                      and not (is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
                               and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0)
                                   <= (run_started | float(0))) }}
@@ -888,7 +890,9 @@ script:
                   {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
                   {{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
                      and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED')
-                     and not r.startswith('BLOCKED') }}
+                     and not r.startswith('BLOCKED')
+                     and is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                     and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) <= (run_started | float(0)) }}
             then:
               - action: input_text.set_value
                 target:
@@ -909,7 +913,7 @@ script:
               {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
               {{ r.startswith('FAILED') or (r.startswith('BLOCKED') and 'already active' not in r)
                  or not (r.startswith('STARTED') or r.startswith('CANCELLED') or r.startswith('BLOCKED')
-                         or is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')) }}
+                         or r.startswith('ARMED') or is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')) }}
         then:
           - action: persistent_notification.create
             data:
@@ -1043,6 +1047,9 @@ automation:
           - action: persistent_notification.dismiss
             data:
               notification_id: ecco_free_power_schedule
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: ecco_free_power_schedule_readiness
 
   - id: ecco_free_power_schedule_fire
     alias: "ECCO - Fire scheduled Free Power"

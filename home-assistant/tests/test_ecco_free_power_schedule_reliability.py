@@ -30,6 +30,7 @@ of the dongle's start gate, transaction, timer and Modbus poll, using the busy w
                     longest firmware refusal text (255-character helper limit)
   [15] review 2     the real cancel script mid-staging / mid-delay, cancel and re-arm, the limit lowered while offline,
                     staging never confirmed, arming with a past start, the readiness alert, a write enable left on
+  [16] review 3     the limit lowered just before a press; a re-arm's ARMED text kept
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's control flow against a model, not a live
 Home Assistant or the dongle.
@@ -621,13 +622,43 @@ check("Home Assistant restarting with the write enable left on (and nothing arme
       not x.arm_left_on() and x.d.press_log == [])
 
 # ======================================================================================================================
+print("\n[16] review round 3: the limit at the press, a re-arm's text")
+# ======================================================================================================================
+r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 30)))
+
+
+def _drop_limit(x=r):
+    x.w.set("sensor.ecco_config_maximum_grid_charge_power", "3000")
+    x.d.limit = 3000
+
+
+r.w.at(ST + 0.5, _drop_limit)                           # between the loop-top check and the press
+r.until(600)
+check("the limit lowered between the attempt's check and its press: that press is withheld, the next attempt is BLOCKED; "
+      "nothing pressed with the stale 8000 W request", r.d.press_log == [] and r.last().startswith("BLOCKED")
+      and r.created() != [], f"{r.presses()} {r.last()}")
+r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 240)))
+r.w.at(ST + 89, lambda x=r: cancel(x))
+
+
+def _rearm2(x=r):
+    x.w.set("input_datetime.ecco_free_power_schedule_start", "2026-10-11 11:30:00")
+    x.w.set(ARMED, "on")
+
+
+r.w.at(ST + 95, _rearm2)
+r.until(400)
+check("after a cancel and a re-arm, the ending run leaves the new schedule's ARMED text alone", r.last().startswith("ARMED"),
+      r.last())
+
+# ======================================================================================================================
 print("\n[13] the post-export declaration (PEX entry fps1)")
 # ======================================================================================================================
 import _fps1_scope as F  # noqa: E402
 import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins fps1's declaration)
 
-FPS1_FINGERPRINT = "a18bb93457131c22148bbe65fd05e4e2d9d73395eaca201ffe18b04a1cf72f61"
+FPS1_FINGERPRINT = "1e8aa9e4fc0e5907ef7331003eb9cfb427dc0c6925bcb277c85b08e1c7798284"
 FE1_FINGERPRINT = "211221b095bcdb61b2e7a2cfdd38fb28c871319d46d9acaf6e4f315a690de57e"
 BEFORE_SHA = "0caa6714bef18946"   # the package as of fe1 (sha256 prefix, LF)
 FPS1 = sc.CHAIN.entry("fps1")

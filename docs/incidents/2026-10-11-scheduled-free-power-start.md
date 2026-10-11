@@ -94,6 +94,13 @@ required by this incident.
 
 ## Not covered / follow-ups
 
+- Residual, bounded behaviours found in review and left as they are (each errs on the safe side):
+  - a schedule re-armed for a time that arrives while the previous run is still finishing is started by the watchdog, about
+    3 minutes late, with a "missed" alert;
+  - a plain cancel does not dismiss an open "not ready" alert (re-arming or a later success does);
+  - for about 20 s to 3 minutes after a Home Assistant restart, startup recovery turns off a Free Power write enable that the
+    owner has just switched on by hand (the safe direction), and if the dongle is still unreachable then, a write enable left on
+    across a Wi-Fi-only drop stays on until the next press or reboot (it only permits a START).
 - **Dump to Grid has the same latent defect** (`ecco_dump_to_grid_schedule.yaml` is a copy of the old policy). Recommended next,
   with the same pattern.
 - Phone push needs a notify service the owner chooses; the persistent notification is HA-UI only.
