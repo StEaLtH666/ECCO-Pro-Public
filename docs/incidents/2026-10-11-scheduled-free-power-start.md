@@ -2,8 +2,9 @@
 
 **Status:** root cause proven; correction (post-export entry `fps1`) validated offline, not yet deployed.
 **Impact:** the 11:00-13:00 BST scheduled Free Power session did not start. The owner noticed by looking and started Free Power
-manually at 11:03:49; it ran until 13:03:53, about 4 minutes past the free window. No inverter write was made by the failed
-schedule; no safety interlock or recovery state was involved.
+manually at 11:03:49 (about 4 minutes of the free window lost); its automatic end was 13:03:53, so the owner ended it by hand
+at 12:59:30 (restore verified 12:59:48). No inverter write was made by the failed schedule; no safety interlock or recovery
+state was involved.
 
 ## Timeline (BST, Home Assistant receive times)
 
@@ -19,7 +20,8 @@ schedule; no safety interlock or recovery state was involved.
 | 11:00:35.176 | Write Enable off (same refusal, identical text, so no new status state). Telemetry block 150-196 data arrives at 11:00:35.169-35.175 |
 | 11:00:55.039 | `FAILED TO START - REJECTED - Modbus bus busy ...`; the schedule disarms itself; status `IDLE`. **No alert** |
 | 11:02:48-11:03:00 | A routine RTC correction (unrelated; after the failure) |
-| 11:03:49-11:03:58 | The owner's manual "Free Power now": accepted, `ACTIVE - VERIFIED OK`, ends 13:03:53 |
+| 11:03:49-11:03:58 | The owner's manual "Free Power now": accepted, `ACTIVE - VERIFIED OK`, automatic end 13:03:53 |
+| 12:59:30-12:59:48 | The owner ends it by hand; Free Power Active off 12:59:36.954; restore success counted 12:59:48 |
 
 Facts (from the Home Assistant history): no RTC correction, manual write or other Free Power / Dump operation was running at
 11:00; Start Attempts stayed at 0 for both refusals (the counter only counts presses that pass the gate); Free Power Failures
@@ -52,14 +54,30 @@ scheduled starts (about one in seventeen); the corrected package fails none.
   every interlock. Spacing is uneven (about 6-10 s for the first eight attempts, then about 16-21 s), so it never locks to the poll.
 - **Never after a transaction began.** If the gate passed (Operation In Progress or Active seen), the package waits for the
   firmware's own verified outcome and never presses again; on failure the firmware restores its saved snapshot itself.
-- **Persistent refusals stop at once** (snapshot pending restore, Dump to Grid owns the settings, NTP, recovery blocked, ...).
+- **Persistent refusals stop at once** (recovery blocked, already active, snapshot pending restore, register 244 proof pending,
+  Dump to Grid owns the settings). NTP, live battery voltage and the arm itself are treated as transient (no side effect).
+- **Every answer is proven to belong to this press.** The package presses only after it has seen the write enable ON, and
+  counts a refusal only when it then sees the firmware turn it OFF (ESPHome does not re-send an identical status text, so the
+  text alone cannot prove freshness). A press with no answer is never simply retried: the package disarms, sees the switch
+  go off, waits for the firmware's gate-pass counter (`free_power_start_attempts_since_boot`, published every 30 s) and
+  retries only if it did not move and nothing is in progress, active or pending restore. Otherwise the outcome is reported
+  as unconfirmed.
+- **Cancel wins.** Turning the schedule off stops the retries before the next press; a schedule re-armed for another time
+  is never disarmed by the run that is ending.
+- **Nothing is staged into someone else's transaction:** while a Free Power or manual write is in progress, or the dongle or
+  the effective-limit sensor is unavailable, the package waits instead of staging or pressing.
+- **Never silent:** dongle service calls continue on error, every result text fits the 255-character helper, the write
+  enable always ends off, and any run that ends without STARTED / CANCELLED raises the alert.
 - **Positive confirmation:** success only when Free Power Active turns on.
 - **The authorised window:** no attempt after start + 10 minutes or in the window's last 30 s; the staged duration is
   min(requested, floor((window end - now + 20 s) / 60 s)), so an on-time start keeps its full duration and a late start ends
-  within about 30 s of the window end. Nothing is ever started after the window.
+  within about 30-45 s of the window end. Nothing is ever started after the window. Each run (on time, watchdog or restart
+  recovery) retries for at most 10 minutes.
 - **Offline dongle:** while telemetry or configuration is offline nothing is pressed; the package waits (bounded).
 - **Readiness check** 5 minutes before the start and **missed-trigger watchdog** 3 minutes after it (template triggers on the
   existing fire automation; the helper, script and automation counts are unchanged). The watchdog recovers a start that never ran.
+- **Restart recovery** waits (bounded) for the dongle to reconnect before judging, records a session that is already running,
+  and leaves an on-time start that is already retrying alone.
 - **Alerts:** a persistent notification for every failure, missed start, restart recovery and not-ready readiness check, naming
   the reason, whether anything was written, and what to do; a later success clears it.
 - **Status:** `sensor.ecco_free_power_schedule_status` adds STARTING, FAILED and COMPLETED to ACTIVE / ARMED / IDLE, so the

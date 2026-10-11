@@ -14,8 +14,9 @@ of the dongle's start gate, transaction, timer and Modbus poll, using the busy w
   [1] incident      the package as of fe1 reproduces 11 Oct exactly (refusals at +2.6 s and +35.1 s, FAILED, no alert)
   [2] fix           the same inputs now start, verified ACTIVE, ending inside the authorised window
   [3] every phase   the poll phase swept over a whole minute x press-handling delays: the old package fails ~6 %, the new 0 %
-  [4] transient     RTC correction, another write, configuration offline, a lost press: retried, bounded, then started
-  [5] persistent    snapshot pending, Dump owns, NTP: refused once, no retry, an alert at once
+  [4] transient     RTC correction, NTP, configuration offline, a press that never arrived (proved by the gate-pass
+                    counter): retried, bounded, then started
+  [5] persistent    snapshot pending, Dump owns, recovery blocked: refused once, no retry, an alert at once
   [6] transaction   a start that passed the gate and then failed is never retried, and alerts
   [7] window        duration clamp, the start deadline, short windows, never a press after the deadline, never a run past it
   [8] watchdog      a lost start trigger is recovered at +3 min with an alert; never while a start is still retrying
@@ -24,6 +25,9 @@ of the dongle's start gate, transaction, timer and Modbus poll, using the busy w
   [11] status       ARMED -> STARTING -> ACTIVE -> COMPLETED, and FAILED
   [12] mutation     in-memory mutants of the package are each caught; equivalent rewrites survive
   [13] PEX          the fps1 declaration
+  [14] review       cancel mid-retry, a stalled view after a passing press, a restart while the dongle reconnects, the
+                    limit unavailable at the start, the owner's own START racing the schedule, service errors, the
+                    longest firmware refusal text (255-character helper limit)
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's control flow against a model, not a live
 Home Assistant or the dongle.
@@ -47,7 +51,7 @@ PKG_REL = "home-assistant/packages/ecco_free_power_schedule.yaml"
 PKG_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 
-FAILS: list[str] = []
+FAILURES: list[str] = []
 PASSES = 0
 
 
@@ -57,7 +61,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         PASSES += 1
         print(f"  PASS  {name}")
     else:
-        FAILS.append(name)
+        FAILURES.append(name)
         print(f"  FAIL  {name}" + (f"\n        {detail}" if detail else ""))
 
 
@@ -78,6 +82,7 @@ class Run:
         self.w = S.World(S.parse_local("2026-10-11 10:50:00"))
         self.ha = S.HA(self.w, yaml.safe_load(text))
         self.d = S.Dongle(self.w, phase=phase, handle_delays=delays, outcome=outcome)
+        self.d.limit = limit
         w = self.w
         w.set("sensor.ecco_config_maximum_grid_charge_power", str(limit))
         w.set("input_datetime.ecco_free_power_schedule_start", start)
@@ -152,9 +157,15 @@ gate_else = gate_else[:gate_else.index("id(free_power_write_enable).turn_off();"
 fw_rejects = re.findall(r'publish_state\("(REJECTED - [^"]+)"\)', gate_else)
 retried = re.findall(r"s\.startswith\('(REJECTED - [^']+)'\)", PKG_TEXT)
 check(f"the {len(retried)} retried refusals are verbatim prefixes of the firmware start gate's own texts",
-      len(retried) == 4 and all(any(r.startswith(p) for r in fw_rejects) for p in retried), f"{retried} vs {fw_rejects}")
-check("...and they are exactly the transient ones: bus busy, RTC correction, another write, configuration offline",
-      sorted(p.split(" - ")[1].split()[0] for p in retried) == ["Modbus", "RTC", "another", "inverter"])
+      len(retried) == 7 and all(any(r.startswith(p) for r in fw_rejects) for p in retried), f"{retried} vs {fw_rejects}")
+PERSISTENT = ("RECOVERY BLOCKED", "Free Power already active", "saved snapshot pending", "Register 244 proof",
+              "Dump to Grid override", "safety precondition failed")
+check("...they are exactly the transient ones (bus busy, RTC correction, another write, configuration offline, NTP, live "
+      "battery voltage, the arm); every persistent refusal (recovery blocked, already active, snapshot pending, reg 244 "
+      "proof, Dump owns, generic) is never retried",
+      sorted(p.split(" - ")[1].split()[0] for p in retried) == ["Modbus", "RTC", "another", "arm", "inverter", "plausible", "valid"]
+      and all(any(k in r for r in fw_rejects) for k in PERSISTENT)
+      and not any(r.startswith(p) for p in retried for r in fw_rejects if any(k in r for k in PERSISTENT)))
 services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
@@ -239,8 +250,14 @@ def _drop_first(entity, data, d=r.d):
 
 r.w.service_handlers["button.press"] = _drop_first
 r.until(600)
-check("a press the dongle never acknowledges: HA disarms the switch itself and retries", r.d.successes == 1
-      and len(r.d.press_log) == 2 and not r.arm_left_on(), str(r.presses()))
+check("a press that never reaches the dongle: HA disarms, sees the switch go off, waits for the gate-pass counter, finds "
+      "it unchanged, then retries and starts", r.d.successes == 1 and len(r.d.press_log) == 2 and not r.arm_left_on()
+      and 45 <= r.presses()[1] - r.presses()[0] <= 75, str(r.presses()))
+r = Run(setup=lambda x: x.d.flags.__setitem__("ntp_bad", True))
+r.w.at(ST + 60, lambda: r.d.flags.__setitem__("ntp_bad", False))
+r.until(600)
+check("no valid NTP time for the first minute (e.g. just after a dongle reboot): retried, then started",
+      r.d.successes == 1 and any("NTP" in o for _, o in r.gate()), str(r.gate()[:2]))
 r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 3600))).until(1200)
 check("a refusal that never clears: retries stop at the deadline (start + 10 min), FAILED with an alert",
       r.d.successes == 0 and max(r.presses()) <= 600 and r.last().startswith("FAILED TO START")
@@ -257,11 +274,12 @@ print("\n[5] persistent refusals: no retry, alert at once")
 # ======================================================================================================================
 for label, flag, needle in (("a saved snapshot pending restore", "snapshot", "saved snapshot"),
                             ("Dump to Grid owning the inverter", "dump", "Dump to Grid"),
-                            ("no valid NTP time", "ntp_bad", "NTP")):
+                            ("recovery blocked (the firmware's longest refusal text)", "corrupt", "RECOVERY BLOCKED")):
     r = Run(setup=lambda x, f_=flag: x.d.flags.__setitem__(f_, True)).until(600)
     check(f"{label}: one press, refused, FAILED at once with the firmware's reason, alerted, switch off",
           len(r.d.presses) == 1 and needle in r.last() and r.last().startswith("FAILED TO START")
-          and len(r.created()) >= 1 and not r.arm_left_on() and r.d.attempts == 0, f"{r.gate()} {r.last()[:90]}")
+          and len(r.created()) >= 1 and not r.arm_left_on() and r.d.attempts == 0
+          and not any("invalid value" in m for m in r.w.warnings), f"{r.gate()} {r.last()[:90]} {r.w.warnings[:2]}")
 
 # ======================================================================================================================
 print("\n[6] a start transaction that began and failed is never retried")
@@ -399,6 +417,11 @@ def battery(text: str) -> dict:
         res["no_double"] = x.d.successes == 1 and not any("already running" in m for m in x.w.warnings)
         x = Run(text, setup=lambda y: y.d.set_offline(ST - 60, ST + 180)).until(600)
         res["offline"] = x.d.successes == 1 and all(not (ST - 60 <= ST + p < ST + 180) for p in x.presses())
+        x = Run(text)
+        x.d.manual_start(ST - 2)
+        x.until(120)
+        o = x.d.op_intervals[0]
+        res["race"] = not any(o[0] <= t <= o[1] for t, _e, _v in x.d.number_log)
     except Exception as exc:  # noqa: BLE001 - a mutant that breaks the scripts is caught too
         res["crash"] = f"{type(exc).__name__}: {exc}"
     return res
@@ -408,14 +431,14 @@ base = battery(PKG_TEXT)
 check("the mutation battery holds on the real package", all(v is True for v in base.values()), str(base))
 MUTANTS = [
     ("one retry only (the pre-fix policy)", "max_attempts: 60", "max_attempts: 2", "retry"),
-    ("spacing locked to the 10 s poll (6.85 s + the ~3.15 s press overhead = one 10 s cycle per attempt)",
-     "seconds: \"{{ (2.3 if repeat.index <= 8 else 12.6) + 1.7 * (repeat.index % 4) }}\"", "seconds: 6.85", "phase"),
+    ("spacing locked to the 10 s poll (6.68 s + the ~3.32 s press overhead = one 10 s cycle per attempt)",
+     "seconds: \"{{ (2.3 if repeat.index <= 8 else 12.6) + 1.7 * (repeat.index % 4) }}\"", "seconds: 6.68", "phase"),
     ("persistent refusals retried too", "s.startswith('REJECTED - Modbus bus busy with another transaction')",
      "s.startswith('REJECTED')", "persistent"),
     ("a begun transaction retried",
-     "                                  FAILED TO START - {{ states('sensor.ecco_clock_dongle_free_power_status') }}\n"
-     "                                  (start transaction began on attempt {{ repeat.index }}; not retried)\n",
-     "                                  STARTING - retry after a begun transaction\n", "transaction"),
+     "                                          FAILED TO START - {{ states('sensor.ecco_clock_dongle_free_power_status')[:120] }}\n"
+     "                                          (start transaction began on attempt {{ repeat.index }}; not retried)\n",
+     "                                          STARTING - retry after a begun transaction\n", "transaction"),
     ("no start deadline", "as_timestamp(now()) + 600", "as_timestamp(now()) + 99999", "deadline"),
     ("no duration clamp", "(((window_end | float(0)) - as_timestamp(now()) + 20) / 60) | round(0, 'floor') | int(0)] | min }}",
      "99999] | min }}", "clamp"),
@@ -424,12 +447,12 @@ MUTANTS = [
      "          # Only the start trigger starts on time; a readiness or watchdog tick never falls through to here.\n"
      "          - conditions:\n              - condition: trigger\n                id: start\n            sequence:\n",
      "        default:\n", "no_double"),
-    ("pressing while the dongle is offline",
-     "                    # The dongle is offline: press nothing, wait and look again (bounded by retry_until).\n"
+    ("staging while another write is in progress (the not-ready branch disabled)",
+     "                    # another Free Power / manual write is in progress. Stage nothing, press nothing; look again.\n"
      "                    - conditions:\n",
-     "                    # The dongle is offline: press nothing, wait and look again (bounded by retry_until).\n"
+     "                    # another Free Power / manual write is in progress. Stage nothing, press nothing; look again.\n"
      "                    - conditions:\n                        - condition: template\n"
-     "                          value_template: \"{{ false }}\"\n", "offline"),
+     "                          value_template: \"{{ false }}\"\n", "race"),
 ]
 for name, anchor, repl, key in MUTANTS:
     cnt = PKG_TEXT.count(anchor)
@@ -443,13 +466,90 @@ for name, anchor, repl in (("equivalent: the attempt cap written as 59 + 1", "ma
     check(f"control '{name}' survives the battery", all(v is True for v in res.values()), str(res))
 
 # ======================================================================================================================
+print("\n[14] review: cancel, stale state, outages, long texts, races, service errors")
+# ======================================================================================================================
+r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 120)))
+r.w.at(ST + 30, lambda: r.w.call("script.ecco_free_power_cancel_schedule", [], {}) if False else r.w.set(ARMED, "off"))
+r.until(900)
+check("cancelling while the start is still retrying stops it: no press after the cancel, CANCELLED, no alert, switch off",
+      r.d.successes == 0 and all(p <= 31 for p in r.presses()) and r.last().startswith("CANCELLED") and r.created() == []
+      and not r.arm_left_on(), f"{r.presses()} {r.last()}")
+r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 120)))
+
+
+def _rearm(x=r):
+    x.w.set("input_datetime.ecco_free_power_schedule_start", "2026-10-12 11:00:00")
+    x.w.set(ARMED, "on")
+
+
+r.w.at(ST + 60, _rearm)
+r.until(900)
+check("a schedule re-armed for another day while today's run is retrying is not disarmed when that run ends",
+      r.w.state(ARMED) == "on" and r.d.successes == 1, f"{r.w.state(ARMED)} {r.last()}")
+r = Run(phase=5.0, delays=(0.05,))
+r.d.stalls.append((ST + 1.0, ST + 45))
+r.until(900)
+check("Home Assistant's view stalls right after a press that passes: never pressed again, never two transactions; the run "
+      "records the start once the view recovers; the write enable ends off",
+      sum(1 for _, o in r.d.presses if o == "PASSED") == 1 and len(r.d.press_log) == 1 and r.d.successes == 1
+      and r.last().startswith("STARTED OK") and not r.arm_left_on(), f"{r.gate()} {r.last()}")
+r = Run(phase=5.0, delays=(0.05,), outcome="capture_failed")
+r.d.stalls.append((ST + 1.0, ST + 45))
+r.until(900)
+check("...and when that transaction failed: not retried, FAILED (outcome unconfirmed / began), alerted",
+      len(r.d.press_log) == 1 and r.last().startswith("FAILED TO START") and r.created() != [], f"{r.gate()} {r.last()}")
+r = Run()
+r.w.run_until(ST - 120)
+r.ha.stop()
+r.d.set_offline(ST + 590, ST + 640)
+r.w.run_until(ST + 600)
+r.ha = S.HA(r.w, yaml.safe_load(PKG_TEXT))
+r.ha.start()
+r.w.run_until(ST + 7300)
+check("Home Assistant back inside the window while the dongle is still reconnecting (40 s): it waits, then recovers and "
+      "starts, with an alert", r.d.successes == 1 and r.created() != [] and r.d.ends_at <= r.end_ts + 30,
+      f"{r.last()} {r.created()}")
+r = Run(setup=lambda x: x.d.set_offline(ST - 60, ST + 60)).until(600)
+check("the dongle (and so the effective-limit sensor) unavailable at the start: waited for, then started - not BLOCKED",
+      r.d.successes == 1 and not r.last().startswith("BLOCKED"), r.last())
+r = Run()
+r.d.manual_start(ST - 2)
+r.until(600)
+op = r.d.op_intervals[0]
+check("the owner's own START two seconds before the schedule: the schedule stages nothing into that transaction and never "
+      "presses during it; Free Power active, recorded as started",
+      r.d.successes == 1 and sum(1 for _, o in r.d.presses if o == "PASSED") == 1
+      and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log) and r.last().startswith(("STARTED", "BLOCKED"))
+      and not r.arm_left_on(), f"{r.d.number_log} {op} {r.last()}")
+r = Run()
+r.d.manual_start(ST + 1.0)
+r.until(600)
+check("the owner pressing START at the same moment (one press dropped by the firmware's single-mode start): one transaction, "
+      "and the write enable ends off", sum(1 for _, o in r.d.presses if o == "PASSED") == 1 and not r.arm_left_on()
+      and r.d.successes == 1, f"{r.gate()} {r.w.state('switch.ecco_clock_dongle_free_power_write_enable')}")
+r = Run()
+r.w.fail_services["button.press"] = 1
+r.until(600)
+check("a service error on the press (an API reconnect race) does not abort the run: verified as not processed, retried, "
+      "started", r.d.successes == 1 and not any("aborted" in m for m in r.w.warnings), f"{r.last()} {r.w.warnings[:3]}")
+r = Run()
+r.w.fail_services["switch.turn_on"] = 99
+r.until(900)
+check("a service error on every arm: nothing pressed, FAILED at the deadline with an alert (never silent)",
+      r.d.press_log == [] and r.last().startswith("FAILED") and r.created() != [], f"{r.last()} {r.created()}")
+longest = max(len(t) for t in S.REJECT.values())
+r = Run(setup=lambda x: x.d.flags.__setitem__("corrupt", True)).until(600)
+check(f"the longest firmware refusal ({longest} chars) still fits every result text (<= 255): nothing silently dropped",
+      not any("invalid value" in m for m in r.w.warnings) and "RECOVERY BLOCKED" in r.last(), str(r.w.warnings[:2]))
+
+# ======================================================================================================================
 print("\n[13] the post-export declaration (PEX entry fps1)")
 # ======================================================================================================================
 import _fps1_scope as F  # noqa: E402
 import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins fps1's declaration)
 
-FPS1_FINGERPRINT = "dfc6e5acbfb684f9407021d22d336f3d1e09bdbbae6a6cc3c165090c53f8300d"
+FPS1_FINGERPRINT = "d5f3420676832172022524670429a5f7931a6e5813538d1b3676dee537d2e41d"
 FE1_FINGERPRINT = "211221b095bcdb61b2e7a2cfdd38fb28c871319d46d9acaf6e4f315a690de57e"
 BEFORE_SHA = "0caa6714bef18946"   # the package as of fe1 (sha256 prefix, LF)
 FPS1 = sc.CHAIN.entry("fps1")
@@ -474,8 +574,8 @@ check("the fps1 pair round-trips (applying it to the fe1 text gives the live pac
 
 # ======================================================================================================================
 print("")
-if FAILS:
-    print(f"{len(FAILS)} FAILED, {PASSES} passed")
+if FAILURES:
+    print(f"{len(FAILURES)} FAILED, {PASSES} passed")
     sys.exit(1)
 print(f"All {PASSES} scheduled Free Power reliability checks passed.")
 print("These prove the package's control flow against a model of the dongle offline; they prove nothing about a live Home "

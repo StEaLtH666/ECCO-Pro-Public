@@ -39,6 +39,10 @@ class SimError(Exception):
     pass
 
 
+class ServiceError(Exception):
+    """A service call that raises in Home Assistant (e.g. an ESPHome API reconnect race)."""
+
+
 def local_str(ts: float) -> str:
     return datetime.fromtimestamp(ts, LOCAL).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -98,6 +102,8 @@ class World:
         self.waiters: list = []           # (predicate, resume) pairs for wait_template
         self.listeners: list = []         # called after any state change
         self.service_handlers: dict = {}  # "domain.service" -> callable(entity_id, data)
+        self.text_max: dict[str, int] = {}         # input_text entity -> max length (HA keeps the old value if longer)
+        self.fail_services: dict[str, int] = {}     # test hook: "domain.service" -> number of calls that raise
         self.notifications: dict[str, dict] = {}
         self.notification_log: list[tuple[float, str, str, str]] = []
         self.service_log: list[tuple[float, str, str, dict]] = []
@@ -238,11 +244,19 @@ class World:
             if self.notifications.pop(nid, None) is not None:
                 self.notification_log.append((self.t, "dismiss", nid, ""))
             return
+        if self.fail_services.get(service, 0) > 0:
+            self.fail_services[service] -= 1
+            raise ServiceError(service)
         handler = self.service_handlers.get(service)
         if handler is None:
             domain, _, svc = service.partition(".")
             if domain in ("input_text",) and svc == "set_value":
-                handler = lambda e, d: self.set(e, d["value"])  # noqa: E731
+                def handler(e, d):
+                    v = str(d["value"])
+                    if len(v) > self.text_max.get(e, 255):
+                        self.warnings.append(f"{self.t:.3f} input_text {e}: invalid value of length {len(v)} (kept old)")
+                        return
+                    self.set(e, v)
             elif domain == "input_boolean" and svc in ("turn_on", "turn_off"):
                 handler = lambda e, d, s=svc: self.set(e, "on" if s == "turn_on" else "off")  # noqa: E731
             else:
@@ -275,6 +289,8 @@ class HA:
         for k in self.scripts:                      # an idle script entity reads "off" in Home Assistant
             if world.states.get(f"script.{k}", ("off",))[0] != "on":
                 world.set(f"script.{k}", "off")
+        for k, v in (package.get("input_text") or {}).items():
+            world.text_max[f"input_text.{k}"] = int(v.get("max", 100))
         self.automations = []
         for a in package.get("automation") or []:
             self.automations.append(_Automation(self, a))
@@ -315,24 +331,28 @@ class HA:
         variables = dict(variables)
         variables.setdefault("this", {})
 
-        def done():
+        def done(err=None):
             sc.running = False
             self.w.set(f"script.{name}", "off")
             if on_done:
-                on_done()
+                on_done(err) if err is not None else on_done()
 
         self._drive(self._seq(sc.cfg["sequence"], variables, script_vars=sc.cfg.get("variables")), done)
         return True
 
     def _drive(self, gen, done):
         """Step a generator: it yields ('delay', s) / ('wait', pred, timeout) / ('call', name, vars)."""
-        def step(value=None):
+        def step(value=None, error=None):
             if self.dead:
                 return
             try:
-                req = gen.send(value)
+                req = gen.throw(error) if error is not None else gen.send(value)
             except StopIteration:
                 done()
+                return
+            except ServiceError as exc:
+                self.w.warnings.append(f"{self.w.t:.3f} run aborted by a service error: {exc}")
+                done(exc)
                 return
             kind = req[0]
             if kind == "delay":
@@ -360,8 +380,12 @@ class HA:
 
                 self.w.after(timeout, on_timeout)
             elif kind == "call":
-                if not self.start_script(req[1], req[2], on_done=lambda: self.w.after(0, lambda: step(None))):
-                    pass
+                def child_done(err=None, coe=req[3]):
+                    if err is not None and not coe:
+                        self.w.after(0, lambda: step(None, err))
+                    else:
+                        self.w.after(0, lambda: step(None))
+                self.start_script(req[1], req[2], on_done=child_done)
             else:
                 raise Unsupported(f"yield {kind}")
         self.w.after(0, step)
@@ -380,7 +404,7 @@ class HA:
             variables = yield from self._action(act, variables)
 
     def _action(self, act: dict, v: dict):
-        keys = set(act) - {"alias", "enabled"}
+        keys = set(act) - {"alias", "enabled", "continue_on_error"}
         if "variables" in keys:
             return self._render_vars(act["variables"], v)
         if "choose" in keys:
@@ -432,11 +456,16 @@ class HA:
             data = {k: self.w.render_native(val, v) if isinstance(val, str) else val
                     for k, val in (act.get("data") or {}).items()}
             if service.startswith("script."):
-                yield ("call", service.split(".", 1)[1], data)
+                yield ("call", service.split(".", 1)[1], data, bool(act.get("continue_on_error")))
                 return v
             target = (act.get("target") or {}).get("entity_id", [])
             ents = target if isinstance(target, list) else [target]
-            self.w.call(service, ents, data)
+            try:
+                self.w.call(service, ents, data)
+            except ServiceError:
+                if not act.get("continue_on_error"):
+                    raise
+                self.w.warnings.append(f"{self.w.t:.3f} {service} raised (continue_on_error)")
             return v
         raise Unsupported(f"action {sorted(keys)}")
 
@@ -578,7 +607,7 @@ class _Automation:
         self._gen += 1
         gen = self._gen
 
-        def done():
+        def done(err=None):
             if gen == self._gen:
                 self.running = False
 
@@ -602,6 +631,9 @@ E_DUR = f"number.{P}free_power_duration"
 E_PWR = f"number.{P}free_power_max_charge_power"
 E_DUMP_ACTIVE = f"binary_sensor.{P}dump_to_grid_active"
 E_DUMP_SNAP = f"binary_sensor.{P}dump_to_grid_snapshot_valid"
+E_MANUAL = f"binary_sensor.{P}manual_write_in_progress"
+E_ATTEMPTS = f"sensor.{P}free_power_start_attempts_since_boot"
+E_LIMIT = "sensor.ecco_config_maximum_grid_charge_power"   # an HA template over a dongle sensor: unavailable with it
 
 # Measured on 11 Oct 2026 (HA receive times, BST, see the FPS1 incident record): the two telemetry blocks keep the
 # bus busy (queued -> reply -> 600 ms turnaround) at these seconds of every 10 s cycle, and the configuration poll
@@ -618,6 +650,9 @@ REJECT = {
     "config": "REJECTED - inverter configuration offline",
     "ntp": "REJECTED - valid NTP time required for automatic end",
     "arm": "REJECTED - arm Free Power Write Enable first",
+    "corrupt": ("REJECTED - RECOVERY BLOCKED: durable recovery marker exists but its snapshot data cannot be trusted "
+                "(unreadable or invalid); deliberate recovery required"),
+    "voltage": "REJECTED - plausible live battery voltage required for W-to-A conversion",
     "bus": "REJECTED - Modbus bus busy with another transaction; try again shortly",
 }
 
@@ -635,8 +670,13 @@ class Dongle:
         self.outcome = outcome
         self.transaction_s = transaction_s
         self.rtc: list[tuple[float, float]] = []
+        self.writes: list[tuple[float, float]] = []    # another (manual) inverter write in progress
         self.offline: list[tuple[float, float]] = []
-        self.flags = {"snapshot": False, "dump": False, "ntp_bad": False}
+        self.stalls: list[tuple[float, float]] = []    # the API stops delivering (TCP alive): publishes arrive at the end
+        self.flags = {"snapshot": False, "dump": False, "ntp_bad": False, "corrupt": False}
+        self.number_log: list[tuple[float, str, int]] = []
+        self.op_intervals: list[list[float]] = []
+        self.limit = 8000
         self.presses: list[tuple[float, str]] = []     # (gate time, outcome text)
         self.press_log: list[float] = []               # HA press times
         self.attempts = 0
@@ -651,8 +691,10 @@ class Dongle:
         self.dropped = 0
         for e, s in ((E_ARM, "off"), (E_ACTIVE, "off"), (E_OP, "off"), (E_SNAP, "off"), (E_TEL, "on"),
                      (E_CFG, "on"), (E_NTP, "on"), (E_DUMP_ACTIVE, "off"), (E_DUMP_SNAP, "off"),
+                     (E_MANUAL, "off"), (E_ATTEMPTS, "0.0"),
                      (E_STATUS, "IDLE - no Free Power override active")):
             world.set(e, s)
+        world.at(world.t + 7.0, self._attempts_tick)
         world.service_handlers.update({
             "switch.turn_on": self._switch(True), "switch.turn_off": self._switch(False),
             "button.press": self._press, "number.set_value": self._number,
@@ -672,14 +714,55 @@ class Dongle:
     def is_offline(self, t: float) -> bool:
         return any(a <= t < b for a, b in self.offline)
 
+    DONGLE_ENTITIES = (E_ARM, E_STATUS, E_ACTIVE, E_OP, E_SNAP, E_TEL, E_CFG, E_NTP, E_MANUAL, E_ATTEMPTS, E_DUMP_ACTIVE,
+                       E_DUMP_SNAP)
+
     def set_offline(self, a: float, b: float) -> None:
+        """The dongle's API is down: every dongle entity (and the HA limit derived from one) is unavailable."""
         self.offline.append((a, b))
-        self.w.at(a, lambda: (self.w.set(E_TEL, "off"), self.w.set(E_CFG, "off"), self.w.set(E_ARM, "unavailable")))
-        self.w.at(b, lambda: (self.w.set(E_TEL, "on"), self.w.set(E_CFG, "on"),
-                              self.w.set(E_ARM, "on" if self.arm else "off")))
+
+        def down():
+            for e in self.DONGLE_ENTITIES:
+                self.w.set(e, "unavailable")
+            self.w.set(E_LIMIT, "unavailable")
+
+        def up():
+            for e, v in ((E_ARM, "on" if self.arm else "off"), (E_ACTIVE, "on" if self.active else "off"),
+                         (E_OP, "on" if self.op else "off"), (E_SNAP, "on" if self.flags["snapshot"] else "off"),
+                         (E_TEL, "on"), (E_CFG, "on"), (E_NTP, "on"), (E_MANUAL, "on" if self.op else "off"),
+                         (E_ATTEMPTS, f"{float(self.attempts)}"), (E_DUMP_ACTIVE, "off"), (E_DUMP_SNAP, "off"),
+                         (E_STATUS, self.status)):
+                self.w.set(e, v)
+            self.w.set(E_LIMIT, str(self.limit))
+        self.w.at(a, down)
+        self.w.at(b, up)
+
+    def _attempts_tick(self):
+        if not self.is_offline(self.w.t):
+            self._pub(E_ATTEMPTS, f"{float(self.attempts)}")
+        self.w.after(30.0, self._attempts_tick)
+
+    def manual_start(self, at: float, duration: int = 60) -> None:
+        """The owner's own "Free Power now" (stage the duration, arm, then press) at `at`."""
+        def go():
+            self.duration = duration
+            self.arm = True
+            self._pub(E_ARM, "on")
+            self.w.after(1.0, lambda: (self.press_log.append(self.w.t), self._gate()))
+        self.w.at(at, go)
+
+    status = "IDLE - no Free Power override active"
 
     def _pub(self, entity, state, delay=None):
-        self.w.after(self.publish if delay is None else delay, lambda: self.w.set(entity, state))
+        if entity == E_STATUS:
+            self.status = state
+        when = self.w.t + (self.publish if delay is None else delay)
+        for a, b in self.stalls:
+            if a <= when < b:
+                when = b + (when - a) * 1e-3          # held, then delivered in order when the stall ends
+        if self.is_offline(when):
+            return
+        self.w.at(when, lambda: self.w.set(entity, state))
 
     # --- services --------------------------------------------------------------------------------------------
     def _switch(self, on: bool):
@@ -698,6 +781,7 @@ class Dongle:
     def _number(self, entity, data):
         if self.is_offline(self.w.t):
             return
+        self.number_log.append((self.w.t, entity, int(float(data["value"]))))
         if entity == E_DUR:
             self.duration = int(float(data["value"]))
         elif entity == E_PWR:
@@ -720,10 +804,14 @@ class Dongle:
             self.dropped += 1
             return
         reason = None
-        if self.active:
+        if self.flags["corrupt"]:
+            reason = "corrupt"
+        elif self.active:
             reason = "active"
         elif self.flags["snapshot"]:
             reason = "snapshot"
+        elif any(a <= t < b for a, b in self.writes):
+            reason = "write"
         elif self.rtc_active(t):
             reason = "rtc"
         elif self.flags["dump"]:
@@ -745,6 +833,8 @@ class Dongle:
         self.presses.append((t, "PASSED"))
         self.attempts += 1
         self.op = True
+        self.op_intervals.append([t, None])
+        self._pub(E_MANUAL, "on")
         self._pub(E_ARM, "off")
         self._pub(E_STATUS, "STARTING - taking fresh inverter snapshot")
         self._pub(E_OP, "on")
@@ -753,6 +843,8 @@ class Dongle:
     def _finish(self):
         t = self.w.t
         self.op = False
+        self.op_intervals[-1][1] = t
+        self._pub(E_MANUAL, "off")
         if self.outcome == "ok":
             self.active = True
             self.successes += 1
