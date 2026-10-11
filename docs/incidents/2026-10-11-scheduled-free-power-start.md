@@ -62,8 +62,11 @@ scheduled starts (about one in seventeen); the corrected package fails none.
   go off, waits for the firmware's gate-pass counter (`free_power_start_attempts_since_boot`, published every 30 s) and
   retries only if it did not move and nothing is in progress, active or pending restore. Otherwise the outcome is reported
   as unconfirmed.
-- **Cancel wins.** Turning the schedule off stops the retries before the next press; a schedule re-armed for another time
-  is never disarmed by the run that is ending.
+- **Cancel wins.** A run records when it began; turning the schedule off - or off and on again for another time - after
+  that ends the run before the next press (checked at every attempt and again just before the press). A schedule re-armed
+  for another time is never disarmed by the run that is ending.
+- **The limit on every attempt.** A request above the effective grid charge limit is never staged, even if the limit was
+  lowered while the dongle was offline; the press waits until the dongle confirms the arm and both staged values.
 - **Nothing is staged into someone else's transaction:** while a Free Power or manual write is in progress, or the dongle or
   the effective-limit sensor is unavailable, the package waits instead of staging or pressing.
 - **Never silent:** dongle service calls continue on error, every result text fits the 255-character helper, the write
@@ -71,13 +74,15 @@ scheduled starts (about one in seventeen); the corrected package fails none.
 - **Positive confirmation:** success only when Free Power Active turns on.
 - **The authorised window:** no attempt after start + 10 minutes or in the window's last 30 s; the staged duration is
   min(requested, floor((window end - now + 20 s) / 60 s)), so an on-time start keeps its full duration and a late start ends
-  within about 30-45 s of the window end. Nothing is ever started after the window. Each run (on time, watchdog or restart
+  within about a minute of the window end. Nothing is ever started after the window. Each run (on time, watchdog or restart
   recovery) retries for at most 10 minutes.
 - **Offline dongle:** while telemetry or configuration is offline nothing is pressed; the package waits (bounded).
 - **Readiness check** 5 minutes before the start and **missed-trigger watchdog** 3 minutes after it (template triggers on the
   existing fire automation; the helper, script and automation counts are unchanged). The watchdog recovers a start that never ran.
 - **Restart recovery** waits (bounded) for the dongle to reconnect before judging, records a session that is already running,
-  and leaves an on-time start that is already retrying alone.
+  leaves an on-time start that is already retrying alone, and turns a write enable left on by the restart off.
+- The readiness alert has its own notification id and is raised only for a schedule the arm validation accepted; the
+  watchdog only counts a schedule that was armed before its start time.
 - **Alerts:** a persistent notification for every failure, missed start, restart recovery and not-ready readiness check, naming
   the reason, whether anything was written, and what to do; a later success clears it.
 - **Status:** `sensor.ecco_free_power_schedule_status` adds STARTING, FAILED and COMPLETED to ACTIVE / ARMED / IDLE, so the

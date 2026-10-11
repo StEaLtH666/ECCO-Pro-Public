@@ -137,9 +137,11 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   11 Oct 2026 the 11:00 session never started. The firmware start gate correctly refused both presses because a routine telemetry
   read was on the Modbus bus, and the package's fixed timing (+2 s, one retry at +35 s) was locked to the 10 s poll. Nothing was
   written and nobody was told. Home Assistant scheduling layer only:
-  - bounded, unevenly spaced retries of a transient start-gate refusal (no side effects), never a retry once a start transaction
-    began, success only on Free Power Active;
-  - no attempt after start + 10 min or in the window's last 30 s; a late start is shortened to end with the window;
+  - bounded, unevenly spaced retries of a transient start-gate refusal (no side effects), each answer proven to belong to its
+    press, never a retry once a start transaction began or when the outcome is unconfirmed, success only on Free Power Active;
+  - a cancel (or cancel and re-arm) stops the run before the next press; the limit is checked on every attempt; nothing is
+    staged into another transaction;
+  - each run retries for at most 10 min and never in the window's last 30 s; a late start is shortened to end with the window;
   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, and a persistent notification for every failure or
     missed start;
   - schedule status STARTING / FAILED / COMPLETED in addition to ACTIVE / ARMED / IDLE.

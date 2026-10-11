@@ -17,11 +17,13 @@
 #   - nothing is retried once a start transaction has begun (the firmware then owns restore), and
 #     an outcome that cannot be confirmed is reported, never retried;
 #   - nothing is staged or pressed while another Free Power / manual write is in progress, while
-#     the dongle is offline, or once the schedule is cancelled (armed off);
+#     the dongle is offline, above the effective grid charge limit, or once the schedule has been
+#     cancelled (armed off, or disarmed and re-armed since the run began); the press waits for the
+#     arm and both staged values to be confirmed;
 #   - a start counts only on positive confirmation (Free Power Active on);
 #   - each run retries for at most 10 minutes and never in the last 30 s of the window; the staged
 #     duration is min(requested, floor((window end - now + 20 s) / 60 s)): an on-time start keeps
-#     its full duration (as before), a late start ends within about 30-45 s of the window end;
+#     its full duration (as before), a late start ends within about a minute of the window end;
 #   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, restart recovery,
 #     and a persistent notification for every failure or miss; the write enable always ends off.
 
@@ -82,6 +84,8 @@ script:
             {{ w if w > 0 else as_timestamp(now()) + (duration_minutes | int(1)) * 60 }}
           retry_until: "{{ [as_timestamp(now()) + 600, (window_end | float(0)) - 30] | min }}"
           max_attempts: 60
+          # A cancel - or a cancel and a re-arm - after this instant ends this run (armed's last_changed moves).
+          run_started: "{{ as_timestamp(now()) }}"
       - choose:
           - conditions:
               - condition: state
@@ -122,13 +126,14 @@ script:
                       {{ [requested_duration | int(1),
                           (((window_end | float(0)) - as_timestamp(now()) + 20) / 60) | round(0, 'floor') | int(0)] | min }}
                 - choose:
-                    # Cancelled by the owner (the schedule is no longer armed): never press again.
+                    # Cancelled by the owner (no longer armed, or disarmed and re-armed since this run began):
+                    # never press again.
                     - conditions:
-                        - condition: not
-                          conditions:
-                            - condition: state
-                              entity_id: input_boolean.ecco_free_power_schedule_armed
-                              state: "on"
+                        - condition: template
+                          value_template: >-
+                            {{ not (is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                                    and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0)
+                                        <= (run_started | float(0))) }}
                       sequence:
                         - action: input_text.set_value
                           target:
@@ -147,6 +152,21 @@ script:
                             value: >-
                               FAILED TO START - authorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }};
                               not started ({{ states('sensor.ecco_clock_dongle_free_power_status')[:120] }})
+                    # The effective grid charge limit is known and the request exceeds it (it may have been lowered
+                    # while the dongle was offline): never stage it.
+                    - conditions:
+                        - condition: template
+                          value_template: >-
+                            {% set lim = states('sensor.ecco_config_maximum_grid_charge_power') | int(0) %}
+                            {{ lim > 0 and (requested_power | int(0)) > lim }}
+                      sequence:
+                        - action: input_text.set_value
+                          target:
+                            entity_id: input_text.ecco_free_power_schedule_last_result
+                          data:
+                            value: >-
+                              BLOCKED - requested {{ requested_power }}W above the effective grid charge limit
+                              {{ states('sensor.ecco_config_maximum_grid_charge_power') | int(0) }}W
                     # Not ready to press: the dongle is offline, the effective limit is unavailable, or
                     # another Free Power / manual write is in progress. Stage nothing, press nothing; look again.
                     - conditions:
@@ -186,16 +206,23 @@ script:
                       continue_on_error: true
                       target:
                         entity_id: switch.ecco_clock_dongle_free_power_write_enable
-                    # Press only once the dongle has confirmed the arm.
-                    - wait_template: "{{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'on') }}"
+                    # Press only once the dongle has confirmed the arm and both staged values.
+                    - wait_template: >-
+                        {{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'on')
+                           and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == (duration_now | float(-2))
+                           and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == (requested_power | float(-2)) }}
                       timeout: "00:00:05"
                       continue_on_timeout: true
                     - delay:
                         seconds: 1
                     - if:
-                        - condition: state
-                          entity_id: switch.ecco_clock_dongle_free_power_write_enable
-                          state: "on"
+                        - condition: template
+                          value_template: >-
+                            {{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'on')
+                               and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == (duration_now | float(-2))
+                               and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == (requested_power | float(-2))
+                               and is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                               and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) <= (run_started | float(0)) }}
                       then:
                         # The firmware counts a start attempt only when its gate passes (published every 30 s).
                         - variables:
@@ -333,7 +360,8 @@ script:
                                       FAILED TO START - no answer from the dongle to attempt {{ repeat.index }}; outcome
                                       unconfirmed, not retried (last status: {{ status_now }})
                       else:
-                        # The dongle never confirmed the arm: nothing was pressed. Disarm and look again.
+                        # The dongle never confirmed the arm or the staged values, or the schedule was cancelled in
+                        # the meantime: nothing was pressed. Disarm and look again (the loop top sees a cancel).
                         - action: switch.turn_off
                           continue_on_error: true
                           target:
@@ -343,7 +371,7 @@ script:
                             entity_id: input_text.ecco_free_power_schedule_last_result
                           data:
                             value: >-
-                              STARTING - attempt {{ repeat.index }}: the dongle did not confirm the arm; nothing pressed;
+                              STARTING - attempt {{ repeat.index }}: arm or staged values not confirmed; nothing pressed;
                               retrying until {{ (retry_until | float(0)) | timestamp_custom('%H:%M') }}
                         - delay:
                             seconds: 5
@@ -356,11 +384,28 @@ script:
                     - condition: template
                       value_template: >-
                         {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
-                        {{ r.startswith('STARTED') or r.startswith('FAILED') or r.startswith('CANCELLED') }}
+                        {{ r.startswith('STARTED') or r.startswith('FAILED') or r.startswith('CANCELLED') or r.startswith('BLOCKED') }}
                     - condition: template
                       value_template: >-
                         {{ repeat.index >= (max_attempts | int(60))
-                           or as_timestamp(now()) >= (retry_until | float(0)) }}
+                           or as_timestamp(now()) >= (retry_until | float(0))
+                           or not is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                           or as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) > (run_started | float(0)) }}
+          - if:
+              - condition: template
+                value_template: >-
+                  {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
+                  {{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('BLOCKED')
+                     and not (is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                              and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0)
+                                  <= (run_started | float(0))) }}
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "CANCELLED - scheduled Free Power cancelled before it started"
           - if:
               - condition: template
                 value_template: >-
@@ -371,13 +416,14 @@ script:
                 target:
                   entity_id: input_text.ecco_free_power_schedule_last_result
                 data:
-                  value: "STARTED OK - Free Power active (confirmed after the start attempts)"
+                  value: "STARTED OK - Free Power is active; this run could not confirm the start as its own (check power and end time)"
           - if:
               - condition: template
                 value_template: >-
                   {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
                   {{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
-                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED') }}
+                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED')
+                     and not r.startswith('BLOCKED') }}
             then:
               - action: input_text.set_value
                 target:
@@ -420,6 +466,9 @@ script:
               - action: persistent_notification.dismiss
                 data:
                   notification_id: ecco_free_power_schedule
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_free_power_schedule_readiness
 
   ecco_free_power_cancel_schedule:
     alias: "ECCO - Cancel scheduled Free Power"
@@ -552,7 +601,8 @@ automation:
         value_template: >-
           {% set s = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
           {{ is_state('input_boolean.ecco_free_power_schedule_armed', 'on') and s > 0
-             and as_timestamp(now()) - s >= 180 }}
+             and as_timestamp(now()) - s >= 180
+             and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0) < s }}
     conditions:
       - condition: state
         entity_id: input_boolean.ecco_free_power_schedule_armed
@@ -581,13 +631,19 @@ automation:
                     {% set pw = states('input_number.ecco_free_power_schedule_power') | int(0) %}
                     {% if lim <= 0 or pw > lim %}{% set r.v = r.v + ['requested power outside the effective grid charge limit'] %}{% endif %}
                     {{ r.v | join('; ') }}
+              # Let the arm validation finish first: a schedule it refuses gets no readiness alert.
+              - delay:
+                  seconds: 2
               - if:
                   - condition: template
                     value_template: "{{ blockers | length > 0 }}"
+                  - condition: state
+                    entity_id: input_boolean.ecco_free_power_schedule_armed
+                    state: "on"
                 then:
                   - action: persistent_notification.create
                     data:
-                      notification_id: ecco_free_power_schedule
+                      notification_id: ecco_free_power_schedule_readiness
                       title: "ECCO: scheduled Free Power is not ready"
                       message: >-
                         Free Power is due at {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} but would be refused now:
@@ -648,16 +704,22 @@ automation:
     triggers:
       - trigger: homeassistant
         event: start
-    conditions:
-      - condition: state
-        entity_id: input_boolean.ecco_free_power_schedule_armed
-        state: "on"
     actions:
       - delay: "00:00:20"
       # Give the dongle time to reconnect before judging its state (bounded).
       - wait_template: "{{ states('binary_sensor.ecco_clock_dongle_free_power_active') in ['on', 'off'] }}"
         timeout: "00:03:00"
         continue_on_timeout: true
+      # A restart between an arm and its press must not leave the write enable on (unless a start is running).
+      - if:
+          - condition: state
+            entity_id: script.ecco_free_power_start_scheduled
+            state: "off"
+        then:
+          - action: switch.turn_off
+            continue_on_error: true
+            target:
+              entity_id: switch.ecco_clock_dongle_free_power_write_enable
       - variables:
           fired_for: "{{ states('input_datetime.ecco_free_power_schedule_start') }}"
           start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"

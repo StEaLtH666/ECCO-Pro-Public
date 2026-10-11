@@ -28,6 +28,8 @@ of the dongle's start gate, transaction, timer and Modbus poll, using the busy w
   [14] review       cancel mid-retry, a stalled view after a passing press, a restart while the dongle reconnects, the
                     limit unavailable at the start, the owner's own START racing the schedule, service errors, the
                     longest firmware refusal text (255-character helper limit)
+  [15] review 2     the real cancel script mid-staging / mid-delay, cancel and re-arm, the limit lowered while offline,
+                    staging never confirmed, arming with a past start, the readiness alert, a write enable left on
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's control flow against a model, not a live
 Home Assistant or the dongle.
@@ -325,9 +327,9 @@ print("\n[9] readiness, 5 minutes before")
 # ======================================================================================================================
 r = Run(setup=lambda x: x.d.set_offline(ST - 400, ST - 100)).until(-200)
 check("the dongle offline at 10:55: 'not ready' alert naming the blocker", any("not ready" in n[3] for n in r.created())
-      and "telemetry offline" in r.w.notifications["ecco_free_power_schedule"]["message"])
+      and "telemetry offline" in r.w.notifications["ecco_free_power_schedule_readiness"]["message"])
 r.until(7300)
-check("...it then starts on time and the alert is cleared", r.d.successes == 1 and "ecco_free_power_schedule" not in r.w.notifications)
+check("...it then starts on time and the alert is cleared", r.d.successes == 1 and not r.w.notifications)
 r = Run().until(-1)
 check("ready at 10:55: no alert", r.created() == [])
 
@@ -442,7 +444,7 @@ MUTANTS = [
     ("no start deadline", "as_timestamp(now()) + 600", "as_timestamp(now()) + 99999", "deadline"),
     ("no duration clamp", "(((window_end | float(0)) - as_timestamp(now()) + 20) / 60) | round(0, 'floor') | int(0)] | min }}",
      "99999] | min }}", "clamp"),
-    ("no watchdog", "and as_timestamp(now()) - s >= 180 }}", "and false }}", "watchdog"),
+    ("no watchdog", "and as_timestamp(now()) - s >= 180\n", "and as_timestamp(now()) - s >= 99999999\n", "watchdog"),
     ("the start branch as the default (a watchdog tick during a restart recovery calls the script again)",
      "          # Only the start trigger starts on time; a readiness or watchdog tick never falls through to here.\n"
      "          - conditions:\n              - condition: trigger\n                id: start\n            sequence:\n",
@@ -543,13 +545,89 @@ check(f"the longest firmware refusal ({longest} chars) still fits every result t
       not any("invalid value" in m for m in r.w.warnings) and "RECOVERY BLOCKED" in r.last(), str(r.w.warnings[:2]))
 
 # ======================================================================================================================
+print("\n[15] review round 2: cancel and re-arm, the limit on every attempt, staging confirmed, false alerts")
+# ======================================================================================================================
+
+
+def cancel(x):
+    x.ha.start_script("ecco_free_power_cancel_schedule", {})
+
+
+for t_cancel in (28.5, 28.9, 89.0):
+    r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 240)))
+    r.w.at(ST + t_cancel, lambda x=r: cancel(x))
+    r.until(900)
+    check(f"the real cancel script at +{t_cancel} s (mid-staging or mid-delay): no press after it, nothing started, CANCELLED, "
+          "no alert, write enable off", r.d.successes == 0 and all(p_ <= t_cancel for p_ in r.presses())
+          and r.last().startswith("CANCELLED") and r.created() == [] and not r.arm_left_on(),
+          f"{[round(p_, 1) for p_ in r.presses()[-3:]]} {r.last()}")
+for t_cancel, t_rearm in ((89.0, 95.0), (150.0, 153.0)):
+    r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 240)))
+    r.w.at(ST + t_cancel, lambda x=r: cancel(x))
+
+    def _rearm(x=r):
+        x.w.set("input_datetime.ecco_free_power_schedule_start", "2026-10-11 11:30:00")
+        x.w.set(ARMED, "on")
+    r.w.at(ST + t_rearm, _rearm)
+    r.until(400)
+    check(f"cancel at +{t_cancel:.0f} s and re-arm for 11:30 at +{t_rearm:.0f} s: today's run stops (no press after the cancel, "
+          "nothing started) and the new schedule stays armed", r.d.successes == 0
+          and all(p_ <= t_cancel for p_ in r.presses()) and r.w.state(ARMED) == "on", f"{r.presses()[-2:]} {r.last()}")
+
+
+def _lower_limit(x):
+    x.d.set_offline(ST - 60, ST + 60)
+    x.d.limit = 3000
+
+
+r = Run(setup=_lower_limit).until(600)
+check("the limit lowered to 3000 W while the dongle was offline: an 8000 W request is never staged or pressed - BLOCKED, "
+      "alerted", r.d.press_log == [] and not any(e.endswith("max_charge_power") for _t, e, _v in r.d.number_log)
+      and r.last().startswith("BLOCKED") and r.created() != [], f"{r.last()} {r.d.number_log[:2]}")
+r = Run(arm=False)
+r.w.run_until(ST + 30)
+r.w.set(ARMED, "on")                                    # armed with a start time already in the past
+r.until(900)
+check("arming with a start time in the past: refused by the arm validation, no 'missed' alert, nothing pressed",
+      r.d.press_log == [] and r.created() == [] and r.last().startswith("REJECTED"), f"{r.last()} {r.created()}")
+r = Run(setup=lambda x: setattr(x.d, "drop_numbers", True)).until(900)
+check("staging that never reaches the dongle: never pressed (it would run with stale values); FAILED at the deadline, alerted",
+      r.d.press_log == [] and r.last().startswith("FAILED") and r.created() != [], f"{r.last()}")
+r = Run(arm=False, setup=lambda x: x.d.flags.__setitem__("snapshot", True))
+r.w.set("binary_sensor.ecco_clock_dongle_free_power_snapshot_valid", "on")
+r.w.run_until(ST - 120)
+r.w.set(ARMED, "on")                                    # armed inside the 5-minute readiness window, a snapshot pending
+r.w.run_until(ST - 60)
+check("arming 2 minutes before the start with a snapshot pending restore: the readiness alert survives the arm validation",
+      "ecco_free_power_schedule_readiness" in r.w.notifications, str(r.w.notification_log))
+r.until(600)
+check("...and the start then fails at once with its own alert", r.last().startswith("FAILED")
+      and "ecco_free_power_schedule" in r.w.notifications, r.last())
+r = Run(arm=False, setup=lambda x: x.d.set_offline(ST - 400, ST - 30))
+r.w.run_until(ST - 120)
+r.w.set(ARMED, "on")                                    # the arm validation refuses it (limit unavailable)
+r.w.run_until(ST - 60)
+check("an arm the validation refuses (dongle offline, limit unavailable) leaves no readiness alert behind",
+      not r.w.notifications and r.last().startswith("REJECTED"), f"{r.last()} {r.w.notification_log}")
+x = Run(arm=False)
+x.w.run_until(ST - 600)
+x.d._set_arm(True)                                      # left on by a restart between an arm and its press
+x.w.run_until(ST - 590)
+x.ha.stop()
+x.ha = S.HA(x.w, yaml.safe_load(PKG_TEXT))
+x.ha.start()
+x.w.run_until(ST - 500)
+check("Home Assistant restarting with the write enable left on (and nothing armed): startup recovery turns it off",
+      not x.arm_left_on() and x.d.press_log == [])
+
+# ======================================================================================================================
 print("\n[13] the post-export declaration (PEX entry fps1)")
 # ======================================================================================================================
 import _fps1_scope as F  # noqa: E402
 import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins fps1's declaration)
 
-FPS1_FINGERPRINT = "d5f3420676832172022524670429a5f7931a6e5813538d1b3676dee537d2e41d"
+FPS1_FINGERPRINT = "a18bb93457131c22148bbe65fd05e4e2d9d73395eaca201ffe18b04a1cf72f61"
 FE1_FINGERPRINT = "211221b095bcdb61b2e7a2cfdd38fb28c871319d46d9acaf6e4f315a690de57e"
 BEFORE_SHA = "0caa6714bef18946"   # the package as of fe1 (sha256 prefix, LF)
 FPS1 = sc.CHAIN.entry("fps1")

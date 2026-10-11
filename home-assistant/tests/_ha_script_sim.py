@@ -89,6 +89,37 @@ def _truthy(value) -> bool:
     return bool(value)
 
 
+class _StateObj:
+    """What `states.domain.object` returns in a template: the state and its last_changed (aware datetime)."""
+
+    def __init__(self, state: str, last_changed: float):
+        self.state = state
+        self.last_changed = datetime.fromtimestamp(last_changed, LOCAL)
+
+
+class _States:
+    """`states('x')`, and `states.domain.object` (None when the entity does not exist), as in Home Assistant."""
+
+    def __init__(self, world: "World"):
+        self._w = world
+
+    def __call__(self, entity_id: str) -> str:
+        return self._w.state(entity_id)
+
+    def __getattr__(self, domain: str):
+        w = self._w
+        if domain.startswith("_") or not any(e.startswith(domain + ".") for e in w.states):
+            raise AttributeError(domain)        # also answers the sandbox's unsafe_callable / alters_data probes
+
+        class _Domain:
+            def __getattr__(self, obj: str):
+                eid = f"{domain}.{obj}"
+                if eid not in w.states:
+                    return None
+                return _StateObj(w.states[eid][0], w.changed_at.get(eid, 0.0))
+        return _Domain()
+
+
 class World:
     """The virtual clock, the state machine, the event queue and the Jinja environment."""
 
@@ -110,7 +141,8 @@ class World:
         self.warnings: list[str] = []
         env = jinja2.sandbox.ImmutableSandboxedEnvironment(undefined=jinja2.StrictUndefined,
                                                            extensions=["jinja2.ext.loopcontrols"])
-        env.globals.update(states=self._states_fn, is_state=self.is_state, state_attr=self.state_attr,
+        self.changed_at: dict[str, float] = {}
+        env.globals.update(states=_States(self), is_state=self.is_state, state_attr=self.state_attr,
                            now=self.now, as_timestamp=self.as_timestamp, namespace=jinja2.utils.Namespace)
         env.filters.update({
             "int": lambda v, d=_MISSING: _num(v, d, lambda x: int(float(x))),
@@ -159,6 +191,8 @@ class World:
         if old is not None and old[0] == state and (attrs is None or attrs == old[1]):
             return
         self.states[entity_id] = (state, dict(attrs or (old[1] if old else {})))
+        if old is None or old[0] != state:
+            self.changed_at[entity_id] = self.t
         self.history.append((self.t, entity_id, state))
         self._changed()
 
@@ -675,14 +709,15 @@ class Dongle:
         self.stalls: list[tuple[float, float]] = []    # the API stops delivering (TCP alive): publishes arrive at the end
         self.flags = {"snapshot": False, "dump": False, "ntp_bad": False, "corrupt": False}
         self.number_log: list[tuple[float, str, int]] = []
+        self.drop_numbers = False                      # test hook: staging writes never reach the dongle
         self.op_intervals: list[list[float]] = []
         self.limit = 8000
         self.presses: list[tuple[float, str]] = []     # (gate time, outcome text)
         self.press_log: list[float] = []               # HA press times
         self.attempts = 0
         self.successes = 0
-        self.duration = 0
-        self.power = 0
+        self.duration = 240                          # restore_value: the last staged values survive a reboot
+        self.power = 8000
         self.arm = False
         self.active = False
         self.op = False
@@ -691,7 +726,7 @@ class Dongle:
         self.dropped = 0
         for e, s in ((E_ARM, "off"), (E_ACTIVE, "off"), (E_OP, "off"), (E_SNAP, "off"), (E_TEL, "on"),
                      (E_CFG, "on"), (E_NTP, "on"), (E_DUMP_ACTIVE, "off"), (E_DUMP_SNAP, "off"),
-                     (E_MANUAL, "off"), (E_ATTEMPTS, "0.0"),
+                     (E_MANUAL, "off"), (E_ATTEMPTS, "0.0"), (E_DUR, "240.0"), (E_PWR, "8000.0"),
                      (E_STATUS, "IDLE - no Free Power override active")):
             world.set(e, s)
         world.at(world.t + 7.0, self._attempts_tick)
@@ -715,7 +750,7 @@ class Dongle:
         return any(a <= t < b for a, b in self.offline)
 
     DONGLE_ENTITIES = (E_ARM, E_STATUS, E_ACTIVE, E_OP, E_SNAP, E_TEL, E_CFG, E_NTP, E_MANUAL, E_ATTEMPTS, E_DUMP_ACTIVE,
-                       E_DUMP_SNAP)
+                       E_DUMP_SNAP, E_DUR, E_PWR)
 
     def set_offline(self, a: float, b: float) -> None:
         """The dongle's API is down: every dongle entity (and the HA limit derived from one) is unavailable."""
@@ -731,7 +766,7 @@ class Dongle:
                          (E_OP, "on" if self.op else "off"), (E_SNAP, "on" if self.flags["snapshot"] else "off"),
                          (E_TEL, "on"), (E_CFG, "on"), (E_NTP, "on"), (E_MANUAL, "on" if self.op else "off"),
                          (E_ATTEMPTS, f"{float(self.attempts)}"), (E_DUMP_ACTIVE, "off"), (E_DUMP_SNAP, "off"),
-                         (E_STATUS, self.status)):
+                         (E_STATUS, self.status), (E_DUR, f"{float(self.duration)}"), (E_PWR, f"{float(self.power)}")):
                 self.w.set(e, v)
             self.w.set(E_LIMIT, str(self.limit))
         self.w.at(a, down)
@@ -782,12 +817,16 @@ class Dongle:
         if self.is_offline(self.w.t):
             return
         self.number_log.append((self.w.t, entity, int(float(data["value"]))))
+        if self.drop_numbers:
+            return
         if entity == E_DUR:
             self.duration = int(float(data["value"]))
         elif entity == E_PWR:
             self.power = int(float(data["value"]))
         else:
             raise Unsupported(f"number {entity}")
+        if not self.drop_numbers:
+            self._pub(entity, f"{float(data['value'])}")
 
     def _press(self, entity, data):
         if entity != E_PRESS:
