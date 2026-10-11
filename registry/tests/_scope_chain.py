@@ -108,6 +108,7 @@ import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
+import _fps1_scope as _fps1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -726,7 +727,34 @@ FE1 = Entry(
          "staged, one package stanza in the manifest: ZERO firmware, registry, Intelligence or ecco_core change, ZERO Modbus "
          "operation, no service call, no new control surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1)
+# fps1 (scheduled Free Power reliability; the 11 Oct 2026 incident; _fps1_scope.py): made on the export after fe1. The 11:00 scheduled
+# session never started: the firmware start gate refuses a press while any Modbus frame is queued or awaiting its reply, the routine
+# 10 s telemetry poll keeps the bus busy about 20 % of the time, and the package's two presses (+2 s, +35 s) were locked to that cycle.
+# fps1 changes only the Home Assistant scheduling layer: bounded, unevenly spaced retries of a transient start-gate refusal (a refusal
+# has no side effect), never a retry once a start transaction began, positive confirmation, a start deadline and a duration clamp
+# inside the authorised window, a readiness check and a missed-trigger watchdog, persistent notifications, richer status states.
+# FROZEN edit (PEX): the scheduled Free Power package (_fps1_scope.FROZEN_REVERTERS); as of pub0 it is the export byte for byte.
+# test_pex_transition.py and CHANGELOG.md are not frozen. No chain-pinned file.
+# Measured, not declared: ZERO firmware, registry, dashboard, Intelligence or ecco_core byte; ZERO Modbus operation; the package's
+# helper / script / automation counts unchanged; no register, ESPHome-action or Modbus service.
+FPS1 = Entry(
+    id="fps1", pr="FPS1", commit="unmerged",
+    reverts={},
+    checkpoints={},
+    added_files=_fps1.ADDED_FILES,
+    frozen_reverts=dict(_fps1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after fps1; as of pub0 it is its pub0 state (manifest result)
+        _fps1.PACKAGE_REL: "ff7eef8d178afd397b041c1e948337a5262dcabfcff5804caa857d8d1491a004",
+    },
+    # _pex.fingerprint(FPS1): hashes its parent fe1's fingerprint and every declaration above
+    fingerprint="dfc6e5acbfb684f9407021d22d336f3d1e09bdbbae6a6cc3c165090c53f8300d",
+    note="Scheduled Free Power reliability (11 Oct 2026 incident): bounded, unevenly spaced retries of a transient start-gate refusal, "
+         "no retry once a start transaction began, positive confirmation, a start deadline and duration clamp inside the authorised "
+         "window, a readiness check, a missed-trigger watchdog, persistent notifications and STARTING / FAILED / COMPLETED states: "
+         "Home Assistant scheduling layer only, ZERO firmware, registry, dashboard, Intelligence or ecco_core change, ZERO Modbus "
+         "operation, no new control surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
