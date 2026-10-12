@@ -151,6 +151,8 @@ script:
             {% set lo = [shutdown, reserve] | max %}
             {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
             {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+            {% set L = ';' ~ lm ~ ';' %}
+            {% set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' %}
             {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
             {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
             {% set soon = as_timestamp(now()) + 900 %}
@@ -173,8 +175,11 @@ script:
                   or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
                   or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
                   or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
-            {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
-            {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+            {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
+            {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+            {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+            {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
             {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
@@ -327,6 +332,8 @@ script:
             {% set lo = [shutdown, reserve] | max %}
             {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
             {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+            {% set L = ';' ~ lm ~ ';' %}
+            {% set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' %}
             {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
             {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
             {% set soon = as_timestamp(now()) + 900 %}
@@ -349,8 +356,11 @@ script:
                   or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
                   or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
                   or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
-            {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
-            {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+            {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
+            {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+            {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+            {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
             {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
@@ -415,6 +425,8 @@ script:
                 {% set lo = [shutdown, reserve] | max %}
                 {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
                 {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+                {% set L = ';' ~ lm ~ ';' %}
+                {% set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' %}
                 {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
                 {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
                 {% set soon = as_timestamp(now()) + 900 %}
@@ -437,8 +449,11 @@ script:
                       or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
                       or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
                       or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
-                {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
-                {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+                {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
+                {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+                {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
+                {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+                {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                 {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                       or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
                 {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
@@ -546,6 +561,8 @@ script:
                         {% set lo = [shutdown, reserve] | max %}
                         {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
                         {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+                        {% set L = ';' ~ lm ~ ';' %}
+                        {% set R = ';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';' %}
                         {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
                         {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
                         {% set soon = as_timestamp(now()) + 900 %}
@@ -568,8 +585,11 @@ script:
                               or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
                               or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
                               or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
-                        {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
-                        {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+                        {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
+                        {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+                        {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
+                        {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+                        {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                         {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                               or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
                         {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')

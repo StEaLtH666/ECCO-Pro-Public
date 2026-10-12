@@ -41,11 +41,11 @@ SAFE_STATES = {
     f"binary_sensor.{P}manual_configuration_raw_cache_valid": "on",
     f"switch.{P}free_power_write_enable": "off", f"switch.{P}free_power_recovery_arm": "off",
     f"switch.{P}dump_to_grid_write_enable": "off", f"switch.{P}dump_to_grid_recovery_arm": "off",
-    f"sensor.{P}ecco_fallback_profile_live_match":
+    "sensor.ecco_clock_dongle_ecco_fallback_profile_live_match":
         "m=MATCH;dx=00000;cx=000;ox=00000;ix=00;eh=0;obl=FP:CR,DP:CR,R4:CR,BUS:OK;ca=F;elig=OK;ew=-",
-    f"sensor.{P}ecco_fallback_profile_review": "st=IDLE;id=-;age=-",
+    "sensor.ecco_clock_dongle_ecco_fallback_profile_review": "st=IDLE;prior=VALID;exp=-;warn=-;obl=-;latch=-;sv=-",
     f"sensor.{P}ecco_supervision_state": "SUPERVISED", f"binary_sensor.{P}ecco_supervision_stable": "on",
-    f"sensor.{P}ecco_failback_shadow_state": "SHADOW_IDLE",
+    "sensor.ecco_clock_dongle_ecco_failback_shadow_state": "SHADOW_IDLE",
     f"sensor.{P}dump_to_grid_export_containment": "NOT_APPLICABLE",
     f"sensor.{P}free_power_recovery_evidence_id": "-", f"sensor.{P}reg244_original_snapshot": "—",
     f"sensor.{P}free_power_recovery_state": "NONE", f"sensor.{P}dump_to_grid_recovery_state": "NONE",

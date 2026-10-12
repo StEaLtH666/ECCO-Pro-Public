@@ -801,6 +801,12 @@ def section_firmware() -> None:
     SUFFIXES = (".yaml", ".yml", ".py", ".ts", ".js", ".md", ".json", ".h")
     scanned = [f for f in tracked if (f.startswith(SCOPES) or f in SCOPE_FILES) and f.endswith(SUFFIXES)]
     leak, b10_holders = [], []
+    # acs0 (the owner-approved token amendment, Option A, 2026-10-12): the Advanced Configuration Stage 0 editor's three files READ the B10
+    # entity id for their fail-closed gate, spelled in full. That exact id is removed from those three files before the scan, so any other
+    # spelling (a variant, a fragment) still makes them holders, every other file is scanned unchanged, and the list below is NOT widened.
+    ACS0_B10_FILES = frozenset({"home-assistant/packages/ecco_tou_target_soc_edit.yaml", "home-assistant/tests/_manual_tou_sim.py",
+                                "home-assistant/tests/test_ecco_tou_target_soc_edit.py"})
+    ACS0_B10_RE = re.compile(r"(?<![a-z0-9_])sensor\.ecco_clock_dongle_ecco_fallback_profile_live_match(?![a-z0-9_])")
     for rel in scanned:
         p = ROOT / rel
         if p in (FIRMWARE, HEADER_PATH):
@@ -811,7 +817,7 @@ def section_firmware() -> None:
             continue
         if "fbc_raw_" in txt:
             leak.append(rel)
-        if "fallback_profile_live_match" in txt:
+        if "fallback_profile_live_match" in (ACS0_B10_RE.sub("", txt) if rel in ACS0_B10_FILES else txt):   # acs0: exactly the full id
             b10_holders.append(rel)
     ignored_or_untracked = subprocess.run(["git", "ls-files", "-z", "--others"] + [s.rstrip("/") for s in SCOPES], cwd=str(ROOT), capture_output=True)
     outside = {f for f in ignored_or_untracked.stdout.decode("utf-8").split("\0") if f}
@@ -826,6 +832,14 @@ def section_firmware() -> None:
           sorted(b10_holders) == ["home-assistant/dashboards/ecco_pro.yaml", "home-assistant/packages/ecco_fallback_status.yaml",
                                   "home-assistant/tests/test_ecco_fallback_packages.py", "home-assistant/tests/test_ecco_shadow_check_ux.py"],
           str(b10_holders))
+    _acs0_b10 = {f: (ROOT / f).read_text(encoding="utf-8") for f in sorted(ACS0_B10_FILES)}
+    check("acs0: the B10 exemption is real (each of the editor's three files spells the full id) and exact (a variant, a fragment or the id "
+          "in any other file is still a holder)",
+          all(ACS0_B10_RE.search(t) and "fallback_profile_live_match" not in ACS0_B10_RE.sub("", t) for t in _acs0_b10.values())
+          and "fallback_profile_live_match" in ACS0_B10_RE.sub("", "sensor.ecco_clock_dongle_ecco_fallback_profile_live_match_x")
+          and "fallback_profile_live_match" in ACS0_B10_RE.sub("", "binary_sensor.ecco_clock_dongle_ecco_fallback_profile_live_match")
+          and "fallback_profile_live_match" in ACS0_B10_RE.sub("", "states('sensor.ecco_clock_dongle_ecco_' ~ 'fallback_profile_live_match')")
+          and "home-assistant/packages/ecco_system_health.yaml" not in ACS0_B10_FILES, str(sorted(_acs0_b10)))
 
     # --- B10 entity
     fw = chain.load_fw(live_fw)

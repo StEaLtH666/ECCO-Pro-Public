@@ -851,9 +851,14 @@ FSW1 = Entry(
 # Apply), after a review, a typed confirmation with a one-time code, a fresh configuration read and proof that every other staged
 # value equals the live slot; success needs the firmware's VERIFIED OK plus an independent later read of every written register;
 # fail-closed refusals; an uncertain outcome locks further edits until acknowledged. CHAIN-PINNED edit: the deployment manifest,
-# one package stanza (_acs0_scope.PINNED_REVERTERS). No frozen file. _ha_script_sim.py, test_pex_transition.py and CHANGELOG.md
-# are not frozen. Measured, not declared: ZERO firmware byte; the firmware write surface is unchanged (no new register, no new
-# path); no ESPHome action or Modbus service in the package.
+# one package stanza (_acs0_scope.PINNED_REVERTERS). THE TOKEN AMENDMENT (owner-approved Option A, 2026-10-12): the gate READS six
+# reserved fallback / failback entity ids (_acs0_scope.RESERVED_IDS); acs0 declares exactly its three files as banned_files, and its
+# FROZEN edits (PEX) amend three older suites' exact reserved-token allowlists so that exactly those six ids are exempt in exactly
+# those files (_acs0_scope.FROZEN_REVERTERS: test_fallback_profile_schema.py, test_fallback_recovery_dashboard.py,
+# test_fallback_save_scope.py); nothing is widened for any other file, id or operation. test_fallback_live_match.py (the B10 holder
+# list, same exactness), _ha_script_sim.py, test_ecco_battery_runtime.py, test_pex_transition.py and CHANGELOG.md are not frozen.
+# Measured, not declared: ZERO firmware byte; the firmware write surface is unchanged (no new register, no new path); no ESPHome
+# action or Modbus service in the package.
 ACS0 = Entry(
     id="acs0", pr="ACS0", commit="unmerged",
     reverts=dict(_acs0.PINNED_REVERTERS),
@@ -861,14 +866,20 @@ ACS0 = Entry(
         HA_MANIFEST: "6e4d2e9d8f4f1d20ac7e65ab9420ca4daa8c6267c403600d545beea5ed2cc870",
     },
     added_files=_acs0.ADDED_FILES,
-    frozen_reverts={},
-    frozen_checkpoints={},
+    banned_files=_acs0.BANNED_FILES,
+    frozen_reverts=dict(_acs0.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after acs0; as of pub0 each is its pub0 state (manifest result hash)
+        _acs0.SUITE_PS_REL: "c15807408583008e1ce63d134c708c78797cb43dbd6774ba44f61dfbbc9cfbf2",
+        _acs0.SUITE_RD_REL: "1a58c3917ab9b0a1d40e8775ade4b1cf9097c20ddce72022d58754325ab2a157",
+        _acs0.SUITE_SS_REL: "aaf0de4ccd377f98631735144f76464b0d48b521829599a694eae8a8a78f2c99",
+    },
     # _pex.fingerprint(ACS0): hashes its parent fsw1's fingerprint and every declaration above
-    fingerprint="8b60fc3f44c9a1a8ce0e3ed1eaef6742f53d1f1e2256de030df88e03c7c9b37a",
+    fingerprint="d1a56996a4f82cab796c6d01410630453517faca0131824c95f114f53d28253e",
     note="Advanced Configuration Stage 0: a guarded owner edit of one TOU slot's target SOC through the existing verified manual "
          "TOU firmware path (review, typed confirmation, fresh read, staged-equals-live proof, one Apply, firmware readback plus "
-         "an independent later read, fail-closed refusals, manual-review lock); one package stanza in the manifest: ZERO "
-         "firmware change, unchanged write surface, no frozen file",
+         "two later reads, fail-closed refusals, manual-review lock); one package stanza in the manifest; the owner-approved token "
+         "amendment: exactly six reserved ids READ in exactly three declared files, five exact allowlist checks amended (three "
+         "frozen suites by PEX): ZERO firmware change, unchanged write surface",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0)
 

@@ -22,6 +22,8 @@ automation interpreter) against _manual_tou_sim.py, a model of the firmware's ex
   [9] races         Free Power starting during the flow; a second request
   [10] mutation     in-memory mutants are each caught
   [11] PEX          the acs0 declaration
+  [12] tokens       the owner-approved reserved-token amendment: exactly six ids, read only, in exactly three files; no
+                    seventh id, variant, undeclared file, write or indirect route
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package against models of the firmware path
 and of Home Assistant; it does NOT prove how a real interrupted multi-register write behaves on the inverter.
@@ -54,6 +56,23 @@ LOCK = "input_boolean.ecco_cfg_edit_review_required"
 FLIGHT = "input_boolean.ecco_cfg_edit_in_flight"
 RESERVE = "input_number.ecco_minimum_reserve_soc"
 D = "ecco_clock_dongle_"
+# The six reserved fallback / failback entity ids the gate READS. The acs0 token amendment (owner-approved Option A) authorises
+# exactly these, spelled in full, in exactly this suite, the package and its dongle model. Every other reserved token in this file
+# is assembled from parts (the FB-B3 convention), so the suite never spells one.
+LIVE_MATCH = "sensor.ecco_clock_dongle_ecco_fallback_profile_live_match"
+FB_REVIEW = "sensor.ecco_clock_dongle_ecco_fallback_profile_review"
+SAVE_AV = "binary_sensor.ecco_fallback_save_available"
+REPLACE_AV = "binary_sensor.ecco_fallback_replace_corrupt_available"
+INVALIDATE_AV = "binary_sensor.ecco_fallback_invalidate_available"
+SHADOW_STATE = "sensor.ecco_clock_dongle_ecco_failback_shadow_state"
+ACS0_IDS = (LIVE_MATCH, FB_REVIEW, SAVE_AV, REPLACE_AV, INVALIDATE_AV, SHADOW_STATE)
+
+
+def b10(m="MATCH", ca="F", eh="0", obl="FP:CR,DP:CR,R4:CR,BUS:OK"):
+    """A live-match (B10) text in the firmware's grammar: m;dx;cx;ox;ix;eh;obl;ca;elig;ew, every key present."""
+    cmp = m in ("MATCH", "DRIFT", "CONTEXT", "EXPORT", "OUT_OF_DOMAIN")
+    return (f"m={m};dx={'00080' if cmp else '-'};cx={'000' if cmp else '-'};ox={'00000' if cmp else '-'};"
+            f"ix={'00' if cmp else '-'};eh={eh};obl={obl};ca={ca};elig={'OK' if cmp else 'UNK'};ew=-")
 
 FAILURES: list[str] = []
 PASSES = 0
@@ -290,18 +309,15 @@ UNSAFE = [
     (f"switch.{D}manual_configuration_write_enable", "on"), (f"switch.{D}free_power_write_enable", "on"),
     (f"switch.{D}free_power_recovery_arm", "on"), (f"switch.{D}dump_to_grid_write_enable", "on"),
     (f"switch.{D}dump_to_grid_recovery_arm", "on"),
-    (f"sensor.{D}ecco_fallback_profile_live_match", "m=PAUSED;obl=FP:AC,DP:CR,R4:CR,BUS:OK;ca=P"),
-    (f"sensor.{D}ecco_fallback_profile_live_match", "m=PAUSED_IO;obl=FP:CR,DP:CR,R4:CR,BUS:BY;ca=P"),
-    (f"sensor.{D}ecco_fallback_profile_live_match", "m=PAUSED;obl=FP:CR,DP:CR,R4:PC,BUS:OK;ca=P"),
-    (f"sensor.{D}ecco_fallback_profile_live_match", "m=UNKNOWN;obl=-;ca=-"),
-    (f"sensor.{D}ecco_fallback_profile_review", "st=READING;id=-"),
-    (f"sensor.{D}ecco_fallback_profile_review", "st=CANDIDATE_READY;id=AB12"),
-    (f"sensor.{D}ecco_fallback_profile_review", "st=SAVING;id=AB12"),
-    ("binary_sensor.ecco_fallback_save_available", "on"), ("binary_sensor.ecco_fallback_replace_corrupt_available", "on"),
-    ("binary_sensor.ecco_fallback_invalidate_available", "on"),
-    (f"sensor.{D}ecco_fallback_profile_review", "prior=VALID;st=CANDIDATE_READY;id=AB12"),
+    (LIVE_MATCH, b10("PAUSED", ca="P", eh="U", obl="FP:AC,DP:CR,R4:CR,BUS:OK")),
+    (LIVE_MATCH, b10("PAUSED_IO", ca="P", eh="U", obl="FP:CR,DP:CR,R4:CR,BUS:BY")),
+    (LIVE_MATCH, b10("PAUSED", ca="P", eh="U", obl="FP:CR,DP:CR,R4:PC,BUS:OK")),
+    (LIVE_MATCH, "m=UNKNOWN;obl=-;ca=-"),
+    (FB_REVIEW, "st=READING;id=-"), (FB_REVIEW, "st=CANDIDATE_READY;id=AB12"), (FB_REVIEW, "st=SAVING;id=AB12"),
+    (SAVE_AV, "on"), (REPLACE_AV, "on"), (INVALIDATE_AV, "on"),
+    (FB_REVIEW, "prior=VALID;st=CANDIDATE_READY;id=AB12"),
     (f"sensor.{D}ecco_supervision_state", "SUSPECT"), (f"sensor.{D}ecco_supervision_state", "LOST"),
-    (f"binary_sensor.{D}ecco_supervision_stable", "off"), (f"sensor.{D}ecco_failback_shadow_state", "SHADOW_EPISODE"),
+    (f"binary_sensor.{D}ecco_supervision_stable", "off"), (SHADOW_STATE, "SHADOW_EPISODE"),
     (f"sensor.{D}dump_to_grid_export_containment", "CONTAINED"), (f"sensor.{D}free_power_recovery_evidence_id", "E1234"),
     (f"sensor.{D}reg244_original_snapshot", "0"), (f"sensor.{D}free_power_recovery_state", "LOCKED_REVIEW_REQUIRED"),
     (f"sensor.{D}dump_to_grid_recovery_state", "PENDING - restore owed"),
@@ -317,6 +333,40 @@ for ent, val in UNSAFE:
             bad.append((ent, v, r.res()[:80]))
 check(f"each of {len(UNSAFE)} unsafe states, and 'unavailable' for each entity: the review is refused, nothing pressed",
       bad == [], str(bad[:4]))
+# Fallback state that is unknown, unavailable, stale, malformed, duplicated or names an incompatible operation: never an edit.
+AMBIGUOUS = [
+    *[(LIVE_MATCH, v) for v in (
+        "", "unknown", "none", "m=MATCH", "MATCH",                                         # empty / truncated / bare word
+        b10("UNKNOWN", ca="P", eh="U"), b10("NO_PROFILE"), b10("EXPORT"), b10("OUT_OF_DOMAIN"),   # not a compatible comparison
+        b10("MATCH", ca="S"), b10("MATCH", ca="P"), b10("MATCH", ca="I"), b10("MATCH", ca="O"),    # cache stale / pre-fence /
+        b10("MATCH", ca="M"), b10("MATCH", ca="B"),                                        # invalid / polling off / unfilled / boot
+        b10("MATCH", eh="U"), b10("MATCH", eh="1"),                                        # export hazard unknown / present
+        b10("match"), b10("MATCH").replace("m=MATCH", "m=MATCH "),                         # case / whitespace
+        b10("PAUSED", ca="P", eh="U", obl="FP:AC,DP:CR,R4:CR,BUS:OK") + ";" + b10("MATCH"),  # duplicated keys (two texts)
+        b10("MATCH").replace(";obl=", ";xobl="), b10("MATCH", obl="FP:CR,DP:CR,R4:CR,BUS:OK,X:1"),
+        b10("MATCH", obl="FP:CR,DP:CR,R4:CR,BUS:BY"))],
+    *[(FB_REVIEW, v) for v in ("", "unknown", "st=IDLE;st=SAVING", "st=SAVING;st=IDLE", "st=idle", "st=IDLE ", "xst=IDLE",
+                               "st=IDLEX", "prior=VALID", "st=")],
+    *[(e, v) for e in (SAVE_AV, REPLACE_AV, INVALIDATE_AV) for v in ("unknown", "", "true", "On", "ON")],
+    *[(SHADOW_STATE, v) for v in ("SHADOW_WATCH", "SHADOW_BOOT", "SHADOW_WOULD_AWAIT_ACK", "SHADOW_EPISODE_HA_BACK", "shadow_idle",
+                                  "SHADOW_IDLE ", "", "unknown")],
+]
+bad = []
+for ent, val in AMBIGUOUS:
+    r = Run(setup=lambda x, e_=ent, v_=val: x.w.set(e_, v_)).review(3, 41)
+    if not (r.res().startswith("REVIEW REFUSED") and r.d.presses == []):
+        bad.append((ent[-30:], val, r.res()[:80]))
+check(f"each of {len(AMBIGUOUS)} unknown, empty, stale, malformed, duplicated or incompatible fallback states (live match: every "
+      "verdict but MATCH / DRIFT / CONTEXT, every cache letter but F, an unknown or present export hazard, a lease or bus not clear; "
+      "Review not exactly st=IDLE; an operator gate not exactly off; the shadow not exactly SHADOW_IDLE): refused, nothing pressed",
+      bad == [], str(bad[:4]))
+ok_states = []
+for label, ent, val in (("DRIFT (e.g. after an earlier edit)", LIVE_MATCH, b10("DRIFT")),
+                        ("CONTEXT", LIVE_MATCH, b10("CONTEXT"))):
+    r = Run(setup=lambda x, e_=ent, v_=val: x.w.set(e_, v_)).edit(3, 41)
+    ok_states.append((label, r.res()[:40]))
+check("a current comparison other than MATCH (DRIFT, CONTEXT) still allows the edit (step B of the live proof starts in DRIFT)",
+      all(v.startswith("APPLIED AND VERIFIED") for _l, v in ok_states), str(ok_states))
 for label, kw in (("a Free Power schedule starting in 10 min", dict(fp_sched="2026-10-12 14:11:00")),
                   ("a Dump to Grid schedule starting in 10 min", dict(dump_sched="2026-10-12 14:11:00"))):
     r = Run(**kw).review(3, 41)
@@ -324,7 +374,7 @@ for label, kw in (("a Free Power schedule starting in 10 min", dict(fp_sched="20
 check("a Free Power schedule an hour away does not block", Run(fp_sched="2026-10-12 15:00:00").edit(3, 41).res()
       .startswith("APPLIED"))
 r = Run().review(3, 41)
-r.w.set(f"sensor.{D}ecco_fallback_profile_review", "st=CANDIDATE_READY;id=AB12")   # the owner starts a fallback Review
+r.w.set(FB_REVIEW, "st=CANDIDATE_READY;id=AB12")   # the owner starts a fallback Review
 r.apply()
 check("an unsafe state appearing between the review and the Apply: refused at the Apply (the fallback Review is kept)",
       r.res().startswith("REFUSED - a fallback profile Review") and r.d.presses == [], r.res())
@@ -718,8 +768,14 @@ def battery(text: str) -> dict:
         res["fresh"] = x.d.regs["slots"][3]["power"] == 3000
         x = Run(text, setup=late_flip("input_number.ecco_manual_slot_3_power_staged", "2000.0")).edit(3, 41)
         res["same"] = x.changed() == {}
-        x = Run(text, setup=lambda y: y.w.set(f"sensor.{D}ecco_fallback_profile_review", "st=SAVING;id=AB12")).review(3, 41)
+        x = Run(text, setup=lambda y: y.w.set(FB_REVIEW, "st=SAVING;id=AB12")).review(3, 41)
         res["fallback"] = x.res().startswith("REVIEW REFUSED")
+        x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("MATCH", ca="S"))).review(3, 41)
+        res["stale"] = x.res().startswith("REVIEW REFUSED")
+        x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("NO_PROFILE"))).review(3, 41)
+        res["verdict"] = x.res().startswith("REVIEW REFUSED")
+        x = Run(text, setup=lambda y: y.w.set(FB_REVIEW, "st=IDLE;st=SAVING")).review(3, 41)
+        res["dup"] = x.res().startswith("REVIEW REFUSED")
         x = Run(text, setup=lambda y: y.w.set(f"binary_sensor.{D}rtc_correction_in_progress", "unavailable")).review(3, 41)
         res["failclosed"] = x.res().startswith("REVIEW REFUSED")
         x = Run(text, setup=lambda y: y.d.fault.__setitem__("verify_fail", True)).edit(3, 41)
@@ -753,8 +809,14 @@ MUTANTS = [
     ("no fresh read before the Load (no wait, no freshness refusal)",
      [('timeout: "00:01:30"', 'timeout: "00:00:00.1"'), ("{{ not fresh or refusal2", "{{ refusal2")], None, "fresh"),
     ("the staged power not compared with the live power", SAME_PW, "and true", "same"),
-    ("the fallback Review / Save not checked", "{% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_"
-     "fallback_profile_review') ~ ';') %}", "{% elif false %}", "fallback"),
+    ("the fallback Review / Save not checked", "{% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}", "{% elif false %}",
+     "fallback"),
+    ("the live-match cache freshness and export hazard not checked", "{% elif ';ca=F;' not in L or ';eh=0;' not in L %}",
+     "{% elif false %}", "stale"),
+    ("the live-match verdict not checked", "{% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}",
+     "{% elif false %}", "verdict"),
+    ("a duplicated Review state accepted", "{% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}",
+     "{% elif ';st=IDLE;' not in R %}", "dup"),
     ("a refusal that lets 'unavailable' through (RTC)",
      "not is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'off')",
      "is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'on')", "failclosed"),
@@ -797,18 +859,31 @@ import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins acs0's declaration)
 import _acs0_scope as F  # noqa: E402
 
-ACS0_FINGERPRINT = "8b60fc3f44c9a1a8ce0e3ed1eaef6742f53d1f1e2256de030df88e03c7c9b37a"
+ACS0_FINGERPRINT = "d1a56996a4f82cab796c6d01410630453517faca0131824c95f114f53d28253e"
 FSW1_FINGERPRINT = "a380efdfa34b1acfc626ceaa47c8faf56347960d5603a9b98c47077ef7439db5"
 E = sc.CHAIN.entry("acs0")
 ids = [x.id for x in sc.POST_EXPORT_ENTRIES]
 check("acs0 is the fourteenth post-export entry, appended right after fsw1", ids.index("acs0") == 13
       and sc.CHAIN.prev_id("acs0") == "fsw1", str(ids))
-check("acs0 declares exactly the manifest as chain-pinned and no frozen file; no delta, op path, include, substitution, "
-      "banned token or tag", set(E.reverts) == set(E.checkpoints) == {sc.HA_MANIFEST} == set(F.PINNED_REVERTERS)
-      and not E.frozen_reverts and not E.frozen_checkpoints and not F.FROZEN_REVERTERS
+ACS0_FILES = frozenset({PKG_REL, "home-assistant/tests/_manual_tou_sim.py", "home-assistant/tests/test_ecco_tou_target_soc_edit.py"})
+FROZEN_SUITES = {"registry/tests/test_fallback_profile_schema.py", "registry/tests/test_fallback_recovery_dashboard.py",
+                 "registry/tests/test_fallback_save_scope.py"}
+check("acs0 declares exactly the manifest as chain-pinned, exactly the three amended older suites as frozen edits (each with its "
+      "reverter and checkpoint), exactly its own three files as reserved-token holders, and no delta, op path, include, substitution, "
+      "firmware banned token or tag", set(E.reverts) == set(E.checkpoints) == {sc.HA_MANIFEST} == set(F.PINNED_REVERTERS)
+      and set(E.frozen_reverts) == set(E.frozen_checkpoints) == set(F.FROZEN_REVERTERS) == FROZEN_SUITES
+      and all(f in _pex.FROZEN for f in FROZEN_SUITES)   # PEX: each amended suite really is frozen, so the edit is declared
+      and E.banned_files == F.BANNED_FILES == ACS0_FILES and F.RESERVED_IDS == ACS0_IDS
       and not E.deltas and not E.op_paths_changed and not E.includes_added and not E.subst_added
-      and not E.subst_changed and not E.subst_removed and not E.banned_fw_added and not E.banned_files
+      and not E.subst_changed and not E.subst_removed and not E.banned_fw_added
       and not E.tags_declared and not E.tags_promoted)
+# PEX: undoing acs0 exactly gives each amended suite as of fsw1, in which nothing of the amendment exists (sha256-checked steps)
+_pre = {rel: _pex.as_of(rel, "fsw1", _pex.read(rel)) for rel in sorted(FROZEN_SUITES)}   # PEX: frozen reverters
+check("undone exactly, each amended suite is its fsw1 state with no trace of acs0, and re-applying acs0's pairs gives the live file",
+      all("acs0" not in t and "ecco_tou_target_soc_edit" not in t for t in _pre.values())
+      and F.add_acs0_suite_ps(_pre["registry/tests/test_fallback_profile_schema.py"]) == _pex.read("registry/tests/test_fallback_profile_schema.py")   # PEX
+      and F.add_acs0_suite_rd(_pre["registry/tests/test_fallback_recovery_dashboard.py"]) == _pex.read("registry/tests/test_fallback_recovery_dashboard.py")   # PEX
+      and F.add_acs0_suite_ss(_pre["registry/tests/test_fallback_save_scope.py"]) == _pex.read("registry/tests/test_fallback_save_scope.py"))   # PEX
 check("acs0 declares the files it adds and each exists (the package first)", E.added_files == F.ADDED_FILES
       and PKG_REL in F.ADDED_FILES and all((ROOT / f).is_file() for f in E.added_files))
 # PEX: acs0's own fingerprint and its hash link to fsw1
@@ -819,6 +894,121 @@ man = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
 old_man = _pex.as_of("deployment/ha-manifest.yaml", "fsw1", _pex.read("deployment/ha-manifest.yaml"))   # PEX: chain reverter
 check("the manifest gains exactly one package stanza for this package (and nothing else)", F.add_acs0_manifest(old_man) == man
       and man.count("ecco_tou_target_soc_edit.yaml") == 2 and old_man.count("ecco_tou_target_soc_edit") == 0)
+
+# ======================================================================================================================
+print("\n[12] the reserved-token amendment (owner-approved Option A): exactly six ids, read only, in exactly three files")
+# ======================================================================================================================
+# Every reserved token and every NON-authorised id below is assembled from parts, so this suite spells only the six it may.
+FB_TOK, FAB_TOK = "ecco_" + "fallback", "ecco_" + "failback"
+RESERVED = re.compile("|".join((FB_TOK, "FALLBACK" + "_PROFILE", "FAILBACK" + "_STATE", FAB_TOK)))
+B10_TOK = "fallback_profile_" + "live_match"
+ID_RES = [re.compile(r"(?<![a-z0-9_])" + re.escape(i) + r"(?![a-z0-9_])") for i in ACS0_IDS]
+READ_CALL = re.compile(r"\b(?:states|is_state)\('(?:" + "|".join(re.escape(i) for i in ACS0_IDS) + r")'[,)]")
+INDIRECT = re.compile(r"\bstate_attr\(|\bstates\.[a-z_]+\.|\bstates\[|\bexpand\(|_entities\(|\bthis\.")
+ARG = re.compile(r"\b(?:states|is_state)\(([^,)]*)")
+LITERAL_ARG = re.compile(r"'[a-z_]+\.[a-z0-9_]+'|e\.[a-z_]+")
+status_pkg = yaml.safe_load((ROOT / "home-assistant" / "packages" / (FB_TOK + "_status.yaml")).read_text(encoding="utf-8"))
+STATUS_IDS = sorted({x["unique_id"] for block in status_pkg.get("template", []) for kind in ("sensor", "binary_sensor")
+                     for x in block.get(kind, []) if "unique_id" in x and not RESERVED.search(x["unique_id"])})
+
+
+def residue(text: str) -> list:
+    """Reserved tokens left once the six authorised ids (full ids, word-bounded) are removed: must be none."""
+    for rx in ID_RES:
+        text = rx.sub("", text)
+    return RESERVED.findall(text) + ([B10_TOK] if B10_TOK in text else [])
+
+
+def violations(rel: str, text: str) -> list:
+    if rel not in F.BANNED_FILES:
+        return [("undeclared file", t) for t in RESERVED.findall(text)] + ([("undeclared file", B10_TOK)] if B10_TOK in text else [])
+    v = [("not an authorised id", t) for t in residue(text)]
+    if rel == PKG_REL:
+        n_ids = sum(len(rx.findall(text)) for rx in ID_RES)
+        n_reads = len(READ_CALL.findall(text))
+        if n_ids != n_reads:
+            v.append(("a reserved id outside states() / is_state()", n_ids - n_reads))
+        v += [("indirect access", m.group(0)) for m in INDIRECT.finditer(text)]
+        v += [("a built entity id", a.strip()) for a in ARG.findall(text) if not LITERAL_ARG.fullmatch(a.strip())]
+        v += [("a fallback status entity by another name", u) for u in STATUS_IDS if u in text]
+    return v
+
+
+texts = {rel: (ROOT / rel).read_text(encoding="utf-8") for rel in sorted(F.BANNED_FILES)}
+check("live: none of the three declared files spells any reserved token but the six ids (no seventh id, variant or fragment)",
+      all(violations(rel, t) == [] for rel, t in texts.items()), str({r: violations(r, t)[:3] for r, t in texts.items()}))
+check("each declared file really holds all six ids (the declaration is not stale), and the package names exactly these six",
+      all(all(rx.search(t) for rx in ID_RES) for t in texts.values())
+      and sorted(set(re.findall(r"[a-z_]+\.[a-z0-9_]*(?:" + FB_TOK + "|" + FAB_TOK + r")[a-z0-9_]*", PKG_TEXT))) == sorted(ACS0_IDS))
+check("the package READS them only: every occurrence is inside states() / is_state() (24: six ids x four gate copies), never a "
+      "target, a service call or a write", len(READ_CALL.findall(PKG_TEXT)) == sum(len(rx.findall(PKG_TEXT)) for rx in ID_RES) == 24
+      and not re.search(r"entity_id:[^\n]*(?:" + FB_TOK + "|" + FAB_TOK + ")", PKG_TEXT))
+check(f"no indirect route: no state_attr / states.<domain> / states[...] / expand / *_entities / this.; every states() and is_state() "
+      f"argument is a literal entity id or the slot map; none of the fallback status package's {len(STATUS_IDS)} other entities "
+      "(shadow check, supervision status, episode flag, ...) is read", not INDIRECT.search(PKG_TEXT)
+      and all(LITERAL_ARG.fullmatch(a.strip()) for a in ARG.findall(PKG_TEXT)) and not [u for u in STATUS_IDS if u in PKG_TEXT]
+      and "ecco_shadow_check" in STATUS_IDS, str(STATUS_IDS))
+NEG = {
+    "a seventh id (the fallback arm), read": PKG_TEXT + "\n# {{ is_state('switch.ecco_clock_dongle_" + FB_TOK + "_profile_arm', 'off') }}\n",
+    "a variant of an authorised id": PKG_TEXT + "\n# {{ states('sensor.ecco_clock_dongle_" + FB_TOK + "_profile_review_id') }}\n",
+    "a fragment that builds the B10 id": PKG_TEXT + "\n# {{ states('sensor.ecco_clock_dongle_ecco_' ~ '" + B10_TOK + "') }}\n",
+    "a write to an authorised id": PKG_TEXT + "\n      - action: homeassistant.update_entity\n        target:\n          entity_id: "
+                                   + LIVE_MATCH + "\n",
+    "an id as a bare template value": PKG_TEXT + "\n# {{ '" + SAVE_AV + "' }}\n",
+    "a prefixed variant (another domain)": PKG_TEXT + "\n# {{ states('binary_" + FB_REVIEW + "') }}\n",
+    "state_attr on the shadow check": PKG_TEXT + "\n# {{ state_attr('sensor.ecco_shadow_check', 'shadow_state') }}\n",
+    "the states object": PKG_TEXT + "\n# {{ states.binary_sensor.ecco_shadow_episode_open.state }}\n",
+    "expand()": PKG_TEXT + "\n# {{ expand('group.ecco_x') | list }}\n",
+    "an entity id built at run time": PKG_TEXT + "\n# {{ states('binary_sensor.ecco_' ~ 'x') }}\n",
+    "the status package's shadow check by name": PKG_TEXT + "\n# {{ states('sensor.ecco_shadow_check') }}\n",
+}
+caught = {k: bool(violations(PKG_REL, t)) for k, t in NEG.items()}
+check(f"negatives: each of {len(NEG)} evasions in the package is refused (a seventh id, a variant, a fragment, a write, a bare id, "
+      "state_attr, the states object, expand, a built id, the status package's sensors by another name)", all(caught.values()),
+      str([k for k, v in caught.items() if not v]))
+check("negatives: an authorised id in any UNDECLARED file is refused (another package, the dashboard, a frontend file)",
+      all(violations(rel, "x: " + LIVE_MATCH) for rel in ("home-assistant/packages/ecco_manual_controls_helpers.yaml",
+                                                         "home-assistant/dashboards/ecco_pro.yaml", "frontend/x/card.ts")))
+# The amended older checks exempt EXACTLY this: their own regexes and file sets, read from the declared pairs (the PEX proofs show the
+# live suites are exactly those pairs; the not-frozen live-match suite is checked against its recorded pairs here).
+lm_text = (ROOT / F.SUITE_LM_REL).read_text(encoding="utf-8")
+check("the live-match suite carries acs0's three recorded edits exactly once each, and none of the originals",
+      all(lm_text.count(new) == 1 and lm_text.count(old) == (1 if old in new else 0) for old, new in F.SUITE_LM_EDITS)
+      and F.pre_acs0_suite_lm(lm_text) != lm_text)
+
+
+def rx_of(block: str, name: str):
+    body = block.split(name + " = re.compile(", 1)[1].split(")\n", 1)[0]
+    return re.compile("".join(re.findall(r'r"([^"]*)"', body)))
+
+
+def files_of(block: str) -> set:
+    return set(re.findall(r'"(home-assistant/[^"]+)"', block))
+
+
+PS_RX, RD_RX, LM_RX = rx_of(F.SUITE_PS_0_NEW, "ACS0_SHADOW_RE"), rx_of(F.SUITE_RD_0_NEW, "ACS0_IDS_RE"), rx_of(F.SUITE_LM_0_NEW, "ACS0_B10_RE")
+NEAR = [i + s_ for i in ACS0_IDS for s_ in ("_x", "_id", "2")] \
+    + [i.replace("ecco_clock_dongle_", "ecco_clock_dongle2_") for i in ACS0_IDS if "ecco_clock_dongle_" in i] \
+    + ["binary_" + i for i in ACS0_IDS if i.startswith("sensor.")] + ["x" + i for i in ACS0_IDS] \
+    + ["switch.ecco_clock_dongle_" + FB_TOK + "_profile_arm", "sensor.ecco_clock_dongle_" + FAB_TOK + "_shadow_episode",
+       "sensor.ecco_clock_dongle_" + FB_TOK + "_profile_state", "binary_sensor." + FB_TOK + "_reset_high_water_available"]
+
+
+def exempts(rx) -> set:
+    return {i for i in ACS0_IDS if rx.sub("", i) == ""}
+
+
+check("the amended FB-C3 strict rule exempts exactly the shadow State id, the FB-B3 holder scan exactly the six ids, the B10 scan "
+      "exactly the live-match id - and none of them any near miss (a suffix, another device, the arm, another shadow id, the profile "
+      "state, another gate)", exempts(PS_RX) == {SHADOW_STATE} and exempts(RD_RX) == set(ACS0_IDS) and exempts(LM_RX) == {LIVE_MATCH}
+      and not [n for n in NEAR if any(rx.sub("", n) != n and RESERVED.search(rx.sub("", n)) is None for rx in (PS_RX, RD_RX, LM_RX))],
+      str([n for n in NEAR if any(rx.sub("", n) != n and RESERVED.search(rx.sub("", n)) is None for rx in (PS_RX, RD_RX, LM_RX))]))
+check("...and each applies to exactly acs0's files: the strict rule and the B10 scan to the three declared files, the FB-B3 scan to "
+      "the package alone; the exact allowlists name acs0's three files and nothing else new",
+      files_of(F.SUITE_PS_0_NEW) == set(F.BANNED_FILES) == files_of(F.SUITE_LM_0_NEW) == files_of(F.SUITE_SS_0_NEW)
+      and files_of(F.SUITE_RD_0_NEW) == {PKG_REL}
+      and files_of(F.SUITE_PS_1_NEW) - files_of(F.SUITE_PS_1_OLD) == set(F.BANNED_FILES)
+      and files_of(F.SUITE_PS_1_OLD) <= files_of(F.SUITE_PS_1_NEW))
 
 print("")
 if FAILURES:

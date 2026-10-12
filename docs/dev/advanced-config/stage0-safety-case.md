@@ -197,21 +197,56 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
 
 The firmware write surface is unchanged.
 
-## Fallback "armed" gate: what it covers
+## Fallback gate: what it covers
 
-The package must not name the fallback arm or scripts: a frozen test reserves them to the fallback packages. So it reads the
-fallback status package's derived sensors instead:
-- **Save Available** and **Replace Corrupt Available**: the arm on with a ready candidate. These are already implied by
-  `st=CANDIDATE_READY`, which the Review check refuses.
-- **Invalidate Available**: the arm on with a VALID profile.
-- The fallback **Review** state must be IDLE.
-- The firmware write lock covers a running Review or Save.
+The gate reads six reserved fallback / failback entity ids, and nothing else of the fallback system. Each check is exact and
+fails closed: an unknown, unavailable, empty, malformed, duplicated, stale or unexpected value refuses the edit.
 
-**Not refused:** the fallback arm switched on while the profile is not VALID and no candidate is ready. In that state no
-fallback operation can execute, so there is no conflicting operation.
+| Id | Must read exactly |
+|---|---|
+| Live match (B10, `sensor.…_ecco_fallback_profile_live_match`) | every key `m`, `obl`, `ca`, `eh` once; `obl=FP:CR,DP:CR,R4:CR,BUS:OK` (no lease, restore, lockout or register 244 transaction; bus idle); `ca=F` (a fresh, trusted cache: not boot, invalid, polling off, stale, pre-fence or unfilled); `eh=0` (export hazard ruled out); `m` = `MATCH`, `DRIFT` or `CONTEXT` (a comparison actually ran) |
+| Fallback Review (B3, `sensor.…_ecco_fallback_profile_review`) | exactly one `st=` field, and it is `IDLE` |
+| Save / Replace Corrupt / Invalidate Available (`binary_sensor.ecco_fallback_*_available`) | `off` |
+| Failback shadow State (`sensor.…_ecco_failback_shadow_state`) | `SHADOW_IDLE` |
 
-**If the status package is not installed,** those sensors read `unknown` and every edit is refused (fail-closed, but the
-feature is then unusable).
+The firmware publishes `MATCH` / `DRIFT` / `CONTEXT` only when the boot load is complete, every lease is clear, the bus is idle
+and the cache is fresh. So `UNKNOWN`, `PAUSED`, `PAUSED_IO`, `NO_PROFILE` (which also covers a corrupt profile or a fallback
+write whose outcome is unknown), `EXPORT` and `OUT_OF_DOMAIN` all refuse. The live S3 evidence shows `MATCH` / `DRIFT` with
+`ca=F`, `eh=0` in steady state; `UNKNOWN ca=P` and `PAUSED_IO BUS:BY` appear only transiently around writes and bus activity,
+where refusing is correct.
+
+**Proven offline:** 56 ambiguous states (each verdict and cache letter, hazard `U` / `1`, case and whitespace variants,
+duplicated keys, a prefixed key, an extra lease leg, empty and `unknown` values for every id) are each refused, and `DRIFT` /
+`CONTEXT` still allow the edit. Mutants that drop the freshness, the verdict or the duplicate check are each caught.
+
+**Bounded, not proven:** the three operator "available" sensors are Home Assistant templates. If their own inputs (the arm, the
+profile state, the Review id) were unavailable while the dongle stayed connected, they would read `off`. With the ESPHome native
+API a device's entities become unavailable together, which the gate refuses through Telemetry / Configuration Online; and the
+Save / Replace paths also need `st=CANDIDATE_READY`, which the direct Review check refuses. The package must not name the fallback
+arm (a frozen test reserves it to the fallback packages), so this is documented rather than checked directly.
+
+### The reserved-token amendment (owner-approved Option A, 2026-10-12)
+
+The FB-A / FB-B3 / FB-C3 token rule allows reserved tokens (`ecco_fallback`, `ecco_failback`, `FALLBACK_PROFILE`,
+`FAILBACK_STATE`) only in files a chain entry declares, and five exact allowlist checks pin today's holders. Entry `acs0`:
+- declares exactly its three files as reserved-token holders: the package, its dongle model and its suite;
+- amends the five checks so that, in exactly those files, exactly the six ids above (spelled in full, word-bounded at both ends)
+  are exempt. Nothing is widened for any other file, id or operation:
+  - `test_fallback_profile_schema.py` (frozen, PEX): the FB-C3 strict rule exempts only the shadow State id in the three files,
+    with its own exactness proof; the exact declared allowlist grows from eight to eleven named files;
+  - `test_fallback_recovery_dashboard.py` (frozen, PEX): the FB-B3 holder list is unchanged; the six ids are removed from the
+    package before the scan, with an exactness proof (a seventh id or a variant still makes it a holder);
+  - `test_fallback_save_scope.py` (frozen, PEX): the exact union of declaring entries gains `acs0`, pinned to its three files;
+  - `test_fallback_live_match.py` (not frozen): the B10 holder list is unchanged; the full B10 id is removed from the three
+    files before the scan, with an exactness proof.
+- The editor's own suite (section [12]) proves every occurrence in the package is inside `states()` / `is_state()` (24: six ids
+  in four gate copies), that no indirect route exists (no `state_attr`, `states.<domain>`, `expand`, `*_entities`, built entity
+  ids, or the status package's other sensors by name), and that eleven evasions in the package and the ids in any undeclared
+  file are refused. Tamper proofs run the real suites against a seventh id, a variant, an undeclared holder, a write, an indirect
+  read, a widened regex and a dropped declaration.
+
+**If the status package is not installed,** the three operator sensors read `unknown` and every edit is refused (fail-closed,
+but the feature is then unusable).
 
 ## Other residual points (accepted, documented)
 

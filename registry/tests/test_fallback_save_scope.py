@@ -1153,7 +1153,12 @@ def main() -> int:
           "(FB-B3: its entry declares its own exact files, nothing else)",
           banned_files_agree(CH, leaks) and not CH.entry("fbb2").banned_files and CH.entry("fbb1").banned_files == {"home-assistant/dashboards/ecco_pro.yaml"}
           # FB-C3: its entry declares its own exact file (the HA suite that spells ecco_fallback entity ids), nothing else
-          and set(leaks) == set(CH.entry("fbb1").banned_files) | set(CH.entry("fbb3").banned_files) | set(CH.entry("fbc3").banned_files), str(leaks))
+          # acs0 (PEX, the owner-approved token amendment, Option A, 2026-10-12): its entry declares exactly its own three files (the Stage 0
+          # editor's package, dongle model and suite, which read six reserved ids), nothing else
+          and set(CH.entry("acs0").banned_files) == {"home-assistant/packages/ecco_tou_target_soc_edit.yaml", "home-assistant/tests/_manual_tou_sim.py",
+                                                     "home-assistant/tests/test_ecco_tou_target_soc_edit.py"}
+          and set(leaks) == set(CH.entry("fbb1").banned_files) | set(CH.entry("fbb3").banned_files) | set(CH.entry("fbc3").banned_files)
+          | set(CH.entry("acs0").banned_files), str(leaks))
     scan_dirs = ("firmware", "registry", "tools", "home-assistant", "frontend", "deployment", "health", "influxdb", ".github")
     suffixes = {".h", ".hpp", ".c", ".cpp", ".yaml", ".yml", ".py", ".ts", ".js", ".json", ".ps1", ".psm1", ".sh", ".jinja"}
     fb_a_tests = {"registry/tests/test_fallback_profile_schema.py", "registry/tests/test_fallback_profile_host_compile.py"}
