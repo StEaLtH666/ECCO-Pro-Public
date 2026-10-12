@@ -43,6 +43,10 @@ class ServiceError(Exception):
     """A service call that raises in Home Assistant (e.g. an ESPHome API reconnect race)."""
 
 
+class StopRun(Exception):
+    """A `stop` action, or a failing action-level `condition`: the whole script / automation run ends (not an error)."""
+
+
 def local_str(ts: float) -> str:
     return datetime.fromtimestamp(ts, LOCAL).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -293,6 +297,12 @@ class World:
                     self.set(e, v)
             elif domain == "input_boolean" and svc in ("turn_on", "turn_off"):
                 handler = lambda e, d, s=svc: self.set(e, "on" if s == "turn_on" else "off")  # noqa: E731
+            elif domain == "input_number" and svc == "set_value":
+                handler = lambda e, d: self.set(e, f"{float(d['value'])}")  # noqa: E731
+            elif domain == "input_datetime" and svc == "set_datetime":
+                def handler(e, d):
+                    hh, mm, ss = (int(x) for x in str(d["time"]).split(":"))
+                    self.set(e, f"{hh:02d}:{mm:02d}:{ss:02d}", {"hour": hh, "minute": mm, "second": ss})
             else:
                 raise Unsupported(f"service {service}")
         for e in entity_ids:
@@ -313,8 +323,17 @@ class Script:
 class HA:
     """Scripts, automations and template sensors loaded from one package."""
 
-    def __init__(self, world: World, package: dict):
+    def __init__(self, world: World, package):
         self.w = world
+        if isinstance(package, list):
+            merged: dict = {}
+            for pk in package:
+                for k, v in pk.items():
+                    if isinstance(v, list):
+                        merged.setdefault(k, []).extend(v)
+                    else:
+                        merged.setdefault(k, {}).update(v)
+            package = merged
         allowed = {"input_boolean", "input_datetime", "input_number", "input_text", "script", "automation", "template"}
         unknown = set(package) - allowed
         if unknown:
@@ -325,6 +344,7 @@ class HA:
                 world.set(f"script.{k}", "off")
         for k, v in (package.get("input_text") or {}).items():
             world.text_max[f"input_text.{k}"] = int(v.get("max", 100))
+        self._init_helpers(package)
         self.automations = []
         for a in package.get("automation") or []:
             self.automations.append(_Automation(self, a))
@@ -338,6 +358,30 @@ class HA:
         world.listeners.append(self._on_event)
         self.runs: list[tuple[float, str]] = []
         self.dead = False
+
+    def _init_helpers(self, package):
+        """Helper entities start at their `initial` (or the HA default) unless a state already exists (restored)."""
+        w = self.w
+        for k, v in (package.get("input_number") or {}).items():
+            e = f"input_number.{k}"
+            if e not in w.states:
+                w.set(e, f"{float(v.get('initial', v.get('min', 0)))}")
+        for k, v in (package.get("input_text") or {}).items():
+            e = f"input_text.{k}"
+            if e not in w.states:
+                w.set(e, str(v.get("initial", "")))
+        for k, v in (package.get("input_boolean") or {}).items():
+            e = f"input_boolean.{k}"
+            if e not in w.states:
+                w.set(e, "on" if v.get("initial") else "off")
+        for k, v in (package.get("input_datetime") or {}).items():
+            e = f"input_datetime.{k}"
+            if e in w.states:
+                continue
+            if v.get("has_date"):
+                continue                                  # date+time helpers are set by the tests
+            hh, mm, ss = (int(x) for x in str(v.get("initial", "00:00:00")).split(":"))
+            w.set(e, f"{hh:02d}:{mm:02d}:{ss:02d}", {"hour": hh, "minute": mm, "second": ss})
 
     def stop(self):
         """Home Assistant goes down: no trigger, timer or script step of this instance runs again."""
@@ -381,7 +425,7 @@ class HA:
                 return
             try:
                 req = gen.throw(error) if error is not None else gen.send(value)
-            except StopIteration:
+            except (StopIteration, StopRun):
                 done()
                 return
             except ServiceError as exc:
@@ -439,6 +483,12 @@ class HA:
 
     def _action(self, act: dict, v: dict):
         keys = set(act) - {"alias", "enabled", "continue_on_error"}
+        if "condition" in keys:
+            if not self.cond([act], v):
+                raise StopRun("condition")
+            return v
+        if "stop" in keys:
+            raise StopRun(str(act["stop"]))
         if "variables" in keys:
             return self._render_vars(act["variables"], v)
         if "choose" in keys:
@@ -457,6 +507,13 @@ class HA:
             return v
         if "repeat" in keys:
             r = act["repeat"]
+            if set(r) == {"for_each", "sequence"}:
+                items = r["for_each"]
+                if isinstance(items, str):
+                    items = self.w.render_native(items, v)
+                for i, item in enumerate(items, 1):
+                    yield from self._seq(r["sequence"], dict(v, repeat={"index": i, "first": i == 1, "item": item}))
+                return v
             if set(r) - {"sequence", "until"}:
                 raise Unsupported(f"repeat form {set(r)}")
             index = 0
@@ -494,6 +551,7 @@ class HA:
                 return v
             target = (act.get("target") or {}).get("entity_id", [])
             ents = target if isinstance(target, list) else [target]
+            ents = [str(self.w.render_native(x, v)) if isinstance(x, str) and "{{" in x else x for x in ents]
             try:
                 self.w.call(service, ents, data)
             except ServiceError:
@@ -551,8 +609,9 @@ class _Automation:
         self.ha, self.cfg = ha, cfg
         self.id = cfg["id"]
         self.mode = cfg.get("mode", "single")
-        if self.mode not in ("single", "restart"):
+        if self.mode not in ("single", "restart", "queued"):
             raise Unsupported(f"automation mode {self.mode}")
+        self.queue: list = []
         self.running = False
         self.triggers = cfg["triggers"]
         self._tpl_last: dict[int, bool] = {}
@@ -609,11 +668,14 @@ class _Automation:
                     if tid not in self.disabled_triggers:
                         self.fire({"id": tid, "platform": "time"})
             elif t == "state" and kind == "state":
-                ent = tr["entity_id"]
-                new = w.states.get(ent, ("unknown", {}))[0]
-                old = self._last_states.get(ent, ("unknown", {}))[0]
-                if new != old and str(tr.get("to", new)) == new:
-                    self.fire({"id": tid, "platform": "state", "to_state": new})
+                ents = tr["entity_id"] if isinstance(tr["entity_id"], list) else [tr["entity_id"]]
+                for ent in ents:
+                    new = w.states.get(ent, ("unknown", {}))
+                    old = self._last_states.get(ent, ("unknown", {}))
+                    if new[0] != old[0] and str(tr.get("to", new[0])) == new[0]:
+                        self.fire({"id": tid, "platform": "state", "entity_id": ent,
+                                   "to_state": {"state": new[0], "attributes": dict(new[1])},
+                                   "from_state": {"state": old[0], "attributes": dict(old[1])}})
         self._last_states = dict(w.states)
 
     def schedule_time_triggers(self):
@@ -630,6 +692,10 @@ class _Automation:
 
     def fire(self, trigger: dict):
         w = self.ha.w
+        if self.running and self.mode == "queued":
+            if len(self.queue) < int(self.cfg.get("max", 10)):
+                self.queue.append(trigger)
+            return
         if self.running and self.mode == "single":
             w.warnings.append(f"{w.t:.3f} automation {self.id} already running (trigger {trigger['id']} dropped)")
             return
@@ -644,6 +710,9 @@ class _Automation:
         def done(err=None):
             if gen == self._gen:
                 self.running = False
+                if self.queue:
+                    nxt = self.queue.pop(0)
+                    w.after(0, lambda: self.fire(nxt))
 
         self.ha._drive(self.ha._seq(self.cfg["actions"], variables), done)
 

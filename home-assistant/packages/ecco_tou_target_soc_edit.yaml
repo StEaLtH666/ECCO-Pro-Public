@@ -1,0 +1,727 @@
+# ECCO Pro - Advanced Configuration, Stage 0: a guarded owner edit of ONE TOU slot's target SOC (post-export entry acs0)
+#
+# Scope: exactly one value - TOU slot N's target SOC (inverter register 267+N, %). Nothing else is staged. This package
+# writes NO register itself: it drives the existing, live-proven firmware path once per request (Load Current Slot N To
+# Manual Staging -> Manual Configuration Write Enable -> Apply Manual Slot N Settings). That path rewrites the whole slot
+# (232 bit0, the slot's start/end pair, power, SOC, flags) from staging, verifies by exact readback, and has NO durable
+# snapshot and NO rollback; this package therefore proves, immediately before arming, that every other staged value
+# equals the live slot, and never claims success without an independent later read of every one of those registers.
+#
+# Stages (explicit, separate):
+#   EDIT     the owner picks a slot and a value (script fields)
+#   REVIEW   script.ecco_cfg_review_tou_slot_soc - writes nothing; runs the full safety gate; records the plan (register,
+#            old -> new, the unchanged values, the allowed range) with a one-time review code (valid 10 minutes)
+#   CONFIRM  the exact phrase "SET SLOT <n> TARGET SOC <x> REVIEW <code>"
+#   APPLY    script.ecco_cfg_apply_tou_slot_soc - re-runs the gate; waits for a fresh configuration read; re-reads the
+#            shutdown SOC and the reserve; Loads; waits until the Manual Controls helper sync is at a fixed point; stages
+#            only the SOC; proves staged == live for every other field; arms; re-checks; presses Apply ONCE
+#   VERIFY   success only on the firmware's VERIFIED OK AND an independent later configuration read in which the SOC is
+#            the request and every other written register is its pre-edit value
+#   ANYTHING ELSE: stop, disarm, alert with the observed values and recovery steps, and lock further edits until the owner
+#            acknowledges (script.ecco_cfg_acknowledge_edit_review). Never retried, never a compensating write.
+# The allowed range is max(inverter shutdown SOC, ECCO minimum battery reserve) .. 100, read fresh before the Apply; the
+# reserve helper is only read, never changed.
+
+input_text:
+  ecco_cfg_edit_last_result:
+    name: ECCO Advanced Config Edit Last Result
+    max: 255
+  ecco_cfg_last_owner_edit:
+    name: ECCO Last Owner Configuration Edit
+    max: 255
+  ecco_cfg_edit_review:
+    name: ECCO Advanced Config Edit Pending Review
+    max: 255
+
+input_boolean:
+  ecco_cfg_edit_review_required:
+    name: ECCO Advanced Config Edit Needs Manual Review
+    icon: mdi:alert-octagon
+
+script:
+  ecco_cfg_review_tou_slot_soc:
+    alias: "ECCO - Review a TOU slot target SOC edit"
+    description: >-
+      REVIEW stage: writes nothing. Checks the edit against every safety gate and records the plan with a one-time
+      review code for script.ecco_cfg_apply_tou_slot_soc.
+    mode: single
+    fields:
+      slot:
+        description: "TOU slot 1-6"
+      target_soc:
+        description: "New target SOC (%)"
+    sequence:
+      - variables:
+          n: "{{ slot | int(0) }}"
+          want: "{{ target_soc | int(-1) }}"
+          e: >-
+            {% set m = {
+            1: {'reg': 268, 'load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_1_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_1_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_1_power', 'soc': 'number.ecco_clock_dongle_manual_slot_1_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_1_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_1_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone1_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone2_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone1_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone1_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone1_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone1_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged'},
+            2: {'reg': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_2_power', 'soc': 'number.ecco_clock_dongle_manual_slot_2_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_2_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_2_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone2_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone3_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone2_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone2_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone2_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone2_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged'},
+            3: {'reg': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_3_power', 'soc': 'number.ecco_clock_dongle_manual_slot_3_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_3_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_3_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone3_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone4_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone3_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone3_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone3_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone3_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged'},
+            4: {'reg': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_4_power', 'soc': 'number.ecco_clock_dongle_manual_slot_4_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_4_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_4_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone4_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone5_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone4_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone4_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone4_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone4_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged'},
+            5: {'reg': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_5_power', 'soc': 'number.ecco_clock_dongle_manual_slot_5_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_5_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_5_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone5_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone6_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone5_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone5_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone5_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone5_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged'},
+            6: {'reg': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_6_power', 'soc': 'number.ecco_clock_dongle_manual_slot_6_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_6_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_6_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone6_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone1_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone6_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone6_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone6_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone6_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged'}
+            } %}
+            {{ m.get(n, {}) }}
+      - variables:
+          refusal: >-
+            {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
+            {% set reserve = states('input_number.ecco_minimum_reserve_soc') | int(-1) %}
+            {% set lo = [shutdown, reserve] | max %}
+            {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
+            {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+            {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
+            {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
+            {% set soon = as_timestamp(now()) + 900 %}
+            {% if not is_state('input_boolean.ecco_cfg_edit_review_required', 'off') %}an earlier edit's outcome needs manual review first
+            {% elif not e %}invalid slot (1-6)
+            {% elif shutdown < 0 %}inverter shutdown SOC unavailable
+            {% elif reserve < 0 %}ECCO minimum battery reserve unavailable
+            {% elif want < lo or want > 100 %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
+            {% elif live_soc < 0 %}live slot SOC unavailable
+            {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
+                  or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                  or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                  or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off') %}Dump to Grid owns the TOU settings (active, starting or restore owed)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') %}another inverter write or fallback operation in progress
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'off') %}RTC correction in progress
+            {% elif (not (armed_by_us | default(false)) and not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off'))
+                  or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
+                  or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
+                  or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
+            {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+            {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+            {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
+                  or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
+            {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
+                  or not is_state('sensor.ecco_clock_dongle_ecco_failback_shadow_state', 'SHADOW_IDLE') %}supervision not stable or a failback episode is open
+            {% elif not is_state('sensor.ecco_clock_dongle_dump_to_grid_export_containment', 'NOT_APPLICABLE')
+                  or not is_state('sensor.ecco_clock_dongle_free_power_recovery_evidence_id', '-')
+                  or not is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') %}a recovery or containment state is open
+            {% elif not is_state('sensor.ecco_clock_dongle_free_power_recovery_state', 'NONE')
+                  or not (states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('NONE')
+                          or states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('ACCEPTED')) %}a Free Power or Dump recovery state is open
+            {% elif not is_state('script.ecco_free_power_start_scheduled', 'off') or not is_state('script.ecco_dump_to_grid_start_scheduled', 'off') %}a scheduled start is running
+            {% elif is_state('input_boolean.ecco_free_power_schedule_armed', 'on') and fp_start < soon %}a scheduled Free Power starts within 15 minutes
+            {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') and dg_start < soon %}a scheduled Dump to Grid starts within 15 minutes
+            {% endif %}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ refusal | length > 0 }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_cfg_edit_last_result
+                data:
+                  value: >-
+                    REVIEW REFUSED - {{ refusal }}; nothing written
+        default:
+          - variables:
+              code: "{{ '%04d' | format((as_timestamp(now()) | int) % 10000) }}"
+              before: "{{ states(e.live_soc) | int(-1) }}"
+              lo: >-
+                {{ [states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1), states('input_number.ecco_minimum_reserve_soc') | int(-1)] | max }}
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_review
+            data:
+              value: "{{ n }}|{{ want }}|{{ code }}|{{ as_timestamp(now()) | int }}|{{ before }}"
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_last_result
+            data:
+              value: >-
+                REVIEWED - slot {{ n }} target SOC (register {{ e.reg }}) {{ before }} -> {{ want }} %; confirm with: SET SLOT {{ n }} TARGET SOC {{ want }} REVIEW {{ code }}
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit_review
+              title: "ECCO: review TOU slot {{ n }} target SOC {{ before }} -> {{ want }} %"
+              message: >-
+                Change: register {{ e.reg }} (slot {{ n }} target SOC) {{ before }} % -> {{ want }} %.
+                Unchanged and rewritten with their current values: start {{ states(e.live_t) }}, end {{ states(e.live_t_next) }},
+                power {{ states(e.live_pw) }} W, charge source {{ states(e.live_src) }}, mode {{ states(e.live_mode) }},
+                grid charge {{ states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') }}.
+                Allowed range {{ lo }}-100 % (inverter shutdown SOC and ECCO reserve, re-read before applying).
+                The fallback profile will then differ (DRIFT) until you Review and Save it.
+                To apply within 10 minutes, run ECCO - Apply a reviewed TOU slot target SOC edit with:
+                SET SLOT {{ n }} TARGET SOC {{ want }} REVIEW {{ code }}
+
+  ecco_cfg_apply_tou_slot_soc:
+    alias: "ECCO - Apply a reviewed TOU slot target SOC edit"
+    description: >-
+      CONFIRM + APPLY stage for the plan recorded by the review. Changes only that slot's target SOC through the existing
+      verified firmware path; never retried; an unproven outcome locks further edits for manual review.
+    mode: single
+    fields:
+      confirmation:
+        description: "Exactly: SET SLOT <n> TARGET SOC <x> REVIEW <code> (from the review)"
+    sequence:
+      - variables:
+          rv: "{{ states('input_text.ecco_cfg_edit_review').split('|') }}"
+      - variables:
+          n: "{{ rv[0] | int(0) if rv | count == 5 else 0 }}"
+          want: "{{ rv[1] | int(-1) if rv | count == 5 else -1 }}"
+          code: "{{ rv[2] if rv | count == 5 else '' }}"
+          reviewed_at: "{{ rv[3] | int(0) if rv | count == 5 else 0 }}"
+          before: "{{ rv[4] | int(-1) if rv | count == 5 else -1 }}"
+      - variables:
+          e: >-
+            {% set m = {
+            1: {'reg': 268, 'load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_1_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_1_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_1_power', 'soc': 'number.ecco_clock_dongle_manual_slot_1_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_1_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_1_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone1_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone2_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone1_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone1_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone1_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone1_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged'},
+            2: {'reg': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_2_power', 'soc': 'number.ecco_clock_dongle_manual_slot_2_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_2_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_2_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone2_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone3_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone2_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone2_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone2_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone2_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged'},
+            3: {'reg': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_3_power', 'soc': 'number.ecco_clock_dongle_manual_slot_3_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_3_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_3_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone3_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone4_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone3_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone3_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone3_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone3_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged'},
+            4: {'reg': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_4_power', 'soc': 'number.ecco_clock_dongle_manual_slot_4_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_4_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_4_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone4_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone5_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone4_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone4_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone4_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone4_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged'},
+            5: {'reg': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_5_power', 'soc': 'number.ecco_clock_dongle_manual_slot_5_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_5_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_5_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone5_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone6_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone5_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone5_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone5_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone5_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged'},
+            6: {'reg': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
+                'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
+                'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
+                'pw': 'number.ecco_clock_dongle_manual_slot_6_power', 'soc': 'number.ecco_clock_dongle_manual_slot_6_target_soc',
+                'src': 'select.ecco_clock_dongle_manual_slot_6_charge_source', 'mode': 'select.ecco_clock_dongle_manual_slot_6_mode',
+                'live_t': 'sensor.ecco_clock_dongle_ecco_timezone6_time', 'live_t_next': 'sensor.ecco_clock_dongle_ecco_timezone1_time',
+                'live_pw': 'sensor.ecco_clock_dongle_ecco_timezone6_power', 'live_soc': 'sensor.ecco_clock_dongle_ecco_timezone6_soc',
+                'live_src': 'sensor.ecco_clock_dongle_ecco_timezone6_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone6_mode',
+                'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
+                'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
+                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged'}
+            } %}
+            {{ m.get(n, {}) }}
+      - variables:
+          refusal: >-
+            {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
+            {% set reserve = states('input_number.ecco_minimum_reserve_soc') | int(-1) %}
+            {% set lo = [shutdown, reserve] | max %}
+            {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
+            {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+            {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
+            {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
+            {% set soon = as_timestamp(now()) + 900 %}
+            {% if not is_state('input_boolean.ecco_cfg_edit_review_required', 'off') %}an earlier edit's outcome needs manual review first
+            {% elif not e %}invalid slot (1-6)
+            {% elif shutdown < 0 %}inverter shutdown SOC unavailable
+            {% elif reserve < 0 %}ECCO minimum battery reserve unavailable
+            {% elif want < lo or want > 100 %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
+            {% elif live_soc < 0 %}live slot SOC unavailable
+            {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
+                  or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                  or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                  or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off') %}Dump to Grid owns the TOU settings (active, starting or restore owed)
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') %}another inverter write or fallback operation in progress
+            {% elif not is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'off') %}RTC correction in progress
+            {% elif (not (armed_by_us | default(false)) and not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off'))
+                  or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
+                  or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
+                  or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
+            {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+            {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+            {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
+                  or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
+            {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
+                  or not is_state('sensor.ecco_clock_dongle_ecco_failback_shadow_state', 'SHADOW_IDLE') %}supervision not stable or a failback episode is open
+            {% elif not is_state('sensor.ecco_clock_dongle_dump_to_grid_export_containment', 'NOT_APPLICABLE')
+                  or not is_state('sensor.ecco_clock_dongle_free_power_recovery_evidence_id', '-')
+                  or not is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') %}a recovery or containment state is open
+            {% elif not is_state('sensor.ecco_clock_dongle_free_power_recovery_state', 'NONE')
+                  or not (states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('NONE')
+                          or states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('ACCEPTED')) %}a Free Power or Dump recovery state is open
+            {% elif not is_state('script.ecco_free_power_start_scheduled', 'off') or not is_state('script.ecco_dump_to_grid_start_scheduled', 'off') %}a scheduled start is running
+            {% elif is_state('input_boolean.ecco_free_power_schedule_armed', 'on') and fp_start < soon %}a scheduled Free Power starts within 15 minutes
+            {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') and dg_start < soon %}a scheduled Dump to Grid starts within 15 minutes
+            {% endif %}
+          review_problem: >-
+            {% if (states('input_text.ecco_cfg_edit_review').split('|') | count) != 5 or n < 1 %}no pending review (run the review first)
+            {% elif as_timestamp(now()) - reviewed_at > 600 %}the review has expired (10 minutes); review again
+            {% elif (confirmation | string) != ('SET SLOT ' ~ n ~ ' TARGET SOC ' ~ want ~ ' REVIEW ' ~ code) %}the confirmation phrase does not match the review
+            {% elif (states(e.live_soc) | int(-1)) != before %}the slot changed since the review; review again
+            {% endif %}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ review_problem | length > 0 or refusal | length > 0 }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_cfg_edit_last_result
+                data:
+                  value: >-
+                    REFUSED - {{ review_problem if review_problem else refusal }}; nothing written
+        default:
+          # The review is single-use from here on.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_review
+            data:
+              value: "used"
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_last_result
+            data:
+              value: >-
+                IN PROGRESS - slot {{ n }} target SOC {{ before }} -> {{ want }} %: waiting for a fresh configuration read
+          # 1. A fresh configuration read (bounds the cache age at the Load to seconds).
+          - variables:
+              cfg_before: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+          - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_before }}"
+            timeout: "00:01:30"
+            continue_on_timeout: true
+          - variables:
+              fresh: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_before }}"
+              fresh_at: "{{ as_timestamp(now()) }}"
+              refusal2: >-
+                {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
+                {% set reserve = states('input_number.ecco_minimum_reserve_soc') | int(-1) %}
+                {% set lo = [shutdown, reserve] | max %}
+                {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
+                {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+                {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
+                {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
+                {% set soon = as_timestamp(now()) + 900 %}
+                {% if not is_state('input_boolean.ecco_cfg_edit_review_required', 'off') %}an earlier edit's outcome needs manual review first
+                {% elif not e %}invalid slot (1-6)
+                {% elif shutdown < 0 %}inverter shutdown SOC unavailable
+                {% elif reserve < 0 %}ECCO minimum battery reserve unavailable
+                {% elif want < lo or want > 100 %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
+                {% elif live_soc < 0 %}live slot SOC unavailable
+                {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
+                {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
+                      or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+                {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                      or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
+                {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                      or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off') %}Dump to Grid owns the TOU settings (active, starting or restore owed)
+                {% elif not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') %}another inverter write or fallback operation in progress
+                {% elif not is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'off') %}RTC correction in progress
+                {% elif (not (armed_by_us | default(false)) and not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off'))
+                      or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
+                      or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
+                      or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
+                {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+                {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+                {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
+                      or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
+                {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
+                      or not is_state('sensor.ecco_clock_dongle_ecco_failback_shadow_state', 'SHADOW_IDLE') %}supervision not stable or a failback episode is open
+                {% elif not is_state('sensor.ecco_clock_dongle_dump_to_grid_export_containment', 'NOT_APPLICABLE')
+                      or not is_state('sensor.ecco_clock_dongle_free_power_recovery_evidence_id', '-')
+                      or not is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') %}a recovery or containment state is open
+                {% elif not is_state('sensor.ecco_clock_dongle_free_power_recovery_state', 'NONE')
+                      or not (states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('NONE')
+                              or states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('ACCEPTED')) %}a Free Power or Dump recovery state is open
+                {% elif not is_state('script.ecco_free_power_start_scheduled', 'off') or not is_state('script.ecco_dump_to_grid_start_scheduled', 'off') %}a scheduled start is running
+                {% elif is_state('input_boolean.ecco_free_power_schedule_armed', 'on') and fp_start < soon %}a scheduled Free Power starts within 15 minutes
+                {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') and dg_start < soon %}a scheduled Dump to Grid starts within 15 minutes
+                {% endif %}
+              pre: >-
+                {{ {'t': states(e.live_t), 't_next': states(e.live_t_next), 'pw': states(e.live_pw) | float(-1),
+                    'src': states(e.live_src), 'mode': states(e.live_mode), 'flags': states(e.live_flags),
+                    'gc': states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled'), 'soc': states(e.live_soc) | int(-1)} }}
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ not fresh or refusal2 | length > 0 or pre.soc != before }}"
+                sequence:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_cfg_edit_last_result
+                    data:
+                      value: >-
+                        FAILED - {{ 'no fresh configuration read' if not fresh else (refusal2 if refusal2 else 'the slot changed since the review') }}; nothing written
+            default:
+              # 2. Load (staging = the live slot from that read), then the helper sync must reach a fixed point.
+              - action: button.press
+                continue_on_error: true
+                target:
+                  entity_id: "{{ e.load }}"
+              - delay:
+                  seconds: 3
+              - wait_template: >-
+                  {{ (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+                     and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+                     and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+                     and states(e.src) == states(e.live_src) and states(e.mode) == states(e.live_mode)
+                     and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+                     and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+                     and (states(e.soc) | float(-1)) == (states(e.live_soc) | float(-2))
+                     and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+                     and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+                     and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+                     and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
+                timeout: "00:00:15"
+                continue_on_timeout: true
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ as_timestamp(now()) - fresh_at <= 30
+                         and (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+                         and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+                         and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+                         and states(e.src) == states(e.live_src) and states(e.mode) == states(e.live_mode)
+                         and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+                         and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+                         and (states(e.soc) | float(-1)) == (states(e.live_soc) | float(-2))
+                         and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+                         and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+                         and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+                         and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
+                then:
+                  # 3. Stage ONLY the target SOC, then wait for the sync's echo and a fixed point again.
+                  - action: number.set_value
+                    continue_on_error: true
+                    target:
+                      entity_id: "{{ e.soc }}"
+                    data:
+                      value: "{{ want }}"
+                  - delay:
+                      seconds: 2
+                  - wait_template: >-
+                      {{ (states(e.soc) | float(-1)) == (want | float(-2))
+                         and (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+                         and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+                         and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+                         and states(e.src) == states(e.live_src) and states(e.mode) == states(e.live_mode)
+                         and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+                         and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+                         and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+                         and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+                         and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+                         and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
+                  - action: switch.turn_on
+                    continue_on_error: true
+                    target:
+                      entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+                  - wait_template: "{{ is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'on') }}"
+                    timeout: "00:00:05"
+                    continue_on_timeout: true
+                  # 4. The last check before the press: the full gate (bounds re-read), staged == live except the
+                  #    SOC, the helper sync at its fixed point, the arm confirmed; then ONE press.
+                  - variables:
+                      armed_by_us: true
+                      refusal3: >-
+                        {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
+                        {% set reserve = states('input_number.ecco_minimum_reserve_soc') | int(-1) %}
+                        {% set lo = [shutdown, reserve] | max %}
+                        {% set live_soc = states(e.live_soc) | int(-1) if e else -1 %}
+                        {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
+                        {% set fp_start = as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) %}
+                        {% set dg_start = as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) %}
+                        {% set soon = as_timestamp(now()) + 900 %}
+                        {% if not is_state('input_boolean.ecco_cfg_edit_review_required', 'off') %}an earlier edit's outcome needs manual review first
+                        {% elif not e %}invalid slot (1-6)
+                        {% elif shutdown < 0 %}inverter shutdown SOC unavailable
+                        {% elif reserve < 0 %}ECCO minimum battery reserve unavailable
+                        {% elif want < lo or want > 100 %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
+                        {% elif live_soc < 0 %}live slot SOC unavailable
+                        {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
+                        {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
+                              or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+                        {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                              or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
+                        {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                              or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off') %}Dump to Grid owns the TOU settings (active, starting or restore owed)
+                        {% elif not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') %}another inverter write or fallback operation in progress
+                        {% elif not is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'off') %}RTC correction in progress
+                        {% elif (not (armed_by_us | default(false)) and not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off'))
+                              or not is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
+                              or not is_state('switch.ecco_clock_dongle_free_power_recovery_arm', 'off') or not is_state('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'off')
+                              or not is_state('switch.ecco_clock_dongle_dump_to_grid_recovery_arm', 'off') %}a write or recovery arm is on
+                        {% elif 'obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in lm %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
+                        {% elif ';st=IDLE;' not in (';' ~ states('sensor.ecco_clock_dongle_ecco_fallback_profile_review') ~ ';') %}a fallback profile Review or Save is in progress
+                        {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
+                              or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
+                        {% elif not is_state('sensor.ecco_clock_dongle_ecco_supervision_state', 'SUPERVISED') or not is_state('binary_sensor.ecco_clock_dongle_ecco_supervision_stable', 'on')
+                              or not is_state('sensor.ecco_clock_dongle_ecco_failback_shadow_state', 'SHADOW_IDLE') %}supervision not stable or a failback episode is open
+                        {% elif not is_state('sensor.ecco_clock_dongle_dump_to_grid_export_containment', 'NOT_APPLICABLE')
+                              or not is_state('sensor.ecco_clock_dongle_free_power_recovery_evidence_id', '-')
+                              or not is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') %}a recovery or containment state is open
+                        {% elif not is_state('sensor.ecco_clock_dongle_free_power_recovery_state', 'NONE')
+                              or not (states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('NONE')
+                                      or states('sensor.ecco_clock_dongle_dump_to_grid_recovery_state').startswith('ACCEPTED')) %}a Free Power or Dump recovery state is open
+                        {% elif not is_state('script.ecco_free_power_start_scheduled', 'off') or not is_state('script.ecco_dump_to_grid_start_scheduled', 'off') %}a scheduled start is running
+                        {% elif is_state('input_boolean.ecco_free_power_schedule_armed', 'on') and fp_start < soon %}a scheduled Free Power starts within 15 minutes
+                        {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') and dg_start < soon %}a scheduled Dump to Grid starts within 15 minutes
+                        {% endif %}
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ refusal3 | length == 0
+                             and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'on')
+                             and (states(e.soc) | float(-1)) == (want | float(-2))
+                             and (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+                             and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+                             and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+                             and states(e.src) == states(e.live_src) and states(e.mode) == states(e.live_mode)
+                             and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+                             and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+                             and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+                             and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+                             and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+                             and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
+                    then:
+                      - action: button.press
+                        continue_on_error: true
+                        target:
+                          entity_id: "{{ e.apply }}"
+                      # The firmware disarms on every outcome and releases its write lock when done.
+                      - wait_template: >-
+                          {{ is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                             and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') }}
+                        timeout: "00:00:45"
+                        continue_on_timeout: true
+                      - delay:
+                          seconds: 2
+                      - variables:
+                          fw_result: "{{ states('sensor.ecco_clock_dongle_manual_configuration_last_result')[:120] }}"
+                          cfg_after_apply: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+                      - choose:
+                          # The firmware refused at its gate: nothing was written (its refusal texts all start so).
+                          - conditions:
+                              - condition: template
+                                value_template: "{{ fw_result.startswith('REJECTED') }}"
+                            sequence:
+                              - action: input_text.set_value
+                                target:
+                                  entity_id: input_text.ecco_cfg_edit_last_result
+                                data:
+                                  value: >-
+                                    FAILED - the firmware refused the Apply ({{ fw_result }}); nothing written
+                              - action: persistent_notification.create
+                                data:
+                                  notification_id: ecco_cfg_edit
+                                  title: "ECCO: configuration edit refused by the dongle"
+                                  message: >-
+                                    {{ states('input_text.ecco_cfg_edit_last_result') }}
+                        # Otherwise: an independent LATER configuration read decides, whatever the firmware said.
+                        default:
+                          - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_after_apply }}"
+                            timeout: "00:02:30"
+                            continue_on_timeout: true
+                          - variables:
+                              later_read: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_after_apply }}"
+                              diff: >-
+                                {% set d = namespace(v=[]) %}
+                                {% if (states(e.live_soc) | int(-1)) != want %}{% set d.v = d.v + ['SOC ' ~ states(e.live_soc) ~ ' (expected ' ~ want ~ ')'] %}{% endif %}
+                                {% if states(e.live_t) != pre.t %}{% set d.v = d.v + ['start ' ~ states(e.live_t) ~ ' (was ' ~ pre.t ~ ')'] %}{% endif %}
+                                {% if states(e.live_t_next) != pre.t_next %}{% set d.v = d.v + ['end ' ~ states(e.live_t_next) ~ ' (was ' ~ pre.t_next ~ ')'] %}{% endif %}
+                                {% if (states(e.live_pw) | float(-1)) != pre.pw %}{% set d.v = d.v + ['power ' ~ states(e.live_pw) ~ ' (was ' ~ pre.pw ~ ')'] %}{% endif %}
+                                {% if states(e.live_src) != pre.src or states(e.live_mode) != pre.mode or states(e.live_flags) != pre.flags %}{% set d.v = d.v + ['flags ' ~ states(e.live_flags) ~ ' (was ' ~ pre.flags ~ ')'] %}{% endif %}
+                                {% if states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') != pre.gc %}{% set d.v = d.v + ['grid charge ' ~ states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') ~ ' (was ' ~ pre.gc ~ ')'] %}{% endif %}
+                                {{ d.v | join('; ') }}
+                          - choose:
+                              - conditions:
+                                  - condition: template
+                                    value_template: >-
+                                      {{ fw_result.startswith('VERIFIED OK - manual Slot ' ~ n ~ ' ') and later_read
+                                         and diff | length == 0 }}
+                                sequence:
+                                  - action: input_text.set_value
+                                    target:
+                                      entity_id: input_text.ecco_cfg_last_owner_edit
+                                    data:
+                                      value: >-
+                                        {{ now().strftime('%Y-%m-%d %H:%M:%S') }} slot {{ n }} target SOC (register {{ e.reg }}) {{ before }} -> {{ want }} % (owner, Advanced Configuration)
+                                  - action: input_text.set_value
+                                    target:
+                                      entity_id: input_text.ecco_cfg_edit_last_result
+                                    data:
+                                      value: >-
+                                        APPLIED AND VERIFIED - slot {{ n }} target SOC {{ before }} -> {{ want }} %: firmware readback and an independent later read of every written register agree
+                                  - action: persistent_notification.dismiss
+                                    data:
+                                      notification_id: ecco_cfg_edit_review
+                                  - action: persistent_notification.create
+                                    data:
+                                      notification_id: ecco_cfg_edit
+                                      title: "ECCO: TOU slot {{ n }} target SOC changed to {{ want }} %"
+                                      message: >-
+                                        Verified on the inverter (was {{ before }} %); every other slot {{ n }} value is unchanged.
+                                        The fallback profile now differs from the inverter (Fallback status DRIFT): if this is the new
+                                        normal, Review and Save the fallback profile. To undo, review and apply slot {{ n }} back to
+                                        {{ before }} % the same way.
+                            default:
+                              - action: input_text.set_value
+                                target:
+                                  entity_id: input_text.ecco_cfg_edit_last_result
+                                data:
+                                  value: >-
+                                    UNCERTAIN - firmware: {{ fw_result[:70] }}; later read: {{ 'none' if not later_read else (diff if diff else 'all as expected') }}
+                              - action: input_boolean.turn_on
+                                target:
+                                  entity_id: input_boolean.ecco_cfg_edit_review_required
+                              - action: persistent_notification.create
+                                data:
+                                  notification_id: ecco_cfg_edit
+                                  title: "ECCO: configuration edit outcome NOT proven - manual review needed"
+                                  message: >-
+                                    Slot {{ n }} target SOC {{ before }} -> {{ want }} %. Firmware said: {{ fw_result }}. Independent read: {{ 'no new configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
+                    else:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_cfg_edit_last_result
+                        data:
+                          value: >-
+                            FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else 'the staged values, the helper sync or the arm could not be confirmed' }}); nothing pressed, nothing written
+                else:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_cfg_edit_last_result
+                    data:
+                      value: >-
+                        FAILED - the staged slot {{ n }} did not match the live slot after a fresh read, or the Manual Controls helpers did not settle; nothing pressed, nothing written
+      # The write enable always ends off (it only permits an Apply).
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+      - if:
+          - condition: template
+            value_template: "{{ states('input_text.ecco_cfg_edit_last_result').startswith('FAILED') }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit
+              title: "ECCO: configuration edit did not complete"
+              message: "{{ states('input_text.ecco_cfg_edit_last_result') }}"
+
+  ecco_cfg_acknowledge_edit_review:
+    alias: "ECCO - Acknowledge configuration edit review"
+    description: >-
+      After checking the TOU slots by hand following an UNCERTAIN edit, unlock further edits. Writes nothing to the inverter.
+    mode: single
+    fields:
+      confirmation:
+        description: "Exactly: I HAVE CHECKED THE TOU SLOTS"
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ (confirmation | string) == 'I HAVE CHECKED THE TOU SLOTS' }}"
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_review_required
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_last_result
+            data:
+              value: "ACKNOWLEDGED - the owner checked the TOU slots; edits unlocked"
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: ecco_cfg_edit

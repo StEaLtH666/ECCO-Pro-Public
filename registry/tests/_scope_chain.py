@@ -109,6 +109,7 @@ import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
+import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
@@ -845,7 +846,31 @@ FSW1 = Entry(
          "frontend, deployment, Intelligence or ecco_core change, ZERO Modbus operation, no new control surface, no manifest or "
          "VERSION.yaml change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1)
+# acs0 (Advanced Configuration Stage 0; _acs0_scope.py): made on the export after fsw1. A Home Assistant package lets the owner change
+# ONE TOU slot's target SOC through the EXISTING, verified manual TOU firmware path (Load -> Manual Configuration Write Enable ->
+# Apply), after a review, a typed confirmation with a one-time code, a fresh configuration read and proof that every other staged
+# value equals the live slot; success needs the firmware's VERIFIED OK plus an independent later read of every written register;
+# fail-closed refusals; an uncertain outcome locks further edits until acknowledged. CHAIN-PINNED edit: the deployment manifest,
+# one package stanza (_acs0_scope.PINNED_REVERTERS). No frozen file. _ha_script_sim.py, test_pex_transition.py and CHANGELOG.md
+# are not frozen. Measured, not declared: ZERO firmware byte; the firmware write surface is unchanged (no new register, no new
+# path); no ESPHome action or Modbus service in the package.
+ACS0 = Entry(
+    id="acs0", pr="ACS0", commit="unmerged",
+    reverts=dict(_acs0.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after acs0
+        HA_MANIFEST: "6e4d2e9d8f4f1d20ac7e65ab9420ca4daa8c6267c403600d545beea5ed2cc870",
+    },
+    added_files=_acs0.ADDED_FILES,
+    frozen_reverts={},
+    frozen_checkpoints={},
+    # _pex.fingerprint(ACS0): hashes its parent fsw1's fingerprint and every declaration above
+    fingerprint="8b60fc3f44c9a1a8ce0e3ed1eaef6742f53d1f1e2256de030df88e03c7c9b37a",
+    note="Advanced Configuration Stage 0: a guarded owner edit of one TOU slot's target SOC through the existing verified manual "
+         "TOU firmware path (review, typed confirmation, fresh read, staged-equals-live proof, one Apply, firmware readback plus "
+         "an independent later read, fail-closed refusals, manual-review lock); one package stanza in the manifest: ZERO "
+         "firmware change, unchanged write surface, no frozen file",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

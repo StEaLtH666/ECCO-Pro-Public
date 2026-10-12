@@ -63,6 +63,13 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Advanced Configuration Stage 0 - ACS0 (owner edit of ONE TOU slot's target SOC through the existing, verified manual
+  # TOU firmware path; review + typed confirmation; NOT live-proven - see docs/dev/advanced-config/stage0-live-proof-procedure.md).
+  - source: home-assistant/packages/ecco_tou_target_soc_edit.yaml
+    destination: /config/packages/ecco_tou_target_soc_edit.yaml
+    method: ssh_file_copy
+    restart_required: true
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml
