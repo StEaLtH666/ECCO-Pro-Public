@@ -114,6 +114,12 @@ Development before the first public release happened in a private repository; se
 - **The W2 fallback-capture warning ("resembles Dump to Grid residue") follows the configured ceiling** instead of a fixed
   3000 W. The W2 wording of the recovery card and of the dashboard's Safety view no longer names a wattage; the dashboard
   line is a declared post-export (PEX) edit of the export-frozen file.
+- **The first-run value of the battery reserve helper is 40 %, not 15 %.** `input_number.ecco_minimum_reserve_soc` is still the
+  user's own setting (0-80 %, changeable in Home Assistant at any time) and Home Assistant restores it across restarts and
+  updates. Only the one-time defaults automation changed, and it runs once, so an installation that has already been initialised
+  keeps its value. 40 % is a starting value, not a limit, and no runtime decision hard-codes it. Declared as post-export entry
+  `rsv1` (one line of the export-frozen core package) and pinned by `home-assistant/tests/test_ecco_reserve_default.py`.
+  Nothing else changes: no firmware, Dump-to-Grid, Free Power, Intelligence or dashboard change.
 
 The transaction, ownership, stop and restore model and the Modbus write surface are unchanged.
 
