@@ -48,7 +48,7 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   - An inverter change made after the previous poll (for example on the inverter's own panel) is kept, not reverted.
   - With no fresh read, nothing is written.
   - A late Load is refused.
-  - On the happy path the cache age at the Apply press is measured (about 10 s).
+  - On the happy path the cache age at the Apply press is measured: 5.2 s in the model.
 - **BOUNDED:**
   - The cache is at most about 30 s plus the settle waits (about 45 s in total) old at the press.
   - Within that window, a change made by another Modbus master to slot N's start/end/power/SOC/flags or register 232 would be
@@ -116,15 +116,21 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
 
 ## 5. Independent read-back of every affected register
 
-- **BY CONSTRUCTION:** success requires BOTH:
+- **BY CONSTRUCTION:** success requires ALL of:
   - the firmware's `VERIFIED OK - manual Slot N` (its own readback);
-  - a later configuration poll, after the firmware's own post-Apply poll, in which:
+  - TWO later configuration polls after the outcome. The first may be the firmware's own post-Apply poll, which reads Block A
+    about 0.9 s after the verify, waits 2.5 s, reads Block B, and only then publishes. The second is a poll that began after
+    it.
+  - Configuration Online and the raw configuration cache valid at that read. Block B publishes the update time even when
+    Block A failed, and register 232 comes from Block A.
+  - In that read:
     - the SOC equals the request;
     - slot N's start, end (the next slot's start), power, charge source, mode, raw flags and the grid-charge bit all equal
       their pre-edit values.
-- **PROVEN-OFFLINE:**
-  - A verified write whose later read shows another register changed is UNCERTAIN, and the alert lists the field.
-  - A missing later read is UNCERTAIN.
+- **PROVEN-OFFLINE (the model now publishes the firmware's post-Apply poll at +3.9 s, as the real firmware does):**
+  - Only the firmware's own poll arriving: UNCERTAIN.
+  - An invalid raw cache at the later read: UNCERTAIN.
+  - A verified write whose later read shows another register changed: UNCERTAIN, and the alert lists the field.
 - **RESIDUAL:** register 232's bits other than bit 0 are not exposed to Home Assistant, so they are not independently read
   back. The firmware preserves them from its cache.
 
@@ -132,12 +138,22 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
 
 - **BY CONSTRUCTION:**
   - One press per request, never retried, never a compensating write.
-  - The write enable always ends off.
+  - The write enable is turned off at the end and must be SEEN off within 10 s. Otherwise the outcome is UNCERTAIN. Home
+    Assistant skips service calls to an unavailable entity, so `continue_on_error` alone proves nothing.
+  - "The firmware refused, nothing written" is claimed only when ALL hold:
+    - the result text is a refusal;
+    - the firmware's gate-pass counter (Manual Configuration Write Attempts Since Boot) did not move over 35 s;
+    - the two later reads show every written register at its pre-edit value.
+
+    Otherwise the outcome is UNCERTAIN. A later refusal text from an unrelated press can no longer hide a real write.
+  - A run interrupted before its outcome was judged (a Home Assistant restart or a script reload) leaves its result at
+    IN PROGRESS. The package's one automation (`ecco_cfg_edit_interrupted`) fires on Home Assistant start, and when the
+    Apply script stops with its result still IN PROGRESS. It disarms, marks the outcome UNCERTAIN, locks and alerts.
   - Any outcome other than "firmware refused at its gate" or "verified twice" is UNCERTAIN. That covers a failed verification,
     a partial write, a clamp, a disagreeing or missing later read, and a dropped or unanswered press.
   - UNCERTAIN sets `input_boolean.ecco_cfg_edit_review_required`, which refuses every later Review and Apply until the owner
     runs `script.ecco_cfg_acknowledge_edit_review` with the exact phrase `I HAVE CHECKED THE TOU SLOTS`.
-- **PROVEN-OFFLINE:** each case above locks, and only the exact phrase unlocks.
+- **PROVEN-OFFLINE:** each case above locks, including a stuck write enable, an unrelated refusal text after a real write, an HA restart mid-edit and a cancelled run; only the exact phrase unlocks.
 
 ## 7. Notifications and recovery instructions
 
@@ -163,3 +179,33 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
 - The reserve helper is only read.
 
 The firmware write surface is unchanged.
+
+## Fallback "armed" gate: what it covers
+
+The package must not name the fallback arm or scripts: a frozen test reserves them to the fallback packages. So it reads the
+fallback status package's derived sensors instead:
+- **Save Available** and **Replace Corrupt Available**: the arm on with a ready candidate. These are already implied by
+  `st=CANDIDATE_READY`, which the Review check refuses.
+- **Invalidate Available**: the arm on with a VALID profile.
+- The fallback **Review** state must be IDLE.
+- The firmware write lock covers a running Review or Save.
+
+**Not refused:** the fallback arm switched on while the profile is not VALID and no candidate is ready. In that state no
+fallback operation can execute, so there is no conflicting operation.
+
+**If the status package is not installed,** those sensors read `unknown` and every edit is refused (fail-closed, but the
+feature is then unusable).
+
+## Other residual points (accepted, documented)
+
+- **The shared write enable.** It is on for about 5-15 s per edit. An Apply that the owner presses by hand in that window, for
+  another loaded slot or the register 244 test, would use it. The firmware lock then makes this edit's final check refuse.
+  The other write is the owner's own action.
+- **Load overwrites staging.** The Load overwrites slot N's unsaved Manual Controls staging and the shared grid-charge
+  staging switch, with the live values.
+- **The lock helper.** The manual-review lock is a plain `input_boolean` that an administrator can switch off in the UI. The
+  acknowledgement script is the documented path.
+- **The review code.** It is time-derived: a typo and freshness guard, not an authorisation. Authorisation is the Home
+  Assistant login.
+- **Non-integer inputs.** These are truncated (slot 1.5 → 1, SOC 55.9 → 55). The review shows the resulting values before
+  anything happens.

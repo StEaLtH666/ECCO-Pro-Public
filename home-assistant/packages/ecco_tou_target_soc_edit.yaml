@@ -576,6 +576,9 @@ script:
                              and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
                              and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
                     then:
+                      # The firmware counts an Apply attempt only when its gate passes (published every 30 s).
+                      - variables:
+                          attempts_before: "{{ states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-1) }}"
                       - action: button.press
                         continue_on_error: true
                         target:
@@ -590,41 +593,61 @@ script:
                           seconds: 2
                       - variables:
                           fw_result: "{{ states('sensor.ecco_clock_dongle_manual_configuration_last_result')[:120] }}"
-                          cfg_after_apply: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+                          cfg_0: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+                      # Two LATER configuration reads: the first may be the firmware's own post-Apply poll (published
+                      # about 4 s after its verify); the second is a poll that began after it. Both must complete.
+                      - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_0 }}"
+                        timeout: "00:02:30"
+                        continue_on_timeout: true
+                      - variables:
+                          cfg_1: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+                      - wait_template: "{{ cfg_1 != cfg_0 and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1 }}"
+                        timeout: "00:02:30"
+                        continue_on_timeout: true
+                      - delay:
+                          seconds: 35
+                      - variables:
+                          later_read: >-
+                            {{ cfg_1 != cfg_0 and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1
+                               and is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
+                               and is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') }}
+                          attempts_moved: >-
+                            {{ (states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-2)) != (attempts_before | float(-3))
+                               or (attempts_before | float(-1)) < 0 }}
+                          diff: >-
+                            {% set d = namespace(v=[]) %}
+                            {% if (states(e.live_soc) | int(-1)) != want %}{% set d.v = d.v + ['SOC ' ~ states(e.live_soc) ~ ' (expected ' ~ want ~ ')'] %}{% endif %}
+                            {% if states(e.live_t) != pre.t %}{% set d.v = d.v + ['start ' ~ states(e.live_t) ~ ' (was ' ~ pre.t ~ ')'] %}{% endif %}
+                            {% if states(e.live_t_next) != pre.t_next %}{% set d.v = d.v + ['end ' ~ states(e.live_t_next) ~ ' (was ' ~ pre.t_next ~ ')'] %}{% endif %}
+                            {% if (states(e.live_pw) | float(-1)) != pre.pw %}{% set d.v = d.v + ['power ' ~ states(e.live_pw) ~ ' (was ' ~ pre.pw ~ ')'] %}{% endif %}
+                            {% if states(e.live_src) != pre.src or states(e.live_mode) != pre.mode or states(e.live_flags) != pre.flags %}{% set d.v = d.v + ['flags ' ~ states(e.live_flags) ~ ' (was ' ~ pre.flags ~ ')'] %}{% endif %}
+                            {% if states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') != pre.gc %}{% set d.v = d.v + ['grid charge ' ~ states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') ~ ' (was ' ~ pre.gc ~ ')'] %}{% endif %}
+                            {{ d.v | join('; ') }}
+                          unchanged: >-
+                            {{ (states(e.live_soc) | int(-1)) == pre.soc and states(e.live_t) == pre.t and states(e.live_t_next) == pre.t_next
+                               and (states(e.live_pw) | float(-1)) == pre.pw and states(e.live_src) == pre.src and states(e.live_mode) == pre.mode
+                               and states(e.live_flags) == pre.flags
+                               and states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') == pre.gc }}
                       - choose:
-                          # The firmware refused at its gate: nothing was written (its refusal texts all start so).
+                          # The firmware refused at its gate - claimed only when its gate-pass counter did not move AND
+                          # the two later reads show every written register still at its pre-edit value.
                           - conditions:
                               - condition: template
-                                value_template: "{{ fw_result.startswith('REJECTED') }}"
+                                value_template: "{{ fw_result.startswith('REJECTED') and later_read and not attempts_moved and unchanged }}"
                             sequence:
                               - action: input_text.set_value
                                 target:
                                   entity_id: input_text.ecco_cfg_edit_last_result
                                 data:
                                   value: >-
-                                    FAILED - the firmware refused the Apply ({{ fw_result }}); nothing written
+                                    FAILED - the firmware refused the Apply ({{ fw_result }}); nothing written (counter and later reads agree)
                               - action: persistent_notification.create
                                 data:
                                   notification_id: ecco_cfg_edit
                                   title: "ECCO: configuration edit refused by the dongle"
                                   message: >-
                                     {{ states('input_text.ecco_cfg_edit_last_result') }}
-                        # Otherwise: an independent LATER configuration read decides, whatever the firmware said.
                         default:
-                          - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_after_apply }}"
-                            timeout: "00:02:30"
-                            continue_on_timeout: true
-                          - variables:
-                              later_read: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_after_apply }}"
-                              diff: >-
-                                {% set d = namespace(v=[]) %}
-                                {% if (states(e.live_soc) | int(-1)) != want %}{% set d.v = d.v + ['SOC ' ~ states(e.live_soc) ~ ' (expected ' ~ want ~ ')'] %}{% endif %}
-                                {% if states(e.live_t) != pre.t %}{% set d.v = d.v + ['start ' ~ states(e.live_t) ~ ' (was ' ~ pre.t ~ ')'] %}{% endif %}
-                                {% if states(e.live_t_next) != pre.t_next %}{% set d.v = d.v + ['end ' ~ states(e.live_t_next) ~ ' (was ' ~ pre.t_next ~ ')'] %}{% endif %}
-                                {% if (states(e.live_pw) | float(-1)) != pre.pw %}{% set d.v = d.v + ['power ' ~ states(e.live_pw) ~ ' (was ' ~ pre.pw ~ ')'] %}{% endif %}
-                                {% if states(e.live_src) != pre.src or states(e.live_mode) != pre.mode or states(e.live_flags) != pre.flags %}{% set d.v = d.v + ['flags ' ~ states(e.live_flags) ~ ' (was ' ~ pre.flags ~ ')'] %}{% endif %}
-                                {% if states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') != pre.gc %}{% set d.v = d.v + ['grid charge ' ~ states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') ~ ' (was ' ~ pre.gc ~ ')'] %}{% endif %}
-                                {{ d.v | join('; ') }}
                           - choose:
                               - conditions:
                                   - condition: template
@@ -662,7 +685,7 @@ script:
                                   entity_id: input_text.ecco_cfg_edit_last_result
                                 data:
                                   value: >-
-                                    UNCERTAIN - firmware: {{ fw_result[:70] }}; later read: {{ 'none' if not later_read else (diff if diff else 'all as expected') }}
+                                    UNCERTAIN - firmware: {{ fw_result[:60] }}; later read: {{ 'incomplete' if not later_read else (diff[:110] if diff else 'all as expected') }}
                               - action: input_boolean.turn_on
                                 target:
                                   entity_id: input_boolean.ecco_cfg_edit_review_required
@@ -671,7 +694,7 @@ script:
                                   notification_id: ecco_cfg_edit
                                   title: "ECCO: configuration edit outcome NOT proven - manual review needed"
                                   message: >-
-                                    Slot {{ n }} target SOC {{ before }} -> {{ want }} %. Firmware said: {{ fw_result }}. Independent read: {{ 'no new configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
+                                    Slot {{ n }} target SOC {{ before }} -> {{ want }} %. Firmware said: {{ fw_result }}. Independent read: {{ 'no complete later configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
                     else:
                       - action: input_text.set_value
                         target:
@@ -686,11 +709,35 @@ script:
                     data:
                       value: >-
                         FAILED - the staged slot {{ n }} did not match the live slot after a fresh read, or the Manual Controls helpers did not settle; nothing pressed, nothing written
-      # The write enable always ends off (it only permits an Apply).
+      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.
       - action: switch.turn_off
         continue_on_error: true
         target:
           entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+      - wait_template: "{{ is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off') }}"
+        timeout: "00:00:10"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                 and not states('input_text.ecco_cfg_edit_last_result').startswith('REFUSED') }}
+        then:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_last_result
+            data:
+              value: >-
+                UNCERTAIN - the Manual Configuration Write Enable could not be confirmed off after the edit
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_review_required
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit
+              title: "ECCO: Manual Configuration Write Enable not confirmed off"
+              message: >-
+                Turn it off in Manual Controls and check every TOU slot. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
       - if:
           - condition: template
             value_template: "{{ states('input_text.ecco_cfg_edit_last_result').startswith('FAILED') }}"
@@ -725,3 +772,52 @@ script:
           - action: persistent_notification.dismiss
             data:
               notification_id: ecco_cfg_edit
+
+automation:
+  # An Apply that stopped while its result still reads IN PROGRESS was cancelled (a Home Assistant restart, a script
+  # reload or an error): its outcome was never judged. Disarm, mark it UNCERTAIN, lock and alert.
+  - id: ecco_cfg_edit_interrupted
+    alias: "ECCO - Configuration edit interrupted"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+        id: start
+      - trigger: template
+        id: stopped
+        value_template: >-
+          {{ states('input_text.ecco_cfg_edit_last_result').startswith('IN PROGRESS')
+             and is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') }}
+    actions:
+      - if:
+          - condition: trigger
+            id: start
+        then:
+          - delay:
+              seconds: 30
+      - if:
+          - condition: template
+            value_template: >-
+              {{ states('input_text.ecco_cfg_edit_last_result').startswith('IN PROGRESS')
+                 and not is_state('script.ecco_cfg_apply_tou_slot_soc', 'on') }}
+        then:
+          - action: switch.turn_off
+            continue_on_error: true
+            target:
+              entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_review_required
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_cfg_edit_last_result
+            data:
+              value: "UNCERTAIN - the edit was interrupted (Home Assistant restart or script reload) before its outcome was judged"
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit
+              title: "ECCO: configuration edit interrupted - manual review needed"
+              message: >-
+                An Advanced Configuration edit stopped before its outcome was checked. Do NOT retry. Open Manual
+                Controls, Load each TOU slot and compare with the inverter's own display; turn the Manual Configuration
+                Write Enable off if it is on. Edits stay locked until you run ECCO - Acknowledge configuration edit review.

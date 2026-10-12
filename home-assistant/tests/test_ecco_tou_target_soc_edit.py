@@ -145,8 +145,9 @@ class Run:
 print("[0] static")
 # ======================================================================================================================
 pkg = yaml.safe_load(PKG_TEXT)
-check("the package: three result / plan helpers, one lock, three scripts; no automation, no template",
-      {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 1, "script": 3})
+check("the package: three result / plan helpers, one lock, three scripts, one automation (the interrupted-edit "
+      "watchdog); no template", {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 1, "script": 3,
+                                                                       "automation": 1})
 services = sorted(set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT)))
 check("services: helpers, the write enable, two buttons, one number, notifications - nothing else", services == [
     "button.press", "input_boolean.turn_off", "input_boolean.turn_on", "input_text.set_value", "number.set_value",
@@ -396,7 +397,8 @@ check("without the helper package installed (helpers unknown) the edit works the
 print("\n[7] a refusal at the firmware's Apply gate")
 # ======================================================================================================================
 r = Run(setup=lambda x: x.d.fault.__setitem__("refuse_bus", True)).edit(3, 41)
-check("bus busy at the gate: FAILED (refused by the dongle; nothing written), one Apply, never retried, not locked, alerted",
+check("bus busy at the gate: FAILED (refused; nothing written, confirmed by the unchanged gate-pass counter and two later "
+      "reads), one Apply, never retried, not locked, alerted",
       r.res().startswith("FAILED - the firmware refused") and len(r.applies()) == 1 and r.changed() == {}
       and not r.arm_on() and not r.locked() and r.notes() != [], r.res())
 
@@ -441,12 +443,82 @@ def no_later_read(r):
 
     def finish(n, failed):
         orig(n, failed)
-        r.w.after(1.5, lambda: r.d.flags.__setitem__("cfg", False))   # after the firmware's own post-Apply poll
+        r.w.after(5.0, lambda: r.d.flags.__setitem__("cfg", False))   # right AFTER the firmware's own post-Apply poll
     r.d._finish = finish
 
 
 r = Run(setup=no_later_read).edit(3, 41)
-uncertain(r, "no independent later configuration read arrives", "no new configuration read" in r.note())
+uncertain(r, "only the firmware's own post-Apply poll arrives (no poll that began after it): not enough",
+          "no complete later configuration read" in r.note())
+
+
+def cache_invalid_after(r):
+    orig = r.d._finish
+
+    def finish(n, failed):
+        orig(n, failed)
+        r.w.after(20.0, lambda: r.w.set(f"binary_sensor.{D}manual_configuration_raw_cache_valid", "off"))
+    r.d._finish = finish
+
+
+r = Run(setup=cache_invalid_after).edit(3, 41)
+uncertain(r, "the later read is incomplete (raw configuration cache invalid, e.g. Block A failed)",
+          "no complete later configuration read" in r.note())
+
+
+def rejected_text_overwrites(r):
+    orig = r.d._finish
+
+    def finish(n, failed):
+        orig(n, failed)                           # the write really happened and verified...
+        r.w.after(0.5, lambda: r.w.set(M.RESULT, "REJECTED - cannot load Slot 2 staging while Free Power or Dump to "
+                                                 "Grid owns TOU settings"))   # ...then an unrelated refusal text
+    r.d._finish = finish
+
+
+r = Run(setup=rejected_text_overwrites).edit(3, 41)
+uncertain(r, "a REJECTED text from an unrelated press overwrites the result after a real write: never 'nothing written'",
+          not r.res().startswith("FAILED") and r.changed() == {(3, "soc"): (40, 41)})
+
+
+def arm_stuck(r):
+    """The Apply press and every later turn_off are lost (API trouble): the write enable stays ON."""
+    orig_off = r.d._switch(False)
+    orig_press = r.d._press
+
+    def turn_off(entity, data):
+        if entity == M.ARM:
+            return                                    # never reaches the dongle
+        orig_off(entity, data)
+
+    def press(entity, data):
+        if "apply_manual" in entity:
+            r.d.presses.append((r.w.t, "apply-dropped", "DROPPED"))
+            return
+        orig_press(entity, data)
+    r.w.service_handlers["switch.turn_off"] = turn_off
+    r.w.service_handlers["button.press"] = press
+
+
+r = Run(setup=arm_stuck).edit(3, 41)
+check("the write enable cannot be confirmed off at the end: UNCERTAIN, LOCKED, alerted", r.res().startswith("UNCERTAIN")
+      and r.locked() and "not confirmed off" in str(r.notes()), f"{r.res()} {r.notes()}")
+r = Run().review(3, 41)
+r.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {r.code()}"})
+r.w.run_until(r.w.t + 45)                        # mid-flow (after the fresh read and the Load)
+r.ha.stop()
+r.w.run_until(r.w.t + 60)
+r.ha = S.HA(r.w, [yaml.safe_load(PKG_TEXT), yaml.safe_load(HELPERS_TEXT)])
+r.ha.start()
+r.w.run_until(r.w.t + 120)
+check("Home Assistant restarts in the middle of an edit: the watchdog marks it UNCERTAIN, disarms, LOCKS and alerts",
+      r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked() and not r.arm_on()
+      and "interrupted" in str(r.notes()), f"{r.res()} {r.notes()}")
+r = Run()
+r.w.set(RESULT, "IN PROGRESS - slot 3 target SOC 40 -> 41 %: waiting")   # the script was cancelled (e.g. a reload)
+r.w.run_until(r.w.t + 5)
+check("an Apply cancelled mid-flight (script reload): the watchdog fires on the stopped run - UNCERTAIN, LOCKED",
+      r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked(), r.res())
 
 
 def drop_apply(r):
@@ -545,8 +617,8 @@ MUTANTS = [
     ("an uncertain outcome that does not lock", "- action: input_boolean.turn_on\n", "- action: input_boolean.turn_off\n",
      "lock"),
     ("the independent later read ignored", "and diff | length == 0 }}", "}}", "readback"),
-    ("the final disarm removed", "      # The write enable always ends off (it only permits an Apply).\n"
-     "      - action: switch.turn_off\n", "      # The write enable always ends off (it only permits an Apply).\n"
+    ("the final disarm removed", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
+     "      - action: switch.turn_off\n", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_on\n", "arm_off"),
 ]
 for name, anchor, repl, key in MUTANTS:

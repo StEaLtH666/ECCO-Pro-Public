@@ -23,6 +23,7 @@ GC_STAGED = f"switch.{P}manual_stage_grid_charge_enabled"
 GC_LIVE = f"binary_sensor.{P}ecco_battery_grid_charge_enabled"
 RESULT = f"sensor.{P}manual_configuration_last_result"
 SUCCESSES = f"sensor.{P}manual_configuration_write_successes_since_boot"
+ATTEMPTS = f"sensor.{P}manual_configuration_write_attempts_since_boot"
 MANUAL = f"binary_sensor.{P}manual_write_in_progress"
 CFG_UPDATE = f"sensor.{P}last_configuration_update"
 SHUTDOWN = f"sensor.{P}ecco_battery_shutdown"
@@ -94,6 +95,9 @@ class ManualTouDongle:
         world.set(MANUAL, "off")
         world.set(RESULT, "No manual write since boot")
         world.set(SUCCESSES, "0.0")
+        world.set(ATTEMPTS, "0.0")
+        self.attempts = 0
+        world.at(world.t + 13.0, self._counter_tick)
         world.set(SHUTDOWN, f"{float(shutdown_soc)}")
         for e, v in SAFE_STATES.items():
             world.set(e, v)
@@ -147,6 +151,12 @@ class ManualTouDongle:
         self.cache = copy.deepcopy(self.regs)
         self._publish_live()
         self.w.set(CFG_UPDATE, local_str(self.w.t))
+
+    def _counter_tick(self):
+        """The firmware publishes its write counters every 30 s (not on change)."""
+        if self.flags["tel"]:
+            self.w.set(ATTEMPTS, f"{float(self.attempts)}")
+        self.w.after(30.0, self._counter_tick)
 
     def _poll_tick(self):
         self.poll()
@@ -236,6 +246,7 @@ class ManualTouDongle:
             self.w.after(0.12, lambda: (self.w.set(RESULT, refuse), self.w.set(ARM, "off")))
             return
         self.presses.append((self.w.t, f"apply{n}", "PASSED"))
+        self.attempts += 1
         self.apply_staging.append(dict(staging=copy.deepcopy(st), gc=self.staged_gc, regs=copy.deepcopy(self.regs)))
         self.loaded[n] = False
         self.manual = True
@@ -280,4 +291,4 @@ class ManualTouDongle:
             self.successes += 1
         self.w.after(0.12, lambda: (self.w.set(RESULT, text), self.w.set(MANUAL, "off"),
                                     self.w.set(SUCCESSES, f"{float(self.successes)}")))
-        self.w.after(1.0, self.poll)                    # the firmware polls the configuration after the Apply
+        self.w.after(3.9, self.poll)                    # the firmware's own post-Apply poll (Block A +0.9 s, Block B +3.4 s)
