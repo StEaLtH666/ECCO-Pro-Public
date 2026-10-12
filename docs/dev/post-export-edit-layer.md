@@ -140,9 +140,9 @@ six reserved fallback / failback entity ids, so it carries the owner-approved to
 
 - `banned_files`: exactly its three files (the package, its dongle model and its suite);
 - three frozen edits, one per older suite whose exact reserved-token allowlist it amends: `test_fallback_profile_schema.py`,
-  `test_fallback_recovery_dashboard.py` and `test_fallback_save_scope.py`. Each exempts exactly the six ids (or, for the FB-C3 strict
-  rule, exactly the shadow State id) in exactly those files, and two of them carry an exactness proof. The FB-B3 holder list keeps its
-  four files;
+  `test_fallback_recovery_dashboard.py` and `test_fallback_save_scope.py`. The FB-C3 strict rule exempts exactly the shadow State id
+  in the three files; the FB-B3 holder scan exempts exactly the six ids in the package and keeps its four-file list; both carry an
+  exactness proof. The exact declared list and the save-scope union name the three files;
 - one ordinary edit of the same kind to `test_fallback_live_match.py` (not frozen); its pairs are recorded in the scope module.
 
 As of `pub0` each amended suite is the export byte for byte. `acs0` changed no firmware and no write surface.

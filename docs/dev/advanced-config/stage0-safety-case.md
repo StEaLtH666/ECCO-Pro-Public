@@ -210,14 +210,29 @@ fails closed: an unknown, unavailable, empty, malformed, duplicated, stale or un
 | Failback shadow State (`sensor.…_ecco_failback_shadow_state`) | `SHADOW_IDLE` |
 
 The firmware publishes `MATCH` / `DRIFT` / `CONTEXT` only when the boot load is complete, every lease is clear, the bus is idle
-and the cache is fresh. So `UNKNOWN`, `PAUSED`, `PAUSED_IO`, `NO_PROFILE` (which also covers a corrupt profile or a fallback
-write whose outcome is unknown), `EXPORT` and `OUT_OF_DOMAIN` all refuse. The live S3 evidence shows `MATCH` / `DRIFT` with
+and the cache is fresh. `UNKNOWN`, `PAUSED` and `PAUSED_IO` mean the comparison did not run, and refuse.
+
+**A deliberate fail-closed choice (owner decision point):** three further verdicts also refuse, and the refusal names the verdict.
+- `NO_PROFILE`: no VALID saved fallback profile. It also covers a corrupt profile and a fallback write whose outcome is unknown,
+  which is why it refuses. **Consequence:** the editor cannot be used on an installation without a saved profile, or after an
+  Invalidate, until a profile is saved.
+- `EXPORT` (a trusted comparison: live register 244 allows export where the saved profile does not) and `OUT_OF_DOMAIN` (a trusted
+  comparison: a live value outside the profile's value domain, for example a slot power below its minimum). **Consequence:** while
+  the inverter is in either state the editor refuses until it is put right through the normal tools.
+- The editor itself can never cause these: it changes only a slot SOC (always inside the domain) and never register 244, so the
+  only verdict it produces is `DRIFT`, which is allowed (step B of the live proof starts in `DRIFT`).
+Allowing `EXPORT` or `OUT_OF_DOMAIN` would be a one-line change to the verdict list; it was not made without the owner's decision. The live S3 evidence shows `MATCH` / `DRIFT` with
 `ca=F`, `eh=0` in steady state; `UNKNOWN ca=P` and `PAUSED_IO BUS:BY` appear only transiently around writes and bus activity,
 where refusing is correct.
 
 **Proven offline:** 56 ambiguous states (each verdict and cache letter, hazard `U` / `1`, case and whitespace variants,
 duplicated keys, a prefixed key, an extra lease leg, empty and `unknown` values for every id) are each refused, and `DRIFT` /
 `CONTEXT` still allow the edit. Mutants that drop the freshness, the verdict or the duplicate check are each caught.
+
+**Bounded, not proven (Home Assistant-side staleness):** ESPHome publishes a text sensor only when it changes, so a live-match
+text that has stopped updating while the API stays connected would still read its last value. The gate does not check
+`last_updated` (the editor's suite bans indirect state access). The dongle's own trust terms (`ca=F`) and the online / cache-valid
+flags bound this; a frozen dongle with a live API connection is not modelled.
 
 **Bounded, not proven:** the three operator "available" sensors are Home Assistant templates. If their own inputs (the arm, the
 profile state, the Review id) were unavailable while the dongle stayed connected, they would read `off`. With the ESPHome native
@@ -242,8 +257,12 @@ The FB-A / FB-B3 / FB-C3 token rule allows reserved tokens (`ecco_fallback`, `ec
 - The editor's own suite (section [12]) proves every occurrence in the package is inside `states()` / `is_state()` (24: six ids
   in four gate copies), that no indirect route exists (no `state_attr`, `states.<domain>`, `expand`, `*_entities`, built entity
   ids, or the status package's other sensors by name), and that eleven evasions in the package and the ids in any undeclared
-  file are refused. Tamper proofs run the real suites against a seventh id, a variant, an undeclared holder, a write, an indirect
-  read, a widened regex and a dropped declaration.
+  file are refused. Where exactness is enforced: the FB-C3 strict rule and the B10 scan in all three files, the FB-B3 holder scan
+  in the package, and the editor's suite for any other ecco_fallback-family id in the two `.py` files (`banned_files` is a
+  whole-file declaration, as in every earlier entry).
+- Tamper proofs (run on scratch clones during review, not part of the repository) ran the real suites against a seventh id, another
+  shadow id, an undeclared holder, a write, an indirect read, a widened frozen regex, a dropped declaration and a removed freshness
+  check; each was refused.
 
 **If the status package is not installed,** the three operator sensors read `unknown` and every edit is refused (fail-closed,
 but the feature is then unusable).

@@ -12,7 +12,11 @@ register (the write surface is unchanged).
 
 THE TOKEN AMENDMENT (owner-approved Option A, 2026-10-12). The gate READS six reserved fallback / failback entity ids
 (RESERVED_IDS). acs0 declares exactly its three files as banned_files and makes the five exact allowlist checks exempt exactly
-those six ids in exactly those files - nothing is widened for any other file, id or operation.
+those six ids in exactly those files - nothing is widened for any other file, id or operation. Where exactness is enforced:
+the frozen FB-C3 strict rule (ecco_failback: only the shadow State id, all three files), the FB-B3 holder scan (Home Assistant
+YAML: the package holds only the six ids) and the B10 scan (only the full live-match id, all three files); for the two .py files,
+any other ecco_fallback-family id is refused by the editor's own suite (section [12]), as banned_files is a whole-file declaration
+in every earlier entry too.
 
 CHAIN-PINNED edit: deployment/ha-manifest.yaml, one home_assistant_packages stanza.
 FROZEN edits (PEX): three older suites whose exact reserved-token allowlists acs0 amends - test_fallback_profile_schema.py (the

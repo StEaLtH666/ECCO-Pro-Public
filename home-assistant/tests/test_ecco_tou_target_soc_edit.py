@@ -367,6 +367,12 @@ for label, ent, val in (("DRIFT (e.g. after an earlier edit)", LIVE_MATCH, b10("
     ok_states.append((label, r.res()[:40]))
 check("a current comparison other than MATCH (DRIFT, CONTEXT) still allows the edit (step B of the live proof starts in DRIFT)",
       all(v.startswith("APPLIED AND VERIFIED") for _l, v in ok_states), str(ok_states))
+named = {}
+for m_ in ("NO_PROFILE", "EXPORT", "OUT_OF_DOMAIN"):
+    named[m_] = Run(setup=lambda x, v_=m_: x.w.set(LIVE_MATCH, b10(v_))).review(3, 41).res()
+check("NO_PROFILE, EXPORT and OUT_OF_DOMAIN (a trusted comparison, but no valid saved profile, export open against it, or live "
+      "settings outside its domain) are refused with the verdict named - a deliberate fail-closed choice the safety case documents",
+      all(v.startswith("REVIEW REFUSED - the fallback live match is " + m_ + ":") for m_, v in named.items()), str(named))
 for label, kw in (("a Free Power schedule starting in 10 min", dict(fp_sched="2026-10-12 14:11:00")),
                   ("a Dump to Grid schedule starting in 10 min", dict(dump_sched="2026-10-12 14:11:00"))):
     r = Run(**kw).review(3, 41)
@@ -904,7 +910,11 @@ RESERVED = re.compile("|".join((FB_TOK, "FALLBACK" + "_PROFILE", "FAILBACK" + "_
 B10_TOK = "fallback_profile_" + "live_match"
 ID_RES = [re.compile(r"(?<![a-z0-9_])" + re.escape(i) + r"(?![a-z0-9_])") for i in ACS0_IDS]
 READ_CALL = re.compile(r"\b(?:states|is_state)\('(?:" + "|".join(re.escape(i) for i in ACS0_IDS) + r")'[,)]")
-INDIRECT = re.compile(r"\bstate_attr\(|\bstates\.[a-z_]+\.|\bstates\[|\bexpand\(|_entities\(|\bthis\.")
+# Every Home Assistant template route to another entity's state or attributes that does not name it in states() / is_state():
+# state_attr / is_state_attr / has_value / state_translated, the states object in any form other than a call (states.x,
+# states[...], states | selectattr(...)), expand, *_entities, device / area / floor / label helpers, and this.
+INDIRECT = re.compile(r"\b(?:is_)?state_attr\(|\bhas_value\(|\bstate_translated\(|\bstates\b(?!\()|\bexpand\(|_entities\("
+                      r"|\b(?:device|area|floor|label)_[a-z_]+\(|\b(?:device_id|area_id|floor_id|labels|areas|floors)\(|\bthis\.")
 ARG = re.compile(r"\b(?:states|is_state)\(([^,)]*)")
 LITERAL_ARG = re.compile(r"'[a-z_]+\.[a-z0-9_]+'|e\.[a-z_]+")
 status_pkg = yaml.safe_load((ROOT / "home-assistant" / "packages" / (FB_TOK + "_status.yaml")).read_text(encoding="utf-8"))
@@ -961,10 +971,18 @@ NEG = {
     "expand()": PKG_TEXT + "\n# {{ expand('group.ecco_x') | list }}\n",
     "an entity id built at run time": PKG_TEXT + "\n# {{ states('binary_sensor.ecco_' ~ 'x') }}\n",
     "the status package's shadow check by name": PKG_TEXT + "\n# {{ states('sensor.ecco_shadow_check') }}\n",
+    "states | selectattr (a search by name)": PKG_TEXT + "\n# {{ states | selectattr('entity_id', 'search', 'shadow_st') | list }}\n",
+    "states.<domain> | selectattr": PKG_TEXT + "\n# {{ states.sensor | selectattr('state', 'eq', 'SHADOW_IDLE') | list }}\n",
+    "is_state_attr": PKG_TEXT + "\n# {{ is_state_attr('sensor.ecco_shadow_check', 'shadow_state', 'SHADOW_IDLE') }}\n",
+    "has_value on a built id": PKG_TEXT + "\n# {{ has_value('sensor.' ~ 'x') }}\n",
+    "state_translated": PKG_TEXT + "\n# {{ state_translated('sensor.ecco_x') }}\n",
+    "device_attr": PKG_TEXT + "\n# {{ device_attr('abc', 'name') }}\n",
+    "area_entities": PKG_TEXT + "\n# {{ area_entities('garage') }}\n",
 }
 caught = {k: bool(violations(PKG_REL, t)) for k, t in NEG.items()}
-check(f"negatives: each of {len(NEG)} evasions in the package is refused (a seventh id, a variant, a fragment, a write, a bare id, "
-      "state_attr, the states object, expand, a built id, the status package's sensors by another name)", all(caught.values()),
+check(f"negatives: each of {len(NEG)} evasions in the package is refused (a seventh id, a variant, a prefixed variant, a fragment, a "
+      "write, a bare id, state_attr / is_state_attr / has_value / state_translated, the states object incl. selectattr searches, expand, "
+      "device / area helpers, a built id, the status package's sensors by another name)", all(caught.values()),
       str([k for k, v in caught.items() if not v]))
 check("negatives: an authorised id in any UNDECLARED file is refused (another package, the dashboard, a frontend file)",
       all(violations(rel, "x: " + LIVE_MATCH) for rel in ("home-assistant/packages/ecco_manual_controls_helpers.yaml",

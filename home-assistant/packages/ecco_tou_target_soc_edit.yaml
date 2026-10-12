@@ -178,7 +178,7 @@ script:
             {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
             {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
             {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
             {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -359,7 +359,7 @@ script:
             {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
             {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
             {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
             {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -452,7 +452,7 @@ script:
                 {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
                 {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
                 {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-                {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+                {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
                 {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                 {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                       or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -588,7 +588,7 @@ script:
                         {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
                         {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
                         {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-                        {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is not a current comparison ({{ lm[:60] }})
+                        {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
                         {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                         {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                               or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
