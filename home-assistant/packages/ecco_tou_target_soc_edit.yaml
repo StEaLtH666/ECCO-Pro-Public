@@ -19,6 +19,9 @@
 #            the request and every other written register is its pre-edit value
 #   ANYTHING ELSE: stop, disarm, alert with the observed values and recovery steps, and lock further edits until the owner
 #            acknowledges (script.ecco_cfg_acknowledge_edit_review). Never retried, never a compensating write.
+# An Apply holds input_boolean.ecco_cfg_edit_in_flight from before its first press until its outcome is judged; a run that
+# stops while it is still on (a Home Assistant restart, a script reload) is caught by the watchdog automation below, which
+# locks and alerts at once and then disarms. Review and Acknowledge refuse while an Apply runs or is in flight.
 # The allowed range is max(inverter shutdown SOC, ECCO minimum battery reserve) .. 100, read fresh before the Apply; the
 # reserve helper is only read, never changed.
 
@@ -37,6 +40,9 @@ input_boolean:
   ecco_cfg_edit_review_required:
     name: ECCO Advanced Config Edit Needs Manual Review
     icon: mdi:alert-octagon
+  ecco_cfg_edit_in_flight:
+    name: ECCO Advanced Config Edit In Flight
+    icon: mdi:progress-wrench
 
 script:
   ecco_cfg_review_tou_slot_soc:
@@ -51,6 +57,20 @@ script:
       target_soc:
         description: "New target SOC (%)"
     sequence:
+      # Never while an Apply runs or is in flight: refuse without touching the edit's result or its markers.
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') or not is_state('input_boolean.ecco_cfg_edit_in_flight', 'off') }}
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit_busy
+              title: "ECCO: refused - a configuration edit is being applied"
+              message: >-
+                A Review or Acknowledge was refused because an Advanced Configuration edit is running or has not been
+                judged yet; nothing was changed. See ECCO Advanced Config Edit Last Result.
+          - stop: "an edit is being applied"
       - variables:
           n: "{{ slot | int(0) }}"
           want: "{{ target_soc | int(-1) }}"
@@ -346,7 +366,8 @@ script:
             {% elif is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on') and dg_start < soon %}a scheduled Dump to Grid starts within 15 minutes
             {% endif %}
           review_problem: >-
-            {% if (states('input_text.ecco_cfg_edit_review').split('|') | count) != 5 or n < 1 %}no pending review (run the review first)
+            {% if not is_state('input_boolean.ecco_cfg_edit_in_flight', 'off') %}an earlier edit has not been judged yet
+            {% elif (states('input_text.ecco_cfg_edit_review').split('|') | count) != 5 or n < 1 %}no pending review (run the review first)
             {% elif as_timestamp(now()) - reviewed_at > 600 %}the review has expired (10 minutes); review again
             {% elif (confirmation | string) != ('SET SLOT ' ~ n ~ ' TARGET SOC ' ~ want ~ ' REVIEW ' ~ code) %}the confirmation phrase does not match the review
             {% elif (states(e.live_soc) | int(-1)) != before %}the slot changed since the review; review again
@@ -363,6 +384,10 @@ script:
                   value: >-
                     REFUSED - {{ review_problem if review_problem else refusal }}; nothing written
         default:
+          # In flight from here until the outcome is judged (the watchdog catches a run that stops before that).
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_in_flight
           # The review is single-use from here on.
           - action: input_text.set_value
             target:
@@ -589,26 +614,37 @@ script:
                              and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off') }}
                         timeout: "00:00:45"
                         continue_on_timeout: true
+                      # Never left on while the outcome is judged (harmless when the firmware has already disarmed: the
+                      # firmware reads the write enable only at its Apply gate, so this cannot interrupt a write).
+                      - action: switch.turn_off
+                        continue_on_error: true
+                        target:
+                          entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
                       - delay:
                           seconds: 2
                       - variables:
                           fw_result: "{{ states('sensor.ecco_clock_dongle_manual_configuration_last_result')[:120] }}"
                           cfg_0: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
-                      # Two LATER configuration reads: the first may be the firmware's own post-Apply poll (published
-                      # about 4 s after its verify); the second is a poll that began after it. Both must complete.
-                      - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_0 }}"
+                      # Two LATER configuration reads, compared as TIMES - a connection drop's 'unavailable' and the value a
+                      # reconnect re-sends are not reads. The first may be the firmware's own post-Apply poll (published
+                      # about 4 s after its verify); the firmware runs one poll at a time, so the second began after it.
+                      - wait_template: >-
+                          {{ as_timestamp(cfg_0, 0) > 0 and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_0, 0) }}
                         timeout: "00:02:30"
                         continue_on_timeout: true
                       - variables:
                           cfg_1: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
-                      - wait_template: "{{ cfg_1 != cfg_0 and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1 }}"
+                      - wait_template: >-
+                          {{ as_timestamp(cfg_0, 0) > 0 and as_timestamp(cfg_1, 0) > as_timestamp(cfg_0, 0)
+                             and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_1, 0) }}
                         timeout: "00:02:30"
                         continue_on_timeout: true
                       - delay:
                           seconds: 35
                       - variables:
                           later_read: >-
-                            {{ cfg_1 != cfg_0 and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1
+                            {{ as_timestamp(cfg_0, 0) > 0 and as_timestamp(cfg_1, 0) > as_timestamp(cfg_0, 0)
+                               and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_1, 0)
                                and is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                                and is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') }}
                           attempts_moved: >-
@@ -728,7 +764,7 @@ script:
               entity_id: input_text.ecco_cfg_edit_last_result
             data:
               value: >-
-                UNCERTAIN - the Manual Configuration Write Enable could not be confirmed off after the edit
+                UNCERTAIN - the write enable could not be confirmed off after the edit (outcome before: {{ states('input_text.ecco_cfg_edit_last_result')[:120] }})
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.ecco_cfg_edit_review_required
@@ -747,6 +783,14 @@ script:
               notification_id: ecco_cfg_edit
               title: "ECCO: configuration edit did not complete"
               message: "{{ states('input_text.ecco_cfg_edit_last_result') }}"
+      # Judged: out of flight (a refused run never set it, and must not clear an earlier run's marker).
+      - if:
+          - condition: template
+            value_template: "{{ not states('input_text.ecco_cfg_edit_last_result').startswith('REFUSED') }}"
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_in_flight
 
   ecco_cfg_acknowledge_edit_review:
     alias: "ECCO - Acknowledge configuration edit review"
@@ -757,6 +801,20 @@ script:
       confirmation:
         description: "Exactly: I HAVE CHECKED THE TOU SLOTS"
     sequence:
+      # Never while an Apply runs or is in flight: refuse without touching the edit's result or its markers.
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') or not is_state('input_boolean.ecco_cfg_edit_in_flight', 'off') }}
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_cfg_edit_busy
+              title: "ECCO: refused - a configuration edit is being applied"
+              message: >-
+                A Review or Acknowledge was refused because an Advanced Configuration edit is running or has not been
+                judged yet; nothing was changed. See ECCO Advanced Config Edit Last Result.
+          - stop: "an edit is being applied"
       - if:
           - condition: template
             value_template: "{{ (confirmation | string) == 'I HAVE CHECKED THE TOU SLOTS' }}"
@@ -774,37 +832,24 @@ script:
               notification_id: ecco_cfg_edit
 
 automation:
-  # An Apply that stopped while its result still reads IN PROGRESS was cancelled (a Home Assistant restart, a script
-  # reload or an error): its outcome was never judged. Disarm, mark it UNCERTAIN, lock and alert.
+  # An Apply that stopped while it was still in flight was cancelled (a Home Assistant restart, a script reload or an
+  # error): its outcome was never judged. Lock and mark it UNCERTAIN at once, alert, then disarm once the dongle is
+  # reachable (a service call to an unavailable entity does nothing) and confirm the write enable reads off.
   - id: ecco_cfg_edit_interrupted
     alias: "ECCO - Configuration edit interrupted"
     mode: single
     triggers:
       - trigger: homeassistant
         event: start
-        id: start
       - trigger: template
-        id: stopped
         value_template: >-
-          {{ states('input_text.ecco_cfg_edit_last_result').startswith('IN PROGRESS')
-             and is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') }}
+          {{ is_state('input_boolean.ecco_cfg_edit_in_flight', 'on') and is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') }}
     actions:
-      - if:
-          - condition: trigger
-            id: start
-        then:
-          - delay:
-              seconds: 30
       - if:
           - condition: template
             value_template: >-
-              {{ states('input_text.ecco_cfg_edit_last_result').startswith('IN PROGRESS')
-                 and not is_state('script.ecco_cfg_apply_tou_slot_soc', 'on') }}
+              {{ is_state('input_boolean.ecco_cfg_edit_in_flight', 'on') and not is_state('script.ecco_cfg_apply_tou_slot_soc', 'on') }}
         then:
-          - action: switch.turn_off
-            continue_on_error: true
-            target:
-              entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.ecco_cfg_edit_review_required
@@ -813,6 +858,9 @@ automation:
               entity_id: input_text.ecco_cfg_edit_last_result
             data:
               value: "UNCERTAIN - the edit was interrupted (Home Assistant restart or script reload) before its outcome was judged"
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.ecco_cfg_edit_in_flight
           - action: persistent_notification.create
             data:
               notification_id: ecco_cfg_edit
@@ -821,3 +869,24 @@ automation:
                 An Advanced Configuration edit stopped before its outcome was checked. Do NOT retry. Open Manual
                 Controls, Load each TOU slot and compare with the inverter's own display; turn the Manual Configuration
                 Write Enable off if it is on. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
+          - wait_template: "{{ states('switch.ecco_clock_dongle_manual_configuration_write_enable') in ['on', 'off'] }}"
+            timeout: "00:10:00"
+            continue_on_timeout: true
+          - action: switch.turn_off
+            continue_on_error: true
+            target:
+              entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+          - wait_template: "{{ is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off') }}"
+            timeout: "00:00:10"
+            continue_on_timeout: true
+          - if:
+              - condition: template
+                value_template: "{{ not is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off') }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_cfg_edit_arm
+                  title: "ECCO: Manual Configuration Write Enable NOT confirmed off"
+                  message: >-
+                    After an interrupted configuration edit the Manual Configuration Write Enable could not be confirmed
+                    off (it reads {{ states('switch.ecco_clock_dongle_manual_configuration_write_enable') }}). Turn it off in Manual Controls now, then check every TOU slot.

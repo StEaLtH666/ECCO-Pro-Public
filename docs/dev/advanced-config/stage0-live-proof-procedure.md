@@ -10,8 +10,9 @@
 
 1. **Timing.** No Free Power or Dump to Grid session, schedule or recovery is active or armed within the next 60 minutes,
    and no fallback Review or Save is open.
-2. **Package deployed.** Stage 0 (`ecco_tou_target_soc_edit.yaml`) is deployed and reloaded. The three scripts and four
-   helpers exist; `input_boolean.ecco_cfg_edit_review_required` is off.
+2. **Package deployed.** Stage 0 (`ecco_tou_target_soc_edit.yaml`) is deployed and reloaded. The three scripts, the five
+   helpers and the `ECCO - Configuration edit interrupted` automation exist; `input_boolean.ecco_cfg_edit_review_required`
+   and `input_boolean.ecco_cfg_edit_in_flight` are both off.
 3. **Fallback profile.** The live match shows MATCH. Note `dx` and `obl`.
 4. **Slot 3 baseline.** Record start, end (slot 4 start), power, charge source, mode, raw flags, SOC (expected 40 %) and the
    grid-charge bit. Also record slots 1, 2, 4, 5 and 6 (all fields).
@@ -25,8 +26,9 @@
    - Check the review notification: register 270, 40 → 41 %, every unchanged value, the allowed range and the phrase.
 2. Within 10 minutes, run *ECCO - Apply a reviewed TOU slot target SOC edit* with the exact phrase from the review.
 3. Expect:
-   - the result moves through `IN PROGRESS`;
-   - then `APPLIED AND VERIFIED`, within about 3 minutes (it waits for one fresh and one later configuration read);
+   - the result moves through `IN PROGRESS`, with `input_boolean.ecco_cfg_edit_in_flight` on;
+   - then `APPLIED AND VERIFIED`, within about 3 minutes (it waits for one fresh and two later configuration reads), with the
+     in-flight marker back off and the Manual Configuration Write Enable off within seconds of the Apply;
    - the notification reports "TOU slot 3 target SOC changed to 41 %";
    - the live match shows DRIFT;
    - the counters advance by +1 / +1 / 0.
@@ -43,7 +45,8 @@ live match returning to MATCH, and the counters advancing by +1 / +1 / 0 again.
 Pull HA history (read-only) for the window and check:
 - every slot 3 field other than the SOC, and every field of slots 1, 2, 4, 5 and 6, has no change rows;
 - the SOC rows read 40 → 41 → 40;
-- each Apply produced exactly one `Writing Slot3 …`, one `VERIFIED OK`, and one independent later read matching the request;
+- each Apply produced exactly one `Writing Slot3 …`, one `VERIFIED OK`, and two later configuration reads (strictly later
+  update times) matching the request;
 - the dongle log shows exactly the slot 3 write and verify transactions per Apply, no retries, and the write enable disarmed;
 - the lock stayed off, and no Free Power, Dump, RTC or fallback state changed except the expected DRIFT / MATCH.
 

@@ -120,7 +120,11 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   - the firmware's `VERIFIED OK - manual Slot N` (its own readback);
   - TWO later configuration polls after the outcome. The first may be the firmware's own post-Apply poll, which reads Block A
     about 0.9 s after the verify, waits 2.5 s, reads Block B, and only then publishes. The second is a poll that began after
-    it.
+    it: the firmware runs one poll at a time (`mode: single`), skips Block B while its write lock is held, and publishes the
+    update time only from a completed Block B.
+  - The reads are compared as TIMES (Last Configuration Update, `%Y-%m-%d %H:%M:%S` from the dongle's synchronised clock),
+    each strictly later than the one before. A connection drop's `unavailable` and the value a reconnect re-sends are not
+    reads. A clock step backwards, or an unsynchronised clock ("Waiting"), ends UNCERTAIN.
   - Configuration Online and the raw configuration cache valid at that read. Block B publishes the update time even when
     Block A failed, and register 232 comes from Block A.
   - In that read:
@@ -129,6 +133,8 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
       their pre-edit values.
 - **PROVEN-OFFLINE (the model now publishes the firmware's post-Apply poll at +3.9 s, as the real firmware does):**
   - Only the firmware's own poll arriving: UNCERTAIN.
+  - A connection drop after the outcome whose reconnect re-sends the firmware's own poll time, with no later poll: UNCERTAIN.
+    With the periodic polls continuing, the same drop still verifies, on a poll that began after the firmware's own.
   - An invalid raw cache at the later read: UNCERTAIN.
   - A verified write whose later read shows another register changed: UNCERTAIN, and the alert lists the field.
 - **RESIDUAL:** register 232's bits other than bit 0 are not exposed to Home Assistant, so they are not independently read
@@ -138,22 +144,33 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
 
 - **BY CONSTRUCTION:**
   - One press per request, never retried, never a compensating write.
-  - The write enable is turned off at the end and must be SEEN off within 10 s. Otherwise the outcome is UNCERTAIN. Home
-    Assistant skips service calls to an unavailable entity, so `continue_on_error` alone proves nothing.
+  - The write enable is turned off as soon as the firmware's 45 s window ends (the firmware reads it only at its Apply gate,
+    so this cannot interrupt a write), and again at the end, where it must be SEEN off within 10 s; otherwise the outcome
+    is UNCERTAIN (the text keeps the earlier outcome). Home Assistant skips service calls to an unavailable entity, so
+    `continue_on_error` alone proves nothing.
   - "The firmware refused, nothing written" is claimed only when ALL hold:
     - the result text is a refusal;
     - the firmware's gate-pass counter (Manual Configuration Write Attempts Since Boot) did not move over 35 s;
     - the two later reads show every written register at its pre-edit value.
 
     Otherwise the outcome is UNCERTAIN. A later refusal text from an unrelated press can no longer hide a real write.
-  - A run interrupted before its outcome was judged (a Home Assistant restart or a script reload) leaves its result at
-    IN PROGRESS. The package's one automation (`ecco_cfg_edit_interrupted`) fires on Home Assistant start, and when the
-    Apply script stops with its result still IN PROGRESS. It disarms, marks the outcome UNCERTAIN, locks and alerts.
+  - An Apply holds `input_boolean.ecco_cfg_edit_in_flight` (restored across restarts) from before its first press until its
+    outcome is judged. Review and Acknowledge refuse while an Apply runs or is in flight, and touch neither the result, the
+    plan nor the marker; an Apply refuses while an earlier run is in flight.
+  - A run interrupted before its outcome was judged (a Home Assistant restart or a script reload) leaves the marker on. The
+    package's one automation (`ecco_cfg_edit_interrupted`) fires on Home Assistant start, and when the marker is on while
+    the Apply script is off. It locks, marks the outcome UNCERTAIN and alerts AT ONCE (so nothing can start in the window
+    before the dongle reconnects), clears the marker, then waits up to 10 minutes for the write enable to become reachable,
+    turns it off and confirms it reads off; otherwise a separate "NOT confirmed off" alert.
   - Any outcome other than "firmware refused at its gate" or "verified twice" is UNCERTAIN. That covers a failed verification,
     a partial write, a clamp, a disagreeing or missing later read, and a dropped or unanswered press.
   - UNCERTAIN sets `input_boolean.ecco_cfg_edit_review_required`, which refuses every later Review and Apply until the owner
     runs `script.ecco_cfg_acknowledge_edit_review` with the exact phrase `I HAVE CHECKED THE TOU SLOTS`.
-- **PROVEN-OFFLINE:** each case above locks, including a stuck write enable, an unrelated refusal text after a real write, an HA restart mid-edit and a cancelled run; only the exact phrase unlocks.
+- **PROVEN-OFFLINE:** each case above locks, including a stuck write enable, an unrelated refusal text after a real write,
+  a partial write of unchanged values hidden by an unrelated refusal (only the counter shows it), an HA restart mid-edit
+  (locked within a second, while the dongle is still unavailable; a Review or Apply in that window is refused; the write
+  enable confirmed off once the dongle returns, or a separate alert), a cancelled run, and a Review or Acknowledge during an
+  Apply; only the exact phrase unlocks. A press that never arrives leaves the write enable on for at most about 46 s.
 
 ## 7. Notifications and recovery instructions
 
@@ -198,7 +215,7 @@ feature is then unusable).
 
 ## Other residual points (accepted, documented)
 
-- **The shared write enable.** It is on for about 5-15 s per edit. An Apply that the owner presses by hand in that window, for
+- **The shared write enable.** It is on for about 5-15 s per edit (at most about 50 s if the press is lost). An Apply that the owner presses by hand in that window, for
   another loaded slot or the register 244 test, would use it. The firmware lock then makes this edit's final check refuse.
   The other write is the owner's own action.
 - **Load overwrites staging.** The Load overwrites slot N's unsaved Manual Controls staging and the shared grid-charge
@@ -207,5 +224,11 @@ feature is then unusable).
   acknowledgement script is the documented path.
 - **The review code.** It is time-derived: a typo and freshness guard, not an authorisation. Authorisation is the Home
   Assistant login.
+- **An unclean crash.** Home Assistant saves restorable state every 15 minutes and on a clean stop. After a crash or power
+  loss it can restore an older in-flight marker, so an Apply interrupted that way may go unnoticed. The watchdog's claim is
+  limited to clean stops, restarts and script reloads. The live-proof procedure is supervised throughout.
+- **A refused Review while locked** replaces the visible UNCERTAIN text with "REVIEW REFUSED - an earlier edit's outcome
+  needs manual review first"; the lock and the UNCERTAIN alert remain.
+- **Run length.** About 2.5-3 minutes typically, about 8.6 minutes at worst (every judging wait timing out).
 - **Non-integer inputs.** These are truncated (slot 1.5 → 1, SOC 55.9 → 55). The review shows the resulting values before
   anything happens.

@@ -165,6 +165,8 @@ class ManualTouDongle:
     # ---- services -----------------------------------------------------------------------------------------------
     def _switch(self, on: bool):
         def h(entity, data):
+            if self.w.state(entity) == "unavailable":
+                return                                  # Home Assistant cannot reach an unavailable ESPHome entity
             if entity == ARM:
                 self.arm = on
                 self.w.after(0.1, lambda: self.w.set(ARM, "on" if on else "off"))
@@ -291,4 +293,5 @@ class ManualTouDongle:
             self.successes += 1
         self.w.after(0.12, lambda: (self.w.set(RESULT, text), self.w.set(MANUAL, "off"),
                                     self.w.set(SUCCESSES, f"{float(self.successes)}")))
-        self.w.after(3.9, self.poll)                    # the firmware's own post-Apply poll (Block A +0.9 s, Block B +3.4 s)
+        if not text.startswith("FAILED"):              # a failed write transaction ends without the post-verify poll
+            self.w.after(3.9, self.poll)                # the firmware's own post-Apply poll (Block A +0.9 s, Block B +3.4 s)

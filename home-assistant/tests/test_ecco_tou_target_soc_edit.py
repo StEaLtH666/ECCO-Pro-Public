@@ -51,6 +51,7 @@ RESULT = "input_text.ecco_cfg_edit_last_result"
 EDIT = "input_text.ecco_cfg_last_owner_edit"
 PLAN = "input_text.ecco_cfg_edit_review"
 LOCK = "input_boolean.ecco_cfg_edit_review_required"
+FLIGHT = "input_boolean.ecco_cfg_edit_in_flight"
 RESERVE = "input_number.ecco_minimum_reserve_soc"
 D = "ecco_clock_dongle_"
 
@@ -145,9 +146,10 @@ class Run:
 print("[0] static")
 # ======================================================================================================================
 pkg = yaml.safe_load(PKG_TEXT)
-check("the package: three result / plan helpers, one lock, three scripts, one automation (the interrupted-edit "
-      "watchdog); no template", {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 1, "script": 3,
-                                                                       "automation": 1})
+check("the package: three result / plan helpers, the lock and the in-flight marker, three scripts, one automation (the "
+      "interrupted-edit watchdog); no template", {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 2,
+                                                                                         "script": 3, "automation": 1}
+      and not any("initial" in (v or {}) for v in pkg["input_boolean"].values()))
 services = sorted(set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT)))
 check("services: helpers, the write enable, two buttons, one number, notifications - nothing else", services == [
     "button.press", "input_boolean.turn_off", "input_boolean.turn_on", "input_text.set_value", "number.set_value",
@@ -466,6 +468,63 @@ uncertain(r, "the later read is incomplete (raw configuration cache invalid, e.g
           "no complete later configuration read" in r.note())
 
 
+def api_blip(polls_after=False):
+    """The ESPHome connection drops right after the outcome (before the firmware's own post-Apply poll publishes) and
+    reconnects later, re-sending that poll's time; with polls_after=False no periodic poll lands before the judgement."""
+    def setup(r):
+        st = {"t0": None, "pending": None}
+        orig_poll, orig_finish = r.d.poll, r.d._finish
+
+        def poll():
+            t0 = st["t0"]
+            if t0 is not None and t0 + 2.6 <= r.w.t < t0 + 8.0:      # disconnected: the poll runs, HA hears nothing
+                real_set = r.w.set
+                r.w.set = lambda e, v, a=None: (st.__setitem__("pending", v) if e == M.CFG_UPDATE else real_set(e, v, a))
+                try:
+                    orig_poll()
+                finally:
+                    r.w.set = real_set
+                return
+            if not polls_after and t0 is not None and t0 + 8.0 <= r.w.t:
+                return
+            orig_poll()
+        r.d.poll = poll
+
+        def finish(n, failed):
+            st["t0"] = r.w.t
+            orig_finish(n, failed)
+            r.w.after(2.6, lambda: r.w.set(M.CFG_UPDATE, "unavailable"))
+            r.w.after(8.0, lambda: r.w.set(M.CFG_UPDATE, st["pending"]))
+        r.d._finish = finish
+    return setup
+
+
+r = Run(setup=api_blip()).edit(3, 41)
+uncertain(r, "a connection drop and the reconnect's re-sent time are not two reads (only the firmware's own poll is real)",
+          "no complete later configuration read" in r.note())
+r = Run(setup=api_blip(polls_after=True)).edit(3, 41, run=480)
+check("...the same drop with the periodic polls continuing: APPLIED AND VERIFIED on a poll that began after the "
+      "firmware's own", r.res().startswith("APPLIED AND VERIFIED") and r.changed() == {(3, "soc"): (40, 41)}
+      and not r.locked(), r.res())
+
+
+def partial_then_rejected(r):
+    """Four transactions land (each rewrites its current value, so every register reads unchanged), the sequence stops,
+    and an unrelated REJECTED text overwrites the result: only the gate-pass counter shows that a write happened."""
+    r.d.fault["partial"] = 4
+    orig = r.d._finish
+
+    def finish(n, failed):
+        orig(n, failed)
+        r.w.after(0.5, lambda: r.w.set(M.RESULT, "REJECTED - arm Manual Configuration Write Enable first"))
+    r.d._finish = finish
+
+
+r = Run(setup=partial_then_rejected).edit(3, 41)
+uncertain(r, "registers unchanged + a REJECTED text, but the gate-pass counter moved: never 'nothing written'",
+          r.changed() == {} and not r.res().startswith("FAILED"))
+
+
 def rejected_text_overwrites(r):
     orig = r.d._finish
 
@@ -514,10 +573,73 @@ r.w.run_until(r.w.t + 120)
 check("Home Assistant restarts in the middle of an edit: the watchdog marks it UNCERTAIN, disarms, LOCKS and alerts",
       r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked() and not r.arm_on()
       and "interrupted" in str(r.notes()), f"{r.res()} {r.notes()}")
+check("...and the in-flight marker is cleared once judged", r.w.state(FLIGHT) == "off")
 r = Run()
-r.w.set(RESULT, "IN PROGRESS - slot 3 target SOC 40 -> 41 %: waiting")   # the script was cancelled (e.g. a reload)
+r.w.set(FLIGHT, "on")                            # an Apply was cancelled mid-flight (e.g. a script reload)
 r.w.run_until(r.w.t + 5)
 check("an Apply cancelled mid-flight (script reload): the watchdog fires on the stopped run - UNCERTAIN, LOCKED",
+      r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked() and r.w.state(FLIGHT) == "off", r.res())
+
+
+def restart_mid_edit(arm_back_after=None, unreachable=False):
+    """Review + Apply, Home Assistant goes down mid-flow with the write enable ON, and comes back with the dongle's
+    entities unavailable; they return after arm_back_after seconds (never, if unreachable)."""
+    r = Run().review(3, 41)
+    r.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {r.code()}"})
+    r.w.run_until(r.w.t + 45)
+    r.ha.stop()
+    r.d.arm = True
+    r.w.set(M.ARM, "unavailable")
+    r.w.run_until(r.w.t + 30)
+    if unreachable:
+        orig = r.d._switch(False)
+        r.w.service_handlers["switch.turn_off"] = lambda ent, data: None if ent == M.ARM else orig(ent, data)
+    r.ha = S.HA(r.w, [yaml.safe_load(PKG_TEXT), yaml.safe_load(HELPERS_TEXT)])
+    if unreachable:
+        r.w.service_handlers["switch.turn_off"] = lambda ent, data: None if ent == M.ARM else orig(ent, data)
+    r.ha.start()
+    return r
+
+
+r = restart_mid_edit()
+presses_before = len(r.applies())
+r.w.run_until(r.w.t + 1)
+locked_at_once = r.locked() and r.res().startswith("UNCERTAIN - the edit was interrupted")
+r.review(2, 60)
+review_blocked = r.res().startswith("REVIEW REFUSED - an earlier edit") and r.w.state(PLAN) == "used"
+r.ha.start_script(APPLY, {"confirmation": "SET SLOT 3 TARGET SOC 41 REVIEW 0000"})
+r.w.run_until(r.w.t + 2)
+check("restart mid-edit: LOCKED and UNCERTAIN within a second of Home Assistant starting (before the dongle is back); a "
+      "Review or Apply in that window is refused", locked_at_once and review_blocked and r.res().startswith("REFUSED")
+      and r.locked() and len(r.applies()) == presses_before, f"{r.res()} {r.w.state(PLAN)}")
+r.w.at(r.w.t + 90, lambda: r.w.set(M.ARM, "on"))
+r.w.run_until(r.w.t + 120)
+check("...when the dongle returns with the write enable ON, the watchdog turns it off and confirms it (no 'not "
+      "confirmed' alert)", not r.arm_on() and r.w.state(M.ARM) == "off" and "ecco_cfg_edit_arm" not in r.w.notifications,
+      f"{r.w.state(M.ARM)} {list(r.w.notifications)}")
+r = restart_mid_edit(unreachable=True)
+r.w.at(r.w.t + 60, lambda: r.w.set(M.ARM, "on"))
+r.w.run_until(r.w.t + 700)
+check("...when the write enable cannot be turned off: a separate 'NOT confirmed off' alert, still LOCKED",
+      r.locked() and "NOT confirmed off" in r.w.notifications.get("ecco_cfg_edit_arm", {}).get("title", ""),
+      str(list(r.w.notifications)))
+
+r = Run().review(3, 41)
+r.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {r.code()}"})
+r.w.run_until(r.w.t + 75)
+mid = r.res()
+r.ha.start_script(REVIEW, {"slot": 2, "target_soc": 55})
+r.ha.start_script(ACK, {"confirmation": "I HAVE CHECKED THE TOU SLOTS"})
+r.w.run_until(r.w.t + 2)
+check("a Review or Acknowledge while an Apply runs is refused and touches neither the result, the plan nor the marker",
+      mid.startswith("IN PROGRESS") and r.res() == mid and r.w.state(PLAN) == "used" and r.w.state(FLIGHT) == "on"
+      and "ecco_cfg_edit_busy" in r.w.notifications, f"{mid} | {r.res()} | {r.w.state(PLAN)}")
+r.ha.stop()
+r.w.run_until(r.w.t + 30)
+r.ha = S.HA(r.w, [yaml.safe_load(PKG_TEXT), yaml.safe_load(HELPERS_TEXT)])
+r.ha.start()
+r.w.run_until(r.w.t + 120)
+check("...and a restart after it still catches the interrupted run: UNCERTAIN, LOCKED, alerted",
       r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked(), r.res())
 
 
@@ -532,7 +654,19 @@ def drop_apply(r):
     r.w.service_handlers["button.press"] = press
 
 
-r = Run(setup=drop_apply).edit(3, 41)
+r = Run(setup=drop_apply)
+r.review(3, 41)
+r.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {r.code()}"})
+on_t = off_t = None
+for _ in range(4200):
+    r.w.run_until(r.w.t + 0.1)
+    if r.w.state(M.ARM) == "on" and on_t is None:
+        on_t = r.w.t
+    if on_t is not None and r.w.state(M.ARM) == "off" and off_t is None:
+        off_t = r.w.t
+check("an Apply press that never arrives: the write enable is turned off right after the firmware's 45 s window, not "
+      "after the judging waits (on for at most 50 s)", on_t is not None and off_t is not None and off_t - on_t <= 50,
+      f"{on_t} {off_t}")
 uncertain(r, "an Apply press that never arrives (nothing written, but that cannot be proven)", r.changed() == {})
 r.review(2, 60)
 check("while locked, a new review is refused", r.res().startswith("REVIEW REFUSED - an earlier edit"), r.res())
@@ -594,6 +728,16 @@ def battery(text: str) -> dict:
         res["readback"] = x.res().startswith("UNCERTAIN")
         x = Run(text, setup=drop_apply).edit(3, 41)
         res["arm_off"] = not x.arm_on()
+        x = Run(text, setup=partial_then_rejected).edit(3, 41)
+        res["counter"] = x.res().startswith("UNCERTAIN")
+        x = Run(text, setup=api_blip()).edit(3, 41)
+        res["times"] = x.res().startswith("UNCERTAIN")
+        x = Run(text).review(3, 41)
+        x.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {x.code()}"})
+        x.w.run_until(x.w.t + 75)
+        x.ha.start_script(REVIEW, {"slot": 2, "target_soc": 55})
+        x.w.run_until(x.w.t + 2)
+        res["busy"] = x.res().startswith("IN PROGRESS")
     except Exception as exc:  # noqa: BLE001
         res["crash"] = f"{type(exc).__name__}: {exc}"
     return res
@@ -617,6 +761,20 @@ MUTANTS = [
     ("an uncertain outcome that does not lock", "- action: input_boolean.turn_on\n", "- action: input_boolean.turn_off\n",
      "lock"),
     ("the independent later read ignored", "and diff | length == 0 }}", "}}", "readback"),
+    ("the gate-pass counter ignored", "and later_read and not attempts_moved and unchanged", "and later_read and unchanged",
+     "counter"),
+    ("the later reads compared as text, not times",
+     [("as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_0, 0) }}",
+       "states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_0 }}"),
+      ("and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_1, 0) }}",
+       "and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1 }}"),
+      ("and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_1, 0)\n",
+       "and states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_1\n"),
+      ("as_timestamp(cfg_0, 0) > 0 and ", ""), ("as_timestamp(cfg_1, 0) > as_timestamp(cfg_0, 0)", "cfg_1 != cfg_0")],
+     None, "times"),
+    ("a Review allowed while an Apply runs",
+     "{{ not is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') or not is_state('input_boolean.ecco_cfg_edit_in_flight', 'off') }}",
+     "{{ false }}", "busy"),
     ("the final disarm removed", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_off\n", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_on\n", "arm_off"),

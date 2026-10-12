@@ -15,10 +15,12 @@ Development before the first public release happened in a private repository; se
   target SOC (register 267+N) through the existing, verified manual TOU firmware path (no firmware change, no new register).
   Review (writes nothing) -> typed confirmation with a one-time review code -> Apply: a fresh configuration read, a Load, the
   Manual Controls helper sync at a fixed point, only the SOC staged, every other staged value proven equal to the live slot,
-  one Apply; success only on the firmware's VERIFIED OK plus an independent later read of every written register. The lower
+  one Apply; success only on the firmware's VERIFIED OK plus two later configuration reads (strictly later update times) of
+  every written register. The lower
   bound is the greater of the inverter shutdown SOC and the ECCO reserve, read fresh. Refused, fail-closed, in every unsafe
   state (Free Power, Dump to Grid, register 244, recovery, fallback arm / Review / Save, supervision, failback shadow, leases,
-  schedules). Any uncertain outcome stops, disarms, alerts and locks further edits until acknowledged; never retried. See
+  schedules). Any uncertain outcome stops, disarms, alerts and locks further edits until acknowledged; never retried. A run interrupted
+  by a restart or reload is caught by a watchdog that locks and alerts at once. See
   [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
   and the supervised live-proof procedure (not executed).
 - Post-export edit layer (PEX, schema `ecco-pex/1`, foundation entry `pex0`). It is the declared, exact and hash-linked way to change

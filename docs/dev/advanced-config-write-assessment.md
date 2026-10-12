@@ -224,6 +224,9 @@ deliberately, through `test_write_surface_invariants.py`, the registry and a PEX
 - Refused (fail-closed) while the fallback system is armed, in Review or Save, during recovery, and in every other unsafe
   state; all existing firmware interlocks unchanged.
 - Uncertain outcomes stop, disarm, alert with observed values and lock further edits until acknowledged.
+- Success needs two later configuration reads with strictly later update times; a refusal claim also needs the firmware's
+  gate-pass counter unchanged. An in-flight marker plus a watchdog automation lock and alert at once on a run interrupted
+  by a restart or reload, then disarm once the dongle is reachable and confirm it.
 - Documents: `advanced-config/stage0-safety-case.md`, `advanced-config/s3-tou-slot1-soc-writes-2026-10.md` (evidence record),
   `advanced-config/stage0-live-proof-procedure.md` (not executed), `advanced-config/stage0b-card-plan.md`, and
   `dump-to-grid-restore-conflict-investigation.md`.
