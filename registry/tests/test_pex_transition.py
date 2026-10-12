@@ -283,7 +283,7 @@ LEDGER = {   # file -> exact number of calls of each _pex function
     "registry/tests/_ovw1_scope.py": {"post_export_added": 3},   # ovw1's exact hunks QUOTE the three routing lines (data, not calls)
     "registry/tests/test_ovw1_transition.py": {"read": 3, "as_of": 1, "fingerprint": 1, "record": 1, "historical_chain_sha": 1, "checkpoint": 1,
                                                "post_export_added": 2, "base": 1, "exact_pairs": 1},   # ovw1's own proofs (one post_export_added is a quoted routing line)
-    "home-assistant/tests/test_ecco_battery_runtime.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fe1's declaration proofs
+    "home-assistant/tests/test_ecco_battery_runtime.py": {"read": 2, "as_of": 2, "fingerprint": 1, "record": 1},   # fe1's declaration proofs (+ the as-of-fe1 round trip, once fsw1 edits the dashboard after it)
     "home-assistant/tests/test_ecco_free_power_schedule_reliability.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fps1: the pre-fix package for the reproduction, and fps1's declaration
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}

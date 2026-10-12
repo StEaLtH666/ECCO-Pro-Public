@@ -65,6 +65,7 @@ semantics invented):
 | `sensor.ecco_health_manual_write_system` | manual_write_system | `manual_write_duration` | `manual_write_failures_recent`, `manual_write_arm_unexpected` |
 | `sensor.ecco_health_rtc` | rtc_time | `rtc_correction_duration`, `rtc_stall_detected`, `rtc_ntp_synced`; `rtc_correction_failures_recent` (added later, offline only - see below) | `rtc_read_freshness`, `rtc_drift_uncorrected` |
 | `sensor.ecco_health_free_power` | free_power | `free_power_operation_duration`, `free_power_active_state`, `free_power_snapshot_recovery` | `free_power_failures_recent`, `free_power_state_consistency` |
+| `sensor.ecco_health_start_failures` | free_power, manual_write_system | `free_power_start_failed_recent`, `dump_to_grid_start_failed_recent` (added later, offline only - see below) | - |
 | `sensor.ecco_health_configuration` | inverter_configuration | `config_cache_valid` | `configuration_freshness`, `configuration_failures_recent` |
 | `sensor.ecco_health_inverter_telemetry` | inverter_telemetry | `inverter_alarm_fault`, `inverter_grid_connected` | `telemetry_freshness`, `telemetry_failures_recent` |
 
@@ -101,6 +102,38 @@ the one-minute refresh is the backstop. An unreadable counter with no failure
 in the window reports UNKNOWN, never HEALTHY. A failure while the counter is
 unavailable to Home Assistant, or while Home Assistant is down, is not
 observed.
+
+**Failed starts: `free_power_start_failed_recent` and `dump_to_grid_start_failed_recent` (FB-D1 follow-up, offline only, not
+live-proven).** A Free Power or Dump to Grid START that fails before it writes anything leaves the recovery state at `NONE`, so
+nothing else on the Overview reported it. `sensor.ecco_health_start_failures` now does, from four existing firmware counters:
+the Free Power and Dump to Grid "Start Attempts Since Boot" and "Start Successes Since Boot".
+
+- **What is counted.** The firmware counts an attempt only after every start gate has passed, so a refusal (`REJECTED - ...`) is not
+  counted. It counts a success only when the START verified ACTIVE. Unresolved attempts (attempts minus successes) therefore rise by
+  one for every genuine failed start, whether or not it then entered recovery. The failures-since-boot counters are not used,
+  because they also count failed restores, force-restores and lockouts. The free-text status never decides anything; it is shown as
+  information only.
+- **When a failure is confirmed.** Only when unresolved attempts have risen and are still up after all four counters were quiet for
+  240 s. The settle has to outlast two things. First, a start in flight: the firmware start scripts reach success within 27 s
+  (Free Power) or 21 s (Dump to Grid), and each counter publishes on its own 30 s timer, so Home Assistant sees the success at
+  most 57 s after the attempt. Second, a silent Wi-Fi loss: the ESPHome client (aioesphomeapi 45.x) pings every 20 s and drops
+  the link 90 s after an unanswered ping, so stale counters can stay available for up to 110 s. 57 + 110 = 167 s, below 240 s.
+  **Timing assumption:** both bounds must be re-checked against the firmware start scripts and the live Home Assistant ESPHome
+  client before deployment.
+- **What is never a failure.** A nonzero count, the first values seen after a Home Assistant start, a reconnection, a counter reset
+  (the counters restart at 0 on every ESP boot) and an inconsistent pair (successes above attempts) only set the baseline. An
+  unreadable counter clears the baseline; a failure while it is unreadable is not observed.
+- **What it reports.** WARNING with `FREE_POWER_START_FAILED` and/or `DUMP_TO_GRID_START_FAILED` for 1800 s after the failed start
+  attempt, and each further failure restarts that feature's window. The two features are independent, so simultaneous failures report
+  both. Nothing unreadable ever reports HEALTHY: with no open window, an unreadable counter pair reports UNKNOWN. The baseline, the
+  failure time and the observed failure count are kept as attributes, which Home Assistant restores for a trigger-based template
+  entity after a restart. The window trigger fires exactly when the attempts counter has been unchanged for the whole window; the
+  one-minute refresh is the backstop. The warning does not clear early when a later start succeeds.
+- **Registry.** Dump to Grid has no health subsystem of its own, so its check sits in `manual_write_system` (a manual inverter write
+  transaction). The two reason codes are WARNING, do not block manual control and do not affect the forecast.
+- **Overview.** The status hero reads the sensor's `reason_codes` (never its state alone) and shows ATTENTION with its own subline
+  when a failed start is the only reason; every existing reason keeps its subline and priority. A failure while an input is missing
+  still shows STATUS PARTIAL first.
 
 **Current-operation duration** (`manual_write_duration`,
 `rtc_correction_duration`, `free_power_operation_duration`, and the derived
