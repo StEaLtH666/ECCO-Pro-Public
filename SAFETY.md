@@ -114,8 +114,10 @@ What is enforced today, and by which layer:
   battery. Dump-to-Grid does **not** use the configured reserve: in 0.9.0 its firmware enforces only its existing stop-level
   bounds, not the Intelligence reserve policy. Reserve enforcement for Dump-to-Grid is deferred until it can be
   hardware-proven.
-- Home Assistant also has a reserve helper, `input_number.ecco_minimum_reserve_soc` (0-80%; a
-  one-time defaults automation in the core package sets it to 15% when Home Assistant first starts with ECCO). In 0.9.0 nothing enforces it: no firmware feature and no Home Assistant script uses it as a limit. Intelligence can take it as a run-time input, and then it can only **raise** the effective reserve, never lower it.
+- Home Assistant also has a reserve helper, `input_number.ecco_minimum_reserve_soc` (0-80%; you can change it at any time in
+  Home Assistant, and Home Assistant keeps your value across restarts and updates; a one-time defaults automation in the core
+  package sets it to a starting value of 40% when Home Assistant first starts with ECCO and never runs again, so 40% is a
+  starting value, not a limit). In 0.9.0 nothing enforces it: no firmware feature and no Home Assistant script uses it as a limit. Intelligence can take it as a run-time input, and then it can only **raise** the effective reserve, never lower it.
 - The inverter's own battery protection settings (for example its shutdown / low-battery levels) remain the final protection.
   ECCO does not change them.
 - Set the Dump-to-Grid stop level at or above your configured reserve and at or above the minimum your inverter / battery

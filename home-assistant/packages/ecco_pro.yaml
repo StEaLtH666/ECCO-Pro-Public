@@ -255,9 +255,11 @@ automation:
           entity_id: input_select.ecco_managed_tou_slot
         data:
           option: "Slot 1"
+      # First-run STARTING value of the user's reserve, not a limit: this automation runs once (until ecco_defaults_initialized
+      # is on) and the helper has no `initial`, so Home Assistant restores the user's own value across restarts and updates.
       - action: input_number.set_value
         target: {entity_id: input_number.ecco_minimum_reserve_soc}
-        data: {value: 15}
+        data: {value: 40}
       - action: input_number.set_value
         target: {entity_id: input_number.ecco_normal_max_charge_target}
         data: {value: 100}

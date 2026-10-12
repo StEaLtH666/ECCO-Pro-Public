@@ -176,9 +176,12 @@ few minutes after a change of direction, and at small powers inside the ±60 W h
   from the grid) is already reflected. A future load above that limit is not modelled.
 - **SOC resolution and capacity.** SOC is an integer. Until 15 points of discharge have been observed, the configured capacity is
   the basis, and it may be the nominal capacity rather than the usable one.
-- **The configured reserve.** The value is read from `input_number.ecco_minimum_reserve_soc`. This repository's defaults
-  automation initialises that helper to 15 % once (`ecco_pro.yaml`). The 40 % default of the Intelligence engine lives only in
-  its Python configuration, and the inverter's own shutdown SOC (register 217) is not consulted. Several Overview planning
+- **The configured reserve.** The value is read from `input_number.ecco_minimum_reserve_soc`, which you can change in Home
+  Assistant at any time; Home Assistant keeps your value across restarts and updates. This repository's defaults automation
+  starts that helper at 40 % once, on a new installation (`ecco_pro.yaml`; post-export entry `rsv1`), and never runs again, so an
+  installation that was initialised earlier keeps its own value, including the 15 % the automation used to set. 40 % is a
+  starting value, not a limit. The Intelligence engine keeps its own configured reserve (default 40 %) in its Python
+  configuration, and the inverter's own shutdown SOC (register 217) is not consulted. Several Overview planning
   scripts still assume their own reserve; they are unchanged.
 - **Warm-up.** After a start, or a gap of more than 5 minutes, the status is "Insufficient data" for 10 minutes. Just after it,
   the window is short and the clipping takes 4 of only 10 to 15 samples: a cycling load already running at the restart behaves

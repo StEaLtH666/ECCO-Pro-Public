@@ -34,7 +34,7 @@ stable canonical aliases (`home-assistant/packages/ecco_canonical_telemetry.yaml
 | ECCO policy helpers | `input_number.ecco_minimum_reserve_soc`, `…_ecco_battery_model_capacity`, `…_round_trip_efficiency`, `input_select.ecco_automation_mode`, `input_boolean.ecco_automatic_setting_writes_enabled`, `binary_sensor.ecco_automatic_writes_armed` | see finding F1 |
 
 **F1 — the battery reserve is not represented consistently in HA or the repo.** `input_number.ecco_minimum_reserve_soc`
-has a default far below 40 %, the inverter shutdown SOC is a separate setting, and no file defines a default user reserve. Intelligence therefore carries the
+had a first-run value far below 40 % (15 %; a new installation now starts at 40 %, post-export entry `rsv1`, and an installation that was already initialised keeps its own value), the inverter shutdown SOC is a separate setting, and the helper and Intelligence's `user_reserve_soc_pct` are still two separate settings. Intelligence therefore carries the
 reserve as explicit configuration: `SiteConfig.user_reserve_soc_pct` (default 40, a per-installation preference, not a project-wide floor) and a separate
 `SiteConfig.technical_min_soc_pct` (a site-specific hardware constraint, default 10 as a placeholder only: set it to the minimum permitted by your inverter / battery
 configuration, for example the inverter's battery shutdown SOC). It uses `max(user reserve, technical minimum, HA reserve)`,

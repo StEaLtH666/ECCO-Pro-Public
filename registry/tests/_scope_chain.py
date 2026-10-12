@@ -114,6 +114,7 @@ import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
+import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
@@ -754,7 +755,29 @@ FPS1 = Entry(
          "Home Assistant scheduling layer only, ZERO firmware, registry, dashboard, Intelligence or ecco_core change, ZERO Modbus "
          "operation, no new control surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1)
+# rsv1 (the first-run value of the battery reserve helper is 40 %, not 15 %; _rsv1_scope.py): a Home Assistant defaults change made on
+# the export after fps1. input_number.ecco_minimum_reserve_soc stays the user's own, Home Assistant-editable reserve (0-80 %, no
+# `initial`, so Home Assistant restores it across restarts and updates); the one-time defaults automation of the core package
+# (gated on ecco_defaults_initialized) now starts a NEW installation at 40 % instead of 15 %, and says so in a comment. FROZEN edit
+# (PEX): the core package (_rsv1_scope.FROZEN_REVERTERS); as of pub0 it is the export byte for byte. SAFETY.md, CHANGELOG.md and the reserve docs
+# are not frozen. No older suite is edited.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, dashboard, deployment,
+# registry, Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); nothing uses the helper as a limit.
+RSV1 = Entry(
+    id="rsv1", pr="RSV1", commit="unmerged",
+    added_files=_rsv1.ADDED_FILES,
+    frozen_reverts=dict(_rsv1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after rsv1; as of pub0 it is its pub0 manifest result
+        _rsv1.PACKAGE_REL: "cea3d4b16e6844c2784540b743c16be057a9286ebba89a510551009cb6a8962e",
+    },
+    # _pex.fingerprint(RSV1): hashes its parent fps1's fingerprint and every declaration above
+    fingerprint="85808fd4ea7af13a57737a12cdff92ab2cf568eab88a53463dec6e9228b3a590",
+    note="first-run value of the battery reserve helper (input_number.ecco_minimum_reserve_soc) is 40 %, not 15 %: one line of the "
+         "core package's one-time defaults automation, which never runs again once initialised, so an existing installation keeps "
+         "its value; the helper stays user-editable and has no `initial`; Home Assistant defaults only: ZERO firmware, dashboard, "
+         "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
