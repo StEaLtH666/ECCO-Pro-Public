@@ -131,3 +131,18 @@ no runtime import. `ovw1` changed no firmware, Home Assistant package, deploymen
 
 Deployment order for dashboard 7.20.0: the Weather & Solar bundle (a manual Lovelace resource, not in the manifest) and the rebuilt
 Energy Actions bundle (listed in the manifest; bump the resource URL's `?v=` so browsers reload it) go first, then the dashboard.
+
+## What acs0 changed
+
+`acs0` adds Advanced Configuration Stage 0, a guarded owner edit of one TOU slot's target SOC (`registry/tests/_acs0_scope.py`, proofs
+in `home-assistant/tests/test_ecco_tou_target_soc_edit.py`). Its chain-pinned edit is one package stanza in the manifest. Its gate reads
+six reserved fallback / failback entity ids, so it carries the owner-approved token amendment (Option A, 2026-10-12):
+
+- `banned_files`: exactly its three files (the package, its dongle model and its suite);
+- three frozen edits, one per older suite whose exact reserved-token allowlist it amends: `test_fallback_profile_schema.py`,
+  `test_fallback_recovery_dashboard.py` and `test_fallback_save_scope.py`. The FB-C3 strict rule exempts exactly the shadow State id
+  in the three files; the FB-B3 holder scan exempts exactly the six ids in the package and keeps its four-file list; both carry an
+  exactness proof. The exact declared list and the save-scope union name the three files;
+- one ordinary edit of the same kind to `test_fallback_live_match.py` (not frozen); its pairs are recorded in the scope module.
+
+As of `pub0` each amended suite is the export byte for byte. `acs0` changed no firmware and no write surface.

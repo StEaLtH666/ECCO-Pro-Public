@@ -1452,7 +1452,25 @@ def main() -> int:
     check("FB-B3: ONLY the operator actions package names the device action (3 wrapper calls + its header comment)", exec_files == {ACTIONS_PKG: 4}, str(exec_files))
     check("FB-B3: exactly three scripts call the device action and each one names the esphome service exactly once",
           len(re.findall(r"action: esphome\.ecco_clock_dongle_fallback_profile_execute", holders[ACTIONS_PKG])) == 3)
-    banned_holders = sorted(rel for rel, text in holders.items() if BANNED.search(text))
+    # acs0 (PEX, the owner-approved token amendment, Option A, 2026-10-12): the Advanced Configuration Stage 0 editor package READS exactly
+    # six reserved ids for its fail-closed gate. They are removed from that one file before the scan, so it is still a holder if it spells
+    # any other reserved token (a seventh id, a variant), every other file is scanned unchanged, and the allowlist below is NOT widened.
+    ACS0_PKG = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"
+    ACS0_IDS_RE = re.compile(r"(?<![a-z0-9_])(?:sensor\.ecco_clock_dongle_ecco_fallback_profile_(?:live_match|review)"
+                             r"|binary_sensor\.ecco_fallback_(?:save|replace_corrupt|invalidate)_available"
+                             r"|sensor\.ecco_clock_dongle_ecco_failback_shadow_state)(?![a-z0-9_])")
+
+    def acs0_view(rel: str, text: str) -> str:
+        return ACS0_IDS_RE.sub("", text) if rel == ACS0_PKG else text
+    check("acs0: the exemption is real (the editor package spells all six ids) and exact (a seventh reserved id, a variant, or one of the "
+          "six ids in any other file is still a holder)",
+          len(set(ACS0_IDS_RE.findall(holders[ACS0_PKG]))) == 6
+          and BANNED.search(acs0_view(ACS0_PKG, holders[ACS0_PKG] + "\nswitch.ecco_clock_dongle_ecco_fallback_profile_arm"))
+          and BANNED.search(acs0_view(ACS0_PKG, holders[ACS0_PKG] + "\nsensor.ecco_clock_dongle_ecco_fallback_profile_review_id"))
+          and BANNED.search(acs0_view(ACS0_PKG, holders[ACS0_PKG] + "\nbinary_sensor.ecco_clock_dongle_ecco_fallback_profile_review"))
+          and BANNED.search(acs0_view(HB_PKG, "binary_sensor.ecco_fallback_save_available")),
+          str(sorted(set(ACS0_IDS_RE.findall(holders[ACS0_PKG])))))
+    banned_holders = sorted(rel for rel, text in holders.items() if BANNED.search(acs0_view(rel, text)))
     check("FB-B3: the reserved entity-id tokens live only in the five declared HA files (dashboard, status / actions / system-health packages)",
           banned_holders == sorted([dash_rel, STATUS_PKG, ACTIONS_PKG, HEALTH_PKG]), str(banned_holders))
     packages_calling_esphome = sorted(rel for rel, text in holders.items() if rel.startswith("home-assistant/packages/") and re.search(r"\besphome\.", text))

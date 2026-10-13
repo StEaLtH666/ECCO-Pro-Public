@@ -821,11 +821,19 @@ STRICT = ("FALLBACK" + "_PROFILE", "FAILBACK" + "_STATE", "ecco_" + "failback")
 # other occurrence (a sixth id, a different file, the dashboard, a package, frontend/) is still a leak.
 SHADOW_ID_FILES = frozenset({"home-assistant/packages/ecco_fallback_status.yaml"})
 SHADOW_ID_RE = re.compile(r"sensor\.ecco_clock_dongle_ecco_failback_shadow_(?:state|episode|soak|verdict|inputs)(?![a-z0-9_])")
+# acs0 (PEX, the owner-approved token amendment, Option A, 2026-10-12): the Advanced Configuration Stage 0 editor's three files - its
+# package, its dongle model and its suite - may spell exactly ONE ecco_failback id: the shadow State, which the editor's fail-closed gate
+# READS. Nothing else is exempt: another shadow id, a variant, the same id in any other file, FALLBACK_PROFILE and FAILBACK_STATE still leak.
+ACS0_FILES = frozenset({"home-assistant/packages/ecco_tou_target_soc_edit.yaml", "home-assistant/tests/_manual_tou_sim.py",
+                        "home-assistant/tests/test_ecco_tou_target_soc_edit.py"})
+ACS0_SHADOW_RE = re.compile(r"(?<![a-z0-9_])sensor\.ecco_clock_dongle_ecco_failback_shadow_state(?![a-z0-9_])")
 
 
 def strict_hits(rel: str, text: str) -> list:
     if rel in SHADOW_ID_FILES:
         text = SHADOW_ID_RE.sub("", text)
+    if rel in ACS0_FILES:
+        text = ACS0_SHADOW_RE.sub("", text)   # acs0: exactly this one id, in exactly these three files
     return [tok for tok in STRICT if tok in text]
 
 
@@ -845,13 +853,29 @@ check("FB-C3: the amendment is real (the status package does spell exactly the f
       and strict_hits("home-assistant/dashboards/ecco_pro.yaml", "sensor.ecco_clock_dongle_ecco_failback_shadow_state") == ["ecco_" + "failback"]
       and strict_hits("home-assistant/packages/ecco_system_health.yaml", "sensor.ecco_clock_dongle_ecco_failback_shadow_verdict") == ["ecco_" + "failback"]
       and strict_hits(_status_rel, "FALLBACK" + "_PROFILE_X") == ["FALLBACK" + "_PROFILE"] and strict_hits(_status_rel, "FAILBACK" + "_STATE") == ["FAILBACK" + "_STATE"])
-check("FB-B3 / FB-C3: frontend/ carries no reserved token at all, and the declared allowlist is exactly the eight named files (exact paths, no directory exemption; "
-      "the eighth is FB-C3's HA suite, which spells ecco_fallback entity ids)",
+_acs0_text = {f: (ROOT / f).read_text(encoding="utf-8") for f in sorted(ACS0_FILES)}
+_acs0_pkg = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"
+check("acs0: the amendment is real (each of the editor's three files spells the shadow State id) and exact (another shadow id, a variant, "
+      "the same id in any other file, FALLBACK_PROFILE or FAILBACK_STATE still leak)",
+      all(ACS0_SHADOW_RE.search(t) and strict_hits(f, t) == [] for f, t in _acs0_text.items())
+      and strict_hits(_acs0_pkg, _acs0_text[_acs0_pkg] + "\nsensor.ecco_clock_dongle_ecco_failback_shadow_episode") == ["ecco_" + "failback"]
+      and strict_hits(_acs0_pkg, _acs0_text[_acs0_pkg] + "\nsensor.ecco_clock_dongle_ecco_failback_shadow_state_x") == ["ecco_" + "failback"]
+      and strict_hits(_acs0_pkg, _acs0_text[_acs0_pkg] + "\nbinary_sensor.ecco_clock_dongle_ecco_failback_shadow_state") == ["ecco_" + "failback"]
+      and strict_hits("home-assistant/packages/ecco_system_health.yaml", "sensor.ecco_clock_dongle_ecco_failback_shadow_state") == ["ecco_" + "failback"]
+      and strict_hits("home-assistant/dashboards/ecco_pro.yaml", "sensor.ecco_clock_dongle_ecco_failback_shadow_state") == ["ecco_" + "failback"]
+      and strict_hits(_acs0_pkg, "FALLBACK" + "_PROFILE") == ["FALLBACK" + "_PROFILE"] and strict_hits(_acs0_pkg, "FAILBACK" + "_STATE") == ["FAILBACK" + "_STATE"],
+      str({f: strict_hits(f, t) for f, t in _acs0_text.items()}))
+check("FB-B3 / FB-C3 / acs0: frontend/ carries no reserved token at all, and the declared allowlist is exactly the eleven named files (exact paths, no directory "
+      "exemption; the eighth is FB-C3's HA suite, which spells ecco_fallback entity ids; the last three are acs0's editor package, model and suite, "
+      "which read six reserved ids)",
       not [l for l in leaks if l.startswith("frontend/")] and sorted(CH.declared_banned_files()) == sorted([
           "deployment/ha-manifest.yaml", "home-assistant/dashboards/ecco_pro.yaml",
           "home-assistant/packages/ecco_fallback_profile_actions.yaml", "home-assistant/packages/ecco_fallback_status.yaml",
           "home-assistant/packages/ecco_system_health.yaml", "home-assistant/tests/test_ecco_fallback_packages.py",
-          "home-assistant/tests/test_ecco_system_health_package.py", "home-assistant/tests/test_ecco_shadow_check_ux.py"]), str(sorted(CH.declared_banned_files())))
+          "home-assistant/tests/test_ecco_system_health_package.py", "home-assistant/tests/test_ecco_shadow_check_ux.py",
+          "home-assistant/packages/ecco_tou_target_soc_edit.yaml", "home-assistant/tests/_manual_tou_sim.py",
+          "home-assistant/tests/test_ecco_tou_target_soc_edit.py"])
+      and CH.entry("acs0").banned_files == ACS0_FILES, str(sorted(CH.declared_banned_files())))
 check("...and the LIVE firmware YAML carries exactly the banned-token occurrences that chain entries declare (none today)",
       len(BANNED.findall(FW_TEXT)) == CH.declared_banned_fw(), f"{len(BANNED.findall(FW_TEXT))} vs {CH.declared_banned_fw()}")
 HEADER_BANNED = (("commit_record", r"commit_record"), ("load_record", r"load_record"), ("make_preference", r"make_preference"),

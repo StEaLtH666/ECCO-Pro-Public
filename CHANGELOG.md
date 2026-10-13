@@ -11,6 +11,22 @@ Development before the first public release happened in a private repository; se
 
 ### Added
 
+- Advanced Configuration Stage 0 (post-export entry `acs0`; offline, NOT live-proven): a guarded owner edit of ONE TOU slot's
+  target SOC (register 267+N) through the existing, verified manual TOU firmware path (no firmware change, no new register).
+  Review (writes nothing) -> typed confirmation with a one-time review code -> Apply: a fresh configuration read, a Load, the
+  Manual Controls helper sync at a fixed point, only the SOC staged, every other staged value proven equal to the live slot,
+  one Apply; success only on the firmware's VERIFIED OK plus two later configuration reads (strictly later update times) of
+  every written register. The lower
+  bound is the greater of the inverter shutdown SOC and the ECCO reserve, read fresh. Refused, fail-closed, in every unsafe
+  state (Free Power, Dump to Grid, register 244, recovery, fallback arm / Review / Save, supervision, failback shadow, leases,
+  schedules). Any uncertain outcome stops, disarms, alerts and locks further edits until acknowledged; never retried. A run interrupted
+  by a restart or reload is caught by a watchdog that locks and alerts at once. The fallback gate parses the live match and the
+  Review state exactly (a fresh, trusted, compared verdict; exactly one IDLE Review), so unknown, stale, malformed or incompatible
+  fallback state refuses. The owner-approved reserved-token amendment authorises exactly six fallback / failback ids, read only,
+  in exactly the editor's three files; five exact allowlist checks are amended (three frozen suites by PEX), nothing else is
+  widened. See
+  [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
+  and the supervised live-proof procedure (not executed).
 - Post-export edit layer (PEX, schema `ecco-pex/1`, foundation entry `pex0`). It is the declared, exact and hash-linked way to change
   files that the `pub0` export froze. The `pub0` proof now runs on the files as of `pub0`, byte for byte. Test and proof
   infrastructure only: no firmware, Home Assistant, dashboard or behaviour change. See

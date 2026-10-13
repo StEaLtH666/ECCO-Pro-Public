@@ -1334,7 +1334,7 @@ check("...in which nothing of FE-1 exists (no time_to_reserve, no package stanza
 check("each fe1 pair round-trips (applying it to the ovw1 text gives the file as of fe1: the live file with any later entry undone exactly)",
       F.add_fe1_dashboard(old[F.DASHBOARD_REL]) == _pex.as_of(F.DASHBOARD_REL, "fe1", _pex.read(F.DASHBOARD_REL))   # PEX: a later entry (fsw1) edits the dashboard too
       and F.add_fe1_version(old[F.VERSION_REL]) == (ROOT / "VERSION.yaml").read_text(encoding="utf-8")
-      and F.add_fe1_manifest(old[F.MANIFEST_REL]) == (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8"))
+      and F.add_fe1_manifest(old[F.MANIFEST_REL]) == _pex.as_of(F.MANIFEST_REL, "fe1", _pex.read(F.MANIFEST_REL)))   # PEX: a later entry (acs0) edits the manifest too
 
 print("")
 if FAILURES:
