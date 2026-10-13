@@ -198,6 +198,12 @@ check("fcp1's Dump Power Limits Write Enable is ALWAYS_OFF (no preference key) a
       FCP1_ARM in ENTITIES and any(e.get("name") == FCP1_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
                                    for doc in YAMLS.values() for e in doc.get("switch") or []))
 n_sw -= 1 if FCP1_ARM in ENTITIES else 0
+# fcp2: likewise `Restart Override Arm` (ecco_restart_arm, restore_mode ALWAYS_OFF: no preference key), the only switch fcp2 adds.
+FCP2_ARM = ("switch", "Restart Override Arm")
+check("fcp2's Restart Override Arm is ALWAYS_OFF (no preference key) and the only switch fcp2 adds",
+      FCP2_ARM in ENTITIES and any(e.get("name") == FCP2_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
+                                   for doc in YAMLS.values() for e in doc.get("switch") or []))
+n_sw -= 1 if FCP2_ARM in ENTITIES else 0
 check(f"entity preferences: {n_num} restore numbers and {n_sw} switches across all YAMLs (3 RESTORE_DEFAULT_ON + the "
       "ALWAYS_OFF ones as a historic superset), each under its object-id key and its 2026.8-beta raw-name key",
       # FB-B2: n_sw 9 -> 10 - the one new template switch `ECCO Fallback Profile Arm` (fallback_profile_arm, restore_mode

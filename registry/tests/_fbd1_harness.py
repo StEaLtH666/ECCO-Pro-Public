@@ -365,7 +365,14 @@ HOOK_ALLOWED = frozenset({"dump_soc_last_update_ms", "dump_grid_last_update_ms",
                           "dump_absolute_overpower_samples", "dump_overpower_last_w",
                           # fcp1: the net grid export guard's sample window (the grid CT hook), the same kind as the overpower
                           # sampling above
-                          "dump_export_window", "dump_export_last_w"})
+                          "dump_export_window", "dump_export_last_w",
+                          # fcp2: the windowed runaway history and its latched decision (the battery hook), and the frozen-
+                          # telemetry evidence (the CT, battery and SOC hooks) - RAM bookkeeping of the same kind
+                          "dump_runaway_win_ord", "dump_runaway_win_abs", "dump_runaway_win_gross", "dump_runaway_trip",
+                          "dump_runaway_trip_w", "dump_runaway_trip_threshold_w", "dump_runaway_trip_count",
+                          "dump_ct_same_count", "dump_ct_last_w", "dump_ct_same_bmin", "dump_ct_same_bmax",
+                          "dump_bp_same_count", "dump_bp_last_w", "dump_bp_last_ms", "dump_soc_frozen_wh_acc",
+                          "dump_soc_last_value"})
 # Ownership flags no RTC / poll path may ever assign.
 OWNERSHIP_FLAGS = ("manual_write_in_progress", "free_power_operation_in_progress", "free_power_recovery_force_in_progress",
                    "free_power_recovery_accept_in_progress", "reg244_apply_in_progress", "dump_operation_in_progress",
