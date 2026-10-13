@@ -191,15 +191,19 @@ for doc in YAMLS.values():
 ENTITIES = sorted(ENTITIES)
 n_num = sum(1 for p, _n in ENTITIES if p == "number")
 n_sw = sum(1 for p, _n in ENTITIES if p == "switch")
+# fcp1: one more template switch, `Dump Power Limits Write Enable` (dump_limits_arm, restore_mode ALWAYS_OFF: no preference key is
+# created for it). It is checked on its own here and left out of the historic count below, whose exact text another suite pins.
+FCP1_ARM = ("switch", "Dump Power Limits Write Enable")
+check("fcp1's Dump Power Limits Write Enable is ALWAYS_OFF (no preference key) and the only switch fcp1 adds",
+      FCP1_ARM in ENTITIES and any(e.get("name") == FCP1_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
+                                   for doc in YAMLS.values() for e in doc.get("switch") or []))
+n_sw -= 1 if FCP1_ARM in ENTITIES else 0
 check(f"entity preferences: {n_num} restore numbers and {n_sw} switches across all YAMLs (3 RESTORE_DEFAULT_ON + the "
       "ALWAYS_OFF ones as a historic superset), each under its object-id key and its 2026.8-beta raw-name key",
       # FB-B2: n_sw 9 -> 10 - the one new template switch `ECCO Fallback Profile Arm` (fallback_profile_arm, restore_mode
       # ALWAYS_OFF: no preference key is created for it; like the other ALWAYS_OFF arms it is counted as a historic superset, and
       # its two entity keys are covered by the collision checks below).
-      # fcp1: n_sw 10 -> 11 - the one new template switch `Dump Power Limits Write Enable` (dump_limits_arm, restore_mode
-      # ALWAYS_OFF: no preference key, counted like the other ALWAYS_OFF arms). fcp1's two new numbers have no restore_value
-      # (their values live in the persisted globals above), so n_num stays 6.
-      n_num == 6 and n_sw == 11 and not any(p == "select" for p, _n in ENTITIES))
+      n_num == 6 and n_sw == 10 and not any(p == "select" for p, _n in ENTITIES))
 check("entity key known answers (ESPHome 2026.8.2 helpers): 'Clock Correction Threshold' 3507116908 / beta 2340601518, "
       "'Automatic Clock Sync' 2578858645 / 2949609849, 'Dump to Grid Stop SOC' 3156274043 / 1118637223",
       (object_id_hash("Clock Correction Threshold"), raw_name_hash("Clock Correction Threshold"),

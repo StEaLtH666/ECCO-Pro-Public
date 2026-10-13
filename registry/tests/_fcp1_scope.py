@@ -815,3 +815,73 @@ def add_fcp1_firmware(text: str) -> str:
             raise AssertionError(f"fcp1 scope: {e.name} edit already present")
         out = _swap(out, e.before, e.after, f"{e.name} anchor", "found")
     return out
+
+
+# ---- (PEX frozen edit) registry/tests/test_supervision_heartbeat_observe_only.py: its persisted-globals pin names fcp1's four (supervision still persists nothing)
+SUPERVISION_TEST_REL = "registry/tests/test_supervision_heartbeat_observe_only.py"
+SUPERVISION_TEST_OLD = _blk(r"""
+          str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
+    check("restore_value: yes globals are unchanged (exactly the 2 pre-existing reg244 drift guards)",
+          sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
+          == ["reg244_last_applied_valid", "reg244_last_applied_value"])
+
+""")
+SUPERVISION_TEST_NEW = _blk(r"""
+          str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
+    # fcp1: the four persisted Dump operating-limit globals are fcp1's, not supervision's (supervision still persists nothing).
+    check("restore_value: yes globals are unchanged by supervision (exactly the 2 pre-existing reg244 drift guards, plus fcp1's "
+          "4 persisted Dump operating limits)",
+          sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
+          == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                     "dump_limits_cap_w", "dump_limits_check"]))
+
+""")
+
+
+def pre_fcp1_supervision_test(text: str) -> str:
+    """registry/tests/test_supervision_heartbeat_observe_only.py with fcp1's one edit undone (a frozen reverter of chain entry fcp1, PEX)."""
+    return _swap(text, SUPERVISION_TEST_NEW, SUPERVISION_TEST_OLD, "supervision_test edit", "present")
+
+
+pre_fcp1_supervision_test.edits = ((SUPERVISION_TEST_OLD, SUPERVISION_TEST_NEW),)   # the PEX contract: exact pairs
+
+
+def add_fcp1_supervision_test(text: str) -> str:
+    """Applies fcp1's edit to registry/tests/test_supervision_heartbeat_observe_only.py as of fsw1 (the round trip)."""
+    return _swap(text, SUPERVISION_TEST_OLD, SUPERVISION_TEST_NEW, "supervision_test anchor", "found")
+
+
+# ---- (PEX frozen edit) registry/tests/test_failback_shadow_evaluator.py: Z6's persisted-globals set names fcp1's four (the shadow still persists nothing)
+SHADOW_EVALUATOR_TEST_REL = "registry/tests/test_failback_shadow_evaluator.py"
+SHADOW_EVALUATOR_TEST_OLD = _blk(r"""
+    yes = sorted(g["id"] for g in fw["globals"] if g.get("restore_value") in (True, "yes"))
+    if yes != ["reg244_last_applied_valid", "reg244_last_applied_value"]:
+        z6.append(f"restore_value: yes set changed {yes}")
+""")
+SHADOW_EVALUATOR_TEST_NEW = _blk(r"""
+    yes = sorted(g["id"] for g in fw["globals"] if g.get("restore_value") in (True, "yes"))
+    # fcp1: + the four persisted Dump operating-limit globals (fcp1's, not the shadow's: the shadow still persists nothing)
+    if yes != sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                      "dump_limits_cap_w", "dump_limits_check"]):
+        z6.append(f"restore_value: yes set changed {yes}")
+""")
+
+
+def pre_fcp1_shadow_evaluator_test(text: str) -> str:
+    """registry/tests/test_failback_shadow_evaluator.py with fcp1's one edit undone (a frozen reverter of chain entry fcp1, PEX)."""
+    return _swap(text, SHADOW_EVALUATOR_TEST_NEW, SHADOW_EVALUATOR_TEST_OLD, "shadow_evaluator_test edit", "present")
+
+
+pre_fcp1_shadow_evaluator_test.edits = ((SHADOW_EVALUATOR_TEST_OLD, SHADOW_EVALUATOR_TEST_NEW),)   # the PEX contract: exact pairs
+
+
+def add_fcp1_shadow_evaluator_test(text: str) -> str:
+    """Applies fcp1's edit to registry/tests/test_failback_shadow_evaluator.py as of fsw1 (the round trip)."""
+    return _swap(text, SHADOW_EVALUATOR_TEST_OLD, SHADOW_EVALUATOR_TEST_NEW, "shadow_evaluator_test anchor", "found")
+
+
+# Every frozen file fcp1 edits, with its reverter (the chain entry's frozen_reverts).
+FROZEN_REVERTERS = {
+    SUPERVISION_TEST_REL: pre_fcp1_supervision_test,
+    SHADOW_EVALUATOR_TEST_REL: pre_fcp1_shadow_evaluator_test,
+}

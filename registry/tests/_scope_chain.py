@@ -932,8 +932,13 @@ FCP1 = Entry(
     deltas={"globals": 9, "intervals": 1, "sensors": 2, "text_sensors": 2, "switches": 1, "numbers": 2, "substitutions": 7},
     subst_added=dict(_fcp1.SUBSTITUTIONS),
     added_files=_fcp1.ADDED_FILES,
+    frozen_reverts=dict(_fcp1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each frozen suite after fcp1; as of pub0 each is its pub0 state
+        _fcp1.SUPERVISION_TEST_REL: "fbbdd59bf047635fb23486ec46aaf5a9a7a9327bdab6f97e1534b3748604521f",
+        _fcp1.SHADOW_EVALUATOR_TEST_REL: "c7da8a993126df7859952bf8c94f43fe50cbef228be0399ffbfd41a84dee4b68",
+    },
     # _pex.fingerprint(FCP1): hashes its parent fsw1's fingerprint and every declaration above
-    fingerprint="8a1734966689f5227aea137d7bb750d93156751140e05873cbba57f632012287",
+    fingerprint="d01b3cd8cd7859abf8ca7aceb1287cf9e47d6e69b07c8e98cade620ee0349f15",
     note="full-capability Dump-to-Grid foundation: inverter capability profile (ecco_dump_capability_w, no global maximum), the "
          "Dump power ceiling and the maximum net grid export as separate settings persisted and enforced on the dongle (validated "
          "at boot, arm-gated raises only when idle, reductions always, a per-lease latched ceiling, a net export guard); factory "
