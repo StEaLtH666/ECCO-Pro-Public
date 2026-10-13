@@ -73,11 +73,11 @@ Development before the first public release happened in a private repository; se
     FAILED pill. Every existing reason keeps its subline and priority, and STATUS PARTIAL still comes first.
   - **Scope:** Home Assistant health package, check and reason-code registries, documentation and the dashboard hero,
     declared as post-export entry `fsw1`. No firmware, frontend or Modbus change.
-  - **Compatibility:** scheduled Free Power (fps1) retries only gate refusals, which are never counted, so its retries and its
-    own failure alert coexist with this warning (the suite drives the real fps1 package against the dongle model).
-    Firmware gate refusals never increment these counters, so this warning does not report them; the Dump to Grid scheduler's
-    reliability is a separate fix and is not changed here. `docs/FAILED_START_HEALTH.md` records the detection matrix, the
-    timing contract, deployment, rollback and the passive live acceptance criteria.
+  - **Compatibility:** the scheduled Free Power (fps1) and scheduled Dump to Grid (dgs1) packages retry only gate refusals, which
+    are never counted, so their retries and their own failure alerts coexist with this warning (the suite drives both real
+    packages against their dongle models). Firmware gate refusals never increment these counters, so this warning does not report
+    them; neither scheduler package is changed here. `docs/FAILED_START_HEALTH.md` records the detection matrix, the timing
+    contract, deployment, rollback and the passive live acceptance criteria.
 
 - **ECCO Weather & Solar card** (`frontend/ecco-weather-solar-card`, read-only): current weather, the hourly and five-day Met.no
   forecast, sun times, the ECCO blended solar forecast (today, remaining today, tomorrow) with its Solcast and Forecast.Solar
@@ -177,6 +177,21 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, and a persistent notification for every failure or
     missed start;
   - schedule status STARTING / FAILED / COMPLETED in addition to ACTIVE / ARMED / IDLE.
+  No firmware, dashboard or Modbus change.
+- Scheduled Dump to Grid gets the same start reliability and failure reporting (post-export entry `dgs1`; review record
+  [docs/incidents/2026-10-12-scheduled-dump-to-grid-start-review.md](docs/incidents/2026-10-12-scheduled-dump-to-grid-start-review.md)).
+  No scheduled Dump to Grid start has failed so far, but its start gate has the same bus-busy refusal and the package used the same
+  locked +2 s / +35 s timing (in the offline model it fails to start at about 9 % of poll phases). The old retry also pressed
+  again after a start transaction had begun, could leave the write enable on when the firmware dropped a press, stopped for good
+  if the dongle read offline at the start instant, and alerted nobody. The fix is in the Home Assistant scheduling layer only and
+  mirrors `fps1`:
+  - bounded, unevenly spaced retries of a transient start-gate refusal only, each answer proven to belong to its press;
+  - never a retry once a start transaction began or when the outcome is unconfirmed;
+  - all three staged values (export power, Stop SOC, duration) confirmed before every press; nothing staged into another
+    transaction;
+  - a start deadline and a duration clamp inside the authorised window;
+  - a readiness check (including a battery already at the Stop SOC), a missed-trigger watchdog, restart recovery, persistent
+    notifications, and STARTING / FAILED / COMPLETED status.
   No firmware, dashboard or Modbus change.
 
 ### Fixed (documentation)

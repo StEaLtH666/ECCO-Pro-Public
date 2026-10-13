@@ -26,6 +26,7 @@ the entity's state before the render, restore of state and attributes across a H
   [7] fps1          the REAL scheduled Free Power package (fps1) driven against the dongle model, FSW1 evaluated on the counter timeline: retried
                     gate refusals and persistent refusals are never counted, a started-then-failed session warns once at the settle (after fps1's
                     own alert), dongle outages and API stalls never fabricate a warning
+  [8] dgs1          the same for the REAL scheduled Dump to Grid package (dgs1) against its dongle model
 
 Writes nothing; no Home Assistant, no network, no hardware. It does not prove the templates on a live Home Assistant instance.
 """
@@ -1316,6 +1317,157 @@ try:
 except Exception as exc:  # noqa: BLE001
     import traceback
     check("the FPS1 compatibility simulations run", False, traceback.format_exc()[-600:])
+
+# ---------------------------------------------------------------------------------------------------------------------------
+print("")
+print("[8] DGS1 compatibility: the REAL scheduled Dump to Grid package (dgs1) driven against its dongle model; FSW1 evaluated on the counter timeline")
+print("    it produces (the same rule: gate refusals are never counted; only a start that passed the gate and then failed is)")
+import _ha_dump_sim as HD  # noqa: E402
+
+DGS_PKG_TEXT = (ROOT / "home-assistant" / "packages" / "ecco_dump_to_grid_schedule.yaml").read_text(encoding="utf-8")
+E_DSUCC = HD.D_ATTEMPTS.replace("attempts", "successes")
+assert E_DSUCC != HD.D_ATTEMPTS and E_DSUCC == DGS, (E_DSUCC, DGS)
+
+
+class SDump(HD.DumpDongle):
+    """The DGS1 dongle model plus the start-successes counter, published (like the attempts counter) on its own 30 s timer."""
+    DONGLE_ENTITIES = HD.DumpDongle.DONGLE_ENTITIES + (E_DSUCC,)
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.w.set(E_DSUCC, "0.0")
+
+    def _attempts_tick(self):
+        if not self.is_offline(self.w.t):
+            self._pub(E_DSUCC, f"{float(self.successes)}")
+        super()._attempts_tick()
+
+    def set_offline(self, a, b):
+        super().set_offline(a, b)
+        self.w.at(b, lambda: self.w.set(E_DSUCC, f"{float(self.successes)}"))
+
+
+DGS_START = "2026-10-11 18:00:00"
+DGS_ST = HS.parse_local(DGS_START)
+DGS_T0 = HS.parse_local("2026-10-11 17:50:00")
+
+
+class DgsRun:
+    """One simulated scheduled Dump to Grid session (armed 17:51, start 18:00), then FSW1 replayed over the counters it produced."""
+
+    def __init__(self, *, phase=0.0, delays=(0.117,), outcome="ok", setup=None, horizon=1500):
+        self.w = w = HS.World(DGS_T0)
+        HD.add_ha_filters(w)
+        self.ha = HS.HA(w, yaml.safe_load(DGS_PKG_TEXT))
+        self.d = SDump(w, phase=phase, handle_delays=delays, outcome=outcome)
+        w.set("input_datetime.ecco_dump_to_grid_schedule_start", DGS_START)
+        w.set("input_number.ecco_dump_to_grid_schedule_duration", "60.0")
+        w.set("input_number.ecco_dump_to_grid_schedule_power", "3000.0")
+        w.set("input_number.ecco_dump_to_grid_schedule_stop_soc", "40.0")
+        w.set("input_boolean.ecco_dump_to_grid_schedule_armed", "off")
+        w.set("input_text.ecco_dump_to_grid_schedule_last_result", "")
+        w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+        self.ha.start()
+        if setup:
+            setup(self)
+        w.run_until(HS.parse_local("2026-10-11 17:51:00"))
+        w.set("input_boolean.ecco_dump_to_grid_schedule_armed", "on")
+        self.end = DGS_ST + horizon
+        w.run_until(self.end)
+        self.sim = self.replay()
+
+    def replay(self):
+        mp = {HD.D_ATTEMPTS: DGA, E_DSUCC: DGS}
+        s = Sim(LIVE_C, base_values())
+        cur = DGS_T0
+        for t, e, v in self.w.history:
+            if e not in mp:
+                continue
+            if t > cur:
+                s.advance(t - cur)
+                cur = t
+            s.set(mp[e], v)
+        s.advance(max(0.0, self.end - cur))
+        return s
+
+    def warn_times(self):
+        out, prev = [], None
+        for when, state, _a, _tid in self.sim.renders:
+            if state == "WARNING" and prev != "WARNING":
+                out.append(DGS_T0 + (when - T0).total_seconds())
+            prev = state
+        return out
+
+    def never_warned(self):
+        return all(r[1] != "WARNING" for r in self.sim.renders)
+
+    def gate_pass(self):
+        return [t for t, o in self.d.presses if o == "PASSED"]
+
+    def alerts(self):
+        return [n for n in self.w.notification_log if n[1] == "create"]
+
+
+try:
+    sweep_bad, sweep_n = [], 0
+    for phase in range(0, 60, 5):
+        for delays in ((0.117,), (0.6, 0.1)):
+            r = DgsRun(phase=float(phase), delays=delays)
+            sweep_n += 1
+            if not (r.d.attempts == 1 and r.d.successes == 1 and len(r.gate_pass()) == 1 and r.never_warned()
+                    and r.sim.attrs.get("dump_to_grid_failures_observed") == 0 and r.sim.state == "HEALTHY"):
+                sweep_bad.append((phase, delays, r.d.attempts, r.d.successes, r.sim.state))
+    check(f"every poll phase x press delay ({sweep_n} scheduled Dump to Grid sessions through the real dgs1 package, retried gate refusals included): "
+          f"one counted attempt, one success, FSW1 never WARNING and nothing observed", not sweep_bad, str(sweep_bad[:3]))
+
+    r = DgsRun(setup=lambda x: x.d.rtc.append((DGS_ST - 5, DGS_ST + 70)))
+    check("a transient gate refusal (RTC correction at the start) retried by dgs1 and then started: refusals not counted, FSW1 never WARNING",
+          len([o for _t, o in r.d.presses if o != "PASSED"]) >= 1 and r.d.attempts == 1 and r.d.successes == 1 and r.never_warned()
+          and r.sim.attrs.get("dump_to_grid_unresolved_baseline") == 0, str((r.d.presses, r.sim.state)))
+
+    def dsnap(x):
+        x.d.flags["snapshot"] = True
+        x.w.set(HD.D_SNAP, "on")
+
+    r = DgsRun(setup=dsnap)
+    check("a persistent gate refusal (saved snapshot pending): nothing counted, dgs1 alerts, FSW1 stays HEALTHY (the gate refusal is the "
+          "scheduler's alert, never FSW1's)", r.d.attempts == 0 and len(r.gate_pass()) == 0 and r.alerts() and r.never_warned() and r.sim.state == "HEALTHY",
+          str((r.d.presses, r.alerts(), r.sim.state)))
+
+    for outcome in ("capture_failed", "verify_failed"):
+        r = DgsRun(outcome=outcome, horizon=2500)
+        warns = r.warn_times()
+        alert_t = min((n[0] for n in r.alerts()), default=None)
+        first_attempt_visible = next((t for t, e, v in r.w.history if e == HD.D_ATTEMPTS and v == "1.0"), None)
+        check(f"a Dump to Grid start that passed the gate and then failed ({outcome}): one attempt, no success, never retried by dgs1, an alert from dgs1",
+              r.d.attempts == 1 and r.d.successes == 0 and len(r.gate_pass()) == 1 and alert_t is not None, str((r.d.attempts, r.d.successes, r.gate_pass(), r.alerts())))
+        check(f"... FSW1 warns exactly {SETTLE} s after the attempt became visible (and after dgs1's own alert), with the Dump to Grid code only",
+              len(warns) == 1 and first_attempt_visible is not None and abs((warns[0] - first_attempt_visible) - SETTLE) <= 1
+              and alert_t <= warns[0] and r.sim.attrs.get("dump_to_grid_failures_observed") == 1
+              and r.sim.attrs.get("free_power_failures_observed") == 0, str((warns, first_attempt_visible, alert_t)))
+        check("... the warning is Dump to Grid only and expires 1800 s after the attempt (HEALTHY again by the end of the run)",
+              r.sim.state == "HEALTHY" and any(CODE_DG in x[2].get("reason_codes", []) for x in r.sim.renders)
+              and not any(CODE_FP in x[2].get("reason_codes", []) for x in r.sim.renders), str((r.sim.state,)))
+
+    r = DgsRun(setup=lambda x: x.d.set_offline(DGS_ST - 30, DGS_ST + 40))
+    check("the dongle offline across the scheduled Dump to Grid start (dgs1 waits, then starts): counters unavailable then back; FSW1 never WARNING",
+          r.d.attempts == 1 and r.d.successes == 1 and r.never_warned() and r.sim.state == "HEALTHY", str((r.d.attempts, r.sim.state)))
+
+    r = DgsRun(setup=lambda x: x.d.set_offline(DGS_ST + 2, DGS_ST + 150))
+    check("the dongle offline from just after the press (the start itself runs): reconnection with attempt 1 / success 1 only sets the baseline",
+          r.d.attempts == 1 and r.d.successes == 1 and r.never_warned() and r.sim.attrs.get("dump_to_grid_failures_observed") == 0, str((r.d.attempts, r.sim.state)))
+
+    r = DgsRun(outcome="capture_failed", setup=lambda x: x.d.set_offline(DGS_ST + 2, DGS_ST + 150), horizon=1500)
+    check("a genuine failed Dump to Grid start while the dongle is offline is NOT observed (documented limitation): no WARNING is fabricated at the reconnection",
+          r.d.attempts == 1 and r.d.successes == 0 and r.never_warned() and r.sim.attrs.get("dump_to_grid_failures_observed") == 0, str((r.d.attempts, r.sim.state)))
+
+    for hold in (100, 260):
+        r = DgsRun(setup=lambda x, hold=hold: x.d.stalls.append((DGS_ST + 1, DGS_ST + hold)))
+        check(f"the API stalled for {hold} s across the Dump to Grid start (TCP alive, publishes held and delivered in order): FSW1 never WARNING",
+              r.d.attempts == 1 and r.d.successes == 1 and r.never_warned() and r.sim.attrs.get("dump_to_grid_failures_observed") == 0, str((r.sim.state,)))
+except Exception as exc:  # noqa: BLE001
+    import traceback
+    check("the DGS1 compatibility simulations run", False, traceback.format_exc()[-600:])
 
 print("")
 if FAILURES:

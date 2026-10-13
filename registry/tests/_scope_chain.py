@@ -107,6 +107,7 @@ import _fbc3_scope as _fbc3  # noqa: E402
 import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
+import _dgs1_scope as _dgs1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
@@ -778,8 +779,39 @@ RSV1 = Entry(
          "its value; the helper stays user-editable and has no `initial`; Home Assistant defaults only: ZERO firmware, dashboard, "
          "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
 )
+# dgs1 (scheduled Dump to Grid reliability; the review after the 11 Oct 2026 scheduled Free Power incident; _dgs1_scope.py): made on
+# the export after rsv1 (which follows fps1). The Dump to Grid start gate is the same shape as Free Power's (one condition; a refusal has no side effect;
+# its last test refuses while any Modbus frame is queued or awaiting its reply), and the scheduled Dump to Grid package used the same
+# +2 s / +35 s timing fps1 proved locked to the 10 s telemetry poll; it also retried after a start transaction had begun, could leave
+# the write enable on when the firmware dropped a press, and raised no alert. dgs1 mirrors fps1 in the Home Assistant scheduling
+# layer only: bounded, unevenly spaced retries of a transient start-gate refusal, never a retry once a transaction began, all three
+# staged values confirmed before each press, positive confirmation, a start deadline and a duration clamp inside the authorised
+# window, a readiness check and a missed-trigger watchdog, persistent notifications, richer status states.
+# FROZEN edits (PEX): the scheduled Dump to Grid package and its frozen package test (the service allowlist)
+# (_dgs1_scope.FROZEN_REVERTERS); as of pub0 each is the export byte for byte. test_pex_transition.py and CHANGELOG.md are not frozen.
+# No chain-pinned file. Measured, not declared: ZERO firmware, registry, dashboard, Intelligence or ecco_core byte; ZERO Modbus
+# operation; the package's helper / script / automation counts unchanged; no register, ESPHome-action or Modbus service.
+DGS1 = Entry(
+    id="dgs1", pr="DGS1", commit="unmerged",
+    reverts={},
+    checkpoints={},
+    added_files=_dgs1.ADDED_FILES,
+    frozen_reverts=dict(_dgs1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after dgs1; as of pub0 each is its pub0 state (manifest result)
+        _dgs1.PACKAGE_REL: "95c7ed6eeec8ed51b7b43fa0b34f5d3499c3074685af4d7734441be0e4447833",
+        _dgs1.PKG_TEST_REL: "271f980ffd6ebf6c5492d01cb43564e03a33797154afd73fd455097b48938ec1",
+    },
+    # _pex.fingerprint(DGS1): hashes its parent rsv1's fingerprint and every declaration above
+    fingerprint="65c52d137893cdde64c8d7a5cd850582093da5a39412a3e2e2d316e82b39bf36",
+    note="Scheduled Dump to Grid reliability (review after the 11 Oct 2026 Free Power incident): bounded, unevenly spaced retries of "
+         "a transient start-gate refusal, no retry once a start transaction began, all three staged values confirmed before each "
+         "press, positive confirmation, a start deadline and duration clamp inside the authorised window, a readiness check, a "
+         "missed-trigger watchdog, persistent notifications and STARTING / FAILED / COMPLETED states: Home Assistant scheduling "
+         "layer only, ZERO firmware, registry, dashboard, Intelligence or ecco_core change, ZERO Modbus operation, no new control "
+         "surface",
+)
 # fsw1 (the failed-start health warning; _fsw1_scope.py): a Home Assistant health, records and Overview-hero change made on the export
-# after rsv1. A Free Power or Dump to Grid START that fails before it writes anything leaves the recovery state at NONE, so nothing on
+# after dgs1. A Free Power or Dump to Grid START that fails before it writes anything leaves the recovery state at NONE, so nothing on
 # the Overview reported it. sensor.ecco_health_start_failures detects a genuine new failed start from four EXISTING firmware counters
 # (start attempts and start successes, Free Power and Dump to Grid): a rise of unresolved attempts that is still there after the counters
 # were quiet for 240 s (refusals are never counted; a nonzero count, a Home Assistant start, a reconnection and a counter reset only set the
@@ -804,7 +836,7 @@ FSW1 = Entry(
         _fsw1.DASHBOARD_REL: "de1d291a4b610152b04371ddf049d691f56e1c763394a724934b833bf01ce6b5",
     },
     # _pex.fingerprint(FSW1): hashes its parent ovw1's fingerprint and every declaration above
-    fingerprint="7a983265c5477ea686c51fc4c2addcfe12653eace5148b8d62a5aa4fedcc2415",
+    fingerprint="a380efdfa34b1acfc626ceaa47c8faf56347960d5603a9b98c47077ef7439db5",
     note="structured, time-limited failed-start health warning: sensor.ecco_health_start_failures detects a genuine new Free Power / "
          "Dump to Grid START failure from the existing start-attempt and start-success counters (unresolved attempts rising and "
          "settled; refusals, a nonzero count, a restart, a reconnection and a counter reset never count), WARNING for 1800 s with "
@@ -813,7 +845,7 @@ FSW1 = Entry(
          "frontend, deployment, Intelligence or ecco_core change, ZERO Modbus operation, no new control surface, no manifest or "
          "VERSION.yaml change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, FSW1)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

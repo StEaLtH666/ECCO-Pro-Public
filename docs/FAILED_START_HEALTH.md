@@ -77,8 +77,9 @@ of that version) and confirm the keep-alive constants `KEEP_ALIVE_FREQUENCY` and
 - **Firmware gate refusals never increment these counters.** The attempt counter is incremented only after every start gate has
   passed, so a start refused at the gate (bus busy, RTC correction, another write, configuration offline, snapshot pending, ...)
   changes nothing here. FSW1 neither detects nor reports it; the scheduler's own alert does (Free Power: FPS1).
-- **Dump to Grid scheduler reliability is a separate fix.** FSW1 covers Dump to Grid *transactions* that passed the gate and failed.
-  It does not change the Dump scheduler package, which still has the older fixed timing and no persistent failure notification.
+- **Scheduler reliability is a separate layer.** The scheduled Free Power (fps1) and scheduled Dump to Grid (dgs1) packages retry
+  transient gate refusals and raise their own persistent notifications. FSW1 changes neither package; it covers *transactions* that
+  passed the gate and then failed, for both features.
 - **No reserve or limit is read or changed.** FSW1 does not touch the minimum-reserve helper, Stop SOC, grid charge limits or any
   schedule helper.
 
@@ -91,9 +92,11 @@ successes counters only; FPS1 reads the attempts counter. Neither writes to the 
 package against the dongle model (every poll phase, transient and persistent refusals, failed transactions, dongle outages and API
 stalls) and evaluates FSW1 on the counters that produce.
 
-**Dump to Grid.** The same counters and the same rule apply. The Dump to Grid scheduler package still uses the older fixed timing
-(press, one retry after about 13 s, no persistent notification). A gate refusal there is invisible to FSW1 and is recorded only in the
-schedule's last-result text. That belongs to a separate scheduler change, not to this health warning.
+**Dump to Grid (dgs1).** The same counters and the same rule apply, and the scheduled Dump to Grid package (dgs1) has the same
+shape as fps1: bounded retries of a transient gate refusal only, never a retry once a start transaction began, a persistent
+notification for every failure. A gate refusal there is not counted and is reported by dgs1's own alert, never by FSW1. The offline suite
+drives the real dgs1 package against its dongle model (every poll phase, transient and persistent refusals, failed transactions with
+and without a retained snapshot, dongle outages and API stalls) and evaluates FSW1 on the counters that produce.
 
 ## Overview hero
 

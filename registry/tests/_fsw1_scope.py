@@ -2,7 +2,7 @@
 
 Same technique as the earlier post-export scope modules: every verbatim edit is held HERE as the single source of truth, as an exact
 (before, after) pair generated from the real diff and round-trip-checked, and each reverter raises unless each of its edits is present
-exactly once. The post-export chain entry `fsw1` (registry/tests/_scope_chain.py POST_EXPORT_ENTRIES, appended last after rsv1;
+exactly once. The post-export chain entry `fsw1` (registry/tests/_scope_chain.py POST_EXPORT_ENTRIES, appended last after dgs1;
 registry/tests/_pex.py) carries one frozen reverter per edited file.
 
 WHAT fsw1 IS. Home Assistant health, records and the Overview status hero only. A Free Power or Dump to Grid START that fails before it
@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import hashlib
 
-# Public main the change is based on (battery reserve first-run default, rsv1).
-BASE_COMMIT = "311c129637b78250532503d6cc60c1403010bed1"
+# Public main the change is based on (scheduled Dump to Grid reliability, dgs1).
+BASE_COMMIT = "8d19fa0c3f7a217b404c29548e692673bc9fb26e"
 
 ADDED_FILES = frozenset({
     "home-assistant/tests/test_ecco_start_failure_alert.py",
