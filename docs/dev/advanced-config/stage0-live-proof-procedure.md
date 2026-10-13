@@ -18,6 +18,9 @@
    grid-charge bit. Also record slots 1, 2, 4, 5 and 6 (all fields).
 5. **Bounds.** Record the inverter shutdown SOC and the ECCO minimum reserve. The allowed range must include 40 and 41.
 6. **Counters.** Record the manual configuration write counters (attempts / successes / failures).
+6a. **Fresh evidence.** ECCO Supervision Valid Heartbeat Count rises between two readings 60 s apart; Heartbeat Age is at most
+   60 s; Last Configuration Update is within 2 minutes of Home Assistant's clock and advances every minute. Do not start if any
+   fails (the editor would refuse anyway).
 7. **Read-only capture.** Start a dongle log capture (`esphome logs`, bounded, read-only), and note the HA history pull window.
 
 ## Step A: 40 → 41 %

@@ -20,6 +20,8 @@ automation interpreter) against _manual_tou_sim.py, a model of the firmware's ex
                     comes, a dropped press: stop, disarm, alert with the observed values, lock further edits until the
                     owner acknowledges; never retried, never a compensating write
   [9] races         Free Power starting during the flow; a second request
+  [9b] freshness    fresh evidence, not just a connected API: a live heartbeat round trip, a new poll stamped by the dongle's own
+                    clock and coherent with Home Assistant's, a frozen view, a dead heartbeat, a replayed time, clock skew
   [10] mutation     in-memory mutants are each caught
   [11] PEX          the acs0 declaration
   [12] tokens       the owner-approved reserved-token amendment: exactly six ids, read only, in exactly three files; no
@@ -753,6 +755,88 @@ check("a second Apply while one runs is not started (single mode): one Apply pre
       and any("already running" in m for m in r.w.warnings))
 
 # ======================================================================================================================
+print("\n[9b] fresh evidence, not just a connected API")
+# ======================================================================================================================
+HB_COUNT, HB_AGE = M.HB_COUNT, M.HB_AGE
+
+
+def frozen_view(r):
+    """From just after the review the dongle's API stays 'connected' but nothing new reaches Home Assistant: every dongle entity keeps
+    its last value (no 'unavailable', no change) - the stale-connection case the fresh-evidence gate exists for."""
+    real = r.w.set
+
+    def gate(e, v, a=None):
+        if "ecco_clock_dongle_" in e and r.w.t > T0 + 75:
+            return
+        return real(e, v, a)
+    r.w.set = gate
+
+
+r = Run(setup=frozen_view).edit(3, 41)
+check("a frozen view (API up, nothing new published): FAILED - no live heartbeat round trip; nothing pressed, nothing written",
+      r.res().startswith("FAILED - no live heartbeat round trip") and r.d.presses == [] and r.changed() == {}, r.res())
+r = Run().review(3, 41)
+r.d.fault["hb_dead"] = True                       # Home Assistant's heartbeats stop reaching the dongle; polls continue
+r.apply()
+check("heartbeats stop reaching the dongle while polls continue: FAILED before the Load (round trip or heartbeat age); nothing pressed",
+      r.res().startswith("FAILED") and "heartbeat" in r.res() and r.d.presses == [] and r.changed() == {}, r.res())
+
+
+def replayed_time(r):
+    """After the review every poll re-sends the configuration time Home Assistant already has (a reconnect replay; no new poll)."""
+    old = r.w.state(M.CFG_UPDATE)
+    orig = r.d.poll
+
+    def poll():
+        orig()
+        r.w.set(M.CFG_UPDATE, old)
+    r.d.poll = poll
+
+
+r = Run(setup=replayed_time).edit(3, 41)
+check("a replayed configuration time (no genuinely new poll): FAILED before the Load; nothing pressed, nothing written",
+      r.res().startswith("FAILED") and r.d.presses == [] and r.changed() == {}, r.res())
+r = Run(setup=lambda x: (x.d.fault.__setitem__("clock_skew", 600.0), x.d.poll())).review(3, 41)
+check("the dongle's clock 10 minutes ahead of Home Assistant's: the review is refused (configuration time not current)",
+      r.res().startswith("REVIEW REFUSED - the dongle's configuration time or heartbeat is not current"), r.res())
+r = Run().review(3, 41)
+r.d.fault["clock_skew"] = -600.0
+r.d.poll()
+r.apply()
+check("a clock step between the review and the Apply: refused at the Apply, nothing pressed",
+      r.res().startswith("REFUSED - the dongle's configuration time or heartbeat is not current") and r.d.presses == [], r.res())
+for v in ("unknown", "unavailable", "300.0", "-1.0"):
+    r = Run(setup=lambda x, v_=v: x.w.set(HB_AGE, v_)).review(3, 41)
+    check(f"heartbeat age {v!r}: the review is refused", r.res().startswith("REVIEW REFUSED - the dongle's configuration time or heartbeat"),
+          r.res())
+
+
+def skew_after_write(r):
+    orig = r.d._finish
+
+    def finish(n, failed):
+        orig(n, failed)
+        r.d.fault["clock_skew"] = 900.0          # the dongle's clock jumps right after the write
+    r.d._finish = finish
+
+
+r = Run(setup=skew_after_write).edit(3, 41, run=480)
+uncertain(r, "the later reads' times are not coherent with Home Assistant's clock (a dongle clock jump after the write)",
+          "no complete later configuration read" in r.note())
+r = Run()
+t_start = r.w.t
+r.review(3, 41)
+r.ha.start_script(APPLY, {"confirmation": f"SET SLOT 3 TARGET SOC 41 REVIEW {r.code()}"})
+load_t = None
+while r.w.t < t_start + 600 and not r.res().startswith("APPLIED"):
+    r.w.run_until(r.w.t + 0.5)
+    if load_t is None and any(p[1].startswith("load") for p in r.d.presses):
+        load_t = r.w.t
+check("the normal edit still completes (round trip + fresh poll + Load + Apply + two later reads) within about 5 minutes",
+      r.res().startswith("APPLIED AND VERIFIED") and r.w.t - t_start <= 300, f"{r.res()[:40]} {r.w.t - t_start:.0f}s")
+
+
+# ======================================================================================================================
 print("\n[10] mutation")
 # ======================================================================================================================
 SAME_PW = "and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))"
@@ -776,6 +860,10 @@ def battery(text: str) -> dict:
         res["same"] = x.changed() == {}
         x = Run(text, setup=lambda y: y.w.set(FB_REVIEW, "st=SAVING;id=AB12")).review(3, 41)
         res["fallback"] = x.res().startswith("REVIEW REFUSED")
+        x = Run(text, setup=frozen_view).edit(3, 41)
+        res["roundtrip"] = "heartbeat round trip" in x.res() and x.d.presses == []
+        x = Run(text, setup=lambda y: (y.d.fault.__setitem__("clock_skew", 600.0), y.d.poll())).review(3, 41)
+        res["coherence"] = x.res().startswith("REVIEW REFUSED")
         x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("MATCH", ca="S"))).review(3, 41)
         res["stale"] = x.res().startswith("REVIEW REFUSED")
         x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("NO_PROFILE"))).review(3, 41)
@@ -843,6 +931,11 @@ MUTANTS = [
     ("a Review allowed while an Apply runs",
      "{{ not is_state('script.ecco_cfg_apply_tou_slot_soc', 'off') or not is_state('input_boolean.ecco_cfg_edit_in_flight', 'off') }}",
      "{{ false }}", "busy"),
+    ("the heartbeat round trip not required", "round_trip: \"{{ hb_before | float(-1) >= 0 and (states('sensor.ecco_clock_dongle_"
+     "ecco_supervision_valid_heartbeat_count') | float(-1)) > (hb_before | float(-1)) }}\"", "round_trip: \"{{ true }}\"", "roundtrip"),
+    ("the dongle's configuration time not checked against Home Assistant's clock",
+     "{% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or ",
+     "{% elif ", "coherence"),
     ("the final disarm removed", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_off\n", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_on\n", "arm_off"),

@@ -26,6 +26,8 @@ SUCCESSES = f"sensor.{P}manual_configuration_write_successes_since_boot"
 ATTEMPTS = f"sensor.{P}manual_configuration_write_attempts_since_boot"
 MANUAL = f"binary_sensor.{P}manual_write_in_progress"
 CFG_UPDATE = f"sensor.{P}last_configuration_update"
+HB_COUNT = f"sensor.{P}ecco_supervision_valid_heartbeat_count"
+HB_AGE = f"sensor.{P}ecco_supervision_heartbeat_age"
 SHUTDOWN = f"sensor.{P}ecco_battery_shutdown"
 FLAGS = {
     "tel": f"binary_sensor.{P}telemetry_online", "cfg": f"binary_sensor.{P}configuration_online",
@@ -98,6 +100,15 @@ class ManualTouDongle:
         world.set(ATTEMPTS, "0.0")
         self.attempts = 0
         world.at(world.t + 13.0, self._counter_tick)
+        # The supervision heartbeat: Home Assistant sends one every 30 s and the dongle counts each valid one (supervision_valid_count),
+        # publishing the count every 30 s and the age of the last one every 20 s (fault "hb_dead": heartbeats stop arriving).
+        self.hb_count = 40
+        self.hb_last = world.t - 5.0
+        world.at(world.t + 25.0, self._heartbeat)
+        world.at(world.t + 7.0, self._hb_count_tick)
+        world.at(world.t + 3.0, self._hb_age_tick)
+        world.set(HB_COUNT, f"{float(self.hb_count)}")
+        world.set(HB_AGE, "5.0")
         world.set(SHUTDOWN, f"{float(shutdown_soc)}")
         for e, v in SAFE_STATES.items():
             world.set(e, v)
@@ -150,7 +161,23 @@ class ManualTouDongle:
             return
         self.cache = copy.deepcopy(self.regs)
         self._publish_live()
-        self.w.set(CFG_UPDATE, local_str(self.w.t))
+        self.w.set(CFG_UPDATE, local_str(self.w.t + self.fault.get("clock_skew", 0.0)))   # the dongle's own (SNTP) clock
+
+    def _heartbeat(self):
+        if not self.fault.get("hb_dead"):
+            self.hb_count += 1
+            self.hb_last = self.w.t
+        self.w.after(30.0, self._heartbeat)
+
+    def _hb_count_tick(self):
+        if self.flags["tel"]:
+            self.w.set(HB_COUNT, f"{float(self.hb_count)}")
+        self.w.after(30.0, self._hb_count_tick)
+
+    def _hb_age_tick(self):
+        if self.flags["tel"]:
+            self.w.set(HB_AGE, f"{float(int(self.w.t - self.hb_last))}")
+        self.w.after(20.0, self._hb_age_tick)
 
     def _counter_tick(self):
         """The firmware publishes its write counters every 30 s (not on change)."""
