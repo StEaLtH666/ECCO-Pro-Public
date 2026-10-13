@@ -14,7 +14,11 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
               equivalence), the recorded leases replay with no trip, healthy leases at 3-8 kW do not trip, synthetic runaways and
               oscillating faults at 3-8 kW trip within a bound, skipped samples are not "below", latching, grace, transitions,
               a 12 kW profile
-  [C]         write surface and NVS: no new Modbus operation, register 245 never written, every new global RAM only
+  [O] SG-08   the ownership-checked restore: a fresh pre-read of 244-261 before any restore write; ORIGINAL left alone, ECCO's own
+              values restored, a FOREIGN value never overwritten (obligation kept, operator decides); no repeat rewrite after a
+              verified restore; reboot, comms failure, Force Restore Original
+  [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
+              global RAM only
   [P]         the post-export declaration (PEX entry fcp2)
 """
 from __future__ import annotations
@@ -594,10 +598,170 @@ check(f"a 12 kW profile: the backstop scales with it ({big_thr:.0f} W at 12000 W
       big_level([12000 * 1.12 + 100] * 6) is None and big_level([big_thr + 200] * 3) is not None)
 
 # ==================================================================================================================================
+print("\n[O] SG-08 / SG-29c: the ownership-checked restore")
+# ==================================================================================================================================
+VALID = "ecco_dump_to_grid_snapshot_valid_v1"
+RETRY = "ecco_dump_to_grid_retry_state_v1"
+
+
+def marker(sim):
+    rec = sim.nvs.get(VALID)
+    return None if rec is None else rec.state
+
+
+def end(sim, reason="manual End button"):
+    n = len(sim.modbus_log)
+    sim.execute("request_dump_end", {"reason": ds.CStr(reason)})
+    return sim.modbus_log[n:]
+
+
+def restore_ops(log):
+    return [(k, a, (len(v) if k == "read" else v)) for k, a, v, o in log]
+
+
+sim = started(target=1000)
+ops = restore_ops(end(sim))
+check("a normal End: the restore READS 244-261 first (one 18-register read), then writes 244 and 256-261 back, verified",
+      ops[0] == ("read", 244, 18)
+      and [o for o in ops if o[0] == "write"] == [("write", 244, [2]), ("write", 256, [8000, 8000, 7000, 8000, 8000, 5000])]
+      and owned(sim) == ORIGINAL and marker(sim) == 0 and "RESTORED OK" in sim.status(), f"{ops} | {sim.status()}")
+oops = restore_ops(end(started(OLD, target=1000)))
+check("...the fcp1 restore wrote blind (no pre-read)", oops[0][0] == "write", str(oops[:2]))
+
+sim = started(target=1000)
+sim.bank.update(ORIGINAL)
+ops = restore_ops(end(sim))
+check("everything already ORIGINAL (e.g. reverted by hand): the restore writes NOTHING and clears the obligation",
+      [o for o in ops if o[0] == "write"] == [] and marker(sim) == 0 and "RESTORED OK" in sim.status(), f"{ops} {sim.status()}")
+
+sim = started(target=1000)
+sim.bank.update({256: 8000, 257: 8000})      # two registers already back at their ORIGINAL, four still at ECCO's ceiling
+ops = restore_ops(end(sim))
+check("a mix of ORIGINAL and ECCO's own ceiling (no foreign value): the block is written back, verified", owned(sim) == ORIGINAL
+      and marker(sim) == 0 and any(o[1] == 256 and o[0] == "write" for o in ops), sim.status())
+
+for label, fw in (("fcp2", FW), ("fcp1", OLD)):
+    s = started(fw, target=1000)
+    s.bank[258] = 6500                         # an external change during the lease (the app, the front panel, another master)
+    config_poll(s)
+    tick(s)                                    # the passive drift check ends the lease; the restore runs
+    if label == "fcp2":
+        check("an EXTERNAL change to 258 during the lease: the drift END turns export off (244 was ECCO's) but 258's 6500 W is "
+              "KEPT, the block is not written, the obligation is kept and the operator is asked (durably)",
+              s.bank[258] == 6500 and s.bank[244] == ORIGINAL[244] and s.bank[256] == 1000 and marker(s) == 1
+              and s.g["dump_operator_needed"] and s.nvs[RETRY].operator_needed == 1
+              and s.status().startswith("OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten")
+              and "register 258 reads 6500W" in s.status()
+              and str(s.ent("dump_recovery_state").state).startswith("FOREIGN (not overwritten)"), s.status())
+        n = len(s.modbus_log)
+        for _ in range(4):
+            tick(s)
+        check("...and no further automatic Modbus I/O while the operator decides", len(s.modbus_log) == n)
+        s.ent("dump_recovery_arm").state = True
+        s.execute("dump_force_restore_original")
+        check("Force Restore Original (armed operator decision) then writes the ORIGINAL snapshot over it and clears",
+              owned(s) == ORIGINAL and marker(s) == 0, s.status())
+    else:
+        check("...the fcp1 restore OVERWROTE the external 6500 W with the stale snapshot (SG-08 reproduced)", s.bank[258] == 7000)
+
+s = started(target=1000)
+s.bank[244] = 1                                # 244 changed externally to Essentials (not exporting)
+end(s)
+check("244 changed externally (Essentials): left as is; ECCO's own 256-261 ceiling IS restored; operator asked",
+      s.bank[244] == 1 and all(s.bank[r] == ORIGINAL[r] for r in range(256, 262)) and marker(s) == 1 and s.g["dump_operator_needed"]
+      and "register 244 reads 1" in s.status(), s.status())
+
+s = started(target=1000)
+s.g["dump_evidence_pending_ceiling"] = 1500    # a write that may have landed (an over-covered cancelled write, a power cut)
+s.bank.update({r: 1500 for r in range(256, 262)})
+end(s)
+check("the possibly-landed PENDING ceiling is ECCO's own (Dump V2 evidence): restored, not treated as foreign",
+      owned(s) == ORIGINAL and marker(s) == 0, s.status())
+
+# Duplicate restoration: a verified restore whose durable completion failed is retried with ZERO writes; a change made after it is kept.
+for label, fw in (("fcp2", FW), ("fcp1", OLD)):
+    s = started(fw, target=1000)
+    s.nvs_fail_next[VALID] = 1                 # the PENDING_CLEAR commit after the verified restore fails
+    end(s)
+    first_ok = owned(s) == ORIGINAL and marker(s) == 1
+    n = len(s.writes())
+    tick(s)
+    retry_writes = s.writes()[n:]
+    s2 = started(fw, target=1000)
+    s2.nvs_fail_next[VALID] = 1
+    end(s2)
+    s2.bank[259] = 6000                       # the owner adjusts 259 after the (verified) restore
+    tick(s2)
+    if label == "fcp2":
+        check("a verified restore whose durable clear failed: the retry re-reads, finds ORIGINAL and writes NOTHING, then clears",
+              first_ok and retry_writes == [] and marker(s) == 0 and "RESTORED OK" in s.status(), f"{retry_writes} {s.status()}")
+        check("...and a change the owner made in between is KEPT (foreign: not overwritten, operator asked)",
+              s2.bank[259] == 6000 and marker(s2) == 1 and s2.g["dump_operator_needed"], s2.status())
+    else:
+        check("...the fcp1 retry REWROTE 244 and 256-261 blind and overwrote the owner's later change (duplicate restoration)",
+              first_ok and len(retry_writes) == 2 and s2.bank[259] == 8000, str(retry_writes))
+
+# The pre-read failing: nothing is written, the obligation stays, the comms backoff applies, and it completes once comms return.
+for outcome, label in (("error", "an error reply"), ("lost", "no reply (timeout)")):
+    s = started(target=1000)
+    real = s.outcome_fn
+    s.outcome_fn = lambda k, a, c, real=real, outcome=outcome: outcome if (k == "read" and a == 244 and c == 18) else real(k, a, c)
+    ops = restore_ops(end(s))
+    check(f"the pre-read gets {label}: ZERO writes, obligation kept, retried with comms backoff",
+          [o for o in ops if o[0] == "write"] == [] and marker(s) == 1 and not s.g["dump_operator_needed"]
+          and s.g["dump_comms_restore_attempts"] == 1 and "RESTORE WRITE FAILED" in s.status(), f"{ops} {s.status()}")
+    s.outcome_fn = real
+    for _ in range(3):
+        tick(s, ms=30000)
+    check("...once comms return, the restore completes", owned(s) == ORIGINAL and marker(s) == 0, s.status())
+
+
+# Reboot mid-lease: the boot path ends the lease and the same ownership-checked restore runs.
+def _boot_text(fw):
+    return fw["esphome"]["on_boot"]["then"][0]["lambda"]
+
+
+def reboot(sim, bank_update=None):
+    """A power cut now, then a fresh boot of the same firmware: new RAM, the same durable store and inverter, the real Dump boot block
+    and arbitration block, then the 15 s watchdog."""
+    b = ds.Sim(sim.fw)
+    b.configure_dump_limits(int(SUBS["ecco_dump_controller_max_ceiling_w"]), CAP)
+    b.ent("configuration_online").state = True
+    b.ent("configuration_polling").state = True
+    b.ent("dump_write_enable").state = False
+    b.ent("dump_recovery_arm").state = False
+    b.nvs = {k: v.copy() for k, v in sim.nvs.items()}
+    b.bank = dict(sim.bank)
+    b.bank.update(bank_update or {})
+    boot = _boot_text(b.fw)
+    s0 = boot.index("// Manual Dump-to-Grid V1 (2026-09-26) - same fail-closed marker/")
+    e0 = boot.index('id(dump_status).publish_state("Inactive");', s0)
+    b.run_lambda(boot[s0:boot.index("}", e0) + 1])
+    s1 = boot.index("// S4 fix (2026-09-27")
+    b.run_lambda(boot[s1:boot.index("if (id(free_power_recovery_metadata_corrupt)) {", s1)])
+    b.grid_w = 0.0
+    return b
+
+
+s = started(target=1000)
+b = reboot(s)
+tick(b)
+check("a power cut mid-lease, then boot: the forced end runs the ownership-checked restore - ECCO's ceiling and Allow Export are "
+      "restored, verified, obligation cleared", owned(b) == ORIGINAL and marker(b) == 0, b.status())
+s = started(target=1000)
+b = reboot(s, {257: 4321})
+tick(b)
+check("...and a value changed while the dongle was down is KEPT (no blind boot restore): operator asked, obligation kept",
+      b.bank[257] == 4321 and b.bank[244] == ORIGINAL[244] and marker(b) == 1 and b.g["dump_operator_needed"], b.status())
+
+# ==================================================================================================================================
 print("\n[C] write surface and NVS")
 # ==================================================================================================================================
-OPS = ("write_multiple_registers", "write_single_register", "read_holding_registers", "read_input_registers")
-check("no new Modbus operation of any kind (counts equal to the fcp1 firmware)", all(FW_TEXT.count(o) == OLD_TEXT.count(o) for o in OPS))
+OPS = ("write_multiple_registers", "write_single_register", "read_input_registers")
+check("no new Modbus WRITE operation (counts equal to the fcp1 firmware)", all(FW_TEXT.count(o) == OLD_TEXT.count(o) for o in OPS))
+check("exactly ONE new read: the restore's ownership pre-read of 244-261 (18 registers)",
+      FW_TEXT.count("read_holding_registers") == OLD_TEXT.count("read_holding_registers") + 1
+      and FW_TEXT.count("start_address: 244\n                count: 18") == 1)
 w_new = sorted({int(m) for m in re.findall(r"write_multiple_registers:\s*\n\s*modbus_id: \w+\s*\n\s*address: 0x01\s*\n\s*start_address: (\d+)", FW_TEXT)})
 check("register 245 is never written; the written start addresses are unchanged", 245 not in w_new and w_new == sorted(
     {int(m) for m in re.findall(r"write_multiple_registers:\s*\n\s*modbus_id: \w+\s*\n\s*address: 0x01\s*\n\s*start_address: (\d+)", OLD_TEXT)}))
@@ -607,8 +771,11 @@ check(f"every global fcp2 adds ({len(F.NEW_GLOBAL_IDS)}) is RAM only (restore_va
       all(str(gl[g].get("restore_value")).lower() in ("no", "false") for g in F.NEW_GLOBAL_IDS)
       and {g["id"] for g in FW["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")}
       == {g["id"] for g in OLD["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")})
-check("no durable commit / load site, tag or schema is touched by fcp2",
-      all(FW_TEXT.count(tok) == OLD_TEXT.count(tok) for tok in ("commit_record(", "load_record(", "load_record_status(", "_TAG")))
+check("no durable load site, tag or schema is touched; ONE new commit site - the operator-needed retry record of the FOREIGN "
+      "lockout, an existing record written exactly as the mismatch lockout writes it",
+      all(FW_TEXT.count(tok) == OLD_TEXT.count(tok) for tok in ("load_record(", "load_record_status("))
+      and FW_TEXT.count("commit_record(") == OLD_TEXT.count("commit_record(") + 1
+      and FW_TEXT.count("ecco_durable::DUMP_TO_GRID_RETRY_TAG") == OLD_TEXT.count("ecco_durable::DUMP_TO_GRID_RETRY_TAG") + 1)
 
 # ==================================================================================================================================
 print("\n[P] the post-export declaration (PEX entry fcp2)")

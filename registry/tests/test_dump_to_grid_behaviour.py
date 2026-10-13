@@ -489,7 +489,9 @@ check("once comms recover, the watchdog completes the restore exactly", owned(si
 
 # Verify mismatches DO lock out after the second one.
 sim = started()
-sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)  # 244 always reads Essentials
+# fcp2: EVERY read of 244 says Essentials, the restore's ownership pre-read (244-261) included: ECCO now sees a FOREIGN 244 before
+# writing and locks out at once (obligation kept, nothing overwritten) instead of after a second verify mismatch.
+sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)  # 244 always reads Essentials
 sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
 tick(sim)
 check("second consecutive verify mismatch: durable operator lockout", sim.g["dump_operator_needed"]
@@ -718,7 +720,7 @@ print("[E] Accept Current State residue protection (zero Modbus I/O)")
 
 def locked_out():
     sim = started()
-    sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)
+    sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)
     sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
     tick(sim, poll=False)
     sim.read_override_fn = None
@@ -754,7 +756,9 @@ sim.execute("dump_accept_current_state")
 check("post-operation readback older than 120s: Accept REFUSED", marker_state(sim) == 1, sim.status())
 
 sim = locked_out()
-sim.bank.update({244: 1})  # operator set a non-export mode by hand; ceiling still the lease value
+# fcp2: the ownership-checked restore already returned ECCO's own 256-261 to the original before locking out on the FOREIGN 244, so
+# the lease-value ceiling residue this check is about is set explicitly (as the pre-fcp2 restore left it).
+sim.bank.update({244: 1, 256: 1000, 257: 1000, 258: 1000, 259: 1000, 260: 1000, 261: 1000})  # operator set a non-export mode by hand; ceiling still the lease value
 config_poll(sim)
 io = len(sim.modbus_log)
 sim.execute("dump_accept_current_state")
@@ -1136,7 +1140,7 @@ def s_drift_detected(fw):
 
 def s_locked(fw):
     sim = started(fw=fw)
-    sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)
+    sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)
     sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
     tick(sim, poll=False)
     sim.read_override_fn = None
@@ -1470,8 +1474,10 @@ def s_r3_external_mutation_before_ownership_read_blocks_write(fw):
     256-261 immediately before ECCO's next dynamic controller correction.
     ECCO's immediate pre-write ownership re-read must observe the drift,
     perform ZERO controller overwrite of it, and fail the lease closed via
-    the common restore path - restoring the ORIGINAL pre-lease snapshot,
-    never re-asserting its own believed value over the external change."""
+    the common restore path - never re-asserting its own believed value over
+    the external change. fcp2 (SG-08): the restore no longer overwrites it
+    either - export is turned off (244 was still ECCO's), the external value
+    is KEPT and the obligation waits for the operator."""
     sim = started(target=500, duration=90, grid_w=1810.0, fw=fw)
     tick(sim, soc=60.0); tick(sim, soc=60.0)  # t+30s - still settling, no write yet
     real = sim.outcome_fn
@@ -1489,7 +1495,8 @@ def s_r3_external_mutation_before_ownership_read_blocks_write(fw):
     return (
         fired["once"]
         and not still_active(sim)
-        and owned(sim) == ORIGINAL
+        and sim.bank[259] == 4242 and sim.bank[244] == ORIGINAL[244]
+        and sim.g["dump_operator_needed"] and marker_state(sim) == 1
         and "CONFIG DRIFT (immediate pre-write check)" in str(sim.ent("dump_last_end_reason").state)
         and "register 259" in str(sim.ent("dump_last_end_reason").state)
     )
@@ -2710,8 +2717,9 @@ def _mutate_reg256_before_ownership_read(kind, addr, count):
 
 sim.outcome_fn = _mutate_reg256_before_ownership_read
 tick(sim, soc=60.0)  # t+45s
-check("R3: an external mutation of a DIFFERENT owned register (256, not 259) is caught identically",
-      fired_256["once"] and not still_active(sim) and owned(sim) == ORIGINAL
+check("R3: an external mutation of a DIFFERENT owned register (256, not 259) is caught identically (fcp2: and kept, not overwritten)",
+      fired_256["once"] and not still_active(sim) and sim.bank[256] == 1234 and sim.bank[244] == ORIGINAL[244]
+      and sim.g["dump_operator_needed"] and marker_state(sim) == 1
       and "register 256" in str(sim.ent("dump_last_end_reason").state), sim.status())
 
 # --- R3: the last-verified-owned state (dump_target_power) only ever
@@ -2757,7 +2765,7 @@ for _ in range(4):
 check("R2 x R3: a bounded retry's own write still passes through the SAME immediate ownership check - there is "
       "one obvious mutation gate, not a weaker path for retries",
       fired_retry["once"] and sim.g["dump_controller_recovery_attempts"] == 1 and not still_active(sim)
-      and owned(sim) == ORIGINAL
+      and sim.bank[260] == 9191 and sim.bank[244] == ORIGINAL[244] and sim.g["dump_operator_needed"]   # fcp2: kept, not overwritten
       and "CONFIG DRIFT (immediate pre-write check)" in str(sim.ent("dump_last_end_reason").state)
       and "register 260" in str(sim.ent("dump_last_end_reason").state), sim.status())
 

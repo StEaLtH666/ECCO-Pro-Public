@@ -36,6 +36,9 @@ Development before the first public release happened in a private repository; se
     watchdog ticks.
   - Above 3000 W the absolute backstop allows for the battery's normal DC conversion loss (a profile value, 12 % for the
     reference profile), so a healthy high-power lease is not ended by mistake. At 3000 W and below it is unchanged.
+  - The Dump restore first reads the inverter. It restores only what ECCO still owns and never overwrites a setting someone else
+    changed. In that case it keeps the recovery obligation and asks for Force Restore Original or Accept Current State. A repeat
+    after a verified restore no longer rewrites anything.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.

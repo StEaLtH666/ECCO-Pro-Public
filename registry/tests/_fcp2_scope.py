@@ -18,9 +18,16 @@ Every item below is offline-implemented and simulator-tested only.
          a gross level, latched at the sample that completes them, so an alternating (50 % duty) overshoot trips. Above
          ecco_dump_runaway_backstop_floor_w (3000 W) the backstop's margin grows by the profile's DC-over-AC allowance
          (ecco_dump_runaway_dc_allowance_pct) of the command above that floor; at or below it the margin is unchanged.
+  SG-08  ownership-checked restore (also SG-29c's duplicate restoration). restore_dump_to_grid_snapshot first fresh-reads 244-261
+         (one 18-register read) and restores only what ECCO still owns: a register already ORIGINAL is left alone; ECCO's own
+         value (244: Allow Export; 256-261: the verified or the possibly-landed pending ceiling, Dump V2's evidence) is written
+         back and verified; a FOREIGN value is NEVER overwritten - the obligation is kept and the operator decides (durable
+         operator-needed, the existing retry record). A failed or timed-out pre-read writes nothing (comms backoff). Force Restore
+         Original remains the operator's deliberate override.
 
-  ZERO new Modbus operation and ZERO new inverter write domain (register 245 untouched); no persisted global, durable record, tag or
-  header change (every new global is RAM only).
+  ZERO new inverter write and ZERO new write domain (register 245 untouched); ONE new read (the pre-read); no persisted global,
+  durable record schema, tag or header change (every new global is RAM only; the one new commit site writes the existing retry
+  record exactly as the mismatch lockout does).
 
 This module imports no other scope module and not _scope_chain (the chain imports it). No I/O.
 """
@@ -51,7 +58,7 @@ SUBSTITUTIONS = {
 }
 
 # Every global fcp2 adds (all RAM only: restore_value no).
-NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_controller_write_cancelled')
+NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
 
 
 def _blk(s: str) -> str:
@@ -449,6 +456,417 @@ SG40_CANCEL_CLOSE_NEW = _blk(r"""
                             id(dump_target_power) = id(dump_controller_pending_ceiling);
 """)
 
+# ---- restore_globals
+RESTORE_GLOBALS_OLD = _blk(r"""
+  - id: dump_restore_mismatch_this_attempt
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+""")
+RESTORE_GLOBALS_NEW = _blk(r"""
+  - id: dump_restore_mismatch_this_attempt
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # fcp2 (SG-08 / SG-29c): the restore's OWNERSHIP PRE-READ. Before writing
+  # anything, restore_dump_to_grid_snapshot fresh-reads 244-261 and classifies
+  # what it finds against the durable snapshot (ORIGINAL) and ECCO's own
+  # evidence (244: Allow Export, the value START writes; 256-261: the verified
+  # ceiling dump_target_power or the possibly-landed dump_evidence_pending_ceiling).
+  # dump_restore_244_action / dump_restore_block_action: 0 = already ORIGINAL
+  # (nothing to write), 1 = ECCO's own value (restore it), 2 = FOREIGN (an
+  # external change - never overwritten). dump_restore_foreign_this_attempt:
+  # the pre-read found a FOREIGN value; the obligation is kept and the operator
+  # decides (Force Restore Original / Accept Current State). RAM only.
+  - id: dump_restore_244_action
+    type: uint8_t
+    restore_value: no
+    initial_value: '2'
+  - id: dump_restore_block_action
+    type: uint8_t
+    restore_value: no
+    initial_value: '2'
+  - id: dump_restore_foreign_this_attempt
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_restore_foreign_detail
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+""")
+
+# ---- restore_preread
+RESTORE_PREREAD_OLD = _blk(r"""
+                id(dump_status).publish_state("RESTORING - writing back original inverter settings");
+                ESP_LOGW("dump_to_grid", "Restoring Dump to Grid snapshot");
+
+            - modbus_client.write_multiple_registers:
+                modbus_id: inverter_modbus
+                address: 0x01
+                start_address: 244
+                values: !lambda 'return std::vector<uint16_t>{id(dump_snapshot_reg244)};'
+                on_response:
+                  then:
+                    - lambda: 'id(dump_op_terminal) = true;'
+                on_error:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                on_no_response:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                on_not_sent:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+            - wait_until:
+                condition:
+                  lambda: 'return id(dump_op_terminal);'
+                timeout: 3000ms
+            - lambda: |-
+                if (!id(dump_op_terminal)) {
+                  id(dump_write_failed) = true;
+                  ESP_LOGE("dump_to_grid", "Restore write to register 244 did not reach a terminal state");
+                }
+
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.read_holding_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 244
+                      count: 1
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (!id(dump_operation_in_progress)) return;
+                              uint16_t raw = values[0];
+                              const char* names[3] = {"Allow Export", "Essentials", "Zero Export"};
+                              if (raw <= 2) id(ecco_load_limit).publish_state(names[raw]);
+                              if (raw != id(dump_snapshot_reg244)) {
+                                id(dump_write_failed) = true;
+                                id(dump_restore_mismatch_this_attempt) = true;
+                                ESP_LOGE("dump_to_grid", "RESTORE VERIFY FAILED on register 244 (raw=%u expected=%u)", raw, id(dump_snapshot_reg244));
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore verify reread of register 244 did not reach a terminal state");
+                      }
+
+""")
+RESTORE_PREREAD_NEW = _blk(r"""
+                id(dump_status).publish_state("RESTORING - writing back original inverter settings");
+                ESP_LOGW("dump_to_grid", "Restoring Dump to Grid snapshot");
+
+            # fcp2 (SG-08 / SG-29c): OWNERSHIP PRE-READ - fresh-read 244-261 inside this
+            # same critical section (the mutex and dump_operation_in_progress are held)
+            # BEFORE writing anything, and restore only what ECCO still owns: a register
+            # already ORIGINAL is left alone, ECCO's own value is restored, and a FOREIGN
+            # value (an external change: the app, the front panel, another Modbus master,
+            # an inverter reset) is NEVER overwritten - the obligation is kept and the
+            # operator decides. A repeat run after a verified restore (e.g. a failed
+            # durable clear) therefore finds ORIGINAL and writes nothing. A failed or
+            # timed-out read writes nothing (the comms-backoff path, unchanged). Force
+            # Restore Original is the operator's deliberate override: it still needs the
+            # read to succeed, then writes the ORIGINAL snapshot regardless.
+            - lambda: |-
+                id(dump_op_terminal) = false;
+                id(dump_restore_244_action) = 2;
+                id(dump_restore_block_action) = 2;
+                id(dump_restore_foreign_this_attempt) = false;
+                id(dump_restore_foreign_detail) = "";
+            - modbus_client.read_holding_registers:
+                modbus_id: inverter_modbus
+                address: 0x01
+                start_address: 244
+                count: 18
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (!id(dump_operation_in_progress)) return;
+                        char d[160];
+                        uint16_t v244 = values[0];
+                        if (v244 == id(dump_snapshot_reg244)) {
+                          id(dump_restore_244_action) = 0;
+                        } else if (v244 == 0) {
+                          id(dump_restore_244_action) = 1;
+                        } else {
+                          id(dump_restore_244_action) = 2;
+                          snprintf(d, sizeof(d), "register 244 reads %u (original %u; ECCO writes only 0)", v244, id(dump_snapshot_reg244));
+                          id(dump_restore_foreign_detail) = d;
+                        }
+                        uint16_t orig[6] = {
+                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
+                          id(dump_snapshot_reg259), id(dump_snapshot_reg260), id(dump_snapshot_reg261)
+                        };
+                        bool all_original = true;
+                        bool foreign = false;
+                        for (int i = 0; i < 6; i++) {
+                          uint16_t live = values[12 + i];
+                          if (live != orig[i]) {
+                            all_original = false;
+                            if (live != id(dump_target_power) && live != id(dump_evidence_pending_ceiling)) {
+                              foreign = true;
+                              snprintf(d, sizeof(d), "register %d reads %uW (original %uW; ECCO's ceiling %uW, pending %uW)", 256 + i, live, orig[i], (unsigned) id(dump_target_power), (unsigned) id(dump_evidence_pending_ceiling));
+                              id(dump_restore_foreign_detail) = d;
+                              break;
+                            }
+                          }
+                        }
+                        id(dump_restore_block_action) = foreign ? 2 : (all_original ? 0 : 1);
+                on_error:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                on_no_response:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                on_not_sent:
+                  then:
+                    - lambda: |-
+                        id(dump_op_terminal) = true;
+                        if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+            - wait_until:
+                condition:
+                  lambda: 'return id(dump_op_terminal);'
+                timeout: 3000ms
+            - lambda: |-
+                if (!id(dump_op_terminal)) {
+                  id(dump_write_failed) = true;
+                  ESP_LOGE("dump_to_grid", "Restore ownership pre-read of 244-261 did not reach a terminal state");
+                }
+                if (!id(dump_write_failed) && id(dump_force_restore_this_call)) {
+                  // The operator's deliberate Force Restore Original: write the snapshot regardless.
+                  id(dump_restore_244_action) = 1;
+                  id(dump_restore_block_action) = 1;
+                }
+                if (!id(dump_write_failed)) {
+                  id(dump_restore_foreign_this_attempt) =
+                    id(dump_restore_244_action) == 2 || id(dump_restore_block_action) == 2;
+                  ESP_LOGI("dump_to_grid", "Restore pre-read: 244 %s, 256-261 %s",
+                           id(dump_restore_244_action) == 0 ? "ORIGINAL" : (id(dump_restore_244_action) == 1 ? "ECCO-owned" : "FOREIGN"),
+                           id(dump_restore_block_action) == 0 ? "ORIGINAL" : (id(dump_restore_block_action) == 1 ? "ECCO-owned" : "FOREIGN"));
+                }
+
+            # Register 244 (the export enable) is restored FIRST, as before - but only when
+            # it still holds ECCO's own Allow Export. Already ORIGINAL: nothing to write.
+            # FOREIGN: never overwritten (it is not Allow Export, so ECCO is not exporting).
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed) && id(dump_restore_244_action) == 1;'
+                then:
+                - modbus_client.write_multiple_registers:
+                    modbus_id: inverter_modbus
+                    address: 0x01
+                    start_address: 244
+                    values: !lambda 'return std::vector<uint16_t>{id(dump_snapshot_reg244)};'
+                    on_response:
+                      then:
+                        - lambda: 'id(dump_op_terminal) = true;'
+                    on_error:
+                      then:
+                        - lambda: |-
+                            id(dump_op_terminal) = true;
+                            if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                    on_no_response:
+                      then:
+                        - lambda: |-
+                            id(dump_op_terminal) = true;
+                            if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                    on_not_sent:
+                      then:
+                        - lambda: |-
+                            id(dump_op_terminal) = true;
+                            if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+                - wait_until:
+                    condition:
+                      lambda: 'return id(dump_op_terminal);'
+                    timeout: 3000ms
+                - lambda: |-
+                    if (!id(dump_op_terminal)) {
+                      id(dump_write_failed) = true;
+                      ESP_LOGE("dump_to_grid", "Restore write to register 244 did not reach a terminal state");
+                    }
+
+                - if:
+                    condition:
+                      lambda: 'return !id(dump_write_failed);'
+                    then:
+                      - lambda: 'id(dump_op_terminal) = false;'
+                      - modbus_client.read_holding_registers:
+                          modbus_id: inverter_modbus
+                          address: 0x01
+                          start_address: 244
+                          count: 1
+                          on_response:
+                            then:
+                              - lambda: |-
+                                  id(dump_op_terminal) = true;
+                                  if (!id(dump_operation_in_progress)) return;
+                                  uint16_t raw = values[0];
+                                  const char* names[3] = {"Allow Export", "Essentials", "Zero Export"};
+                                  if (raw <= 2) id(ecco_load_limit).publish_state(names[raw]);
+                                  if (raw != id(dump_snapshot_reg244)) {
+                                    id(dump_write_failed) = true;
+                                    id(dump_restore_mismatch_this_attempt) = true;
+                                    ESP_LOGE("dump_to_grid", "RESTORE VERIFY FAILED on register 244 (raw=%u expected=%u)", raw, id(dump_snapshot_reg244));
+                                  }
+                          on_error:
+                            then:
+                              - lambda: |-
+                                  id(dump_op_terminal) = true;
+                                  if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                          on_no_response:
+                            then:
+                              - lambda: |-
+                                  id(dump_op_terminal) = true;
+                                  if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                          on_not_sent:
+                            then:
+                              - lambda: |-
+                                  id(dump_op_terminal) = true;
+                                  if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+                      - wait_until:
+                          condition:
+                            lambda: 'return id(dump_op_terminal);'
+                          timeout: 3000ms
+                      - lambda: |-
+                          if (!id(dump_op_terminal)) {
+                            id(dump_write_failed) = true;
+                            ESP_LOGE("dump_to_grid", "Restore verify reread of register 244 did not reach a terminal state");
+                          }
+
+""")
+
+# ---- restore_block_gate
+RESTORE_BLOCK_GATE_OLD = _blk(r"""
+
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      values: !lambda |-
+                        return std::vector<uint16_t>{
+                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
+""")
+RESTORE_BLOCK_GATE_NEW = _blk(r"""
+
+            # fcp2 (SG-08 / SG-29c): 256-261 only when every one of them is ORIGINAL or
+            # ECCO's own value, and at least one is not yet ORIGINAL - never over a FOREIGN one.
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed) && id(dump_restore_block_action) == 1;'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      values: !lambda |-
+                        return std::vector<uint16_t>{
+                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
+""")
+
+# ---- restore_foreign_route
+RESTORE_FOREIGN_ROUTE_OLD = _blk(r"""
+                              ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
+                            }
+
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+""")
+RESTORE_FOREIGN_ROUTE_NEW = _blk(r"""
+                              ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
+                            }
+
+            # fcp2 (SG-08 / SG-29c): a FOREIGN value was left untouched - the restore is
+            # NOT complete: keep the obligation (no marker change) and ask the operator.
+            - lambda: |-
+                if (!id(dump_write_failed) && id(dump_restore_foreign_this_attempt)) id(dump_write_failed) = true;
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+""")
+
+# ---- restore_foreign_lockout
+RESTORE_FOREIGN_LOCKOUT_OLD = _blk(r"""
+                      id(dump_failures)++;
+                      id(dump_operation_in_progress) = false;
+                      id(manual_write_in_progress) = false;
+                      if (id(dump_restore_mismatch_this_attempt)) {
+""")
+RESTORE_FOREIGN_LOCKOUT_NEW = _blk(r"""
+                      id(dump_failures)++;
+                      id(dump_operation_in_progress) = false;
+                      id(manual_write_in_progress) = false;
+                      if (id(dump_restore_foreign_this_attempt)) {
+                        // fcp2 (SG-08 / SG-29c): an external change was found and NOT
+                        // overwritten. Whatever ECCO still owned has been restored and
+                        // verified above (244 first); the obligation stays (marker
+                        // unchanged) and automatic retries stop: the operator decides.
+                        ecco_durable::DumpToGridRetryState retry{};
+                        retry.operator_needed = 1;
+                        if (!ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry)) {
+                          ESP_LOGW("dump_to_grid", "Could not durably record operator-needed lockout - enforced for this runtime only");
+                        }
+                        id(dump_operator_needed) = true;
+                        id(dump_recovery_last_classification) = 0;
+                        id(dump_recovery_state).publish_state(
+                          std::string("FOREIGN (not overwritten) - ") + id(dump_restore_foreign_detail)
+                        );
+                        id(dump_status).publish_state(
+                          std::string("OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten (") +
+                          id(dump_restore_foreign_detail) +
+                          "); use Force Restore Original or Accept Current State"
+                        );
+                        ESP_LOGE("dump_to_grid", "Restore found a FOREIGN value - not overwritten, operator needed: %s", id(dump_restore_foreign_detail).c_str());
+                      } else if (id(dump_restore_mismatch_this_attempt)) {
+""")
+
 EDITS = (
     Edit('dc_allowance_subst', DC_ALLOWANCE_SUBST_OLD, DC_ALLOWANCE_SUBST_NEW),
     Edit('window_subst', WINDOW_SUBST_OLD, WINDOW_SUBST_NEW),
@@ -465,6 +883,11 @@ EDITS = (
     Edit('sg40_write_gate', SG40_WRITE_GATE_OLD, SG40_WRITE_GATE_NEW),
     Edit('sg40_verify_gate', SG40_VERIFY_GATE_OLD, SG40_VERIFY_GATE_NEW),
     Edit('sg40_cancel_close', SG40_CANCEL_CLOSE_OLD, SG40_CANCEL_CLOSE_NEW),
+    Edit('restore_globals', RESTORE_GLOBALS_OLD, RESTORE_GLOBALS_NEW),
+    Edit('restore_preread', RESTORE_PREREAD_OLD, RESTORE_PREREAD_NEW),
+    Edit('restore_block_gate', RESTORE_BLOCK_GATE_OLD, RESTORE_BLOCK_GATE_NEW),
+    Edit('restore_foreign_route', RESTORE_FOREIGN_ROUTE_OLD, RESTORE_FOREIGN_ROUTE_NEW),
+    Edit('restore_foreign_lockout', RESTORE_FOREIGN_LOCKOUT_OLD, RESTORE_FOREIGN_LOCKOUT_NEW),
 )
 EDIT_NAMES = tuple(e.name for e in EDITS)
 

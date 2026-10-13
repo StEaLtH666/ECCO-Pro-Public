@@ -121,8 +121,45 @@ deliver such replies late, including inside the restore's own transaction, and s
 **Residual model limits.** The recorded residuals come from 2000-3000 W only. Above 3000 W the proportional model is an
 extrapolation until each higher operating level is observed live. Raising the power ceiling is a supervised, per-level step.
 
+## 3. Ownership-checked restore (SG-08, SG-29c)
+
+**The gap.** The restore wrote the durable ORIGINAL snapshot back blind, in two writes:
+
+1. 244, the export enable;
+2. 256-261, the TOU power.
+
+That overwrote any change someone else had made in the meantime, for example from the app, the front panel, another Modbus master
+or an inverter reset. A verified restore whose durable completion failed was also repeated every 15 s, and each repeat rewrote the
+registers again, including over anything the owner had changed since.
+
+**The fix.** Before writing anything, inside the same critical section, the restore reads 244-261 once (an 18-register read) and
+classifies what it finds:
+
+| Register | ORIGINAL (the snapshot) | ECCO's own value | Anything else |
+|---|---|---|---|
+| 244 | left alone | 0, Allow Export (what START writes): restored first and verified | FOREIGN |
+| 256-261 | left alone | the verified ceiling, or the possibly-landed pending ceiling (the Dump V2 evidence): the block is written back and verified | FOREIGN |
+
+- **A FOREIGN value is never overwritten.** The 256-261 block is written only when every one of its registers is ORIGINAL or
+  ECCO's own.
+- **Everything ECCO still owns is restored.** When 244 still reads ECCO's Allow Export, that means export is turned off first.
+- **The obligation is kept** and the operator is asked:
+  - the existing durable operator-needed record is set;
+  - the status reads `OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten (...)`;
+  - the operator chooses **Force Restore Original** or **Accept Current State**.
+- **A FOREIGN 244 is never Allow Export**, because 0 counts as ECCO's own. So ECCO is not exporting in that state.
+- **A repeat run after a verified restore finds ORIGINAL and writes nothing.** It only completes the durable clear.
+- **A failed or timed-out pre-read writes nothing.** The existing comms backoff retries it.
+- **Force Restore Original stays the operator's deliberate override.** It still needs the read to succeed, then writes the ORIGINAL
+  snapshot.
+- **The boot path uses the same restore.** That covers a power cut mid-lease, and a value changed while the dongle was down is
+  kept.
+
 ## Compatibility
 
-- **No new Modbus operation**, and no new write domain. Register 245 is never written.
+- **No new write operation**, and no new write domain. Register 245 is never written.
+- **One new read:** the restore's pre-read of 244-261.
 - **Every new global is RAM only.** No NVS key is added or changed.
-- **No durable record, tag or header changes.** The 4 October rollback firmware is unaffected.
+- **No durable record schema, tag or header changes.** The one new commit site writes the existing retry record exactly as the
+  verify-mismatch lockout already does.
+- **The 4 October rollback firmware is unaffected.**

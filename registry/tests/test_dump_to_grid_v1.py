@@ -435,23 +435,32 @@ check(
 )
 
 print("")
-print("[23] Restore ordering on the PARSED action tree: 244 write -> 244 verify read -> 256-261 write -> verify read")
+print("[23] Restore ordering on the PARSED action tree: (fcp2) ownership pre-read 244-261 -> 244 write -> 244 verify read -> "
+      "256-261 write -> verify read")
 restore_flat = flatten(restore_tree)
 ops = [(i, kind, body.get("start_address"), gates) for i, (kind, gates, body) in enumerate(restore_flat) if kind in (READ, WRITE)]
 seq = [(kind == WRITE and "W" or "R", addr) for _, kind, addr, _ in ops]
 check(
-    "restore issues exactly W244, R244, W256, R256 in that order",
-    seq == [("W", 244), ("R", 244), ("W", 256), ("R", 256)],
+    "restore issues exactly R244 (fcp2: the 18-register ownership pre-read), W244, R244, W256, R256 in that order",
+    seq == [("R", 244), ("W", 244), ("R", 244), ("W", 256), ("R", 256)]
+    and restore_flat[ops[0][0]][2].get("count") == 18,
     f"{seq}",
 )
-if len(ops) == 4:
-    w256_gates = [c for c, branch in ops[2][3] if branch == "then"]
+if len(ops) == 5:
+    w244_gates = [c for c, branch in ops[1][3] if branch == "then"]
+    w256_gates = [c for c, branch in ops[3][3] if branch == "then"]
     check(
-        "the 256-261 restore write is gated on !dump_write_failed (i.e. only after 244 was written AND verified)",
-        "return !id(dump_write_failed);" in w256_gates,
+        "fcp2: the 244 restore write is gated on a successful pre-read that found ECCO's own Allow Export there",
+        "return !id(dump_write_failed) && id(dump_restore_244_action) == 1;" in w244_gates,
+        f"{w244_gates}",
+    )
+    check(
+        "the 256-261 restore write is gated on !dump_write_failed (i.e. only after 244 was written AND verified) and (fcp2) on "
+        "the pre-read finding only ORIGINAL or ECCO's own values there",
+        "return !id(dump_write_failed) && id(dump_restore_block_action) == 1;" in w256_gates,
         f"{w256_gates}",
     )
-    r244_body = restore_flat[ops[1][0]][2]
+    r244_body = restore_flat[ops[2][0]][2]
     r244_handler = r244_body["on_response"]["then"][0]["lambda"]
     check(
         "the 244 verify read's on_response fails the attempt when live 244 != the snapshot value",
