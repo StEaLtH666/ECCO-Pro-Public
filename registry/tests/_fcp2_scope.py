@@ -24,6 +24,11 @@ Every item below is offline-implemented and simulator-tested only.
          back and verified; a FOREIGN value is NEVER overwritten - the obligation is kept and the operator decides (durable
          operator-needed, the existing retry record). A failed or timed-out pre-read writes nothing (comms backoff). Force Restore
          Original remains the operator's deliberate override.
+  SG-15/43 frozen telemetry: during a settled lease, battery power repeating exactly for ecco_dump_frozen_samples reads, the grid
+         CT repeating exactly that long while the battery moved more than ecco_dump_frozen_cross_w (or for
+         ecco_dump_frozen_ct_long_samples reads regardless), or more than ecco_dump_soc_frozen_wh discharged with no SOC change,
+         ends the lease (common restore path). SG-39: a restore that failed while the link was down is retried as soon as a
+         telemetry read succeeds again (the backoff shortened to its first step), not up to 300 s later.
 
   ZERO new inverter write and ZERO new write domain (register 245 untouched); ONE new read (the pre-read); no persisted global,
   durable record schema, tag or header change (every new global is RAM only; the one new commit site writes the existing retry
@@ -55,10 +60,15 @@ SUBSTITUTIONS = {
     'ecco_dump_runaway_dc_allowance_pct': '12',
     'ecco_dump_runaway_window_k': '4',
     'ecco_dump_runaway_gross_k': '3',
+    'ecco_dump_frozen_samples': '6',
+    'ecco_dump_frozen_cross_w': '150',
+    'ecco_dump_frozen_ct_long_samples': '30',
+    'ecco_dump_soc_frozen_wh': '1500',
+    'ecco_dump_link_down_ms': '25000',
 }
 
 # Every global fcp2 adds (all RAM only: restore_value no).
-NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
+NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
 
 
 def _blk(s: str) -> str:
@@ -152,6 +162,15 @@ WINDOW_ASSERTS_NEW = _blk(r"""
           static_assert(${ecco_dump_runaway_samples} >= 2 && ${ecco_dump_runaway_samples} <= 8 &&
                             ${ecco_dump_runaway_absolute_samples} >= 2 && ${ecco_dump_runaway_absolute_samples} <= 8,
                         "Dump runaway consecutive runs must fit the 8-sample history");
+          // fcp2 (SG-15 / SG-43): frozen-telemetry bounds.
+          static_assert(${ecco_dump_frozen_samples} >= 4 && ${ecco_dump_frozen_samples} <= 16 &&
+                            ${ecco_dump_frozen_ct_long_samples} > ${ecco_dump_frozen_samples} &&
+                            ${ecco_dump_frozen_ct_long_samples} <= 60,
+                        "Dump frozen telemetry: 4..16 repeats, the long CT window longer but at most 60 samples");
+          static_assert(${ecco_dump_frozen_cross_w} >= 50 && ${ecco_dump_soc_frozen_wh} >= 300 && ${ecco_dump_soc_frozen_wh} <= 10000,
+                        "Dump frozen telemetry: cross-check >= 50 W; frozen-SOC energy 300..10000 Wh");
+          static_assert(${ecco_dump_link_down_ms}UL >= 15000UL && ${ecco_dump_link_down_ms}UL < ${ecco_dump_soc_stale_ms}UL,
+                        "Dump restore backoff: the link-down age must exceed one missed poll and stay below the SOC staleness bound");
 """)
 
 # ---- window_globals
@@ -198,6 +217,50 @@ WINDOW_GLOBALS_NEW = _blk(r"""
     initial_value: '0.0'
   - id: dump_runaway_trip_count
     type: int
+    restore_value: no
+    initial_value: '0'
+  # fcp2 (SG-15 / SG-43): frozen-telemetry evidence (see ecco_dump_frozen_samples).
+  # RAM only; the counters and the energy count are reset at every START.
+  - id: dump_ct_same_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dump_ct_last_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_ct_same_bmin
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_ct_same_bmax
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_bp_same_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dump_bp_last_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_bp_last_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_soc_frozen_wh_acc
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_soc_last_value
+    type: float
+    restore_value: no
+    initial_value: '-1.0'
+  # fcp2 (SG-39): when the last restore attempt failed on comms WHILE THE LINK WAS
+  # DOWN (0 = none, or a failure while telemetry was flowing).
+  - id: dump_restore_failed_ms
+    type: uint32_t
     restore_value: no
     initial_value: '0'
 """)
@@ -287,6 +350,10 @@ WINDOW_START_CLEAR_NEW = _blk(r"""
                               id(dump_runaway_win_abs) = 0;
                               id(dump_runaway_win_gross) = 0;
                               id(dump_runaway_trip) = 0;
+                              // fcp2 (SG-15 / SG-43): fresh frozen-telemetry evidence.
+                              id(dump_ct_same_count) = 0;
+                              id(dump_bp_same_count) = 0;
+                              id(dump_soc_frozen_wh_acc) = 0.0f;
                               // V1.1: the settle window for both the
 """)
 
@@ -315,6 +382,31 @@ WINDOW_WATCHDOG_NEW = _blk(r"""
                           snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY (windowed) - battery discharge above the %.0fW absolute backstop in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
                         } else {
                           snprintf(msg, sizeof(msg), "POWER RUNAWAY (windowed) - battery discharge above the %.0fW lease-ceiling threshold in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
+                        }
+                        return std::string(msg);
+            # fcp2 (SG-15 / SG-43): FROZEN telemetry during a settled lease - readings
+            # that keep arriving but never change are not evidence; see
+            # ecco_dump_frozen_samples. Fail closed through the common restore path.
+            - if:
+                condition:
+                  lambda: |-
+                    if ((uint32_t) (millis() - id(dump_active_since_ms)) < ${ecco_dump_runaway_grace_ms}UL) return false;
+                    bool ct_frozen = (id(dump_ct_same_count) >= ${ecco_dump_frozen_samples} - 1 &&
+                                      id(dump_ct_same_bmax) - id(dump_ct_same_bmin) > ${ecco_dump_frozen_cross_w}.0f) ||
+                                     id(dump_ct_same_count) >= ${ecco_dump_frozen_ct_long_samples} - 1;
+                    return ct_frozen || id(dump_bp_same_count) >= ${ecco_dump_frozen_samples} - 1 ||
+                           id(dump_soc_frozen_wh_acc) > ${ecco_dump_soc_frozen_wh}.0f;
+                then:
+                  - script.execute:
+                      id: request_dump_end
+                      reason: !lambda |-
+                        char msg[200];
+                        if (id(dump_bp_same_count) >= ${ecco_dump_frozen_samples} - 1) {
+                          snprintf(msg, sizeof(msg), "BATTERY POWER TELEMETRY FROZEN - %d identical readings of %.0fW; the runaway guard cannot be trusted - failing closed", id(dump_bp_same_count) + 1, id(dump_bp_last_w));
+                        } else if (id(dump_soc_frozen_wh_acc) > ${ecco_dump_soc_frozen_wh}.0f) {
+                          snprintf(msg, sizeof(msg), "SOC TELEMETRY FROZEN - %.0fWh discharged with no SOC change (still %.0f%%); Stop SOC cannot be trusted - failing closed", id(dump_soc_frozen_wh_acc), id(dump_soc_last_value));
+                        } else {
+                          snprintf(msg, sizeof(msg), "GRID CT FROZEN - %d identical readings of %.0fW while the battery moved %.0fW; the controller and the export guard cannot be trusted - failing closed", id(dump_ct_same_count) + 1, id(dump_ct_last_w), id(dump_ct_same_bmax) - id(dump_ct_same_bmin));
                         }
                         return std::string(msg);
             # fcp1 (2026-10-13): NET GRID EXPORT guard - independent of the power
@@ -867,6 +959,160 @@ RESTORE_FOREIGN_LOCKOUT_NEW = _blk(r"""
                       } else if (id(dump_restore_mismatch_this_attempt)) {
 """)
 
+# ---- frozen_subst
+FROZEN_SUBST_OLD = _blk(r"""
+  ecco_dump_soc_stale_ms: "90000"
+""")
+FROZEN_SUBST_NEW = _blk(r"""
+  ecco_dump_soc_stale_ms: "90000"
+  # fcp2 (SG-15 / SG-43): FROZEN telemetry. A reading that keeps arriving on
+  # time but never changes is not evidence; the grid CT (register 172), the
+  # battery power (190) and the SOC (184) come from the same telemetry read,
+  # so a missing read is already caught (Stop SOC's freshness check ends the
+  # lease, and the controller never decides on a stale grid sample). During a
+  # settled lease, the lease ends when:
+  #  - battery power repeats EXACTLY for ecco_dump_frozen_samples valid samples
+  #    (recorded leases: never more than 2 identical in a row);
+  #  - the grid CT repeats exactly for ecco_dump_frozen_samples samples while
+  #    the battery power moved by more than ecco_dump_frozen_cross_w (the plant
+  #    changed, the meter did not), or for ecco_dump_frozen_ct_long_samples
+  #    samples whatever the battery did (a CT stuck at a saturated ceiling);
+  #  - the battery discharged more than ecco_dump_soc_frozen_wh (DC energy,
+  #    integrated from register 190) without any SOC change (SOC moves in 1 %
+  #    steps; this is about 5 % of the reference installation's ~30 kWh
+  #    battery - SITE-DEPENDENT: a smaller battery needs a smaller value).
+  ecco_dump_frozen_samples: "6"
+  ecco_dump_frozen_cross_w: "150"
+  ecco_dump_frozen_ct_long_samples: "30"
+  ecco_dump_soc_frozen_wh: "1500"
+  # fcp2 (SG-39): a restore attempt that failed while NO telemetry read had
+  # succeeded for this long (two missed 10 s polls: the link itself was down)
+  # is retried as soon as the link is proven to work again - see the restore
+  # gate - instead of sitting out the rest of a backoff of up to 300 s. A
+  # failure while telemetry was flowing (the inverter refused the write) keeps
+  # the ordinary backoff.
+  ecco_dump_link_down_ms: "25000"
+""")
+
+# ---- frozen_ct_clear
+FROZEN_CT_CLEAR_OLD = _blk(r"""
+              id(dump_export_window) = 0;
+              return;
+""")
+FROZEN_CT_CLEAR_NEW = _blk(r"""
+              id(dump_export_window) = 0;
+              id(dump_ct_same_count) = 0;
+              id(dump_ct_last_w) = x;
+              return;
+""")
+
+# ---- frozen_ct_track
+FROZEN_CT_TRACK_OLD = _blk(r"""
+            bool over = !std::isnan(x) && -x > limit + margin;
+            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
+            if (over) id(dump_export_last_w) = -x;
+""")
+FROZEN_CT_TRACK_NEW = _blk(r"""
+            bool over = !std::isnan(x) && -x > limit + margin;
+            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
+            if (over) id(dump_export_last_w) = -x;
+            // fcp2 (SG-15): a FROZEN grid CT - see ecco_dump_frozen_samples. Counts exact
+            // repeats of a valid reading, and the range the battery power (the previous
+            // read's value) covered meanwhile.
+            if (!std::isnan(x)) {
+              bool b_ok = id(ecco_battery_power).has_state() && !std::isnan(id(ecco_battery_power).state);
+              float b = b_ok ? id(ecco_battery_power).state : 0.0f;
+              if (x == id(dump_ct_last_w)) {
+                id(dump_ct_same_count)++;
+                if (b_ok && b < id(dump_ct_same_bmin)) id(dump_ct_same_bmin) = b;
+                if (b_ok && b > id(dump_ct_same_bmax)) id(dump_ct_same_bmax) = b;
+              } else {
+                // a range seeded empty when there is no battery reading yet (never "moved")
+                id(dump_ct_same_count) = 0;
+                id(dump_ct_same_bmin) = b_ok ? b : 1000000000.0f;
+                id(dump_ct_same_bmax) = b_ok ? b : -1000000000.0f;
+              }
+              id(dump_ct_last_w) = x;
+            }
+""")
+
+# ---- frozen_bp_track
+FROZEN_BP_TRACK_OLD = _blk(r"""
+        - lambda: |-
+            if (!id(dump_active_persisted) || id(dump_restore_requested) || id(dump_operation_in_progress)) {
+              id(dump_overpower_samples) = 0;
+""")
+FROZEN_BP_TRACK_NEW = _blk(r"""
+        - lambda: |-
+            // fcp2 (SG-43): FROZEN battery power and the frozen-SOC energy count (see
+            // ecco_dump_frozen_samples / ecco_dump_soc_frozen_wh). Every valid sample:
+            // exact repeats are counted, and the DC energy discharged since the last SOC
+            // change is integrated (each gap capped at 60 s). Both are reset at START.
+            if (!std::isnan(x)) {
+              uint32_t bp_now = millis();
+              if (id(dump_bp_last_ms) != 0 && x > 0.0f) {
+                uint32_t bp_dt = bp_now - id(dump_bp_last_ms);
+                if (bp_dt > 60000UL) bp_dt = 60000UL;
+                id(dump_soc_frozen_wh_acc) += x * (float) bp_dt / 3600000.0f;
+              }
+              if (x == id(dump_bp_last_w)) id(dump_bp_same_count)++;
+              else id(dump_bp_same_count) = 0;
+              id(dump_bp_last_w) = x;
+              id(dump_bp_last_ms) = bp_now;
+            }
+            if (!id(dump_active_persisted) || id(dump_restore_requested) || id(dump_operation_in_progress)) {
+              id(dump_overpower_samples) = 0;
+""")
+
+# ---- frozen_soc_reset
+FROZEN_SOC_RESET_OLD = _blk(r"""
+        - lambda: 'id(dump_soc_last_update_ms) = millis();'
+""")
+FROZEN_SOC_RESET_NEW = _blk(r"""
+        - lambda: |-
+            id(dump_soc_last_update_ms) = millis();
+            // fcp2 (SG-43): a CHANGED SOC restarts the frozen-SOC energy count.
+            if (!std::isnan(x) && x != id(dump_soc_last_value)) {
+              id(dump_soc_last_value) = x;
+              id(dump_soc_frozen_wh_acc) = 0.0f;
+            }
+""")
+
+# ---- backoff_gate
+BACKOFF_GATE_OLD = _blk(r"""
+                (id(dump_force_restore_this_call) ||
+                 id(dump_restore_next_attempt_ms) == 0 ||
+                 (int32_t) (millis() - id(dump_restore_next_attempt_ms)) >= 0) &&
+""")
+BACKOFF_GATE_NEW = _blk(r"""
+                (id(dump_force_restore_this_call) ||
+                 id(dump_restore_next_attempt_ms) == 0 ||
+                 (int32_t) (millis() - id(dump_restore_next_attempt_ms)) >= 0 ||
+                 // fcp2 (SG-39): a GENUINE recovery - the last attempt failed while the link
+                 // was down (dump_restore_failed_ms, see ecco_dump_link_down_ms) and a
+                 // telemetry read has succeeded since (it stamps dump_soc_last_update_ms) -
+                 // shortens whatever backoff remains to its first step: the restore is
+                 // retried as soon as the link is proven to work again, not up to 300 s later.
+                 (id(dump_restore_failed_ms) != 0 &&
+                  (int32_t) (id(dump_soc_last_update_ms) - id(dump_restore_failed_ms)) > 0 &&
+                  (int32_t) (millis() - (id(dump_restore_failed_ms) + ecco_durable::comms_backoff_ms(1))) >= 0)) &&
+""")
+
+# ---- backoff_stamp
+BACKOFF_STAMP_OLD = _blk(r"""
+                        id(dump_comms_restore_attempts)++;
+                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
+""")
+BACKOFF_STAMP_NEW = _blk(r"""
+                        id(dump_comms_restore_attempts)++;
+                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
+                        // fcp2 (SG-39): remember a failure made while the LINK was down (no telemetry
+                        // read for ecco_dump_link_down_ms) - see the restore gate. 0 = an ordinary failure.
+                        id(dump_restore_failed_ms) =
+                          (id(dump_soc_last_update_ms) == 0 ||
+                           (uint32_t) (millis() - id(dump_soc_last_update_ms)) > ${ecco_dump_link_down_ms}UL) ? millis() : 0;
+""")
+
 EDITS = (
     Edit('dc_allowance_subst', DC_ALLOWANCE_SUBST_OLD, DC_ALLOWANCE_SUBST_NEW),
     Edit('window_subst', WINDOW_SUBST_OLD, WINDOW_SUBST_NEW),
@@ -888,6 +1134,13 @@ EDITS = (
     Edit('restore_block_gate', RESTORE_BLOCK_GATE_OLD, RESTORE_BLOCK_GATE_NEW),
     Edit('restore_foreign_route', RESTORE_FOREIGN_ROUTE_OLD, RESTORE_FOREIGN_ROUTE_NEW),
     Edit('restore_foreign_lockout', RESTORE_FOREIGN_LOCKOUT_OLD, RESTORE_FOREIGN_LOCKOUT_NEW),
+    Edit('frozen_subst', FROZEN_SUBST_OLD, FROZEN_SUBST_NEW),
+    Edit('frozen_ct_clear', FROZEN_CT_CLEAR_OLD, FROZEN_CT_CLEAR_NEW),
+    Edit('frozen_ct_track', FROZEN_CT_TRACK_OLD, FROZEN_CT_TRACK_NEW),
+    Edit('frozen_bp_track', FROZEN_BP_TRACK_OLD, FROZEN_BP_TRACK_NEW),
+    Edit('frozen_soc_reset', FROZEN_SOC_RESET_OLD, FROZEN_SOC_RESET_NEW),
+    Edit('backoff_gate', BACKOFF_GATE_OLD, BACKOFF_GATE_NEW),
+    Edit('backoff_stamp', BACKOFF_STAMP_OLD, BACKOFF_STAMP_NEW),
 )
 EDIT_NAMES = tuple(e.name for e in EDITS)
 

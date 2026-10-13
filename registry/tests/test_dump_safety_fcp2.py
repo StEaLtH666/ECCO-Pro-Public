@@ -17,6 +17,10 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
   [O] SG-08   the ownership-checked restore: a fresh pre-read of 244-261 before any restore write; ORIGINAL left alone, ECCO's own
               values restored, a FOREIGN value never overwritten (obligation kept, operator decides); no repeat rewrite after a
               verified restore; reboot, comms failure, Force Restore Original
+  [T] SG-15/43 frozen telemetry: a CT that repeats exactly while the battery moves (fast) or for 5 minutes (a stuck saturated
+      SG-39   reading), battery power that repeats exactly, a SOC that does not move while kWh are discharged - each ends a
+              settled lease; healthy noisy leases and the recorded data never trip it; the restore backoff is shortened after a
+              genuine link recovery, and only then
   [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
               global RAM only
   [P]         the post-export declaration (PEX entry fcp2)
@@ -106,13 +110,20 @@ def fresh(fw=None, target=1000, soc=70.0, grid_w=None, ceiling=None, duration=90
     return sim
 
 
+def meter(sim):
+    """The grid CT as a real meter reports it: 1 W of noise, inside the controller's deadband (a CT that repeats EXACTLY while the
+    battery moves is a FROZEN CT - section [T])."""
+    sim._meter_n = getattr(sim, "_meter_n", 0) + 1
+    return sim.grid_w - (sim._meter_n % 2)
+
+
 def tick(sim, ms=15000, soc=70.0, battery_w=None):
     """One 15 s watchdog tick with fresh SOC, grid and configuration readback."""
     sim.advance(ms)
     sim.ent("ecco_battery_soc").publish_state(soc)
     if battery_w is not None:
         sim.ent("ecco_battery_power").publish_state(float(battery_w))
-    sim.ent("ecco_grid_ct_power").publish_state(sim.grid_w)
+    sim.ent("ecco_grid_ct_power").publish_state(meter(sim))
     config_poll(sim)
     sim.run_actions(watchdog(sim.fw))
 
@@ -377,7 +388,7 @@ def feed(s, samples, period_ms=10000, wd_ms=15000):
             t = next_w
             n = len(end_reasons(s))
             s.ent("ecco_battery_soc").publish_state(70.0)
-            s.ent("ecco_grid_ct_power").publish_state(s.grid_w)
+            s.ent("ecco_grid_ct_power").publish_state(meter(s))
             config_poll(s)
             s.run_actions(watchdog(s.fw))
             if len(end_reasons(s)) > n and "RUNAWAY" in end_reasons(s)[n]:
@@ -388,7 +399,7 @@ def feed(s, samples, period_ms=10000, wd_ms=15000):
         t += wd_ms
         n = len(end_reasons(s))
         s.ent("ecco_battery_soc").publish_state(70.0)
-        s.ent("ecco_grid_ct_power").publish_state(s.grid_w)
+        s.ent("ecco_grid_ct_power").publish_state(meter(s))
         config_poll(s)
         s.run_actions(watchdog(s.fw))
         if len(end_reasons(s)) > n and "RUNAWAY" in end_reasons(s)[n]:
@@ -530,7 +541,7 @@ def between_ticks(fw):
         s.ent("ecco_battery_power").publish_state(float(w))
     s.advance(3000)
     s.ent("ecco_battery_soc").publish_state(70.0)
-    s.ent("ecco_grid_ct_power").publish_state(s.grid_w)
+    s.ent("ecco_grid_ct_power").publish_state(meter(s))
     config_poll(s)
     s.run_actions(watchdog(s.fw))
     return first_end(s)
@@ -753,6 +764,132 @@ b = reboot(s, {257: 4321})
 tick(b)
 check("...and a value changed while the dongle was down is KEPT (no blind boot restore): operator asked, obligation kept",
       b.bank[257] == 4321 and b.bank[244] == ORIGINAL[244] and marker(b) == 1 and b.g["dump_operator_needed"], b.status())
+
+# ==================================================================================================================================
+print("\n[T] SG-15 / SG-43 / SG-39: frozen telemetry and the restore backoff after a genuine recovery")
+# ==================================================================================================================================
+N_FROZEN = int(SUBS["ecco_dump_frozen_samples"])
+N_LONG = int(SUBS["ecco_dump_frozen_ct_long_samples"])
+SOC_WH = int(SUBS["ecco_dump_soc_frozen_wh"])
+
+
+def run_lease(fw, samples, soc_fn=None, c=1000):
+    """A settled lease commanding c W (default 1000) fed one telemetry read every 10 s - (grid_w, battery_w) per read, SOC from soc_fn(i) (default a fresh,
+    unchanged 70 %) - with the 15 s watchdog on the same clock. Returns (read index at the first end, its reason) or (None, "")."""
+    s = started(fw, target=1000, ceiling=max(c, 1000))
+    force_ceiling(s, c)
+    tick(s, ms=31000)
+    t, next_w, n_end = 0, 15000, len(end_reasons(s))
+    for i, (g, b) in enumerate(samples):
+        t_s = (i + 1) * 10000
+        while next_w <= t_s:
+            s.advance(next_w - t)
+            t = next_w
+            config_poll(s)
+            s.run_actions(watchdog(s.fw))
+            if len(end_reasons(s)) > n_end:
+                return i, end_reasons(s)[n_end]
+            next_w += 15000
+        s.advance(t_s - t)
+        t = t_s
+        s.ent("ecco_grid_ct_power").publish_state(float(g))       # the read's publish order: CT, SOC, battery
+        s.ent("ecco_battery_soc").publish_state(soc_fn(i) if soc_fn else 70.0)
+        s.ent("ecco_battery_power").publish_state(float(b))
+    for _ in range(2):
+        s.advance(15000)
+        config_poll(s)
+        s.run_actions(watchdog(s.fw))
+        if len(end_reasons(s)) > n_end:
+            return len(samples), end_reasons(s)[n_end]
+    return None, ""
+
+
+noisy = [(-1000.0 - (i % 3), 1100.0 + 7 * (i % 4)) for i in range(60)]
+i, why = run_lease(FW, noisy)
+check("a healthy 10-minute lease (meter noise of a few W on the CT and the battery): no frozen-telemetry end", i is None, why)
+FIXB = [b for lease in FIX["leases"] for t_, c_, b in lease["samples"]]
+runs, cur = [], 1
+for a_, b_ in zip(FIXB, FIXB[1:]):
+    cur = cur + 1 if a_ == b_ else 1
+    runs.append(cur)
+check(f"the recorded leases never repeat a battery reading {N_FROZEN} times in a row (longest run {max(runs)})", max(runs) < N_FROZEN)
+
+cross = [(-1000.0, 1050.0 + 50 * (i % 5)) for i in range(20)]               # the battery moves 200 W; the CT never changes
+i_new, why_new = run_lease(FW, cross)
+i_old, why_old = run_lease(OLD, cross)
+check(f"the CT repeats exactly while the battery moves (200 W, within every runaway threshold): GRID CT FROZEN after {N_FROZEN} identical reads "
+      f"(fcp1: {'never' if i_old is None else why_old})",
+      i_new is not None and i_new <= N_FROZEN + 1 and why_new.startswith("GRID CT FROZEN") and i_old is None, f"{i_new} {why_new}")
+steady = [(-1000.0, 1100.0 + 7 * (i % 4)) for i in range(N_LONG + 6)]       # the CT repeats; the battery is steady (cross < 150 W)
+i_new, why_new = run_lease(FW, steady)
+check(f"the CT repeats exactly with a steady battery (a CT stuck at a saturated ceiling): GRID CT FROZEN after {N_LONG} reads, "
+      "not before", i_new is not None and N_LONG - 2 <= i_new <= N_LONG + 1 and why_new.startswith("GRID CT FROZEN"), f"{i_new} {why_new}")
+i_new, _ = run_lease(FW, steady[:N_LONG - 3])
+check(f"...{N_LONG - 3} identical CT reads with a steady battery do not end the lease", i_new is None)
+
+bat = [(-1000.0 - (i % 3), 1180.0) for i in range(12)]                      # the battery repeats exactly; the CT is noisy
+i_new, why_new = run_lease(FW, bat)
+i_old, _ = run_lease(OLD, bat)
+check(f"battery power repeats exactly ({N_FROZEN} identical reads): BATTERY POWER TELEMETRY FROZEN (fcp1: never)",
+      i_new is not None and i_new <= N_FROZEN + 1 and why_new.startswith("BATTERY POWER TELEMETRY FROZEN") and i_old is None,
+      f"{i_new} {why_new}")
+i_new, _ = run_lease(FW, bat[:N_FROZEN - 1] + [(-1001.0, 1181.0)] * 1 + bat[:N_FROZEN - 1])
+check(f"{N_FROZEN - 1} identical battery reads, a change, then {N_FROZEN - 1} more: no end (exact repeats only, reset by a change)",
+      i_new is None)
+
+reads_to_soc = int(SOC_WH / 3000.0 * 360) + 1                               # 3 kW for SOC_WH Wh, one read every 10 s
+soc_frozen = [(-1000.0 - (i % 3), 3000.0 + 5 * (i % 2)) for i in range(reads_to_soc + 10)]
+i_new, why_new = run_lease(FW, soc_frozen, c=3000)
+i_old, _ = run_lease(OLD, soc_frozen, c=3000)
+check(f"3 kW of discharge with the SOC never changing: SOC TELEMETRY FROZEN once {SOC_WH} Wh are discharged (~{reads_to_soc * 10 // 60} "
+      f"min; fcp1: never)", i_new is not None and abs(i_new - reads_to_soc) <= 3 and why_new.startswith("SOC TELEMETRY FROZEN")
+      and i_old is None, f"{i_new} vs {reads_to_soc} {why_new}")
+i_new, why_new = run_lease(FW, soc_frozen, soc_fn=lambda i: 70.0 - i // 36, c=3000)  # 1 % every 6 minutes at 3 kW (the recorded rate)
+check("the same discharge with the SOC falling 1 % every 6 minutes (the recorded rate): no frozen-SOC end", i_new is None, why_new)
+
+s = started(target=1000)
+force_ceiling(s, 1000)
+for k in range(3):
+    s.advance(9000)
+    s.ent("ecco_grid_ct_power").publish_state(-1000.0)
+    s.ent("ecco_battery_power").publish_state(1100.0 + 400 * k)
+check("lease-start grace: frozen readings in the first 30 s are not judged", first_end(s) == "")
+
+# SG-39: the restore's comms backoff after a GENUINE recovery.
+def backoff_case(fw, link_down):
+    s = started(fw, target=1000)
+    real = s.outcome_fn
+    s.outcome_fn = lambda k, a, c: "no_response" if k == "read" else "no_response_lost"
+    if link_down:
+        s.advance(30000)                         # no telemetry read for 30 s: the link is down
+    end(s)
+    for _ in range(4):                           # four more failed attempts, the link still down: the backoff reaches 300 s
+        s.advance(int(s.g["dump_restore_next_attempt_ms"]) - s.millis() + 1)
+        if not link_down:
+            s.ent("ecco_battery_soc").publish_state(70.0)
+        s.run_actions(watchdog(s.fw))
+    attempts, wait = s.g["dump_comms_restore_attempts"], int(s.g["dump_restore_next_attempt_ms"]) - s.millis()
+    s.outcome_fn = real                          # the inverter answers again
+    s.advance(5000)
+    s.ent("ecco_battery_soc").publish_state(70.0)     # a telemetry read succeeds: the link is proven up
+    t0 = s.millis()
+    for _ in range(25):
+        if owned(s) == ORIGINAL and marker(s) == 0:
+            break
+        s.advance(15000)
+        s.ent("ecco_battery_soc").publish_state(70.0)
+        s.run_actions(watchdog(s.fw))
+    return attempts, wait, (s.millis() - t0) / 1000.0, owned(s) == ORIGINAL and marker(s) == 0
+
+
+a_new, w_new, t_new, ok_new = backoff_case(FW, link_down=True)
+a_old, w_old, t_old, ok_old = backoff_case(OLD, link_down=True)
+check(f"restore failures while the link is DOWN back off to {w_new // 1000} s; once a telemetry read succeeds again the restore "
+      f"completes within {t_new:.0f} s (fcp1: {t_old:.0f} s - the rest of the backoff, unmonitored)",
+      a_new == 5 and w_new > 200000 and ok_new and t_new <= 30 and ok_old and t_old > 200, f"{a_new} {w_new} {t_new} {t_old}")
+a_new, w_new, t_new, ok_new = backoff_case(FW, link_down=False)
+check(f"restore failures while telemetry kept FLOWING (the inverter, not the link, failed): the ordinary backoff is kept "
+      f"({t_new:.0f} s)", ok_new and t_new > 200, f"{a_new} {w_new} {t_new}")
 
 # ==================================================================================================================================
 print("\n[C] write surface and NVS")

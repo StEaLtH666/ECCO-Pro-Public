@@ -952,14 +952,14 @@ FCP1 = Entry(
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "8f6793f26e10a295171d51ce03b4fea1c87d2f1a2ae2fa75bc0750627667a80c"},
-    deltas={"globals": 12, "substitutions": 3, "commit_record": 1, "modbus_reads": 1},
+    checkpoints={FIRMWARE: "f0d90809e78dd5711e9e114b31819363f4f33a3e365df87d32ba24bf1279eadd"},
+    deltas={"globals": 22, "substitutions": 8, "commit_record": 1, "modbus_reads": 1},
     subst_added=dict(_fcp2.SUBSTITUTIONS),
     op_paths_changed=frozenset({"restore_dump_to_grid_snapshot"}),   # the ownership pre-read (one read of 244-261, no new write)
     added_files=_fcp2.ADDED_FILES,
     frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="8f3b6105f3e872c4145c1419d597a8b028bd6e703d17ff6fdc9c714fb205f221",
+    fingerprint="f856ee2e5f4c02a24d06b0631bc325073cc71fd9091901508dadb2af81ab59fd",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "

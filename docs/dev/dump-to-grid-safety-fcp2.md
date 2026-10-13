@@ -155,6 +155,36 @@ classifies what it finds:
 - **The boot path uses the same restore.** That covers a power cut mid-lease, and a value changed while the dongle was down is
   kept.
 
+## 4. Frozen telemetry and the restore backoff (SG-15, SG-43, SG-39)
+
+**The gap.** "Fresh" used to mean "published recently". A grid CT, battery-power or SOC reading that kept arriving on time but never
+changed was trusted. A stuck CT could hold the controller at its ceiling for the whole lease, a frozen SOC disabled Stop SOC, and
+frozen battery power blinded the runaway guard.
+
+**Already covered: a read that stops.** The CT (register 172), SOC (184) and battery power (190) are decoded from ONE telemetry
+read. So when that read stops, all three stop together:
+
+- Stop SOC's freshness check ends the lease after 90 s;
+- the controller never decides on a grid sample older than its last write.
+
+**New: readings that keep arriving but never change.** During a settled lease, the lease ends through the common restore path in
+any of these cases:
+
+| Signal | Ends the lease when | Default |
+|---|---|---|
+| Battery power | it repeats exactly for `ecco_dump_frozen_samples` valid reads. The recorded leases never repeat a reading twice in a row. | 6 |
+| Grid CT, fast | it repeats exactly for `ecco_dump_frozen_samples` reads while the battery power moved by more than `ecco_dump_frozen_cross_w`. The plant changed and the meter did not. | 6 reads, 150 W |
+| Grid CT, slow | it repeats exactly for `ecco_dump_frozen_ct_long_samples` reads, whatever the battery did. This catches a CT stuck while the controller sits at its ceiling. | 30 reads (5 minutes) |
+| SOC | the battery discharges more than `ecco_dump_soc_frozen_wh` of DC energy (integrated from register 190) with no SOC change. | 1500 Wh |
+
+The SOC default is about 5 % of the reference installation's ~30 kWh battery, and it is **site-dependent**: a smaller battery needs
+a smaller value.
+
+**The restore backoff (SG-39).** A restore attempt that failed while the link itself was down (no telemetry read for
+`ecco_dump_link_down_ms`, 25 s) is retried as soon as a telemetry read succeeds again. Before, it waited out the rest of a backoff
+of up to 300 s with nothing supervising the lease. A failure while telemetry was still flowing means the inverter refused the
+write, not that the link failed, so it keeps the ordinary backoff and the inverter is not hammered.
+
 ## Compatibility
 
 - **No new write operation**, and no new write domain. Register 245 is never written.

@@ -523,7 +523,8 @@ print("")
 print("[26] 2026-09-26 review fix: Stop SOC fails closed on STALE or NaN telemetry, not only on a missing value")
 check(
     "ecco_battery_soc records a freshness timestamp on every publish (on_value, RAM only)",
-    re.search(r"id: ecco_battery_soc\n(?:    .*\n)*?    on_value:\n      then:\n        - lambda: 'id\(dump_soc_last_update_ms\) = millis\(\);'", FIRMWARE_TEXT) is not None,
+    # fcp2: the lambda also restarts the frozen-SOC energy count on a changed SOC; the freshness stamp is still its first statement.
+    re.search(r"id: ecco_battery_soc\n(?:    .*\n)*?    on_value:\n      then:\n        - lambda: \|-\n            id\(dump_soc_last_update_ms\) = millis\(\);\n", FIRMWARE_TEXT) is not None,
 )
 check(
     "START requires a fresh SOC sample",

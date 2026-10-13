@@ -709,7 +709,9 @@ for w in (1900, 1900):
     sim.run_actions(watchdog_of(sim.fw))
 assert still_active(sim), sim.status()
 for _ in range(7):  # then telemetry freezes
-    tick(sim)
+    # fcp2: the grid CT, SOC and battery power come from ONE telemetry read, so a frozen read republishes none of them (a CT that
+    # kept being republished unchanged while the battery moved is itself a FROZEN CT - test_dump_safety_fcp2.py [T]).
+    tick(sim, grid_fresh=False)
 check("telemetry freezing mid-runaway still fails closed (TELEMETRY LOST), never silently continues",
       sim.ent("dump_last_end_reason").state == "TELEMETRY LOST - failing closed" and owned(sim) == ORIGINAL)
 
@@ -1924,14 +1926,16 @@ tick(sim, soc=70.0)  # t+90s - the 30s post-write TRANSITION window (H1) has als
 # NEW threshold (1500 + max(750, 750) = 2250) must NOT trip at 2200W. Both
 # comfortably under the 3750W absolute backstop, so only the ordinary
 # ceiling-relative guard is exercised here.
-tick(sim, soc=70.0, battery_w=2200.0)
-tick(sim, soc=70.0, battery_w=2200.0)
-tick(sim, soc=70.0, battery_w=2200.0)
+# fcp2: a real CT never repeats exactly while the battery moves (that is the FROZEN CT detector's signal), so the grid reading
+# carries 1 W of meter noise here - inside the controller's deadband.
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-501.0)
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-500.0)
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-501.0)
 check("2200W battery discharge is BELOW the new 2250W threshold: does not trip",
       still_active(sim), sim.status())
-tick(sim, soc=70.0, battery_w=2300.0)
-tick(sim, soc=70.0, battery_w=2300.0)
-tick(sim, soc=70.0, battery_w=2300.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-500.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-501.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-500.0)
 check("2300W battery discharge is ABOVE the new 2250W threshold: trips POWER RUNAWAY",
       not still_active(sim) and "POWER RUNAWAY" in sim.ent("dump_last_end_reason").state, sim.status())
 

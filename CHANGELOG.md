@@ -39,6 +39,9 @@ Development before the first public release happened in a private repository; se
   - The Dump restore first reads the inverter. It restores only what ECCO still owns and never overwrites a setting someone else
     changed. In that case it keeps the recovery obligation and asks for Force Restore Original or Accept Current State. A repeat
     after a verified restore no longer rewrites anything.
+  - Telemetry that keeps arriving but never changes now ends a Dump lease safely: a grid CT, battery power or SOC that stays
+    exactly the same when it should move. After the inverter link comes back, an owed restore is retried at once instead of up to
+    5 minutes later.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.
