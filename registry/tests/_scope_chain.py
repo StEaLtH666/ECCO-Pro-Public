@@ -110,6 +110,7 @@ import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
+import _fsw1_scope as _fsw1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -809,7 +810,42 @@ DGS1 = Entry(
          "layer only, ZERO firmware, registry, dashboard, Intelligence or ecco_core change, ZERO Modbus operation, no new control "
          "surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1)
+# fsw1 (the failed-start health warning; _fsw1_scope.py): a Home Assistant health, records and Overview-hero change made on the export
+# after dgs1. A Free Power or Dump to Grid START that fails before it writes anything leaves the recovery state at NONE, so nothing on
+# the Overview reported it. sensor.ecco_health_start_failures detects a genuine new failed start from four EXISTING firmware counters
+# (start attempts and start successes, Free Power and Dump to Grid): a rise of unresolved attempts that is still there after the counters
+# were quiet for 240 s (refusals are never counted; a nonzero count, a Home Assistant start, a reconnection and a counter reset only set the
+# baseline) and reports WARNING with FREE_POWER_START_FAILED / DUMP_TO_GRID_START_FAILED for 1800 s, UNKNOWN (never HEALTHY) for an
+# unreadable counter pair. Two registry checks and two reason codes record it; the Overview hero reads its reason_codes (structured, never
+# the free-text status) and shows ATTENTION with its own subline and a START FAILED pill, every existing reason keeping its subline and
+# priority. FROZEN edits (PEX): the health package, the check registry, the reason-code registry, docs/SYSTEM_HEALTH_ARCHITECTURE.md and the
+# dashboard (_fsw1_scope.FROZEN_REVERTERS); as of pub0 each file is the export byte for byte. CHANGELOG.md
+# is an ordinary edit.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, frontend, deployment,
+# Intelligence or ecco_core byte; ZERO Modbus reads / writes (64 / 52); no HA control surface (template keys only), automation, script
+# or notification; no manifest stanza, no VERSION.yaml change.
+FSW1 = Entry(
+    id="fsw1", pr="FSW1", commit="unmerged",
+    added_files=_fsw1.ADDED_FILES,
+    frozen_reverts=dict(_fsw1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after fsw1; as of pub0 each is its pub0 state (manifest result)
+        _fsw1.HEALTH_PKG_REL: "c1cdf33bdb874c3e5d7acb4cbb1344a3f10d4e1be7d989344690dae7b0fef430",
+        _fsw1.CHECKS_REL: "fea61c01a8b8d3e10e7abef42efbafc0130129ca635a2805274aca3e98d81364",
+        _fsw1.REASON_CODES_REL: "0da0cb11de790abf64df0fb95f11e18c993f094f7d4e97aaac22db37538f4091",
+        _fsw1.ARCH_DOC_REL: "ecb161140f613a8c8e7af6b82d875afcac586fad8be3a1e483d525dba895cfa5",
+        _fsw1.DASHBOARD_REL: "de1d291a4b610152b04371ddf049d691f56e1c763394a724934b833bf01ce6b5",
+    },
+    # _pex.fingerprint(FSW1): hashes its parent ovw1's fingerprint and every declaration above
+    fingerprint="a380efdfa34b1acfc626ceaa47c8faf56347960d5603a9b98c47077ef7439db5",
+    note="structured, time-limited failed-start health warning: sensor.ecco_health_start_failures detects a genuine new Free Power / "
+         "Dump to Grid START failure from the existing start-attempt and start-success counters (unresolved attempts rising and "
+         "settled; refusals, a nonzero count, a restart, a reconnection and a counter reset never count), WARNING for 1800 s with "
+         "FREE_POWER_START_FAILED / DUMP_TO_GRID_START_FAILED, UNKNOWN for unreadable counters; two registry checks and two reason "
+         "codes; the Overview hero shows ATTENTION and a START FAILED pill (existing reasons keep their priority): ZERO firmware, "
+         "frontend, deployment, Intelligence or ecco_core change, ZERO Modbus operation, no new control surface, no manifest or "
+         "VERSION.yaml change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

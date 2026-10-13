@@ -495,6 +495,36 @@ checks:
     one).'
   implementation_status: designed
   live_proof_status: unknown
+- id: dump_to_grid_start_failed_recent
+  subsystem: manual_write_system
+  description: A Dump to Grid START that failed after every start gate had passed (unresolved start attempts rose and stayed up).
+  source:
+    entity: dump_start_attempts minus dump_start_successes (derived, settled)
+    type: derived
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 1800
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: DUMP_TO_GRID_START_FAILED
+    condition: unresolved start attempts (attempts minus successes) rose by 1 or more within the 1800s window
+      and stayed up after the counters were quiet for 240s.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:17055 (dump_start_attempts++ only after the start gate
+    has passed, so a refusal is not counted), 17631 (dump_start_successes++ only on a verified ACTIVE), 17428 / 17699 / 17709
+    (the genuine failed-start paths); published as "Dump to Grid Start Attempts / Successes Since Boot"
+    (firmware:6300-6318, 30 s, 0 after every ESP boot). The failures-since-boot counter is not used - it also counts failed
+    restores. Represented by sensor.ecco_health_start_failures (home-assistant/packages/ecco_system_health.yaml) in Home
+    Assistant form - a rise is judged between consecutive observed values, never against a baseline that spans a reboot. A
+    nonzero count, the first values after a Home Assistant start, a reconnection or a counter reset only set the baseline;
+    the free-text status is information only. The subsystem is manual_write_system because Dump to Grid is a manual inverter
+    write transaction and the registry has no dump subsystem. A failure while the counters are unavailable to Home Assistant
+    is not observed.
+  implementation_status: implemented_offline
+  live_proof_status: unknown
 - id: free_power_active_state
   subsystem: free_power
   description: Free Power override currently active.
@@ -582,6 +612,34 @@ checks:
   evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:599 (id), incremented throughout the start/restore
     write/verify blocks.
   implementation_status: designed
+  live_proof_status: unknown
+- id: free_power_start_failed_recent
+  subsystem: free_power
+  description: A Free Power START that failed after every start gate had passed (unresolved start attempts rose and stayed up).
+  source:
+    entity: free_power_start_attempts minus free_power_start_successes (derived, settled)
+    type: derived
+  expected_datatype: counter
+  check_type: failure_counter_delta
+  parameters:
+    window_seconds: 1800
+    warning_delta: 1
+    failure_delta: null
+  applicability_condition: null
+  outcomes:
+  - reason_code: FREE_POWER_START_FAILED
+    condition: unresolved start attempts (attempts minus successes) rose by 1 or more within the 1800s window
+      and stayed up after the counters were quiet for 240s.
+  dependencies: []
+  evidence: firmware/ecco_clock_dongle_stage3_4_free_power.yaml:7797 (free_power_start_attempts++ only after the start gate
+    has passed, so a refusal is not counted), 8667 (free_power_start_successes++ only on a verified ACTIVE), 8152 / 8752-8823
+    (the genuine failed-start paths); published as "Free Power Start Attempts / Successes Since Boot" (firmware:6260-6277,
+    30 s, 0 after every ESP boot). free_power_failures_recent (above) is a different signal - it also counts failed restores.
+    Represented by sensor.ecco_health_start_failures (home-assistant/packages/ecco_system_health.yaml) in Home Assistant form -
+    a rise is judged between consecutive observed values, never against a baseline that spans a reboot. A nonzero count, the
+    first values after a Home Assistant start, a reconnection or a counter reset only set the baseline; the free-text status
+    is information only. A failure while the counters are unavailable to Home Assistant is not observed.
+  implementation_status: implemented_offline
   live_proof_status: unknown
 - id: free_power_state_consistency
   subsystem: free_power

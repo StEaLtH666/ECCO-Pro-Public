@@ -196,6 +196,15 @@ views:
                   // STATUS PARTIAL) and only supervision Lost is hardAttention; fallback states are not.
                   const sup = get('sensor.ecco_supervision_status');
                   const fb = get('sensor.ecco_fallback_status');
+                  // FSW1: a Free Power / Dump to Grid START that failed before it entered recovery (so both recovery states can still read NONE).
+                  // Structured only: the reason_codes of sensor.ecco_health_start_failures, a time-limited WARNING (1800 s after the failed attempt).
+                  // Display only. Deliberately NOT in `required`: an unavailable sensor stays quiet (an offline dongle is already COMMS / PARTIAL).
+                  const failedStartState = get('sensor.ecco_health_start_failures');
+                  const failedStartCodes = states['sensor.ecco_health_start_failures']?.attributes?.reason_codes;
+                  const failedStartText = Array.isArray(failedStartCodes) ? failedStartCodes.join(',') : String(failedStartCodes ?? '');
+                  const freeStartFailed = failedStartText.includes('FREE_POWER_START_FAILED');
+                  const dumpStartFailed = failedStartText.includes('DUMP_TO_GRID_START_FAILED');
+                  const startFailed = failedStartState === 'WARNING' && (freeStartFailed || dumpStartFailed);
 
                   const required = [comm,runtime,telemetry,configOnline,ntp,cache,inverter,warning,fault,manualState,rtcState,freeOpState,freeActiveState,snapshot,dumpOpState,dumpActiveState,dumpSnapshot];
                   const hasUnknown = required.some(unknown) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery);
@@ -215,6 +224,9 @@ views:
                     dumpRecoveryAttention ||
                     sup === 'Lost';
                   const busy = manualBusy || rtcBusy || freeBusy || freeActive || dumpBusy || dumpActive;
+                  // FSW1: ATTENTION also for a confirmed failed start; every existing reason keeps its subline and its priority.
+                  const attention = hardAttention || startFailed;
+                  const startFailSubline = freeStartFailed && dumpStartFailed ? 'Free Power and Dump to Grid starts failed recently' : freeStartFailed ? 'A Free Power start failed recently' : 'A Dump to Grid start failed recently';
 
                   let headline, subline, colour, bg, border, icon;
                   if (hasUnknown) {
@@ -224,9 +236,9 @@ views:
                     bg = 'rgba(170,180,195,.08)';
                     border = 'rgba(170,180,195,.22)';
                     icon = 'mdi:help-circle-outline';
-                  } else if (hardAttention) {
+                  } else if (attention) {
                     headline = 'ATTENTION';
-                    subline = 'A monitored subsystem needs checking';
+                    subline = hardAttention ? 'A monitored subsystem needs checking' : startFailSubline;
                     colour = '#ffbd3d';
                     bg = 'rgba(255,189,61,.10)';
                     border = 'rgba(255,189,61,.30)';
@@ -269,7 +281,7 @@ views:
                   const rtcChip = chipState(ntp === 'on', rtcBusy, unknown(ntp) || unknown(rtcState));
                   const invChip = chipState(String(inverter).toLowerCase() === 'normal' && warning === '00000000' && fault === '0000000000000000', false, unknown(inverter) || unknown(warning) || unknown(fault));
                   const txUnknown = unknown(manualState) || unknown(freeOpState) || unknown(freeActiveState) || unknown(dumpOpState) || unknown(dumpActiveState);
-                  const txChip = chipState(true, manualBusy || freeBusy || freeActive || dumpBusy || dumpActive, txUnknown);
+                  const txChip = startFailed ? ['START FAILED', 'warn'] : chipState(true, manualBusy || freeBusy || freeActive || dumpBusy || dumpActive, txUnknown);
                   const recoveryChip = chipState(!snapshotPending && !dumpSnapshotPending && !freeRecoveryAttention && !dumpRecoveryAttention, false, unknown(snapshot) || unknown(freeActiveState) || unknown(dumpSnapshot) || unknown(dumpActiveState) || recoveryUnavailable(freeRecovery) || recoveryUnavailable(dumpRecovery));
                   const supChips = {'Healthy': ['HEALTHY', 'good'], 'Recovering': ['RECOVERING', 'info'], 'Awaiting Heartbeat': ['AWAITING', 'muted'], 'Suspect': ['SUSPECT', 'warn'], 'Lost': ['LOST', 'warn']};
                   const supChip = supChips[sup] || ['UNKNOWN', 'muted'];

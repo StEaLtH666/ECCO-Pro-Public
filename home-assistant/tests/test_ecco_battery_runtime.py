@@ -1331,8 +1331,8 @@ check("...in which nothing of FE-1 exists (no time_to_reserve, no package stanza
       "time_to_reserve" not in old[F.DASHBOARD_REL] and PKG_REL not in old[F.MANIFEST_REL]
       and 'version: "7.20.0"' in old[F.VERSION_REL]
       and 'version: "7.21.0"' in (ROOT / "VERSION.yaml").read_text(encoding="utf-8"))
-check("each fe1 pair round-trips (applying it to the ovw1 text gives the live file)",
-      F.add_fe1_dashboard(old[F.DASHBOARD_REL]) == (ROOT / "home-assistant" / "dashboards" / "ecco_pro.yaml").read_text(encoding="utf-8")
+check("each fe1 pair round-trips (applying it to the ovw1 text gives the file as of fe1: the live file with any later entry undone exactly)",
+      F.add_fe1_dashboard(old[F.DASHBOARD_REL]) == _pex.as_of(F.DASHBOARD_REL, "fe1", _pex.read(F.DASHBOARD_REL))   # PEX: a later entry (fsw1) edits the dashboard too
       and F.add_fe1_version(old[F.VERSION_REL]) == (ROOT / "VERSION.yaml").read_text(encoding="utf-8")
       and F.add_fe1_manifest(old[F.MANIFEST_REL]) == (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8"))
 

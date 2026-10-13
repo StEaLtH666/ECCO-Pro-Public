@@ -53,6 +53,32 @@ Development before the first public release happened in a private repository; se
   - **Scope:** Home Assistant health package, check registry and documentation only, declared as post-export entry
     `rtcf1`. No firmware, dashboard, frontend or Modbus change.
 
+- **Failed-start health warning** (FB-D1 follow-up; offline only, not live-proven). A Free Power or Dump to Grid start that
+  fails before it writes anything leaves the recovery state at `NONE`, so the Overview could still say SYSTEMS NOMINAL. The new
+  sensor `ECCO Health Start Failures` detects it from four existing firmware counters: the Free Power and Dump to Grid start
+  attempts and start successes.
+  - **What counts:** a rise of unresolved attempts (attempts minus successes) that is still there after the counters were
+    quiet for 240 s. The firmware counts an attempt only after every start gate has passed, so a refusal is never counted.
+    240 s outlasts a start in flight (success seen within 57 s) plus a silent Wi-Fi loss (the ESPHome client drops the link
+    within 110 s). This timing assumption must be re-checked against the live Home Assistant version before deployment.
+    The failures-since-boot counters are not used, because they also count failed restores.
+  - **What never counts:** a nonzero count, the first values after a Home Assistant start or a reconnection, a counter
+    reset, an inconsistent pair, and the free-text status. These only set the baseline.
+  - **What it reports:** WARNING with `FREE_POWER_START_FAILED` and/or `DUMP_TO_GRID_START_FAILED` for 1800 s after the
+    failed attempt. Each further failure restarts that feature's window; the two features are independent. Unreadable
+    counters report UNKNOWN, never HEALTHY.
+  - **Registry:** two checks and two reason codes (Dump to Grid sits in `manual_write_system`, because the registry has no
+    dump subsystem).
+  - **Overview:** the status hero reads the sensor's `reason_codes` and shows ATTENTION with its own subline and a START
+    FAILED pill. Every existing reason keeps its subline and priority, and STATUS PARTIAL still comes first.
+  - **Scope:** Home Assistant health package, check and reason-code registries, documentation and the dashboard hero,
+    declared as post-export entry `fsw1`. No firmware, frontend or Modbus change.
+  - **Compatibility:** the scheduled Free Power (fps1) and scheduled Dump to Grid (dgs1) packages retry only gate refusals, which
+    are never counted, so their retries and their own failure alerts coexist with this warning (the suite drives both real
+    packages against their dongle models). Firmware gate refusals never increment these counters, so this warning does not report
+    them; neither scheduler package is changed here. `docs/FAILED_START_HEALTH.md` records the detection matrix, the timing
+    contract, deployment, rollback and the passive live acceptance criteria.
+
 - **ECCO Weather & Solar card** (`frontend/ecco-weather-solar-card`, read-only): current weather, the hourly and five-day Met.no
   forecast, sun times, the ECCO blended solar forecast (today, remaining today, tomorrow) with its Solcast and Forecast.Solar
   inputs, an hourly chart of Solcast's profile against actual PV with cloud cover and rain, forecast freshness, the existing

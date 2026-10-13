@@ -243,6 +243,16 @@ reason_codes:
     blocks_manual_control: false
     affects_forecast: false
 
+  - code: DUMP_TO_GRID_START_FAILED
+    subsystem: manual_write_system
+    severity: WARNING
+    meaning: "A Dump to Grid START failed after every start gate had passed: unresolved start attempts (start attempts minus start successes) rose and stayed up. A refusal (REJECTED - ...) is not counted."
+    source_signal: "dump_start_attempts and dump_start_successes counter pair (unresolved attempts delta, settled: still up after 240 s with no counter change)"
+    likely_cause: "The fresh snapshot could not be taken or durably committed, or the activation write or its verification failed. The start may or may not have entered recovery: check the recovery state and dump_status for the firmware's own explanation."
+    safe_diagnostic_step: "Read dump_status and the Dump to Grid recovery state before retrying. The 15 s watchdog restores an outstanding snapshot by itself."
+    blocks_manual_control: false
+    affects_forecast: false
+
   # ===================================================================
   # free_power
   # ===================================================================
@@ -303,6 +313,16 @@ reason_codes:
     source_signal: "free_power_failures counter delta"
     likely_cause: "A rejected/failed start, end, or restore attempt - check free_power_status for the specific reason text."
     safe_diagnostic_step: "Read free_power_status for the firmware's own explanation before retrying."
+    blocks_manual_control: false
+    affects_forecast: false
+
+  - code: FREE_POWER_START_FAILED
+    subsystem: free_power
+    severity: WARNING
+    meaning: "A Free Power START failed after every start gate had passed: unresolved start attempts (start attempts minus start successes) rose and stayed up. A refusal (REJECTED - ...) is not counted."
+    source_signal: "free_power_start_attempts and free_power_start_successes counter pair (unresolved attempts delta, settled: still up after 240 s with no counter change)"
+    likely_cause: "The fresh snapshot could not be completed or durably committed, or the activation write or its verification failed. The start may or may not have entered recovery: check the recovery state and free_power_status for the firmware's own explanation."
+    safe_diagnostic_step: "Read free_power_status and the Free Power recovery state before retrying. Do not press a recovery action unless the recovery state asks for one."
     blocks_manual_control: false
     affects_forecast: false
 
