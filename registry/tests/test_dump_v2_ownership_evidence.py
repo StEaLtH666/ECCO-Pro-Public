@@ -71,7 +71,9 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 FW_PATH = ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml"
 HEADER_PATH = ROOT / "firmware" / "include" / "ecco_durable_snapshot.h"
-FW_TEXT = FW_PATH.read_text(encoding="utf-8")
+# fcp2: this suite proves Dump V2's own evidence model on the firmware as it stood before fcp2, whose SG-40 re-checks sit inside the
+# controller write path Dump V2 edited; the chain undoes fcp2 exactly (PEX), and test_dump_safety_fcp2.py covers the fcp2 firmware.
+FW_TEXT = chain.CHAIN.as_of(chain.FIRMWARE, "fcp1", FW_PATH.read_text(encoding="utf-8"))
 HEADER = HEADER_PATH.read_text(encoding="utf-8")
 FW = ds.load_firmware_text(FW_TEXT)
 BASE_TEXT = dv2s.pre_dump_v2_firmware(FW_TEXT)

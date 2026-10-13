@@ -633,6 +633,18 @@ for w in (1100, 8605, 1100, 8620, 1120):  # isolated spikes
     sim.run_actions(watchdog_of(sim.fw))
 check("isolated single-sample spikes: no trip", still_active(sim))
 
+# fcp2 (R-1): the same 8.6 kW spikes ALTERNATING with normal samples (a 50 % duty oscillation never forms a consecutive run, so the
+# consecutive counters alone never trip it - the weakness the windowed guard closes): the third spike in the window ends the lease.
+sim = started()
+tick(sim, ms=31000, soc=60.0)
+for w in (8605, 1100, 8620, 1100, 8618, 1100):
+    sim.advance(10000)
+    sim.ent("ecco_battery_power").publish_state(float(w))
+    sim.run_actions(watchdog_of(sim.fw))
+check("fcp2: alternating 8.6 kW spikes (50 % duty) trip the WINDOWED guard (GROSS POWER RUNAWAY)",
+      not still_active(sim) and str(sim.ent("dump_last_end_reason").state).startswith("GROSS POWER RUNAWAY (windowed)"),
+      str(sim.ent("dump_last_end_reason").state))
+
 sim = started()
 tick(sim, ms=31000, soc=60.0)
 for w in (8605, 8620, 8618):  # recorded 2026-09-22 anomaly values
@@ -1076,11 +1088,14 @@ print("")
 print("[H] Sensitivity: each safety scenario FAILS against a firmware copy with that safeguard removed")
 
 
-def mutant(old: str, new: str) -> dict:
+def mutant(old, new) -> dict:
+    """One exact (old, new) replacement, or (fcp2) a tuple of them applied in order - a safeguard with two parts."""
     text = FW["_text"]
-    if text.count(old) != 1:
-        raise AssertionError(f"mutation anchor not unique/present: {old!r}")
-    return ds.load_firmware_text(text.replace(old, new))
+    for o, n in (zip(old, new) if isinstance(old, tuple) else ((old, new),)):
+        if text.count(o) != 1:
+            raise AssertionError(f"mutation anchor not unique/present: {o!r}")
+        text = text.replace(o, n)
+    return ds.load_firmware_text(text)
 
 
 def s_verify_gate(fw):
@@ -1145,9 +1160,12 @@ def s_accept_needs_fresh_readback(fw):
 
 
 def s_runaway_needs_consecutive(fw):
+    # fcp2 (R-1): alternating 8.6 kW spikes now END the lease (the windowed guard - see [D]). What the consecutive requirement
+    # still protects is a LOW-duty, modest overshoot: 1 sample in 3 above the ordinary threshold (2000 W vs 1750 W at 1000 W),
+    # never above the backstop - 3 of the last 8, below the window's 4, so no trip; a counter that never resets trips at the third.
     sim = started(fw=fw)
     tick(sim, ms=31000, soc=60.0)
-    for w in (8605, 1100, 8620, 1100, 8618, 1100):
+    for w in (2000, 1100, 1100, 2000, 1100, 1100, 2000):
         sim.advance(10000)
         sim.ent("ecco_battery_power").publish_state(float(w))
         sim.run_actions(watchdog_of(fw))
@@ -1560,9 +1578,12 @@ MUTATIONS = [
      "if (rounded < ${ecco_dump_controller_min_ceiling_w}.0f) rounded = ${ecco_dump_controller_min_ceiling_w}.0f;", ""),
     ("H1 fix removed: independent absolute runaway backstop no longer checked by the watchdog",
      s_h1_absolute_backstop,
-     "return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples} ||\n"
-     "                        id(dump_absolute_overpower_samples) >= ${ecco_dump_runaway_absolute_samples};",
-     "return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples};"),
+     # fcp2: the backstop's consecutive run is ALSO read from the windowed history, so removing it means removing both.
+     ("return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples} ||\n"
+      "                        id(dump_absolute_overpower_samples) >= ${ecco_dump_runaway_absolute_samples};",
+      "} else if (n_abs >= ${ecco_dump_runaway_window_k} || ((uint32_t) id(dump_runaway_win_abs) & run_abs) == run_abs) {"),
+     ("return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples};",
+      "} else if (false) {")),
     ("M2 fix removed: controller no longer checks manual_write_in_progress is free before taking it",
      s_m2_lock_check,
      "return !id(manual_write_in_progress) && !id(correction_in_progress) &&\n"

@@ -47,7 +47,9 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 FW_PATH = ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml"
-FW_TEXT = FW_PATH.read_text(encoding="utf-8")
+# fcp2: this suite proves fcp1's own firmware; the later firmware entry fcp2 (safety hardening) is undone exactly by the chain (PEX).
+import _scope_chain as chain  # noqa: E402
+FW_TEXT = chain.CHAIN.as_of(chain.FIRMWARE, "fcp1", FW_PATH.read_text(encoding="utf-8"))
 FW = ds.load_firmware_text(FW_TEXT)
 SUBS = FW["_substitutions"]
 CAP = int(SUBS["ecco_dump_capability_w"])
@@ -153,8 +155,10 @@ check("the factory integrity value is the integrity value of the factory limits"
       int(SUBS["ecco_dump_limits_default_check"]) == DEFAULT + 3 * 0 + 7 * CAP + 12345)
 REG = yaml.safe_load((ROOT / "registry" / "inverter_profiles.yaml").read_text(encoding="utf-8"))
 ref = next(p for p in REG["profiles"] if p["id"] == SUBS["ecco_inverter_profile_id"])
+# fcp2 adds a later profile key (the runaway DC allowance), checked against the live firmware by test_dump_safety_fcp2.py.
 check("the firmware's reference profile is exactly the registry's entry for it (no drift)",
-      all(str(ref["substitutions"][k]) == SUBS[k] for k in ref["substitutions"]), str(ref["substitutions"]))
+      all(str(ref["substitutions"][k]) == SUBS[k] for k in ref["substitutions"] if k != "ecco_dump_runaway_dc_allowance_pct"),
+      str(ref["substitutions"]))
 
 
 def profile_ok(s):
@@ -437,7 +441,7 @@ print("\n[11] the post-export declaration (PEX entry fcp1)")
 import _fcp1_scope as F  # noqa: E402
 E = chain.CHAIN.entry("fcp1")
 ids = [e.id for e in chain.POST_EXPORT_ENTRIES]
-check("fcp1 is appended right after ovw2 (re-chained on public main aafa03e5)", ids[-1] == "fcp1" and chain.CHAIN.prev_id("fcp1") == "ovw2", str(ids))
+check("fcp1 is appended right after ovw2 (re-chained on public main aafa03e5)", "fcp1" in ids and chain.CHAIN.prev_id("fcp1") == "ovw2", str(ids))
 check("fcp1's reverter reproduces the dtgp1 firmware byte for byte, and its checkpoint is the live firmware",
       F.sha(F.pre_fcp1_firmware(FW_TEXT)) == F.BASE_FW_SHA == chain.CHAIN.entry("dtgp1").checkpoints[chain.FIRMWARE]
       and E.checkpoints == {chain.FIRMWARE: F.sha(FW_TEXT)})

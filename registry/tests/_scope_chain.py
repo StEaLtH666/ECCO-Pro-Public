@@ -109,6 +109,7 @@ import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
 import _fcp1_scope as _fcp1  # noqa: E402
+import _fcp2_scope as _fcp2  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
@@ -945,7 +946,26 @@ FCP1 = Entry(
          "ceiling 3000 W and export not configured (START refused); ZERO new Modbus operation or write domain, no durable record "
          "change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1)
+# fcp2 (full-capability Dump-to-Grid phase 2, safety hardening; _fcp2_scope.py): made on the fcp1 candidate, appended after fcp1.
+# SG-40 (no controller write once a lease is ending) and R-1 (a windowed, efficiency-aware runaway guard). Chain-pinned:
+# pre_fcp2_firmware reproduces the fcp1 firmware byte for byte. RAM-only globals; no Modbus operation, write domain or durable change.
+FCP2 = Entry(
+    id="fcp2", pr="FCP2", commit="unmerged",
+    reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
+    checkpoints={FIRMWARE: "efa72371c8bda5256b48443ac1ca9daecc5a1cfc3f7e6cb227dc0f482c69971b"},
+    deltas={"globals": 8, "substitutions": 3},
+    subst_added=dict(_fcp2.SUBSTITUTIONS),
+    added_files=_fcp2.ADDED_FILES,
+    frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
+    # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
+    fingerprint="f18d6d5f776c4f9294090b0ea6c0b35b92092652f5c3d242776ab58f34586a05",
+    note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
+         "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
+         "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "
+         "unchanged; the backstop margin grows by the profile's DC allowance above 3000 W only); RAM-only globals, ZERO new "
+         "Modbus operation or write domain, no durable change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -32,6 +32,18 @@ substitutions:
   # Ceiling" setting; it is not a default and not a recommendation. Must be
   # <= ecco_inverter_tou_power_ceiling_w (checked at compile time).
   ecco_dump_capability_w: "8000"
+  # fcp2 (R-1): the profile's DC-over-AC allowance for the absolute runaway
+  # backstop, in percent of the commanded TOU power. The TOU power registers
+  # (256-261) limit the inverter's AC output, while register 190 measures
+  # battery DC power including the conversion loss, so a healthy lease draws
+  # MORE than its command: the recorded leases on the reference installation
+  # show +228..+275 W at 2000 W and +271..+357 W at 3000 W (about 7-12 %).
+  # Above ecco_dump_runaway_backstop_floor_w the backstop's margin grows by
+  # this share of the command above that floor, so its headroom over a
+  # residual of this size is the same at every operating level; at or below
+  # the floor the margin is exactly the fixed one it always was. Chosen above
+  # every recorded residual. 0..30 (compile-time check).
+  ecco_dump_runaway_dc_allowance_pct: "12"
   # 2026-09-22 hardening (target 6): how long, in milliseconds of THIS
   # boot's uptime, an outstanding verified Free Power lease is allowed to
   # run before being treated as due for restore when the wall clock is not
@@ -97,6 +109,23 @@ substitutions:
   # parked above anything the inverter can actually do. An evidence level of
   # this guard, not a second copy of the configured ceiling.
   ecco_dump_runaway_backstop_floor_w: "3000"
+  # fcp2 (R-1): WINDOWED runaway detection, IN ADDITION to the consecutive-
+  # sample counters above (unchanged, so the guard is never looser than
+  # before). Every valid battery-power sample (a published, non-NaN reading
+  # after the lease-start grace) is recorded in an 8-sample history against
+  # the ordinary threshold, the absolute backstop and a GROSS level (the
+  # backstop plus one more absolute margin). The lease ends once
+  # ecco_dump_runaway_window_k of the last 8 valid samples are above the
+  # ordinary threshold or above the backstop - a sustained 50 %-duty
+  # oscillation, which never forms a consecutive run, trips this - or
+  # ecco_dump_runaway_gross_k of the last 8 are above the gross level (a
+  # large excursion at a lower duty). Two isolated samples never trip it. The consecutive runs of the counters above are
+  # read from the same history too. A skipped or NaN sample is never "below":
+  # the history simply does not advance. The decision is LATCHED at the
+  # sample that completes it, so the 15 s watchdog cannot miss it between two
+  # samples; it is cleared only at the next lease START.
+  ecco_dump_runaway_window_k: "4"
+  ecco_dump_runaway_gross_k: "3"
   # Accept Current State's residue gate: maximum age of the post-operation
   # configuration readback it will trust (same 120s bound Free Power uses
   # for its own recovery review evidence).
@@ -1320,6 +1349,17 @@ esphome:
           static_assert(${ecco_dump_runaway_backstop_floor_w} == (long) ${ecco_dump_runaway_backstop_floor_w}.0f &&
                             ${ecco_dump_controller_min_ceiling_w} < ${ecco_dump_runaway_backstop_floor_w},
                         "Dump runaway backstop floor: a plain decimal integer above the controller floor");
+          // fcp2 (R-1): the profile's DC allowance and the runaway windows. k <= 4 of
+          // 8 so a sustained 50 %-duty oscillation always trips; gross k >= 3 so two
+          // isolated samples never do.
+          static_assert(${ecco_dump_runaway_dc_allowance_pct} >= 0 && ${ecco_dump_runaway_dc_allowance_pct} <= 30,
+                        "Dump runaway DC allowance: 0 to 30 percent of the command");
+          static_assert(${ecco_dump_runaway_window_k} >= 3 && ${ecco_dump_runaway_window_k} <= 4 &&
+                            ${ecco_dump_runaway_gross_k} >= 3 && ${ecco_dump_runaway_gross_k} <= ${ecco_dump_runaway_window_k},
+                        "Dump runaway windows: k of the last 8 valid samples");
+          static_assert(${ecco_dump_runaway_samples} >= 2 && ${ecco_dump_runaway_samples} <= 8 &&
+                            ${ecco_dump_runaway_absolute_samples} >= 2 && ${ecco_dump_runaway_absolute_samples} <= 8,
+                        "Dump runaway consecutive runs must fit the 8-sample history");
       # fcp1 (2026-10-13): validate the PERSISTED Dump operating limits before
       # anything can use them. A value that is out of range, was stored for a
       # different capability profile, or fails the integrity check (an
@@ -3678,6 +3718,16 @@ globals:
   # from dump_op_terminal (shared by start_dump_to_grid_override and
   # restore_dump_to_grid_snapshot) - a shared flag risked one script's
   # wait_until being satisfied by a DIFFERENT script's callback.
+  # fcp2 (SG-40): set when the controller's write was CANCELLED because the
+  # lease stopped being live (ended, an End/restore requested, a restore
+  # running, corrupt) after the tick decided to write - checked once the write
+  # mutex is held and again in the same step that issues the write. A
+  # cancelled write is never issued, verified or recorded. Reset each time
+  # the mutex is taken.
+  - id: dump_controller_write_cancelled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   - id: dump_controller_op_terminal
     type: bool
     restore_value: no
@@ -3860,6 +3910,40 @@ globals:
   # Never reset by a controller write, only by a sample dropping back under
   # the absolute threshold.
   - id: dump_absolute_overpower_samples
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # fcp2 (R-1): the windowed runaway history - bit 0 the newest VALID battery
+  # sample, 8 samples - against the ordinary threshold, the absolute backstop
+  # and the gross level (see ecco_dump_runaway_window_k). dump_runaway_trip is
+  # the LATCHED decision (0 none, 1 ordinary, 2 backstop, 3 gross) with the
+  # sample, the threshold and the window count that completed it. Cleared at
+  # every lease START; RAM only.
+  - id: dump_runaway_win_ord
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_runaway_win_abs
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_runaway_win_gross
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_runaway_trip
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_runaway_trip_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_trip_threshold_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_trip_count
     type: int
     restore_value: no
     initial_value: '0'
@@ -6881,7 +6965,14 @@ sensor:
             float backstop_floor = ${ecco_dump_runaway_backstop_floor_w}.0f;
             if (backstop_floor > (float) id(dump_lease_ceiling_w)) backstop_floor = (float) id(dump_lease_ceiling_w);
             if (backstop_ref < backstop_floor) backstop_ref = backstop_floor;
-            if (!std::isnan(x) && x > backstop_ref + ${ecco_dump_runaway_absolute_margin_w}.0f) {
+            // fcp2 (R-1): efficiency-aware absolute margin - see
+            // ecco_dump_runaway_dc_allowance_pct. Exactly the fixed margin at or
+            // below ecco_dump_runaway_backstop_floor_w.
+            float abs_margin = ${ecco_dump_runaway_absolute_margin_w}.0f;
+            if (backstop_ref > ${ecco_dump_runaway_backstop_floor_w}.0f) {
+              abs_margin += (backstop_ref - ${ecco_dump_runaway_backstop_floor_w}.0f) * (float) ${ecco_dump_runaway_dc_allowance_pct} / 100.0f;
+            }
+            if (!std::isnan(x) && x > backstop_ref + abs_margin) {
               id(dump_absolute_overpower_samples)++;
               id(dump_overpower_last_w) = x;
             } else {
@@ -6909,6 +7000,42 @@ sensor:
               id(dump_overpower_last_w) = x;
             } else {
               id(dump_overpower_samples) = 0;
+            }
+            // fcp2 (R-1): WINDOWED runaway detection - see ecco_dump_runaway_window_k.
+            // Only a valid sample advances the history (a NaN is neither above nor
+            // below); the first complete decision is latched until the next START.
+            if (!std::isnan(x)) {
+              float abs_thr = backstop_ref + abs_margin;
+              float gross_thr = abs_thr + abs_margin;
+              id(dump_runaway_win_ord) = (uint8_t) (((uint32_t) id(dump_runaway_win_ord) << 1) | (x > requested + margin ? 1u : 0u));
+              id(dump_runaway_win_abs) = (uint8_t) (((uint32_t) id(dump_runaway_win_abs) << 1) | (x > abs_thr ? 1u : 0u));
+              id(dump_runaway_win_gross) = (uint8_t) (((uint32_t) id(dump_runaway_win_gross) << 1) | (x > gross_thr ? 1u : 0u));
+              if (id(dump_runaway_trip) == 0) {
+                int n_ord = 0;
+                int n_abs = 0;
+                int n_gross = 0;
+                for (int i = 0; i < 8; i++) {
+                  n_ord += (id(dump_runaway_win_ord) >> i) & 1;
+                  n_abs += (id(dump_runaway_win_abs) >> i) & 1;
+                  n_gross += (id(dump_runaway_win_gross) >> i) & 1;
+                }
+                uint32_t run_ord = (1u << ${ecco_dump_runaway_samples}) - 1u;
+                uint32_t run_abs = (1u << ${ecco_dump_runaway_absolute_samples}) - 1u;
+                if (n_gross >= ${ecco_dump_runaway_gross_k}) {
+                  id(dump_runaway_trip) = 3;
+                  id(dump_runaway_trip_threshold_w) = gross_thr;
+                  id(dump_runaway_trip_count) = n_gross;
+                } else if (n_abs >= ${ecco_dump_runaway_window_k} || ((uint32_t) id(dump_runaway_win_abs) & run_abs) == run_abs) {
+                  id(dump_runaway_trip) = 2;
+                  id(dump_runaway_trip_threshold_w) = abs_thr;
+                  id(dump_runaway_trip_count) = n_abs;
+                } else if (n_ord >= ${ecco_dump_runaway_window_k} || ((uint32_t) id(dump_runaway_win_ord) & run_ord) == run_ord) {
+                  id(dump_runaway_trip) = 1;
+                  id(dump_runaway_trip_threshold_w) = requested + margin;
+                  id(dump_runaway_trip_count) = n_ord;
+                }
+                if (id(dump_runaway_trip) != 0) id(dump_runaway_trip_w) = x;
+              }
             }
 
   - platform: template
@@ -17965,6 +18092,11 @@ script:
                               id(dump_active_cfg_seq) = id(cfg_block_b_seq);
                               id(dump_overpower_samples) = 0;
                               id(dump_absolute_overpower_samples) = 0;
+                              // fcp2 (R-1): a fresh runaway history, no latched decision.
+                              id(dump_runaway_win_ord) = 0;
+                              id(dump_runaway_win_abs) = 0;
+                              id(dump_runaway_win_gross) = 0;
+                              id(dump_runaway_trip) = 0;
                               // V1.1: the settle window for both the
                               // controller's own tick and the runaway guard's
                               // post-change grace starts here too.
@@ -18456,6 +18588,7 @@ script:
                       id(dump_controller_ownership_mismatch) = false;
                       id(dump_controller_ownership_read_failed) = false;
                       id(dump_controller_evidence_commit_failed) = false;
+                      id(dump_controller_write_cancelled) = false;
                       id(dump_controller_op_terminal) = false;
                   # Dump V2 ownership evidence (2026-09-29): save-before-write,
                   # BEFORE R3 and before the 256-261 write. The bus/lock
@@ -18478,6 +18611,16 @@ script:
                   # because the durable {V, P} already contains the verified
                   # value.
                   - lambda: |-
+                      // fcp2 (SG-40): re-check, now that the write mutex is held, that the
+                      // lease is still live and nothing has asked to end it. If not: no
+                      // evidence commit, no R3 read, no write - the controller never writes
+                      // once a lease is ending, restoring or stopped.
+                      if (!id(dump_active_persisted) || id(dump_restore_requested) || id(dump_operation_in_progress) ||
+                          id(dump_recovery_metadata_corrupt) || !id(dump_snapshot_valid) ||
+                          id(dump_marker_state) != ecco_durable::MARKER_RESTORE_REQUIRED) {
+                        id(dump_controller_write_cancelled) = true;
+                        return;
+                      }
                       id(dump_evidence_pending_ceiling) = id(dump_controller_pending_ceiling);
                       bool evidence_ok = false;
                       if (id(dump_snapshot_valid) && id(dump_marker_state) == ecco_durable::MARKER_RESTORE_REQUIRED &&
@@ -18506,10 +18649,10 @@ script:
 
                   # R3 runs only once the evidence commit above has succeeded.
                   # The R3 block itself is unchanged - only re-indented under
-                  # this gate.
+                  # this gate. fcp2 (SG-40): and never for a cancelled write.
                   - if:
                       condition:
-                        lambda: 'return !id(dump_controller_write_failed);'
+                        lambda: 'return !id(dump_controller_write_failed) && !id(dump_controller_write_cancelled);'
                       then:
                         # R3 (2026-09-27 hardening): immediate pre-write ownership
                         # re-read of 256-261, inside the SAME critical section
@@ -18581,9 +18724,20 @@ script:
                               ESP_LOGE("dump_to_grid", "Ownership re-read of 256-261 did not reach a terminal state before the controller write");
                             }
 
+                  # fcp2 (SG-40): the LAST check before the write, in the same synchronous
+                  # step that issues it. An End/restore request - or any other end of the
+                  # lease - that arrived while the R3 read was in flight cancels the write:
+                  # once a lease is ending, the controller writes nothing.
                   - if:
                       condition:
-                        lambda: 'return !id(dump_controller_write_failed);'
+                        lambda: |-
+                          if (!id(dump_controller_write_failed) &&
+                              (!id(dump_active_persisted) || id(dump_restore_requested) || id(dump_operation_in_progress) ||
+                               id(dump_recovery_metadata_corrupt) || !id(dump_snapshot_valid) ||
+                               id(dump_marker_state) != ecco_durable::MARKER_RESTORE_REQUIRED)) {
+                            id(dump_controller_write_cancelled) = true;
+                          }
+                          return !id(dump_controller_write_failed) && !id(dump_controller_write_cancelled);
                       then:
                         - lambda: 'id(dump_controller_op_terminal) = false;'
                         - modbus_client.write_multiple_registers:
@@ -18624,7 +18778,7 @@ script:
 
                   - if:
                       condition:
-                        lambda: 'return !id(dump_controller_write_failed);'
+                        lambda: 'return !id(dump_controller_write_failed) && !id(dump_controller_write_cancelled);'
                       then:
                         - lambda: 'id(dump_controller_op_terminal) = false;'
                         - modbus_client.read_holding_registers:
@@ -18675,6 +18829,14 @@ script:
                       then:
                         - lambda: |-
                             id(manual_write_in_progress) = false;
+                            // fcp2 (SG-40): a cancelled write was never issued - nothing to
+                            // record or publish. The lease is already ending; its restore runs
+                            // on the next watchdog tick (the mutex is released above).
+                            if (id(dump_controller_write_cancelled)) {
+                              id(dump_controller_state) = "WRITE CANCELLED - LEASE ENDING";
+                              ESP_LOGW("dump_to_grid", "Controller write cancelled - the lease is ending; nothing written");
+                              return;
+                            }
                             id(dump_target_power) = id(dump_controller_pending_ceiling);
                             id(dump_runaway_ceiling_ref) = std::max(
                               (float) id(dump_controller_pending_prior_ceiling),
@@ -22719,6 +22881,26 @@ interval:
                           snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY - battery discharge %.0fW sustained above the %uW V1.1 absolute backstop", id(dump_overpower_last_w), (unsigned) (backstop_ref + ${ecco_dump_runaway_absolute_margin_w}.0f));
                         } else {
                           snprintf(msg, sizeof(msg), "POWER RUNAWAY - battery discharge %.0fW sustained above the %uW lease ceiling", id(dump_overpower_last_w), (unsigned) id(dump_target_power));
+                        }
+                        return std::string(msg);
+            # fcp2 (R-1): the WINDOWED runaway decision, latched by
+            # ecco_battery_power's on_value at the sample that completed it (see
+            # ecco_dump_runaway_window_k). Checked after the consecutive guards
+            # above, so a lease they end in the same tick keeps their reason.
+            - if:
+                condition:
+                  lambda: 'return id(dump_runaway_trip) != 0;'
+                then:
+                  - script.execute:
+                      id: request_dump_end
+                      reason: !lambda |-
+                        char msg[200];
+                        if (id(dump_runaway_trip) == 3) {
+                          snprintf(msg, sizeof(msg), "GROSS POWER RUNAWAY (windowed) - battery discharge above the %.0fW gross level in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
+                        } else if (id(dump_runaway_trip) == 2) {
+                          snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY (windowed) - battery discharge above the %.0fW absolute backstop in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
+                        } else {
+                          snprintf(msg, sizeof(msg), "POWER RUNAWAY (windowed) - battery discharge above the %.0fW lease-ceiling threshold in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
                         }
                         return std::string(msg);
             # fcp1 (2026-10-13): NET GRID EXPORT guard - independent of the power

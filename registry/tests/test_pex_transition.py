@@ -290,6 +290,7 @@ LEDGER = {   # file -> exact number of calls of each _pex function
     "registry/tests/test_ovw2_transition.py": {"read": 2, "as_of": 1, "fingerprint": 1, "record": 1, "historical_chain_sha": 1, "checkpoint": 1, "exact_pairs": 1},   # ovw2's own proofs
     "home-assistant/tests/test_ecco_overview_v21.py": {"read": 1, "as_of": 1},   # ovw2: reads the dashboard and VERSION.yaml as of ovw2 (one helper)
     "registry/tests/test_dump_capability_limits.py": {"fingerprint": 1, "record": 1},   # fcp1: its declaration's hash link
+    "registry/tests/test_dump_safety_fcp2.py": {"fingerprint": 1, "record": 1},   # fcp2: its declaration's hash link
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")

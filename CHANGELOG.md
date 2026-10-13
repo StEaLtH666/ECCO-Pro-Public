@@ -27,6 +27,15 @@ Development before the first public release happened in a private repository; se
   widened. See
   [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
   and the supervised live-proof procedure (not executed).
+- **Dump to Grid safety hardening, phase 2** (post-export entry `fcp2`; firmware, not yet flashed anywhere;
+  [docs/dev/dump-to-grid-safety-fcp2.md](docs/dev/dump-to-grid-safety-fcp2.md)).
+  - The closed-loop controller never writes once a lease is ending. An End or restore request that arrives while it is checking
+    the inverter before a write now cancels that write (SG-40).
+  - The battery runaway guard also judges a window of the last 8 samples. An overshoot that alternates above and below the
+    threshold now ends the lease, a skipped or NaN reading no longer resets it, and the decision cannot be missed between two
+    watchdog ticks.
+  - Above 3000 W the absolute backstop allows for the battery's normal DC conversion loss (a profile value, 12 % for the
+    reference profile), so a healthy high-power lease is not ended by mistake. At 3000 W and below it is unchanged.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.
