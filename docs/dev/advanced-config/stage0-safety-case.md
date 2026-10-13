@@ -64,7 +64,19 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   - A frozen view (API up, nothing new published), heartbeats that stop reaching the dongle, a replayed configuration time,
     a dongle clock 10 minutes off (at the Review, or stepping between the Review and the Apply) and an unknown or old heartbeat
     age are each refused before anything is pressed; a dongle clock jump after the write ends UNCERTAIN. Mutants that drop the
-    round trip or the clock-coherence check are each caught. A normal edit still completes within about 5 minutes.
+    round trip or either clock-coherence check are each caught. A normal edit completes in about 2-3 minutes in the model.
+  - The round trip is defence in depth, not a separate proof: with it removed, a frozen view still fails on the strictly-later
+    poll and a dead heartbeat on the heartbeat age (the round-trip mutant is caught by its reason, not by a press). Strictly, a
+    rise proves Home Assistant received a NEW dongle-counted value after the Apply began; the counted heartbeat itself can be up
+    to about 30 s older. The count is RAM-only and rises only for an echo of the dongle's current, single-use challenge, so a
+    reconnect re-sends the current value, never history, and a dongle reboot (count back to 0) refuses.
+- **Time-zone dependency (bounded):** the dongle stamps polls in local time with no zone (SNTP, Europe/London, `strftime`), and
+  Home Assistant's `as_timestamp()` reads a zone-less time in Home Assistant's configured time zone. The editor therefore needs
+  Home Assistant configured for Europe/London (the existing Free Power / Dump schedule checks share this dependency); otherwise
+  every Review is refused (about 3600 s out in summer time) - fail-closed, but unusable. On the night clocks go back (next:
+  25 Oct 2026) the repeated 01:00-02:00 hour parses an hour out: edits are refused during it, and an Apply running across the
+  change would see its later reads go backwards and end UNCERTAIN and locked. Do not edit around 01:00-02:00 that night.
+  The offline model uses one fixed zone for both sides, so it cannot test this; the live-proof preconditions check it.
 - **BOUNDED:**
   - The cache is at most about 30 s plus the settle waits (about 45 s in total) old at the press.
   - Within that window, a change made by another Modbus master to slot N's start/end/power/SOC/flags or register 232 would be
@@ -186,7 +198,7 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   a partial write of unchanged values hidden by an unrelated refusal (only the counter shows it), an HA restart mid-edit
   (locked within a second, while the dongle is still unavailable; a Review or Apply in that window is refused; the write
   enable confirmed off once the dongle returns, or a separate alert), a cancelled run, and a Review or Acknowledge during an
-  Apply; only the exact phrase unlocks. A press that never arrives leaves the write enable on for at most about 46 s.
+  Apply; only the exact phrase unlocks. A press that never arrives leaves the write enable on for at most about 50 s.
 
 ## 7. Notifications and recovery instructions
 
@@ -289,8 +301,8 @@ but the feature is then unusable).
 ## Other residual points (accepted, documented)
 
 - **The shared write enable (documented, not changed).** The firmware has ONE Manual Configuration Write Enable for every
-  manual write path (slot 1-6 Apply, the register 244 proof). Stage 0 holds it on for about 5-15 s per edit (at most about 46 s
-  if the press is lost). Within that window:
+  manual write path (slot 1-6 Apply, the register 244 proof). Stage 0 holds it on for about 5-15 s per edit (at most about 50 s
+  if the press is lost: the 5 s wait to see it on plus the firmware's 45 s window). Within that window:
   - an Apply the owner presses by hand in Manual Controls (another loaded slot, or the register 244 test) would consume it.
     The firmware's write lock serialises the two writes: this edit either refuses before its own press, or is judged as usual
     by the firmware readback and its two later reads of its own slot. A "refused, nothing written" claim is withdrawn
@@ -310,8 +322,6 @@ but the feature is then unusable).
   changes outside the editor's scripts, by the change's context) is a candidate for Stage 0b; it is not part of this change.
 - **Load overwrites staging.** The Load overwrites slot N's unsaved Manual Controls staging and the shared grid-charge
   staging switch, with the live values.
-- **The lock helper.** The manual-review lock is a plain `input_boolean` that an administrator can switch off in the UI. The
-  acknowledgement script is the documented path.
 - **The review code.** It is time-derived: a typo and freshness guard, not an authorisation. Authorisation is the Home
   Assistant login.
 - **An unclean crash.** Home Assistant saves restorable state every 15 minutes and on a clean stop. After a crash or power
@@ -319,6 +329,8 @@ but the feature is then unusable).
   limited to clean stops, restarts and script reloads. The live-proof procedure is supervised throughout.
 - **A refused Review while locked** replaces the visible UNCERTAIN text with "REVIEW REFUSED - an earlier edit's outcome
   needs manual review first"; the lock and the UNCERTAIN alert remain.
-- **Run length.** About 2.5-3 minutes typically, about 8.6 minutes at worst (every judging wait timing out).
+- **Run length.** About 2-3 minutes typically, about 10 minutes at worst (every wait timing out, including the 90 s round
+  trip). The last schedule check is just before the press and at most about 6.5 minutes follow it, inside the 15-minute
+  Free Power / Dump schedule guard.
 - **Non-integer inputs.** These are truncated (slot 1.5 → 1, SOC 55.9 → 55). The review shows the resulting values before
   anything happens.

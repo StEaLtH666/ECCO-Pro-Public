@@ -412,10 +412,12 @@ script:
             data:
               value: >-
                 IN PROGRESS - slot {{ n }} target SOC {{ before }} -> {{ want }} %: waiting for a fresh configuration read
-          # 1. Fresh evidence, not just a connected API. (a) A live round trip: the dongle counts a NEW Home Assistant heartbeat
-          #    after the Apply began (heartbeats every 30 s; the dongle publishes its count every 30 s). (b) Then a NEW configuration
-          #    poll: its dongle-stamped time strictly later than the one seen after (a), and within 120 s of Home Assistant's clock
-          #    (a replayed or buffered value, or an unsynchronised dongle clock, fails). This bounds the cache age at the Load to seconds.
+          # 1. Fresh evidence, not just a connected API. (a) A live round trip (defence in depth): Home Assistant receives a NEW
+          #    dongle-counted heartbeat count after the Apply began (heartbeats every 30 s; the count is published every 30 s).
+          #    (b) Then a NEW configuration poll: its dongle-stamped time strictly later than the one seen after (a), and within
+          #    120 s of Home Assistant's clock (a replayed or buffered value, or an unsynchronised dongle clock, fails). This bounds
+          #    the cache age at the Load to seconds. The dongle's zone-less local time is read in Home Assistant's configured time
+          #    zone, which must be the dongle's (Europe/London); a mismatch refuses.
           - variables:
               hb_before: "{{ states('sensor.ecco_clock_dongle_ecco_supervision_valid_heartbeat_count') | float(-1) }}"
           - wait_template: "{{ hb_before | float(-1) >= 0 and (states('sensor.ecco_clock_dongle_ecco_supervision_valid_heartbeat_count') | float(-1)) > (hb_before | float(-1)) }}"

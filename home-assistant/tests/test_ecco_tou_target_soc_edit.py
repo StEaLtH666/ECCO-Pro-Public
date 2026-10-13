@@ -794,8 +794,11 @@ def replayed_time(r):
 
 
 r = Run(setup=replayed_time).edit(3, 41)
-check("a replayed configuration time (no genuinely new poll): FAILED before the Load; nothing pressed, nothing written",
-      r.res().startswith("FAILED") and r.d.presses == [] and r.changed() == {}, r.res())
+check("a replayed configuration time (no genuinely new poll): FAILED - no fresh configuration read; nothing pressed, nothing written",
+      r.res().startswith("FAILED - no fresh configuration read") and r.d.presses == [] and r.changed() == {}, r.res())
+r = Run(setup=lambda x: (x.d.fault.__setitem__("clock_skew", 130.0), x.d.poll())).edit(3, 41)
+check("a dongle clock 130 s ahead (inside the gates' 150 s, outside the Apply's 120 s): FAILED at the fresh read; nothing pressed",
+      r.res().startswith("FAILED - the dongle configuration time is not current") and r.d.presses == [], r.res())
 r = Run(setup=lambda x: (x.d.fault.__setitem__("clock_skew", 600.0), x.d.poll())).review(3, 41)
 check("the dongle's clock 10 minutes ahead of Home Assistant's: the review is refused (configuration time not current)",
       r.res().startswith("REVIEW REFUSED - the dongle's configuration time or heartbeat is not current"), r.res())
@@ -864,6 +867,8 @@ def battery(text: str) -> dict:
         res["roundtrip"] = "heartbeat round trip" in x.res() and x.d.presses == []
         x = Run(text, setup=lambda y: (y.d.fault.__setitem__("clock_skew", 600.0), y.d.poll())).review(3, 41)
         res["coherence"] = x.res().startswith("REVIEW REFUSED")
+        x = Run(text, setup=lambda y: (y.d.fault.__setitem__("clock_skew", 130.0), y.d.poll())).edit(3, 41)
+        res["coherent120"] = x.d.presses == []
         x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("MATCH", ca="S"))).review(3, 41)
         res["stale"] = x.res().startswith("REVIEW REFUSED")
         x = Run(text, setup=lambda y: y.w.set(LIVE_MATCH, b10("NO_PROFILE"))).review(3, 41)
@@ -936,6 +941,8 @@ MUTANTS = [
     ("the dongle's configuration time not checked against Home Assistant's clock",
      "{% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or ",
      "{% elif ", "coherence"),
+    ("the Apply's 120 s clock coherence not checked", "coherent: \"{{ ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_"
+     "dongle_last_configuration_update'), 0)) | abs) <= 120 }}\"", "coherent: \"{{ true }}\"", "coherent120"),
     ("the final disarm removed", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_off\n", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n"
      "      - action: switch.turn_on\n", "arm_off"),
