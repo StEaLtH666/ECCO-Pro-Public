@@ -29,6 +29,13 @@ Every item below is offline-implemented and simulator-tested only.
          ecco_dump_frozen_ct_long_samples reads regardless), or more than ecco_dump_soc_frozen_wh discharged with no SOC change,
          ends the lease (common restore path). SG-39: a restore that failed while the link was down is retried as soon as a
          telemetry read succeeds again (the backoff shortened to its first step), not up to 300 s later.
+  SG-36/07/16 restart and flash safety: the raw reboot is internal; the "Restart" button is gated by ecco_safety_census (refused
+         during any transaction or owed lease / restore / recovery decision; an owed obligation - never a transaction in flight -
+         may be overridden with "Restart Override Arm"); ECCO Safe To Flash / Flash Readiness / Build Identity; explicit safe_mode
+         (ESPHome's defaults).
+  SG-14/42 a lock is never released by time: an inverter transaction lock held beyond ecco_write_lock_stuck_ms is STUCK - an
+         active Dump lease is ended durably and, while anything is owed, the device restarts so the boot path completes it;
+         nothing owed: reported only.
 
   ZERO new inverter write and ZERO new write domain (register 245 untouched); ONE new read (the pre-read); no persisted global,
   durable record schema, tag or header change (every new global is RAM only; the one new commit site writes the existing retry
@@ -65,10 +72,12 @@ SUBSTITUTIONS = {
     'ecco_dump_frozen_ct_long_samples': '30',
     'ecco_dump_soc_frozen_wh': '1500',
     'ecco_dump_link_down_ms': '25000',
+    'ecco_build_tag': 'unrecorded-build',
+    'ecco_write_lock_stuck_ms': '180000',
 }
 
 # Every global fcp2 adds (all RAM only: restore_value no).
-NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
+NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'ecco_unsafe_reason', 'ecco_unsafe_busy', 'ecco_restart_arm_ms', 'ecco_lock_since_ms', 'ecco_lock_stuck', 'ecco_lock_escalated', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
 
 
 def _blk(s: str) -> str:
@@ -171,6 +180,8 @@ WINDOW_ASSERTS_NEW = _blk(r"""
                         "Dump frozen telemetry: cross-check >= 50 W; frozen-SOC energy 300..10000 Wh");
           static_assert(${ecco_dump_link_down_ms}UL >= 15000UL && ${ecco_dump_link_down_ms}UL < ${ecco_dump_soc_stale_ms}UL,
                         "Dump restore backoff: the link-down age must exceed one missed poll and stay below the SOC staleness bound");
+          static_assert(${ecco_write_lock_stuck_ms}UL >= 60000UL,
+                        "Stuck-lock bound: at least 60 s (every transaction step is bounded by a 3 s wait)");
 """)
 
 # ---- window_globals
@@ -263,6 +274,35 @@ WINDOW_GLOBALS_NEW = _blk(r"""
     type: uint32_t
     restore_value: no
     initial_value: '0'
+  # fcp2 (SG-07 / SG-36): the safety census (ecco_safety_census) - what a restart
+  # or a flash would interrupt ("" = nothing) and whether it is a transaction in
+  # flight; and when the restart override arm was turned on. RAM only.
+  - id: ecco_unsafe_reason
+    type: std::string
+    restore_value: no
+    initial_value: '"not yet assessed"'
+  - id: ecco_unsafe_busy
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: ecco_restart_arm_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  # fcp2 (SG-14 / SG-42): lock age (0 = no inverter transaction lock held), STUCK
+  # (held beyond ecco_write_lock_stuck_ms) and whether that episode was escalated.
+  - id: ecco_lock_since_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: ecco_lock_stuck
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ecco_lock_escalated
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 """)
 
 # ---- abs_margin
@@ -1113,6 +1153,349 @@ BACKOFF_STAMP_NEW = _blk(r"""
                            (uint32_t) (millis() - id(dump_soc_last_update_ms)) > ${ecco_dump_link_down_ms}UL) ? millis() : 0;
 """)
 
+# ---- build_tag_subst
+BUILD_TAG_SUBST_OLD = _blk(r"""
+  ecco_inverter_profile_name: "8 kW single-phase low-voltage Deye-family hybrid (reference installation H-001)"
+""")
+BUILD_TAG_SUBST_NEW = _blk(r"""
+  ecco_inverter_profile_name: "8 kW single-phase low-voltage Deye-family hybrid (reference installation H-001)"
+  # fcp2 (SG-07): what this build IS, published by "ECCO Build Identity" with the
+  # profile, the ESPHome version and the configuration hash. A release build
+  # sets it to the source it was built from (`esphome -s ecco_build_tag
+  # <tree or commit> compile ...`) and records it in the build record.
+  ecco_build_tag: "unrecorded-build"
+""")
+
+# ---- safe_mode_block
+SAFE_MODE_BLOCK_OLD = _blk(r"""
+ota:
+  - platform: esphome
+    password: !secret ecco_ota_password
+""")
+SAFE_MODE_BLOCK_NEW = _blk(r"""
+ota:
+  - platform: esphome
+    password: !secret ecco_ota_password
+
+# fcp2 (SG-16): ESPHome's safe mode, stated explicitly (these are its defaults -
+# no behaviour change). After 10 boots in a row that do not stay up for one
+# minute, the device boots into safe mode: Wi-Fi, API and OTA only, and NONE of
+# this firmware's components - no lease supervision and no restore runs there.
+# The inverter then keeps whatever it holds; every ECCO lease or restore
+# obligation is durable and is re-opened, with the ownership-checked restore, on
+# the first normal boot after a fix or a re-flash. "ECCO Safe To Flash" says
+# whether flashing now would interrupt anything.
+safe_mode:
+  num_attempts: 10
+  reboot_timeout: 5min
+  boot_is_good_after: 1min
+""")
+
+# ---- restart_arm_switch
+RESTART_ARM_SWITCH_OLD = _blk(r"""
+    turn_on_action:
+      - lambda: 'id(dump_limits_arm_ms) = millis();'
+""")
+RESTART_ARM_SWITCH_NEW = _blk(r"""
+    turn_on_action:
+      - lambda: 'id(dump_limits_arm_ms) = millis();'
+
+  # fcp2 (SG-36): the deliberate override for the gated "Restart" button - one
+  # press within 60 s, and only while nothing is IN PROGRESS (an owed lease or
+  # restore may be overridden: the boot path re-opens it from the durable
+  # markers; a transaction in flight may not). Writes nothing to the inverter.
+  - platform: template
+    name: "Restart Override Arm"
+    id: ecco_restart_arm
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    icon: "mdi:restart-alert"
+    turn_on_action:
+      - lambda: 'id(ecco_restart_arm_ms) = millis();'
+""")
+
+# ---- identity_text_sensors
+IDENTITY_TEXT_SENSORS_OLD = _blk(r"""
+    name: "Dump Power Limits Status"
+    id: dump_limits_status
+    update_interval: never
+    icon: "mdi:shield-check-outline"
+""")
+IDENTITY_TEXT_SENSORS_NEW = _blk(r"""
+    name: "Dump Power Limits Status"
+    id: dump_limits_status
+    update_interval: never
+    icon: "mdi:shield-check-outline"
+
+  # fcp2 (SG-07): what this build is - the build tag, the capability profile, the
+  # ESPHome version and the configuration hash (the value Home Assistant shows as
+  # the device's config hash), so the device itself says which image it runs.
+  - platform: template
+    name: "ECCO Build Identity"
+    id: ecco_build_identity
+    entity_category: diagnostic
+    update_interval: 60s
+    icon: "mdi:identifier"
+    lambda: |-
+      char b[200];
+      snprintf(b, sizeof(b), "%s; profile %s; ESPHome %s; config 0x%08x", "${ecco_build_tag}", "${ecco_inverter_profile_id}",
+               ESPHOME_VERSION, (unsigned) App.get_config_hash());
+      return std::string(b);
+
+  # fcp2 (SG-07 / SG-36): the in-firmware half of the pre-flash checklist - see
+  # ecco_safety_census. SAFE only when no lease, restore, recovery decision or
+  # transaction exists in any domain and every durable marker is CLEAR.
+  - platform: template
+    name: "ECCO Flash Readiness"
+    id: ecco_flash_readiness
+    entity_category: diagnostic
+    update_interval: 10s
+    icon: "mdi:shield-sync-outline"
+    lambda: |-
+      if (id(ecco_unsafe_reason).empty()) {
+        return std::string("SAFE - no lease, restore, recovery decision or transaction; every durable marker CLEAR");
+      }
+      return std::string("NOT SAFE - ") + id(ecco_unsafe_reason);
+
+  # fcp2 (SG-36): the last gated Restart decision (refused / restarting, and why).
+  - platform: template
+    name: "Restart Status"
+    id: ecco_restart_status
+    update_interval: never
+    icon: "mdi:restart-alert"
+""")
+
+# ---- safe_to_flash_binary
+SAFE_TO_FLASH_BINARY_OLD = _blk(r"""
+binary_sensor:
+  - platform: template
+    name: "NTP Synced"
+""")
+SAFE_TO_FLASH_BINARY_NEW = _blk(r"""
+binary_sensor:
+  # fcp2 (SG-07): true only when ecco_safety_census finds nothing owed or in
+  # progress (see "ECCO Flash Readiness" for the reason when false).
+  - platform: template
+    name: "ECCO Safe To Flash"
+    id: ecco_safe_to_flash
+    entity_category: diagnostic
+    icon: "mdi:shield-check"
+    lambda: 'return id(ecco_unsafe_reason).empty();'
+
+  - platform: template
+    name: "NTP Synced"
+""")
+
+# ---- restart_button
+RESTART_BUTTON_OLD = _blk(r"""
+button:
+  - platform: restart
+    name: "Restart"
+""")
+RESTART_BUTTON_NEW = _blk(r"""
+button:
+  - platform: restart
+    # fcp2 (SG-36): the raw reboot primitive is INTERNAL - nothing outside this
+    # firmware can press it; the "Restart" button below is the gated restart.
+    id: ecco_restart_internal
+    internal: true
+    name: "Restart (internal)"
+
+  # fcp2 (SG-36): GATED restart. A routine restart is REFUSED while any
+  # transaction is in progress or any lease, restore or recovery decision is
+  # owed, in any domain (Dump to Grid, Free Power, register 244, an inverter
+  # write, an RTC correction, a fallback profile operation) - see
+  # ecco_safety_census and "Restart Status". An owed obligation (never a
+  # transaction in flight) may be overridden with "Restart Override Arm": the
+  # boot path re-opens it from the durable markers and runs the ownership-
+  # checked restore. Over-the-air updates are not gated by firmware: "ECCO Safe
+  # To Flash" is the indication the pre-flash checklist requires.
+  - platform: template
+    name: "Restart"
+    id: ecco_restart_button
+    icon: "mdi:restart"
+    on_press:
+      - script.execute: ecco_restart_request
+""")
+
+# ---- census_scripts
+CENSUS_SCRIPTS_OLD = _blk(r"""
+  - id: dump_clear_verified_marker
+    mode: single
+""")
+CENSUS_SCRIPTS_NEW = _blk(r"""
+  # fcp2 (SG-07 / SG-36): the SAFETY CENSUS - what a restart or a flash would
+  # interrupt right now. RAM reads only (no Modbus, no durable access); sets
+  # ecco_unsafe_reason ("" = nothing) and ecco_unsafe_busy (a transaction is in
+  # flight - never overridable). Run every 5 s and immediately before a restart.
+  - id: ecco_safety_census
+    mode: queued
+    then:
+      - lambda: |-
+          std::string r = "";
+          bool busy = true;
+          if (id(ecco_lock_stuck)) {
+            // A leaked lock is not a transaction in flight: overridable (a restart is the recovery).
+            r = "an inverter transaction lock is STUCK (held beyond any transaction's bound); a restart is the recovery";
+            busy = false;
+          } else if (id(dump_operation_in_progress)) {
+            r = "a Dump to Grid transaction is in progress";
+          } else if (id(free_power_operation_in_progress) || id(free_power_recovery_force_in_progress) ||
+                     id(free_power_recovery_accept_in_progress)) {
+            r = "a Free Power transaction is in progress";
+          } else if (id(reg244_apply_in_progress)) {
+            r = "a register 244 change is in progress";
+          } else if (id(manual_write_in_progress)) {
+            r = "an inverter write is in progress";
+          } else if (id(correction_in_progress)) {
+            r = "an RTC correction is in progress";
+          } else if (id(fallback_profile_op_in_progress)) {
+            r = "a fallback profile operation is in progress";
+          } else {
+            busy = false;
+            if (id(dump_snapshot_valid) || id(dump_marker_state) != ecco_durable::MARKER_CLEAR) {
+              r = (id(dump_active_persisted) && !id(dump_restore_requested)) ? "a Dump to Grid lease is active" : "a Dump to Grid restore is owed";
+            } else if (id(dump_operator_needed) || id(dump_recovery_metadata_corrupt)) {
+              r = "a Dump to Grid recovery decision is outstanding";
+            } else if (id(free_power_snapshot_valid) || id(free_power_marker_state) != ecco_durable::MARKER_CLEAR) {
+              r = "a Free Power lease or restore is owed";
+            } else if (id(free_power_operator_needed) || id(free_power_recovery_metadata_corrupt)) {
+              r = "a Free Power recovery decision is outstanding";
+            } else if (id(reg244_snapshot_valid) || id(reg244_marker_state) != ecco_durable::MARKER_CLEAR) {
+              r = "a register 244 restore is owed";
+            }
+          }
+          id(ecco_unsafe_reason) = r;
+          id(ecco_unsafe_busy) = busy;
+
+  # fcp2 (SG-36): the gated "Restart" button's decision - see that button.
+  - id: ecco_restart_request
+    mode: single
+    then:
+      - script.execute: ecco_safety_census
+      - if:
+          condition:
+            lambda: |-
+              bool armed = id(ecco_restart_arm).state &&
+                  (uint32_t) (millis() - id(ecco_restart_arm_ms)) <= 60000UL;
+              if (id(ecco_restart_arm).state) id(ecco_restart_arm).turn_off();
+              if (id(ecco_unsafe_reason).empty()) {
+                id(ecco_restart_status).publish_state("RESTARTING - nothing owed or in progress");
+                return true;
+              }
+              if (armed && !id(ecco_unsafe_busy)) {
+                id(ecco_restart_status).publish_state(std::string("RESTARTING (override) - ") + id(ecco_unsafe_reason) +
+                    "; the boot path re-opens it from the durable markers");
+                return true;
+              }
+              if (id(ecco_unsafe_busy)) {
+                id(ecco_restart_status).publish_state(std::string("REFUSED - ") + id(ecco_unsafe_reason) +
+                    " (never overridable); try again when it has finished");
+              } else {
+                id(ecco_restart_status).publish_state(std::string("REFUSED - ") + id(ecco_unsafe_reason) +
+                    "; wait for it to finish, or turn on Restart Override Arm and press Restart within 60 s");
+              }
+              ESP_LOGW("ecco_restart", "Restart refused: %s", id(ecco_unsafe_reason).c_str());
+              return false;
+          then:
+            - button.press: ecco_restart_internal
+
+  # fcp2 (SG-14 / SG-42): the escalation of a STUCK lock - see
+  # ecco_write_lock_stuck_ms. The lock itself is never released here. An active
+  # Dump lease is ended DURABLY first (request_dump_end commits restore_requested
+  # without the bus; its restore stays deferred behind the stuck lock); then, while
+  # any lease or restore is owed in any domain, the device restarts through the
+  # internal primitive so the boot path completes it. With nothing owed: report only.
+  - id: ecco_lock_escalation
+    mode: single
+    then:
+      - lambda: |-
+          ESP_LOGE("ecco_lock", "An inverter transaction lock has been held beyond %u s - STUCK; escalating (never released by time)",
+                   (unsigned) (${ecco_write_lock_stuck_ms}UL / 1000UL));
+      - if:
+          condition:
+            lambda: |-
+              return id(dump_snapshot_valid) && id(dump_marker_state) == ecco_durable::MARKER_RESTORE_REQUIRED &&
+                     !id(dump_recovery_metadata_corrupt) && !id(dump_restore_requested);
+          then:
+            - script.execute:
+                id: request_dump_end
+                reason: "WRITE LOCK STUCK - an inverter transaction lock was held beyond any transaction's bound; lease ended durably, restarting so the boot path completes the restore"
+      - if:
+          condition:
+            lambda: |-
+              return id(dump_snapshot_valid) || id(dump_marker_state) != ecco_durable::MARKER_CLEAR ||
+                     id(free_power_snapshot_valid) || id(free_power_marker_state) != ecco_durable::MARKER_CLEAR ||
+                     id(reg244_snapshot_valid) || id(reg244_marker_state) != ecco_durable::MARKER_CLEAR;
+          then:
+            - lambda: |-
+                id(ecco_restart_status).publish_state("RESTARTING (stuck lock) - an inverter transaction lock was held beyond any transaction's bound while a lease or restore is owed; the lock is NOT released - the boot path completes the owed restore");
+            - button.press: ecco_restart_internal
+          else:
+            - lambda: |-
+                id(ecco_restart_status).publish_state("STUCK LOCK - an inverter transaction lock was held beyond any transaction's bound; nothing is owed, so no automatic restart - inverter writes stay blocked until Restart (Restart Override Arm)");
+
+  - id: dump_clear_verified_marker
+    mode: single
+""")
+
+# ---- census_interval
+CENSUS_INTERVAL_OLD = _blk(r"""
+          if (id(dump_limits_arm).state &&
+              (uint32_t) (millis() - id(dump_limits_arm_ms)) > ${ecco_dump_limits_arm_window_ms}UL) {
+            id(dump_limits_arm).turn_off();
+          }
+""")
+CENSUS_INTERVAL_NEW = _blk(r"""
+          if (id(dump_limits_arm).state &&
+              (uint32_t) (millis() - id(dump_limits_arm_ms)) > ${ecco_dump_limits_arm_window_ms}UL) {
+            id(dump_limits_arm).turn_off();
+          }
+          // fcp2 (SG-36): the restart override arm also expires after 60 s.
+          if (id(ecco_restart_arm).state && (uint32_t) (millis() - id(ecco_restart_arm_ms)) > 60000UL) {
+            id(ecco_restart_arm).turn_off();
+          }
+      # fcp2 (SG-07): refresh the safety census behind ECCO Safe To Flash.
+      - script.execute: ecco_safety_census
+      # fcp2 (SG-14 / SG-42): LOCK AGE - see ecco_write_lock_stuck_ms. Measures how long
+      # an inverter transaction lock has been held continuously; NEVER releases it.
+      - lambda: |-
+          bool held = id(manual_write_in_progress) || id(dump_operation_in_progress) ||
+                      id(free_power_operation_in_progress) || id(reg244_apply_in_progress);
+          if (!held) {
+            id(ecco_lock_since_ms) = 0;
+            id(ecco_lock_stuck) = false;
+            id(ecco_lock_escalated) = false;
+          } else {
+            if (id(ecco_lock_since_ms) == 0) id(ecco_lock_since_ms) = millis();
+            if ((uint32_t) (millis() - id(ecco_lock_since_ms)) > ${ecco_write_lock_stuck_ms}UL) id(ecco_lock_stuck) = true;
+          }
+      - if:
+          condition:
+            lambda: 'return id(ecco_lock_stuck) && !id(ecco_lock_escalated);'
+          then:
+            - lambda: 'id(ecco_lock_escalated) = true;'
+            - script.execute: ecco_safety_census
+            - script.execute: ecco_lock_escalation
+""")
+
+# ---- lock_subst
+LOCK_SUBST_OLD = _blk(r"""
+  ecco_dump_limits_arm_window_ms: "60000"
+""")
+LOCK_SUBST_NEW = _blk(r"""
+  ecco_dump_limits_arm_window_ms: "60000"
+  # fcp2 (SG-14 / SG-42): the bound past which an inverter transaction lock (the
+  # shared write mutex or a domain's operation flag) is STUCK. Every Modbus step
+  # of every transaction is bounded by a 3 s wait, so no transaction can hold a
+  # lock anywhere near this long; a lock held longer is a leak. A STUCK lock is
+  # NEVER released by time: the lease (if any) is ended durably and, while any
+  # lease or restore is owed, the device restarts so the boot path - the designed
+  # recovery path, with the ownership-checked restore - completes it. With
+  # nothing owed it is reported only (writes stay blocked until a restart).
+  ecco_write_lock_stuck_ms: "180000"
+""")
+
 EDITS = (
     Edit('dc_allowance_subst', DC_ALLOWANCE_SUBST_OLD, DC_ALLOWANCE_SUBST_NEW),
     Edit('window_subst', WINDOW_SUBST_OLD, WINDOW_SUBST_NEW),
@@ -1141,6 +1524,15 @@ EDITS = (
     Edit('frozen_soc_reset', FROZEN_SOC_RESET_OLD, FROZEN_SOC_RESET_NEW),
     Edit('backoff_gate', BACKOFF_GATE_OLD, BACKOFF_GATE_NEW),
     Edit('backoff_stamp', BACKOFF_STAMP_OLD, BACKOFF_STAMP_NEW),
+    Edit('build_tag_subst', BUILD_TAG_SUBST_OLD, BUILD_TAG_SUBST_NEW),
+    Edit('safe_mode_block', SAFE_MODE_BLOCK_OLD, SAFE_MODE_BLOCK_NEW),
+    Edit('restart_arm_switch', RESTART_ARM_SWITCH_OLD, RESTART_ARM_SWITCH_NEW),
+    Edit('identity_text_sensors', IDENTITY_TEXT_SENSORS_OLD, IDENTITY_TEXT_SENSORS_NEW),
+    Edit('safe_to_flash_binary', SAFE_TO_FLASH_BINARY_OLD, SAFE_TO_FLASH_BINARY_NEW),
+    Edit('restart_button', RESTART_BUTTON_OLD, RESTART_BUTTON_NEW),
+    Edit('census_scripts', CENSUS_SCRIPTS_OLD, CENSUS_SCRIPTS_NEW),
+    Edit('census_interval', CENSUS_INTERVAL_OLD, CENSUS_INTERVAL_NEW),
+    Edit('lock_subst', LOCK_SUBST_OLD, LOCK_SUBST_NEW),
 )
 EDIT_NAMES = tuple(e.name for e in EDITS)
 

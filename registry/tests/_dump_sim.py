@@ -1304,6 +1304,7 @@ class Sim:
         self.minute = 0
         self.running: set = set()
         self.executed: list = []
+        self.pressed: list = []        # fcp2: button.press actions taken (see run_actions)
         self._fn_cache: dict = {}
         self._recovery_evidence = None
         # FB-B1: seedable per-sim RNG behind random_uint32(); `random_values`
@@ -1454,6 +1455,10 @@ class Sim:
                         else:
                             params[k] = CStr(v)
                     self.execute(body["id"], params)
+            elif kind == "button.press":
+                # fcp2: a button press from an action list (the gated Restart pressing the internal reboot primitive) is
+                # recorded, never performed - the simulator has no reboot.
+                self.pressed.append(str(body))
             elif kind == WRITE:
                 self._modbus_write(body, local)
             elif kind == READ:

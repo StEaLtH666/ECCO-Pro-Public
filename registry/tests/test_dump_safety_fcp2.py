@@ -21,6 +21,10 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
       SG-39   reading), battery power that repeats exactly, a SOC that does not move while kWh are discharged - each ends a
               settled lease; healthy noisy leases and the recorded data never trip it; the restore backoff is shortened after a
               genuine link recovery, and only then
+  [S] SG-36/07 gated restart (refused during any transaction or owed obligation; override only for an obligation), the
+      SG-16   safety census behind ECCO Safe To Flash, build identity, explicit safe mode
+  [K] SG-14/42 a lock is never released by time: a STUCK lock (held beyond any transaction's bound) ends an active lease
+              durably and, while anything is owed, restarts so the boot path completes it; nothing owed: reported only
   [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
               global RAM only
   [P]         the post-export declaration (PEX entry fcp2)
@@ -890,6 +894,169 @@ check(f"restore failures while the link is DOWN back off to {w_new // 1000} s; o
 a_new, w_new, t_new, ok_new = backoff_case(FW, link_down=False)
 check(f"restore failures while telemetry kept FLOWING (the inverter, not the link, failed): the ordinary backoff is kept "
       f"({t_new:.0f} s)", ok_new and t_new > 200, f"{a_new} {w_new} {t_new}")
+
+# ==================================================================================================================================
+print("\n[S] SG-36 / SG-07 / SG-16: gated restart, safe to flash, build identity, explicit safe mode")
+# ==================================================================================================================================
+BUTTONS = FW["button"]
+raw = [b for b in BUTTONS if b.get("platform") == "restart"]
+gated = next(b for b in BUTTONS if b.get("name") == "Restart")
+check("the raw reboot primitive is INTERNAL (Home Assistant cannot press it); the 'Restart' entity is the gated template button",
+      len(raw) == 1 and raw[0].get("internal") is True and raw[0].get("id") == "ecco_restart_internal"
+      and gated.get("platform") == "template" and gated["on_press"] == [{"script.execute": "ecco_restart_request"}])
+PRESSERS = sorted(s["id"] for s in FW["script"] if "'button.press': 'ecco_restart_internal'" in str(s))
+check("only two scripts press the raw primitive: the gated Restart (ecco_restart_request) and the STUCK-lock escalation",
+      FW_TEXT.count("button.press: ecco_restart_internal") == 2 and PRESSERS == ["ecco_lock_escalation", "ecco_restart_request"],
+      str(PRESSERS))
+ARM_IV = next(i for i in FW["interval"] if "dump_limits_arm" in str(i))
+
+
+def idle_sim():
+    s = fresh(target=1000)
+    s.ent("ecco_restart_arm").state = False
+    return s
+
+
+def restart(s, armed=False):
+    if armed:
+        s.ent("ecco_restart_arm").state = True
+        s.g["ecco_restart_arm_ms"] = s.millis()
+    n = len(s.pressed)
+    s.execute("ecco_restart_request")
+    return len(s.pressed) > n, str(s.ent("ecco_restart_status").state)
+
+
+s = idle_sim()
+check("before the first census, the device does not claim to be safe to flash", s.g["ecco_unsafe_reason"] != "")
+s.run_actions(ARM_IV["then"])
+check("idle with every marker CLEAR: SAFE TO FLASH; Restart restarts", s.g["ecco_unsafe_reason"] == "" and restart(s)[0], restart(s)[1])
+CENSUS = (
+    ("dump_operation_in_progress", True, "a Dump to Grid transaction is in progress", True),
+    ("free_power_operation_in_progress", True, "a Free Power transaction is in progress", True),
+    ("free_power_recovery_force_in_progress", True, "a Free Power transaction is in progress", True),
+    ("reg244_apply_in_progress", True, "a register 244 change is in progress", True),
+    ("manual_write_in_progress", True, "an inverter write is in progress", True),
+    ("correction_in_progress", True, "an RTC correction is in progress", True),
+    ("fallback_profile_op_in_progress", True, "a fallback profile operation is in progress", True),
+    ("dump_marker_state", 1, "a Dump to Grid restore is owed", False),
+    ("dump_operator_needed", True, "a Dump to Grid recovery decision is outstanding", False),
+    ("dump_recovery_metadata_corrupt", True, "a Dump to Grid recovery decision is outstanding", False),
+    ("free_power_snapshot_valid", True, "a Free Power lease or restore is owed", False),
+    ("free_power_marker_state", 2, "a Free Power lease or restore is owed", False),
+    ("free_power_operator_needed", True, "a Free Power recovery decision is outstanding", False),
+    ("reg244_snapshot_valid", True, "a register 244 restore is owed", False),
+    ("reg244_marker_state", 1, "a register 244 restore is owed", False),
+)
+for gid, val, why, busy in CENSUS:
+    s = idle_sim()
+    s.g[gid] = val
+    did, st = restart(s)
+    check(f"{gid} set: NOT safe to flash ('{why}'); a routine Restart is REFUSED and says why",
+          s.g["ecco_unsafe_reason"] == why and s.g["ecco_unsafe_busy"] is busy and not did and st.startswith("REFUSED - " + why), st)
+    did, st = restart(s, armed=True)
+    if busy:
+        check(f"...{gid}: a transaction in flight is NEVER overridable, even armed", not did and "never overridable" in st, st)
+    else:
+        check(f"...{gid}: an owed obligation may be overridden with the arm (the boot path re-opens it)",
+              did and st.startswith("RESTARTING (override)"), st)
+    check(f"...{gid}: the arm is consumed by the press", s.ent("ecco_restart_arm").state is False)
+
+s = started(target=1000)
+s.ent("ecco_restart_arm").state = False
+did, st = restart(s)
+check("during an ACTIVE Dump lease: Restart REFUSED ('a Dump to Grid lease is active')",
+      not did and st.startswith("REFUSED - a Dump to Grid lease is active"), st)
+s = idle_sim()
+s.ent("ecco_restart_arm").state = True
+s.g["ecco_restart_arm_ms"] = s.millis()
+s.g["dump_marker_state"] = 1
+s.advance(61000)
+s.run_actions(ARM_IV["then"])
+check("the override arm expires after 60 s (the 5 s interval turns it off)", s.ent("ecco_restart_arm").state is False)
+s.ent("ecco_restart_arm").state = True
+s.g["ecco_restart_arm_ms"] = s.millis() - 61000
+did, st = restart(s)
+check("...and an arm older than 60 s does not authorise an override", not did and st.startswith("REFUSED"), st)
+
+names = {e.get("name"): e for sec in ("text_sensor", "binary_sensor", "switch") for e in FW[sec] if isinstance(e, dict)}
+ident = names["ECCO Build Identity"]["lambda"]
+check("ECCO Build Identity publishes the build tag, the capability profile, the ESPHome version and the config hash",
+      all(tok in ident for tok in ("${ecco_build_tag}", "${ecco_inverter_profile_id}", "ESPHOME_VERSION", "App.get_config_hash()"))
+      and SUBS["ecco_build_tag"] == "unrecorded-build")
+check("ECCO Safe To Flash is exactly 'the census found nothing'; ECCO Flash Readiness names the reason",
+      names["ECCO Safe To Flash"]["lambda"] == "return id(ecco_unsafe_reason).empty();"
+      and "NOT SAFE - " in names["ECCO Flash Readiness"]["lambda"])
+check("the safe-mode block is explicit, with ESPHome's own defaults (no behaviour change: 10 attempts, 5 min, good after 1 min)",
+      FW.get("safe_mode") == {"num_attempts": 10, "reboot_timeout": "5min", "boot_is_good_after": "1min"}, str(FW.get("safe_mode")))
+check("the census performs no Modbus I/O and no durable access (RAM reads only)",
+      not any(tok in str(next(x for x in FW["script"] if x["id"] == "ecco_safety_census"))
+              for tok in ("modbus_client", "commit_record", "load_record")))
+
+# ==================================================================================================================================
+print("\n[K] SG-14 / SG-42: a lock is never released by time - a STUCK lock escalates")
+# ==================================================================================================================================
+STUCK_MS = int(SUBS["ecco_write_lock_stuck_ms"])
+
+
+def five_s(s, seconds):
+    """Run the real 5 s interval for `seconds` of simulated time."""
+    for _ in range(seconds // 5):
+        s.advance(5000)
+        s.run_actions(ARM_IV["then"])
+
+
+s = started(target=1000)
+s.ent("ecco_restart_arm").state = False
+s.g["manual_write_in_progress"] = True            # a leaked write lock during an ACTIVE lease (no script holds it)
+five_s(s, STUCK_MS // 1000 - 10)
+check("a lock held for less than the bound is a transaction in flight: not STUCK, nothing escalated, never overridable",
+      not s.g["ecco_lock_stuck"] and s.pressed == [] and s.g["ecco_unsafe_busy"] is True)
+five_s(s, 20)
+check(f"held beyond {STUCK_MS // 1000} s during an ACTIVE lease: the lease is ended DURABLY (restore_requested committed, reason "
+      "WRITE LOCK STUCK) and the device restarts through the internal primitive so the boot path completes the restore",
+      s.g["ecco_lock_stuck"] and s.g["dump_restore_requested"] and s.nvs["ecco_dump_to_grid_snapshot_data_v2"].restore_requested == 1
+      and str(s.ent("dump_last_end_reason").state).startswith("WRITE LOCK STUCK") and s.pressed == ["ecco_restart_internal"]
+      and str(s.ent("ecco_restart_status").state).startswith("RESTARTING (stuck lock)"), str(s.ent("ecco_restart_status").state))
+check("...the lock itself was NOT released by any of it (manual_write_in_progress still held)", s.g["manual_write_in_progress"] is True)
+five_s(s, 60)
+check("...and the episode is escalated once (no repeated presses while the same lock stays held)", s.pressed == ["ecco_restart_internal"])
+b = reboot(s)
+tick(b)
+check("...after the restart the boot path completes the owed restore (ownership-checked) with fresh RAM",
+      owned(b) == ORIGINAL and marker(b) == 0, b.status())
+
+s = idle_sim()
+s.g["manual_write_in_progress"] = True            # a leaked lock with NOTHING owed
+five_s(s, STUCK_MS // 1000 + 15)
+check("a STUCK lock with nothing owed: reported, NO automatic restart, the lock not released",
+      s.g["ecco_lock_stuck"] and s.pressed == [] and s.g["manual_write_in_progress"] is True
+      and str(s.ent("ecco_restart_status").state).startswith("STUCK LOCK"), str(s.ent("ecco_restart_status").state))
+did, st = restart(s)
+check("...a routine Restart is refused, naming the STUCK lock", not did and "STUCK" in st, st)
+did, st = restart(s, armed=True)
+check("...but a STUCK lock is not a transaction in flight: Restart with the override arm restarts (the recovery)",
+      did and st.startswith("RESTARTING (override)"), st)
+
+s = idle_sim()
+s.g["manual_write_in_progress"] = True
+five_s(s, STUCK_MS // 1000 - 30)
+s.g["manual_write_in_progress"] = False           # released by its own transaction
+five_s(s, 5)
+s.g["manual_write_in_progress"] = True
+five_s(s, STUCK_MS // 1000 - 30)
+check("a lock released by its transaction resets the age: two long-but-bounded holds never count as STUCK",
+      not s.g["ecco_lock_stuck"] and s.pressed == [])
+
+LOCKS = ("manual_write_in_progress", "dump_operation_in_progress", "free_power_operation_in_progress", "reg244_apply_in_progress",
+         "correction_in_progress")
+lock_code = str(next(i for i in FW["interval"] if "dump_limits_arm" in str(i))) + str(next(x for x in FW["script"] if x["id"] == "ecco_lock_escalation"))
+check("the lock-age monitor and the escalation never assign a lock: no timeout releases one",
+      not any(f"id({k}) = false" in lock_code for k in LOCKS))
+rtc_old = next(i for i in OLD["interval"] if "breaker_due" in str(i))
+rtc_new = next(i for i in FW["interval"] if "breaker_due" in str(i))
+check("the FB-D1 RTC deadline breaker is unchanged (it needs its deadline AND proof that no RTC frame is outstanding, releases "
+      "RTC-owned state only, never the shared write lock, and ends ABORTED with a cooldown)", rtc_old == rtc_new
+      and "no_rtc_frame_outstanding" in str(rtc_new) and "id(manual_write_in_progress) = false" not in str(rtc_new))
 
 # ==================================================================================================================================
 print("\n[C] write surface and NVS")

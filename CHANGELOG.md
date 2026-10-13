@@ -42,6 +42,12 @@ Development before the first public release happened in a private repository; se
   - Telemetry that keeps arriving but never changes now ends a Dump lease safely: a grid CT, battery power or SOC that stays
     exactly the same when it should move. After the inverter link comes back, an owed restore is retried at once instead of up to
     5 minutes later.
+  - The **Restart** button no longer restarts the dongle in the middle of an inverter transaction, or while a lease, restore or
+    recovery decision is owed. An owed obligation (never a transaction in flight) can be overridden with **Restart Override Arm**.
+    New diagnostics: **ECCO Safe To Flash**, **ECCO Flash Readiness**, **ECCO Build Identity** and **Restart Status**. The
+    `safe_mode:` settings are now explicit, with no change in behaviour.
+  - An inverter transaction lock is never released because a timer ran out. A lock held far beyond any transaction's bound is
+    reported. If a lease or restore is owed, the lease is ended durably and the dongle restarts so the owed restore completes.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.

@@ -185,6 +185,110 @@ a smaller value.
 of up to 300 s with nothing supervising the lease. A failure while telemetry was still flowing means the inverter refused the
 write, not that the link failed, so it keeps the ordinary backoff and the inverter is not hammered.
 
+## 5. Restart protection, build identity and safe to flash (SG-36, SG-07, SG-16)
+
+**Restart.** The raw ESPHome reboot button is now internal, so nothing outside the firmware can press it. The `Restart` entity is a
+gated template button.
+
+**The safety census.** `ecco_safety_census` reads RAM only (no Modbus, no durable access). It runs every 5 s and immediately before
+a restart, and finds the first thing a restart or a flash would interrupt.
+
+- **A transaction in flight:**
+  - Dump to Grid or Free Power, including Force or Accept;
+  - a register 244 change;
+  - any inverter write;
+  - an RTC correction;
+  - a fallback profile operation.
+- **Or an obligation:**
+  - a Dump to Grid or Free Power lease or restore owed (snapshot or marker not CLEAR);
+  - a recovery decision outstanding (operator-needed or corrupt metadata);
+  - a register 244 restore owed.
+
+**What Restart does with that:**
+
+- **Nothing found:** it restarts.
+- **A transaction in flight:** it is refused, and **never overridable**.
+- **An owed obligation:** it is refused unless `Restart Override Arm` is on. The arm allows one press within 60 s and is consumed
+  by that press. An override is acceptable here because the boot path re-opens every durable obligation and runs the
+  ownership-checked restore.
+- **The reason is published** in `Restart Status`.
+
+**Flashing.** Over-the-air updates cannot be refused by firmware.
+
+- `ECCO Safe To Flash` is true only when the census finds nothing.
+- `ECCO Flash Readiness` names the reason when it is not safe.
+- Before the first census after boot, the device does not claim to be safe.
+
+**Build identity.** `ECCO Build Identity` publishes:
+
+- the build tag (`ecco_build_tag`, set at build time to the source tree or commit);
+- the capability profile;
+- the ESPHome version;
+- the configuration hash.
+
+**Safe mode.** The `safe_mode:` block is now explicit, with ESPHome's defaults: 10 attempts, 5 min, boot is good after 1 min. Safe
+mode runs none of this firmware's components, so no supervision or restore happens there. Every obligation is durable and is
+re-opened on the next normal boot.
+
+**Communication loss.** The API's default 15-minute no-client reboot is unchanged. It is safe because:
+
+- a reboot ends any lease;
+- the boot path re-opens the obligation from the durable markers;
+- the restore that follows is ownership-checked (section 3): ECCO's own values are restored and anything changed meanwhile is kept
+  for the operator.
+
+Proposed for a later decision, not implemented: a firmware supervisor that disables the API reboot and reboots only once the census
+is clear.
+
+## 6. Lock and recovery safety (SG-14, SG-42)
+
+**Rule:** a timeout never simply releases a lock that protects an unresolved inverter transaction.
+
+**Audit of the existing timeouts.**
+
+| Timeout | Behaviour | Compliant |
+|---|---|---|
+| Each Modbus step's 3 s wait | the step and its transaction are FAILED, never treated as success. The durable obligation is kept (snapshot or marker retained, restore owed) and retried with backoff and a fresh classification. No new transaction can start while a frame is outstanding, because every writer has its own bus-quiet gate. | yes |
+| The FB-D1 RTC deadline breaker | fires only on its 90 s deadline **and** proof that no RTC frame is outstanding. It releases only RTC-owned state, never the shared write lock, and ends ABORTED with a 5 min cooldown and an invalidated baseline. Unchanged by fcp2. | yes |
+| The fallback Review leak breaker | fires only when its dispatch is not running, clears only that feature's own flag, and involves no inverter transaction. | yes |
+
+**The gap: a leaked lock.** Nothing watched a lock that a code path failed to release, for example the shared write mutex. Such a
+lock silently blocks every restore and the controller until a reboot. During a lease, export would carry on with no way to end it.
+
+**The fix.** A lock-age monitor in the 5 s interval measures how long any inverter transaction lock has been held continuously:
+
+- the shared write mutex;
+- the Dump to Grid or Free Power operation flag;
+- the register 244 apply flag.
+
+Every transaction step is bounded by a 3 s wait, so no transaction can hold a lock for `ecco_write_lock_stuck_ms` (180 s). Past
+that bound the lock is STUCK. **It is never released.** Instead, once per episode:
+
+1. **An active Dump lease is ended durably.** `request_dump_end` commits `restore_requested` without the bus, with the reason
+   `WRITE LOCK STUCK`. Its restore stays deferred behind the lock.
+2. **While any lease or restore is owed in any domain, the device restarts** through the internal primitive. The boot path is the
+   designed recovery path: it re-opens every durable obligation and runs the ownership-checked restore with fresh RAM.
+3. **With nothing owed it reports only.** `Restart Status` reads `STUCK LOCK - ...`, and inverter writes stay blocked until a
+   restart.
+
+The census reports a STUCK lock as overridable, because it is not a transaction in flight, so `Restart Override Arm` plus
+`Restart` is the operator's recovery.
+
+**Residual risk.** If a code path leaks the lock again after every boot, the device restarts at most once per bound (each boot then
+completes the owed restore). The cycle is logged and visible in `Restart Status`.
+
+## Not in this phase
+
+**SG-25, the DST-aware TOU charge-slot gate.** The START gate walks the lease window in local minutes from `now`, so on the
+spring-forward night a charge slot just after 01:00 can be missed.
+
+The fix is to walk the window in UTC, converting each minute with `ESPTime::from_epoch_local`, and to refuse when either the
+current offset or the DST-corrected offset overlaps a charge slot. The inverter's own clock may lag the change until ECCO's RTC
+correction, which is why both offsets are checked.
+
+It needs a simulator whose clock derives its hour and minute from the epoch and the Europe/London rules, which the existing
+charge-slot suites do not model. It is therefore left for a separate, focused change.
+
 ## Compatibility
 
 - **No new write operation**, and no new write domain. Register 245 is never written.
