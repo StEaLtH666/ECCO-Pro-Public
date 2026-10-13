@@ -362,7 +362,10 @@ POLL_ALLOWED = frozenset({
 POLL_ALLOWED_PREFIXES = ("manual_cfg_reg", "fbc_raw_")
 # The telemetry sensors' on_value hooks (Dump grid / SOC freshness, overpower sampling) - run by the telemetry publishes.
 HOOK_ALLOWED = frozenset({"dump_soc_last_update_ms", "dump_grid_last_update_ms", "dump_overpower_samples",
-                          "dump_absolute_overpower_samples", "dump_overpower_last_w"})
+                          "dump_absolute_overpower_samples", "dump_overpower_last_w",
+                          # fcp1: the net grid export guard's sample window (the grid CT hook), the same kind as the overpower
+                          # sampling above
+                          "dump_export_window", "dump_export_last_w"})
 # Ownership flags no RTC / poll path may ever assign.
 OWNERSHIP_FLAGS = ("manual_write_in_progress", "free_power_operation_in_progress", "free_power_recovery_force_in_progress",
                    "free_power_recovery_accept_in_progress", "reg244_apply_in_progress", "dump_operation_in_progress",

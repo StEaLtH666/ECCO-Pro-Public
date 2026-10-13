@@ -3397,8 +3397,9 @@ TF_MUTATIONS = [
      "if (ecco_feas_required_w > -${ecco_dump_controller_deadband_w}.0f) {"),
     ("HIGH threshold comparison inverted (would never detect HIGH infeasibility)",
      s_tf_high_detects,
-     "} else if (ecco_feas_required_w > ${ecco_dump_controller_max_ceiling_w}.0f) {",
-     "} else if (ecco_feas_required_w < ${ecco_dump_controller_max_ceiling_w}.0f) {"),
+     # fcp1: the HIGH test compares against the lease's latched ceiling (was the compile-time ceiling).
+     "} else if (ecco_feas_required_w > (float) id(dump_lease_ceiling_w)) {",
+     "} else if (ecco_feas_required_w < (float) id(dump_lease_ceiling_w)) {"),
     ("Confirm-samples raised to 99 (2 confirming ticks would no longer be enough to relabel)",
      s_tf_low_detects,
      'ecco_dump_feasibility_confirm_samples: "2"',

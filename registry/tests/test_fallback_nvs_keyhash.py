@@ -168,10 +168,18 @@ check("the hardware-wrapper allowlist is exactly the one S3 wrapper, it exists, 
       and sorted(YAMLS) == ["ecco_clock_dongle_stage3_2_manual_slot1.yaml", "ecco_clock_dongle_stage3_3_manual_tou6.yaml",
                             "ecco_clock_dongle_stage3_4_free_power.yaml"])
 RESTORE_GLOBALS = sorted({g["id"] for doc in YAMLS.values() for g in doc.get("globals") or [] if g.get("restore_value")})
+# fcp1: + the four persisted Dump operating-limit globals. Their keys are known answers from ESPHome 2026.8.2's own codegen of the
+# fcp1 firmware (generated main.cpp: set_name_hash N, key = 1944399030 ^ N): dump_op_ceiling_w 2633213036 -> 4011231450,
+# dump_max_export_w 3560735419 -> 2816060941, dump_limits_cap_w 1775658265 -> 439568815, dump_limits_check 1121151361 -> 825640247.
+FCP1_KEYS = {"dump_op_ceiling_w": 4011231450, "dump_max_export_w": 2816060941, "dump_limits_cap_w": 439568815,
+             "dump_limits_check": 825640247}
 check("restore_value globals of every firmware YAML: exactly reg244_last_applied_value / _valid, keys "
-      "1944399030 ^ md5(id)[:8] = 1425646640 / 1452813359 (known answers from ESPHome 2026.8.2's own codegen)",
-      RESTORE_GLOBALS == ["reg244_last_applied_valid", "reg244_last_applied_value"]
-      and (globals_key("reg244_last_applied_value"), globals_key("reg244_last_applied_valid")) == (1425646640, 1452813359))
+      "1944399030 ^ md5(id)[:8] = 1425646640 / 1452813359 (known answers from ESPHome 2026.8.2's own codegen), plus fcp1's four "
+      "persisted Dump operating-limit globals at their own known-answer keys, all distinct",
+      RESTORE_GLOBALS == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", *FCP1_KEYS])
+      and (globals_key("reg244_last_applied_value"), globals_key("reg244_last_applied_valid")) == (1425646640, 1452813359)
+      and all(globals_key(k) == v for k, v in FCP1_KEYS.items())
+      and len({globals_key(k) for k in RESTORE_GLOBALS}) == len(RESTORE_GLOBALS))
 ENTITIES = set()
 for doc in YAMLS.values():
     for plat in ("number", "select"):
@@ -188,7 +196,10 @@ check(f"entity preferences: {n_num} restore numbers and {n_sw} switches across a
       # FB-B2: n_sw 9 -> 10 - the one new template switch `ECCO Fallback Profile Arm` (fallback_profile_arm, restore_mode
       # ALWAYS_OFF: no preference key is created for it; like the other ALWAYS_OFF arms it is counted as a historic superset, and
       # its two entity keys are covered by the collision checks below).
-      n_num == 6 and n_sw == 10 and not any(p == "select" for p, _n in ENTITIES))
+      # fcp1: n_sw 10 -> 11 - the one new template switch `Dump Power Limits Write Enable` (dump_limits_arm, restore_mode
+      # ALWAYS_OFF: no preference key, counted like the other ALWAYS_OFF arms). fcp1's two new numbers have no restore_value
+      # (their values live in the persisted globals above), so n_num stays 6.
+      n_num == 6 and n_sw == 11 and not any(p == "select" for p, _n in ENTITIES))
 check("entity key known answers (ESPHome 2026.8.2 helpers): 'Clock Correction Threshold' 3507116908 / beta 2340601518, "
       "'Automatic Clock Sync' 2578858645 / 2949609849, 'Dump to Grid Stop SOC' 3156274043 / 1118637223",
       (object_id_hash("Clock Correction Threshold"), raw_name_hash("Clock Correction Threshold"),

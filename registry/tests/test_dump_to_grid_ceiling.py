@@ -74,7 +74,9 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 
 FW_PATH = ROOT / DP.FIRMWARE_REL
-FW_TEXT = FW_PATH.read_text(encoding="utf-8")
+# fcp1: this suite proves dtgp1's OWN firmware; a later firmware entry (fcp1: the capability profile and the persisted operating
+# limits) is undone exactly by the chain, so every pin below reads the firmware as of dtgp1.
+FW_TEXT = chain.CHAIN.as_of(chain.FIRMWARE, "dtgp1", FW_PATH.read_text(encoding="utf-8"))
 PRE_TEXT = DP.pre_dtgp1_firmware(FW_TEXT)
 FW_DOC = ds.load_firmware_text(FW_TEXT)
 PRE_DOC = ds.load_firmware_text(PRE_TEXT)
@@ -356,8 +358,11 @@ check("dtgp1 declares exactly +1 sensor, +1 substitution (the backstop floor) an
       and E.banned_fw_added == 0 and set(E.frozen_reverts) == set(E.frozen_checkpoints) == {DP.DASHBOARD_REL}
       and E.frozen_reverts[DP.DASHBOARD_REL] is DP.pre_dtgp1_dashboard)
 check("every file dtgp1 declares as added exists", all((ROOT / f).is_file() for f in E.added_files), str(sorted(E.added_files)))
+# fcp1: files ADDED by a later post-export entry (e.g. fcp1's own scope and suite, which describe how they build on dtgp1) are not
+# pre-existing files and are not part of dtgp1's ledger.
+_LATER_ADDED = set().union(*(e.added_files for e in chain.POST_EXPORT_ENTRIES[[x.id for x in chain.POST_EXPORT_ENTRIES].index("dtgp1") + 1:]))
 older = sorted(f"registry/tests/{p.name}" for p in HERE.glob("*.py") if f"registry/tests/{p.name}" not in DP.ADDED_FILES
-               and re.search(r"(?i)dtgp1", p.read_text(encoding="utf-8")))
+               and f"registry/tests/{p.name}" not in _LATER_ADDED and re.search(r"(?i)dtgp1", p.read_text(encoding="utf-8")))
 check("the ledger is complete: the only pre-existing files under registry/tests that mention dtgp1 are the chain (its entry) and "
       "test_fallback_durable_model.py (its declared-substitution list anchored at fbb0, one commented DTGP1: edit, no pin changed); "
       "test_fbd1_liveness.py needs none: pex0 already reads its FB-D1 baseline as of fbd1 through the chain",

@@ -1,0 +1,33 @@
+# ECCO Pro - inverter capability profiles (fcp1)
+#
+# A profile is the set of firmware substitution values that describe ONE inverter variant's validated capability. The firmware
+# carries the reference profile's values in firmware/ecco_clock_dongle_stage3_4_free_power.yaml; another profile is selected at
+# BUILD time by overriding each key, for example:
+#
+#   esphome -s ecco_inverter_profile_id <id> -s ecco_inverter_profile_name "<name>" \
+#           -s ecco_inverter_tou_power_ceiling_w <W> -s ecco_dump_capability_w <W> compile <wrapper yaml>
+#
+# The firmware's on_boot compile-time checks refuse an inconsistent profile (capability above the TOU register bound, not a
+# multiple of the controller step, not above the controller floor, below the default operating ceiling, or a TOU bound that does
+# not fit a 16-bit register). There is NO global maximum: each profile states its own capability.
+#
+# A profile records CAPABILITY only. The operating limits a site actually uses - the Dump to Grid power ceiling and the maximum
+# net grid export - are run-time settings persisted on the dongle and changed from Home Assistant (docs/dev/inverter-capability-
+# profiles.md). A profile is listed here only with its evidence; registry/tests/test_dump_capability_limits.py checks every entry
+# against the firmware's compile-time rules and the reference entry against the firmware itself.
+
+schema_version: 1
+profiles:
+  - id: deye_1ph_lv_8kw
+    name: 8 kW single-phase low-voltage Deye-family hybrid (reference installation H-001)
+    status: reference
+    evidence: >-
+      The reference installation (SUPPORTED_HARDWARE.md H-001). Inverter rated power 8000 W and the TOU power register bound
+      8000 W are read on that installation; Dump to Grid is hardware tested at 3000 W only. A capability above 3000 W is the
+      profile's configurable range, not a hardware proof: each higher operating level is proven live, supervised, on the
+      installation itself.
+    substitutions:
+      ecco_inverter_profile_id: deye_1ph_lv_8kw
+      ecco_inverter_profile_name: 8 kW single-phase low-voltage Deye-family hybrid (reference installation H-001)
+      ecco_inverter_tou_power_ceiling_w: 8000
+      ecco_dump_capability_w: 8000
