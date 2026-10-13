@@ -146,3 +146,27 @@ six reserved fallback / failback entity ids, so it carries the owner-approved to
 - one ordinary edit of the same kind to `test_fallback_live_match.py` (not frozen); its pairs are recorded in the scope module.
 
 As of `pub0` each amended suite is the export byte for byte. `acs0` changed no firmware and no write surface.
+
+## What ovw2 changed
+
+`ovw2` is the Overview V2.1 polish and accuracy pass (`registry/tests/_ovw2_scope.py`, proofs in
+`registry/tests/test_ovw2_transition.py` and, for the changed dashboard JavaScript run under node,
+`home-assistant/tests/test_ecco_overview_v21.py`). It is display only and edits no chain-pinned artifact: the manifest is untouched.
+It edits two files that were already frozen, so nothing new is enrolled:
+
+- the dashboard: the v7.21.1 header note and the card edits listed in the scope module. ECCO Today and Smart Charge Strategy count
+  only the solar that can arrive before their target time and show an unavailable state instead of NaN; the Overview's Battery
+  estimate becomes Battery outlook; Today so far and Coming up are new read-only cards; the dead SOC Model chart series is removed
+  and a chart data-status strip added; the 7-day outlook score reads the entity ids that exist; the static reserve texts show the
+  live ECCO reserve setting. Coming up appears twice, each copy with one Home Assistant screen `visibility` condition: in the
+  right-hand column at `(min-width: 1696px)` and under Electrical detail at `(max-width: 1695px)` (1440 px of content, where the
+  sections view switches to four columns, plus the 256 px sidebar). The animated Energy Flow card, the status banner, the Energy
+  Actions section and four views are byte-identical to the dashboard as of `fps1`; the Battery outlook card also keeps `fe1`'s one-line
+  "Time to reserve" (read from `sensor.ecco_battery_time_to_reserve`) and the Energy Flow card keeps `fe1`'s `time_to_reserve` line;
+- `VERSION.yaml`: dashboard 7.21.1, staged (`tested_in_home_assistant` stays false).
+
+`ovw2` was first made on `f0ddeb4` (as of `ovw1`) and re-chained onto public main `451f0c24`, after `acs0`, as the fifteenth
+post-export entry; its scope pairs, checkpoints and fingerprint were regenerated for that parent. It changed no firmware, Home Assistant
+package, deployment, registry, Intelligence or ecco_core file, and adds no service
+call. The earlier suites read the dashboard as of their own entry, so `test_ovw1_transition.py` no longer asserts that `ovw1`
+is the last chain entry (its position and parent are pinned instead).

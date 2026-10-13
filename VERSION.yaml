@@ -5,8 +5,14 @@ project_version: "0.9.0"
 
 current:
   dashboard:
-    version: "7.21.0"
+    version: "7.21.1"
     path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.21.1 (OVW2) is the Overview V2.1 polish and accuracy pass over 7.21.0 (FE1's time to reserve is kept): the SOC projections in ECCO Today and Smart Charge
+    # Strategy credit only the solar that can arrive before their target time and show an unavailable state instead of an
+    # unsupported number; the dead SOC Model chart series is removed and a chart data-status strip is added; Battery outlook,
+    # Today so far and Coming up cards use existing entities; reserve wording separates the ECCO setting from the modelled
+    # need; the 7-day outlook score reads the entity ids that exist. Display only: no control path, firmware, package or
+    # automation changed. It is STAGED: tested_in_home_assistant stays false. The 7.21.0 record follows.
     # v7.21.0 (FE1) shows the batteries' time to reserve: the Overview Energy Flow card's battery node reads
     # sensor.ecco_battery_time_to_reserve (nodes.battery.time_to_reserve) and the battery estimate card adds its
     # summary. The estimate is the new read-only package ecco_battery_runtime.yaml (offline template tests only).

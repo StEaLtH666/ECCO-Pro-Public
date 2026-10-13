@@ -133,6 +133,20 @@ Development before the first public release happened in a private repository; se
 
 ### Changed
 
+- **Overview V2.1 polish and accuracy pass** (dashboard 7.21.1, staged; display only; re-chained after FE-1 and FPS1, keeping FE-1's time to reserve). ECCO Today and Smart Charge Strategy now
+  count only the solar that can arrive before their target time (between 00:00 and the 00:30 target the projected SOC had been
+  overstated by about 25 points, because the forecast is for the rest of the current day), say which day the target is, and show
+  "Battery data unavailable" or "Projection unavailable" instead of NaN or an unsupported number. The Overview's Battery estimate
+  becomes Battery outlook (the learned load-only outlook and how accurate it was), with new Today so far and Coming up cards and
+  scheduled-session counters built from existing sensors to fill the empty space beside Energy Actions. The dead SOC Model chart
+  series (it read an undefined variable, the source of the browser's "states is not defined" warning) is removed, and a data-status
+  strip on the Power Flow charts tells a new day from a sensor that is not reporting. The 7-day outlook score reads the entity ids
+  that exist, and the static "Suggested 15%" / "15% starting point" texts show the live ECCO reserve setting. Text that was cut off
+  (Grid Status unit, Current Plan countdown, Electrical detail on a phone) now wraps. At four columns Coming up fills the right-hand
+  column beside the Energy Flow; on narrower pages an identical copy sits under Electrical detail instead (a Home Assistant screen
+  condition at 1696 px: the 1440 px of content at which the sections view switches to four columns, plus the 256 px sidebar), so the
+  right-hand column does not become taller than the section beside it. No control path,
+  firmware, package or automation changed; declared as post-export entry `ovw2`.
 - **The Overview is rebuilt** (dashboard 7.20.0, staged) as nine sections: a compact status banner that keeps the hero's state
   machine, pills and vocabulary and now also reads the Dump to Grid lease states and both recovery-state sensors (a recovery
   condition raises ATTENTION even when no lease flag is set); the Weather & Solar card's new solar strip and compact daily layouts;
