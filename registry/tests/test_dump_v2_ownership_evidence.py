@@ -888,7 +888,7 @@ print("[8] V1 tombstone vs the pre-V2 loader (main @ 004040b rebuilt byte-for-by
 # LATER chain entry is undone by its exact-match reverter first (registry/tests/_scope_chain.py), then Dump V2's and Manual
 # TOU's own reverters run exactly as before - a later PR's declared edits never re-hash it, an undeclared edit still
 # breaks it. The differential tests keep running the LIVE firmware against BASE_FW (= LIVE minus Dump V2's edits).
-SCOPE_FW_TEXT = chain.CHAIN.as_of(chain.FIRMWARE, "dump_v2", FW_TEXT)
+SCOPE_FW_TEXT = chain.Chain(chain.CHAIN.upto("fcp1")).as_of(chain.FIRMWARE, "dump_v2", FW_TEXT)   # PEX: FW_TEXT is as of fcp1
 SCOPE_BASE_TEXT = dv2s.pre_dump_v2_firmware(SCOPE_FW_TEXT)
 check("the rebuilt base firmware, with Manual TOU Phase 1's own edits (PR #53) also reverted, is main @ 004040b byte-for-byte",
       dv2s.sha(mtou1.pre_mtou1_text(SCOPE_BASE_TEXT)) == dv2s.BASE_FIRMWARE_SHA)

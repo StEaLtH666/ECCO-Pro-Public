@@ -378,7 +378,7 @@ check("...armed and idle, re-setting the ceiling rewrites the stored capability 
 # initial value; the new keys are new ids only; the durable record headers are untouched.
 import _scope_chain as chain  # noqa: E402
 import _pex  # noqa: E402  (PEX: the firmware as of dtgp1 - the rollback firmware's source)
-OLD = ds.load_firmware_text(chain.CHAIN.as_of(chain.FIRMWARE, "dtgp1", FW_TEXT))   # PEX: fcp1 undone exactly
+OLD = ds.load_firmware_text(chain.Chain(chain.CHAIN.upto("fcp1")).as_of(chain.FIRMWARE, "dtgp1", FW_TEXT))   # PEX: fcp1 undone exactly (FW_TEXT is as of fcp1)
 old_persist = {g["id"]: (g["type"], str(g.get("initial_value"))) for g in OLD["globals"]
                if str(g.get("restore_value")).lower() in ("true", "yes")}
 new_persist = {g["id"]: (g["type"], str(g.get("initial_value"))) for g in FW["globals"]
