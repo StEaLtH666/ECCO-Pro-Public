@@ -115,6 +115,7 @@ import _fsw1_scope as _fsw1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
+import _ovw2_scope as _ovw2  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
@@ -881,7 +882,38 @@ ACS0 = Entry(
          "amendment: exactly six reserved ids READ in exactly three declared files, five exact allowlist checks amended (three "
          "frozen suites by PEX): ZERO firmware change, unchanged write surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0)
+# ovw2 (ECCO Overview V2.1: the polish and accuracy pass over the V2 dashboard, dashboard 7.21.1; _ovw2_scope.py): re-chained on public main 451f0c24
+# after acs0 (first made on f0ddeb4 after ovw1). DISPLAY ONLY. ECCO Today (Overview, Intelligence) and Smart Charge
+# Strategy (Intelligence, Tariffs, Control, Recommended) count only the solar that can arrive BEFORE their target time, name the day of
+# the target and show an unavailable state instead of NaN or an unsupported number (between 00:00 and the 00:30 target the SOC at the
+# target had been overstated by about 25 points: the forecast is for the rest of the CURRENT day); the Overview's Battery estimate
+# becomes Battery outlook (the learned load-only outlook and its accuracy), with new Today so far and Coming up cards from existing
+# sensors, scheduled-session counters, and ECCO Today without the tariff figures the Tariff now card shows; the three Power Flow charts
+# lose the dead "SOC Model" series (it read an undefined variable) and gain a chart data-status strip; the 7-day outlook score reads the
+# entity ids that exist; the static "Suggested 15%" / "15% starting point" texts show the live ECCO reserve setting. FROZEN edits (PEX):
+# the dashboard (the v7.21.1 header note and the card edits) and VERSION.yaml (dashboard 7.21.1, staged), both already frozen
+# (_ovw2_scope.FROZEN_REVERTERS); as of acs0 each is the 451f0c24 blob byte for byte. Nothing is newly enrolled. Measured, not declared:
+# no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package, deployment, registry,
+# Intelligence or ecco_core byte; ZERO Modbus reads / writes; no new service call, no new tap handler other than `action: none`; no
+# manifest stanza; FE1's time_to_reserve configuration and the animated Energy Flow card, the status banner, the Energy Actions section and four views are byte-identical.
+OVW2 = Entry(
+    id="ovw2", pr="OVW2", commit="unmerged",
+    added_files=_ovw2.ADDED_FILES,
+    frozen_reverts=dict(_ovw2.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ovw2; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ovw2.DASHBOARD_REL: "7191ab0043e78f2c4a74f4e6f0aec3a382ea47de1166f2530b891b3f50157106",
+        _ovw2.VERSION_REL: "3fae70d3e7cce2854d4b76be97ede7d9e8531f0a5e10a3b858d205254924894e",
+    },
+    # _pex.fingerprint(OVW2): hashes its parent acs0's fingerprint and every declaration above
+    fingerprint="034edf1b9a62f36f034f9563988f9e6856c1850e5eb1c022aef630f270c8ac14",
+    note="ECCO Overview V2.1: SOC projections (ECCO Today, Smart Charge Strategy) credit only solar that can arrive before the target "
+         "and show an unavailable state instead of NaN, the Battery estimate becomes Battery outlook, new Today so far / Coming up "
+         "cards and scheduled-session counters from existing sensors, the dead SOC Model chart series removed and a chart data-status "
+         "strip added, the 7-day outlook score reads the entity ids that exist, reserve wording separates the ECCO setting from the "
+         "modelled need, dashboard 7.21.1 staged: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
+         "ecco_core change, ZERO Modbus operation, no new service call, no manifest stanza",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
