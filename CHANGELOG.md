@@ -152,6 +152,21 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
     missed start;
   - schedule status STARTING / FAILED / COMPLETED in addition to ACTIVE / ARMED / IDLE.
   No firmware, dashboard or Modbus change.
+- Scheduled Dump to Grid gets the same start reliability and failure reporting (post-export entry `dgs1`; review record
+  [docs/incidents/2026-10-12-scheduled-dump-to-grid-start-review.md](docs/incidents/2026-10-12-scheduled-dump-to-grid-start-review.md)).
+  No scheduled Dump to Grid start has failed so far, but its start gate has the same bus-busy refusal and the package used the same
+  locked +2 s / +35 s timing (in the offline model it fails to start at about 9 % of poll phases). The old retry also pressed
+  again after a start transaction had begun, could leave the write enable on when the firmware dropped a press, stopped for good
+  if the dongle read offline at the start instant, and alerted nobody. The fix is in the Home Assistant scheduling layer only and
+  mirrors `fps1`:
+  - bounded, unevenly spaced retries of a transient start-gate refusal only, each answer proven to belong to its press;
+  - never a retry once a start transaction began or when the outcome is unconfirmed;
+  - all three staged values (export power, Stop SOC, duration) confirmed before every press; nothing staged into another
+    transaction;
+  - a start deadline and a duration clamp inside the authorised window;
+  - a readiness check (including a battery already at the Stop SOC), a missed-trigger watchdog, restart recovery, persistent
+    notifications, and STARTING / FAILED / COMPLETED status.
+  No firmware, dashboard or Modbus change.
 
 ### Fixed (documentation)
 

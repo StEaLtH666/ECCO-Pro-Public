@@ -285,6 +285,7 @@ LEDGER = {   # file -> exact number of calls of each _pex function
                                                "post_export_added": 2, "base": 1, "exact_pairs": 1},   # ovw1's own proofs (one post_export_added is a quoted routing line)
     "home-assistant/tests/test_ecco_battery_runtime.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fe1's declaration proofs
     "home-assistant/tests/test_ecco_free_power_schedule_reliability.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fps1: the pre-fix package for the reproduction, and fps1's declaration
+    "home-assistant/tests/test_ecco_dump_to_grid_schedule_reliability.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # dgs1: the pre-fix package for the reproduction, and dgs1's declaration
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")
