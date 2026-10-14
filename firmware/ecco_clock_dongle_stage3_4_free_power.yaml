@@ -18471,9 +18471,9 @@ script:
                       uint32_t duration_s = ((uint32_t) lroundf(id(dump_duration_minutes).state)) * 60u;
                       id(dump_end_epoch) = (uint32_t) id(ntp_time).now().timestamp + duration_s;
                       // fcp2 final rework (Priority 3): this obligation's Stop SOC, PERSISTED with it and
-                      // bound to its end time (see dump_owed_stop_soc_rec), so the post-END supervision keeps
-                      // it across a restart. Queued now; the first commit_record below flushes it (its sync)
-                      // before any marker or inverter write.
+                      // bound to its end time (see dump_owed_stop_soc_rec), so the post-END Stop SOC check of an
+                      // owed restore keeps it across a restart. Queued now; the first commit_record below flushes
+                      // it (its sync) before any marker or inverter write.
                       id(dump_owed_stop_soc_rec) = ((id(dump_end_epoch) & 0xFFFFFFu) << 8) | ((uint32_t) id(dump_target_stop_soc) & 0xFFu);
                       dump_owed_stop_soc_rec->update();
 

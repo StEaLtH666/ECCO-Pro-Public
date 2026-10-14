@@ -2880,9 +2880,9 @@ OWED_STOP_SOC_START_OLD = _blk(r"""
 OWED_STOP_SOC_START_NEW = _blk(r"""
                       id(dump_end_epoch) = (uint32_t) id(ntp_time).now().timestamp + duration_s;
                       // fcp2 final rework (Priority 3): this obligation's Stop SOC, PERSISTED with it and
-                      // bound to its end time (see dump_owed_stop_soc_rec), so the post-END supervision keeps
-                      // it across a restart. Queued now; the first commit_record below flushes it (its sync)
-                      // before any marker or inverter write.
+                      // bound to its end time (see dump_owed_stop_soc_rec), so the post-END Stop SOC check of an
+                      // owed restore keeps it across a restart. Queued now; the first commit_record below flushes
+                      // it (its sync) before any marker or inverter write.
                       id(dump_owed_stop_soc_rec) = ((id(dump_end_epoch) & 0xFFFFFFu) << 8) | ((uint32_t) id(dump_target_stop_soc) & 0xFFu);
                       dump_owed_stop_soc_rec->update();
 """)
@@ -2961,5 +2961,60 @@ def add_fcp2_firmware(text: str) -> str:
     return out
 
 
-# fcp2 edits no frozen file.
-FROZEN_REVERTERS: dict = {}
+# ---- (PEX frozen edits, final rework) the two frozen pub0 suites that pin the persisted-globals set name fcp2's ONE persisted
+#      global, dump_owed_stop_soc_rec (the post-END supervision's Stop SOC) - exactly as fcp1 declared its own four.
+SUPERVISION_TEST_REL = 'registry/tests/test_supervision_heartbeat_observe_only.py'
+SUPERVISION_TEST_OLD = _blk(r"""
+          str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
+    # fcp1: the four persisted Dump operating-limit globals are fcp1's, not supervision's (supervision still persists nothing).
+    check("restore_value: yes globals are unchanged by supervision (exactly the 2 pre-existing reg244 drift guards, plus fcp1's "
+          "4 persisted Dump operating limits)",
+          sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
+          == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                     "dump_limits_cap_w", "dump_limits_check"]))
+""")
+SUPERVISION_TEST_NEW = _blk(r"""
+          str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
+    # fcp1: the four persisted Dump operating-limit globals are fcp1's, not supervision's (supervision still persists nothing).
+    # fcp2 (final rework): + the persisted Stop SOC of an owed Dump restore - fcp2's, not supervision's.
+    check("restore_value: yes globals are unchanged by supervision (exactly the 2 pre-existing reg244 drift guards, plus fcp1's "
+          "4 persisted Dump operating limits and fcp2's persisted Dump Stop SOC record)",
+          sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
+          == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                     "dump_limits_cap_w", "dump_limits_check", "dump_owed_stop_soc_rec"]))
+""")
+SHADOW_EVALUATOR_TEST_REL = 'registry/tests/test_failback_shadow_evaluator.py'
+SHADOW_EVALUATOR_TEST_OLD = _blk(r"""
+    # fcp1: + the four persisted Dump operating-limit globals (fcp1's, not the shadow's: the shadow still persists nothing)
+    if yes != sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                      "dump_limits_cap_w", "dump_limits_check"]):
+""")
+SHADOW_EVALUATOR_TEST_NEW = _blk(r"""
+    # fcp1: + the four persisted Dump operating-limit globals (fcp1's, not the shadow's: the shadow still persists nothing)
+    # fcp2 (final rework): + the persisted Stop SOC of an owed Dump restore (fcp2's, not the shadow's)
+    if yes != sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                      "dump_limits_cap_w", "dump_limits_check", "dump_owed_stop_soc_rec"]):
+""")
+
+
+def pre_fcp2_supervision_test(text: str) -> str:
+    """registry/tests/test_supervision_heartbeat_observe_only.py with fcp2's one edit undone (a frozen reverter of chain entry fcp2, PEX)."""
+    return _swap(text, SUPERVISION_TEST_NEW, SUPERVISION_TEST_OLD, "supervision_test edit", "present")
+
+
+pre_fcp2_supervision_test.edits = ((SUPERVISION_TEST_OLD, SUPERVISION_TEST_NEW),)   # the PEX contract: exact pairs
+
+
+def pre_fcp2_shadow_evaluator_test(text: str) -> str:
+    """registry/tests/test_failback_shadow_evaluator.py with fcp2's one edit undone (a frozen reverter of chain entry fcp2, PEX)."""
+    return _swap(text, SHADOW_EVALUATOR_TEST_NEW, SHADOW_EVALUATOR_TEST_OLD, "shadow_evaluator_test edit", "present")
+
+
+pre_fcp2_shadow_evaluator_test.edits = ((SHADOW_EVALUATOR_TEST_OLD, SHADOW_EVALUATOR_TEST_NEW),)   # the PEX contract: exact pairs
+
+
+# Every frozen file fcp2 edits, with its reverter (the chain entry's frozen_reverts).
+FROZEN_REVERTERS = {
+    SUPERVISION_TEST_REL: pre_fcp2_supervision_test,
+    SHADOW_EVALUATOR_TEST_REL: pre_fcp2_shadow_evaluator_test,
+}

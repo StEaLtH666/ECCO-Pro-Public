@@ -953,7 +953,7 @@ FCP1 = Entry(
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "ec07c5225ae8d3980960ccf42806aa3682f12ac3b1fefb7f7f0f8dd7864d95e1"},
+    checkpoints={FIRMWARE: "466e3868ed99a94ae13e7a8d268f5ab696346152bfdb722812cd4fcaff46c90c"},
     deltas={"globals": 69, "substitutions": 17, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
             "scripts": 3, "binary_sensors": 1,
             "text_sensors": 3, "switches": 1, "buttons": 1},
@@ -962,8 +962,12 @@ FCP2 = Entry(
                                 "ecco_lock_escalation"}),          # a STUCK lock's durable End request (reaches the existing restore)
     added_files=_fcp2.ADDED_FILES,
     frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each frozen suite after fcp2 (the final rework's persisted Stop SOC record)
+        _fcp2.SUPERVISION_TEST_REL: "3285b80f41c10b22c121e96f343ab41560d951648ba1a18ca0d6b1839c6b8c7b",
+        _fcp2.SHADOW_EVALUATOR_TEST_REL: "a9023ffd14e90c5147b4796d8776f45b5c3cc3c6098273484eb683d503a2cd0d",
+    },
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="90dd4782ae5be20dc4c4ee1e2a6d809c2613c0ff9c5c1428568ab7d4ff27865b",
+    fingerprint="918f96773d4b97f3d31a10660f83e2b0e716390723281e5f907b04a2bb4e6b74",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "

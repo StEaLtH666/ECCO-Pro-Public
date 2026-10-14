@@ -307,11 +307,12 @@ def main() -> int:
           sup_globals and all(g.get("restore_value") in (False, "no") for g in sup_globals),
           str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
     # fcp1: the four persisted Dump operating-limit globals are fcp1's, not supervision's (supervision still persists nothing).
+    # fcp2 (final rework): + the persisted Stop SOC of an owed Dump restore - fcp2's, not supervision's.
     check("restore_value: yes globals are unchanged by supervision (exactly the 2 pre-existing reg244 drift guards, plus fcp1's "
-          "4 persisted Dump operating limits)",
+          "4 persisted Dump operating limits and fcp2's persisted Dump Stop SOC record)",
           sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
           == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
-                     "dump_limits_cap_w", "dump_limits_check"]))
+                     "dump_limits_cap_w", "dump_limits_check", "dump_owed_stop_soc_rec"]))
 
     # Pre-existing surfaces, pinned against their values on main @ 6c62417
     # (measured again for SG-01 Phase 0 after PR #44/#45/#46 all merged; the

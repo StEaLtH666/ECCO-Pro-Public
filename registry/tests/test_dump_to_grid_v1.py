@@ -621,9 +621,13 @@ if watchdog_section_match:
 batt = re.search(r"id: ecco_battery_power\n(?:    .*\n|\n)*?    on_value:\n((?:      .*\n|\n)*)", FIRMWARE_TEXT)
 check("ecco_battery_power's on_value maintains the runaway counter (RAM only, no Modbus I/O)",
       batt is not None and "id(dump_overpower_samples)++;" in batt.group(1) and "modbus_client" not in batt.group(1))
+# fcp2 final rework: the battery hook now also CROSS-CHECKS battery power against the grid CT (RF1, a separate frozen-telemetry
+# check); the RUNAWAY threshold itself - from the ordinary guard's `float requested` to its comparison - still never uses the grid.
+_runaway = batt.group(1)[batt.group(1).index("float requested = (float) id(dump_target_power);"):] if batt else ""
+_runaway = _runaway[:_runaway.index("x > requested + margin")] if "x > requested + margin" in _runaway else ""
 check("runaway threshold is requested + max(requested/2, margin) on battery DISCHARGE (x > ...), never grid export",
       batt is not None and "float margin = requested / 2.0f;" in batt.group(1)
-      and "x > requested + margin" in batt.group(1) and "grid" not in batt.group(1).split("on_value")[-1].lower().replace("grid export", ""))
+      and "x > requested + margin" in batt.group(1) and _runaway != "" and "grid" not in _runaway.lower())
 
 print("")
 print("[29] 2026-09-26 pre-live hardening: Accept residue gate, TOU slot gate, latched-value entities")

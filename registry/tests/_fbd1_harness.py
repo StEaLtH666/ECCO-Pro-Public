@@ -372,7 +372,12 @@ HOOK_ALLOWED = frozenset({"dump_soc_last_update_ms", "dump_grid_last_update_ms",
                           "dump_runaway_trip_w", "dump_runaway_trip_threshold_w", "dump_runaway_trip_count",
                           "dump_ct_same_count", "dump_ct_last_w", "dump_ct_same_bmin", "dump_ct_same_bmax",
                           "dump_bp_same_count", "dump_bp_last_w", "dump_bp_last_ms", "dump_soc_frozen_wh_acc",
-                          "dump_soc_last_value"})
+                          "dump_soc_last_value",
+                          # fcp2 final rework: the battery-vs-grid cross-check (the battery hook) and the export guard's last
+                          # four readings (the grid CT hook) - RAM bookkeeping of the same kind
+                          "dump_bp_xcheck_window", "dump_bp_xcheck_count", "dump_bp_xcheck_trip", "dump_bp_xcheck_last_w",
+                          "dump_bp_xcheck_lb_w", "dump_pv_same_count", "dump_pv_last_w", "dump_export_h0", "dump_export_h1",
+                          "dump_export_h2", "dump_export_h3", "dump_export_avg_n"})
 # Ownership flags no RTC / poll path may ever assign.
 OWNERSHIP_FLAGS = ("manual_write_in_progress", "free_power_operation_in_progress", "free_power_recovery_force_in_progress",
                    "free_power_recovery_accept_in_progress", "reg244_apply_in_progress", "dump_operation_in_progress",
