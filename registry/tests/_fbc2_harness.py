@@ -152,7 +152,23 @@ def initial_value_of(g: dict):
         return 0
     if t in ("float", "double"):
         return float(str(init).strip("'\""))
-    return int(str(init).strip("'\""), 0)
+    raw = str(init).strip("'\"")
+    if "${" in raw:   # fcp1: a substitution initial value (the persisted Dump operating limits' factory values)
+        raw = _resolve_subst(raw)
+    return int(raw, 0)
+
+
+_SUBS_CACHE: dict = {}
+
+
+def _resolve_subst(raw: str) -> str:
+    """Resolve ${...} in an initial value against the repository firmware's substitutions (loaded once)."""
+    if not _SUBS_CACHE:
+        import re as _re
+        text = (Path(__file__).resolve().parents[2] / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
+        _SUBS_CACHE.update(dict(_re.findall(r'^  (ecco_[a-z0-9_]+): "([^"]*)"$', text, _re.M)))
+    import re as _re
+    return _re.sub(r"\$\{(\w+)\}", lambda m: _SUBS_CACHE[m.group(1)], raw)
 
 
 # ---------------------------------------------------------------------------

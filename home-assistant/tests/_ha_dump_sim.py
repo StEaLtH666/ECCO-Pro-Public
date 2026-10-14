@@ -64,6 +64,10 @@ REJECT = {
     "power": "REJECTED - requested export power outside safe range 500-8000W",
     "stop_soc": "REJECTED - requested Stop SOC outside safe range 10-90%",
     "duration": "REJECTED - requested duration outside safe range 1-240 minutes",
+    # fcp1: the persisted Dump operating limits (invalid / maximum grid export not configured / target above it).
+    "limits_invalid": "REJECTED - Dump power limits are invalid; set them again (see Dump Power Limits Status)",
+    "export_unset": "REJECTED - maximum grid export not configured; set Dump to Grid Max Grid Export first",
+    "export_above": "REJECTED - requested export is above the configured maximum grid export",
     "arm": "REJECTED - arm Dump to Grid Write Enable first",
     "bus": "REJECTED - Modbus bus busy with another transaction; try again shortly",
 }
@@ -104,7 +108,10 @@ class DumpDongle(S.Dongle):
         self.cfg_stale: list = []
         self.grid_stale: list = []
         self.flags = {"corrupt": False, "snapshot": False, "fp": False, "fp_op": False, "r244": False, "ntp_bad": False,
-                      "voltage_bad": False, "soc_bad": False, "polling_off": False, "tou_unreadable": False}
+                      "voltage_bad": False, "soc_bad": False, "polling_off": False, "tou_unreadable": False,
+                      "limits_invalid": False}
+        # fcp1: the dongle's persisted maximum grid export (W; 0 = not configured). An owner-configured site by default.
+        self.max_export = 8000
         self.tou_slot = 0
         self.soc = 80.0
         self.number_log: list = []
@@ -244,7 +251,9 @@ class DumpDongle(S.Dongle):
             ("cfg_stale", self._in(self.cfg_stale, t)), ("grid_stale", self._in(self.grid_stale, t)),
             ("tou_unreadable", f["tou_unreadable"]), ("tou_slot", self.tou_slot > 0), ("soc_floor", self.soc <= self.stop_soc),
             ("power", not 500 <= self.power <= 8000), ("stop_soc", not 10 <= self.stop_soc <= 90),
-            ("duration", not 1 <= self.duration <= 240), ("arm", not self.arm), ("bus", self.bus_busy(t)),
+            ("duration", not 1 <= self.duration <= 240), ("limits_invalid", f["limits_invalid"]),
+            ("export_unset", self.max_export <= 0), ("export_above", self.power > self.max_export),
+            ("arm", not self.arm), ("bus", self.bus_busy(t)),
         )
         return next((k for k, hit in checks if hit), None)
 

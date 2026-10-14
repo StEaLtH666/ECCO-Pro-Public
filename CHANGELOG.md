@@ -27,6 +27,21 @@ Development before the first public release happened in a private repository; se
   widened. See
   [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
   and the supervised live-proof procedure (not executed).
+- **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
+  flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
+  now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.
+  - The inverter's Dump capability is a **profile** value (`ecco_dump_capability_w`); there is no global maximum. The reference
+    profile is 8 kW, and other profiles are listed in `registry/inverter_profiles.yaml`.
+  - New run-time settings, stored and enforced **on the dongle**, so Home Assistant being unavailable never lifts them:
+    - **Dump to Grid Power Ceiling** (factory 3000 W);
+    - **Dump to Grid Max Grid Export** (factory: not configured, so every Dump START is refused until it is set).
+    Raising either needs the new **Dump Power Limits Write Enable** arm and Dump idle; lowering works at any time.
+  - Each lease locks its ceiling at START. A later raise never reaches a running lease, and a reduction lowers it at once.
+  - An export guard ends a lease whose measured net grid export exceeds the configured limit.
+  - Settings that are corrupt, out of range or stored for another profile are refused, never replaced by a larger value.
+  - No new Modbus operation or inverter write domain (register 245 is never written).
+  - The durable records keep their schemas: the previous firmware can still be flashed back.
+
 - Post-export edit layer (PEX, schema `ecco-pex/1`, foundation entry `pex0`). It is the declared, exact and hash-linked way to change
   files that the `pub0` export froze. The `pub0` proof now runs on the files as of `pub0`, byte for byte. Test and proof
   infrastructure only: no firmware, Home Assistant, dashboard or behaviour change. See

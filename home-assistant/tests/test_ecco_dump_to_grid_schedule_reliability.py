@@ -193,7 +193,7 @@ check(f"the {len(retried)} retried refusals are verbatim prefixes of the firmwar
 persistent = [r for r in all_fw if not any(r.startswith(p) for p in retried)]
 check(f"...and the {len(persistent)} other refusals (recovery blocked, already active, snapshot pending, Free Power owns, reg 244, "
       "polling off, TOU unreadable / slot, SOC at the floor, the three ranges, generic) are never retried",
-      len(persistent) == 13 and len(persistent) + len(retried) == len(all_fw), str(persistent))
+      len(persistent) == 16 and len(persistent) + len(retried) == len(all_fw), str(persistent))   # fcp1: +3 operating-limit refusals
 services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
@@ -368,7 +368,14 @@ for label, setup, needle in (
         ("a register 244 proof transaction", _flag("r244"), "Register 244"),
         ("configuration polling switched off", _flag("polling_off"), "Configuration Polling"),
         ("the window overlapping a charging TOU slot", lambda x: setattr(x.d, "tou_slot", 1), "TOU slot 1"),
-        ("the battery already at the Stop SOC", lambda x: setattr(x.d, "soc", 40.0), "at or below the requested Stop SOC")):
+        ("the battery already at the Stop SOC", lambda x: setattr(x.d, "soc", 40.0), "at or below the requested Stop SOC"),
+        # fcp1: the dongle's persisted operating limits refuse a SCHEDULED start exactly like a manual one - never retried
+        ("the maximum grid export not configured (fcp1 factory state)", lambda x: setattr(x.d, "max_export", 0),
+         "maximum grid export not configured"),
+        ("the scheduled export power above the configured maximum grid export", lambda x: setattr(x.d, "max_export", 2000),
+         "above the configured maximum grid export"),
+        ("the persisted Dump power limits invalid (corrupt / mismatched save)", _flag("limits_invalid"),
+         "Dump power limits are invalid")):
     r = Run(setup=setup).until(600)
     check(f"{label}: one press, refused, FAILED at once with the firmware's reason, alerted, switch off, nothing written",
           len(r.d.presses) == 1 and needle in r.last() and r.last().startswith("FAILED TO START") and len(r.created()) >= 1

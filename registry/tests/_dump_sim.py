@@ -1246,7 +1246,12 @@ READ = "modbus_client.read_holding_registers"
 
 
 class Sim:
-    def __init__(self, firmware: dict):
+    def __init__(self, firmware: dict, dump_limits: str = "configured"):
+        """fcp1: `dump_limits` - the persisted Dump operating limits (power ceiling / maximum grid export) of the simulated site.
+        "configured" (default; what every pre-fcp1 suite needs): an owner-configured site - the limits VALID, the factory power
+        ceiling and a maximum grid export equal to the profile capability, so a START is never refused for the limits.
+        "factory": the firmware's own initial values with the on_boot validation run - the ceiling at its factory value and the
+        maximum grid export NOT CONFIGURED (every START refused). Firmware without the fcp1 globals is unaffected."""
         self.fw = firmware
         self.subs = firmware["_substitutions"]
         self.g: dict = {}
@@ -1254,7 +1259,10 @@ class Sim:
         for g in firmware["globals"]:
             ctype = g["type"]
             self.gtypes[g["id"]] = ctype
-            self.g[g["id"]] = self._initial(ctype, g.get("initial_value"))
+            raw = g.get("initial_value")
+            # fcp1: a global's initial value may be a substitution (the persisted Dump operating limits' factory values).
+            raw = substitute(raw, self.subs) if isinstance(raw, str) else raw
+            self.g[g["id"]] = self._initial(ctype, raw)
         self.scripts = {s["id"]: s for s in firmware["script"]}
         self.on_value = {}
         for s in firmware.get("sensor", []):
@@ -1307,6 +1315,39 @@ class Sim:
         self.random_values: list = []
         self.random_log: list = []
         self.exception_code = 2
+        if "dump_limits_valid" in self.g:
+            if dump_limits == "configured":
+                # Set the stored state directly (no lambda runs here: subclasses finish their own setup after this
+                # constructor, and a configured site's boot validation would only publish a status text).
+                cap = int(self.subs["ecco_dump_capability_w"])
+                self.g["dump_max_export_w"] = cap
+                self.g["dump_limits_check"] = wrap(int(self.g["dump_op_ceiling_w"]) + 3 * cap + 7 * cap + 12345, "uint32_t")
+                self.g["dump_limits_valid"] = True
+            elif dump_limits == "factory":
+                self.run_dump_limits_boot()
+            else:
+                raise ValueError(f"dump_limits={dump_limits!r}")
+
+    # -- fcp1: the persisted Dump operating limits --------------------------------------------------------------------
+    def configure_dump_limits(self, ceiling: int, max_export: int) -> None:
+        """An owner-configured site: the persisted values and their integrity value, as the validated set_actions store them,
+        then the firmware's own on_boot validation."""
+        cap = int(self.subs["ecco_dump_capability_w"])
+        self.g["dump_op_ceiling_w"] = int(ceiling)
+        self.g["dump_max_export_w"] = int(max_export)
+        self.g["dump_limits_cap_w"] = cap
+        self.g["dump_limits_check"] = wrap(int(ceiling) + 3 * int(max_export) + 7 * cap + 12345, "uint32_t")
+        self.run_dump_limits_boot()
+
+    def run_dump_limits_boot(self) -> None:
+        """Run the firmware's on_boot validation lambda of the persisted Dump operating limits (the one that sets
+        dump_limits_valid)."""
+        for item in self.fw["esphome"]["on_boot"]["then"]:
+            code = item.get("lambda") if isinstance(item, dict) else None
+            if code and "id(dump_limits_valid) = (why == 0);" in code:
+                self.run_lambda(code)
+                return
+        raise Unsupported("on_boot has no Dump operating-limits validation lambda")
 
     def seed_rng(self, seed: int) -> None:
         self.rng_seed = int(seed)

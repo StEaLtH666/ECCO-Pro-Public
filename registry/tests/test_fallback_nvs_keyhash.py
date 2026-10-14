@@ -168,10 +168,18 @@ check("the hardware-wrapper allowlist is exactly the one S3 wrapper, it exists, 
       and sorted(YAMLS) == ["ecco_clock_dongle_stage3_2_manual_slot1.yaml", "ecco_clock_dongle_stage3_3_manual_tou6.yaml",
                             "ecco_clock_dongle_stage3_4_free_power.yaml"])
 RESTORE_GLOBALS = sorted({g["id"] for doc in YAMLS.values() for g in doc.get("globals") or [] if g.get("restore_value")})
+# fcp1: + the four persisted Dump operating-limit globals. Their keys are known answers from ESPHome 2026.8.2's own codegen of the
+# fcp1 firmware (generated main.cpp: set_name_hash N, key = 1944399030 ^ N): dump_op_ceiling_w 2633213036 -> 4011231450,
+# dump_max_export_w 3560735419 -> 2816060941, dump_limits_cap_w 1775658265 -> 439568815, dump_limits_check 1121151361 -> 825640247.
+FCP1_KEYS = {"dump_op_ceiling_w": 4011231450, "dump_max_export_w": 2816060941, "dump_limits_cap_w": 439568815,
+             "dump_limits_check": 825640247}
 check("restore_value globals of every firmware YAML: exactly reg244_last_applied_value / _valid, keys "
-      "1944399030 ^ md5(id)[:8] = 1425646640 / 1452813359 (known answers from ESPHome 2026.8.2's own codegen)",
-      RESTORE_GLOBALS == ["reg244_last_applied_valid", "reg244_last_applied_value"]
-      and (globals_key("reg244_last_applied_value"), globals_key("reg244_last_applied_valid")) == (1425646640, 1452813359))
+      "1944399030 ^ md5(id)[:8] = 1425646640 / 1452813359 (known answers from ESPHome 2026.8.2's own codegen), plus fcp1's four "
+      "persisted Dump operating-limit globals at their own known-answer keys, all distinct",
+      RESTORE_GLOBALS == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", *FCP1_KEYS])
+      and (globals_key("reg244_last_applied_value"), globals_key("reg244_last_applied_valid")) == (1425646640, 1452813359)
+      and all(globals_key(k) == v for k, v in FCP1_KEYS.items())
+      and len({globals_key(k) for k in RESTORE_GLOBALS}) == len(RESTORE_GLOBALS))
 ENTITIES = set()
 for doc in YAMLS.values():
     for plat in ("number", "select"):
@@ -183,6 +191,13 @@ for doc in YAMLS.values():
 ENTITIES = sorted(ENTITIES)
 n_num = sum(1 for p, _n in ENTITIES if p == "number")
 n_sw = sum(1 for p, _n in ENTITIES if p == "switch")
+# fcp1: one more template switch, `Dump Power Limits Write Enable` (dump_limits_arm, restore_mode ALWAYS_OFF: no preference key is
+# created for it). It is checked on its own here and left out of the historic count below, whose exact text another suite pins.
+FCP1_ARM = ("switch", "Dump Power Limits Write Enable")
+check("fcp1's Dump Power Limits Write Enable is ALWAYS_OFF (no preference key) and the only switch fcp1 adds",
+      FCP1_ARM in ENTITIES and any(e.get("name") == FCP1_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
+                                   for doc in YAMLS.values() for e in doc.get("switch") or []))
+n_sw -= 1 if FCP1_ARM in ENTITIES else 0
 check(f"entity preferences: {n_num} restore numbers and {n_sw} switches across all YAMLs (3 RESTORE_DEFAULT_ON + the "
       "ALWAYS_OFF ones as a historic superset), each under its object-id key and its 2026.8-beta raw-name key",
       # FB-B2: n_sw 9 -> 10 - the one new template switch `ECCO Fallback Profile Arm` (fallback_profile_arm, restore_mode

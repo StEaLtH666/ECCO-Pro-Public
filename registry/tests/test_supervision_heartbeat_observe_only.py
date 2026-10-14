@@ -306,9 +306,12 @@ def main() -> int:
     check("every supervision/diagnostic global is RAM-only (restore_value: no)",
           sup_globals and all(g.get("restore_value") in (False, "no") for g in sup_globals),
           str([g["id"] for g in sup_globals if g.get("restore_value") not in (False, "no")]))
-    check("restore_value: yes globals are unchanged (exactly the 2 pre-existing reg244 drift guards)",
+    # fcp1: the four persisted Dump operating-limit globals are fcp1's, not supervision's (supervision still persists nothing).
+    check("restore_value: yes globals are unchanged by supervision (exactly the 2 pre-existing reg244 drift guards, plus fcp1's "
+          "4 persisted Dump operating limits)",
           sorted(g["id"] for g in FW["globals"] if g.get("restore_value") in (True, "yes"))
-          == ["reg244_last_applied_valid", "reg244_last_applied_value"])
+          == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
+                     "dump_limits_cap_w", "dump_limits_check"]))
 
     # Pre-existing surfaces, pinned against their values on main @ 6c62417
     # (measured again for SG-01 Phase 0 after PR #44/#45/#46 all merged; the

@@ -1,5 +1,12 @@
 # Dump-to-Grid command ceiling
 
+> **Updated by `fcp1`** ([inverter-capability-profiles.md](inverter-capability-profiles.md)). The ceiling is no longer chosen
+> at build time. The build's **profile** sets the inverter's capability (`ecco_dump_capability_w`), and the ceiling the controller
+> uses is the run-time **Dump to Grid Power Ceiling** setting, persisted on the dongle and changed from Home Assistant (raises
+> armed and only while idle; reductions at any time). `ecco_dump_controller_max_ceiling_w` is now that setting's factory value,
+> 3000 W. The runaway backstop, the W2 rule and the proof levels below are unchanged; read "configured ceiling" as "the lease's
+> latched ceiling".
+
 Dump-to-Grid's closed-loop controller writes a battery discharge ceiling to the TOU power registers 256-261. The highest value it
 will ever write is the **command ceiling**, `ecco_dump_controller_max_ceiling_w` in the firmware. It is the one source of truth
 for that limit.
@@ -29,7 +36,8 @@ export permission.
 
 ## Configuring a ceiling
 
-The ceiling is chosen at **build time only**. Home Assistant can never raise it. For example:
+*(dtgp1 text, superseded by fcp1; see the note at the top.)* The ceiling is chosen at **build time only**. Home Assistant can never
+raise it. For example:
 
 ```
 esphome -s ecco_dump_controller_max_ceiling_w 6000 compile firmware/ecco_clock_dongle_stage3_4_free_power_esp32s3.yaml

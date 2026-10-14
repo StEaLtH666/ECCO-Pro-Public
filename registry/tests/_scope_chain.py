@@ -108,6 +108,7 @@ import _fbd1_scope as _fbd1  # noqa: E402
 import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
+import _fcp1_scope as _fcp1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
@@ -913,7 +914,38 @@ OVW2 = Entry(
          "modelled need, dashboard 7.21.1 staged: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or "
          "ecco_core change, ZERO Modbus operation, no new service call, no manifest stanza",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2)
+# fcp1 (full-capability Dump-to-Grid foundation; _fcp1_scope.py): made on the export after fsw1. Owner decision 2026-10-13: ONE eventual
+# firmware flash supporting the installed inverter's full validated capability, with power testing through Home Assistant settings,
+# never by reflashing. The inverter capability becomes a PROFILE value (ecco_dump_capability_w; no global maximum - the reference
+# profile's 8000 W is that profile's), and the Dump power ceiling and the maximum net grid export become separate run-time settings
+# PERSISTED on the dongle (restore_value globals behind two validated number entities and one arm switch), validated at boot and
+# enforced without Home Assistant: START refuses invalid / unconfigured limits or a target above the export limit; each lease latches
+# its ceiling (a raise never reaches it, a reduction lowers it at once through the controller's own verified write); an in-lease net
+# export guard ends the lease. Factory state: ceiling 3000 W, export NOT CONFIGURED (every START refused). The firmware is
+# chain-pinned: pre_fcp1_firmware reproduces the dtgp1 firmware byte for byte (every entry between them edits no firmware).
+# Measured, not declared: ZERO Modbus reads / writes (64 / 52) and no write-surface change (register 245 untouched); zero commit / load
+# / status / NVS durable sites, zero durable tags, no header or other firmware file; no op path.
+FCP1 = Entry(
+    id="fcp1", pr="FCP1", commit="unmerged",
+    reverts={FIRMWARE: _fcp1.pre_fcp1_firmware},
+    checkpoints={FIRMWARE: "3101b8a921c8ac72cf42c8f95ae5b260e65d698f17c087bb5df3cb4510e11003"},
+    deltas={"globals": 9, "intervals": 1, "sensors": 2, "text_sensors": 2, "switches": 1, "numbers": 2, "substitutions": 7},
+    subst_added=dict(_fcp1.SUBSTITUTIONS),
+    added_files=_fcp1.ADDED_FILES,
+    frozen_reverts=dict(_fcp1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each frozen suite after fcp1; as of pub0 each is its pub0 state
+        _fcp1.SUPERVISION_TEST_REL: "fbbdd59bf047635fb23486ec46aaf5a9a7a9327bdab6f97e1534b3748604521f",
+        _fcp1.SHADOW_EVALUATOR_TEST_REL: "c7da8a993126df7859952bf8c94f43fe50cbef228be0399ffbfd41a84dee4b68",
+    },
+    # _pex.fingerprint(FCP1): hashes its parent fsw1's fingerprint and every declaration above
+    fingerprint="d2d3ba914523bdec6f796be116be8b089bbd6cfac119c4a5929da53af700d99c",
+    note="full-capability Dump-to-Grid foundation: inverter capability profile (ecco_dump_capability_w, no global maximum), the "
+         "Dump power ceiling and the maximum net grid export as separate settings persisted and enforced on the dongle (validated "
+         "at boot, arm-gated raises only when idle, reductions always, a per-lease latched ceiling, a net export guard); factory "
+         "ceiling 3000 W and export not configured (START refused); ZERO new Modbus operation or write domain, no durable record "
+         "change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
