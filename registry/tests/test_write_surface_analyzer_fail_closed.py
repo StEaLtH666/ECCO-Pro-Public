@@ -356,7 +356,10 @@ prod_writes = [(p.name, op) for p in prod["paths"] for op in p.writes]
 # 51 on main @ 15ee7d2; SG-02 (fix/sg02-dump-lockout-containment) added
 # exactly one: dump_lockout_containment's literal 244 = 2 (register 244 was
 # already in Dump's write surface - the register set is unchanged).
-check("production firmware has 52 modelled writes (51 + the SG-02 containment write)", len(prod_writes) == 52,
+# fcp2 rework: +6 - the Dump restore's one-register writes of 256..261 (a FOREIGN slot is never written); registers already in
+# Dump's write surface, the register set is unchanged.
+check("production firmware has 58 modelled writes (51 + the SG-02 containment write + fcp2's six one-register restore writes)",
+      len(prod_writes) == 58,
       f"{len(prod_writes)}")
 check("production firmware: zero unknown-extent writes", prod["unknown_extent_writes"] == [],
       f"{prod['unknown_extent_writes']}")

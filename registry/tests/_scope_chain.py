@@ -952,7 +952,7 @@ FCP1 = Entry(
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "9c26993b82a46223b0a08c335b464cc4afc8ba5269e770a769787973781fc03c"},
+    checkpoints={FIRMWARE: "f347cacab3be8ddf701a89535d2d9befc2a37f975b409f583e6b133bdfa537fa"},
     deltas={"globals": 55, "substitutions": 13, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
             "scripts": 3, "binary_sensors": 1,
             "text_sensors": 3, "switches": 1, "buttons": 1},
@@ -962,7 +962,7 @@ FCP2 = Entry(
     added_files=_fcp2.ADDED_FILES,
     frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="cf5438b338fd829587e37b817d8caee02d503d1698745f0e82e1406bf405a8b0",
+    fingerprint="26d274332350526b37f97c714d3532c600c820b8ee6e00b5883fb464fd7f43ff",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "

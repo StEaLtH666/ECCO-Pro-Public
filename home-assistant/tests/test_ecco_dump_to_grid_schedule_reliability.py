@@ -193,7 +193,7 @@ check(f"the {len(retried)} retried refusals are verbatim prefixes of the firmwar
 persistent = [r for r in all_fw if not any(r.startswith(p) for p in retried)]
 check(f"...and the {len(persistent)} other refusals (recovery blocked, already active, snapshot pending, Free Power owns, reg 244, "
       "polling off, TOU unreadable / slot, SOC at the floor, the three ranges, generic) are never retried",
-      len(persistent) == 16 and len(persistent) + len(retried) == len(all_fw), str(persistent))   # fcp1: +3 operating-limit refusals
+      len(persistent) == 18 and len(persistent) + len(retried) == len(all_fw), str(persistent))   # fcp1: +3 operating-limit refusals; fcp2 rework: +2 export refusals
 services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
@@ -375,7 +375,13 @@ for label, setup, needle in (
         ("the scheduled export power above the configured maximum grid export", lambda x: setattr(x.d, "max_export", 2000),
          "above the configured maximum grid export"),
         ("the persisted Dump power limits invalid (corrupt / mismatched save)", _flag("limits_invalid"),
-         "Dump power limits are invalid")):
+         "Dump power limits are invalid"),
+        # fcp2 rework (R2): the export refusals are never retried either
+        ("a scheduled export power without headroom below the maximum grid export (3000 W of 3050 W)",
+         lambda x: setattr(x.d, "max_export", 3050),
+         "leaves no headroom"),
+        ("the grid meter already exporting above the maximum grid export", lambda x: setattr(x.d, "meter_export", 9000),
+         "grid meter already shows export")):
     r = Run(setup=setup).until(600)
     check(f"{label}: one press, refused, FAILED at once with the firmware's reason, alerted, switch off, nothing written",
           len(r.d.presses) == 1 and needle in r.last() and r.last().startswith("FAILED TO START") and len(r.created()) >= 1

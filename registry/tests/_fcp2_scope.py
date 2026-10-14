@@ -2470,7 +2470,7 @@ POST_END_SUPERVISION_NEW = _blk(r"""
           if (!id(dump_snapshot_valid) || !id(dump_restore_requested) || !id(dump_export_unverified) ||
               id(dump_recovery_metadata_corrupt)) return;
           bool soc_low = id(ecco_battery_soc).has_state() && id(dump_target_stop_soc) > 0 &&
-                         id(ecco_battery_soc).state <= (float) id(dump_target_stop_soc);
+                         (float) id(dump_target_stop_soc) >= id(ecco_battery_soc).state;
           bool export_over = id(dump_export_trip) != 0;
           if (!soc_low && !export_over) return;
           id(dump_export_trip) = 0;

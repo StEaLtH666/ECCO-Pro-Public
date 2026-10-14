@@ -68,6 +68,10 @@ REJECT = {
     "limits_invalid": "REJECTED - Dump power limits are invalid; set them again (see Dump Power Limits Status)",
     "export_unset": "REJECTED - maximum grid export not configured; set Dump to Grid Max Grid Export first",
     "export_above": "REJECTED - requested export is above the configured maximum grid export",
+    # fcp2 rework (R2): headroom below the limit, and export the grid meter already shows above it.
+    "export_headroom": ("REJECTED - requested export leaves no headroom below the maximum grid export (keep it at least "
+                        "max(100 W, 3 %) below)"),
+    "meter_export": "REJECTED - the grid meter already shows export above the configured maximum grid export",
     "arm": "REJECTED - arm Dump to Grid Write Enable first",
     "bus": "REJECTED - Modbus bus busy with another transaction; try again shortly",
 }
@@ -112,6 +116,8 @@ class DumpDongle(S.Dongle):
                       "limits_invalid": False}
         # fcp1: the dongle's persisted maximum grid export (W; 0 = not configured). An owner-configured site by default.
         self.max_export = 8000
+        # fcp2 rework: the export the grid meter shows before START (W, positive = export).
+        self.meter_export = 0
         self.tou_slot = 0
         self.soc = 80.0
         self.number_log: list = []
@@ -253,6 +259,8 @@ class DumpDongle(S.Dongle):
             ("power", not 500 <= self.power <= 8000), ("stop_soc", not 10 <= self.stop_soc <= 90),
             ("duration", not 1 <= self.duration <= 240), ("limits_invalid", f["limits_invalid"]),
             ("export_unset", self.max_export <= 0), ("export_above", self.power > self.max_export),
+            ("export_headroom", self.power > self.max_export - max(100.0, 0.03 * self.max_export)),
+            ("meter_export", self.meter_export > self.max_export),
             ("arm", not self.arm), ("bus", self.bus_busy(t)),
         )
         return next((k for k, hit in checks if hit), None)
