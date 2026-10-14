@@ -113,9 +113,23 @@ deliver such replies late, including inside the restore's own transaction, and s
 | a 50 % duty oscillation just above the backstop | 95 s |
 | 1-in-3 duty excursions above the gross level | 95 s |
 
+**The windowed mean (added after the independent audit).** A sustained overshoot that sits mostly UNDER the backstop got past
+the k-of-8 rules. The audit's case ran 800 s at a 6000 W command: 3 samples in 8 at backstop + 900 W and the rest just under it,
+a mean discharge 1323 W above the command.
+
+Each valid sample's excess over the **expected** draw, the command × (1 + the profile's DC allowance), is now clipped to
+[−`ecco_dump_runaway_mean_margin_w`, one backstop margin]. Once 8 valid samples exist, a mean above `ecco_dump_runaway_mean_margin_w`
+(300 W) ends the lease: `SUSTAINED POWER EXCESS (windowed mean)`.
+
+Because of the clip, a single glitch adds at most one margin. The audit's case trips at its 8th sample. None of these trips:
+
+- the pessimistic loss model (12 % + 100 W) at any level from 500 W to 8000 W;
+- the recorded leases;
+- two isolated gross spikes.
+
 **Documented tolerances.** These do not trip:
 
-- one sample in four, less than one margin above the backstop;
+- one sample in four, less than one margin above the backstop, with the rest at the expected draw;
 - two isolated gross spikes in 8 samples (a third trips).
 
 **Residual model limits.** The recorded residuals come from 2000-3000 W only. Above 3000 W the proportional model is an
@@ -132,21 +146,39 @@ That overwrote any change someone else had made in the meantime, for example fro
 or an inverter reset. A verified restore whose durable completion failed was also repeated every 15 s, and each repeat rewrote the
 registers again, including over anything the owner had changed since.
 
-**The fix.** Before writing anything, inside the same critical section, the restore reads 244-261 once (an 18-register read) and
-classifies what it finds:
+**The fix (as reworked after the independent audit).** Before writing anything, inside the same critical section, the restore
+reads 244-261 once (an 18-register read) and classifies each register:
 
 | Register | ORIGINAL (the snapshot) | ECCO's own value | Anything else |
 |---|---|---|---|
-| 244 | left alone | 0, Allow Export (what START writes): restored first and verified | FOREIGN |
-| 256-261 | left alone | the verified ceiling, or the possibly-landed pending ceiling (the Dump V2 evidence): the block is written back and verified | FOREIGN |
+| 244 | left alone | 0, Allow Export (what START writes): restored FIRST and verified | FOREIGN, never written |
+| 256-261, each slot | left alone | the verified ceiling, the possibly-landed pending ceiling (the Dump V2 evidence) or the containment value min(original, 500 W) | FOREIGN, never written |
 
-- **A FOREIGN value is never overwritten.** The 256-261 block is written only when every one of its registers is ORIGINAL or
-  ECCO's own.
-- **Everything ECCO still owns is restored.** When 244 still reads ECCO's Allow Export, that means export is turned off first.
-- **The obligation is kept** and the operator is asked:
-  - the existing durable operator-needed record is set;
-  - the status reads `OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten (...)`;
-  - the operator chooses **Force Restore Original** or **Accept Current State**.
+**Then 256-261, per slot:**
+
+- **244 proven out of ECCO's Allow Export** (ORIGINAL, FOREIGN, or restored and verified): ECCO's own slots go back to their
+  ORIGINAL values.
+  - With nothing FOREIGN this is the single 6-register write (the pre-fcp2 write).
+  - Otherwise it is one register at a time, so **a FOREIGN slot is never written**.
+- **244 NOT proven** (its write errored, timed out, or was acknowledged but not applied): the step **CONTAINS** instead. Every
+  non-FOREIGN slot goes to min(original, the 500 W controller floor), so an export ECCO cannot switch off is bounded. The attempt
+  still fails and keeps its retries and its obligation; restoring the originals there would raise the ceiling under a live Allow
+  Export.
+- **Every slot written is read back and verified.**
+
+**The outcome:**
+
+- **Success** only when everything ECCO attempted was written AND verified and nothing is FOREIGN.
+- **The FOREIGN lockout** only in that same case (independent audit B1). It sets the existing durable operator-needed record and
+  publishes `OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified, but an external change was found and NOT
+  overwritten (...)`. The operator chooses **Force Restore Original** or **Accept Current State**.
+- **A failed step** takes the mismatch path (one retry, then the operator) or the comms-backoff path (unbounded retries), never the
+  FOREIGN lockout.
+- **No status ever implies export is off when it isn't proven.** While 244 is not proven, every status names it, and names the
+  containment when that was verified.
+- **Every command's completion flag is reset before the command.** The `d9f11ea` restore did not do this before its 244 write, so
+  on the real (asynchronous) Modbus hub each later wait was satisfied by the previous command's reply. A 256-261 write that was
+  acknowledged but not applied was then declared RESTORED OK. An asynchronous-hub model and a static check now cover this.
 - **A FOREIGN 244 is never Allow Export**, because 0 counts as ECCO's own. So ECCO is not exporting in that state.
 - **A repeat run after a verified restore finds ORIGINAL and writes nothing.** It only completes the durable clear.
 - **A failed or timed-out pre-read writes nothing.** The existing comms backoff retries it.
@@ -179,6 +211,14 @@ any of these cases:
 
 The SOC default is about 5 % of the reference installation's ~30 kWh battery, and it is **site-dependent**: a smaller battery needs
 a smaller value.
+
+Rework (independent audit F3):
+
+- **Idle battery:** battery power within `ecco_dump_frozen_idle_w` (50 W) of zero is idle, never "frozen". A battery that cannot
+  discharge further reads exactly 0 W.
+- **Toggling SOC:** the frozen-SOC energy count restarts only when the SOC drops below its lowest value since the last restart, so
+  a SOC toggling between two values cannot defeat it.
+- **New lease:** the count starts from the SOC at START.
 
 **The restore backoff (SG-39).** A restore attempt that failed while the link itself was down (no telemetry read for
 `ecco_dump_link_down_ms`, 25 s) is retried as soon as a telemetry read succeeds again. Before, it waited out the rest of a backoff
@@ -274,8 +314,72 @@ that bound the lock is STUCK. **It is never released.** Instead, once per episod
 The census reports a STUCK lock as overridable, because it is not a transaction in flight, so `Restart Override Arm` plus
 `Restart` is the operator's recovery.
 
+**The restart waits for a quiet bus (rework).** It happens only when no Modbus frame is queued or awaiting a reply, re-checked every
+5 s, so it can never cut an exchange in half.
+
 **Residual risk.** If a code path leaks the lock again after every boot, the device restarts at most once per bound (each boot then
-completes the owed restore). The cycle is logged and visible in `Restart Status`.
+completes the owed restore). The cycle is logged and visible in `Restart Status`. There is no persistent restart counter. Bounding
+the loop further is an owner decision, together with the reboot policy.
+
+## 7. Export safety (independent audit R2)
+
+**ECCO's export guard is a SECONDARY, lease-ending protection.** It acts on ECCO's own grid CT reading at the telemetry cadence
+(one read every 10 s). It is not a DNO-compliant export limitation scheme. That is the inverter's own export limit, register 245,
+which ECCO never writes.
+
+- **The guard has no start grace.** It counts from the moment the lease is ACTIVE.
+- **When it trips:**
+  - ONE reading more than max(`ecco_dump_export_far_min_w` = 500 W, 25 %) over the limit;
+  - or TWO consecutive readings over limit + max(100 W, 3 %).
+- **How fast:** the decision is latched, and a 1 s interval ends the lease, so the response is one meter reading plus at most 1 s
+  for a gross excess, and two readings plus at most 1 s for a marginal one. The audit's case (7000 W against 3680 W) ends at 10 s
+  after START; it was 60 s.
+- **After an End, while a restore is owed and 244 is not proven** out of Allow Export, the guard keeps sampling. With Stop SOC, a
+  trip makes the owed restore retry at once (its containment included), never after a backoff. Under the operator lockout it
+  raises a `CRITICAL` recovery state.
+- **START fails closed on export.** It refuses when:
+  - the target has no headroom below the limit (at least max(100 W, 3 %));
+  - the grid meter ALREADY shows export above the limit;
+  - its own fresh feed-forward read shows a natural PV surplus above the limit.
+
+  The surplus is refused before the durable commit, so nothing is written. Under Zero Export the inverter throttles PV, so START
+  sees only the surplus it shows; the in-lease guard covers the rest.
+
+## 8. Invalid persisted limits (independent audit R3)
+
+After the limits are INVALID (at boot), **both** the power ceiling and the maximum grid export must be confirmed again, each armed
+and idle, before they are VALID. Re-setting one never re-validates the other, unconfirmed stored value.
+
+Until both are confirmed the integrity value is not recomputed, so a reboot stays INVALID too. A stale export allowance can never be
+silently reactivated.
+
+## 9. Accept Current State (independent audit R4)
+
+Accept refuses while any 256-261 slot still holds ECCO's own ceiling (the verified or the pending one) **above** its original value.
+A raised TOU power setting would outlive the obligation. The operator uses Force Restore Original or lets the restore finish.
+
+- FOREIGN values stay acceptable, because ECCO does not own them.
+- ECCO residue at or below the original, such as the 500 W containment, only limits discharge and stays acceptable.
+- The fresh post-operation readback requirement is unchanged.
+
+## Independent audit: status of every finding
+
+| Finding | Status | Where |
+|---|---|---|
+| B1 FOREIGN + failed 244 → one-attempt lockout, export live | RESOLVED | §3; tests `[W]` B1/O2 |
+| R1 SG-04: block never restored when 244 fails; no supervision | RESOLVED (containment + post-END supervision); export can still remain enabled if the inverter refuses every 244 write, now bounded by the 500 W containment and alarmed | §3, §7; `[W]` R1/S4 |
+| R2 export guard grace and cadence; START does not check export | RESOLVED (no grace, 1 s actor, START checks); it remains secondary protection by design | §7; `[W]` R2/D1/D2 |
+| R3 one limit re-validates the other after INVALID | RESOLVED | §8; `[W]` R3/L1 |
+| R4 Accept retires raised ECCO residue | RESOLVED (per-slot restore + Accept refusal) | §3, §9; `[W]` R4/A1 |
+| F1 3-of-8 sustained overshoot escapes | RESOLVED (windowed mean) | §2; `[W]` F1/R3 |
+| F2 backstop above physical capability at 8 kW; allowance extrapolated | OUTSTANDING (supervised per-level validation, unchanged plan) | §2 |
+| F3 frozen battery at 0 W; SOC toggling | RESOLVED; fixed 1500 Wh stays site-dependent (OUTSTANDING: tie to battery capacity) | §4; `[W]` F3 |
+| F4 stale `dump_restore_failed_ms` | RESOLVED (cleared on success and at START) | `[W]` F4 |
+| F5 limit changes reach flash on a 1 s interval; linear integrity value | OUTSTANDING (at most 1 s window; a power cut inside it keeps the previous, still consistent pair) | - |
+| F6 OTA not gated; default reboot timeouts; restart loop; build tag default | OUTSTANDING: owner decisions and pre-flight tool (the restart now waits for a quiet bus) | §5, §6 |
+| F7 target equal to the limit; one arm for both limits | Target headroom RESOLVED; the shared arm OUTSTANDING (owner decision) | §7 |
+| F8 use the pre-read's 245-255 | OUTSTANDING (optional) | - |
+| AT1 (Window 4 audit) the completion flag before the restore's 244 write | RESOLVED | §3; `[W]` AT1 |
 
 ## Not in this phase
 
@@ -291,7 +395,8 @@ charge-slot suites do not model. It is therefore left for a separate, focused ch
 
 ## Compatibility
 
-- **No new write operation**, and no new write domain. Register 245 is never written.
+- **No new write domain**, and the set of written start addresses is unchanged. Register 245 is never written. The restore's six
+  one-register writes (256..261) are new operations on registers Manual TOU already writes one slot at a time.
 - **One new read:** the restore's pre-read of 244-261.
 - **Every new global is RAM only.** No NVS key is added or changed.
 - **No durable record schema, tag or header changes.** The one new commit site writes the existing retry record exactly as the

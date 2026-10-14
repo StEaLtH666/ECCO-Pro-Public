@@ -36,9 +36,13 @@ Development before the first public release happened in a private repository; se
     watchdog ticks.
   - Above 3000 W the absolute backstop allows for the battery's normal DC conversion loss (a profile value, 12 % for the
     reference profile), so a healthy high-power lease is not ended by mistake. At 3000 W and below it is unchanged.
-  - The Dump restore first reads the inverter. It restores only what ECCO still owns and never overwrites a setting someone else
-    changed. In that case it keeps the recovery obligation and asks for Force Restore Original or Accept Current State. A repeat
-    after a verified restore no longer rewrites anything.
+  - The Dump restore first reads the inverter.
+    - It restores only what ECCO still owns, one register at a time when needed, and never overwrites a setting someone else
+      changed.
+    - If export cannot be proven switched off, it holds ECCO's own TOU power settings at the 500 W floor instead of restoring
+      them, and keeps retrying.
+    - It asks for Force Restore Original or Accept Current State only once everything ECCO owns has been restored and checked.
+    - A repeat after a verified restore no longer rewrites anything.
   - Telemetry that keeps arriving but never changes now ends a Dump lease safely: a grid CT, battery power or SOC that stays
     exactly the same when it should move. After the inverter link comes back, an owed restore is retried at once instead of up to
     5 minutes later.
@@ -48,6 +52,15 @@ Development before the first public release happened in a private repository; se
     `safe_mode:` settings are now explicit, with no change in behaviour.
   - An inverter transaction lock is never released because a timer ran out. A lock held far beyond any transaction's bound is
     reported. If a lease or restore is owed, the lease is ended durably and the dongle restarts so the owed restore completes.
+  - Export safety (still a backup to the inverter's own export limit, which ECCO never writes):
+    - The maximum grid export guard now works from the first second of a lease and ends it within about a second of one reading
+      far over the limit, or of two readings over it.
+    - START refuses when the meter already shows export above the limit, when PV alone already exceeds it, or when the target
+      leaves no headroom.
+  - After the Dump power limits are reported invalid, both the power ceiling and the maximum grid export must be set again.
+  - Accept Current State refuses while ECCO's own raised TOU power setting is still in place.
+  - The runaway guard also ends a lease on a sustained average excess.
+  - A battery idle at exactly 0 W is no longer mistaken for frozen telemetry.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.

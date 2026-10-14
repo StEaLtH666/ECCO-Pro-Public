@@ -952,8 +952,9 @@ FCP1 = Entry(
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "0d7dd52cb12b6ad8c479bb83f3d5849628b8d51749d492689723b5e4cc5d8862"},
-    deltas={"globals": 28, "substitutions": 10, "commit_record": 1, "modbus_reads": 1, "scripts": 3, "binary_sensors": 1,
+    checkpoints={FIRMWARE: "9c26993b82a46223b0a08c335b464cc4afc8ba5269e770a769787973781fc03c"},
+    deltas={"globals": 55, "substitutions": 13, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
+            "scripts": 3, "binary_sensors": 1,
             "text_sensors": 3, "switches": 1, "buttons": 1},
     subst_added=dict(_fcp2.SUBSTITUTIONS),
     op_paths_changed=frozenset({"restore_dump_to_grid_snapshot",   # the ownership pre-read (one read of 244-261, no new write)
@@ -961,7 +962,7 @@ FCP2 = Entry(
     added_files=_fcp2.ADDED_FILES,
     frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="f6c2e868fb5ca747943ad36a8931063d1a65013c23d5277a4202dffa0806769f",
+    fingerprint="cf5438b338fd829587e37b817d8caee02d503d1698745f0e82e1406bf405a8b0",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "

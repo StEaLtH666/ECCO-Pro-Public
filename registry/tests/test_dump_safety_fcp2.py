@@ -25,6 +25,10 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
       SG-16   safety census behind ECCO Safe To Flash, build identity, explicit safe mode
   [K] SG-14/42 a lock is never released by time: a STUCK lock (held beyond any transaction's bound) ends an active lease
               durably and, while anything is owed, restarts so the boot path completes it; nothing owed: reported only
+  [W]         the independent audit's reproductions as permanent regressions: B1/O2 (FOREIGN + failed 244), R1/S4
+              (containment and post-END supervision), R2/D1/D2 (export guard cadence, START export checks), R3/L1 (both limits
+              re-confirmed), R4/A1 (Accept residue), F1/R3 (the 800 s oscillating overshoot, no nuisance trips), F3 (idle
+              battery, toggling SOC), F4 (stale timer), the quiet-bus restart, and AT1 (the restore under an ASYNCHRONOUS hub)
   [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
               global RAM only
   [P]         the post-export declaration (PEX entry fcp2)
@@ -661,11 +665,12 @@ for label, fw in (("fcp2", FW), ("fcp1", OLD)):
     config_poll(s)
     tick(s)                                    # the passive drift check ends the lease; the restore runs
     if label == "fcp2":
-        check("an EXTERNAL change to 258 during the lease: the drift END turns export off (244 was ECCO's) but 258's 6500 W is "
-              "KEPT, the block is not written, the obligation is kept and the operator is asked (durably)",
-              s.bank[258] == 6500 and s.bank[244] == ORIGINAL[244] and s.bank[256] == 1000 and marker(s) == 1
-              and s.g["dump_operator_needed"] and s.nvs[RETRY].operator_needed == 1
-              and s.status().startswith("OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten")
+        check("an EXTERNAL change to 258 during the lease: the drift END turns export off (244 was ECCO's), ECCO's OWN five slots "
+              "are restored one register at a time, 258's 6500 W is KEPT, the obligation is kept and the operator is asked (durably)",
+              s.bank[258] == 6500 and s.bank[244] == ORIGINAL[244] and s.bank[256] == ORIGINAL[256] and s.bank[261] == ORIGINAL[261]
+              and marker(s) == 1 and s.g["dump_operator_needed"] and s.nvs[RETRY].operator_needed == 1
+              and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified, but an "
+                                        "external change was found and NOT overwritten")
               and "register 258 reads 6500W" in s.status()
               and str(s.ent("dump_recovery_state").state).startswith("FOREIGN (not overwritten)"), s.status())
         n = len(s.modbus_log)
@@ -1059,16 +1064,420 @@ check("the FB-D1 RTC deadline breaker is unchanged (it needs its deadline AND pr
       and "no_rtc_frame_outstanding" in str(rtc_new) and "id(manual_write_in_progress) = false" not in str(rtc_new))
 
 # ==================================================================================================================================
+print("\n[W] the independent audit (Window 7) and the async-hub defect: permanent regressions")
+# ==================================================================================================================================
+NUMBERS = {n["id"]: n for n in FW["number"]}
+FAST = next(i for i in FW["interval"] if "id(dump_export_trip) != 0 && id(dump_active_persisted)" in str(i))
+
+
+def set_number(sim, number_id, value):
+    sim.run_actions(NUMBERS[number_id]["set_action"], {"x": float(value)})
+
+
+def limits_arm(sim):
+    sim.ent("dump_limits_arm").state = True
+    sim.g["dump_limits_arm_ms"] = sim.millis()
+
+
+def lease_at(c, fw=None, target=1000, max_export=None, originals=None, settle=True):
+    """A lease whose controller has walked every slot to c W (ECCO's verified and pending ceiling)."""
+    s = ds.Sim(fw or FW)
+    s.configure_dump_limits(max(c, 3000), CAP if max_export is None else max_export)
+    s.bank.update(originals or ORIGINAL)
+    for k, v in (("dump_export_power", float(target)), ("dump_stop_soc", 25.0), ("dump_duration_minutes", 90.0),
+                 ("ecco_battery_voltage", 52.0)):
+        s.ent(k).set(v)
+    for k, v in (("dump_write_enable", True), ("dump_recovery_arm", False), ("dump_limits_arm", False),
+                 ("configuration_online", True), ("configuration_polling", True), ("ecco_restart_arm", False)):
+        s.ent(k).state = v
+    s.g["ntp_synced"] = True
+    for i, t in enumerate([0, 530, 800, 1600, 1900, 2330]):
+        s.g[f"manual_cfg_reg{250 + i}_raw"] = t
+    for i, f in enumerate([1, 0, 0, 0, 0, 0]):
+        s.g[f"manual_cfg_reg{274 + i}_raw"] = f
+    config_poll(s)
+    s.ent("ecco_battery_soc").publish_state(70.0)
+    s.grid_w = -float(target)
+    s.ent("ecco_grid_ct_power").publish_state(s.grid_w)
+    s.execute("start_dump_to_grid_override")
+    assert s.g["dump_active_persisted"], s.status()
+    for r in range(256, 262):
+        s.bank[r] = c
+    s.g["dump_target_power"] = c
+    s.g["dump_evidence_pending_ceiling"] = c
+    s.g["dump_runaway_ceiling_ref"] = float(c)
+    if settle:
+        s.advance(40000)
+    return s
+
+
+def retries(s, n, outcome_244=None):
+    """n watchdog ticks with the backoff skipped (the attempts happen in this window) and fresh telemetry."""
+    w244 = 0
+    for _ in range(n):
+        s.advance(15000)
+        s.ent("ecco_battery_soc").publish_state(70.0)
+        config_poll(s)
+        s.g["dump_restore_next_attempt_ms"] = 0
+        before = len([e for e in s.modbus_log if e[0] == "write" and e[1] == 244])
+        s.run_actions(watchdog(s.fw))
+        w244 += len([e for e in s.modbus_log if e[0] == "write" and e[1] == 244]) - before
+    return w244
+
+
+# --- B1 / O2: a FOREIGN slot plus a failed 244 restore is NOT an operator lockout after one attempt ----------------------------
+for mode in ("error", "ack_not_applied"):
+    for label, fw in (("fcp2 rework", FW), ("fcp1", OLD)):
+        s = lease_at(6000, fw, target=5500)
+        s.bank[258] = 1234                                    # one FOREIGN slot
+        s.outcome_fn = (lambda m: (lambda k, a, c: m if (k == "write" and a == 244) else "ok"))(mode)
+        s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+        first_locked = s.g["dump_operator_needed"]
+        w = retries(s, 8)
+        block = [s.bank[r] for r in range(256, 262)]
+        if label == "fcp2 rework" and mode == "error":
+            check("B1/O2 (244 write ERRORS, one FOREIGN slot): no lockout after one attempt - the comms path keeps retrying with "
+                  "the obligation kept, and every attempt CONTAINS ECCO's own slots at the 500 W floor (the FOREIGN one untouched)",
+                  not first_locked and not s.g["dump_operator_needed"] and w >= 4 and s.g["dump_snapshot_valid"]
+                  and block == [500, 500, 1234, 500, 500, 500] and s.bank[244] == 0
+                  and "NOT proven out of Allow Export" in s.status(), f"w={w} block={block} {s.status()}")
+        elif label == "fcp2 rework":
+            check("B1/O2 (244 write ACKed but NOT applied, one FOREIGN slot): the mismatch path's retry, not an immediate FOREIGN "
+                  "lockout; ECCO's slots CONTAINED at 500 W and verified; the eventual operator lockout says 244 is not proven",
+                  not first_locked and w >= 1 and block == [500, 500, 1234, 500, 500, 500] and s.g["dump_operator_needed"]
+                  and "NOT proven out of Allow Export" in s.status()
+                  and "held at the 500 W floor" in s.status()
+                  and "FOREIGN (not overwritten)" not in str(s.ent("dump_recovery_state").state), f"w={w} block={block} {s.status()}")
+        elif mode == "error":
+            check("...the FCP1 base retried the same comms error without a lockout (the B1 regression was FCP2's)",
+                  not s.g["dump_operator_needed"] and w >= 4)
+s = lease_at(6000, target=5500)
+s.bank[258] = 1234
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+check("...and with 244 restoring normally, the FOREIGN lockout comes only AFTER ECCO's own 244 and slots were written AND "
+      "verified, and says so", s.bank[244] == 2 and [s.bank[r] for r in (256, 257, 259, 260, 261)] == [8000, 8000, 8000, 8000, 5000]
+      and s.bank[258] == 1234 and s.g["dump_operator_needed"]
+      and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified"), s.status())
+
+# --- R1 / S4: 244 refused at high power - containment, and supervision while the restore is owed -----------------------------
+s = lease_at(6000, target=5500)
+s.outcome_fn = lambda k, a, c: "ack_not_applied" if (k == "write" and a == 244) else "ok"
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+retries(s, 6)
+block = [s.bank[r] for r in range(256, 262)]
+check("R1/S4 (6000 W lease, 244 restore ACKed but not applied): every ECCO TOU power slot is CONTAINED at the 500 W floor and "
+      "verified - never left at the 6000 W lease ceiling (FCP2 d9f11ea left 6000 W on all six)",
+      s.bank[244] == 0 and block == [500] * 6 and s.g["dump_restore_contained"] and s.g["dump_export_unverified"], str(block))
+o = lease_at(6000, OLD, target=5500)
+o.outcome_fn = lambda k, a, c: "ack_not_applied" if (k == "write" and a == 244) else "ok"
+o.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+retries(o, 6)
+check("...(the FCP1 base left all six at 6000 W with Allow Export live)", [o.bank[r] for r in range(256, 262)] == [6000] * 6)
+# supervision: while the restore is OWED and 244 unproven, export over the limit makes the retry immediate (not backed off)
+s = lease_at(3000, target=1000, max_export=3680)
+s.outcome_fn = lambda k, a, c: "no_response" if k == "read" and a == 244 and c == 18 else "ok"
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+s.advance(2000)
+s.g["dump_restore_next_attempt_ms"] = s.millis() + 280000                     # a long backoff is in force
+s.ent("ecco_grid_ct_power").publish_state(-6000.0)                             # export far over 3680 W after End
+n0 = len([e for e in s.modbus_log if e[0] == "read" and e[1] == 244 and len(e[2]) == 18])
+s.outcome_fn = lambda k, a, c: "ok"
+s.advance(13000)
+s.ent("ecco_battery_soc").publish_state(70.0)
+config_poll(s)
+s.run_actions(watchdog(s.fw))
+n1 = len([e for e in s.modbus_log if e[0] == "read" and e[1] == 244 and len(e[2]) == 18])
+check("R1 supervision: after End, with 244 not yet proven and export FAR over the limit, the owed restore is retried at the "
+      "next watchdog tick despite a 280 s backoff (and completes)", n1 == n0 + 1 and owned(s) == ORIGINAL and marker(s) == 0,
+      f"{n0}->{n1} {s.status()}")
+s = lease_at(6000, target=5500)
+s.outcome_fn = lambda k, a, c: "ack_not_applied" if (k == "write" and a == 244) else "ok"
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+retries(s, 3)
+s.g["dump_target_stop_soc"] = 25
+s.ent("ecco_battery_soc").publish_state(20.0)                                   # Stop SOC passed while locked out
+s.advance(15000)
+config_poll(s)
+s.run_actions(watchdog(s.fw))
+check("R1 supervision under the operator lockout: Stop SOC passed with 244 unproven raises a CRITICAL recovery state "
+      "(no write: the operator decides)", s.g["dump_operator_needed"]
+      and str(s.ent("dump_recovery_state").state).startswith("CRITICAL - a restore is OWED and register 244 is not proven"),
+      str(s.ent("dump_recovery_state").state))
+
+# --- R2 / D1, D2: export safety -----------------------------------------------------------------------------------------------
+def d1(export_w, fw=FW, fast=True):
+    """CT and battery every 10 s and the watchdog every 15 s from the moment START enabled export; the 1 s interval runs too."""
+    s = lease_at(3000, fw, target=3000, max_export=3680, settle=False)
+    t0 = s.millis()
+    for step in range(1, 61):
+        s.advance(1000)
+        t = s.millis() - t0
+        if t % 10000 == 0:
+            s.ent("ecco_battery_soc").publish_state(70.0)
+            s.ent("ecco_battery_power").publish_state(2000.0 + (step % 3))
+            s.ent("ecco_grid_ct_power").publish_state(-export_w - (step % 2))
+            config_poll(s)
+        if fast:
+            s.run_actions(FAST["then"])
+        if t % 15000 == 0:
+            s.run_actions(watchdog(s.fw))
+        if first_end(s):
+            return t / 1000.0, first_end(s)
+    return None, ""
+
+
+t_far, why = d1(7000.0)
+check(f"R2/D1: 7000 W of export against a 3680 W limit from START ends the lease at the first meter reading + <=1 s "
+      f"({t_far} s; FCP2 d9f11ea: 60 s - its 30 s grace and 3-of-4 rule)", t_far is not None and t_far <= 11
+      and "one reading far over it" in why, f"{t_far} {why}")
+t_mod, why = d1(3900.0)
+check(f"R2: a MARGINAL excess (3900 W vs 3680 + 110 W margin) ends it on the SECOND consecutive reading + <=1 s ({t_mod} s)",
+      t_mod is not None and t_mod <= 21 and "two consecutive readings over it" in why, f"{t_mod} {why}")
+t_ok, _ = d1(3600.0)
+check("R2: export within the limit never trips the guard", t_ok is None)
+s = fresh(target=3000, grid_w=-5000.0, ceiling=3000)
+s.configure_dump_limits(3000, 3680)
+s.execute("start_dump_to_grid_override")
+check("R2/D2: START is REFUSED while the meter already shows 5000 W export against a 3680 W limit; nothing written",
+      not s.g["dump_active_persisted"] and s.status() == "REJECTED - the grid meter already shows export above the configured maximum grid export"
+      and s.writes() == [], s.status())
+s = fresh(target=3680, ceiling=3000)
+s.configure_dump_limits(3000, 3680)
+s.execute("start_dump_to_grid_override")
+check("R2/F7: a target AT the limit is refused (no headroom for the guard's own margin)",
+      not s.g["dump_active_persisted"] and "no headroom" in s.status(), s.status())
+check("R2: START refuses BEFORE any write when its own feed-forward read shows a natural PV surplus above the limit",
+      "dump_start_surplus_refused) = true" in FW_TEXT and "natural PV export surplus" in FW_TEXT
+      and "if (trustworthy && pv_power - house_load > (float) id(dump_max_export_w))" in FW_TEXT)
+# Executed: the feed-forward reply shows PV 6000 W against a 500 W house - a 5500 W visible surplus.
+s2 = fresh(target=3000, ceiling=3000)
+s2.configure_dump_limits(3000, 3680)
+_real_read = s2._modbus_read
+
+
+def read_with_surplus(body, local):
+    _real_read(body, local)
+    if int(body["start_address"]) == 172:
+        s2.g["dump_ff_read_ok"] = True
+        s2.g["dump_ff_grid_w"] = 0.0
+        s2.g["dump_ff_inverter_w"] = 500.0
+        s2.g["dump_ff_house_w"] = 500.0
+        s2.g["dump_ff_pv_w"] = 6000.0
+
+
+s2._modbus_read = read_with_surplus
+s2.execute("start_dump_to_grid_override")
+check("...executed: a 5500 W visible surplus against 3680 W - REJECTED, nothing written, no obligation created",
+      not s2.g["dump_active_persisted"] and not s2.g["dump_snapshot_valid"] and s2.writes() == []
+      and s2.status().startswith("REJECTED - natural PV export surplus ~5500W"), s2.status())
+
+# --- R3 / L1: invalid limits need BOTH re-confirmed --------------------------------------------------------------------------
+s = fresh(target=1000, ceiling=3000)
+s.configure_dump_limits(3000, 3680)
+s.g["dump_max_export_w"] = 6000                                 # an incomplete save: export changed, integrity value not
+s.run_dump_limits_boot()
+invalid = not s.g["dump_limits_valid"]
+limits_arm(s)
+set_number(s, "dump_op_ceiling_number", 3000)
+still_invalid = not s.g["dump_limits_valid"]
+s.ent("dump_export_power").set(5500.0)
+s.execute("start_dump_to_grid_override")
+check("R3/L1: INVALID at boot; re-setting ONLY the ceiling keeps the limits INVALID (the stale 6000 W export is never "
+      "re-validated); START refused", invalid and still_invalid and not s.g["dump_active_persisted"]
+      and "the maximum grid export must also be set again" in str(s.ent("dump_limits_status").state),
+      str(s.ent("dump_limits_status").state))
+check("...and the integrity value was NOT recomputed, so a reboot now is still INVALID",
+      (s.run_dump_limits_boot() or True) and not s.g["dump_limits_valid"])
+limits_arm(s)
+set_number(s, "dump_max_export_number", 3680)
+check("...confirming the maximum grid export as well (armed): VALID with the owner's 3680 W, and it survives a reboot",
+      s.g["dump_limits_valid"] and s.g["dump_max_export_w"] == 3680
+      and (s.run_dump_limits_boot() or True) and s.g["dump_limits_valid"], str(s.ent("dump_limits_status").state))
+
+# --- R4 / A1: Accept never retires a raised ECCO residue ------------------------------------------------------------------------
+LOW = {244: 2, 256: 2500, 257: 2500, 258: 2500, 259: 2500, 260: 2500, 261: 2500}
+s = lease_at(6000, target=5500, originals=LOW)
+s.bank[258] = 1234
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+s.advance(5000)
+config_poll(s)
+check("R4/A1 (originals 2500 W, lease 6000 W, one FOREIGN slot): ECCO's own five slots are RESTORED to 2500 W by the "
+      "restore itself - no 6000 W residue left (FCP2 d9f11ea left 6000 W on five slots)",
+      [s.bank[r] for r in range(256, 262)] == [2500, 2500, 1234, 2500, 2500, 2500], str([s.bank[r] for r in range(256, 262)]))
+s.ent("dump_recovery_arm").state = True
+s.execute("dump_accept_current_state")
+check("...Accept then may retire it, keeping the FOREIGN 1234 W (the external owner's)", marker(s) == 0 and s.bank[258] == 1234,
+      s.status())
+s = lease_at(6000, target=5500, originals=LOW)
+s.outcome_fn = lambda k, a, c: "error" if (k == "write" and a >= 256) else "ok"   # the slot writes fail: ECCO's 6000 W stays
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+s.g["dump_operator_needed"] = True                              # e.g. after a later lockout
+s.advance(5000)
+config_poll(s)
+s.ent("dump_recovery_arm").state = True
+s.execute("dump_accept_current_state")
+check("R4: with ECCO's 6000 W still on a slot above its 2500 W original, Accept is REFUSED (zero writes, obligation kept)",
+      marker(s) == 1 and s.status().startswith("ACCEPT REFUSED - register 256 still holds ECCO's 6000W, above its original 2500W"),
+      s.status())
+
+# --- F1 / R3-runaway: the 800 s oscillating overshoot ----------------------------------------------------------------------
+def r3(fw):
+    s = lease_at(6000, fw, target=6000)
+    thr = abs_thr(6000)
+    pattern = [thr + 900, thr - 200, thr - 200, thr + 900, thr - 200, thr - 200, thr + 900, thr - 200]
+    for i in range(80):
+        s.advance(10000)
+        s.ent("ecco_battery_soc").publish_state(70.0 - i * 0.05)
+        s.ent("ecco_battery_power").publish_state(float(pattern[i % 8] + (i % 3)))
+        s.ent("ecco_grid_ct_power").publish_state(-5900.0 - (i % 5))
+        config_poll(s)
+        if i % 3 == 2:
+            s.run_actions(watchdog(s.fw))
+        if first_end(s):
+            return i, first_end(s)
+    return None, ""
+
+
+i_new, why = r3(FW)
+i_old, _ = r3(OLD)
+check(f"F1/R3: the audit's 800 s oscillating overshoot (3 of 8 samples to backstop+900 W, 5 just under it; mean +1323 W above "
+      f"a 6000 W command) now ends the lease (SUSTAINED POWER EXCESS, sample {i_new}); FCP2 d9f11ea's windows alone let it run "
+      f"800 s (independent audit R3). (The FCP1 base trips it only through its fixed 750 W backstop - sample {i_old} - the "
+      f"same backstop that nuisance-trips a healthy 7-8 kW lease, see [R].)",
+      i_new is not None and i_new <= 12 and why.startswith("SUSTAINED POWER EXCESS (windowed mean)"), f"{i_new} {why}")
+for c in (500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000):
+    noisy_ok = feed(at_level(c), [c * 1.12 + 100.0 + (8 if k % 2 else -8) for k in range(40)])
+    check(f"F1 no nuisance: {c} W under the pessimistic loss model (12 % + 100 W) for 400 s - the mean criterion never trips",
+          noisy_ok is None, str(noisy_ok))
+check("F1 no nuisance: the recorded leases replay with the mean criterion active - no trip",
+      [lease["lease"] for lease in FIX["leases"] if replay(FW, lease)[1]] == [])
+check("F1: two isolated gross spikes still do not trip (each sample adds at most one backstop margin to the mean)",
+      feed(at_level(3000), [8600, 3300, 3300, 8600, 3300, 3300, 3300, 3300, 3300, 3300]) is None)
+
+# --- F3: an idle battery at exactly 0 W is not frozen; a toggling SOC cannot defeat the frozen-SOC count ----------------------
+i_f1, why = run_lease(FW, [(-1000.0 - (k % 3), 0.0) for k in range(12)])
+check("F3/F1: a battery legitimately idle at exactly 0 W for 12 reads does NOT end the lease as frozen (FCP2 d9f11ea did)",
+      i_f1 is None, why)
+i_tog, why = run_lease(FW, [(-1000.0 - (k % 3), 3000.0 + 5 * (k % 2)) for k in range(reads_to_soc + 10)],
+                       soc_fn=lambda k: 70.0 + (k % 2), c=3000)
+check("F3: a SOC toggling between 70 and 71 % while kWh are discharged still trips SOC TELEMETRY FROZEN",
+      i_tog is not None and why.startswith("SOC TELEMETRY FROZEN"), f"{i_tog} {why}")
+
+# --- F4: no stale link-down stamp survives into a new lease --------------------------------------------------------------------
+s = started(target=1000)
+s.g["dump_restore_failed_ms"] = 12345
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+s3 = fresh(target=1000)
+s3.g["dump_restore_failed_ms"] = 999
+s3.execute("start_dump_to_grid_override")
+check("F4: a restore SUCCESS clears dump_restore_failed_ms, and every START clears it",
+      marker(s) == 0 and s.g["dump_restore_failed_ms"] == 0 and s3.g["dump_active_persisted"] and s3.g["dump_restore_failed_ms"] == 0)
+
+# --- the stuck-lock restart waits for a quiet bus ------------------------------------------------------------------------------
+s = started(target=1000)
+s.ent("ecco_restart_arm").state = False
+s.g["manual_write_in_progress"] = True
+s.bus_idle = False
+five_s(s, STUCK_MS // 1000 + 30)
+p_busy = list(s.pressed)
+s.bus_idle = True
+five_s(s, 5)
+check("the STUCK-lock escalation never restarts while a Modbus frame is queued or awaited (it waits for a quiet bus, "
+      "re-checked every 5 s), then escalates", p_busy == [] and s.pressed == ["ecco_restart_internal"], f"{p_busy} {s.pressed}")
+
+
+# --- AT1: the restore under an ASYNCHRONOUS Modbus hub (the d9f11ea completion-flag defect) ------------------------------------
+class AsyncSim(ds.Sim):
+    """The real hub: a command's reply arrives LATER, in order; wait_until returns at once if its flag is already set. Replies
+    are queued and delivered FIFO only while a wait_until condition is false."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.pending = []
+        self.async_on = False
+
+    def _handler(self, body, name, local, values=None, exception_code=None):
+        if not self.async_on:
+            return super()._handler(body, name, local, values, exception_code)
+        self.pending.append((body, name, dict(local or {}), values, exception_code))
+
+    def run_actions(self, actions, local=None):
+        for action in actions or []:
+            (kind, body), = action.items()
+            if kind == "wait_until" and self.async_on:
+                cond = body["condition"]["lambda"]
+                while not self.run_lambda(cond, local, params=tuple((local or {}).keys())) and self.pending:
+                    b, n, l, v, e = self.pending.pop(0)
+                    ds.Sim._handler(self, b, n, l, v, e)
+                continue
+            super().run_actions([action], local)
+
+
+def async_restore(fw, case):
+    s = AsyncSim(fw)
+    s.configure_dump_limits(3000, CAP)
+    s.bank.update(ORIGINAL)
+    for k, v in (("dump_export_power", 1000.0), ("dump_stop_soc", 25.0), ("dump_duration_minutes", 90.0), ("ecco_battery_voltage", 52.0)):
+        s.ent(k).set(v)
+    for k in ("configuration_online", "configuration_polling", "dump_write_enable"):
+        s.ent(k).state = True
+    s.ent("dump_recovery_arm").state = False
+    s.g["ntp_synced"] = True
+    for i, t in enumerate([0, 530, 800, 1600, 1900, 2330]):
+        s.g[f"manual_cfg_reg{250 + i}_raw"] = t
+    for i, f in enumerate([1, 0, 0, 0, 0, 0]):
+        s.g[f"manual_cfg_reg{274 + i}_raw"] = f
+    config_poll(s)
+    s.ent("ecco_battery_soc").publish_state(70.0)
+    s.ent("ecco_grid_ct_power").publish_state(-1000.0)
+    s.execute("start_dump_to_grid_override")
+    s.async_on = True
+    if case:
+        s.outcome_fn = lambda k, a, c: "ack_not_applied" if (k == "write" and a == case) else "ok"
+    s.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
+    while s.pending:
+        b, n, l, v, e = s.pending.pop(0)
+        ds.Sim._handler(s, b, n, l, v, e)
+    return s
+
+
+s = async_restore(FW, None)
+check("AT1: under an asynchronous hub a normal restore still completes and verifies", owned(s) == ORIGINAL and marker(s) == 0, s.status())
+s = async_restore(FW, 256)
+check("AT1: a 256-261 write ACKed but NOT applied is caught by the readback, obligation kept (d9f11ea declared RESTORED OK and "
+      "cleared the obligation with ECCO's ceiling still live - its 244 write reused the pre-read's completion flag)",
+      marker(s) == 1 and "VERIFY FAILED" in s.status(), s.status())
+s = async_restore(FW, 244)
+check("AT1: a 244 write ACKed but NOT applied: the 256-261 step CONTAINS (500 W) instead of restoring the originals, and the "
+      "attempt fails", marker(s) == 1 and [s.bank[r] for r in range(256, 262)] == [500] * 6, str([s.bank[r] for r in range(256, 262)]))
+RESTORE_TEXT = FW_TEXT[FW_TEXT.index("  - id: restore_dump_to_grid_snapshot\n"):FW_TEXT.index("  - id: request_dump_end\n")]
+ops = [m.start() for m in re.finditer(r"- modbus_client\.(?:read_holding_registers|write_multiple_registers):", RESTORE_TEXT)]
+waits = [m.start() for m in re.finditer(r"- wait_until:", RESTORE_TEXT)]
+missing = []
+for k, op in enumerate(ops):
+    prev_wait = max([w for w in waits if w < op], default=0)
+    if "id(dump_op_terminal) = false;" not in RESTORE_TEXT[prev_wait:op]:
+        missing.append(k)
+check(f"AT1 static: every one of the restore's {len(ops)} Modbus commands is preceded by its own completion-flag reset since the "
+      "previous wait", missing == [], str(missing))
+
+# ==================================================================================================================================
 print("\n[C] write surface and NVS")
 # ==================================================================================================================================
-OPS = ("write_multiple_registers", "write_single_register", "read_input_registers")
-check("no new Modbus WRITE operation (counts equal to the fcp1 firmware)", all(FW_TEXT.count(o) == OLD_TEXT.count(o) for o in OPS))
+OPS = ("write_single_register", "read_input_registers")
+check("no new FC06 write or input-register read (counts equal to the fcp1 firmware)", all(FW_TEXT.count(o) == OLD_TEXT.count(o) for o in OPS))
+check("fcp2 rework: exactly SIX new writes - the restore's one-register writes of 256..261, so a FOREIGN slot is never written "
+      "(registers already in the write surface; no new register)",
+      FW_TEXT.count("write_multiple_registers") == OLD_TEXT.count("write_multiple_registers") + 6
+      and all(FW_TEXT.count(f"start_address: {r}\n                      values: !lambda 'return std::vector<uint16_t>{{id(dump_restore_v{r - 256})}};'") == 1
+              for r in range(256, 262)))
 check("exactly ONE new read: the restore's ownership pre-read of 244-261 (18 registers)",
       FW_TEXT.count("read_holding_registers") == OLD_TEXT.count("read_holding_registers") + 1
       and FW_TEXT.count("start_address: 244\n                count: 18") == 1)
 w_new = sorted({int(m) for m in re.findall(r"write_multiple_registers:\s*\n\s*modbus_id: \w+\s*\n\s*address: 0x01\s*\n\s*start_address: (\d+)", FW_TEXT)})
-check("register 245 is never written; the written start addresses are unchanged", 245 not in w_new and w_new == sorted(
-    {int(m) for m in re.findall(r"write_multiple_registers:\s*\n\s*modbus_id: \w+\s*\n\s*address: 0x01\s*\n\s*start_address: (\d+)", OLD_TEXT)}))
+w_old = sorted({int(m) for m in re.findall(r"write_multiple_registers:\s*\n\s*modbus_id: \w+\s*\n\s*address: 0x01\s*\n\s*start_address: (\d+)", OLD_TEXT)})
+check("register 245 is never written; the set of written start addresses is UNCHANGED (257..261 are already written one slot at "
+      "a time by Manual TOU)", 245 not in w_new and w_new == w_old, str(sorted(set(w_new) ^ set(w_old))))
 import _fcp2_scope as F  # noqa: E402
 gl = {g["id"]: g for g in FW["globals"]}
 check(f"every global fcp2 adds ({len(F.NEW_GLOBAL_IDS)}) is RAM only (restore_value no): no NVS key added or changed",

@@ -166,15 +166,19 @@ print("")
 print("[7] Restore write ordering: 244 (disable export) before 256-261 (the ceiling) - the reverse of activation")
 restore_256_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if op.start_address == 256]
 restore_244_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if op.start_address == 244]
+# fcp2 rework: the 256-261 step is the full 6-register write (nothing FOREIGN) OR one register at a time (never a FOREIGN
+# slot) - so the restore has one write starting at 256 for each form, plus one each starting at 257..261.
+restore_slot_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if 257 <= op.start_address <= 261]
 check(
-    "restore_dump_to_grid_snapshot writes 244 exactly once and 256-261 exactly once",
-    len(restore_244_offsets) == 1 and len(restore_256_offsets) == 1,
-    f"244-offsets={restore_244_offsets} 256-offsets={restore_256_offsets}",
+    "restore_dump_to_grid_snapshot writes 244 exactly once, and 256-261 through exactly one full-block write plus one "
+    "single-register write per slot (fcp2: a FOREIGN slot is never written)",
+    len(restore_244_offsets) == 1 and len(restore_256_offsets) == 2 and len(restore_slot_offsets) == 5,
+    f"244-offsets={restore_244_offsets} 256-offsets={restore_256_offsets} 257-261={restore_slot_offsets}",
 )
 if restore_244_offsets and restore_256_offsets:
     check(
-        "the 244 write happens BEFORE the 256-261 write on restore",
-        restore_244_offsets[0] < restore_256_offsets[0],
+        "the 244 write happens BEFORE every 256-261 write on restore",
+        restore_244_offsets[0] < min(restore_256_offsets + restore_slot_offsets),
     )
 
 print("")
@@ -441,24 +445,30 @@ restore_flat = flatten(restore_tree)
 ops = [(i, kind, body.get("start_address"), gates) for i, (kind, gates, body) in enumerate(restore_flat) if kind in (READ, WRITE)]
 seq = [(kind == WRITE and "W" or "R", addr) for _, kind, addr, _ in ops]
 check(
-    "restore issues exactly R244 (fcp2: the 18-register ownership pre-read), W244, R244, W256, R256 in that order",
-    seq == [("R", 244), ("W", 244), ("R", 244), ("W", 256), ("R", 256)]
+    "restore issues exactly R244 (fcp2: the 18-register ownership pre-read), W244, R244, then the 256-261 step (the full "
+    "W256 x6, or W256..W261 one at a time) and R256, in that order",
+    seq == [("R", 244), ("W", 244), ("R", 244), ("W", 256), ("W", 256), ("W", 257), ("W", 258), ("W", 259), ("W", 260),
+            ("W", 261), ("R", 256)]
     and restore_flat[ops[0][0]][2].get("count") == 18,
     f"{seq}",
 )
-if len(ops) == 5:
+if len(ops) == 11:
     w244_gates = [c for c, branch in ops[1][3] if branch == "then"]
     w256_gates = [c for c, branch in ops[3][3] if branch == "then"]
+    slot_gates = [[c for c, branch in ops[k][3] if branch == "then"] for k in range(4, 10)]
     check(
         "fcp2: the 244 restore write is gated on a successful pre-read that found ECCO's own Allow Export there",
-        "return !id(dump_write_failed) && id(dump_restore_244_action) == 1;" in w244_gates,
+        "return id(dump_restore_pre_ok) && id(dump_restore_244_action) == 1;" in w244_gates,
         f"{w244_gates}",
     )
     check(
-        "the 256-261 restore write is gated on !dump_write_failed (i.e. only after 244 was written AND verified) and (fcp2) on "
-        "the pre-read finding only ORIGINAL or ECCO's own values there",
-        "return !id(dump_write_failed) && id(dump_restore_block_action) == 1;" in w256_gates,
-        f"{w256_gates}",
+        "fcp2 rework: the full 256-261 write is gated on the plan writing all six slots (nothing FOREIGN) - the plan restores "
+        "ORIGINAL only once 244 is proven out of Allow Export, else it CONTAINS at the floor",
+        "return id(dump_restore_wmask) == 0x3F;" in w256_gates, f"{w256_gates}",
+    )
+    check(
+        "fcp2 rework: each single-register write is gated on its own slot bit of the plan (a FOREIGN slot is never in it)",
+        all(f"((id(dump_restore_wmask) >> {i}) & 1) != 0" in str(g) for i, g in enumerate(slot_gates)), f"{slot_gates}",
     )
     r244_body = restore_flat[ops[2][0]][2]
     r244_handler = r244_body["on_response"]["then"][0]["lambda"]

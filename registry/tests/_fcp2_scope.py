@@ -18,12 +18,20 @@ Every item below is offline-implemented and simulator-tested only.
          a gross level, latched at the sample that completes them, so an alternating (50 % duty) overshoot trips. Above
          ecco_dump_runaway_backstop_floor_w (3000 W) the backstop's margin grows by the profile's DC-over-AC allowance
          (ecco_dump_runaway_dc_allowance_pct) of the command above that floor; at or below it the margin is unchanged.
-  SG-08  ownership-checked restore (also SG-29c's duplicate restoration). restore_dump_to_grid_snapshot first fresh-reads 244-261
-         (one 18-register read) and restores only what ECCO still owns: a register already ORIGINAL is left alone; ECCO's own
-         value (244: Allow Export; 256-261: the verified or the possibly-landed pending ceiling, Dump V2's evidence) is written
-         back and verified; a FOREIGN value is NEVER overwritten - the obligation is kept and the operator decides (durable
-         operator-needed, the existing retry record). A failed or timed-out pre-read writes nothing (comms backoff). Force Restore
-         Original remains the operator's deliberate override.
+  SG-08  ownership-checked restore (also SG-29c's duplicate restoration; reworked after the independent audit). restore_dump_to_grid_
+         snapshot first fresh-reads 244-261 (one 18-register read) and classifies each register ORIGINAL / ECCO's own (244:
+         Allow Export; 256-261: the verified or pending ceiling - Dump V2's evidence - or the containment value) / FOREIGN. 244 is
+         restored FIRST (its completion flag reset before the write). If 244 is proven out of ECCO's Allow Export, ECCO's own
+         256-261 slots return to ORIGINAL (the 6-register write when nothing is FOREIGN, else one register at a time); if NOT,
+         every non-FOREIGN slot is CONTAINED at min(original, 500 W) and the attempt fails with its retries. A FOREIGN value is
+         never written; the FOREIGN operator lockout (the existing retry record) follows only when everything ECCO attempted was
+         written AND verified. A failed or timed-out pre-read writes nothing. Force Restore Original remains the operator's
+         override.
+  R1/R2/R3/R4/F1/F3/F4 (the independent audit): post-END supervision while 244 is unproven; the export guard without a start grace,
+         latched (one far reading or two consecutive) and acted on within 1 s; START refuses measured export above the limit, a
+         visible PV surplus above it and a target without headroom; both limits re-confirmed after INVALID; Accept refuses ECCO's
+         raised residue; a windowed-mean runaway criterion; an idle battery is not frozen and a toggling SOC cannot reset the
+         frozen-SOC count; no stale link-down stamp; the stuck-lock restart waits for a quiet bus.
   SG-15/43 frozen telemetry: during a settled lease, battery power repeating exactly for ecco_dump_frozen_samples reads, the grid
          CT repeating exactly that long while the battery moved more than ecco_dump_frozen_cross_w (or for
          ecco_dump_frozen_ct_long_samples reads regardless), or more than ecco_dump_soc_frozen_wh discharged with no SOC change,
@@ -37,7 +45,8 @@ Every item below is offline-implemented and simulator-tested only.
          active Dump lease is ended durably and, while anything is owed, the device restarts so the boot path completes it;
          nothing owed: reported only.
 
-  ZERO new inverter write and ZERO new write domain (register 245 untouched); ONE new read (the pre-read); no persisted global,
+  ZERO new write domain and an unchanged set of written start addresses (register 245 untouched); six one-register restore writes
+  of 256..261; ONE new read (the pre-read); no persisted global,
   durable record schema, tag or header change (every new global is RAM only; the one new commit site writes the existing retry
   record exactly as the mismatch lockout does).
 
@@ -67,17 +76,20 @@ SUBSTITUTIONS = {
     'ecco_dump_runaway_dc_allowance_pct': '12',
     'ecco_dump_runaway_window_k': '4',
     'ecco_dump_runaway_gross_k': '3',
+    'ecco_dump_runaway_mean_margin_w': '300',
     'ecco_dump_frozen_samples': '6',
     'ecco_dump_frozen_cross_w': '150',
     'ecco_dump_frozen_ct_long_samples': '30',
     'ecco_dump_soc_frozen_wh': '1500',
+    'ecco_dump_frozen_idle_w': '50',
     'ecco_dump_link_down_ms': '25000',
     'ecco_build_tag': 'unrecorded-build',
     'ecco_write_lock_stuck_ms': '180000',
+    'ecco_dump_export_far_min_w': '500',
 }
 
 # Every global fcp2 adds (all RAM only: restore_value no).
-NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'ecco_unsafe_reason', 'ecco_unsafe_busy', 'ecco_restart_arm_ms', 'ecco_lock_since_ms', 'ecco_lock_stuck', 'ecco_lock_escalated', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_block_action', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail')
+NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'ecco_unsafe_reason', 'ecco_unsafe_busy', 'ecco_restart_arm_ms', 'ecco_lock_since_ms', 'ecco_lock_stuck', 'ecco_lock_escalated', 'dump_export_trip', 'dump_start_surplus_refused', 'dump_start_surplus_w', 'dump_limits_reconfirm', 'dump_runaway_e0', 'dump_runaway_e1', 'dump_runaway_e2', 'dump_runaway_e3', 'dump_runaway_e4', 'dump_runaway_e5', 'dump_runaway_e6', 'dump_runaway_e7', 'dump_runaway_e_n', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_owned_mask', 'dump_restore_foreign_mask', 'dump_restore_wmask', 'dump_restore_v0', 'dump_restore_v1', 'dump_restore_v2', 'dump_restore_v3', 'dump_restore_v4', 'dump_restore_v5', 'dump_restore_pre_ok', 'dump_restore_244_ok', 'dump_restore_contain', 'dump_restore_contained', 'dump_restore_block_failed', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail', 'dump_export_unverified')
 
 
 def _blk(s: str) -> str:
@@ -148,6 +160,13 @@ WINDOW_SUBST_NEW = _blk(r"""
   # samples; it is cleared only at the next lease START.
   ecco_dump_runaway_window_k: "4"
   ecco_dump_runaway_gross_k: "3"
+  # fcp2 rework (F1): the WINDOWED MEAN (energy) criterion, alongside the windows
+  # above. Each valid sample's excess over the EXPECTED battery draw - the command
+  # times (1 + the profile's DC allowance) - is clipped to [-this, one backstop
+  # margin], so a single glitch adds at most one margin and an under-run cannot hide
+  # a later excess for long; once 8 valid samples exist, a mean excess above this
+  # many W ends the lease (a sustained overshoot that is mostly UNDER the backstop).
+  ecco_dump_runaway_mean_margin_w: "300"
 """)
 
 # ---- window_asserts
@@ -182,6 +201,8 @@ WINDOW_ASSERTS_NEW = _blk(r"""
                         "Dump restore backoff: the link-down age must exceed one missed poll and stay below the SOC staleness bound");
           static_assert(${ecco_write_lock_stuck_ms}UL >= 60000UL,
                         "Stuck-lock bound: at least 60 s (every transaction step is bounded by a 3 s wait)");
+          static_assert(${ecco_dump_runaway_mean_margin_w} >= 150 && ${ecco_dump_runaway_mean_margin_w} <= ${ecco_dump_runaway_absolute_margin_w},
+                        "Dump runaway mean criterion: 150 W up to the absolute margin");
 """)
 
 # ---- window_globals
@@ -303,6 +324,63 @@ WINDOW_GLOBALS_NEW = _blk(r"""
     type: bool
     restore_value: no
     initial_value: 'false'
+  # fcp2 rework (R2): the NET GRID EXPORT guard's LATCHED decision (0 none, 1 two consecutive
+  # samples over, 2 one sample far over) - see ecco_grid_ct_power's on_value; and START's PV-surplus
+  # refusal (see start_dump_to_grid_override). RAM only; cleared at every START.
+  - id: dump_export_trip
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_start_surplus_refused
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_start_surplus_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  # fcp2 rework (R3): after INVALID, which limits have been confirmed again (bit 0 the power
+  # ceiling, bit 1 the maximum grid export); VALID only once both are. RAM only.
+  - id: dump_limits_reconfirm
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_runaway_e0
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e1
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e2
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e3
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e4
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e5
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e6
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e7
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_runaway_e_n
+    type: int
+    restore_value: no
+    initial_value: '0'
 """)
 
 # ---- abs_margin
@@ -373,6 +451,30 @@ WINDOW_UPDATE_NEW = _blk(r"""
                 }
                 if (id(dump_runaway_trip) != 0) id(dump_runaway_trip_w) = x;
               }
+              // fcp2 rework (F1): the WINDOWED MEAN criterion - see ecco_dump_runaway_mean_margin_w.
+              float expected = requested * (1.0f + (float) ${ecco_dump_runaway_dc_allowance_pct} / 100.0f);
+              float e = x - expected;
+              if (e > abs_margin) e = abs_margin;
+              if (e < -${ecco_dump_runaway_mean_margin_w}.0f) e = -${ecco_dump_runaway_mean_margin_w}.0f;
+              id(dump_runaway_e7) = id(dump_runaway_e6);
+              id(dump_runaway_e6) = id(dump_runaway_e5);
+              id(dump_runaway_e5) = id(dump_runaway_e4);
+              id(dump_runaway_e4) = id(dump_runaway_e3);
+              id(dump_runaway_e3) = id(dump_runaway_e2);
+              id(dump_runaway_e2) = id(dump_runaway_e1);
+              id(dump_runaway_e1) = id(dump_runaway_e0);
+              id(dump_runaway_e0) = e;
+              if (id(dump_runaway_e_n) < 8) id(dump_runaway_e_n)++;
+              if (id(dump_runaway_trip) == 0 && id(dump_runaway_e_n) >= 8) {
+                float mean = (id(dump_runaway_e0) + id(dump_runaway_e1) + id(dump_runaway_e2) + id(dump_runaway_e3) +
+                              id(dump_runaway_e4) + id(dump_runaway_e5) + id(dump_runaway_e6) + id(dump_runaway_e7)) / 8.0f;
+                if (mean > ${ecco_dump_runaway_mean_margin_w}.0f) {
+                  id(dump_runaway_trip) = 4;
+                  id(dump_runaway_trip_threshold_w) = expected;
+                  id(dump_runaway_trip_w) = mean;
+                  id(dump_runaway_trip_count) = 8;
+                }
+              }
             }
 """)
 
@@ -394,6 +496,10 @@ WINDOW_START_CLEAR_NEW = _blk(r"""
                               id(dump_ct_same_count) = 0;
                               id(dump_bp_same_count) = 0;
                               id(dump_soc_frozen_wh_acc) = 0.0f;
+                              // fcp2 rework (F1 / F3): a fresh mean window, and the frozen-SOC count
+                              // starts from today's SOC.
+                              id(dump_runaway_e_n) = 0;
+                              id(dump_soc_last_value) = id(ecco_battery_soc).has_state() ? id(ecco_battery_soc).state : -1.0f;
                               // V1.1: the settle window for both the
 """)
 
@@ -416,7 +522,9 @@ WINDOW_WATCHDOG_NEW = _blk(r"""
                       id: request_dump_end
                       reason: !lambda |-
                         char msg[200];
-                        if (id(dump_runaway_trip) == 3) {
+                        if (id(dump_runaway_trip) == 4) {
+                          snprintf(msg, sizeof(msg), "SUSTAINED POWER EXCESS (windowed mean) - battery discharge averaged %.0fW above the expected %.0fW over the last 8 samples", id(dump_runaway_trip_w), id(dump_runaway_trip_threshold_w));
+                        } else if (id(dump_runaway_trip) == 3) {
                           snprintf(msg, sizeof(msg), "GROSS POWER RUNAWAY (windowed) - battery discharge above the %.0fW gross level in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
                         } else if (id(dump_runaway_trip) == 2) {
                           snprintf(msg, sizeof(msg), "ABSOLUTE POWER RUNAWAY (windowed) - battery discharge above the %.0fW absolute backstop in %d of the last 8 samples (last %.0fW)", id(dump_runaway_trip_threshold_w), id(dump_runaway_trip_count), id(dump_runaway_trip_w));
@@ -600,24 +708,77 @@ RESTORE_GLOBALS_NEW = _blk(r"""
     type: bool
     restore_value: no
     initial_value: 'false'
-  # fcp2 (SG-08 / SG-29c): the restore's OWNERSHIP PRE-READ. Before writing
-  # anything, restore_dump_to_grid_snapshot fresh-reads 244-261 and classifies
-  # what it finds against the durable snapshot (ORIGINAL) and ECCO's own
-  # evidence (244: Allow Export, the value START writes; 256-261: the verified
-  # ceiling dump_target_power or the possibly-landed dump_evidence_pending_ceiling).
-  # dump_restore_244_action / dump_restore_block_action: 0 = already ORIGINAL
-  # (nothing to write), 1 = ECCO's own value (restore it), 2 = FOREIGN (an
-  # external change - never overwritten). dump_restore_foreign_this_attempt:
-  # the pre-read found a FOREIGN value; the obligation is kept and the operator
-  # decides (Force Restore Original / Accept Current State). RAM only.
+  # fcp2 (SG-08 / SG-29c / SG-04): the restore's OWNERSHIP PRE-READ and plan - see
+  # restore_dump_to_grid_snapshot. dump_restore_244_action: 0 = 244 already ORIGINAL,
+  # 1 = ECCO's own Allow Export (restore it), 2 = FOREIGN (never written).
+  # dump_restore_owned_mask / _foreign_mask: per 256-261 slot (bit 0 = 256), ECCO's own
+  # value (the verified or pending ceiling, or the containment value) / an external one.
+  # dump_restore_wmask and dump_restore_v0..v5: the slots this attempt writes and their
+  # values. dump_restore_244_ok: 244 is proven not exporting by ECCO after this attempt;
+  # if not, the plan CONTAINS (dump_restore_contain) instead of restoring.
+  # dump_restore_contained: that containment was written AND verified. RAM only.
   - id: dump_restore_244_action
     type: uint8_t
     restore_value: no
     initial_value: '2'
-  - id: dump_restore_block_action
+  - id: dump_restore_owned_mask
     type: uint8_t
     restore_value: no
-    initial_value: '2'
+    initial_value: '0'
+  - id: dump_restore_foreign_mask
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_wmask
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v0
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v1
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v2
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v3
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v4
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_v5
+    type: uint16_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_restore_pre_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_restore_244_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_restore_contain
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_restore_contained
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_restore_block_failed
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # fcp2: set only when everything ECCO attempted this time was written AND verified and
+  # a FOREIGN value remains: the operator decides (never after a failed step).
   - id: dump_restore_foreign_this_attempt
     type: bool
     restore_value: no
@@ -626,10 +787,24 @@ RESTORE_GLOBALS_NEW = _blk(r"""
     type: std::string
     restore_value: no
     initial_value: '""'
+  # fcp2 (R1 / SG-04): register 244 has NOT been proven out of ECCO's Allow Export since
+  # the last START (or boot). Set at every START; cleared only by a pre-read or a
+  # verified restore of 244. While a restore is owed and this is set, the watchdog keeps
+  # supervising export and Stop SOC (see the Dump watchdog). RAM only; true at boot.
+  - id: dump_export_unverified
+    type: bool
+    restore_value: no
+    initial_value: 'true'
 """)
 
-# ---- restore_preread
-RESTORE_PREREAD_OLD = _blk(r"""
+# ---- restore_body
+RESTORE_BODY_OLD = _blk(r"""
+            - lambda: |-
+                id(dump_operation_in_progress) = true;
+                id(manual_write_in_progress) = true;
+                id(dump_write_failed) = false;
+                id(dump_restore_mismatch_this_attempt) = false;
+                id(dump_op_terminal) = false;
                 id(dump_status).publish_state("RESTORING - writing back original inverter settings");
                 ESP_LOGW("dump_to_grid", "Restoring Dump to Grid snapshot");
 
@@ -716,26 +891,235 @@ RESTORE_PREREAD_OLD = _blk(r"""
                         ESP_LOGE("dump_to_grid", "Restore verify reread of register 244 did not reach a terminal state");
                       }
 
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      values: !lambda |-
+                        return std::vector<uint16_t>{
+                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
+                          id(dump_snapshot_reg259), id(dump_snapshot_reg260), id(dump_snapshot_reg261)
+                        };
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to registers 256-261 did not reach a terminal state");
+                      }
+
+                  - if:
+                      condition:
+                        lambda: 'return !id(dump_write_failed);'
+                      then:
+                        - lambda: 'id(dump_op_terminal) = false;'
+                        - modbus_client.read_holding_registers:
+                            modbus_id: inverter_modbus
+                            address: 0x01
+                            start_address: 256
+                            count: 6
+                            on_response:
+                              then:
+                                - lambda: |-
+                                    id(dump_op_terminal) = true;
+                                    if (!id(dump_operation_in_progress)) return;
+                                    bool ok = values[0] == id(dump_snapshot_reg256) && values[1] == id(dump_snapshot_reg257) &&
+                                              values[2] == id(dump_snapshot_reg258) && values[3] == id(dump_snapshot_reg259) &&
+                                              values[4] == id(dump_snapshot_reg260) && values[5] == id(dump_snapshot_reg261);
+                                    if (!ok) {
+                                      id(dump_write_failed) = true;
+                                      id(dump_restore_mismatch_this_attempt) = true;
+                                      ESP_LOGE("dump_to_grid", "RESTORE VERIFY FAILED on registers 256-261");
+                                    }
+                            on_error:
+                              then:
+                                - lambda: |-
+                                    id(dump_op_terminal) = true;
+                                    if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                            on_no_response:
+                              then:
+                                - lambda: |-
+                                    id(dump_op_terminal) = true;
+                                    if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+                            on_not_sent:
+                              then:
+                                - lambda: |-
+                                    id(dump_op_terminal) = true;
+                                    if (id(dump_operation_in_progress)) id(dump_write_failed) = true;
+
+                        - wait_until:
+                            condition:
+                              lambda: 'return id(dump_op_terminal);'
+                            timeout: 3000ms
+                        - lambda: |-
+                            if (!id(dump_op_terminal)) {
+                              id(dump_write_failed) = true;
+                              ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
+                            }
+
+            - if:
+                condition:
+                  lambda: 'return !id(dump_write_failed);'
+                then:
+                  - lambda: |-
+                      ecco_durable::ValidMarker pending{};
+                      pending.magic = ecco_durable::VALID_MARKER_MAGIC;
+                      pending.state = ecco_durable::MARKER_RESTORE_VERIFIED_PENDING_CLEAR;
+                      bool pending_ok = ecco_durable::commit_record(
+                        ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_VALID_TAG), pending);
+                      if (pending_ok) id(dump_marker_state) = ecco_durable::MARKER_RESTORE_VERIFIED_PENDING_CLEAR;
+
+                      ecco_durable::ValidMarker clear{};
+                      clear.magic = ecco_durable::VALID_MARKER_MAGIC;
+                      clear.state = ecco_durable::MARKER_CLEAR;
+                      bool clear_ok = pending_ok && ecco_durable::commit_record(
+                        ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_VALID_TAG), clear);
+
+                      if (clear_ok) {
+                        id(dump_marker_state) = ecco_durable::MARKER_CLEAR;
+                        id(dump_snapshot_valid) = false;
+                        id(dump_active_persisted) = false;
+                        id(dump_restore_requested) = false;
+                        id(dump_operator_retry_pending) = false;
+                        id(dump_comms_restore_attempts) = 0;
+                        id(dump_restore_next_attempt_ms) = 0;
+                        id(dump_verify_mismatch_count) = 0;
+                        id(dump_restore_successes)++;
+                        id(dump_controller_state) = "IDLE";
+                        id(dump_controller_state_sensor).publish_state("IDLE");
+                        // A verified clear resolves any prior lockout too -
+                        // durably, not just in RAM, matching the durable set
+                        // in the failure branch below.
+                        if (id(dump_operator_needed)) {
+                          ecco_durable::DumpToGridRetryState retry{};
+                          retry.operator_needed = 0;
+                          ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry);
+                          id(dump_operator_needed) = false;
+                        }
+                        id(dump_status).publish_state("RESTORED OK - original inverter settings verified");
+                        ESP_LOGW("dump_to_grid", "Dump to Grid RESTORED OK");
+                      } else {
+                        // Hardware IS confirmed restored (pending_ok's write
+                        // happened before this branch, or the verify above
+                        // already passed) but the durable CLEAR itself could
+                        // not be committed. Leave the marker as whatever it
+                        // durably reached - never invent CLEAR in RAM only.
+                        id(dump_status).publish_state(
+                          "RESTORE VERIFIED - durable clear pending; will retry automatically"
+                        );
+                        ESP_LOGE("dump_to_grid", "Hardware restored but durable clear commit failed - will retry");
+                      }
+                      id(dump_operation_in_progress) = false;
+                      id(manual_write_in_progress) = false;
+                else:
+                  # 2026-09-26 independent review: cause-aware, mirroring
+                  # restore_free_power_snapshot_dispatch. Only a VERIFY
+                  # MISMATCH counts towards the durable operator lockout; a
+                  # COMMS failure keeps retrying automatically under the
+                  # bounded backoff (15s..300s), because the restore is the
+                  # safe direction and a lockout here stops both the timed
+                  # end and Stop SOC enforcement while export may still be
+                  # enabled.
+                  - lambda: |-
+                      id(dump_failures)++;
+                      id(dump_operation_in_progress) = false;
+                      id(manual_write_in_progress) = false;
+                      if (id(dump_restore_mismatch_this_attempt)) {
+                        id(dump_verify_mismatch_count)++;
+                        if (id(dump_verify_mismatch_count) >= 2) {
+                          ecco_durable::DumpToGridRetryState retry{};
+                          retry.operator_needed = 1;
+                          if (!ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry)) {
+                            // Same documented pacing-only fail-open as Free
+                            // Power: enforced in RAM for this runtime even if
+                            // the durable record could not be written.
+                            ESP_LOGW("dump_to_grid", "Could not durably record operator-needed lockout - enforced for this runtime only");
+                          }
+                          id(dump_operator_needed) = true;
+                          id(dump_recovery_last_classification) = 0;
+                          id(dump_recovery_state).publish_state(
+                            "NEITHER (fail-closed default) - repeated restore verify mismatch"
+                          );
+                          id(dump_status).publish_state(
+                            "OPERATOR DECISION REQUIRED - repeated verify mismatch restoring Dump to Grid; use Force Restore Original or Accept Current State"
+                          );
+                          ESP_LOGE("dump_to_grid", "Second consecutive restore verify mismatch - automatic retries stopped, operator needed");
+                        } else {
+                          id(dump_status).publish_state(
+                            "RESTORE VERIFY FAILED - snapshot retained; watchdog will retry once automatically"
+                          );
+                          ESP_LOGE("dump_to_grid", "Restore verify mismatch - watchdog will retry once");
+                        }
+                      } else {
+                        id(dump_comms_restore_attempts)++;
+                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
+                        id(dump_status).publish_state(
+                          "RESTORE WRITE FAILED - inverter did not respond or refused; snapshot retained; will retry automatically with backoff"
+                        );
+                        ESP_LOGW("dump_to_grid", "Restore attempt failed (comms) - watchdog will retry with backoff");
+                      }
 """)
-RESTORE_PREREAD_NEW = _blk(r"""
+RESTORE_BODY_NEW = _blk(r"""
+            - lambda: |-
+                id(dump_operation_in_progress) = true;
+                id(manual_write_in_progress) = true;
+                id(dump_write_failed) = false;
+                id(dump_restore_mismatch_this_attempt) = false;
+                id(dump_op_terminal) = false;
                 id(dump_status).publish_state("RESTORING - writing back original inverter settings");
                 ESP_LOGW("dump_to_grid", "Restoring Dump to Grid snapshot");
 
-            # fcp2 (SG-08 / SG-29c): OWNERSHIP PRE-READ - fresh-read 244-261 inside this
-            # same critical section (the mutex and dump_operation_in_progress are held)
-            # BEFORE writing anything, and restore only what ECCO still owns: a register
-            # already ORIGINAL is left alone, ECCO's own value is restored, and a FOREIGN
-            # value (an external change: the app, the front panel, another Modbus master,
-            # an inverter reset) is NEVER overwritten - the obligation is kept and the
-            # operator decides. A repeat run after a verified restore (e.g. a failed
-            # durable clear) therefore finds ORIGINAL and writes nothing. A failed or
-            # timed-out read writes nothing (the comms-backoff path, unchanged). Force
-            # Restore Original is the operator's deliberate override: it still needs the
-            # read to succeed, then writes the ORIGINAL snapshot regardless.
+            # fcp2 (SG-08 / SG-29c / SG-04, reworked after the independent audit): OWNERSHIP
+            # PRE-READ - fresh-read 244-261 inside this same critical section (the mutex and
+            # dump_operation_in_progress are held) BEFORE writing anything. Each register is
+            # ORIGINAL (left alone), ECCO's own (written back) or FOREIGN (an external change:
+            # the app, the front panel, another Modbus master, an inverter reset - NEVER
+            # written). 244 is restored FIRST. If 244 is then NOT proven out of ECCO's Allow
+            # Export, the 256-261 step CONTAINS instead of restoring: every non-FOREIGN slot to
+            # min(original, the controller floor), so an export ECCO cannot switch off is
+            # bounded; the attempt still fails and keeps its retries and its obligation. A
+            # FOREIGN value ends in the operator lockout ONLY when everything ECCO attempted was
+            # written AND verified. A failed or timed-out pre-read writes nothing (comms
+            # backoff). A repeat run after a verified restore finds ORIGINAL and writes nothing.
+            # Force Restore Original (the operator's deliberate override) still needs the read,
+            # then writes the whole ORIGINAL snapshot.
             - lambda: |-
                 id(dump_op_terminal) = false;
+                id(dump_restore_pre_ok) = false;
                 id(dump_restore_244_action) = 2;
-                id(dump_restore_block_action) = 2;
+                id(dump_restore_owned_mask) = 0;
+                id(dump_restore_foreign_mask) = 0;
+                id(dump_restore_wmask) = 0;
+                id(dump_restore_244_ok) = false;
+                id(dump_restore_contain) = false;
+                id(dump_restore_contained) = false;
+                id(dump_restore_block_failed) = false;
                 id(dump_restore_foreign_this_attempt) = false;
                 id(dump_restore_foreign_detail) = "";
             - modbus_client.read_holding_registers:
@@ -759,25 +1143,31 @@ RESTORE_PREREAD_NEW = _blk(r"""
                           snprintf(d, sizeof(d), "register 244 reads %u (original %u; ECCO writes only 0)", v244, id(dump_snapshot_reg244));
                           id(dump_restore_foreign_detail) = d;
                         }
+                        // 244 is proven out of ECCO's Allow Export unless it still reads 0 over a non-0 original.
+                        id(dump_export_unverified) = v244 == 0 && id(dump_snapshot_reg244) != 0;
                         uint16_t orig[6] = {
                           id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
                           id(dump_snapshot_reg259), id(dump_snapshot_reg260), id(dump_snapshot_reg261)
                         };
-                        bool all_original = true;
-                        bool foreign = false;
+                        uint8_t owned = 0;
+                        uint8_t foreign = 0;
                         for (int i = 0; i < 6; i++) {
                           uint16_t live = values[12 + i];
-                          if (live != orig[i]) {
-                            all_original = false;
-                            if (live != id(dump_target_power) && live != id(dump_evidence_pending_ceiling)) {
-                              foreign = true;
+                          uint16_t floor_v = orig[i] < ${ecco_dump_controller_min_ceiling_w} ? orig[i] : (uint16_t) ${ecco_dump_controller_min_ceiling_w};
+                          bool ecco_value = live == id(dump_target_power) || live == id(dump_evidence_pending_ceiling) || live == floor_v;
+                          if (live != orig[i] && ecco_value) {
+                            owned = (uint8_t) (owned | (1 << i));
+                          } else if (live != orig[i]) {
+                            if (foreign == 0 && id(dump_restore_244_action) != 2) {
                               snprintf(d, sizeof(d), "register %d reads %uW (original %uW; ECCO's ceiling %uW, pending %uW)", 256 + i, live, orig[i], (unsigned) id(dump_target_power), (unsigned) id(dump_evidence_pending_ceiling));
                               id(dump_restore_foreign_detail) = d;
-                              break;
                             }
+                            foreign = (uint8_t) (foreign | (1 << i));
                           }
                         }
-                        id(dump_restore_block_action) = foreign ? 2 : (all_original ? 0 : 1);
+                        id(dump_restore_owned_mask) = owned;
+                        id(dump_restore_foreign_mask) = foreign;
+                        id(dump_restore_pre_ok) = true;
                 on_error:
                   then:
                     - lambda: |-
@@ -803,26 +1193,28 @@ RESTORE_PREREAD_NEW = _blk(r"""
                   id(dump_write_failed) = true;
                   ESP_LOGE("dump_to_grid", "Restore ownership pre-read of 244-261 did not reach a terminal state");
                 }
-                if (!id(dump_write_failed) && id(dump_force_restore_this_call)) {
-                  // The operator's deliberate Force Restore Original: write the snapshot regardless.
+                if (id(dump_write_failed)) id(dump_restore_pre_ok) = false;
+                if (id(dump_restore_pre_ok) && id(dump_force_restore_this_call)) {
+                  // The operator's deliberate Force Restore Original: the whole ORIGINAL snapshot.
                   id(dump_restore_244_action) = 1;
-                  id(dump_restore_block_action) = 1;
+                  id(dump_restore_owned_mask) = 0x3F;
+                  id(dump_restore_foreign_mask) = 0;
                 }
-                if (!id(dump_write_failed)) {
-                  id(dump_restore_foreign_this_attempt) =
-                    id(dump_restore_244_action) == 2 || id(dump_restore_block_action) == 2;
-                  ESP_LOGI("dump_to_grid", "Restore pre-read: 244 %s, 256-261 %s",
+                if (id(dump_restore_pre_ok)) {
+                  ESP_LOGI("dump_to_grid", "Restore pre-read: 244 %s, 256-261 owned 0x%02X foreign 0x%02X",
                            id(dump_restore_244_action) == 0 ? "ORIGINAL" : (id(dump_restore_244_action) == 1 ? "ECCO-owned" : "FOREIGN"),
-                           id(dump_restore_block_action) == 0 ? "ORIGINAL" : (id(dump_restore_block_action) == 1 ? "ECCO-owned" : "FOREIGN"));
+                           (unsigned) id(dump_restore_owned_mask), (unsigned) id(dump_restore_foreign_mask));
                 }
 
-            # Register 244 (the export enable) is restored FIRST, as before - but only when
-            # it still holds ECCO's own Allow Export. Already ORIGINAL: nothing to write.
-            # FOREIGN: never overwritten (it is not Allow Export, so ECCO is not exporting).
+            # A - register 244 (the export enable) FIRST, only when it still holds ECCO's own
+            # Allow Export. fcp2 rework: its completion flag is reset HERE - the pre-read's reply
+            # set it, and without this reset every later wait would be satisfied by the previous
+            # command's reply on the real (asynchronous) Modbus hub.
             - if:
                 condition:
-                  lambda: 'return !id(dump_write_failed) && id(dump_restore_244_action) == 1;'
+                  lambda: 'return id(dump_restore_pre_ok) && id(dump_restore_244_action) == 1;'
                 then:
+                - lambda: 'id(dump_op_terminal) = false;'
                 - modbus_client.write_multiple_registers:
                     modbus_id: inverter_modbus
                     address: 0x01
@@ -879,6 +1271,8 @@ RESTORE_PREREAD_NEW = _blk(r"""
                                     id(dump_write_failed) = true;
                                     id(dump_restore_mismatch_this_attempt) = true;
                                     ESP_LOGE("dump_to_grid", "RESTORE VERIFY FAILED on register 244 (raw=%u expected=%u)", raw, id(dump_snapshot_reg244));
+                                  } else {
+                                    id(dump_export_unverified) = false;   // fcp2: 244 proven back to its original
                                   }
                           on_error:
                             then:
@@ -906,80 +1300,451 @@ RESTORE_PREREAD_NEW = _blk(r"""
                             ESP_LOGE("dump_to_grid", "Restore verify reread of register 244 did not reach a terminal state");
                           }
 
-""")
 
-# ---- restore_block_gate
-RESTORE_BLOCK_GATE_OLD = _blk(r"""
-
-            - if:
-                condition:
-                  lambda: 'return !id(dump_write_failed);'
-                then:
-                  - lambda: 'id(dump_op_terminal) = false;'
-                  - modbus_client.write_multiple_registers:
-                      modbus_id: inverter_modbus
-                      address: 0x01
-                      start_address: 256
-                      values: !lambda |-
-                        return std::vector<uint16_t>{
-                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
-""")
-RESTORE_BLOCK_GATE_NEW = _blk(r"""
-
-            # fcp2 (SG-08 / SG-29c): 256-261 only when every one of them is ORIGINAL or
-            # ECCO's own value, and at least one is not yet ORIGINAL - never over a FOREIGN one.
-            - if:
-                condition:
-                  lambda: 'return !id(dump_write_failed) && id(dump_restore_block_action) == 1;'
-                then:
-                  - lambda: 'id(dump_op_terminal) = false;'
-                  - modbus_client.write_multiple_registers:
-                      modbus_id: inverter_modbus
-                      address: 0x01
-                      start_address: 256
-                      values: !lambda |-
-                        return std::vector<uint16_t>{
-                          id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
-""")
-
-# ---- restore_foreign_route
-RESTORE_FOREIGN_ROUTE_OLD = _blk(r"""
-                              ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
-                            }
-
-            - if:
-                condition:
-                  lambda: 'return !id(dump_write_failed);'
-""")
-RESTORE_FOREIGN_ROUTE_NEW = _blk(r"""
-                              ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
-                            }
-
-            # fcp2 (SG-08 / SG-29c): a FOREIGN value was left untouched - the restore is
-            # NOT complete: keep the obligation (no marker change) and ask the operator.
+            # B - the 256-261 plan (see the header comment of this section).
             - lambda: |-
-                if (!id(dump_write_failed) && id(dump_restore_foreign_this_attempt)) id(dump_write_failed) = true;
+                if (!id(dump_restore_pre_ok)) return;
+                id(dump_restore_244_ok) = id(dump_restore_244_action) != 1 || !id(dump_write_failed);
+                bool contain = !id(dump_restore_244_ok);
+                uint16_t orig[6] = {
+                  id(dump_snapshot_reg256), id(dump_snapshot_reg257), id(dump_snapshot_reg258),
+                  id(dump_snapshot_reg259), id(dump_snapshot_reg260), id(dump_snapshot_reg261)
+                };
+                uint16_t v[6] = {0, 0, 0, 0, 0, 0};
+                uint8_t m = 0;
+                for (int i = 0; i < 6; i++) {
+                  uint16_t floor_v = orig[i] < ${ecco_dump_controller_min_ceiling_w} ? orig[i] : (uint16_t) ${ecco_dump_controller_min_ceiling_w};
+                  v[i] = contain ? floor_v : orig[i];
+                  bool is_foreign = ((id(dump_restore_foreign_mask) >> i) & 1) != 0;     // a FOREIGN slot is never written
+                  if (!is_foreign && (contain || ((id(dump_restore_owned_mask) >> i) & 1) != 0)) m = (uint8_t) (m | (1 << i));
+                }
+                // The full 6-register write when every slot is to be written (nothing FOREIGN, any
+                // owned): ORIGINAL slots receive their own value again - the pre-fcp2 restore write.
+                if (!contain && id(dump_restore_foreign_mask) == 0 && m != 0) m = 0x3F;
+                id(dump_restore_v0) = v[0];
+                id(dump_restore_v1) = v[1];
+                id(dump_restore_v2) = v[2];
+                id(dump_restore_v3) = v[3];
+                id(dump_restore_v4) = v[4];
+                id(dump_restore_v5) = v[5];
+                id(dump_restore_wmask) = m;
+                id(dump_restore_contain) = contain && m != 0;
+                if (contain) ESP_LOGW("dump_to_grid", "244 NOT proven out of Allow Export - containing ECCO's TOU power registers at the floor (mask 0x%02X)", (unsigned) m);
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) == 0x3F;'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      values: !lambda |-
+                        return std::vector<uint16_t>{
+                          id(dump_restore_v0), id(dump_restore_v1), id(dump_restore_v2),
+                          id(dump_restore_v3), id(dump_restore_v4), id(dump_restore_v5)
+                        };
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to registers 256-261 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 0) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v0)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 256 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 1) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 257
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v1)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 257 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 2) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 258
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v2)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 258 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 3) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 259
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v3)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 259 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 4) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 260
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v4)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 260 did not reach a terminal state");
+                      }
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 5) & 1) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.write_multiple_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 261
+                      values: !lambda 'return std::vector<uint16_t>{id(dump_restore_v5)};'
+                      on_response:
+                        then:
+                          - lambda: 'id(dump_op_terminal) = true;'
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore write to register 261 did not reach a terminal state");
+                      }
+            # V - readback of every slot written this attempt.
+            - if:
+                condition:
+                  lambda: 'return id(dump_restore_wmask) != 0 && !id(dump_restore_block_failed);'
+                then:
+                  - lambda: 'id(dump_op_terminal) = false;'
+                  - modbus_client.read_holding_registers:
+                      modbus_id: inverter_modbus
+                      address: 0x01
+                      start_address: 256
+                      count: 6
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (!id(dump_operation_in_progress)) return;
+                              uint16_t v[6] = {
+                                id(dump_restore_v0), id(dump_restore_v1), id(dump_restore_v2),
+                                id(dump_restore_v3), id(dump_restore_v4), id(dump_restore_v5)
+                              };
+                              for (int i = 0; i < 6; i++) {
+                                if (((id(dump_restore_wmask) >> i) & 1) && values[i] != v[i]) {
+                                  id(dump_restore_block_failed) = true;
+                                  id(dump_write_failed) = true;
+                                  id(dump_restore_mismatch_this_attempt) = true;
+                                  ESP_LOGE("dump_to_grid", "RESTORE VERIFY FAILED on register %d (raw=%u expected=%u)", 256 + i, values[i], v[i]);
+                                }
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_no_response:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+                      on_not_sent:
+                        then:
+                          - lambda: |-
+                              id(dump_op_terminal) = true;
+                              if (id(dump_operation_in_progress)) { id(dump_restore_block_failed) = true; id(dump_write_failed) = true; }
+
+                  - wait_until:
+                      condition:
+                        lambda: 'return id(dump_op_terminal);'
+                      timeout: 3000ms
+                  - lambda: |-
+                      if (!id(dump_op_terminal)) {
+                        id(dump_restore_block_failed) = true; id(dump_write_failed) = true;
+                        ESP_LOGE("dump_to_grid", "Restore verify reread of 256-261 did not reach a terminal state");
+                      }
+
+            # R - the outcome. Success only when everything ECCO attempted was written AND
+            # verified and nothing is FOREIGN; the FOREIGN lockout only in that same case.
+            - lambda: |-
+                if (id(dump_restore_contain) && !id(dump_restore_block_failed)) id(dump_restore_contained) = true;
+                if (id(dump_restore_pre_ok) && !id(dump_write_failed) &&
+                    (id(dump_restore_foreign_mask) != 0 || id(dump_restore_244_action) == 2)) {
+                  id(dump_restore_foreign_this_attempt) = true;
+                  id(dump_write_failed) = true;
+                }
             - if:
                 condition:
                   lambda: 'return !id(dump_write_failed);'
-""")
+                then:
+                  - lambda: |-
+                      ecco_durable::ValidMarker pending{};
+                      pending.magic = ecco_durable::VALID_MARKER_MAGIC;
+                      pending.state = ecco_durable::MARKER_RESTORE_VERIFIED_PENDING_CLEAR;
+                      bool pending_ok = ecco_durable::commit_record(
+                        ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_VALID_TAG), pending);
+                      if (pending_ok) id(dump_marker_state) = ecco_durable::MARKER_RESTORE_VERIFIED_PENDING_CLEAR;
 
-# ---- restore_foreign_lockout
-RESTORE_FOREIGN_LOCKOUT_OLD = _blk(r"""
+                      ecco_durable::ValidMarker clear{};
+                      clear.magic = ecco_durable::VALID_MARKER_MAGIC;
+                      clear.state = ecco_durable::MARKER_CLEAR;
+                      bool clear_ok = pending_ok && ecco_durable::commit_record(
+                        ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_VALID_TAG), clear);
+
+                      if (clear_ok) {
+                        id(dump_marker_state) = ecco_durable::MARKER_CLEAR;
+                        id(dump_snapshot_valid) = false;
+                        id(dump_active_persisted) = false;
+                        id(dump_restore_requested) = false;
+                        id(dump_operator_retry_pending) = false;
+                        id(dump_comms_restore_attempts) = 0;
+                        id(dump_restore_next_attempt_ms) = 0;
+                        id(dump_restore_failed_ms) = 0;        // fcp2 (F4): no stale link-down stamp survives a success
+                        id(dump_export_unverified) = false;
+                        id(dump_verify_mismatch_count) = 0;
+                        id(dump_restore_successes)++;
+                        id(dump_controller_state) = "IDLE";
+                        id(dump_controller_state_sensor).publish_state("IDLE");
+                        // A verified clear resolves any prior lockout too -
+                        // durably, not just in RAM, matching the durable set
+                        // in the failure branch below.
+                        if (id(dump_operator_needed)) {
+                          ecco_durable::DumpToGridRetryState retry{};
+                          retry.operator_needed = 0;
+                          ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry);
+                          id(dump_operator_needed) = false;
+                        }
+                        id(dump_status).publish_state("RESTORED OK - original inverter settings verified");
+                        ESP_LOGW("dump_to_grid", "Dump to Grid RESTORED OK");
+                      } else {
+                        // Hardware IS confirmed restored (pending_ok's write
+                        // happened before this branch, or the verify above
+                        // already passed) but the durable CLEAR itself could
+                        // not be committed. Leave the marker as whatever it
+                        // durably reached - never invent CLEAR in RAM only.
+                        id(dump_status).publish_state(
+                          "RESTORE VERIFIED - durable clear pending; will retry automatically"
+                        );
+                        ESP_LOGE("dump_to_grid", "Hardware restored but durable clear commit failed - will retry");
+                      }
+                      id(dump_operation_in_progress) = false;
+                      id(manual_write_in_progress) = false;
+                else:
+                  # 2026-09-26 independent review: cause-aware, mirroring
+                  # restore_free_power_snapshot_dispatch. Only a VERIFY
+                  # MISMATCH counts towards the durable operator lockout; a
+                  # COMMS failure keeps retrying automatically under the
+                  # bounded backoff (15s..300s), because the restore is the
+                  # safe direction and a lockout here stops both the timed
+                  # end and Stop SOC enforcement while export may still be
+                  # enabled.
+                  - lambda: |-
                       id(dump_failures)++;
                       id(dump_operation_in_progress) = false;
                       id(manual_write_in_progress) = false;
-                      if (id(dump_restore_mismatch_this_attempt)) {
-""")
-RESTORE_FOREIGN_LOCKOUT_NEW = _blk(r"""
-                      id(dump_failures)++;
-                      id(dump_operation_in_progress) = false;
-                      id(manual_write_in_progress) = false;
+                      // fcp2 (SG-04): name a containment, so no status ever implies export is off when 244 is not proven.
+                      std::string contained = "";
+                      if (id(dump_export_unverified) && id(dump_restore_contained)) {
+                        contained = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
+                      } else if (id(dump_export_unverified)) {
+                        contained = "; register 244 is NOT proven out of Allow Export - export may continue";
+                      }
                       if (id(dump_restore_foreign_this_attempt)) {
-                        // fcp2 (SG-08 / SG-29c): an external change was found and NOT
-                        // overwritten. Whatever ECCO still owned has been restored and
-                        // verified above (244 first); the obligation stays (marker
-                        // unchanged) and automatic retries stop: the operator decides.
+                        // fcp2 (SG-08 / B1): reached ONLY when everything ECCO attempted this time
+                        // (244 first, then its own 256-261 slots) was written AND verified and an
+                        // external value remains. The obligation stays (marker unchanged) and
+                        // automatic retries stop: the operator decides. Never after a failed step -
+                        // those take the mismatch / comms paths below, with their retries.
                         ecco_durable::DumpToGridRetryState retry{};
                         retry.operator_needed = 1;
                         if (!ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry)) {
@@ -991,12 +1756,50 @@ RESTORE_FOREIGN_LOCKOUT_NEW = _blk(r"""
                           std::string("FOREIGN (not overwritten) - ") + id(dump_restore_foreign_detail)
                         );
                         id(dump_status).publish_state(
-                          std::string("OPERATOR DECISION REQUIRED - an external change was found and NOT overwritten (") +
+                          std::string("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified, but an external change was found and NOT overwritten (") +
                           id(dump_restore_foreign_detail) +
                           "); use Force Restore Original or Accept Current State"
                         );
                         ESP_LOGE("dump_to_grid", "Restore found a FOREIGN value - not overwritten, operator needed: %s", id(dump_restore_foreign_detail).c_str());
                       } else if (id(dump_restore_mismatch_this_attempt)) {
+                        id(dump_verify_mismatch_count)++;
+                        if (id(dump_verify_mismatch_count) >= 2) {
+                          ecco_durable::DumpToGridRetryState retry{};
+                          retry.operator_needed = 1;
+                          if (!ecco_durable::commit_record(ecco_durable::key_for(ecco_durable::DUMP_TO_GRID_RETRY_TAG), retry)) {
+                            // Same documented pacing-only fail-open as Free
+                            // Power: enforced in RAM for this runtime even if
+                            // the durable record could not be written.
+                            ESP_LOGW("dump_to_grid", "Could not durably record operator-needed lockout - enforced for this runtime only");
+                          }
+                          id(dump_operator_needed) = true;
+                          id(dump_recovery_last_classification) = 0;
+                          id(dump_recovery_state).publish_state(
+                            "NEITHER (fail-closed default) - repeated restore verify mismatch"
+                          );
+                          id(dump_status).publish_state(
+                            std::string("OPERATOR DECISION REQUIRED - repeated verify mismatch restoring Dump to Grid; use Force Restore Original or Accept Current State") + contained
+                          );
+                          ESP_LOGE("dump_to_grid", "Second consecutive restore verify mismatch - automatic retries stopped, operator needed");
+                        } else {
+                          id(dump_status).publish_state(
+                            std::string("RESTORE VERIFY FAILED - snapshot retained; watchdog will retry once automatically") + contained
+                          );
+                          ESP_LOGE("dump_to_grid", "Restore verify mismatch - watchdog will retry once");
+                        }
+                      } else {
+                        id(dump_comms_restore_attempts)++;
+                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
+                        // fcp2 (SG-39): remember a failure made while the LINK was down (no telemetry
+                        // read for ecco_dump_link_down_ms) - see the restore gate. 0 = an ordinary failure.
+                        id(dump_restore_failed_ms) =
+                          (id(dump_soc_last_update_ms) == 0 ||
+                           (uint32_t) (millis() - id(dump_soc_last_update_ms)) > ${ecco_dump_link_down_ms}UL) ? millis() : 0;
+                        id(dump_status).publish_state(
+                          std::string("RESTORE WRITE FAILED - inverter did not respond or refused; snapshot retained; will retry automatically with backoff") + contained
+                        );
+                        ESP_LOGW("dump_to_grid", "Restore attempt failed (comms) - watchdog will retry with backoff");
+                      }
 """)
 
 # ---- frozen_subst
@@ -1025,6 +1828,9 @@ FROZEN_SUBST_NEW = _blk(r"""
   ecco_dump_frozen_cross_w: "150"
   ecco_dump_frozen_ct_long_samples: "30"
   ecco_dump_soc_frozen_wh: "1500"
+  # fcp2 rework (F3): battery power within this many W of zero is IDLE, never
+  # judged frozen (a battery that cannot discharge further reads exactly 0).
+  ecco_dump_frozen_idle_w: "50"
   # fcp2 (SG-39): a restore attempt that failed while NO telemetry read had
   # succeeded for this long (two missed 10 s polls: the link itself was down)
   # is retried as soon as the link is proven to work again - see the restore
@@ -1032,48 +1838,6 @@ FROZEN_SUBST_NEW = _blk(r"""
   # failure while telemetry was flowing (the inverter refused the write) keeps
   # the ordinary backoff.
   ecco_dump_link_down_ms: "25000"
-""")
-
-# ---- frozen_ct_clear
-FROZEN_CT_CLEAR_OLD = _blk(r"""
-              id(dump_export_window) = 0;
-              return;
-""")
-FROZEN_CT_CLEAR_NEW = _blk(r"""
-              id(dump_export_window) = 0;
-              id(dump_ct_same_count) = 0;
-              id(dump_ct_last_w) = x;
-              return;
-""")
-
-# ---- frozen_ct_track
-FROZEN_CT_TRACK_OLD = _blk(r"""
-            bool over = !std::isnan(x) && -x > limit + margin;
-            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
-            if (over) id(dump_export_last_w) = -x;
-""")
-FROZEN_CT_TRACK_NEW = _blk(r"""
-            bool over = !std::isnan(x) && -x > limit + margin;
-            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
-            if (over) id(dump_export_last_w) = -x;
-            // fcp2 (SG-15): a FROZEN grid CT - see ecco_dump_frozen_samples. Counts exact
-            // repeats of a valid reading, and the range the battery power (the previous
-            // read's value) covered meanwhile.
-            if (!std::isnan(x)) {
-              bool b_ok = id(ecco_battery_power).has_state() && !std::isnan(id(ecco_battery_power).state);
-              float b = b_ok ? id(ecco_battery_power).state : 0.0f;
-              if (x == id(dump_ct_last_w)) {
-                id(dump_ct_same_count)++;
-                if (b_ok && b < id(dump_ct_same_bmin)) id(dump_ct_same_bmin) = b;
-                if (b_ok && b > id(dump_ct_same_bmax)) id(dump_ct_same_bmax) = b;
-              } else {
-                // a range seeded empty when there is no battery reading yet (never "moved")
-                id(dump_ct_same_count) = 0;
-                id(dump_ct_same_bmin) = b_ok ? b : 1000000000.0f;
-                id(dump_ct_same_bmax) = b_ok ? b : -1000000000.0f;
-              }
-              id(dump_ct_last_w) = x;
-            }
 """)
 
 # ---- frozen_bp_track
@@ -1095,7 +1859,9 @@ FROZEN_BP_TRACK_NEW = _blk(r"""
                 if (bp_dt > 60000UL) bp_dt = 60000UL;
                 id(dump_soc_frozen_wh_acc) += x * (float) bp_dt / 3600000.0f;
               }
-              if (x == id(dump_bp_last_w)) id(dump_bp_same_count)++;
+              // fcp2 rework (F3): a battery legitimately idle (|x| below ecco_dump_frozen_idle_w, e.g.
+              // it cannot discharge further) is not "frozen".
+              if (x == id(dump_bp_last_w) && std::fabs(x) >= ${ecco_dump_frozen_idle_w}.0f) id(dump_bp_same_count)++;
               else id(dump_bp_same_count) = 0;
               id(dump_bp_last_w) = x;
               id(dump_bp_last_ms) = bp_now;
@@ -1111,8 +1877,9 @@ FROZEN_SOC_RESET_OLD = _blk(r"""
 FROZEN_SOC_RESET_NEW = _blk(r"""
         - lambda: |-
             id(dump_soc_last_update_ms) = millis();
-            // fcp2 (SG-43): a CHANGED SOC restarts the frozen-SOC energy count.
-            if (!std::isnan(x) && x != id(dump_soc_last_value)) {
+            // fcp2 (SG-43; rework F3): only a SOC DROP below the lowest value since the last restart of
+            // the count restarts it - a SOC toggling between two values cannot defeat the detector.
+            if (!std::isnan(x) && (x < id(dump_soc_last_value) || id(dump_soc_last_value) < 0.0f)) {
               id(dump_soc_last_value) = x;
               id(dump_soc_frozen_wh_acc) = 0.0f;
             }
@@ -1136,21 +1903,6 @@ BACKOFF_GATE_NEW = _blk(r"""
                  (id(dump_restore_failed_ms) != 0 &&
                   (int32_t) (id(dump_soc_last_update_ms) - id(dump_restore_failed_ms)) > 0 &&
                   (int32_t) (millis() - (id(dump_restore_failed_ms) + ecco_durable::comms_backoff_ms(1))) >= 0)) &&
-""")
-
-# ---- backoff_stamp
-BACKOFF_STAMP_OLD = _blk(r"""
-                        id(dump_comms_restore_attempts)++;
-                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
-""")
-BACKOFF_STAMP_NEW = _blk(r"""
-                        id(dump_comms_restore_attempts)++;
-                        id(dump_restore_next_attempt_ms) = millis() + ecco_durable::comms_backoff_ms(id(dump_comms_restore_attempts));
-                        // fcp2 (SG-39): remember a failure made while the LINK was down (no telemetry
-                        // read for ecco_dump_link_down_ms) - see the restore gate. 0 = an ordinary failure.
-                        id(dump_restore_failed_ms) =
-                          (id(dump_soc_last_update_ms) == 0 ||
-                           (uint32_t) (millis() - id(dump_soc_last_update_ms)) > ${ecco_dump_link_down_ms}UL) ? millis() : 0;
 """)
 
 # ---- build_tag_subst
@@ -1472,11 +2224,35 @@ CENSUS_INTERVAL_NEW = _blk(r"""
           }
       - if:
           condition:
-            lambda: 'return id(ecco_lock_stuck) && !id(ecco_lock_escalated);'
+            # fcp2 rework: escalate (and possibly restart) only on a QUIET bus - no frame queued or awaiting
+            # a reply - so the restart can never cut a Modbus exchange in half; re-checked every 5 s.
+            lambda: |-
+              return id(ecco_lock_stuck) && !id(ecco_lock_escalated) &&
+                     id(inverter_modbus)->tx_buffer_empty() && !id(inverter_modbus)->tx_blocked();
           then:
             - lambda: 'id(ecco_lock_escalated) = true;'
             - script.execute: ecco_safety_census
             - script.execute: ecco_lock_escalation
+  # fcp2 rework (R2): act on a LATCHED net grid export trip within one second (see ecco_grid_ct_power's
+  # on_value) instead of waiting for the 15 s watchdog. RAM checks, then the common end path.
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(dump_export_trip) != 0 && id(dump_active_persisted) && !id(dump_restore_requested) &&
+                     !id(dump_operation_in_progress) && id(dump_snapshot_valid);
+          then:
+            - script.execute:
+                id: request_dump_end
+                reason: !lambda |-
+                  char msg[200];
+                  if (id(dump_export_trip) == 2) {
+                    snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export %.0fW above the configured %dW limit (one reading far over it)", id(dump_export_last_w), id(dump_max_export_w));
+                  } else {
+                    snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export %.0fW above the configured %dW limit (two consecutive readings over it)", id(dump_export_last_w), id(dump_max_export_w));
+                  }
+                  return std::string(msg);
 """)
 
 # ---- lock_subst
@@ -1496,6 +2272,344 @@ LOCK_SUBST_NEW = _blk(r"""
   ecco_write_lock_stuck_ms: "180000"
 """)
 
+# ---- export_subst
+EXPORT_SUBST_OLD = _blk(r"""
+  ecco_dump_export_guard_samples: "3"
+""")
+EXPORT_SUBST_NEW = _blk(r"""
+  ecco_dump_export_guard_samples: "3"
+  # fcp2 rework (R2): the guard no longer uses the 3-of-4 rule above (kept for the
+  # record): ONE sample more than max(this many W, 25 %) over the limit, or TWO
+  # consecutive samples over limit + margin, end the lease - acted on within 1 s.
+  ecco_dump_export_far_min_w: "500"
+""")
+
+# ---- export_hook
+EXPORT_HOOK_OLD = _blk(r"""
+        # fcp1 (2026-10-13): the in-lease NET GRID EXPORT guard's sample window.
+        # Export = -register 172. A fresh sample is "over" when export exceeds
+        # the configured maximum grid export plus max(ecco_dump_export_margin_min_w,
+        # 3 %). Outside a settled lease the window is cleared. The 15 s watchdog
+        # ends the lease once ecco_dump_export_guard_samples of the last four
+        # samples are over. RAM only, no Modbus I/O.
+        - lambda: |-
+            if (!id(dump_active_persisted) || id(dump_restore_requested) || id(dump_operation_in_progress) ||
+                (uint32_t) (millis() - id(dump_active_since_ms)) < ${ecco_dump_runaway_grace_ms}UL) {
+              id(dump_export_window) = 0;
+              return;
+            }
+            float limit = (float) id(dump_max_export_w);
+            float margin = limit * 0.03f;
+            if (margin < ${ecco_dump_export_margin_min_w}.0f) margin = ${ecco_dump_export_margin_min_w}.0f;
+            bool over = !std::isnan(x) && -x > limit + margin;
+            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
+            if (over) id(dump_export_last_w) = -x;
+""")
+EXPORT_HOOK_NEW = _blk(r"""
+        # fcp1 + fcp2 rework (R2): the NET GRID EXPORT guard's samples. Export = -register 172. A
+        # sample is OVER when export exceeds the configured maximum plus max(ecco_dump_export_margin_min_w,
+        # 3 %), and FAR OVER when it exceeds it by max(ecco_dump_export_far_min_w, 25 %). Counted from the
+        # moment the lease is ACTIVE - NO start grace - and, after an End, for as long as a restore is owed
+        # and register 244 is not proven out of ECCO's Allow Export (the watchdog's post-END supervision).
+        # One FAR OVER sample, or two consecutive OVER samples, LATCH dump_export_trip; a 1 s interval acts
+        # on it in a lease. A lease-ending SECONDARY protection on ECCO's own CT reading at the telemetry
+        # cadence - NOT a DNO-compliant export limitation scheme (that is the inverter's own export limit,
+        # register 245, which ECCO never writes). RAM only, no Modbus I/O.
+        - lambda: |-
+            bool in_lease = id(dump_active_persisted) && !id(dump_restore_requested) && !id(dump_operation_in_progress);
+            bool owed = id(dump_snapshot_valid) && id(dump_restore_requested) && id(dump_export_unverified) &&
+                        !id(dump_operation_in_progress);
+            if (!in_lease && !owed) {
+              id(dump_export_window) = 0;
+              id(dump_ct_same_count) = 0;
+              id(dump_ct_last_w) = x;
+              return;
+            }
+            float limit = (float) id(dump_max_export_w);
+            float margin = limit * 0.03f;
+            if (margin < ${ecco_dump_export_margin_min_w}.0f) margin = ${ecco_dump_export_margin_min_w}.0f;
+            float far = limit * 0.25f;
+            if (far < ${ecco_dump_export_far_min_w}.0f) far = ${ecco_dump_export_far_min_w}.0f;
+            bool over = !std::isnan(x) && -x > limit + margin;
+            bool far_over = !std::isnan(x) && -x > limit + far;
+            id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
+            if (over) id(dump_export_last_w) = -x;
+            if (id(dump_export_trip) == 0 && (far_over || (id(dump_export_window) & 3) == 3)) {
+              id(dump_export_trip) = far_over ? 2 : 1;
+            }
+            // the frozen-CT evidence starts after the lease-start grace (the export guard above has none)
+            if (!in_lease || (uint32_t) (millis() - id(dump_active_since_ms)) < ${ecco_dump_runaway_grace_ms}UL) return;
+            // fcp2 (SG-15): a FROZEN grid CT - see ecco_dump_frozen_samples. Counts exact
+            // repeats of a valid reading, and the range the battery power (the previous
+            // read's value) covered meanwhile.
+            if (!std::isnan(x)) {
+              bool b_ok = id(ecco_battery_power).has_state() && !std::isnan(id(ecco_battery_power).state);
+              float b = b_ok ? id(ecco_battery_power).state : 0.0f;
+              if (x == id(dump_ct_last_w)) {
+                id(dump_ct_same_count)++;
+                if (b_ok && b < id(dump_ct_same_bmin)) id(dump_ct_same_bmin) = b;
+                if (b_ok && b > id(dump_ct_same_bmax)) id(dump_ct_same_bmax) = b;
+              } else {
+                // a range seeded empty when there is no battery reading yet (never "moved")
+                id(dump_ct_same_count) = 0;
+                id(dump_ct_same_bmin) = b_ok ? b : 1000000000.0f;
+                id(dump_ct_same_bmax) = b_ok ? b : -1000000000.0f;
+              }
+              id(dump_ct_last_w) = x;
+            }
+""")
+
+# ---- export_watchdog
+EXPORT_WATCHDOG_OLD = _blk(r"""
+                    uint8_t w = id(dump_export_window);
+                    int over = (w & 1) + ((w >> 1) & 1) + ((w >> 2) & 1) + ((w >> 3) & 1);
+                    return over >= ${ecco_dump_export_guard_samples};
+""")
+EXPORT_WATCHDOG_NEW = _blk(r"""
+                    // fcp2 rework (R2): the latched decision (see ecco_grid_ct_power's on_value);
+                    // normally already acted on by the 1 s interval - this is the backstop.
+                    return id(dump_export_trip) != 0;
+""")
+
+# ---- start_flags
+START_FLAGS_OLD = _blk(r"""
+                id(dump_write_enable).turn_off();
+                id(dump_operation_in_progress) = true;
+""")
+START_FLAGS_NEW = _blk(r"""
+                id(dump_write_enable).turn_off();
+                // fcp2 rework (R1 / F4 / R2): a NEW transaction - 244 is not proven out of ECCO's
+                // Allow Export until a restore proves it, no stale link-down stamp may shorten a later
+                // backoff, and no export decision or PV-surplus refusal carries over.
+                id(dump_export_unverified) = true;
+                id(dump_restore_failed_ms) = 0;
+                id(dump_export_trip) = 0;
+                id(dump_start_surplus_refused) = false;
+                id(dump_operation_in_progress) = true;
+""")
+
+# ---- start_gate_export
+START_GATE_EXPORT_OLD = _blk(r"""
+                id(dump_export_power).state <= (float) id(dump_max_export_w) &&
+""")
+START_GATE_EXPORT_NEW = _blk(r"""
+                id(dump_export_power).state <= (float) id(dump_max_export_w) &&
+                // fcp2 rework (R2 / F7): fail closed on export - the target needs headroom below the
+                // limit (at least the guard's own margin, max(min margin, 3 %)), and the export the
+                // grid CT ALREADY measures (required fresh above) must be within the limit.
+                id(dump_export_power).state <= (float) id(dump_max_export_w) -
+                  std::max(${ecco_dump_export_margin_min_w}.0f, 0.03f * (float) id(dump_max_export_w)) &&
+                -id(ecco_grid_ct_power).state <= (float) id(dump_max_export_w) &&
+""")
+
+# ---- start_refusal_texts
+START_REFUSAL_TEXTS_OLD = _blk(r"""
+                else if (id(dump_export_power).state > (float) id(dump_max_export_w)) id(dump_status).publish_state("REJECTED - requested export is above the configured maximum grid export");
+""")
+START_REFUSAL_TEXTS_NEW = _blk(r"""
+                else if (id(dump_export_power).state > (float) id(dump_max_export_w)) id(dump_status).publish_state("REJECTED - requested export is above the configured maximum grid export");
+                else if (id(dump_export_power).state > (float) id(dump_max_export_w) - std::max(${ecco_dump_export_margin_min_w}.0f, 0.03f * (float) id(dump_max_export_w))) id(dump_status).publish_state("REJECTED - requested export leaves no headroom below the maximum grid export (keep it at least max(${ecco_dump_export_margin_min_w} W, 3 %) below)");
+                else if (-id(ecco_grid_ct_power).state > (float) id(dump_max_export_w)) id(dump_status).publish_state("REJECTED - the grid meter already shows export above the configured maximum grid export");
+""")
+
+# ---- start_surplus_check
+START_SURPLUS_CHECK_OLD = _blk(r"""
+                      if (trustworthy) {
+                        // required_ceiling = house_load + requested_export -
+""")
+START_SURPLUS_CHECK_NEW = _blk(r"""
+                      // fcp2 rework (R2): fail closed on a natural PV export surplus the fresh START read
+                      // already shows above the maximum grid export - Dump does not command battery charging,
+                      // so it could never bring that export back under the limit. Refused BEFORE the durable
+                      // commit: nothing is written. (Under Zero Export the inverter throttles PV, so this sees
+                      // only the surplus it shows; the in-lease guard covers the rest.)
+                      if (trustworthy && pv_power - house_load > (float) id(dump_max_export_w)) {
+                        id(dump_start_surplus_refused) = true;
+                        id(dump_start_surplus_w) = pv_power - house_load;
+                        id(dump_write_failed) = true;
+                      }
+                      if (trustworthy) {
+                        // required_ceiling = house_load + requested_export -
+""")
+
+# ---- start_surplus_text
+START_SURPLUS_TEXT_OLD = _blk(r"""
+                      id(dump_status).publish_state("START FAILED - could not capture/durably commit inverter snapshot; nothing written");
+""")
+START_SURPLUS_TEXT_NEW = _blk(r"""
+                      if (id(dump_start_surplus_refused)) {
+                        char msg[200];
+                        snprintf(msg, sizeof(msg), "REJECTED - natural PV export surplus ~%.0fW already exceeds the configured %dW maximum grid export; nothing written", id(dump_start_surplus_w), id(dump_max_export_w));
+                        id(dump_status).publish_state(msg);
+                      } else {
+                        id(dump_status).publish_state("START FAILED - could not capture/durably commit inverter snapshot; nothing written");
+                      }
+""")
+
+# ---- post_end_supervision
+POST_END_SUPERVISION_OLD = _blk(r"""
+  - interval: 15s
+    startup_delay: 15s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(dump_snapshot_valid)) return false;
+""")
+POST_END_SUPERVISION_NEW = _blk(r"""
+  - interval: 15s
+    startup_delay: 15s
+    then:
+      # fcp2 rework (R1 / SG-04): SUPERVISION WHILE A RESTORE IS OWED and register 244 is not
+      # proven out of ECCO's Allow Export (dump_export_unverified). The lease's own monitors stop at
+      # End, but export may still be enabled: Stop SOC reached, or a NET GRID EXPORT trip (its
+      # samples keep counting in this state), makes the restore retry AT ONCE - the retry contains
+      # ECCO's TOU power registers at the floor while 244 is still not proven - never after a
+      # backoff. Under the operator lockout it can only alarm. RAM only, no Modbus I/O here.
+      - lambda: |-
+          if (!id(dump_snapshot_valid) || !id(dump_restore_requested) || !id(dump_export_unverified) ||
+              id(dump_recovery_metadata_corrupt)) return;
+          bool soc_low = id(ecco_battery_soc).has_state() && id(dump_target_stop_soc) > 0 &&
+                         id(ecco_battery_soc).state <= (float) id(dump_target_stop_soc);
+          bool export_over = id(dump_export_trip) != 0;
+          if (!soc_low && !export_over) return;
+          id(dump_export_trip) = 0;
+          char msg[220];
+          snprintf(msg, sizeof(msg), "%s - a restore is OWED and register 244 is not proven out of Allow Export: %s",
+                   id(dump_operator_needed) ? "CRITICAL" : "SUPERVISION",
+                   export_over ? "net export over the configured maximum" : "Stop SOC reached");
+          if (!id(dump_operator_needed)) {
+            id(dump_restore_next_attempt_ms) = 0;
+          } else {
+            id(dump_recovery_state).publish_state(std::string(msg) + " - operator action required now (Force Restore Original)");
+          }
+          ESP_LOGE("dump_to_grid", "%s", msg);
+      - if:
+          condition:
+            lambda: |-
+              if (!id(dump_snapshot_valid)) return false;
+""")
+
+# ---- limits_ceiling_reconfirm
+LIMITS_CEILING_RECONFIRM_OLD = _blk(r"""
+          int ex = id(dump_max_export_w);
+          id(dump_op_ceiling_w) = req;
+          id(dump_limits_cap_w) = ${ecco_dump_capability_w};
+          id(dump_limits_check) = (uint32_t) req + 3u * (uint32_t) ex + 7u * (uint32_t) ${ecco_dump_capability_w} + 12345u;
+          id(dump_limits_valid) = ex >= 0 && ex <= ${ecco_dump_capability_w} && ex % 10 == 0;
+          // A reduction during a lease lowers that lease's latched ceiling at once; nothing ever raises it.
+          if (id(dump_active_persisted) && id(dump_lease_ceiling_w) > req) id(dump_lease_ceiling_w) = req;
+          if (req > cur || !id(dump_limits_valid)) id(dump_limits_arm).turn_off();
+          snprintf(msg, sizeof(msg), "%s - power ceiling %d W (was %d W); maximum grid export %d W%s",
+                   id(dump_limits_valid) ? "VALID" : "INVALID", req, cur, ex, ex == 0 ? " (NOT CONFIGURED)" : "");
+""")
+LIMITS_CEILING_RECONFIRM_NEW = _blk(r"""
+          int ex = id(dump_max_export_w);
+          bool was_valid = id(dump_limits_valid);
+          id(dump_op_ceiling_w) = req;
+          // fcp2 rework (R3): leaving INVALID needs BOTH limits confirmed again (each armed, idle) -
+          // re-setting one never re-validates the other, unconfirmed stored value. Until both are
+          // confirmed the integrity value is NOT recomputed, so a reboot stays INVALID too.
+          if (!was_valid) id(dump_limits_reconfirm) = (uint8_t) (id(dump_limits_reconfirm) | 1);
+          if (was_valid || id(dump_limits_reconfirm) == 3) {
+            id(dump_limits_cap_w) = ${ecco_dump_capability_w};
+            id(dump_limits_check) = (uint32_t) req + 3u * (uint32_t) ex + 7u * (uint32_t) ${ecco_dump_capability_w} + 12345u;
+            id(dump_limits_valid) = ex >= 0 && ex <= ${ecco_dump_capability_w} && ex % 10 == 0;
+          }
+          // A reduction during a lease lowers that lease's latched ceiling at once; nothing ever raises it.
+          if (id(dump_active_persisted) && id(dump_lease_ceiling_w) > req) id(dump_lease_ceiling_w) = req;
+          if (req > cur || !was_valid) id(dump_limits_arm).turn_off();
+          if (!id(dump_limits_valid)) {
+            snprintf(msg, sizeof(msg), "INVALID - power ceiling %d W confirmed; the maximum grid export must also be set again (after INVALID both limits are re-confirmed)", req);
+          } else {
+            snprintf(msg, sizeof(msg), "%s - power ceiling %d W (was %d W); maximum grid export %d W%s",
+                     "VALID", req, cur, ex, ex == 0 ? " (NOT CONFIGURED)" : "");
+          }
+""")
+
+# ---- limits_export_reconfirm
+LIMITS_EXPORT_RECONFIRM_OLD = _blk(r"""
+          int op = id(dump_op_ceiling_w);
+          id(dump_max_export_w) = req;
+          id(dump_limits_cap_w) = ${ecco_dump_capability_w};
+          id(dump_limits_check) = (uint32_t) op + 3u * (uint32_t) req + 7u * (uint32_t) ${ecco_dump_capability_w} + 12345u;
+          id(dump_limits_valid) = op >= ${ecco_dump_controller_min_ceiling_w} && op <= ${ecco_dump_capability_w} &&
+                                  op % ${ecco_dump_controller_round_w} == 0;
+          if (req > cur || !id(dump_limits_valid)) id(dump_limits_arm).turn_off();
+          snprintf(msg, sizeof(msg), "%s - power ceiling %d W; maximum grid export %d W (was %d W)%s",
+                   id(dump_limits_valid) ? "VALID" : "INVALID", op, req, cur, req == 0 ? " (NOT CONFIGURED)" : "");
+""")
+LIMITS_EXPORT_RECONFIRM_NEW = _blk(r"""
+          int op = id(dump_op_ceiling_w);
+          bool was_valid = id(dump_limits_valid);
+          id(dump_max_export_w) = req;
+          // fcp2 rework (R3): see the power ceiling's set_action - both limits after INVALID.
+          if (!was_valid) id(dump_limits_reconfirm) = (uint8_t) (id(dump_limits_reconfirm) | 2);
+          if (was_valid || id(dump_limits_reconfirm) == 3) {
+            id(dump_limits_cap_w) = ${ecco_dump_capability_w};
+            id(dump_limits_check) = (uint32_t) op + 3u * (uint32_t) req + 7u * (uint32_t) ${ecco_dump_capability_w} + 12345u;
+            id(dump_limits_valid) = op >= ${ecco_dump_controller_min_ceiling_w} && op <= ${ecco_dump_capability_w} &&
+                                    op % ${ecco_dump_controller_round_w} == 0;
+          }
+          if (req > cur || !was_valid) id(dump_limits_arm).turn_off();
+          if (!id(dump_limits_valid)) {
+            snprintf(msg, sizeof(msg), "INVALID - maximum grid export %d W confirmed; the power ceiling must also be set again (after INVALID both limits are re-confirmed)", req);
+          } else {
+            snprintf(msg, sizeof(msg), "%s - power ceiling %d W; maximum grid export %d W (was %d W)%s",
+                     "VALID", op, req, cur, req == 0 ? " (NOT CONFIGURED)" : "");
+          }
+""")
+
+# ---- accept_elevated_calc
+ACCEPT_ELEVATED_CALC_OLD = _blk(r"""
+            bool live_is_original = live244 == id(dump_snapshot_reg244) && ceiling_matches_original;
+""")
+ACCEPT_ELEVATED_CALC_NEW = _blk(r"""
+            bool live_is_original = live244 == id(dump_snapshot_reg244) && ceiling_matches_original;
+            // fcp2 rework (R4 / SG-29c): a slot still holding ECCO's OWN ceiling (the verified or the
+            // pending one) ABOVE its original is never accepted - a raised TOU power setting would
+            // outlive the obligation. FOREIGN values (anything else) stay acceptable: ECCO does not
+            // own them. ECCO residue at or below the original (e.g. the 500 W containment) only limits.
+            int elevated = -1;
+            for (int i = 0; i < 6; i++) {
+              bool ecco_value = live256[i] == id(dump_target_power) || live256[i] == id(dump_evidence_pending_ceiling);
+              if (elevated < 0 && live256[i] != snap256[i] && ecco_value && live256[i] > snap256[i]) elevated = i;
+            }
+""")
+
+# ---- accept_elevated_refuse
+ACCEPT_ELEVATED_REFUSE_OLD = _blk(r"""
+            } else if (!ceiling_matches_original) {
+""")
+ACCEPT_ELEVATED_REFUSE_NEW = _blk(r"""
+            } else if (elevated >= 0) {
+              char e[200];
+              snprintf(e, sizeof(e), "register %d still holds ECCO's %uW, above its original %uW - a raised TOU power setting is never accepted; use Force Restore Original or let the restore finish", 256 + elevated, live256[elevated], snap256[elevated]);
+              why = e;
+            } else if (!ceiling_matches_original) {
+""")
+
+# ---- gate_else_operator_text
+GATE_ELSE_OPERATOR_TEXT_OLD = _blk(r"""
+                } else if (id(dump_operator_needed) && !id(dump_force_restore_this_call)) {
+                  id(dump_status).publish_state(
+                    "OPERATOR DECISION REQUIRED - use Force Restore Original or Accept Current State"
+                  );
+""")
+GATE_ELSE_OPERATOR_TEXT_NEW = _blk(r"""
+                } else if (id(dump_operator_needed) && !id(dump_force_restore_this_call)) {
+                  // fcp2 rework (SG-04): the waiting status never hides an unproven register 244.
+                  std::string unproven = "";
+                  if (id(dump_export_unverified) && id(dump_restore_contained)) {
+                    unproven = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
+                  } else if (id(dump_export_unverified)) {
+                    unproven = "; register 244 is NOT proven out of Allow Export - export may continue";
+                  }
+                  id(dump_status).publish_state(
+                    std::string("OPERATOR DECISION REQUIRED - use Force Restore Original or Accept Current State") + unproven
+                  );
+""")
+
 EDITS = (
     Edit('dc_allowance_subst', DC_ALLOWANCE_SUBST_OLD, DC_ALLOWANCE_SUBST_NEW),
     Edit('window_subst', WINDOW_SUBST_OLD, WINDOW_SUBST_NEW),
@@ -1513,17 +2627,11 @@ EDITS = (
     Edit('sg40_verify_gate', SG40_VERIFY_GATE_OLD, SG40_VERIFY_GATE_NEW),
     Edit('sg40_cancel_close', SG40_CANCEL_CLOSE_OLD, SG40_CANCEL_CLOSE_NEW),
     Edit('restore_globals', RESTORE_GLOBALS_OLD, RESTORE_GLOBALS_NEW),
-    Edit('restore_preread', RESTORE_PREREAD_OLD, RESTORE_PREREAD_NEW),
-    Edit('restore_block_gate', RESTORE_BLOCK_GATE_OLD, RESTORE_BLOCK_GATE_NEW),
-    Edit('restore_foreign_route', RESTORE_FOREIGN_ROUTE_OLD, RESTORE_FOREIGN_ROUTE_NEW),
-    Edit('restore_foreign_lockout', RESTORE_FOREIGN_LOCKOUT_OLD, RESTORE_FOREIGN_LOCKOUT_NEW),
+    Edit('restore_body', RESTORE_BODY_OLD, RESTORE_BODY_NEW),
     Edit('frozen_subst', FROZEN_SUBST_OLD, FROZEN_SUBST_NEW),
-    Edit('frozen_ct_clear', FROZEN_CT_CLEAR_OLD, FROZEN_CT_CLEAR_NEW),
-    Edit('frozen_ct_track', FROZEN_CT_TRACK_OLD, FROZEN_CT_TRACK_NEW),
     Edit('frozen_bp_track', FROZEN_BP_TRACK_OLD, FROZEN_BP_TRACK_NEW),
     Edit('frozen_soc_reset', FROZEN_SOC_RESET_OLD, FROZEN_SOC_RESET_NEW),
     Edit('backoff_gate', BACKOFF_GATE_OLD, BACKOFF_GATE_NEW),
-    Edit('backoff_stamp', BACKOFF_STAMP_OLD, BACKOFF_STAMP_NEW),
     Edit('build_tag_subst', BUILD_TAG_SUBST_OLD, BUILD_TAG_SUBST_NEW),
     Edit('safe_mode_block', SAFE_MODE_BLOCK_OLD, SAFE_MODE_BLOCK_NEW),
     Edit('restart_arm_switch', RESTART_ARM_SWITCH_OLD, RESTART_ARM_SWITCH_NEW),
@@ -1533,6 +2641,20 @@ EDITS = (
     Edit('census_scripts', CENSUS_SCRIPTS_OLD, CENSUS_SCRIPTS_NEW),
     Edit('census_interval', CENSUS_INTERVAL_OLD, CENSUS_INTERVAL_NEW),
     Edit('lock_subst', LOCK_SUBST_OLD, LOCK_SUBST_NEW),
+    Edit('export_subst', EXPORT_SUBST_OLD, EXPORT_SUBST_NEW),
+    Edit('export_hook', EXPORT_HOOK_OLD, EXPORT_HOOK_NEW),
+    Edit('export_watchdog', EXPORT_WATCHDOG_OLD, EXPORT_WATCHDOG_NEW),
+    Edit('start_flags', START_FLAGS_OLD, START_FLAGS_NEW),
+    Edit('start_gate_export', START_GATE_EXPORT_OLD, START_GATE_EXPORT_NEW),
+    Edit('start_refusal_texts', START_REFUSAL_TEXTS_OLD, START_REFUSAL_TEXTS_NEW),
+    Edit('start_surplus_check', START_SURPLUS_CHECK_OLD, START_SURPLUS_CHECK_NEW),
+    Edit('start_surplus_text', START_SURPLUS_TEXT_OLD, START_SURPLUS_TEXT_NEW),
+    Edit('post_end_supervision', POST_END_SUPERVISION_OLD, POST_END_SUPERVISION_NEW),
+    Edit('limits_ceiling_reconfirm', LIMITS_CEILING_RECONFIRM_OLD, LIMITS_CEILING_RECONFIRM_NEW),
+    Edit('limits_export_reconfirm', LIMITS_EXPORT_RECONFIRM_OLD, LIMITS_EXPORT_RECONFIRM_NEW),
+    Edit('accept_elevated_calc', ACCEPT_ELEVATED_CALC_OLD, ACCEPT_ELEVATED_CALC_NEW),
+    Edit('accept_elevated_refuse', ACCEPT_ELEVATED_REFUSE_OLD, ACCEPT_ELEVATED_REFUSE_NEW),
+    Edit('gate_else_operator_text', GATE_ELSE_OPERATOR_TEXT_OLD, GATE_ELSE_OPERATOR_TEXT_NEW),
 )
 EDIT_NAMES = tuple(e.name for e in EDITS)
 

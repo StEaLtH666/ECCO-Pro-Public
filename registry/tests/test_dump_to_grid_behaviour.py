@@ -452,7 +452,9 @@ for k, (kind, _) in enumerate(RESTORE_OPS):
 
         def watched(body, local, sim=sim, bad=bad, real=real_write):
             real(body, local)
-            if sim.bank.get(244) == 0 and any(sim.bank.get(r) not in (TARGET,) for r in range(256, 262)):
+            # fcp2 rework: when 244 cannot be proven out of Allow Export the restore CONTAINS ECCO's ceilings at the floor
+            # (below the lease's), so the invariant is "never Allow Export under a ceiling ABOVE the lease's".
+            if sim.bank.get(244) == 0 and any(sim.bank.get(r, 0) > TARGET for r in range(256, 262)):
                 bad.append(dict(sim.bank))
         sim._modbus_write = watched
         sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
@@ -1236,7 +1238,10 @@ def s_b1_dispatch_fence(fw):
 
 
 def s_b2_floor(fw):
-    sim = started(target=500, duration=90, grid_w=-20000.0, fw=fw)
+    # fcp2 rework: START now refuses when the meter ALREADY shows export above the maximum grid export, so the lease starts
+    # at its target and the PV-driven export (7 kW: under the 8 kW limit, far above the 500 W target) arrives afterwards.
+    sim = started(target=500, duration=90, grid_w=-500.0, fw=fw)
+    sim.grid_w = -7000.0
     for _ in range(6):
         tick(sim, soc=70.0)
     # Exact equality, not >=500: without the clamp the computed ceiling goes
@@ -1849,13 +1854,18 @@ tick(sim, soc=70.0, grid_fresh=False)
 check("grid telemetry never available (last-update timestamp still zero): fails closed immediately",
       not still_active(sim) and "GRID TELEMETRY LOST" in sim.ent("dump_last_end_reason").state, sim.status())
 
-sim = started(target=8000, duration=90, grid_w=20000.0)  # extreme but plausible sustained import
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=90, grid_w=20000.0)  # extreme but plausible sustained import
 for _ in range(8):
     tick(sim, soc=70.0)
 check("controller command max clamp: never exceeds ecco_dump_controller_max_ceiling_w (3000W)",
       sim.g["dump_target_power"] == 3000, sim.status())
 
-sim = started(target=500, duration=90, grid_w=-20000.0)  # extreme but plausible sustained export
+# fcp2 rework: START refuses while the meter ALREADY exports above the maximum grid export, and 20 kW would now end the lease
+# through the export guard - so the export (7 kW, under the 8 kW limit, far above the 500 W target) arrives after START.
+sim = started(target=500, duration=90, grid_w=-500.0)
+sim.grid_w = -7000.0  # extreme but plausible sustained export
 for _ in range(6):
     tick(sim, soc=70.0)
 check("BLOCKER B2: controller command min clamp never goes below the 500W floor (never 0W, never 100W)",
@@ -2336,7 +2346,9 @@ check("R1-1: SATURATED LOW remains SATURATED LOW for many ticks, never drifting 
       and sim.g["dump_controller_wrong_direction_count"] == 0 and still_active(sim), sim.status())
 
 # R1-2: SATURATED HIGH remains SATURATED HIGH for many ticks.
-sim = started(target=8000, duration=30, grid_w=20000.0)
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=30, grid_w=20000.0)
 force_ceiling(sim, 3000)  # V1.2 feed-forward's START-only 2000W limiter means START itself no longer lands
                           # exactly on 3000W here - this test is about the controller/anti-windup behaviour AT
                           # the cap, not feed-forward's own START computation (see [FF]), so force it directly.
@@ -2443,7 +2455,9 @@ print("    must still have its own response judged exactly once, decoupled from 
 # write's own judgement should show NO regression, simply confirming
 # judging still runs at all for a capped write (proven by the ineffective
 # counter moving once conditions stop improving further).
-sim = started(target=8000, duration=90, grid_w=6000.0)
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=90, grid_w=6000.0)
 force_ceiling(sim, 3000)  # V1.2 feed-forward's START-only 2000W limiter means START itself no longer lands
                           # exactly on 3000W here - this test is about judging-at-the-cap, not feed-forward's
                           # own START computation (see [FF]), so force it directly.
