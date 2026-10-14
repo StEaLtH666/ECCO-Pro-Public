@@ -967,7 +967,7 @@ FCP2 = Entry(
         _fcp2.SHADOW_EVALUATOR_TEST_REL: "a9023ffd14e90c5147b4796d8776f45b5c3cc3c6098273484eb683d503a2cd0d",
     },
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="dc1fac2d9488a5f3e5f765dfdcfb59474ae792062ae1387c13c0283a935bdb4e",
+    fingerprint="40060f7b76de9e688bd5fb1208d28aba2370d55c55a35584f50a375634161398",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "
