@@ -300,6 +300,9 @@ class Durable:
             return False
         sim.nvs[key] = record.copy()
         sim._log_event(("commit", key, record.copy(), True))
+        # fcp2 final rework: the real commit_record() ends with global_preferences->sync(), which also flushes every
+        # preference already queued (e.g. a restore_value global queued by `->update()` just before).
+        sim.pref_sync()
         return True
 
     def load_record(self, key, record):
@@ -1137,6 +1140,21 @@ class Transpiler:
                 self.take("}")
                 return f"[{', '.join(elems)}]"
             raise Unsupported(f"std::{name}")
+        # fcp2 final rework (F5): `<restore_value global>->update()` queues that global's ESPHome preference now (its own
+        # 1 s poll, run at once) and `global_preferences->sync()` flushes the queue - see Sim.pref_update / pref_sync.
+        if kind == "id" and self.val(1) == "->" and (v == "global_preferences" or v in self.gtypes):
+            self.take()
+            self.take("->")
+            method = self.take()[1]
+            self.take("(")
+            self.take(")")
+            if v == "global_preferences":
+                if method != "sync":
+                    raise Unsupported(f"global_preferences->{method}()")
+                return "S.pref_sync()"
+            if method != "update":
+                raise Unsupported(f"{v}->{method}()")
+            return f"S.pref_update({v!r})"
         if v == "millis":
             self.take()
             self.take("(")
@@ -1316,6 +1334,20 @@ class Sim:
         self.random_values: list = []
         self.random_log: list = []
         self.exception_code = 2
+        # fcp2 final rework (F5): the ESPHome preferences of restore_value globals, modelled only as far as a lambda
+        # drives them (`<global>->update()`, `global_preferences->sync()`, and the sync inside commit_record).
+        # pref_checked: RestoringGlobalsComponent's last_checked_value_ per global (no entry = never checked: queue it);
+        # pref_pending: the ordered save queue ([name, value]); pref_flushed: what reached flash this way. Failure
+        # injection: pref_sync_fail (NVS refuses: nothing written, False), pref_cut_after = k (a power cut after the
+        # k-th write of the next flush; pref_power_cut records that it happened). See pref_baseline().
+        self.pref_checked: dict = {}
+        self.pref_pending: list = []
+        self.pref_flushed: dict = {}
+        self.pref_syncs = 0
+        self.pref_sync_fail = False
+        self.pref_cut_after = None
+        self.pref_power_cut = False
+        self.pref_writes: list = []    # every (name, value) written to flash this way, in order
         if "dump_limits_valid" in self.g:
             if dump_limits == "configured":
                 # Set the stored state directly (no lambda runs here: subclasses finish their own setup after this
@@ -1328,6 +1360,44 @@ class Sim:
                 self.run_dump_limits_boot()
             else:
                 raise ValueError(f"dump_limits={dump_limits!r}")
+
+    # -- fcp2 final rework (F5): ESPHome preferences of restore_value globals ------------------------------------------
+    def pref_baseline(self) -> None:
+        """Every restore_value global as it stands now is already in flash (a site that has been running): flushed, and
+        the 'last checked' value of each component, so an unchanged value is never queued again."""
+        for g in self.fw["globals"]:
+            if g.get("restore_value"):
+                self.pref_flushed[g["id"]] = self.g[g["id"]]
+                self.pref_checked[g["id"]] = self.g[g["id"]]
+
+    def pref_update(self, name: str) -> None:
+        """RestoringGlobalsComponent::update(): queue the value only if it differs from the last checked one (memcmp);
+        an entry already queued for the same key is updated in place (ESP32PreferenceBackend::save)."""
+        val = self.g[name]
+        if name in self.pref_checked and self.pref_checked[name] == val:
+            return
+        self.pref_checked[name] = val
+        for e in self.pref_pending:
+            if e[0] == name:
+                e[1] = val
+                return
+        self.pref_pending.append([name, val])
+
+    def pref_sync(self) -> bool:
+        """ESP32Preferences::sync(): the queue is written IN ORDER (nvs_set_blob per entry) and cleared. With
+        pref_sync_fail nothing is written and it returns false (the real queue is cleared on failure too); with
+        pref_cut_after = k only the first k entries reach flash - the power fails there (pref_power_cut)."""
+        self.pref_syncs += 1
+        pending, self.pref_pending = self.pref_pending, []
+        if self.pref_sync_fail:
+            return False
+        if self.pref_cut_after is not None:
+            pending = pending[:self.pref_cut_after]
+            self.pref_power_cut = True
+        for name, val in pending:
+            self.pref_flushed[name] = val
+            self.pref_writes.append((name, val))
+        return True
 
     # -- fcp1: the persisted Dump operating limits --------------------------------------------------------------------
     def configure_dump_limits(self, ceiling: int, max_export: int) -> None:

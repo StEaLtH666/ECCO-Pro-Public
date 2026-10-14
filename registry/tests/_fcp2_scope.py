@@ -32,6 +32,14 @@ Every item below is offline-implemented and simulator-tested only.
          visible PV surplus above it and a target without headroom; both limits re-confirmed after INVALID; Accept refuses ECCO's
          raised residue; a windowed-mean runaway criterion; an idle battery is not frozen and a toggling SOC cannot reset the
          frozen-SOC count; no stale link-down stamp; the stuck-lock restart waits for a quiet bus.
+  FINAL rework (Window 7's re-audit of 5178e0f): RF1 - battery power is CROSS-CHECKED against the grid (net export minus PV, from
+         the same telemetry frame, is the least the battery must be delivering; 4 of the last 8 contradicted readings end a
+         settled lease), a reading near 0 W is idle only when that evidence explains it, and the frozen-SOC energy integrates the
+         larger of the reading and the bound; F5 - each accepted Dump power-limit change is flushed to flash before it is
+         reported (integrity value last; a failed flush leaves the limits INVALID); C8 - the post-END supervision's Stop SOC is
+         persisted with the obligation (dump_owed_stop_soc_rec, bound to its end time; missing or unbound = fail closed; a stale
+         SOC counts as reached); R2b - the export guard trips on two of the last three readings over, or the mean of four above
+         the limit; C1 - FOREIGN slots, never written, are named as NOT CONTAINED in every status and the CRITICAL alarm.
   SG-15/43 frozen telemetry: during a settled lease, battery power repeating exactly for ecco_dump_frozen_samples reads, the grid
          CT repeating exactly that long while the battery moved more than ecco_dump_frozen_cross_w (or for
          ecco_dump_frozen_ct_long_samples reads regardless), or more than ecco_dump_soc_frozen_wh discharged with no SOC change,
@@ -46,9 +54,9 @@ Every item below is offline-implemented and simulator-tested only.
          nothing owed: reported only.
 
   ZERO new write domain and an unchanged set of written start addresses (register 245 untouched); six one-register restore writes
-  of 256..261; ONE new read (the pre-read); no persisted global,
-  durable record schema, tag or header change (every new global is RAM only; the one new commit site writes the existing retry
-  record exactly as the mismatch lockout does).
+  of 256..261; ONE new read (the pre-read); ONE persisted global (the final rework's dump_owed_stop_soc_rec, a NEW NVS key that
+  older firmware ignores); no durable record schema, tag or header change (every other new global is RAM only; the one new commit
+  site writes the existing retry record exactly as the mismatch lockout does).
 
 This module imports no other scope module and not _scope_chain (the chain imports it). No I/O.
 """
@@ -82,14 +90,18 @@ SUBSTITUTIONS = {
     'ecco_dump_frozen_ct_long_samples': '30',
     'ecco_dump_soc_frozen_wh': '1500',
     'ecco_dump_frozen_idle_w': '50',
+    'ecco_dump_xcheck_min_w': '300',
+    'ecco_dump_xcheck_pct': '10',
+    'ecco_dump_xcheck_window_k': '4',
+    'ecco_dump_xcheck_ct_age_ms': '5000',
     'ecco_dump_link_down_ms': '25000',
     'ecco_build_tag': 'unrecorded-build',
     'ecco_write_lock_stuck_ms': '180000',
     'ecco_dump_export_far_min_w': '500',
 }
 
-# Every global fcp2 adds (all RAM only: restore_value no).
-NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'ecco_unsafe_reason', 'ecco_unsafe_busy', 'ecco_restart_arm_ms', 'ecco_lock_since_ms', 'ecco_lock_stuck', 'ecco_lock_escalated', 'dump_export_trip', 'dump_start_surplus_refused', 'dump_start_surplus_w', 'dump_limits_reconfirm', 'dump_runaway_e0', 'dump_runaway_e1', 'dump_runaway_e2', 'dump_runaway_e3', 'dump_runaway_e4', 'dump_runaway_e5', 'dump_runaway_e6', 'dump_runaway_e7', 'dump_runaway_e_n', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_owned_mask', 'dump_restore_foreign_mask', 'dump_restore_wmask', 'dump_restore_v0', 'dump_restore_v1', 'dump_restore_v2', 'dump_restore_v3', 'dump_restore_v4', 'dump_restore_v5', 'dump_restore_pre_ok', 'dump_restore_244_ok', 'dump_restore_contain', 'dump_restore_contained', 'dump_restore_block_failed', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail', 'dump_export_unverified')
+# Every global fcp2 adds (all RAM only - restore_value no - except dump_owed_stop_soc_rec).
+NEW_GLOBAL_IDS = ('dump_runaway_win_ord', 'dump_runaway_win_abs', 'dump_runaway_win_gross', 'dump_runaway_trip', 'dump_runaway_trip_w', 'dump_runaway_trip_threshold_w', 'dump_runaway_trip_count', 'dump_ct_same_count', 'dump_ct_last_w', 'dump_ct_same_bmin', 'dump_ct_same_bmax', 'dump_bp_same_count', 'dump_bp_last_w', 'dump_bp_last_ms', 'dump_soc_frozen_wh_acc', 'dump_soc_last_value', 'dump_restore_failed_ms', 'ecco_unsafe_reason', 'ecco_unsafe_busy', 'ecco_restart_arm_ms', 'ecco_lock_since_ms', 'ecco_lock_stuck', 'ecco_lock_escalated', 'dump_export_trip', 'dump_start_surplus_refused', 'dump_start_surplus_w', 'dump_limits_reconfirm', 'dump_runaway_e0', 'dump_runaway_e1', 'dump_runaway_e2', 'dump_runaway_e3', 'dump_runaway_e4', 'dump_runaway_e5', 'dump_runaway_e6', 'dump_runaway_e7', 'dump_runaway_e_n', 'dump_bp_xcheck_window', 'dump_bp_xcheck_count', 'dump_bp_xcheck_trip', 'dump_bp_xcheck_last_w', 'dump_bp_xcheck_lb_w', 'dump_pv_same_count', 'dump_pv_last_w', 'dump_export_h0', 'dump_export_h1', 'dump_export_h2', 'dump_export_h3', 'dump_export_avg_n', 'dump_restore_uncontained', 'dump_owed_stop_soc_rec', 'dump_controller_write_cancelled', 'dump_restore_244_action', 'dump_restore_owned_mask', 'dump_restore_foreign_mask', 'dump_restore_wmask', 'dump_restore_v0', 'dump_restore_v1', 'dump_restore_v2', 'dump_restore_v3', 'dump_restore_v4', 'dump_restore_v5', 'dump_restore_pre_ok', 'dump_restore_244_ok', 'dump_restore_contain', 'dump_restore_contained', 'dump_restore_block_failed', 'dump_restore_foreign_this_attempt', 'dump_restore_foreign_detail', 'dump_export_unverified')
 
 
 def _blk(s: str) -> str:
@@ -203,6 +215,12 @@ WINDOW_ASSERTS_NEW = _blk(r"""
                         "Stuck-lock bound: at least 60 s (every transaction step is bounded by a 3 s wait)");
           static_assert(${ecco_dump_runaway_mean_margin_w} >= 150 && ${ecco_dump_runaway_mean_margin_w} <= ${ecco_dump_runaway_absolute_margin_w},
                         "Dump runaway mean criterion: 150 W up to the absolute margin");
+          // fcp2 final rework (RF1): the battery-vs-grid cross-check bounds.
+          static_assert(${ecco_dump_xcheck_min_w} >= 100 && ${ecco_dump_xcheck_min_w} <= 1000 &&
+                            ${ecco_dump_xcheck_pct} >= 5 && ${ecco_dump_xcheck_pct} <= 30 &&
+                            ${ecco_dump_xcheck_window_k} >= 2 && ${ecco_dump_xcheck_window_k} <= 8 &&
+                            ${ecco_dump_xcheck_ct_age_ms}UL >= 1000UL && ${ecco_dump_xcheck_ct_age_ms}UL <= 10000UL,
+                        "Dump battery cross-check: 100..1000 W, 5..30 %, 2..8 of 8, a CT age of 1..10 s (one telemetry frame)");
 """)
 
 # ---- window_globals
@@ -381,6 +399,78 @@ WINDOW_GLOBALS_NEW = _blk(r"""
     type: int
     restore_value: no
     initial_value: '0'
+  # fcp2 final rework (RF1): the battery-vs-grid CROSS-CHECK (see ecco_dump_xcheck_min_w): the
+  # last 8 settled-lease samples (bit 0 newest, 1 = contradicted), their count, the LATCHED
+  # decision, the last contradicted reading and the bound it broke; and the PV repeat count.
+  # RAM only; cleared at every START.
+  - id: dump_bp_xcheck_window
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: dump_bp_xcheck_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dump_bp_xcheck_trip
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dump_bp_xcheck_last_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_bp_xcheck_lb_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_pv_same_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dump_pv_last_w
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  # fcp2 final rework (R2b): the last FOUR valid net grid export readings (h0 newest) and how many
+  # there are (up to 4) - their MEAN is judged, see ecco_grid_ct_power's on_value. RAM only.
+  - id: dump_export_h0
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_export_h1
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_export_h2
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_export_h3
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: dump_export_avg_n
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # fcp2 final rework (SG-04): the FOREIGN 256-261 slots the last successful restore pre-read
+  # found ("258=7777W 260=6500W"; empty = none). ECCO never writes them, so they are never
+  # contained - every status that reports containment names them. RAM only; cleared at START.
+  - id: dump_restore_uncontained
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  # fcp2 final rework (Priority 3): PERSISTED - this obligation's Stop SOC, bound to it:
+  # ((end epoch & 0xFFFFFF) << 8) | Stop SOC %, written at START with the durable record (whose
+  # commit flushes it). dump_target_stop_soc is RAM only, so after a restart the post-END
+  # supervision takes the Stop SOC from here - only when it is bound to the obligation's end
+  # time and in range (10..90); otherwise it is NOT trusted and the supervision fails closed.
+  # A new NVS key: firmware without it ignores it (rollback compatible); a stale value from an
+  # older lease never binds to a newer obligation.
+  - id: dump_owed_stop_soc_rec
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
 """)
 
 # ---- abs_margin
@@ -500,6 +590,12 @@ WINDOW_START_CLEAR_NEW = _blk(r"""
                               // starts from today's SOC.
                               id(dump_runaway_e_n) = 0;
                               id(dump_soc_last_value) = id(ecco_battery_soc).has_state() ? id(ecco_battery_soc).state : -1.0f;
+                              // fcp2 final rework (RF1 / R2b): a fresh cross-check history and export average.
+                              id(dump_bp_xcheck_window) = 0;
+                              id(dump_bp_xcheck_count) = 0;
+                              id(dump_bp_xcheck_trip) = false;
+                              id(dump_pv_same_count) = 0;
+                              id(dump_export_avg_n) = 0;
                               // V1.1: the settle window for both the
 """)
 
@@ -543,6 +639,7 @@ WINDOW_WATCHDOG_NEW = _blk(r"""
                                       id(dump_ct_same_bmax) - id(dump_ct_same_bmin) > ${ecco_dump_frozen_cross_w}.0f) ||
                                      id(dump_ct_same_count) >= ${ecco_dump_frozen_ct_long_samples} - 1;
                     return ct_frozen || id(dump_bp_same_count) >= ${ecco_dump_frozen_samples} - 1 ||
+                           id(dump_bp_xcheck_trip) ||
                            id(dump_soc_frozen_wh_acc) > ${ecco_dump_soc_frozen_wh}.0f;
                 then:
                   - script.execute:
@@ -551,6 +648,9 @@ WINDOW_WATCHDOG_NEW = _blk(r"""
                         char msg[200];
                         if (id(dump_bp_same_count) >= ${ecco_dump_frozen_samples} - 1) {
                           snprintf(msg, sizeof(msg), "BATTERY POWER TELEMETRY FROZEN - %d identical readings of %.0fW; the runaway guard cannot be trusted - failing closed", id(dump_bp_same_count) + 1, id(dump_bp_last_w));
+                        } else if (id(dump_bp_xcheck_trip)) {
+                          // fcp2 final rework (RF1)
+                          snprintf(msg, sizeof(msg), "BATTERY POWER CONTRADICTED BY GRID - reads %.0fW but export minus PV proves >= %.0fW discharge (%d of last 8); runaway guard and Stop SOC untrusted - failing closed", id(dump_bp_xcheck_last_w), id(dump_bp_xcheck_lb_w), id(dump_bp_xcheck_count));
                         } else if (id(dump_soc_frozen_wh_acc) > ${ecco_dump_soc_frozen_wh}.0f) {
                           snprintf(msg, sizeof(msg), "SOC TELEMETRY FROZEN - %.0fWh discharged with no SOC change (still %.0f%%); Stop SOC cannot be trusted - failing closed", id(dump_soc_frozen_wh_acc), id(dump_soc_last_value));
                         } else {
@@ -1151,6 +1251,8 @@ RESTORE_BODY_NEW = _blk(r"""
                         };
                         uint8_t owned = 0;
                         uint8_t foreign = 0;
+                        // fcp2 final rework (SG-04): the FOREIGN slots, named for every containment status
+                        std::string un = "";
                         for (int i = 0; i < 6; i++) {
                           uint16_t live = values[12 + i];
                           uint16_t floor_v = orig[i] < ${ecco_dump_controller_min_ceiling_w} ? orig[i] : (uint16_t) ${ecco_dump_controller_min_ceiling_w};
@@ -1163,8 +1265,13 @@ RESTORE_BODY_NEW = _blk(r"""
                               id(dump_restore_foreign_detail) = d;
                             }
                             foreign = (uint8_t) (foreign | (1 << i));
+                            char one[16];
+                            snprintf(one, sizeof(one), "%d=%uW", 256 + i, live);
+                            if (!un.empty()) un += " ";
+                            un += one;
                           }
                         }
+                        id(dump_restore_uncontained) = un;
                         id(dump_restore_owned_mask) = owned;
                         id(dump_restore_foreign_mask) = foreign;
                         id(dump_restore_pre_ok) = true;
@@ -1734,7 +1841,12 @@ RESTORE_BODY_NEW = _blk(r"""
                       id(manual_write_in_progress) = false;
                       // fcp2 (SG-04): name a containment, so no status ever implies export is off when 244 is not proven.
                       std::string contained = "";
-                      if (id(dump_export_unverified) && id(dump_restore_contained)) {
+                      if (id(dump_export_unverified) && !id(dump_restore_uncontained).empty()) {
+                        // fcp2 final rework (SG-04): a FOREIGN slot is never written, so never contained -
+                        // named FIRST (the status stays within Home Assistant's 255 characters).
+                        contained = std::string("; 244 NOT proven off - NOT CONTAINED (external): ") + id(dump_restore_uncontained) +
+                                    (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue");
+                      } else if (id(dump_export_unverified) && id(dump_restore_contained)) {
                         contained = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
                       } else if (id(dump_export_unverified)) {
                         contained = "; register 244 is NOT proven out of Allow Export - export may continue";
@@ -1831,6 +1943,28 @@ FROZEN_SUBST_NEW = _blk(r"""
   # fcp2 rework (F3): battery power within this many W of zero is IDLE, never
   # judged frozen (a battery that cannot discharge further reads exactly 0).
   ecco_dump_frozen_idle_w: "50"
+  # fcp2 final rework (RF1): the battery power is CROSS-CHECKED against the grid.
+  # The grid CT (register 172) and the PV strings are published from the SAME
+  # telemetry frame just before register 190, and on a single-inverter site net
+  # grid export can only come from PV or the battery:
+  #     battery discharge >= net export - PV
+  # (house load and conversion losses only add to the discharge). A battery
+  # reading more than max(ecco_dump_xcheck_min_w, ecco_dump_xcheck_pct % of that
+  # bound) BELOW the bound is CONTRADICTED; ecco_dump_xcheck_window_k contradicted
+  # readings among the last 8 of a settled lease end it. A reading near 0 W is
+  # IDLE (never "frozen") only when the same evidence explains it: a CT reading
+  # from this frame (at most ecco_dump_xcheck_ct_age_ms old), not itself frozen,
+  # and no export beyond PV. PV that is missing, negative or frozen counts as
+  # 0 W: it can never excuse export. The frozen-SOC energy count integrates the
+  # larger of the battery reading and the bound. Recorded leases (reference
+  # installation): discharge exceeded export by at least 1.4 kW in every
+  # sample. SITE ASSUMPTION: no other generation (e.g. AC-coupled PV) behind
+  # the CT - on such a site this check ends leases (fail closed) and must be
+  # re-validated first.
+  ecco_dump_xcheck_min_w: "300"
+  ecco_dump_xcheck_pct: "10"
+  ecco_dump_xcheck_window_k: "4"
+  ecco_dump_xcheck_ct_age_ms: "5000"
   # fcp2 (SG-39): a restore attempt that failed while NO telemetry read had
   # succeeded for this long (two missed 10 s polls: the link itself was down)
   # is retried as soon as the link is proven to work again - see the restore
@@ -1854,14 +1988,60 @@ FROZEN_BP_TRACK_NEW = _blk(r"""
             // change is integrated (each gap capped at 60 s). Both are reset at START.
             if (!std::isnan(x)) {
               uint32_t bp_now = millis();
-              if (id(dump_bp_last_ms) != 0 && x > 0.0f) {
+              // fcp2 final rework (RF1): this sample's INDEPENDENT grid evidence - see
+              // ecco_dump_xcheck_min_w. PV that is missing, negative or frozen (the same reading
+              // of at least ecco_dump_frozen_idle_w for ecco_dump_frozen_ct_long_samples frames)
+              // counts as 0 W; a CT reading that is not from this frame, out of range or frozen
+              // gives no evidence at all.
+              bool pv_ok = id(ecco_pv_power).has_state() && !std::isnan(id(ecco_pv_power).state);
+              float pv = pv_ok ? id(ecco_pv_power).state : 0.0f;
+              if (pv_ok && pv == id(dump_pv_last_w) && pv >= ${ecco_dump_frozen_idle_w}.0f) id(dump_pv_same_count)++;
+              else id(dump_pv_same_count) = 0;
+              id(dump_pv_last_w) = pv;
+              if (!pv_ok || pv < 0.0f || id(dump_pv_same_count) >= ${ecco_dump_frozen_ct_long_samples} - 1) pv = 0.0f;
+              bool ct_ok = id(dump_grid_last_update_ms) != 0 &&
+                           (uint32_t) (bp_now - id(dump_grid_last_update_ms)) <= ${ecco_dump_xcheck_ct_age_ms}UL &&
+                           id(ecco_grid_ct_power).has_state() && !std::isnan(id(ecco_grid_ct_power).state) &&
+                           std::fabs(id(ecco_grid_ct_power).state) < 30000.0f &&
+                           id(dump_ct_same_count) < ${ecco_dump_frozen_samples} - 1;
+              // the discharge the grid alone proves (W): net export (-register 172) minus PV
+              float lb = ct_ok ? -id(ecco_grid_ct_power).state - pv : 0.0f;
+              float tol = lb * (float) ${ecco_dump_xcheck_pct} / 100.0f;
+              if (tol < ${ecco_dump_xcheck_min_w}.0f) tol = ${ecco_dump_xcheck_min_w}.0f;
+              bool contra = ct_ok && x < lb - tol;
+              bool xc_lease = id(dump_active_persisted) && !id(dump_restore_requested) && !id(dump_operation_in_progress) &&
+                              (uint32_t) (bp_now - id(dump_active_since_ms)) >= ${ecco_dump_runaway_grace_ms}UL;
+              if (xc_lease) {
+                id(dump_bp_xcheck_window) = (uint8_t) (((uint32_t) id(dump_bp_xcheck_window) << 1) | (contra ? 1u : 0u));
+                if (contra) {
+                  id(dump_bp_xcheck_last_w) = x;
+                  id(dump_bp_xcheck_lb_w) = lb;
+                }
+                int n_x = 0;
+                for (int i = 0; i < 8; i++) {
+                  n_x += (id(dump_bp_xcheck_window) >> i) & 1;
+                }
+                id(dump_bp_xcheck_count) = n_x;
+                // LATCHED until the next START (the watchdog ends the lease on it)
+                if (n_x >= ${ecco_dump_xcheck_window_k}) id(dump_bp_xcheck_trip) = true;
+              } else {
+                id(dump_bp_xcheck_window) = 0;
+                id(dump_bp_xcheck_count) = 0;
+              }
+              // the frozen-SOC energy: the larger of the battery reading and the grid's own bound
+              float dis = x;
+              if (ct_ok && lb > dis) dis = lb;
+              if (id(dump_bp_last_ms) != 0 && dis > 0.0f) {
                 uint32_t bp_dt = bp_now - id(dump_bp_last_ms);
                 if (bp_dt > 60000UL) bp_dt = 60000UL;
-                id(dump_soc_frozen_wh_acc) += x * (float) bp_dt / 3600000.0f;
+                id(dump_soc_frozen_wh_acc) += dis * (float) bp_dt / 3600000.0f;
               }
-              // fcp2 rework (F3): a battery legitimately idle (|x| below ecco_dump_frozen_idle_w, e.g.
-              // it cannot discharge further) is not "frozen".
-              if (x == id(dump_bp_last_w) && std::fabs(x) >= ${ecco_dump_frozen_idle_w}.0f) id(dump_bp_same_count)++;
+              // fcp2 rework (F3) + final rework (RF1): a reading near 0 W (|x| below
+              // ecco_dump_frozen_idle_w) is IDLE - never judged frozen - ONLY when the grid evidence
+              // above explains it (a fresh, unfrozen CT and no export beyond PV). Otherwise a repeated
+              // 0 W counts like any other repeat: it may be a stuck register.
+              bool idle = std::fabs(x) < ${ecco_dump_frozen_idle_w}.0f && ct_ok && lb <= tol;
+              if (x == id(dump_bp_last_w) && !idle) id(dump_bp_same_count)++;
               else id(dump_bp_same_count) = 0;
               id(dump_bp_last_w) = x;
               id(dump_bp_last_ms) = bp_now;
@@ -2249,8 +2429,10 @@ CENSUS_INTERVAL_NEW = _blk(r"""
                   char msg[200];
                   if (id(dump_export_trip) == 2) {
                     snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export %.0fW above the configured %dW limit (one reading far over it)", id(dump_export_last_w), id(dump_max_export_w));
+                  } else if (id(dump_export_trip) == 3) {
+                    snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export averaging %.0fW, above the configured %dW limit (readings alternating around it)", id(dump_export_last_w), id(dump_max_export_w));
                   } else {
-                    snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export %.0fW above the configured %dW limit (two consecutive readings over it)", id(dump_export_last_w), id(dump_max_export_w));
+                    snprintf(msg, sizeof(msg), "MAXIMUM GRID EXPORT EXCEEDED - net export %.0fW above the configured %dW limit (two of the last three readings over it)", id(dump_export_last_w), id(dump_max_export_w));
                   }
                   return std::string(msg);
 """)
@@ -2321,6 +2503,7 @@ EXPORT_HOOK_NEW = _blk(r"""
                         !id(dump_operation_in_progress);
             if (!in_lease && !owed) {
               id(dump_export_window) = 0;
+              id(dump_export_avg_n) = 0;
               id(dump_ct_same_count) = 0;
               id(dump_ct_last_w) = x;
               return;
@@ -2334,8 +2517,24 @@ EXPORT_HOOK_NEW = _blk(r"""
             bool far_over = !std::isnan(x) && -x > limit + far;
             id(dump_export_window) = (uint8_t) (((id(dump_export_window) << 1) | (over ? 1 : 0)) & 15);
             if (over) id(dump_export_last_w) = -x;
-            if (id(dump_export_trip) == 0 && (far_over || (id(dump_export_window) & 3) == 3)) {
-              id(dump_export_trip) = far_over ? 2 : 1;
+            // fcp2 final rework (R2b): readings ALTERNATING around the threshold (over, under, over)
+            // must not escape: TWO of the last THREE readings over (was: two consecutive), or the MEAN
+            // of the last FOUR valid readings above the configured limit itself (exact for any
+            // alternation of two values). Trip 3 = the mean.
+            if (!std::isnan(x)) {
+              id(dump_export_h3) = id(dump_export_h2);
+              id(dump_export_h2) = id(dump_export_h1);
+              id(dump_export_h1) = id(dump_export_h0);
+              id(dump_export_h0) = -x;
+              if (id(dump_export_avg_n) < 4) id(dump_export_avg_n)++;
+            }
+            float avg = (id(dump_export_h0) + id(dump_export_h1) + id(dump_export_h2) + id(dump_export_h3)) / 4.0f;
+            uint8_t w3 = (uint8_t) (id(dump_export_window) & 7);
+            bool two_of_three = w3 == 3 || w3 == 5 || w3 == 6 || w3 == 7;
+            bool avg_over = id(dump_export_avg_n) >= 4 && avg > limit;
+            if (id(dump_export_trip) == 0 && (far_over || two_of_three || avg_over)) {
+              id(dump_export_trip) = far_over ? 2 : (two_of_three ? 1 : 3);
+              if (id(dump_export_trip) == 3) id(dump_export_last_w) = avg;
             }
             // the frozen-CT evidence starts after the lease-start grace (the export guard above has none)
             if (!in_lease || (uint32_t) (millis() - id(dump_active_since_ms)) < ${ecco_dump_runaway_grace_ms}UL) return;
@@ -2385,6 +2584,7 @@ START_FLAGS_NEW = _blk(r"""
                 id(dump_restore_failed_ms) = 0;
                 id(dump_export_trip) = 0;
                 id(dump_start_surplus_refused) = false;
+                id(dump_restore_uncontained) = "";
                 id(dump_operation_in_progress) = true;
 """)
 
@@ -2469,19 +2669,48 @@ POST_END_SUPERVISION_NEW = _blk(r"""
       - lambda: |-
           if (!id(dump_snapshot_valid) || !id(dump_restore_requested) || !id(dump_export_unverified) ||
               id(dump_recovery_metadata_corrupt)) return;
-          bool soc_low = id(ecco_battery_soc).has_state() && id(dump_target_stop_soc) > 0 &&
-                         (float) id(dump_target_stop_soc) >= id(ecco_battery_soc).state;
+          // fcp2 final rework (Priority 3): the Stop SOC protecting THIS obligation. The lease's own
+          // value is RAM only; after a restart it comes from dump_owed_stop_soc_rec - trusted only
+          // when bound to this obligation's end time and in range. Missing or unbound: NOT trusted,
+          // supervised as already reached (fail closed). A higher configured Stop SOC also applies.
+          // A SOC reading that is missing or older than ecco_dump_soc_stale_ms (once that long has
+          // passed since boot) counts as reached too.
+          int stop = id(dump_target_stop_soc);
+          bool stop_known = stop >= 10 && stop <= 90;
+          if (!stop_known) {
+            uint32_t rec = id(dump_owed_stop_soc_rec);
+            int rec_soc = (int) (rec & 0xFFu);
+            stop_known = id(dump_end_epoch) != 0 && (rec >> 8) == (id(dump_end_epoch) & 0xFFFFFFu) &&
+                         rec_soc >= 10 && rec_soc <= 90;
+            if (stop_known) stop = rec_soc;
+          }
+          float cfg = id(dump_stop_soc).state;
+          if (stop_known && !std::isnan(cfg) && (int) lroundf(cfg) > stop) stop = (int) lroundf(cfg);
+          bool soc_fresh = id(ecco_battery_soc).has_state() && !std::isnan(id(ecco_battery_soc).state) &&
+                           id(dump_soc_last_update_ms) != 0 &&
+                           (uint32_t) (millis() - id(dump_soc_last_update_ms)) <= ${ecco_dump_soc_stale_ms}UL;
+          bool soc_low = !stop_known ||
+                         (soc_fresh ? (float) stop >= id(ecco_battery_soc).state : millis() > ${ecco_dump_soc_stale_ms}UL);
           bool export_over = id(dump_export_trip) != 0;
           if (!soc_low && !export_over) return;
           id(dump_export_trip) = 0;
-          char msg[220];
-          snprintf(msg, sizeof(msg), "%s - a restore is OWED and register 244 is not proven out of Allow Export: %s",
-                   id(dump_operator_needed) ? "CRITICAL" : "SUPERVISION",
-                   export_over ? "net export over the configured maximum" : "Stop SOC reached");
+          const char* why = export_over ? "net export over the configured maximum" :
+                            !stop_known ? "Stop SOC unknown after a restart (fail closed)" :
+                            !soc_fresh ? "no fresh SOC reading (fail closed)" : "Stop SOC reached";
+          // fcp2 final rework (SG-04): name what is NOT contained - FOREIGN slots are never written. The
+          // alarm is bounded to Home Assistant's 255 characters: the head (at most 119), the fixed
+          // operator text (56) and the list (at most 80 - six 4-digit values need 76).
+          std::string unc = "";
+          if (!id(dump_restore_uncontained).empty()) unc = std::string("; NOT CONTAINED: ") + id(dump_restore_uncontained);
+          char msg[128];
+          snprintf(msg, sizeof(msg), "%s - restore OWED, register 244 not proven out of Allow Export: %s",
+                   id(dump_operator_needed) ? "CRITICAL" : "SUPERVISION", why);
           if (!id(dump_operator_needed)) {
             id(dump_restore_next_attempt_ms) = 0;
           } else {
-            id(dump_recovery_state).publish_state(std::string(msg) + " - operator action required now (Force Restore Original)");
+            char full[256];
+            snprintf(full, sizeof(full), "%.119s - operator action required now (Force Restore Original)%.80s", msg, unc.c_str());
+            id(dump_recovery_state).publish_state(full);
           }
           ESP_LOGE("dump_to_grid", "%s", msg);
       - if:
@@ -2519,7 +2748,22 @@ LIMITS_CEILING_RECONFIRM_NEW = _blk(r"""
           // A reduction during a lease lowers that lease's latched ceiling at once; nothing ever raises it.
           if (id(dump_active_persisted) && id(dump_lease_ceiling_w) > req) id(dump_lease_ceiling_w) = req;
           if (req > cur || !was_valid) id(dump_limits_arm).turn_off();
-          if (!id(dump_limits_valid)) {
+          // fcp2 final rework (F5): IMMEDIATE, CHECKED persistence. ESPHome queues a restore_value
+          // global only from its own 1 s poll and flushes at flash_write_interval, so a power cut in
+          // that window used to bring the PREVIOUS - consistent, possibly higher - pair back at boot.
+          // The changed values are queued now, the integrity value LAST (the ESP32 backend writes its
+          // queue in order), and flushed before anything is reported; an unchanged value is skipped
+          // (no flash write). A flush cut short leaves a value that disagrees with the integrity value
+          // it was saved under - INVALID at boot, never the old pair (each change alters one limit,
+          // and the integrity value with it). A failed flush leaves the limits INVALID now.
+          dump_op_ceiling_w->update();
+          dump_limits_cap_w->update();
+          dump_limits_check->update();
+          if (!global_preferences->sync()) {
+            id(dump_limits_valid) = false;
+            id(dump_limits_reconfirm) = 0;
+            snprintf(msg, sizeof(msg), "INVALID - power ceiling %d W could NOT be saved to flash (a power cut could restore the previous value); set both limits again", req);
+          } else if (!id(dump_limits_valid)) {
             snprintf(msg, sizeof(msg), "INVALID - power ceiling %d W confirmed; the maximum grid export must also be set again (after INVALID both limits are re-confirmed)", req);
           } else {
             snprintf(msg, sizeof(msg), "%s - power ceiling %d W (was %d W); maximum grid export %d W%s",
@@ -2552,7 +2796,22 @@ LIMITS_EXPORT_RECONFIRM_NEW = _blk(r"""
                                     op % ${ecco_dump_controller_round_w} == 0;
           }
           if (req > cur || !was_valid) id(dump_limits_arm).turn_off();
-          if (!id(dump_limits_valid)) {
+          // fcp2 final rework (F5): IMMEDIATE, CHECKED persistence. ESPHome queues a restore_value
+          // global only from its own 1 s poll and flushes at flash_write_interval, so a power cut in
+          // that window used to bring the PREVIOUS - consistent, possibly higher - pair back at boot.
+          // The changed values are queued now, the integrity value LAST (the ESP32 backend writes its
+          // queue in order), and flushed before anything is reported; an unchanged value is skipped
+          // (no flash write). A flush cut short leaves a value that disagrees with the integrity value
+          // it was saved under - INVALID at boot, never the old pair (each change alters one limit,
+          // and the integrity value with it). A failed flush leaves the limits INVALID now.
+          dump_max_export_w->update();
+          dump_limits_cap_w->update();
+          dump_limits_check->update();
+          if (!global_preferences->sync()) {
+            id(dump_limits_valid) = false;
+            id(dump_limits_reconfirm) = 0;
+            snprintf(msg, sizeof(msg), "INVALID - maximum grid export %d W could NOT be saved to flash (a power cut could restore the previous value); set both limits again", req);
+          } else if (!id(dump_limits_valid)) {
             snprintf(msg, sizeof(msg), "INVALID - maximum grid export %d W confirmed; the power ceiling must also be set again (after INVALID both limits are re-confirmed)", req);
           } else {
             snprintf(msg, sizeof(msg), "%s - power ceiling %d W; maximum grid export %d W (was %d W)%s",
@@ -2600,7 +2859,11 @@ GATE_ELSE_OPERATOR_TEXT_NEW = _blk(r"""
                 } else if (id(dump_operator_needed) && !id(dump_force_restore_this_call)) {
                   // fcp2 rework (SG-04): the waiting status never hides an unproven register 244.
                   std::string unproven = "";
-                  if (id(dump_export_unverified) && id(dump_restore_contained)) {
+                  if (id(dump_export_unverified) && !id(dump_restore_uncontained).empty()) {
+                    // fcp2 final rework (SG-04): FOREIGN slots are never contained - named first.
+                    unproven = std::string("; 244 NOT proven off - NOT CONTAINED (external): ") + id(dump_restore_uncontained) +
+                               (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue");
+                  } else if (id(dump_export_unverified) && id(dump_restore_contained)) {
                     unproven = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
                   } else if (id(dump_export_unverified)) {
                     unproven = "; register 244 is NOT proven out of Allow Export - export may continue";
@@ -2608,6 +2871,20 @@ GATE_ELSE_OPERATOR_TEXT_NEW = _blk(r"""
                   id(dump_status).publish_state(
                     std::string("OPERATOR DECISION REQUIRED - use Force Restore Original or Accept Current State") + unproven
                   );
+""")
+
+# ---- owed_stop_soc_start
+OWED_STOP_SOC_START_OLD = _blk(r"""
+                      id(dump_end_epoch) = (uint32_t) id(ntp_time).now().timestamp + duration_s;
+""")
+OWED_STOP_SOC_START_NEW = _blk(r"""
+                      id(dump_end_epoch) = (uint32_t) id(ntp_time).now().timestamp + duration_s;
+                      // fcp2 final rework (Priority 3): this obligation's Stop SOC, PERSISTED with it and
+                      // bound to its end time (see dump_owed_stop_soc_rec), so the post-END supervision keeps
+                      // it across a restart. Queued now; the first commit_record below flushes it (its sync)
+                      // before any marker or inverter write.
+                      id(dump_owed_stop_soc_rec) = ((id(dump_end_epoch) & 0xFFFFFFu) << 8) | ((uint32_t) id(dump_target_stop_soc) & 0xFFu);
+                      dump_owed_stop_soc_rec->update();
 """)
 
 EDITS = (
@@ -2655,6 +2932,7 @@ EDITS = (
     Edit('accept_elevated_calc', ACCEPT_ELEVATED_CALC_OLD, ACCEPT_ELEVATED_CALC_NEW),
     Edit('accept_elevated_refuse', ACCEPT_ELEVATED_REFUSE_OLD, ACCEPT_ELEVATED_REFUSE_NEW),
     Edit('gate_else_operator_text', GATE_ELSE_OPERATOR_TEXT_OLD, GATE_ELSE_OPERATOR_TEXT_NEW),
+    Edit('owed_stop_soc_start', OWED_STOP_SOC_START_OLD, OWED_STOP_SOC_START_NEW),
 )
 EDIT_NAMES = tuple(e.name for e in EDITS)
 

@@ -29,8 +29,12 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
               (containment and post-END supervision), R2/D1/D2 (export guard cadence, START export checks), R3/L1 (both limits
               re-confirmed), R4/A1 (Accept residue), F1/R3 (the 800 s oscillating overshoot, no nuisance trips), F3 (idle
               battery, toggling SOC), F4 (stale timer), the quiet-bus restart, and AT1 (the restore under an ASYNCHRONOUS hub)
+  [X]         the FINAL rework (Window 7's re-audit of 5178e0f): RF1 (stuck-zero battery telemetry - the grid cross-check, genuine
+              idle without nuisance, stale CT, mixed failures, reboot), F5 (immediate, checked persistence of the power limits:
+              every flush prefix, failure, flash wear), the Stop SOC across a restart (persisted, bound, fail-closed), R2b
+              (alternating export readings) and the naming of uncontained FOREIGN settings
   [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
-              global RAM only
+              global RAM only except the final rework's one persisted Stop SOC record
   [P]         the post-export declaration (PEX entry fcp2)
 """
 from __future__ import annotations
@@ -1140,13 +1144,13 @@ for mode in ("error", "ack_not_applied"):
                   "the obligation kept, and every attempt CONTAINS ECCO's own slots at the 500 W floor (the FOREIGN one untouched)",
                   not first_locked and not s.g["dump_operator_needed"] and w >= 4 and s.g["dump_snapshot_valid"]
                   and block == [500, 500, 1234, 500, 500, 500] and s.bank[244] == 0
-                  and "NOT proven out of Allow Export" in s.status(), f"w={w} block={block} {s.status()}")
+                  and "244 NOT proven off - NOT CONTAINED (external): 258=1234W; ECCO's own at 500 W" in s.status(),
+                  f"w={w} block={block} {s.status()}")
         elif label == "fcp2 rework":
             check("B1/O2 (244 write ACKed but NOT applied, one FOREIGN slot): the mismatch path's retry, not an immediate FOREIGN "
                   "lockout; ECCO's slots CONTAINED at 500 W and verified; the eventual operator lockout says 244 is not proven",
                   not first_locked and w >= 1 and block == [500, 500, 1234, 500, 500, 500] and s.g["dump_operator_needed"]
-                  and "NOT proven out of Allow Export" in s.status()
-                  and "held at the 500 W floor" in s.status()
+                  and "244 NOT proven off - NOT CONTAINED (external): 258=1234W; ECCO's own at 500 W" in s.status()
                   and "FOREIGN (not overwritten)" not in str(s.ent("dump_recovery_state").state), f"w={w} block={block} {s.status()}")
         elif mode == "error":
             check("...the FCP1 base retried the same comms error without a lockout (the B1 regression was FCP2's)",
@@ -1201,7 +1205,8 @@ config_poll(s)
 s.run_actions(watchdog(s.fw))
 check("R1 supervision under the operator lockout: Stop SOC passed with 244 unproven raises a CRITICAL recovery state "
       "(no write: the operator decides)", s.g["dump_operator_needed"]
-      and str(s.ent("dump_recovery_state").state).startswith("CRITICAL - a restore is OWED and register 244 is not proven"),
+      and str(s.ent("dump_recovery_state").state).startswith("CRITICAL - restore OWED, register 244 not proven out of Allow Export: "
+                                                              "Stop SOC reached - operator action required now"),
       str(s.ent("dump_recovery_state").state))
 
 # --- R2 / D1, D2: export safety -----------------------------------------------------------------------------------------------
@@ -1231,8 +1236,8 @@ check(f"R2/D1: 7000 W of export against a 3680 W limit from START ends the lease
       f"({t_far} s; FCP2 d9f11ea: 60 s - its 30 s grace and 3-of-4 rule)", t_far is not None and t_far <= 11
       and "one reading far over it" in why, f"{t_far} {why}")
 t_mod, why = d1(3900.0)
-check(f"R2: a MARGINAL excess (3900 W vs 3680 + 110 W margin) ends it on the SECOND consecutive reading + <=1 s ({t_mod} s)",
-      t_mod is not None and t_mod <= 21 and "two consecutive readings over it" in why, f"{t_mod} {why}")
+check(f"R2: a MARGINAL excess (3900 W vs 3680 + 110 W margin) ends it on the SECOND reading over + <=1 s ({t_mod} s)",
+      t_mod is not None and t_mod <= 21 and "two of the last three readings over it" in why, f"{t_mod} {why}")
 t_ok, _ = d1(3600.0)
 check("R2: export within the limit never trips the guard", t_ok is None)
 s = fresh(target=3000, grid_w=-5000.0, ceiling=3000)
@@ -1355,9 +1360,9 @@ check("F1: two isolated gross spikes still do not trip (each sample adds at most
       feed(at_level(3000), [8600, 3300, 3300, 8600, 3300, 3300, 3300, 3300, 3300, 3300]) is None)
 
 # --- F3: an idle battery at exactly 0 W is not frozen; a toggling SOC cannot defeat the frozen-SOC count ----------------------
-i_f1, why = run_lease(FW, [(-1000.0 - (k % 3), 0.0) for k in range(12)])
-check("F3/F1: a battery legitimately idle at exactly 0 W for 12 reads does NOT end the lease as frozen (FCP2 d9f11ea did)",
-      i_f1 is None, why)
+i_f1, why = run_lease(FW, [(300.0 + (k % 3), 0.0) for k in range(12)])
+check("F3/F1: a battery legitimately idle at exactly 0 W for 12 reads (the grid agrees: the house imports ~300 W, no export) "
+      "does NOT end the lease as frozen (FCP2 d9f11ea did)", i_f1 is None, why)
 i_tog, why = run_lease(FW, [(-1000.0 - (k % 3), 3000.0 + 5 * (k % 2)) for k in range(reads_to_soc + 10)],
                        soc_fn=lambda k: 70.0 + (k % 2), c=3000)
 check("F3: a SOC toggling between 70 and 71 % while kWh are discharged still trips SOC TELEMETRY FROZEN",
@@ -1462,6 +1467,328 @@ check(f"AT1 static: every one of the restore's {len(ops)} Modbus commands is pre
       "previous wait", missing == [], str(missing))
 
 # ==================================================================================================================================
+print("\n[X] the FINAL rework (Window 7's re-audit of 5178e0f): RF1, F5, Stop SOC after a restart, R2b, uncontained naming")
+# ==================================================================================================================================
+def frame(s, ct, batt, soc, pv=None):
+    """One telemetry frame in the firmware's own publish order (block 150-196): grid CT (172), SOC (184), PV, battery (190).
+    None = that register's value is not published (a stale reading)."""
+    if ct is not None:
+        s.ent("ecco_grid_ct_power").publish_state(float(ct))
+    if soc is not None:
+        s.ent("ecco_battery_soc").publish_state(float(soc))
+    if pv is not None:
+        s.ent("ecco_pv_power").publish_state(float(pv))
+    if batt is not None:
+        s.ent("ecco_battery_power").publish_state(float(batt))
+
+
+def run_frames(s, fn, seconds):
+    """A telemetry frame every 10 s (fn(i) -> (ct, battery, soc, pv)), the 1 s export interval after each frame and the 15 s
+    watchdog, on one clock, for `seconds`. Returns (seconds at the first end, its reason) or (None, "")."""
+    n0 = len(end_reasons(s))
+    t, i = 0, 0
+    while t < seconds:
+        t += 5
+        s.advance(5000)
+        if t % 10 == 0:
+            frame(s, *fn(i))
+            i += 1
+            config_poll(s)
+            s.run_actions(FAST["then"])
+        if t % 15 == 0:
+            s.run_actions(watchdog(s.fw))
+        if len(end_reasons(s)) > n0:
+            return t, end_reasons(s)[n0]
+    return None, ""
+
+
+def telemetry_ends(s):
+    return [r for r in end_reasons(s) if "FROZEN" in r or "CONTRADICTED" in r]
+
+
+# --- RF1: stuck-zero battery telemetry ---------------------------------------------------------------------------------------
+t_x, why = run_frames(lease_at(6000, target=5500), lambda i: (-5500.0 - (i % 7), 0.0, 60.0, None), 3600)
+check(f"RF1 (Window 7's reproduction, in the real frame order): a 6000 W lease, register 190 STUCK at 0 W, SOC STUCK at 60 %, the "
+      f"meter showing ~5.5 kW of export - the GRID CROSS-CHECK ends it at {t_x} s (5178e0f: nothing within 60 minutes - its idle "
+      f"exemption hid the stuck 0 W and the frozen-SOC count integrated only the stuck reading)",
+      t_x is not None and t_x <= 90 and why.startswith("BATTERY POWER CONTRADICTED BY GRID - reads 0W but export minus PV proves"),
+      f"{t_x} {why}")
+t_x2, why2 = run_frames(lease_at(6000, target=5500), lambda i: (-5500.0 - (i % 7), 0.0, 60.0 - i * 0.18, None), 3600)
+check(f"RF1: the same with the SOC still falling ends it on the cross-check too ({t_x2} s - 5178e0f only at Stop SOC, 1890 s)",
+      t_x2 is not None and t_x2 <= 90 and why2.startswith("BATTERY POWER CONTRADICTED BY GRID"), f"{t_x2} {why2}")
+s = lease_at(6000, target=5500)
+t_n, why_n = run_frames(s, lambda i: (300.0 + (i % 5), 0.0, 40.0, 0.0), 3600)
+check("RF1 no nuisance: a battery GENUINELY idle at exactly 0 W for 60 minutes (the house importing ~300 W, no PV, SOC unchanged) "
+      "is never judged frozen or contradicted, and the frozen-SOC count does not grow", telemetry_ends(s) == []
+      and s.g["dump_soc_frozen_wh_acc"] == 0.0, f"{t_n} {why_n} acc={s.g['dump_soc_frozen_wh_acc']}")
+s = lease_at(6000, target=5500)
+t_p, why_p = run_frames(s, lambda i: (-2500.0 - (i % 9), 0.0, 55.0, 3000.0 + 13 * (i % 4)), 3600)
+check("RF1 no nuisance: a battery idle at 0 W while PV covers the export (PV ~3 kW, export ~2.5 kW) for 60 minutes: never frozen "
+      "or contradicted", telemetry_ends(s) == [], f"{t_p} {why_p}")
+s = lease_at(6000, target=5500)
+t_h, why_h = run_frames(s, lambda i: (-5500.0 - (i % 7), 6100.0 + 9 * (i % 5), 60.0 - i * 0.18, 0.0), 1800)
+check("RF1 no nuisance: a HEALTHY 6 kW discharge (battery = export + house load, the relation every recorded lease shows) for 30 "
+      "minutes: never contradicted", telemetry_ends(s) == [], f"{t_h} {why_h}")
+s = lease_at(6000, target=5500)
+t_d, why_d = run_frames(s, lambda i: (-4500.0 - (i % 7), 2000.0 + 9 * (i % 5), 60.0 - i * 0.06, 3000.0 + 11 * (i % 3)), 1800)
+check("RF1 no nuisance: daytime - battery 2 kW, PV 3 kW, export 4.5 kW (export - PV = 1.5 kW <= the battery): never contradicted",
+      telemetry_ends(s) == [], f"{t_d} {why_d}")
+# stale CT: the frames keep coming but register 172 is never published again
+s = lease_at(6000, target=5500)
+t_s, why_s = run_frames(s, lambda i: (None, 0.0, 60.0, None), 600)
+check(f"RF1 + STALE CT: battery stuck at 0 W, SOC stuck and NO fresh grid reading - an idle reading the grid cannot confirm is a "
+      f"repeat like any other: the lease ends ({t_s} s: {why_s[:60]})", t_s is not None and t_s <= 120, f"{t_s} {why_s}")
+# mixed telemetry failures
+cases = [
+    ("the CT ALSO frozen at exactly -5500 W", lambda i: (-5500.0, 0.0, 60.0, None), 90),
+    ("PV STUCK at exactly 6000 W (it would excuse the export): untrusted after ecco_dump_frozen_ct_long_samples frames",
+     lambda i: (-5500.0 - (i % 7), 0.0, 60.0, 6000.0), 400),
+    ("battery jittering 0..30 W (never an exact repeat)", lambda i: (-5500.0 - (i % 7), float((i * 7) % 31), 60.0, None), 90),
+    ("battery UNDER-reading (a gain fault: 2.2 kW against 5.5 kW export)", lambda i: (-5500.0 - (i % 7), 2200.0 + (i % 3), 60.0, 0.0), 90),
+]
+for label, fn, bound in cases:
+    t_m, why_m = run_frames(lease_at(6000, target=5500), fn, 3600)
+    check(f"RF1 mixed failures - {label}, SOC stuck: the lease ends within {bound} s ({t_m} s)",
+          t_m is not None and t_m <= bound and ("CONTRADICTED" in why_m or "FROZEN" in why_m), f"{t_m} {why_m}")
+s = started(target=1000)                                                        # START's own verified ceiling
+run_frames(s, lambda i: (-1000.0 - (i % 7), 0.0, 60.0, None), 20)
+b = reboot(s)
+tick(b)
+check("RF1 + reboot: a power cut during a stuck-zero lease - the boot's forced End runs the ownership-checked restore (the lease "
+      "never resumes) and the cross-check history starts empty", owned(b) == ORIGINAL and marker(b) == 0
+      and not b.g["dump_bp_xcheck_trip"] and b.g["dump_bp_xcheck_count"] == 0, b.status())
+s = lease_at(6000, target=5500)
+s.g["dump_bp_xcheck_trip"] = True
+s.g["dump_bp_xcheck_window"] = 255
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+s2 = lease_at(6000, target=5500)
+check("RF1: the cross-check decision is LATCHED for its lease and cleared at the next START",
+      s2.g["dump_bp_xcheck_trip"] is False and s2.g["dump_bp_xcheck_window"] == 0)
+
+# --- F5: immediate, checked persistence of the Dump power limits ------------------------------------------------------------
+def set_number(sim, number_id, value):                                          # the SIM's own firmware's set_action
+    sim.run_actions(next(n for n in sim.fw["number"] if n["id"] == number_id)["set_action"], {"x": float(value)})
+
+
+def limits_site(fw, ceiling=6000, max_export=6000):
+    s = ds.Sim(fw)
+    s.configure_dump_limits(ceiling, max_export)
+    s.pref_baseline()
+    return s
+
+
+def boot_from_flash(sim):
+    """A power cut NOW: a fresh boot whose restore_value globals are exactly what reached flash."""
+    b = ds.Sim(sim.fw)
+    for k, v in sim.pref_flushed.items():
+        b.g[k] = v
+    b.run_dump_limits_boot()
+    return b
+
+
+for number, field, new, label in (("dump_op_ceiling_number", "dump_op_ceiling_w", 3000, "power-ceiling"),
+                                  ("dump_max_export_number", "dump_max_export_w", 3680, "maximum-grid-export")):
+    got = {}
+    for name, fw_ in (("final", FW), ("fcp1", OLD)):
+        s = limits_site(fw_)
+        set_number(s, number, new)
+        b = boot_from_flash(s)
+        got[name] = (s.g[field], b.g[field], b.g["dump_limits_valid"])
+    check(f"F5: a {label} REDUCTION 6000 -> {new} W followed AT ONCE by a power cut boots VALID at {new} W (flushed before it is "
+          f"reported); the FCP1 set_action (unchanged up to 5178e0f) left it to the 1 s poll - the same cut booted VALID at the old "
+          f"6000 W", got["final"] == (new, new, True) and got["fcp1"] == (new, 6000, True), str(got))
+    outcomes = []
+    for k in range(0, 4):
+        s = limits_site(FW)
+        s.pref_cut_after = k
+        set_number(s, number, new)
+        b = boot_from_flash(s)
+        outcomes.append((k, b.g[field], b.g["dump_limits_valid"]))
+    check(f"F5: a power cut after EVERY prefix of the {label} flush (k = 1.. writes reached flash) boots INVALID or VALID at the "
+          f"NEW {new} W - never VALID at the old 6000 W; k = 0 (cut before the first flash write, i.e. before the change was "
+          f"reported) is the old consistent pair", all(v is False or f == new for kk, f, v in outcomes if kk >= 1)
+          and outcomes[0][1:] == (6000, True) and any(v is False for kk, f, v in outcomes if kk >= 1), str(outcomes))
+s = limits_site(FW)
+s.pref_cut_after = 1
+limits_arm(s)
+set_number(s, "dump_op_ceiling_number", 7000)
+b = boot_from_flash(s)
+check("F5: a RAISE cut after its first flash write boots INVALID (never VALID at a value the owner did not confirm)",
+      not b.g["dump_limits_valid"], str((b.g["dump_op_ceiling_w"], b.g["dump_limits_valid"])))
+s = limits_site(FW)
+s.pref_sync_fail = True
+set_number(s, "dump_op_ceiling_number", 3000)
+check("F5: a FAILED flush (NVS refuses) makes the limits INVALID at once - START refused until both are confirmed again - and the "
+      "status says the value could not be saved", not s.g["dump_limits_valid"] and s.g["dump_limits_reconfirm"] == 0
+      and str(s.ent("dump_limits_status").state).startswith("INVALID - power ceiling 3000 W could NOT be saved to flash"),
+      str(s.ent("dump_limits_status").state))
+s = limits_site(FW)
+set_number(s, "dump_op_ceiling_number", 6000)
+check("F5 flash wear: re-setting an UNCHANGED value writes nothing to flash", s.pref_writes == [], str(s.pref_writes))
+s = limits_site(FW)
+set_number(s, "dump_op_ceiling_number", 3000)
+check("F5 flash wear: a reduction writes exactly the changed value and its integrity value, the integrity value LAST",
+      [n for n, v in s.pref_writes] == ["dump_op_ceiling_w", "dump_limits_check"], str(s.pref_writes))
+s = limits_site(FW, 3000, 3680)
+s.g["dump_max_export_w"] = 6000                                                 # a corrupt stored value
+s.pref_baseline()
+s.run_dump_limits_boot()
+limits_arm(s)
+set_number(s, "dump_op_ceiling_number", 3000)
+mid = boot_from_flash(s)
+limits_arm(s)
+set_number(s, "dump_max_export_number", 3680)
+end_b = boot_from_flash(s)
+check("F5 + R3: after INVALID, each re-confirmation is flushed at once; a power cut between the two boots INVALID, after both "
+      "VALID at the confirmed pair", not mid.g["dump_limits_valid"] and end_b.g["dump_limits_valid"]
+      and (end_b.g["dump_op_ceiling_w"], end_b.g["dump_max_export_w"]) == (3000, 3680))
+
+# --- Priority 3: the post-END supervision keeps this obligation's Stop SOC across a restart --------------------------------
+ACK_244 = lambda k, a, c: "ack_not_applied" if (k == "write" and a == 244) else "ok"
+
+
+def locked_out_then_reboot(rec=None):
+    """A 6000 W lease (Stop SOC 25 %) ended with register 244 refusing to leave Allow Export (acknowledged, not applied): ECCO's
+    slots contained, the operator lockout reached - then a POWER CUT and a fresh boot (RAM lost; flash, NVS, inverter kept)."""
+    s = lease_at(6000, target=5500)
+    s.outcome_fn = ACK_244
+    s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+    retries(s, 3)
+    assert s.g["dump_operator_needed"], s.status()
+    b = reboot(s)
+    for k, v in s.pref_flushed.items():
+        b.g[k] = v
+    if rec is not None:
+        b.g["dump_owed_stop_soc_rec"] = rec
+    b.outcome_fn = ACK_244
+    b.ent("dump_stop_soc").set(25.0)
+    return s, b
+
+
+def supervise(b, soc, advance=15000):
+    b.advance(advance)
+    if soc is not None:
+        b.ent("ecco_battery_soc").publish_state(float(soc))
+    config_poll(b)
+    b.run_actions(watchdog(b.fw))
+    return str(b.ent("dump_recovery_state").state)
+
+
+s, b = locked_out_then_reboot()
+check("P3: START persisted the obligation's Stop SOC with it, bound to its end time (flushed by the START's own durable commit)",
+      s.pref_flushed.get("dump_owed_stop_soc_rec") == (((s.g["dump_end_epoch"] & 0xFFFFFF) << 8) | 25), str(s.pref_flushed))
+st_hi = supervise(b, 30.0)
+st = supervise(b, 20.0)
+check("P3 (Window 7 C8): AFTER A RESTART, an owed restore with 244 unproven and the operator lockout - SOC 30 % (above the lease's "
+      "25 %): no alarm; SOC 20 %: CRITICAL 'Stop SOC reached' (5178e0f: its RAM-only Stop SOC was gone, no supervision)",
+      b.g["dump_target_stop_soc"] < 0 and not st_hi.startswith("CRITICAL")
+      and st.startswith("CRITICAL - restore OWED, register 244 not proven out of Allow Export: Stop SOC reached"), f"{st_hi} | {st}")
+_, b = locked_out_then_reboot(rec=0)
+st = supervise(b, 70.0)
+check("P3: the persisted Stop SOC MISSING (an obligation from firmware that never wrote it) is not trusted - CRITICAL at once, "
+      "even at 70 % (fail closed)", st.startswith("CRITICAL - restore OWED, register 244 not proven out of Allow Export: Stop SOC "
+                                                  "unknown after a restart (fail closed)"), st)
+_, b = locked_out_then_reboot()
+b.g["dump_owed_stop_soc_rec"] = ((((b.g["dump_end_epoch"] + 600) & 0xFFFFFF) << 8) | 25)
+st = supervise(b, 70.0)
+check("P3: a persisted Stop SOC bound to ANOTHER obligation (a different end time) is not trusted - CRITICAL (fail closed)",
+      "Stop SOC unknown after a restart" in st, st)
+_, b = locked_out_then_reboot()
+supervise(b, 70.0)
+st = supervise(b, None, advance=100000)
+check("P3: no fresh SOC for longer than ecco_dump_soc_stale_ms while the restore is owed counts as reached - CRITICAL",
+      "no fresh SOC reading (fail closed)" in st, st)
+s = lease_at(6000, target=5500)
+s.outcome_fn = lambda k, a, c: "error" if (k == "write" and a == 244) else "ok"          # comms path: retries, no lockout
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+b = reboot(s)
+for k, v in s.pref_flushed.items():
+    b.g[k] = v
+b.outcome_fn = s.outcome_fn
+b.ent("dump_stop_soc").set(25.0)
+tick(b)
+waited = b.g["dump_restore_next_attempt_ms"] = b.millis() + 300000                    # a long backoff is pending
+b.ent("ecco_battery_soc").publish_state(20.0)
+b.advance(2000)
+sup = next(i for i in FW["interval"] if "restore OWED, register 244 not proven" in str(i))
+b.run_actions(sup["then"][:1])                                                          # the supervision lambda alone
+check("P3: after a restart WITHOUT the operator lockout (244 write errors, comms retries), SOC below the persisted Stop SOC "
+      "cancels a pending 300 s backoff - the owed restore is retried at once", not b.g["dump_operator_needed"]
+      and b.g["dump_target_stop_soc"] < 0 and b.g["dump_restore_next_attempt_ms"] == 0,
+      f"{b.g['dump_restore_next_attempt_ms']} {b.status()}")
+_, b = locked_out_then_reboot()
+b.ent("dump_stop_soc").set(50.0)
+st = supervise(b, 45.0)
+check("P3: a configured Stop SOC raised above the lease's (50 % vs 25 %) also applies - CRITICAL at 45 %",
+      "Stop SOC reached" in st, st)
+
+# --- R2b: export readings alternating around the threshold --------------------------------------------------------------------
+def alternating(seq, seconds=600):
+    s = lease_at(3000, target=3000, max_export=3680, settle=False)
+
+    def fn(i):
+        # the battery follows its command (the controller's), PV makes up the rest of the export over a 400 W house load
+        e = seq[i % len(seq)] + (i % 2)
+        b = float(s.g["dump_target_power"]) + (i % 3)
+        return (-e, b, 70.0, e - b + 400.0)
+    return run_frames(s, fn, seconds)
+
+
+t_a, why_a = alternating([3850.0, 3600.0])
+check(f"R2b (Window 7): export alternating 3850 / 3600 W around a 3680 W limit (+110 W margin) ends the lease ({t_a} s) - two of "
+      f"the last three readings over (5178e0f: never - it needed two CONSECUTIVE)", t_a is not None and t_a <= 31
+      and "two of the last three readings over it" in why_a, f"{t_a} {why_a}")
+t_b, why_b = alternating([3780.0, 3640.0])
+check(f"R2b: alternating 3780 / 3640 W - no reading ever over limit + margin, but an AVERAGE above the limit - ends it ({t_b} s)",
+      t_b is not None and t_b <= 61 and "averaging" in why_b, f"{t_b} {why_b}")
+t_c, why_c = alternating([3700.0, 3650.0])
+check(f"R2b no nuisance: alternating 3700 / 3650 W (mean of four 3675.5 W, just below the limit, never over the margin): the export "
+      f"guard never trips (the harness's export ignores the command, so the controller's own NO RESPONSE ends it at {t_c} s)",
+      "MAXIMUM GRID EXPORT" not in why_c and (t_c is None or t_c >= 300), f"{t_c} {why_c}")
+t_d, why_d = alternating([3570.0 + 40.0, 3570.0 - 40.0, 3570.0])
+check(f"R2b no nuisance: export held at the START headroom limit (3570 W) with +-40 W of noise: the export guard never trips "
+      f"(ended at {t_d} s: {why_d[:40]})", "MAXIMUM GRID EXPORT" not in why_d and (t_d is None or t_d >= 300), f"{t_d} {why_d}")
+
+# --- C1 / SG-04: FOREIGN slots are never written, so never contained - the alarms name them ---------------------------------
+s = lease_at(6000, target=5500)
+s.bank[258] = 7777
+s.bank[260] = 6500
+s.outcome_fn = ACK_244
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+retries(s, 3)
+block = [s.bank[r] for r in range(256, 262)]
+st = s.status()
+check("C1 (Window 7): two FOREIGN slots while 244 cannot be proven off - ECCO's own four contained at 500 W, the FOREIGN two never "
+      "written - and the status NAMES them as NOT CONTAINED (5178e0f said only that every ECCO-controlled register was held at "
+      "500 W)", block == [500, 500, 7777, 500, 6500, 500]
+      and "244 NOT proven off - NOT CONTAINED (external): 258=7777W 260=6500W; ECCO's own at 500 W" in st and len(st) <= 255, st)
+s.g["dump_target_stop_soc"] = 25
+st = supervise(s, 20.0)
+check("C1: the CRITICAL alarm names the uncontained settings too (within Home Assistant's 255 characters)",
+      st.startswith("CRITICAL - restore OWED") and st.endswith("; NOT CONTAINED: 258=7777W 260=6500W") and len(st) <= 255, st)
+s = lease_at(6000, target=5500)
+for r in range(256, 262):
+    s.bank[r] = 9001 + r - 256                                                  # every slot FOREIGN, 4-digit values
+s.outcome_fn = ACK_244
+s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+retries(s, 3)
+lens = [len(s.status())]
+s.g["dump_target_stop_soc"] = 25
+lens.append(len(supervise(s, 20.0)))
+s.g["dump_owed_stop_soc_rec"] = 0
+s.g["dump_target_stop_soc"] = -1
+lens.append(len(supervise(s, 20.0)))
+check("C1: the worst case - all six slots FOREIGN - keeps the status and the CRITICAL alarm within 255 characters "
+      f"(lengths {lens})", max(lens) <= 255 and "256=9001W 257=9002W 258=9003W 259=9004W 260=9005W 261=9006W" in s.status(),
+      s.status())
+check("the final rework adds no Modbus write and no read: the restore's six one-register writes and its one pre-read are still "
+      "the only additions, register 245 is never written",
+      FW_TEXT.count("write_multiple_registers") == OLD_TEXT.count("write_multiple_registers") + 6
+      and FW_TEXT.count("read_holding_registers") == OLD_TEXT.count("read_holding_registers") + 1
+      and "start_address: 245" not in FW_TEXT)
+
+
+# ==================================================================================================================================
 print("\n[C] write surface and NVS")
 # ==================================================================================================================================
 OPS = ("write_single_register", "read_input_registers")
@@ -1480,10 +1807,14 @@ check("register 245 is never written; the set of written start addresses is UNCH
       "a time by Manual TOU)", 245 not in w_new and w_new == w_old, str(sorted(set(w_new) ^ set(w_old))))
 import _fcp2_scope as F  # noqa: E402
 gl = {g["id"]: g for g in FW["globals"]}
-check(f"every global fcp2 adds ({len(F.NEW_GLOBAL_IDS)}) is RAM only (restore_value no): no NVS key added or changed",
-      all(str(gl[g].get("restore_value")).lower() in ("no", "false") for g in F.NEW_GLOBAL_IDS)
-      and {g["id"] for g in FW["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")}
-      == {g["id"] for g in OLD["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")})
+PERSISTED_NEW = {g["id"] for g in FW["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")} - \
+    {g["id"] for g in OLD["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")}
+check(f"every global fcp2 adds ({len(F.NEW_GLOBAL_IDS)}) is RAM only (restore_value no) EXCEPT the final rework's ONE persisted "
+      "dump_owed_stop_soc_rec (a NEW key - firmware without it ignores it; no existing NVS key is changed)",
+      all(str(gl[g].get("restore_value")).lower() in ("no", "false") for g in F.NEW_GLOBAL_IDS if g != "dump_owed_stop_soc_rec")
+      and PERSISTED_NEW == {"dump_owed_stop_soc_rec"}
+      and {g["id"] for g in OLD["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")}
+      <= {g["id"] for g in FW["globals"] if str(g.get("restore_value")).lower() in ("yes", "true")}, str(PERSISTED_NEW))
 check("no durable load site, tag or schema is touched; ONE new commit site - the operator-needed retry record of the FOREIGN "
       "lockout, an existing record written exactly as the mismatch lockout writes it",
       all(FW_TEXT.count(tok) == OLD_TEXT.count(tok) for tok in ("load_record(", "load_record_status("))

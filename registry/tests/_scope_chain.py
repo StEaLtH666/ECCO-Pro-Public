@@ -948,12 +948,13 @@ FCP1 = Entry(
 )
 # fcp2 (full-capability Dump-to-Grid phase 2, safety hardening; _fcp2_scope.py): made on the fcp1 candidate, appended after fcp1.
 # SG-40 (no controller write once a lease is ending) and R-1 (a windowed, efficiency-aware runaway guard). Chain-pinned:
-# pre_fcp2_firmware reproduces the fcp1 firmware byte for byte. RAM-only globals; no Modbus operation, write domain or durable change.
+# pre_fcp2_firmware reproduces the fcp1 firmware byte for byte. RAM-only globals except ONE persisted (the final rework's
+# dump_owed_stop_soc_rec, a new NVS key); no new write domain or durable record change.
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "f347cacab3be8ddf701a89535d2d9befc2a37f975b409f583e6b133bdfa537fa"},
-    deltas={"globals": 55, "substitutions": 13, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
+    checkpoints={FIRMWARE: "ec07c5225ae8d3980960ccf42806aa3682f12ac3b1fefb7f7f0f8dd7864d95e1"},
+    deltas={"globals": 69, "substitutions": 17, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
             "scripts": 3, "binary_sensors": 1,
             "text_sensors": 3, "switches": 1, "buttons": 1},
     subst_added=dict(_fcp2.SUBSTITUTIONS),
@@ -962,12 +963,14 @@ FCP2 = Entry(
     added_files=_fcp2.ADDED_FILES,
     frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="26d274332350526b37f97c714d3532c600c820b8ee6e00b5883fb464fd7f43ff",
+    fingerprint="90dd4782ae5be20dc4c4ee1e2a6d809c2613c0ff9c5c1428568ab7d4ff27865b",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "
-         "unchanged; the backstop margin grows by the profile's DC allowance above 3000 W only); RAM-only globals, ZERO new "
-         "Modbus operation or write domain, no durable change",
+         "unchanged; the backstop margin grows by the profile's DC allowance above 3000 W only); the independent-audit rework "
+         "and the FINAL rework (a battery-vs-grid cross-check, immediate limit persistence, a persisted Stop SOC for post-END "
+         "supervision, the alternating-export rule, uncontained settings named); no new write domain, one persisted global, "
+         "no durable record change",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2)
 

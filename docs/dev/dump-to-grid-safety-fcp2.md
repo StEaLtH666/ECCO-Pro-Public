@@ -161,9 +161,15 @@ reads 244-261 once (an 18-register read) and classifies each register:
   - With nothing FOREIGN this is the single 6-register write (the pre-fcp2 write).
   - Otherwise it is one register at a time, so **a FOREIGN slot is never written**.
 - **244 NOT proven** (its write errored, timed out, or was acknowledged but not applied): the step **CONTAINS** instead. Every
-  non-FOREIGN slot goes to min(original, the 500 W controller floor), so an export ECCO cannot switch off is bounded. The attempt
-  still fails and keeps its retries and its obligation; restoring the originals there would raise the ceiling under a live Allow
-  Export.
+  non-FOREIGN slot goes to min(original, the 500 W controller floor), so the discharge ECCO's OWN settings allow under an export
+  ECCO cannot switch off is bounded. The attempt still fails and keeps its retries and its obligation; restoring the originals
+  there would raise the ceiling under a live Allow Export.
+- **A FOREIGN slot cannot be contained** (final rework, independent re-audit C1). ECCO never writes a value someone else set, so
+  while 244 is not proven an external value above 500 W stays exactly as it is: the 500 W bound covers ECCO's own slots only. This
+  needs two faults at once (an external TOU change and a 244 the inverter refuses). Every containment status and the `CRITICAL`
+  alarm then **name the uncontained settings**, for example
+  `...; 244 NOT proven off - NOT CONTAINED (external): 258=7777W 260=6500W; ECCO's own at 500 W`. The texts stay within Home
+  Assistant's 255 characters even with all six slots external.
 - **Every slot written is read back and verified.**
 
 **The outcome:**
@@ -174,8 +180,8 @@ reads 244-261 once (an 18-register read) and classifies each register:
   overwritten (...)`. The operator chooses **Force Restore Original** or **Accept Current State**.
 - **A failed step** takes the mismatch path (one retry, then the operator) or the comms-backoff path (unbounded retries), never the
   FOREIGN lockout.
-- **No status ever implies export is off when it isn't proven.** While 244 is not proven, every status names it, and names the
-  containment when that was verified.
+- **No status ever implies export is off when it isn't proven.** While 244 is not proven, every status names it, names the
+  containment when that was verified, and names every FOREIGN slot that is NOT contained.
 - **Every command's completion flag is reset before the command.** The `d9f11ea` restore did not do this before its 244 write, so
   on the real (asynchronous) Modbus hub each later wait was satisfied by the previous command's reply. A 256-261 write that was
   acknowledged but not applied was then declared RESTORED OK. An asynchronous-hub model and a static check now cover this.
@@ -212,13 +218,39 @@ any of these cases:
 The SOC default is about 5 % of the reference installation's ~30 kWh battery, and it is **site-dependent**: a smaller battery needs
 a smaller value.
 
-Rework (independent audit F3):
+Rework (independent audit F3), corrected by the final rework (independent re-audit RF1):
 
-- **Idle battery:** battery power within `ecco_dump_frozen_idle_w` (50 W) of zero is idle, never "frozen". A battery that cannot
-  discharge further reads exactly 0 W.
+- **Idle battery, only when the grid agrees.** Battery power within `ecco_dump_frozen_idle_w` (50 W) of zero is idle, never
+  "frozen", **only when independent evidence explains it**: a grid CT reading from the same telemetry frame, itself not frozen,
+  showing no export beyond PV. Otherwise a repeated 0 W is a repeat like any other: register 190 may be stuck.
+  - `5178e0f` exempted every reading near 0 W. With register 190 stuck at 0 W and the SOC stuck, a 6000 W lease exporting ~5.5 kW
+    was never ended (the frozen-SOC count integrated only the stuck reading). It now ends at 45 s.
 - **Toggling SOC:** the frozen-SOC energy count restarts only when the SOC drops below its lowest value since the last restart, so
   a SOC toggling between two values cannot defeat it.
 - **New lease:** the count starts from the SOC at START.
+
+**The battery-vs-grid cross-check (final rework, RF1).** Battery power and SOC can both be stuck, so neither may vouch for the
+other. The grid CT (register 172) and the PV strings are decoded from the same telemetry frame just before register 190, and on a
+single-inverter site net export can only come from PV or the battery:
+
+    battery discharge >= net export - PV      (house load and conversion losses only add to the discharge)
+
+| Rule | Default |
+|---|---|
+| A battery reading more than max(`ecco_dump_xcheck_min_w`, `ecco_dump_xcheck_pct` of the bound) BELOW the bound is CONTRADICTED | 300 W, 10 % |
+| `ecco_dump_xcheck_window_k` contradicted readings among the last 8 of a settled lease LATCH the decision; the watchdog ends the lease (`BATTERY POWER CONTRADICTED BY GRID`) | 4 of 8 |
+| The CT reading must be at most `ecco_dump_xcheck_ct_age_ms` old (one frame), in range and not frozen - otherwise there is no evidence, and no idle exemption | 5 s |
+| PV that is missing, negative or frozen (the same reading of at least 50 W for 30 frames) counts as 0 W: it can never excuse export | - |
+| The frozen-SOC energy count integrates the LARGER of the battery reading and the bound, so a stuck SOC is caught even when register 190 under-reads | - |
+
+- **Evidence.** In every in-lease sample of the four recorded leases (reference installation), battery discharge exceeded net export
+  by at least 1.4 kW (the house load). The bound never came near.
+- **No nuisance:** a battery genuinely idle at 0 W (the house importing, or PV covering the export), a healthy discharge, and a
+  daytime discharge with PV, each for 30-60 minutes, never trip it.
+- **Also caught:** a stale CT (no idle exemption, so the stuck reading counts as frozen), a CT also frozen, PV stuck high, a battery
+  reading jittering near 0 W, and a battery under-reading (a gain fault).
+- **Site assumption:** no other generation (for example AC-coupled PV) behind ECCO's CT. On such a site this check ends leases
+  (fail closed) and must be re-validated before use.
 
 **The restore backoff (SG-39).** A restore attempt that failed while the link itself was down (no telemetry read for
 `ecco_dump_link_down_ms`, 25 s) is retried as soon as a telemetry read succeeds again. Before, it waited out the rest of a backoff
@@ -330,13 +362,23 @@ which ECCO never writes.
 - **The guard has no start grace.** It counts from the moment the lease is ACTIVE.
 - **When it trips:**
   - ONE reading more than max(`ecco_dump_export_far_min_w` = 500 W, 25 %) over the limit;
-  - or TWO consecutive readings over limit + max(100 W, 3 %).
+  - or TWO of the last THREE readings over limit + max(100 W, 3 %) (final rework R2b: it was two CONSECUTIVE, which readings
+    alternating just over and just under the threshold escaped - 3850 / 3600 W against 3680 W never tripped);
+  - or the MEAN of the last four readings above the limit itself (R2b; exact for any alternation of two values, so 3780 / 3640 W
+    trips, 3700 / 3650 W - a mean of 3675 W - does not).
 - **How fast:** the decision is latched, and a 1 s interval ends the lease, so the response is one meter reading plus at most 1 s
   for a gross excess, and two readings plus at most 1 s for a marginal one. The audit's case (7000 W against 3680 W) ends at 10 s
   after START; it was 60 s.
 - **After an End, while a restore is owed and 244 is not proven** out of Allow Export, the guard keeps sampling. With Stop SOC, a
   trip makes the owed restore retry at once (its containment included), never after a backoff. Under the operator lockout it
-  raises a `CRITICAL` recovery state.
+  raises a `CRITICAL` recovery state, which names any FOREIGN setting that is not contained.
+- **The Stop SOC of that supervision survives a restart** (final rework, independent re-audit C8). The lease's own Stop SOC is RAM
+  only, so after a reboot `5178e0f` had none. START now also persists it, bound to the obligation's end time
+  (`dump_owed_stop_soc_rec`, flushed by START's own durable commit before anything is written). After a restart the supervision:
+  - uses it only when it is bound to THIS obligation's end time and in range (10-90 %);
+  - treats it as ALREADY REACHED when it is missing or bound to another obligation (fail closed);
+  - also applies a higher configured Stop SOC;
+  - treats a SOC reading that is missing or older than 90 s (once 90 s have passed since boot) as reached.
 - **START fails closed on export.** It refuses when:
   - the target has no headroom below the limit (at least max(100 W, 3 %));
   - the grid meter ALREADY shows export above the limit;
@@ -353,6 +395,19 @@ and idle, before they are VALID. Re-setting one never re-validates the other, un
 Until both are confirmed the integrity value is not recomputed, so a reboot stays INVALID too. A stale export allowance can never be
 silently reactivated.
 
+**Immediate, checked persistence (final rework F5).** ESPHome queues a `restore_value` global only from its own 1 s poll and flushes
+at `flash_write_interval`, so a power cut within about 2 s of a change brought the PREVIOUS, consistent and possibly higher pair
+back at boot. Each accepted change now queues the changed values itself, the integrity value LAST, and flushes them synchronously
+before anything is reported:
+
+- the ESP32 backend writes its queue in order, one NVS entry at a time, so a flush cut short leaves a stored value that disagrees
+  with the integrity value it was saved under - **INVALID at boot, never the old pair**. Each change alters exactly one limit, and
+  the integrity value with it (proved for every prefix of the flush, a reduction, a raise and the re-confirmation sequence);
+- a cut before the first flash write is a cut before the change was reported, and leaves the previous pair;
+- a failed flush leaves the limits **INVALID at once** (START refused) until both are confirmed again, and says so;
+- flash wear: an unchanged value is skipped by both layers, so only an owner's accepted change writes, and only the changed value
+  and its integrity value.
+
 ## 9. Accept Current State (independent audit R4)
 
 Accept refuses while any 256-261 slot still holds ECCO's own ceiling (the verified or the pending one) **above** its original value.
@@ -367,24 +422,41 @@ A raised TOU power setting would outlive the obligation. The operator uses Force
 | Finding | Status | Where |
 |---|---|---|
 | B1 FOREIGN + failed 244 → one-attempt lockout, export live | RESOLVED | §3; tests `[W]` B1/O2 |
-| R1 SG-04: block never restored when 244 fails; no supervision | RESOLVED (containment + post-END supervision); export can still remain enabled if the inverter refuses every 244 write, now bounded by the 500 W containment and alarmed | §3, §7; `[W]` R1/S4 |
+| R1 SG-04: block never restored when 244 fails; no supervision | RESOLVED (containment + post-END supervision); export can still remain enabled if the inverter refuses every 244 write, with ECCO's own settings bounded by the 500 W containment and alarmed. A FOREIGN setting is not contained; it is named (re-audit C1) | §3, §7; `[W]` R1/S4, `[X]` C1 |
 | R2 export guard grace and cadence; START does not check export | RESOLVED (no grace, 1 s actor, START checks); it remains secondary protection by design | §7; `[W]` R2/D1/D2 |
 | R3 one limit re-validates the other after INVALID | RESOLVED | §8; `[W]` R3/L1 |
 | R4 Accept retires raised ECCO residue | RESOLVED (per-slot restore + Accept refusal) | §3, §9; `[W]` R4/A1 |
 | F1 3-of-8 sustained overshoot escapes | RESOLVED (windowed mean) | §2; `[W]` F1/R3 |
 | F2 backstop above physical capability at 8 kW; allowance extrapolated | OUTSTANDING (supervised per-level validation, unchanged plan) | §2 |
-| F3 frozen battery at 0 W; SOC toggling | RESOLVED; fixed 1500 Wh stays site-dependent (OUTSTANDING: tie to battery capacity) | §4; `[W]` F3 |
+| F3 frozen battery at 0 W; SOC toggling | RESOLVED, its idle exemption corrected by RF1; fixed 1500 Wh stays site-dependent (OUTSTANDING: tie to battery capacity) | §4; `[W]` F3 |
 | F4 stale `dump_restore_failed_ms` | RESOLVED (cleared on success and at START) | `[W]` F4 |
-| F5 limit changes reach flash on a 1 s interval; linear integrity value | OUTSTANDING (at most 1 s window; a power cut inside it keeps the previous, still consistent pair) | - |
+| F5 limit changes reach flash on a 1 s interval; linear integrity value | RESOLVED (final rework): synchronous flush, integrity value last; a partial flush boots INVALID, never the old pair. The integrity value stays linear: each change alters one limit and the integrity value with it, so no partial state can match | §8; `[X]` F5 |
 | F6 OTA not gated; default reboot timeouts; restart loop; build tag default | OUTSTANDING: owner decisions and pre-flight tool (the restart now waits for a quiet bus) | §5, §6 |
 | F7 target equal to the limit; one arm for both limits | Target headroom RESOLVED; the shared arm OUTSTANDING (owner decision) | §7 |
 | F8 use the pre-read's 245-255 | OUTSTANDING (optional) | - |
 | AT1 (Window 4 audit) the completion flag before the restore's 244 write | RESOLVED | §3; `[W]` AT1 |
+| **RF1** (re-audit of `5178e0f`, BLOCKER) stuck-zero battery telemetry evades every guard | RESOLVED (final rework): the idle exemption needs grid evidence; the battery-vs-grid cross-check; the frozen-SOC count integrates the grid's bound | §4; `[X]` RF1 |
+| C8 (re-audit) Stop SOC supervision lost after a restart | RESOLVED (final rework): persisted, bound to the obligation, fail closed when missing; a stale SOC counts as reached | §7; `[X]` P3 |
+| R2b (re-audit) export alternating around the threshold | RESOLVED (final rework): two of the last three, and the mean of four | §7; `[X]` R2b |
+| C1 (re-audit) FOREIGN slots uncontained while 244 is unproven; the status said every ECCO-controlled register was held | DOCUMENTED (cannot be contained by design - never written) and NAMED in every status and the CRITICAL alarm | §3; `[X]` C1 |
+| DST (re-audit) the next UK change is the fall-back on 25 October 2026 | RECORDED, still deferred (operational restriction below) | "Not in this phase" |
 
 ## Not in this phase
 
-**SG-25, the DST-aware TOU charge-slot gate.** The START gate walks the lease window in local minutes from `now`, so on the
-spring-forward night a charge slot just after 01:00 can be missed.
+**SG-25, the DST-aware TOU charge-slot gate.** The START gate walks the lease window in local minutes from `now`, so on a
+clock-change night it checks local times that do not happen and misses ones that happen twice:
+
+- **Fall-back, Sunday 25 October 2026** (the next UK change): 02:00 BST becomes 01:00 GMT, so 01:00-02:00 happens twice. A lease
+  started in the first 01:xx is checked against 01:xx-02:xx local, but in fact runs through the REPEATED 01:00-02:00, so a charge
+  slot there is not seen by the gate.
+- **Spring-forward, Sunday 28 March 2027:** 01:00 GMT becomes 02:00 BST. The gate checks 01:00-02:00 local, which does not
+  happen, and a charge slot just after it can be missed.
+- **The inverter's own clock** may lag the change until ECCO's RTC correction, so its TOU slots may switch an hour away from what
+  the gate assumed.
+- **The lease end itself is safe:** it is an epoch (UTC) deadline, unaffected by the change.
+
+**Operational restriction until SG-25 is implemented:** no Dump to Grid lease (manual or scheduled) between 00:00 and 03:00 local on
+25 October 2026 or 28 March 2027.
 
 The fix is to walk the window in UTC, converting each minute with `ESPTime::from_epoch_local`, and to refuse when either the
 current offset or the DST-corrected offset overlaps a charge slot. The inverter's own clock may lag the change until ECCO's RTC
@@ -398,7 +470,12 @@ charge-slot suites do not model. It is therefore left for a separate, focused ch
 - **No new write domain**, and the set of written start addresses is unchanged. Register 245 is never written. The restore's six
   one-register writes (256..261) are new operations on registers Manual TOU already writes one slot at a time.
 - **One new read:** the restore's pre-read of 244-261.
-- **Every new global is RAM only.** No NVS key is added or changed.
+- **Every new global is RAM only, except ONE** (final rework): `dump_owed_stop_soc_rec`, the persisted Stop SOC of an owed
+  restore. It is a NEW NVS key; no existing key is changed.
+  - Firmware without it, including the 4 October rollback firmware, never reads it.
+  - A value left over from an older lease never binds to a newer obligation (its end time differs). An obligation created by
+    firmware that does not write it finds no bound value, and the supervision fails closed.
+- **The power limits keep their keys and their integrity value.** The final rework only flushes them sooner.
 - **No durable record schema, tag or header changes.** The one new commit site writes the existing retry record exactly as the
   verify-mismatch lockout already does.
 - **The 4 October rollback firmware is unaffected.**

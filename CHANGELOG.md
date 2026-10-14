@@ -60,7 +60,18 @@ Development before the first public release happened in a private repository; se
   - After the Dump power limits are reported invalid, both the power ceiling and the maximum grid export must be set again.
   - Accept Current State refuses while ECCO's own raised TOU power setting is still in place.
   - The runaway guard also ends a lease on a sustained average excess.
-  - A battery idle at exactly 0 W is no longer mistaken for frozen telemetry.
+  - A battery idle at exactly 0 W is no longer mistaken for frozen telemetry, but only when the grid meter agrees it is idle.
+  - Battery power is cross-checked against the grid meter: net export minus PV is the least the battery must be delivering. A
+    battery reading stuck at 0 W (or reading far too low) while the meter shows export now ends the lease within about a minute,
+    even with the SOC stuck as well.
+  - A change to the Dump power ceiling or maximum grid export is saved to flash at once, before it is reported. A power cut
+    straight after a reduction no longer brings the previous, higher value back.
+  - After a restart with a restore still owed, the Stop SOC supervision keeps the lease's own Stop SOC, and fails closed when it
+    cannot be recovered or the SOC reading is not fresh.
+  - The export guard also ends a lease on readings alternating just over and under the limit (two of the last three over, or the
+    average of four above it).
+  - Statuses and alarms name any externally changed TOU power setting that cannot be held at 500 W while export is not proven
+    off.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.
