@@ -437,12 +437,12 @@ print("\n[11] the post-export declaration (PEX entry fcp1)")
 import _fcp1_scope as F  # noqa: E402
 E = chain.CHAIN.entry("fcp1")
 ids = [e.id for e in chain.POST_EXPORT_ENTRIES]
-check("fcp1 is appended right after fsw1", ids[-1] == "fcp1" and chain.CHAIN.prev_id("fcp1") == "fsw1", str(ids))
+check("fcp1 is appended right after ovw2 (re-chained on public main aafa03e5)", ids[-1] == "fcp1" and chain.CHAIN.prev_id("fcp1") == "ovw2", str(ids))
 check("fcp1's reverter reproduces the dtgp1 firmware byte for byte, and its checkpoint is the live firmware",
       F.sha(F.pre_fcp1_firmware(FW_TEXT)) == F.BASE_FW_SHA == chain.CHAIN.entry("dtgp1").checkpoints[chain.FIRMWARE]
       and E.checkpoints == {chain.FIRMWARE: F.sha(FW_TEXT)})
-check("fcp1's fingerprint is sealed and linked to fsw1's", E.fingerprint == _pex.fingerprint(E)   # PEX: hash link
-      and _pex.record(E)["parent"] == chain.CHAIN.entry("fsw1").fingerprint)
+check("fcp1's fingerprint is sealed and linked to ovw2's", E.fingerprint == _pex.fingerprint(E)   # PEX: hash link
+      and _pex.record(E)["parent"] == chain.CHAIN.entry("ovw2").fingerprint)
 check("fcp1 declares its four added files and each exists", E.added_files == F.ADDED_FILES and all((ROOT / f).is_file() for f in F.ADDED_FILES))
 
 print("")

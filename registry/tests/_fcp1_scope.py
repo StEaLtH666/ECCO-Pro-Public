@@ -3,7 +3,7 @@ what fcp1 changes in firmware/ecco_clock_dongle_stage3_4_free_power.yaml, and it
 
 Same technique as _dtgp1_scope.py: the verbatim edits are held HERE as the single source of truth, as exact (before, after) pairs,
 and the reverter raises unless every edit is present exactly once. The post-export chain entry `fcp1` (registry/tests/_scope_chain.py
-POST_EXPORT_ENTRIES, appended last after fsw1; registry/tests/_pex.py) carries `pre_fcp1_firmware`: the current firmware text with
+POST_EXPORT_ENTRIES, appended after ovw2 (re-chained on public main aafa03e5; made first after fsw1); registry/tests/_pex.py) carries `pre_fcp1_firmware`: the current firmware text with
 exactly these edits removed, which reproduces the dtgp1 firmware byte for byte (BASE_FW_SHA = the chain's dtgp1 checkpoint; every
 entry between dtgp1 and fcp1 edits no firmware). Older suites read the firmware as of their own entry through the chain.
 

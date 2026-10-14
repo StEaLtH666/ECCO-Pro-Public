@@ -938,7 +938,7 @@ FCP1 = Entry(
         _fcp1.SHADOW_EVALUATOR_TEST_REL: "c7da8a993126df7859952bf8c94f43fe50cbef228be0399ffbfd41a84dee4b68",
     },
     # _pex.fingerprint(FCP1): hashes its parent fsw1's fingerprint and every declaration above
-    fingerprint="d01b3cd8cd7859abf8ca7aceb1287cf9e47d6e69b07c8e98cade620ee0349f15",
+    fingerprint="d2d3ba914523bdec6f796be116be8b089bbd6cfac119c4a5929da53af700d99c",
     note="full-capability Dump-to-Grid foundation: inverter capability profile (ecco_dump_capability_w, no global maximum), the "
          "Dump power ceiling and the maximum net grid export as separate settings persisted and enforced on the dongle (validated "
          "at boot, arm-gated raises only when idle, reductions always, a per-lease latched ceiling, a net export guard); factory "
