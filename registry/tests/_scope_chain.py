@@ -953,7 +953,7 @@ FCP1 = Entry(
 FCP2 = Entry(
     id="fcp2", pr="FCP2", commit="unmerged",
     reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
-    checkpoints={FIRMWARE: "466e3868ed99a94ae13e7a8d268f5ab696346152bfdb722812cd4fcaff46c90c"},
+    checkpoints={FIRMWARE: "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d"},
     deltas={"globals": 69, "substitutions": 17, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
             "scripts": 3, "binary_sensors": 1,
             "text_sensors": 3, "switches": 1, "buttons": 1},
@@ -967,7 +967,7 @@ FCP2 = Entry(
         _fcp2.SHADOW_EVALUATOR_TEST_REL: "a9023ffd14e90c5147b4796d8776f45b5c3cc3c6098273484eb683d503a2cd0d",
     },
     # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
-    fingerprint="918f96773d4b97f3d31a10660f83e2b0e716390723281e5f907b04a2bb4e6b74",
+    fingerprint="dc1fac2d9488a5f3e5f765dfdcfb59474ae792062ae1387c13c0283a935bdb4e",
     note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
          "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
          "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "

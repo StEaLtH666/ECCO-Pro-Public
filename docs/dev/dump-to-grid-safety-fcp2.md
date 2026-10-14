@@ -168,8 +168,17 @@ reads 244-261 once (an 18-register read) and classifies each register:
   while 244 is not proven an external value above 500 W stays exactly as it is: the 500 W bound covers ECCO's own slots only. This
   needs two faults at once (an external TOU change and a 244 the inverter refuses). Every containment status and the `CRITICAL`
   alarm then **name the uncontained settings**, for example
-  `...; 244 NOT proven off - NOT CONTAINED (external): 258=7777W 260=6500W; ECCO's own at 500 W`. The texts stay within Home
-  Assistant's 255 characters even with all six slots external.
+  `...; 244 NOT proven off; ECCO's own at 500 W; NOT CONTAINED: 258=7777W 260=6500W`.
+- **Every Dump status and recovery state fits Home Assistant's 255-character state limit** (HB1), within 240, at the worst case
+  (all six slots external, 5-digit values, every lockout branch). They are ordered by priority:
+  1. the critical state;
+  2. the operator action;
+  3. whether 244 is unproven;
+  4. ECCO's own containment;
+  5. the FOREIGN registers.
+
+  The FOREIGN list carries the values while it fits 52 characters, and otherwise the register numbers alone (the values are
+  logged).
 - **Every slot written is read back and verified.**
 
 **The outcome:**
@@ -439,6 +448,7 @@ A raised TOU power setting would outlive the obligation. The operator uses Force
 | C8 (re-audit) Stop SOC supervision lost after a restart | RESOLVED (final rework): persisted, bound to the obligation, fail closed when missing; a stale SOC counts as reached | §7; `[X]` P3 |
 | R2b (re-audit) export alternating around the threshold | RESOLVED (final rework): two of the last three, and the mean of four | §7; `[X]` R2b |
 | C1 (re-audit) FOREIGN slots uncontained while 244 is unproven; the status said every ECCO-controlled register was held | DOCUMENTED (cannot be contained by design - never written) and NAMED in every status and the CRITICAL alarm | §3; `[X]` C1 |
+| HB1 (audit of `ebdce15`) lockout statuses over Home Assistant's 255 characters (257 / 262) | RESOLVED: every status and recovery state within 240 at the worst case, in priority order | §3; `[X]` HB1 |
 | DST (re-audit) the next UK change is the fall-back on 25 October 2026 | RECORDED, still deferred (operational restriction below) | "Not in this phase" |
 
 ## Not in this phase

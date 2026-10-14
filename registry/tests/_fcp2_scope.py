@@ -1251,8 +1251,10 @@ RESTORE_BODY_NEW = _blk(r"""
                         };
                         uint8_t owned = 0;
                         uint8_t foreign = 0;
-                        // fcp2 final rework (SG-04): the FOREIGN slots, named for every containment status
+                        // fcp2 final rework (SG-04): the FOREIGN slots, named for every containment status. HB1: at most
+                        // 52 characters - with their values while that fits, else the register numbers alone (values logged)
                         std::string un = "";
+                        std::string un_regs = "";
                         for (int i = 0; i < 6; i++) {
                           uint16_t live = values[12 + i];
                           uint16_t floor_v = orig[i] < ${ecco_dump_controller_min_ceiling_w} ? orig[i] : (uint16_t) ${ecco_dump_controller_min_ceiling_w};
@@ -1269,9 +1271,14 @@ RESTORE_BODY_NEW = _blk(r"""
                             snprintf(one, sizeof(one), "%d=%uW", 256 + i, live);
                             if (!un.empty()) un += " ";
                             un += one;
+                            char reg[8];
+                            snprintf(reg, sizeof(reg), "%d", 256 + i);
+                            if (!un_regs.empty()) un_regs += " ";
+                            un_regs += reg;
                           }
                         }
-                        id(dump_restore_uncontained) = un;
+                        if (!un.empty()) ESP_LOGW("dump_to_grid", "FOREIGN 256-261 slots: %s", un.c_str());
+                        id(dump_restore_uncontained) = un.size() <= 52 ? un : un_regs;
                         id(dump_restore_owned_mask) = owned;
                         id(dump_restore_foreign_mask) = foreign;
                         id(dump_restore_pre_ok) = true;
@@ -1843,11 +1850,12 @@ RESTORE_BODY_NEW = _blk(r"""
                       std::string contained = "";
                       if (id(dump_export_unverified) && !id(dump_restore_uncontained).empty()) {
                         // fcp2 final rework (SG-04): a FOREIGN slot is never written, so never contained -
-                        // named FIRST (the status stays within Home Assistant's 255 characters).
-                        contained = std::string("; 244 NOT proven off - NOT CONTAINED (external): ") + id(dump_restore_uncontained) +
-                                    (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue");
+                        // named (HB1: the status stays within 240 of Home Assistant's 255 characters).
+                        contained = std::string("; 244 NOT proven off") +
+                                    (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue") +
+                                    "; NOT CONTAINED: " + id(dump_restore_uncontained);
                       } else if (id(dump_export_unverified) && id(dump_restore_contained)) {
-                        contained = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
+                        contained = "; register 244 NOT proven out of Allow Export - ECCO's TOU power registers held at the 500 W floor";
                       } else if (id(dump_export_unverified)) {
                         contained = "; register 244 is NOT proven out of Allow Export - export may continue";
                       }
@@ -1868,7 +1876,7 @@ RESTORE_BODY_NEW = _blk(r"""
                           std::string("FOREIGN (not overwritten) - ") + id(dump_restore_foreign_detail)
                         );
                         id(dump_status).publish_state(
-                          std::string("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified, but an external change was found and NOT overwritten (") +
+                          std::string("OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified; external change NOT overwritten (") +
                           id(dump_restore_foreign_detail) +
                           "); use Force Restore Original or Accept Current State"
                         );
@@ -2697,9 +2705,9 @@ POST_END_SUPERVISION_NEW = _blk(r"""
           const char* why = export_over ? "net export over the configured maximum" :
                             !stop_known ? "Stop SOC unknown after a restart (fail closed)" :
                             !soc_fresh ? "no fresh SOC reading (fail closed)" : "Stop SOC reached";
-          // fcp2 final rework (SG-04): name what is NOT contained - FOREIGN slots are never written. The
-          // alarm is bounded to Home Assistant's 255 characters: the head (at most 119), the fixed
-          // operator text (56) and the list (at most 80 - six 4-digit values need 76).
+          // fcp2 final rework (SG-04): name what is NOT contained - FOREIGN slots are never written. HB1:
+          // within 240 of Home Assistant's 255 characters - the head (at most 119), the operator action
+          // (46) and the list (at most 17 + 52).
           std::string unc = "";
           if (!id(dump_restore_uncontained).empty()) unc = std::string("; NOT CONTAINED: ") + id(dump_restore_uncontained);
           char msg[128];
@@ -2709,7 +2717,7 @@ POST_END_SUPERVISION_NEW = _blk(r"""
             id(dump_restore_next_attempt_ms) = 0;
           } else {
             char full[256];
-            snprintf(full, sizeof(full), "%.119s - operator action required now (Force Restore Original)%.80s", msg, unc.c_str());
+            snprintf(full, sizeof(full), "%.119s - operator action now: Force Restore Original%.69s", msg, unc.c_str());
             id(dump_recovery_state).publish_state(full);
           }
           ESP_LOGE("dump_to_grid", "%s", msg);
@@ -2861,10 +2869,11 @@ GATE_ELSE_OPERATOR_TEXT_NEW = _blk(r"""
                   std::string unproven = "";
                   if (id(dump_export_unverified) && !id(dump_restore_uncontained).empty()) {
                     // fcp2 final rework (SG-04): FOREIGN slots are never contained - named first.
-                    unproven = std::string("; 244 NOT proven off - NOT CONTAINED (external): ") + id(dump_restore_uncontained) +
-                               (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue");
+                    unproven = std::string("; 244 NOT proven off") +
+                               (id(dump_restore_contained) ? "; ECCO's own at 500 W" : "; export may continue") +
+                               "; NOT CONTAINED: " + id(dump_restore_uncontained);
                   } else if (id(dump_export_unverified) && id(dump_restore_contained)) {
-                    unproven = "; register 244 is NOT proven out of Allow Export - every ECCO-controlled TOU power register is held at the 500 W floor";
+                    unproven = "; register 244 NOT proven out of Allow Export - ECCO's TOU power registers held at the 500 W floor";
                   } else if (id(dump_export_unverified)) {
                     unproven = "; register 244 is NOT proven out of Allow Export - export may continue";
                   }

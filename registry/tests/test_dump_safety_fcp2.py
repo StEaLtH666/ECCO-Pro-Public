@@ -32,7 +32,8 @@ It proves the firmware SOURCE's control flow, not ESPHome timing, the compiled b
   [X]         the FINAL rework (Window 7's re-audit of 5178e0f): RF1 (stuck-zero battery telemetry - the grid cross-check, genuine
               idle without nuisance, stale CT, mixed failures, reboot), F5 (immediate, checked persistence of the power limits:
               every flush prefix, failure, flash wear), the Stop SOC across a restart (persisted, bound, fail-closed), R2b
-              (alternating export readings) and the naming of uncontained FOREIGN settings
+              (alternating export readings), the naming of uncontained FOREIGN settings, and HB1 (every Dump status / recovery
+              state within Home Assistant's 255 characters, worst case, every lockout branch)
   [C]         write surface and NVS: no new write, exactly one new read (the pre-read), register 245 never written, every new
               global RAM only except the final rework's one persisted Stop SOC record
   [P]         the post-export declaration (PEX entry fcp2)
@@ -673,8 +674,8 @@ for label, fw in (("fcp2", FW), ("fcp1", OLD)):
               "are restored one register at a time, 258's 6500 W is KEPT, the obligation is kept and the operator is asked (durably)",
               s.bank[258] == 6500 and s.bank[244] == ORIGINAL[244] and s.bank[256] == ORIGINAL[256] and s.bank[261] == ORIGINAL[261]
               and marker(s) == 1 and s.g["dump_operator_needed"] and s.nvs[RETRY].operator_needed == 1
-              and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified, but an "
-                                        "external change was found and NOT overwritten")
+              and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified; external "
+                                        "change NOT overwritten")
               and "register 258 reads 6500W" in s.status()
               and str(s.ent("dump_recovery_state").state).startswith("FOREIGN (not overwritten)"), s.status())
         n = len(s.modbus_log)
@@ -1144,13 +1145,13 @@ for mode in ("error", "ack_not_applied"):
                   "the obligation kept, and every attempt CONTAINS ECCO's own slots at the 500 W floor (the FOREIGN one untouched)",
                   not first_locked and not s.g["dump_operator_needed"] and w >= 4 and s.g["dump_snapshot_valid"]
                   and block == [500, 500, 1234, 500, 500, 500] and s.bank[244] == 0
-                  and "244 NOT proven off - NOT CONTAINED (external): 258=1234W; ECCO's own at 500 W" in s.status(),
+                  and "244 NOT proven off; ECCO's own at 500 W; NOT CONTAINED: 258=1234W" in s.status(),
                   f"w={w} block={block} {s.status()}")
         elif label == "fcp2 rework":
             check("B1/O2 (244 write ACKed but NOT applied, one FOREIGN slot): the mismatch path's retry, not an immediate FOREIGN "
                   "lockout; ECCO's slots CONTAINED at 500 W and verified; the eventual operator lockout says 244 is not proven",
                   not first_locked and w >= 1 and block == [500, 500, 1234, 500, 500, 500] and s.g["dump_operator_needed"]
-                  and "244 NOT proven off - NOT CONTAINED (external): 258=1234W; ECCO's own at 500 W" in s.status()
+                  and "244 NOT proven off; ECCO's own at 500 W; NOT CONTAINED: 258=1234W" in s.status()
                   and "FOREIGN (not overwritten)" not in str(s.ent("dump_recovery_state").state), f"w={w} block={block} {s.status()}")
         elif mode == "error":
             check("...the FCP1 base retried the same comms error without a lockout (the B1 regression was FCP2's)",
@@ -1161,7 +1162,7 @@ s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
 check("...and with 244 restoring normally, the FOREIGN lockout comes only AFTER ECCO's own 244 and slots were written AND "
       "verified, and says so", s.bank[244] == 2 and [s.bank[r] for r in (256, 257, 259, 260, 261)] == [8000, 8000, 8000, 8000, 5000]
       and s.bank[258] == 1234 and s.g["dump_operator_needed"]
-      and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings were restored and verified"), s.status())
+      and s.status().startswith("OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified"), s.status())
 
 # --- R1 / S4: 244 refused at high power - containment, and supervision while the restore is owed -----------------------------
 s = lease_at(6000, target=5500)
@@ -1206,7 +1207,7 @@ s.run_actions(watchdog(s.fw))
 check("R1 supervision under the operator lockout: Stop SOC passed with 244 unproven raises a CRITICAL recovery state "
       "(no write: the operator decides)", s.g["dump_operator_needed"]
       and str(s.ent("dump_recovery_state").state).startswith("CRITICAL - restore OWED, register 244 not proven out of Allow Export: "
-                                                              "Stop SOC reached - operator action required now"),
+                                                              "Stop SOC reached - operator action now: Force Restore Original"),
       str(s.ent("dump_recovery_state").state))
 
 # --- R2 / D1, D2: export safety -----------------------------------------------------------------------------------------------
@@ -1761,11 +1762,11 @@ st = s.status()
 check("C1 (Window 7): two FOREIGN slots while 244 cannot be proven off - ECCO's own four contained at 500 W, the FOREIGN two never "
       "written - and the status NAMES them as NOT CONTAINED (5178e0f said only that every ECCO-controlled register was held at "
       "500 W)", block == [500, 500, 7777, 500, 6500, 500]
-      and "244 NOT proven off - NOT CONTAINED (external): 258=7777W 260=6500W; ECCO's own at 500 W" in st and len(st) <= 255, st)
+      and "244 NOT proven off; ECCO's own at 500 W; NOT CONTAINED: 258=7777W 260=6500W" in st and len(st) <= 240, st)
 s.g["dump_target_stop_soc"] = 25
 st = supervise(s, 20.0)
 check("C1: the CRITICAL alarm names the uncontained settings too (within Home Assistant's 255 characters)",
-      st.startswith("CRITICAL - restore OWED") and st.endswith("; NOT CONTAINED: 258=7777W 260=6500W") and len(st) <= 255, st)
+      st.startswith("CRITICAL - restore OWED") and st.endswith("; NOT CONTAINED: 258=7777W 260=6500W") and len(st) <= 240, st)
 s = lease_at(6000, target=5500)
 for r in range(256, 262):
     s.bank[r] = 9001 + r - 256                                                  # every slot FOREIGN, 4-digit values
@@ -1779,8 +1780,149 @@ s.g["dump_owed_stop_soc_rec"] = 0
 s.g["dump_target_stop_soc"] = -1
 lens.append(len(supervise(s, 20.0)))
 check("C1: the worst case - all six slots FOREIGN - keeps the status and the CRITICAL alarm within 255 characters "
-      f"(lengths {lens})", max(lens) <= 255 and "256=9001W 257=9002W 258=9003W 259=9004W 260=9005W 261=9006W" in s.status(),
-      s.status())
+      f"(lengths {lens})", max(lens) <= 240 and "NOT CONTAINED: 256 257 258 259 260 261" in s.status(), s.status())
+# --- HB1 (Window 7's audit of ebdce15): EVERY Dump status / recovery state within Home Assistant's 255 characters ------------
+# Home Assistant rejects a state longer than 255 characters (the alarm would vanish). Every publication of dump_status and
+# dump_recovery_state is recorded across each operator-lockout / failure branch, with all six slots FOREIGN and maximum
+# (5-digit, 65535) register values; each must stay within HB1_MAX (a 15-character margin) and keep, in priority order, the
+# critical state, the operator action, register 244's unproven state, ECCO's own containment and the FOREIGN registers.
+HB1_MAX = 240
+HB1_LONGEST = []
+
+
+def hb1_watch(sim):
+    for eid in ("dump_status", "dump_recovery_state"):
+        e = sim.ent(eid)
+        orig = e.publish_state
+
+        def pub(v, _orig=orig, _eid=eid):
+            HB1_LONGEST.append((len(str(v)), _eid, str(v)))
+            return _orig(v)
+        e.publish_state = pub
+    return sim
+
+
+def hb1_lease(originals, foreign, outcome_244):
+    """A 6000 W lease (originals given), the FOREIGN values placed, 244 failing as given, End and three retries."""
+    s = hb1_watch(lease_at(6000, target=5500, originals={244: 2, **{256 + i: v for i, v in enumerate(originals)}}))
+    for r, v in foreign.items():
+        s.bank[r] = v
+    s.outcome_fn = (lambda m: (lambda k, a, c: m if (k == "write" and a == 244) else "ok"))(outcome_244)
+    s.execute("request_dump_end", {"reason": ds.CStr("TEST END")})
+    return s
+
+
+def hb1_states(s):
+    return str(s.ent("dump_status").state), str(s.ent("dump_recovery_state").state)
+
+
+SIX_MAX = {256 + i: 65529 + i for i in range(6)}                                 # all six FOREIGN (none = its 65535 original)
+ORIG_MAX = [65535] * 6
+hb1 = {}
+# (a) the verify-mismatch lockout (244 acknowledged, not applied), all six FOREIGN, maximum values
+_i0 = len(HB1_LONGEST)
+s = hb1_lease(ORIG_MAX, SIX_MAX, "ack_not_applied")
+retries(s, 3)
+hb1["a"] = (next(v for n, e, v in HB1_LONGEST[_i0:] if e == "dump_status"
+                 and v.startswith("OPERATOR DECISION REQUIRED - repeated verify mismatch")), "")
+check("HB1 (Window 7: 257 characters) the verify-mismatch operator lockout, all six slots FOREIGN at 5-digit values: within "
+      f"{HB1_MAX} characters ({len(hb1['a'][0])}) - lockout, operator action, 244 unproven, the FOREIGN registers (numbers: their "
+      "values do not fit and are logged)", s.g["dump_operator_needed"] and len(hb1["a"][0]) <= HB1_MAX
+      and hb1["a"][0].startswith("OPERATOR DECISION REQUIRED - repeated verify mismatch")
+      and "Force Restore Original" in hb1["a"][0] and "244 NOT proven off" in hb1["a"][0]
+      and hb1["a"][0].endswith("NOT CONTAINED: 256 257 258 259 260 261"), hb1["a"][0])
+# (b) the same with ONE FOREIGN slot: ECCO's other five contained, the slot named with its value
+_i0 = len(HB1_LONGEST)
+s = hb1_lease(ORIG_MAX, {258: 65534}, "ack_not_applied")
+retries(s, 3)
+hb1["b"] = (next(v for n, e, v in HB1_LONGEST[_i0:] if e == "dump_status"
+                 and v.startswith("OPERATOR DECISION REQUIRED - repeated verify mismatch")), "")
+check(f"HB1: the mismatch lockout with one FOREIGN 5-digit slot ({len(hb1['b'][0])}) keeps all five parts in priority order",
+      len(hb1["b"][0]) <= HB1_MAX and hb1["b"][0].endswith("; 244 NOT proven off; ECCO's own at 500 W; NOT CONTAINED: 258=65534W")
+      and "Force Restore Original" in hb1["b"][0], hb1["b"][0])
+# (c) the comms path (244 write errors): RESTORE WRITE FAILED with the suffix, all six FOREIGN
+s = hb1_lease(ORIG_MAX, SIX_MAX, "error")
+retries(s, 2)
+hb1["c"] = hb1_states(s)
+check(f"HB1: the comms-failure status, all six FOREIGN ({len(hb1['c'][0])})", len(hb1["c"][0]) <= HB1_MAX
+      and hb1["c"][0].startswith("RESTORE WRITE FAILED") and "244 NOT proven off" in hb1["c"][0], hb1["c"][0])
+# (d) the first mismatch (one automatic retry left), all six FOREIGN
+s = hb1_lease(ORIG_MAX, SIX_MAX, "ack_not_applied")
+hb1["d"] = hb1_states(s)
+check(f"HB1: the first verify mismatch ({len(hb1['d'][0])})", len(hb1["d"][0]) <= HB1_MAX
+      and hb1["d"][0].startswith("RESTORE VERIFY FAILED") and "244 NOT proven off" in hb1["d"][0], hb1["d"][0])
+# (e) the waiting operator status (the restore gate under the lockout), all six FOREIGN
+s = hb1_lease(ORIG_MAX, SIX_MAX, "ack_not_applied")
+retries(s, 3)
+s.advance(15000)
+config_poll(s)
+s.run_actions(watchdog(s.fw))
+hb1["e"] = hb1_states(s)
+check(f"HB1: the waiting OPERATOR DECISION REQUIRED status under the lockout ({len(hb1['e'][0])})", len(hb1["e"][0]) <= HB1_MAX
+      and hb1["e"][0].startswith("OPERATOR DECISION REQUIRED - use Force Restore Original or Accept Current State")
+      and "244 NOT proven off" in hb1["e"][0], hb1["e"][0])
+# (f) the CRITICAL alarm - the longest reason (Stop SOC unknown after a restart), all six FOREIGN
+s.g["dump_target_stop_soc"] = -1
+s.g["dump_owed_stop_soc_rec"] = 0
+st = supervise(s, 20.0)
+hb1["f"] = (str(s.ent("dump_status").state), st)
+check(f"HB1: the CRITICAL alarm with the longest reason and all six FOREIGN ({len(st)}): critical state, operator action, 244, "
+      "the FOREIGN registers", len(st) <= HB1_MAX and st.startswith("CRITICAL - restore OWED, register 244 not proven")
+      and "operator action now: Force Restore Original" in st and st.endswith("; NOT CONTAINED: 256 257 258 259 260 261"), st)
+# (g) the FOREIGN lockout (244 PROVEN out of Allow Export), ONE slot, maximum values (Window 7: 262 characters)
+s = hb1_lease(ORIG_MAX, {258: 65534}, "ok")
+hb1["g"] = hb1_states(s)
+check(f"HB1 (Window 7: 262 characters) the FOREIGN operator lockout with one 5-digit slot ({len(hb1['g'][0])} / recovery state "
+      f"{len(hb1['g'][1])}): the decision, what was found, the operator action", s.g["dump_operator_needed"]
+      and len(hb1["g"][0]) <= HB1_MAX and len(hb1["g"][1]) <= HB1_MAX
+      and hb1["g"][0].startswith("OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified; external change NOT "
+                                 "overwritten (register 258 reads 65534W (original 65535W")
+      and hb1["g"][0].endswith("; use Force Restore Original or Accept Current State"), hb1["g"][0])
+# (h) a FOREIGN 244 (5-digit) - the lockout names register 244
+s = hb1_lease(ORIG_MAX, {244: 65535}, "ok")
+hb1["h"] = hb1_states(s)
+check(f"HB1: the FOREIGN-244 operator lockout ({len(hb1['h'][0])})", len(hb1["h"][0]) <= HB1_MAX
+      and "register 244 reads 65535" in hb1["h"][0], hb1["h"][0])
+# (i) containment NOT verified (the 256-261 writes also fail) with FOREIGN slots: "export may continue" + the registers
+s = hb1_lease(ORIG_MAX, SIX_MAX, "ack_not_applied")
+s.outcome_fn = lambda k, a, c: "ack_not_applied" if k == "write" else "ok"
+retries(s, 3)
+hb1["i"] = hb1_states(s)
+check(f"HB1: containment not verified, all six FOREIGN ({len(hb1['i'][0])})", len(hb1["i"][0]) <= HB1_MAX
+      and "244 NOT proven off; export may continue; NOT CONTAINED: 256 257 258 259 260 261" in hb1["i"][0], hb1["i"][0])
+# (j) no FOREIGN slot, containment verified, the longest head
+s = hb1_lease(ORIG_MAX, {}, "ack_not_applied")
+retries(s, 3)
+hb1["j"] = hb1_states(s)
+check(f"HB1: no FOREIGN slot, ECCO's own contained, the mismatch lockout ({len(hb1['j'][0])})", len(hb1["j"][0]) <= HB1_MAX
+      and hb1["j"][0].endswith("; register 244 NOT proven out of Allow Export - ECCO's TOU power registers held at the 500 W floor"),
+      hb1["j"][0])
+worst = max(HB1_LONGEST)
+check(f"HB1: EVERY dump_status / dump_recovery_state published in these branches ({len(HB1_LONGEST)} publications) is within "
+      f"{HB1_MAX} characters (longest {worst[0]}: {worst[1]})", worst[0] <= HB1_MAX, worst[2])
+# Static: the dynamic (concatenated) status publications are exactly the audited ones; every snprintf status buffer is bounded.
+_dyn = re.findall(r"id\((dump_status|dump_recovery_state)\)\.publish_state\(\s*std::string\(\"([^\"]{0,40})", FW_TEXT)
+check("HB1 static: the concatenated dump_status / dump_recovery_state publications are exactly the eight audited here (no "
+      "unaudited dynamic status)", sorted(h for _e, h in _dyn) == sorted(x[:40] for x in [
+          "FOREIGN (not overwritten) - ", "OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified",
+          "OPERATOR DECISION REQUIRED - repeated verify mismatch", "RESTORE VERIFY FAILED - snapshot retained",
+          "RESTORE WRITE FAILED - inverter did not respond", "OPERATOR DECISION REQUIRED - use Force Restore Original",
+          "ACCEPTED CURRENT STATE - ", "ACCEPT REFUSED - "]), str(sorted(h for _e, h in _dyn)))
+# The two Accept concatenations: "ACCEPT REFUSED - " + the block reason (its longest fixed reason, or the elevated-residue text
+# at 5-digit values) and "ACCEPTED CURRENT STATE - " + the residue note + its tail, at their worst case.
+_acc = FW_TEXT[FW_TEXT.index("  - id: dump_accept_current_state\n"):]
+_acc = _acc[:_acc.index("\n  - id: ", 10)]
+_why = [len(x) for x in re.findall(r'why = "((?:[^"\\]|\\.)*)";', _acc)]
+_fmt = re.findall(r'snprintf\((e|b), sizeof\((?:e|b)\), "((?:[^"\\]|\\.)*)"', _acc)
+_worst_fmt = {w: [len(f.replace("%d", "256").replace("%u", "65535")) for b_, f in _fmt if b_ == w] for w in "eb"}
+_refused = len("ACCEPT REFUSED - ") + max(_why + _worst_fmt["e"])
+_accepted = len("ACCEPTED CURRENT STATE - ") + max(_worst_fmt["b"]) + len("; export is not enabled; no inverter write performed")
+check(f"HB1 static: the Accept texts at their worst case are within {HB1_MAX} characters (refused {_refused}, accepted "
+      f"{_accepted})", bool(_why) and bool(_fmt) and _refused <= HB1_MAX and _accepted <= HB1_MAX, f"{_why} {_worst_fmt}")
+_lits = [m for m in re.findall(r"id\((?:dump_status|dump_recovery_state)\)\.publish_state\(\s*\"((?:[^\"\\]|\\.)*)\"", FW_TEXT)]
+check(f"HB1 static: every fixed dump_status / dump_recovery_state text is within {HB1_MAX} characters (longest "
+      f"{max(len(x) for x in _lits)}, {len(_lits)} texts)", max(len(x) for x in _lits) <= HB1_MAX)
+
 check("the final rework adds no Modbus write and no read: the restore's six one-register writes and its one pre-read are still "
       "the only additions, register 245 is never written",
       FW_TEXT.count("write_multiple_registers") == OLD_TEXT.count("write_multiple_registers") + 6
