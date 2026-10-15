@@ -10,6 +10,14 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Dump to Grid limits in Home Assistant** (post-export entry `fcc1`; for the fcp1 / fcp2 firmware, not yet flashed;
+  [docs/dev/full-capability-controls.md](docs/dev/full-capability-controls.md)).
+  - A package that describes the dongle's limits: VALID, NOT CONFIGURED, INVALID or AWAITING CONFIRMATION; the power ceiling
+    against the owner's record of the highest supervised, proven level (3000 W until the owner records more); flags for an
+    unconfigured export limit and for attention. A persistent notification warns while a Dump schedule is armed but its START
+    would be refused. The package writes nothing to the dongle.
+  - A separate admin-only dashboard with the limits, the dongle's own two limit boxes and their arm, the restore, containment
+    and operator-lockout states, and Safe To Flash, Flash Readiness, Restart Status and Build Identity. No card calls a service.
 
 - Advanced Configuration Stage 0 (post-export entry `acs0`; offline, NOT live-proven): a guarded owner edit of ONE TOU slot's
   target SOC (register 267+N) through the existing, verified manual TOU firmware path (no firmware change, no new register).

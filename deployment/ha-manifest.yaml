@@ -70,6 +70,13 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Dump to Grid operating limits, owner view - FCC1 (describes the fcp1 / fcp2 firmware's limits state; template entities, one
+  # notification-only automation; writes nothing to the dongle). Deploy only with or after the fcp2 firmware.
+  - source: home-assistant/packages/ecco_dump_limits.yaml
+    destination: /config/packages/ecco_dump_limits.yaml
+    method: ssh_file_copy
+    restart_required: true
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml

@@ -895,7 +895,8 @@ check("acs0 declares the files it adds and each exists (the package first)", E.a
 # PEX: acs0's own fingerprint and its hash link to fsw1
 check("acs0's fingerprint is the pinned value, linked to fsw1's", E.fingerprint == ACS0_FINGERPRINT == _pex.fingerprint(E)
       and _pex.record(E)["parent"] == FSW1_FINGERPRINT)   # PEX: hash link
-man = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
+# PEX: the manifest as of acs0 (any later entry that edits it, e.g. fcc1, undone exactly, sha256-checked)
+man = _pex.as_of("deployment/ha-manifest.yaml", "acs0", _pex.read("deployment/ha-manifest.yaml"))   # PEX: chain reverter
 # PEX: the manifest as of fsw1 (acs0's chain reverter undone exactly, sha256-checked)
 old_man = _pex.as_of("deployment/ha-manifest.yaml", "fsw1", _pex.read("deployment/ha-manifest.yaml"))   # PEX: chain reverter
 check("the manifest gains exactly one package stanza for this package (and nothing else)", F.add_acs0_manifest(old_man) == man

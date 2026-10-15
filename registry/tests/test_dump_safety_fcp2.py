@@ -1968,7 +1968,7 @@ print("\n[P] the post-export declaration (PEX entry fcp2)")
 # ==================================================================================================================================
 E = chain.CHAIN.entry("fcp2")
 ids = [e.id for e in chain.POST_EXPORT_ENTRIES]
-check("fcp2 is appended right after fcp1", ids[-1] == "fcp2" and chain.CHAIN.prev_id("fcp2") == "fcp1", str(ids))
+check("fcp2 is appended right after fcp1", "fcp2" in ids and chain.CHAIN.prev_id("fcp2") == "fcp1", str(ids))
 check("fcp2's reverter reproduces the fcp1 firmware byte for byte, and its checkpoint is the live firmware",
       F.sha(F.pre_fcp2_firmware(FW_TEXT)) == F.BASE_FW_SHA == chain.CHAIN.entry("fcp1").checkpoints[chain.FIRMWARE]
       and E.checkpoints == {chain.FIRMWARE: F.sha(FW_TEXT)})
