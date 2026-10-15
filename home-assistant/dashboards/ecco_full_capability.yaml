@@ -1,15 +1,23 @@
 # ECCO Full Capability - Dump to Grid limits and firmware readiness (post-export entry fcc1).
 #
-# A separate, ADMIN-ONLY Lovelace dashboard (YAML mode), deliberately not part of ecco_pro.yaml. Built-in cards only (entities,
-# markdown, conditional): no custom card, no resource. It shows the fcp1 / fcp2 firmware's limits and the restore / containment /
-# lockout / readiness states, and offers exactly the dongle's own controls for the two limits and their arm.
+# A separate Lovelace dashboard (YAML mode) for the installation's administrator, deliberately not part of ecco_pro.yaml. Built-in
+# cards only (entities, markdown, conditional): no custom card, no resource. It shows the fcp1 / fcp2 firmware's limits and the
+# restore / containment / lockout / readiness states, and shows the dongle's own controls for the two limits and their arm.
 #
 # What changes what:
-#   - the two number boxes and the Write Enable arm are the firmware's own entities; the DONGLE validates every request (range,
-#     step, arm for a raise or after INVALID, Dump idle for a raise) and refuses anything else, saying why in the status line;
-#   - the Supervised Proven Level is an owner RECORD in Home Assistant only; nothing reads it to change the dongle;
-#   - no card here calls a service: no tap action, no button, no script. Recovery decisions (Force Restore Original, Accept Current
-#     State) stay on the main dashboard's Dump to Grid recovery controls.
+#   - WRITE-CAPABLE: the Power ceiling and Maximum grid export boxes and the Limits write enable toggle are the firmware's own
+#     entities in Home Assistant's default entity rows. Using them sends number.set_value / switch.turn_on to the dongle. The DONGLE
+#     validates every request (range, step, the arm for a raise or after INVALID, Dump idle for a raise) and refuses anything else,
+#     saying why in its status line; a reduction is accepted at any time.
+#   - Registering this dashboard with `require_admin: true` only hides it from non-administrators' sidebars. It is NOT access
+#     control: any Home Assistant user or automation that can call those services on these entities can still use them, subject to
+#     the same firmware protections.
+#   - The Supervised Proven Level is an owner RECORD in Home Assistant only (guidance; first run 3000 W); nothing reads it to change
+#     the dongle, and it is not a limit.
+#   - No card defines a tap / hold action, button, script or service call of its own. Recovery decisions (Force Restore Original,
+#     Accept Current State) stay on the main dashboard's Dump to Grid recovery controls.
+#   - With firmware without fcp1 / fcp2 (the 4 October 2026 image) the limits state reads UNAVAILABLE, the banner stays hidden and
+#     the new entity rows show as not available.
 # Entity ids use the default device slug `ecco_clock_dongle`; render a site copy with tools/ecco_site_render.py.
 
 title: ECCO Full Capability
@@ -38,10 +46,12 @@ views:
           **State: {{ states('sensor.ecco_dump_limits_state') }}**
 
           {{ state_attr('sensor.ecco_dump_limits_state', 'explanation') }}
+          {%- if not is_state('sensor.ecco_dump_limits_state', 'UNAVAILABLE') %}
 
           Power ceiling **{{ states('number.ecco_clock_dongle_dump_to_grid_power_ceiling') }} W** ·
           maximum grid export **{{ 'NOT CONFIGURED' if is_state('binary_sensor.ecco_dump_export_limit_not_configured', 'on') else states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') ~ ' W' }}** ·
-          supervised proven level **{{ states('input_number.ecco_dump_supervised_proven_w') }} W**
+          supervised proven level (guidance) **{{ states('input_number.ecco_dump_supervised_proven_w') }} W**
+          {%- endif %}
           {%- if is_state('sensor.ecco_dump_ceiling_assessment', 'ABOVE PROVEN LEVEL') %}
 
           **The power ceiling is ABOVE the supervised proven level.** Lower it, or prove the new level live and supervised

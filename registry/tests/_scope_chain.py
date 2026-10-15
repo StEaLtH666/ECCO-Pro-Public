@@ -980,11 +980,12 @@ FCP2 = Entry(
 # fcc1 (full-capability controls; _fcc1_scope.py): made on public main ef8c3177 after fcp2. The Home Assistant side of the merged
 # fcp1 / fcp2 firmware: a package of template entities that DESCRIBE the dongle's Dump to Grid limits (VALID / NOT CONFIGURED /
 # INVALID / AWAITING CONFIRMATION), the ceiling against the owner's supervised proven level (a helper record, first run 3000 W), the
-# not-configured export and an attention flag, with one notification-only automation; and a separate admin-only dashboard showing
-# the limits, the firmware's own number boxes and arm, and the restore / containment / lockout / readiness states. CHAIN-PINNED
+# not-configured export and an attention flag, with one notification-only automation; and a separate administrator dashboard showing
+# the limits, the firmware's own write-capable number boxes and arm (protected by the firmware; require_admin is not access control),
+# and the restore / containment / lockout / readiness states. CHAIN-PINNED
 # edit: the deployment manifest, one package stanza (_fcc1_scope.PINNED_REVERTERS). No frozen file. Measured, not declared: ZERO
-# firmware byte; no write to the dongle or the inverter from the package or the dashboard (no number / switch / button / script /
-# esphome action), no Modbus service.
+# firmware byte; the package writes nothing to the dongle, the inverter or any helper (no number / switch / button / script /
+# esphome action), no Modbus service; the dashboard defines no service call of its own.
 FCC1 = Entry(
     id="fcc1", pr="FCC1", commit="unmerged",
     reverts=dict(_fcc1.PINNED_REVERTERS),
@@ -996,9 +997,9 @@ FCC1 = Entry(
     fingerprint="612133ed148ec71b8fc63db1aa346cc2b7340e67c4d535932cc35f365050178d",
     note="full-capability controls: a Home Assistant package of template entities describing the fcp1 / fcp2 Dump to Grid limits "
          "(state, ceiling against the owner's supervised proven level, export not configured, attention) with one "
-         "notification-only automation, and a separate admin-only dashboard of the limits, the firmware's own controls and the "
-         "restore / containment / lockout / readiness states; one package stanza in the manifest: ZERO firmware change, no write "
-         "to the dongle or the inverter",
+         "notification-only automation, and a separate administrator dashboard of the limits, the firmware's own write-capable "
+         "controls (protected by the firmware) and the restore / containment / lockout / readiness states; one package stanza in "
+         "the manifest: ZERO firmware change, no automatic write to the dongle or the inverter",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1)
 

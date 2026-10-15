@@ -21,6 +21,10 @@ the Home Assistant functions they use (states / is_state / state_attr / this, th
   [8] the post-export declaration (PEX entry fcc1): its place after fcp2, exactly the manifest chain-pinned, no frozen file, the
       files it adds, its fingerprint; undone, the manifest is its fcp2 state byte for byte
   [9] mutation: each named mutant of the package or the dashboard is caught
+  [10] the old firmware (no fcp1 / fcp2 entities, e.g. the 4 October 2026 image): UNAVAILABLE, both flags unavailable, no
+       notification even with a schedule armed, no banner, no values in the summary
+  [11] the wording: the limit boxes and the arm are described as write-capable and firmware-protected, require_admin as NOT access
+       control, the proven level as guidance; no DNO export value is assumed anywhere
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 """
@@ -207,6 +211,8 @@ def static_checks(pkg_text=PKG_TEXT, dash_text=DASH_TEXT, quiet=False) -> list[s
 
 
 def referenced(text: str) -> set:
+    """entity ids used in YAML content (comment lines, which name services in prose, are skipped)"""
+    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
     return set(re.findall(r"\b((?:sensor|binary_sensor|number|switch|button|select|input_number|input_boolean)\.[a-z0-9_]+)", text))
 
 
@@ -335,6 +341,9 @@ for st, assess, arm, want in (("VALID", "AT PROVEN LEVEL", "off", "False"), ("NO
                               ("VALID", "ABOVE PROVEN LEVEL", "off", "True"), ("VALID", "BELOW PROVEN LEVEL", "on", "True")):
     got = render(BIN["ecco_dump_limits_attention"]["state"], {E_STATE: st, E_ASSESS: assess, E_ARM: arm})
     check(f"attention: state {st}, {assess}, arm {arm} -> {want}", got == want, got)
+for st, want in (("VALID", "True"), ("NOT CONFIGURED", "True"), ("UNKNOWN", "True"), ("UNAVAILABLE", "False"), ("unknown", "False")):
+    got = render(BIN["ecco_dump_limits_attention"]["availability"], {E_STATE: st})
+    check(f"attention availability with limits state {st} -> {want}", got == want, got)
 
 # =====================================================================================================================================
 print("\n[5] the notification automation")
@@ -345,7 +354,8 @@ conds = ch.get("conditions", [])
 check("one automation, notification only: create (id ecco_dump_limits_schedule) when the schedule helper is on AND the limits state is "
       "not VALID, else dismiss the same id; triggers on start, the limits state and the schedule helper",
       len(aut) == 1 and conds[0].get("entity_id") == E_SCHED and conds[0].get("state") == "on"
-      and render(conds[1]["value_template"], {E_STATE: "NOT CONFIGURED"}) == "True" and render(conds[1]["value_template"], {E_STATE: "VALID"}) == "False"
+      and all(render(conds[1]["value_template"], {E_STATE: s}) == ("True" if s in ("NOT CONFIGURED", "INVALID", "AWAITING CONFIRMATION") else "False")
+              for s in STATES)
       and ch["sequence"][0]["action"] == "persistent_notification.create" and ch["sequence"][0]["data"]["notification_id"] == "ecco_dump_limits_schedule"
       and a["actions"][0]["default"][0]["action"] == "persistent_notification.dismiss"
       and a["actions"][0]["default"][0]["data"]["notification_id"] == "ecco_dump_limits_schedule"
@@ -454,6 +464,38 @@ for name, old, new in MUTANTS:
 dash_mut = DASH_TEXT.replace("          - entity: sensor.ecco_dump_limits_state\n", "          - entity: sensor.ecco_dump_limits_state\n            tap_action:\n              action: perform-action\n              perform_action: number.set_value\n", 1)
 check("mutant caught: the dashboard gains a service-calling tap action", bool(static_checks(PKG_TEXT, dash_mut)))
 check("the unmutated package and dashboard pass every mutant check", not caught_state(PKG_TEXT))
+
+# =====================================================================================================================================
+print("\n[10] the old firmware: the fcp1 / fcp2 entities do not exist")
+OLD = {E_SCHED: "on", E_PROVEN: "3000.0"}   # every dongle entity missing: states() reads 'unknown'
+st, at = limits_state(OLD, None)
+st2, _ = limits_state(OLD, "VALID")
+check("the limits state reads UNAVAILABLE (also after a VALID state), with an explanation that names firmware without fcp1",
+      st == "UNAVAILABLE" and st2 == "UNAVAILABLE" and "firmware without fcp1" in at["explanation"], f"{st} {st2}")
+w_old = dict(OLD, **{E_STATE: st, E_ASSESS: render(SENS["ecco_dump_ceiling_assessment"]["state"], OLD)})
+check("the ceiling assessment reads UNAVAILABLE, the not-configured flag and the attention flag are unavailable (no false alert)",
+      w_old[E_ASSESS] == "UNAVAILABLE" and render(BIN["ecco_dump_export_limit_not_configured"]["availability"], OLD) == "False"
+      and render(BIN["ecco_dump_limits_attention"]["availability"], w_old) == "False")
+check("with a Dump schedule ARMED, the automation's condition is false: no notification (the old firmware refuses no START for limits)",
+      render(conds[1]["value_template"], w_old) == "False")
+check("the NOT CONFIGURED banner stays hidden (its flag is not 'on')", ban["conditions"][0]["state"] == "on" and w_old.get(E_NOTCONF, "unavailable") != "on")
+m_old = render(summary["content"], dict(w_old, **{E_NOTCONF: "unavailable"}), {E_STATE: {"explanation": at["explanation"], "last_refusal": ""}})
+check("the summary shows the state and its explanation but no limit values (never 'unknown W')",
+      "State: UNAVAILABLE" in m_old and "unknown W" not in m_old and "Power ceiling" not in m_old, m_old)
+
+# =====================================================================================================================================
+print("\n[11] the wording: write-capable, protected, not access control, guidance, no DNO value assumed")
+DOC = (ROOT / "docs" / "dev" / "full-capability-controls.md").read_text(encoding="utf-8")
+check("the dashboard and the docs call the limit boxes and the arm write-capable and say the dongle validates every request",
+      "WRITE-CAPABLE" in DASH_TEXT and "number.set_value / switch.turn_on" in DASH_TEXT and "**write-capable**" in DOC
+      and "validates every request" in DASH_TEXT)
+check("require_admin is described as hiding the dashboard, NOT as access control (dashboard header and docs)",
+      "It is NOT" in DASH_TEXT and "access" in DASH_TEXT.split("It is NOT", 1)[1][:30] and "it is **not**" in DOC and "access control" in DOC
+      and "admin-only" not in DASH_TEXT.lower() and "admin-only" not in DOC.lower())
+check("the proven level is described as guidance, not a limit, with the dongle's ceiling as the enforced one (package, dashboard, docs)",
+      "GUIDANCE ONLY" in PKG_TEXT and "it is not a limit" in PKG_TEXT and "guidance" in DASH_TEXT and "**Guidance only:**" in DOC)
+check("no DNO export value is assumed: no 3680 / 3.68 kW in the package, the dashboard or the docs; the docs say not to assume a G98 figure",
+      not any(x in s for s in (PKG_TEXT, DASH_TEXT, DOC) for x in ("3680", "3.68")) and "assume a G98 figure is approved" in DOC)
 
 print("")
 if FAILURES:

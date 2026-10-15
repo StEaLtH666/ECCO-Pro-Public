@@ -8,8 +8,11 @@
 #                                                         and Dump to Grid idle; a reduction is accepted at any time
 #   sensor.ecco_clock_dongle_dump_power_limits_status     every accepted / refused request and the boot validation, in words
 #
-# This package only DESCRIBES that state for the owner. It writes nothing to the dongle or the inverter: no number, switch,
-# button, script, esphome or Modbus call. Its one automation creates / dismisses a persistent notification.
+# This package only DESCRIBES that state for the owner. It writes nothing to the dongle, the inverter or any helper: no number,
+# switch, button, script, esphome or Modbus call. Its one automation creates / dismisses a persistent notification.
+#
+# With firmware that has no fcp1 / fcp2 entities (for example the 4 October 2026 image) the limits state reads UNAVAILABLE, the
+# two flags are unavailable and the automation stays silent: it is safe to install before or after the firmware flash.
 #
 #   sensor.ecco_dump_limits_state                VALID / NOT CONFIGURED / INVALID / AWAITING CONFIRMATION / UNKNOWN / UNAVAILABLE
 #                                                (a REFUSED request changes nothing, so it keeps the previous state)
@@ -17,13 +20,15 @@
 #                                                in a supervised test (input_number.ecco_dump_supervised_proven_w)
 #   binary_sensor.ecco_dump_export_limit_not_configured   on while the maximum grid export is 0 (not configured)
 #   binary_sensor.ecco_dump_limits_attention     on while the limits are not VALID, the ceiling is above the proven level, or
-#                                                the write window is open
+#                                                the write window is open (unavailable while the dongle does not report limits)
 #   automation ecco_dump_limits_schedule_notice  a persistent notification while a Dump schedule is armed but the dongle would
-#                                                refuse its START (limits not VALID)
+#                                                refuse its START (NOT CONFIGURED / INVALID / AWAITING CONFIRMATION)
 #
 # The profile's capability (sensor.ecco_clock_dongle_dump_to_grid_capability) is the configurable RANGE of this build, never a
 # proof: only 3000 W is hardware-proven. Each higher level is proven live, supervised, and then recorded by the owner in
 # input_number.ecco_dump_supervised_proven_w (no `initial:` - Home Assistant restores the owner's record; first run = 3000 W).
+# That record is GUIDANCE ONLY: nothing reads it to change the dongle, and it is not a limit. The ceiling the dongle enforces is
+# number.ecco_clock_dongle_dump_to_grid_power_ceiling.
 
 input_number:
   ecco_dump_supervised_proven_w:
@@ -120,13 +125,15 @@ template:
           {{ states('sensor.ecco_dump_limits_state') != 'VALID'
              or states('sensor.ecco_dump_ceiling_assessment') == 'ABOVE PROVEN LEVEL'
              or is_state('switch.ecco_clock_dongle_dump_power_limits_write_enable', 'on') }}
+        availability: "{{ states('sensor.ecco_dump_limits_state') not in ['UNAVAILABLE', 'unknown', 'unavailable'] }}"
 
 automation:
   - id: ecco_dump_limits_schedule_notice
     alias: "ECCO - Dump Limits: Schedule Armed But START Would Be Refused"
     description: >-
-      Notification only (no device action): while a Dump to Grid schedule is armed and the dongle's limits are not VALID, the
-      scheduled START would be refused; say so before the window instead of after it.
+      Notification only (no device action): while a Dump to Grid schedule is armed and the dongle's limits are NOT CONFIGURED,
+      INVALID or AWAITING CONFIRMATION, the scheduled START would be refused; say so before the window instead of after it. Silent
+      while the dongle does not report limits (UNAVAILABLE, e.g. firmware without fcp1) or their state is UNKNOWN.
     mode: queued
     max_exceeded: silent
     triggers:
@@ -143,7 +150,7 @@ automation:
                 entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
                 state: "on"
               - condition: template
-                value_template: "{{ states('sensor.ecco_dump_limits_state') != 'VALID' }}"
+                value_template: "{{ states('sensor.ecco_dump_limits_state') in ['NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION'] }}"
             sequence:
               - action: persistent_notification.create
                 data:

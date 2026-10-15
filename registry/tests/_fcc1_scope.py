@@ -13,12 +13,15 @@ on the dongle; none of its 13 new entities was used by Home Assistant. New files
                                                       ceiling against the owner's supervised proven level (a helper record,
                                                       first run 3000 W), the not-configured export and an attention flag; one
                                                       automation that only creates / dismisses a persistent notification
-  home-assistant/dashboards/ecco_full_capability.yaml a separate admin-only dashboard (built-in cards only) showing the limits,
+  home-assistant/dashboards/ecco_full_capability.yaml a separate dashboard for the administrator (built-in cards only) showing the limits,
                                                       the firmware's own two number boxes and arm, and the restore /
-                                                      containment / lockout / readiness states; no service call
+                                                      containment / lockout / readiness states; no service call of its own (the
+                                                      two limit boxes and the arm are the firmware's WRITE-CAPABLE entities in
+                                                      default rows, protected by the firmware; require_admin is not access control)
   home-assistant/tests/test_ecco_dump_limits.py       its offline proofs; docs/dev/full-capability-controls.md; this module.
-ZERO firmware, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no new firmware entity; the package and the
-dashboard write nothing to the dongle (no number / switch / button / script / esphome action).
+ZERO firmware, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no new firmware entity; the package writes
+nothing to the dongle or any helper (no number / switch / button / script / esphome action); with firmware without fcp1 / fcp2 it
+reads UNAVAILABLE and stays silent.
 
 CHAIN-PINNED edit.
   deployment/ha-manifest.yaml               one home_assistant_packages stanza for the new package
