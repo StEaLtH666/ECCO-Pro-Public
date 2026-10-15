@@ -44,6 +44,12 @@ template:
   - triggers:
       - trigger: homeassistant
         event: start
+      # Also on every template reload (fcc1 A5 fix, 15 Oct 2026). A reload-only install or update - no Home Assistant restart -
+      # fires neither the start event nor a state change of the dongle entities, so the state stayed `unknown` and the attention
+      # flag unavailable. Home Assistant attaches these triggers before it fires event_template_reloaded, and an entity added
+      # after the event still renders the trigger's data, so the state is evaluated once, from the dongle's current state.
+      - trigger: event
+        event_type: event_template_reloaded
       - trigger: state
         entity_id:
           - sensor.ecco_clock_dongle_dump_power_limits_status

@@ -25,6 +25,10 @@ the Home Assistant functions they use (states / is_state / state_attr / this, th
        notification even with a schedule armed, no banner, no values in the summary
   [11] the wording: the limit boxes and the arm are described as write-capable and firmware-protected, require_admin as NOT access
        control, the proven level as guidance; no DNO export value is assumed anywhere
+  [12] reload-only initialisation (A5 fix, 15 Oct 2026): the limits state is also evaluated on event_template_reloaded, so an
+       install or update by reloads alone (no restart) reads the dongle's real state at once instead of staying `unknown`; the
+       fresh entity (no memory) still fails closed: a refusal on screen reads UNKNOWN with attention ON, an absent dongle
+       UNAVAILABLE with both flags unavailable; nothing else in the trigger block or any other block changes
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 """
@@ -496,6 +500,60 @@ check("the proven level is described as guidance, not a limit, with the dongle's
       "GUIDANCE ONLY" in PKG_TEXT and "it is not a limit" in PKG_TEXT and "guidance" in DASH_TEXT and "**Guidance only:**" in DOC)
 check("no DNO export value is assumed: no 3680 / 3.68 kW in the package, the dashboard or the docs; the docs say not to assume a G98 figure",
       not any(x in s for s in (PKG_TEXT, DASH_TEXT, DOC) for x in ("3680", "3.68")) and "assume a G98 figure is approved" in DOC)
+
+
+# =====================================================================================================================================
+print("\n[12] reload-only initialisation (A5 fix): the limits state is evaluated on a template reload")
+# Home Assistant 2026.9.4 (homeassistant/components/template): _reload_config awaits _process_config, whose coordinator attaches the
+# triggers at once while Home Assistant is running, and only then fires event_template_reloaded; a trigger entity added after that
+# event renders the coordinator's data in async_added_to_hass (and skips the restore). So the reload trigger evaluates the state once.
+D12 = package()
+TRIG = D12["template"][0]["triggers"]
+check("the limits-state block triggers on Home Assistant start, on every template reload, and on the three dongle entities",
+      {"trigger": "homeassistant", "event": "start"} in TRIG and {"trigger": "event", "event_type": "event_template_reloaded"} in TRIG
+      and [x for x in TRIG if x.get("trigger") == "state"] == [{"trigger": "state", "entity_id": [E_STATUS, E_EXPORT, E_CEIL]}]
+      and len(TRIG) == 3, str(TRIG))
+check("the reload trigger is the only addition: the block still has no conditions, actions or variables, and the plain block "
+      "(assessment, both flags) has no triggers", set(D12["template"][0]) == {"triggers", "sensor"} and "triggers" not in D12["template"][1]
+      and len(D12["template"]) == 2)
+# A fresh entity after the reload has no memory (this.state unknown): the trigger renders from the dongle's state alone.
+st, _at = limits_state(W(boot_nc, "0"), None)
+attn_av = render(BIN["ecco_dump_limits_attention"]["availability"], {E_STATE: st})
+attn = render(BIN["ecco_dump_limits_attention"]["state"], {E_STATE: st, E_ASSESS: "AT PROVEN LEVEL", E_ARM: "off"})
+check("reload-only install on the flashed dongle (factory limits): NOT CONFIGURED at once, attention available and ON",
+      st == "NOT CONFIGURED" and attn_av == "True" and attn == "True", f"{st} {attn_av} {attn}")
+st_r, _ = limits_state(W("REFUSED - power ceiling 4000 W: arm Dump Power Limits Write Enable first; kept 3000 W", "0"), None)
+check("fail closed: a reload while the dongle shows a REFUSED message gives UNKNOWN (no memory to keep), attention available and ON",
+      st_r == "UNKNOWN" and render(BIN["ecco_dump_limits_attention"]["availability"], {E_STATE: st_r}) == "True"
+      and render(BIN["ecco_dump_limits_attention"]["state"], {E_STATE: st_r, E_ASSESS: "AT PROVEN LEVEL", E_ARM: "off"}) == "True", st_r)
+st_u, _ = limits_state({E_STATUS: "unavailable", E_EXPORT: "unavailable", E_CEIL: "unavailable"}, None)
+check("fail closed: a reload while the dongle is offline gives UNAVAILABLE, attention and the banner flag unavailable (unchanged)",
+      st_u == "UNAVAILABLE" and render(BIN["ecco_dump_limits_attention"]["availability"], {E_STATE: st_u}) == "False"
+      and render(BIN["ecco_dump_export_limit_not_configured"]["availability"], {E_EXPORT: "unavailable"}) == "False", st_u)
+st_v, _ = limits_state(W("VALID - power ceiling 3000 W; maximum grid export 3680 W", "3680"), None)
+check("a reload after the limits are configured gives VALID, attention OFF (no nuisance)",
+      st_v == "VALID" and render(BIN["ecco_dump_limits_attention"]["state"], {E_STATE: st_v, E_ASSESS: "AT PROVEN LEVEL", E_ARM: "off"}) == "False", st_v)
+# The notification automation follows the state: unknown -> NOT CONFIGURED is a state change of its own trigger entity.
+a12 = D12["automation"][0]
+check("the schedule notice still triggers on the limits state, so the reload's first evaluation reaches it (create while a schedule "
+      "is armed, dismiss otherwise)", E_STATE in a12["triggers"][1]["entity_id"]
+      and render(a12["actions"][0]["choose"][0]["conditions"][1]["value_template"], {E_STATE: "NOT CONFIGURED"}) == "True")
+
+
+def has_reload_trigger(text):
+    try:
+        return {"trigger": "event", "event_type": "event_template_reloaded"} in package(text)["template"][0]["triggers"]
+    except Exception:
+        return False
+
+
+RELOAD = "      - trigger: event\n        event_type: event_template_reloaded\n"
+assert PKG_TEXT.count(RELOAD) == 1
+check("mutant caught: the reload trigger removed (a reload-only install would stay unknown again)",
+      not has_reload_trigger(PKG_TEXT.replace(RELOAD, "", 1)))
+check("mutant caught: the reload trigger listening to the wrong event",
+      not has_reload_trigger(PKG_TEXT.replace("event_type: event_template_reloaded", "event_type: event_automation_reloaded", 1)))
+check("the unmutated package has the reload trigger", has_reload_trigger(PKG_TEXT))
 
 print("")
 if FAILURES:
