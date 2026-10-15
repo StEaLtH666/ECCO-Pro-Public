@@ -1,0 +1,140 @@
+# ECCO Full Capability - Dump to Grid limits and firmware readiness (post-export entry fcc1).
+#
+# A separate Lovelace dashboard (YAML mode) for the installation's administrator, deliberately not part of ecco_pro.yaml. Built-in
+# cards only (entities, markdown, conditional): no custom card, no resource. It shows the fcp1 / fcp2 firmware's limits and the
+# restore / containment / lockout / readiness states, and shows the dongle's own controls for the two limits and their arm.
+#
+# What changes what:
+#   - WRITE-CAPABLE: the Power ceiling and Maximum grid export boxes and the Limits write enable toggle are the firmware's own
+#     entities in Home Assistant's default entity rows. Using them sends number.set_value / switch.turn_on to the dongle. The DONGLE
+#     validates every request (range, step, the arm for a raise or after INVALID, Dump idle for a raise) and refuses anything else,
+#     saying why in its status line; a reduction is accepted at any time.
+#   - Registering this dashboard with `require_admin: true` only hides it from non-administrators' sidebars. It is NOT access
+#     control: any Home Assistant user or automation that can call those services on these entities can still use them, subject to
+#     the same firmware protections.
+#   - The Supervised Proven Level is an owner RECORD in Home Assistant only (guidance; first run 3000 W); nothing reads it to change
+#     the dongle, and it is not a limit.
+#   - No card defines a tap / hold action, button, script or service call of its own. Recovery decisions (Force Restore Original,
+#     Accept Current State) stay on the main dashboard's Dump to Grid recovery controls.
+#   - With firmware without fcp1 / fcp2 (the 4 October 2026 image) the limits state reads UNAVAILABLE, the banner stays hidden and
+#     the new entity rows show as not available.
+# Entity ids use the default device slug `ecco_clock_dongle`; render a site copy with tools/ecco_site_render.py.
+
+title: ECCO Full Capability
+views:
+  - title: Dump Limits & Flash
+    path: dump-limits
+    icon: mdi:transmission-tower-export
+    cards:
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.ecco_dump_export_limit_not_configured
+            state: "on"
+        card:
+          type: markdown
+          content: >-
+            ## MAXIMUM GRID EXPORT NOT CONFIGURED
+
+            **Every Dump to Grid START is refused** - manual and scheduled - until the owner sets **Dump to Grid Max Grid
+            Export** to the net export the DNO permits for this installation (for example the value in the connection
+            agreement). Disarm any Dump schedule until it is set.
+
+      - type: markdown
+        title: Dump to Grid limits
+        content: >-
+          **State: {{ states('sensor.ecco_dump_limits_state') }}**
+
+          {{ state_attr('sensor.ecco_dump_limits_state', 'explanation') }}
+          {%- if not is_state('sensor.ecco_dump_limits_state', 'UNAVAILABLE') %}
+
+          Power ceiling **{{ states('number.ecco_clock_dongle_dump_to_grid_power_ceiling') }} W** ·
+          maximum grid export **{{ 'NOT CONFIGURED' if is_state('binary_sensor.ecco_dump_export_limit_not_configured', 'on') else states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') ~ ' W' }}** ·
+          supervised proven level (guidance) **{{ states('input_number.ecco_dump_supervised_proven_w') }} W**
+          {%- endif %}
+          {%- if is_state('sensor.ecco_dump_ceiling_assessment', 'ABOVE PROVEN LEVEL') %}
+
+          **The power ceiling is ABOVE the supervised proven level.** Lower it, or prove the new level live and supervised
+          first.
+          {%- endif %}
+          {%- if state_attr('sensor.ecco_dump_limits_state', 'last_refusal') %}
+
+          Last refused request: {{ state_attr('sensor.ecco_dump_limits_state', 'last_refusal') }}
+          {%- endif %}
+
+      - type: entities
+        title: Operating limits (enforced on the dongle)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ecco_dump_limits_state
+            name: Limits state
+          - entity: sensor.ecco_clock_dongle_dump_power_limits_status
+            name: Dongle status
+          - entity: number.ecco_clock_dongle_dump_to_grid_power_ceiling
+            name: Power ceiling (W)
+          - entity: number.ecco_clock_dongle_dump_to_grid_max_grid_export
+            name: Maximum grid export (W, 0 = not configured)
+          - entity: switch.ecco_clock_dongle_dump_power_limits_write_enable
+            name: Limits write enable (60 s, one change)
+          - entity: sensor.ecco_dump_ceiling_assessment
+            name: Ceiling against the proven level
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_lease_ceiling
+            name: Running lease's ceiling
+
+      - type: markdown
+        title: How the limits change
+        content: >-
+          - **Lowering** a limit is accepted at any time, also during a lease (a running lease's ceiling only ever goes down).
+
+          - **Raising** a limit, or setting limits that are INVALID, needs **Limits write enable** first: it opens one change
+          for 60 s and turns itself off. Dump to Grid must be idle.
+
+          - After INVALID, **both** limits must be set again before Dump to Grid can start.
+
+          - A refused request changes nothing; the dongle status says why.
+
+          - Raise the power ceiling one supervised stage at a time, and only to a level proven live at this installation. The
+          inverter's rated power is not a proof of export capability.
+
+      - type: entities
+        title: Inverter capability (profile range, not a proof)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ecco_clock_dongle_inverter_capability_profile
+            name: Capability profile
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_capability
+            name: Profile capability (configurable range)
+          - entity: input_number.ecco_dump_supervised_proven_w
+            name: Supervised proven level (owner record)
+
+      - type: entities
+        title: Restore, containment and operator lockout
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_status
+            name: Dump to Grid status
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_recovery_state
+            name: Recovery state
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_export_containment
+            name: Export containment
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_controller_state
+            name: Controller state
+          - entity: sensor.ecco_clock_dongle_dump_to_grid_last_end_reason
+            name: Last end reason
+          - entity: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+            name: Lease active
+          - entity: binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid
+            name: Restore snapshot held
+
+      - type: entities
+        title: Firmware readiness
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.ecco_clock_dongle_ecco_safe_to_flash
+            name: Safe to flash
+          - entity: sensor.ecco_clock_dongle_ecco_flash_readiness
+            name: Flash readiness
+          - entity: sensor.ecco_clock_dongle_restart_status
+            name: Restart status
+          - entity: sensor.ecco_clock_dongle_ecco_build_identity
+            name: Build identity

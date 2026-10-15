@@ -1,0 +1,165 @@
+# ECCO Dump to Grid operating limits - owner view (post-export entry fcc1).
+#
+# The firmware (fcp1 / fcp2) stores and ENFORCES the Dump to Grid limits on the dongle:
+#   number.ecco_clock_dongle_dump_to_grid_power_ceiling   the highest TOU battery power a lease may command (factory 3000 W)
+#   number.ecco_clock_dongle_dump_to_grid_max_grid_export the maximum NET export at the grid meter (factory 0 = NOT CONFIGURED:
+#                                                         every Dump START, manual or scheduled, is refused until it is set)
+#   switch.ecco_clock_dongle_dump_power_limits_write_enable  the arm: a raise, or leaving INVALID, needs it (60 s, one change)
+#                                                         and Dump to Grid idle; a reduction is accepted at any time
+#   sensor.ecco_clock_dongle_dump_power_limits_status     every accepted / refused request and the boot validation, in words
+#
+# This package only DESCRIBES that state for the owner. It writes nothing to the dongle, the inverter or any helper: no number,
+# switch, button, script, esphome or Modbus call. Its one automation creates / dismisses a persistent notification.
+#
+# With firmware that has no fcp1 / fcp2 entities (for example the 4 October 2026 image) the limits state reads UNAVAILABLE, the
+# two flags are unavailable and the automation stays silent: it is safe to install before or after the firmware flash.
+#
+#   sensor.ecco_dump_limits_state                VALID / NOT CONFIGURED / INVALID / AWAITING CONFIRMATION / UNKNOWN / UNAVAILABLE
+#                                                (a REFUSED request changes nothing, so it keeps the previous state)
+#   sensor.ecco_dump_ceiling_assessment          the configured ceiling against the owner's record of the highest level proven
+#                                                in a supervised test (input_number.ecco_dump_supervised_proven_w)
+#   binary_sensor.ecco_dump_export_limit_not_configured   on while the maximum grid export is 0 (not configured)
+#   binary_sensor.ecco_dump_limits_attention     on while the limits are not VALID, the ceiling is above the proven level, or
+#                                                the write window is open (unavailable while the dongle does not report limits)
+#   automation ecco_dump_limits_schedule_notice  a persistent notification while a Dump schedule is armed but the dongle would
+#                                                refuse its START (NOT CONFIGURED / INVALID / AWAITING CONFIRMATION)
+#
+# The profile's capability (sensor.ecco_clock_dongle_dump_to_grid_capability) is the configurable RANGE of this build, never a
+# proof: only 3000 W is hardware-proven. Each higher level is proven live, supervised, and then recorded by the owner in
+# input_number.ecco_dump_supervised_proven_w (no `initial:` - Home Assistant restores the owner's record; first run = 3000 W).
+# That record is GUIDANCE ONLY: nothing reads it to change the dongle, and it is not a limit. The ceiling the dongle enforces is
+# number.ecco_clock_dongle_dump_to_grid_power_ceiling.
+
+input_number:
+  ecco_dump_supervised_proven_w:
+    name: "ECCO Dump Supervised Proven Level"
+    icon: mdi:shield-check-outline
+    min: 3000
+    max: 8000
+    step: 100
+    mode: box
+    unit_of_measurement: "W"
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - sensor.ecco_clock_dongle_dump_power_limits_status
+          - number.ecco_clock_dongle_dump_to_grid_max_grid_export
+          - number.ecco_clock_dongle_dump_to_grid_power_ceiling
+    sensor:
+      - name: "ECCO Dump Limits State"
+        unique_id: ecco_dump_limits_state
+        icon: mdi:shield-lock-outline
+        state: >-
+          {%- set m = states('sensor.ecco_clock_dongle_dump_power_limits_status') -%}
+          {%- set ex = states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') -%}
+          {%- set prev = this.state if this.state in ['VALID', 'NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION'] else 'UNKNOWN' -%}
+          {%- if m in ['unknown', 'unavailable', 'none', ''] -%}UNAVAILABLE
+          {%- elif m.startswith('REFUSED') -%}{{ prev }}
+          {%- elif m.startswith('INVALID') and ' confirmed; ' in m -%}AWAITING CONFIRMATION
+          {%- elif m.startswith('INVALID') -%}INVALID
+          {%- elif m.startswith('VALID') -%}
+            {%- if 'NOT CONFIGURED' in m or (ex | float(-1)) == 0 -%}NOT CONFIGURED{%- else -%}VALID{%- endif -%}
+          {%- else -%}UNKNOWN
+          {%- endif -%}
+        attributes:
+          status: "{{ states('sensor.ecco_clock_dongle_dump_power_limits_status') }}"
+          last_refusal: >-
+            {%- set m = states('sensor.ecco_clock_dongle_dump_power_limits_status') -%}
+            {{ m if m.startswith('REFUSED') else (this.attributes.last_refusal | default('', true)) }}
+          power_ceiling_w: "{{ states('number.ecco_clock_dongle_dump_to_grid_power_ceiling') }}"
+          max_grid_export_w: "{{ states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') }}"
+          capability_w: "{{ states('sensor.ecco_clock_dongle_dump_to_grid_capability') }}"
+          explanation: >-
+            {%- set m = states('sensor.ecco_clock_dongle_dump_power_limits_status') -%}
+            {%- set ex = states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') -%}
+            {%- set prev = this.state if this.state in ['VALID', 'NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION'] else 'UNKNOWN' -%}
+            {%- if m in ['unknown', 'unavailable', 'none', ''] -%}{%- set s = 'UNAVAILABLE' -%}
+            {%- elif m.startswith('REFUSED') -%}{%- set s = prev -%}
+            {%- elif m.startswith('INVALID') and ' confirmed; ' in m -%}{%- set s = 'AWAITING CONFIRMATION' -%}
+            {%- elif m.startswith('INVALID') -%}{%- set s = 'INVALID' -%}
+            {%- elif m.startswith('VALID') -%}{%- set s = 'NOT CONFIGURED' if ('NOT CONFIGURED' in m or (ex | float(-1)) == 0) else 'VALID' -%}
+            {%- else -%}{%- set s = 'UNKNOWN' -%}
+            {%- endif -%}
+            {%- if s == 'VALID' -%}Both limits are valid and enforced on the dongle.
+            {%- elif s == 'NOT CONFIGURED' -%}The maximum grid export is NOT CONFIGURED: every Dump to Grid START (manual and scheduled) is refused until the owner sets it to the export the DNO permits.
+            {%- elif s == 'AWAITING CONFIRMATION' -%}One limit has been confirmed after INVALID; the other must also be set again (armed, idle) before Dump to Grid can start.
+            {%- elif s == 'INVALID' -%}The stored limits failed validation; every Dump to Grid START is refused until BOTH limits are set again (armed, idle).
+            {%- elif s == 'UNAVAILABLE' -%}The dongle does not report its limits (offline, or firmware without fcp1).
+            {%- else -%}The last request was refused and the validity since then is not known here; the dongle still enforces its own state. Any Dump to Grid START reports it.
+            {%- endif -%}
+
+  - sensor:
+      - name: "ECCO Dump Ceiling Assessment"
+        unique_id: ecco_dump_ceiling_assessment
+        icon: mdi:gauge
+        state: >-
+          {%- set c = states('number.ecco_clock_dongle_dump_to_grid_power_ceiling') | float(-1) -%}
+          {%- set p = states('input_number.ecco_dump_supervised_proven_w') | float(3000) -%}
+          {%- if c < 0 -%}UNAVAILABLE
+          {%- elif c > p -%}ABOVE PROVEN LEVEL
+          {%- elif c == p -%}AT PROVEN LEVEL
+          {%- else -%}BELOW PROVEN LEVEL
+          {%- endif -%}
+        attributes:
+          power_ceiling_w: "{{ states('number.ecco_clock_dongle_dump_to_grid_power_ceiling') }}"
+          proven_w: "{{ states('input_number.ecco_dump_supervised_proven_w') }}"
+          note: >-
+            The ceiling may be raised only to a level proven live and supervised at this installation. The profile capability is
+            a configurable range, not a proof; only 3000 W is hardware-proven by default.
+    binary_sensor:
+      - name: "ECCO Dump Export Limit Not Configured"
+        unique_id: ecco_dump_export_limit_not_configured
+        device_class: problem
+        icon: mdi:transmission-tower-off
+        state: "{{ (states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') | float(-1)) == 0 }}"
+        availability: "{{ states('number.ecco_clock_dongle_dump_to_grid_max_grid_export') | is_number }}"
+      - name: "ECCO Dump Limits Attention"
+        unique_id: ecco_dump_limits_attention
+        device_class: problem
+        icon: mdi:alert-outline
+        state: >-
+          {{ states('sensor.ecco_dump_limits_state') != 'VALID'
+             or states('sensor.ecco_dump_ceiling_assessment') == 'ABOVE PROVEN LEVEL'
+             or is_state('switch.ecco_clock_dongle_dump_power_limits_write_enable', 'on') }}
+        availability: "{{ states('sensor.ecco_dump_limits_state') not in ['UNAVAILABLE', 'unknown', 'unavailable'] }}"
+
+automation:
+  - id: ecco_dump_limits_schedule_notice
+    alias: "ECCO - Dump Limits: Schedule Armed But START Would Be Refused"
+    description: >-
+      Notification only (no device action): while a Dump to Grid schedule is armed and the dongle's limits are NOT CONFIGURED,
+      INVALID or AWAITING CONFIRMATION, the scheduled START would be refused; say so before the window instead of after it. Silent
+      while the dongle does not report limits (UNAVAILABLE, e.g. firmware without fcp1) or their state is UNKNOWN.
+    mode: queued
+    max_exceeded: silent
+    triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - sensor.ecco_dump_limits_state
+          - input_boolean.ecco_dump_to_grid_schedule_armed
+    actions:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+                state: "on"
+              - condition: template
+                value_template: "{{ states('sensor.ecco_dump_limits_state') in ['NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION'] }}"
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_dump_limits_schedule
+                  title: "ECCO: Dump to Grid schedule armed - the START would be refused"
+                  message: >-
+                    Dump limits: {{ states('sensor.ecco_dump_limits_state') }}.
+                    {{ state_attr('sensor.ecco_dump_limits_state', 'explanation') }}
+        default:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: ecco_dump_limits_schedule

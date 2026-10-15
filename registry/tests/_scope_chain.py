@@ -110,6 +110,7 @@ import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
 import _fcp1_scope as _fcp1  # noqa: E402
 import _fcp2_scope as _fcp2  # noqa: E402
+import _fcc1_scope as _fcc1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
@@ -976,7 +977,31 @@ FCP2 = Entry(
          "supervision, the alternating-export rule, uncontained settings named); no new write domain, one persisted global, "
          "no durable record change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2)
+# fcc1 (full-capability controls; _fcc1_scope.py): made on public main ef8c3177 after fcp2. The Home Assistant side of the merged
+# fcp1 / fcp2 firmware: a package of template entities that DESCRIBE the dongle's Dump to Grid limits (VALID / NOT CONFIGURED /
+# INVALID / AWAITING CONFIRMATION), the ceiling against the owner's supervised proven level (a helper record, first run 3000 W), the
+# not-configured export and an attention flag, with one notification-only automation; and a separate administrator dashboard showing
+# the limits, the firmware's own write-capable number boxes and arm (protected by the firmware; require_admin is not access control),
+# and the restore / containment / lockout / readiness states. CHAIN-PINNED
+# edit: the deployment manifest, one package stanza (_fcc1_scope.PINNED_REVERTERS). No frozen file. Measured, not declared: ZERO
+# firmware byte; the package writes nothing to the dongle, the inverter or any helper (no number / switch / button / script /
+# esphome action), no Modbus service; the dashboard defines no service call of its own.
+FCC1 = Entry(
+    id="fcc1", pr="FCC1", commit="unmerged",
+    reverts=dict(_fcc1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after fcc1
+        HA_MANIFEST: "2559c5c9ac2195c5a10e92f639db59d5e2e5602a5c25b1dceac0a8a9d7705c65",
+    },
+    added_files=_fcc1.ADDED_FILES,
+    # _pex.fingerprint(FCC1): hashes its parent fcp2's fingerprint and every declaration above
+    fingerprint="612133ed148ec71b8fc63db1aa346cc2b7340e67c4d535932cc35f365050178d",
+    note="full-capability controls: a Home Assistant package of template entities describing the fcp1 / fcp2 Dump to Grid limits "
+         "(state, ceiling against the owner's supervised proven level, export not configured, attention) with one "
+         "notification-only automation, and a separate administrator dashboard of the limits, the firmware's own write-capable "
+         "controls (protected by the firmware) and the restore / containment / lockout / readiness states; one package stanza in "
+         "the manifest: ZERO firmware change, no automatic write to the dongle or the inverter",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
