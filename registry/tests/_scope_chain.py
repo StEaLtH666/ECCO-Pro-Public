@@ -109,6 +109,7 @@ import _fbc_scope as _fbc  # noqa: E402
 import _fbrp1_scope as _fbrp1  # noqa: E402
 import _dgs1_scope as _dgs1  # noqa: E402
 import _fcp1_scope as _fcp1  # noqa: E402
+import _fcp2_scope as _fcp2  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
@@ -945,7 +946,37 @@ FCP1 = Entry(
          "ceiling 3000 W and export not configured (START refused); ZERO new Modbus operation or write domain, no durable record "
          "change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1)
+# fcp2 (full-capability Dump-to-Grid phase 2, safety hardening; _fcp2_scope.py): made on the fcp1 candidate, appended after fcp1.
+# SG-40 (no controller write once a lease is ending) and R-1 (a windowed, efficiency-aware runaway guard). Chain-pinned:
+# pre_fcp2_firmware reproduces the fcp1 firmware byte for byte. RAM-only globals except ONE persisted (the final rework's
+# dump_owed_stop_soc_rec, a new NVS key); no new write domain or durable record change.
+FCP2 = Entry(
+    id="fcp2", pr="FCP2", commit="unmerged",
+    reverts={FIRMWARE: _fcp2.pre_fcp2_firmware},
+    checkpoints={FIRMWARE: "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d"},
+    deltas={"globals": 69, "substitutions": 17, "commit_record": 1, "modbus_reads": 1, "modbus_writes": 6, "intervals": 1,
+            "scripts": 3, "binary_sensors": 1,
+            "text_sensors": 3, "switches": 1, "buttons": 1},
+    subst_added=dict(_fcp2.SUBSTITUTIONS),
+    op_paths_changed=frozenset({"restore_dump_to_grid_snapshot",   # the ownership pre-read (one read of 244-261, no new write)
+                                "ecco_lock_escalation"}),          # a STUCK lock's durable End request (reaches the existing restore)
+    added_files=_fcp2.ADDED_FILES,
+    frozen_reverts=dict(_fcp2.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each frozen suite after fcp2 (the final rework's persisted Stop SOC record)
+        _fcp2.SUPERVISION_TEST_REL: "3285b80f41c10b22c121e96f343ab41560d951648ba1a18ca0d6b1839c6b8c7b",
+        _fcp2.SHADOW_EVALUATOR_TEST_REL: "a9023ffd14e90c5147b4796d8776f45b5c3cc3c6098273484eb683d503a2cd0d",
+    },
+    # _pex.fingerprint(FCP2): hashes its parent fcp1's fingerprint and every declaration above
+    fingerprint="40060f7b76de9e688bd5fb1208d28aba2370d55c55a35584f50a375634161398",
+    note="full-capability Dump-to-Grid phase 2 (safety hardening): no controller write once a lease is ending (SG-40: re-checked "
+         "with the write mutex held and in the step that issues the write); a windowed, efficiency-aware runaway guard (R-1: "
+         "k-of-8 history against the ordinary threshold, the backstop and a gross level, latched; the consecutive counters "
+         "unchanged; the backstop margin grows by the profile's DC allowance above 3000 W only); the independent-audit rework "
+         "and the FINAL rework (a battery-vs-grid cross-check, immediate limit persistence, a persisted Stop SOC for post-END "
+         "supervision, the alternating-export rule, uncontained settings named); no new write domain, one persisted global, "
+         "no durable record change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

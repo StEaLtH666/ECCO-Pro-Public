@@ -173,12 +173,15 @@ RESTORE_GLOBALS = sorted({g["id"] for doc in YAMLS.values() for g in doc.get("gl
 # dump_max_export_w 3560735419 -> 2816060941, dump_limits_cap_w 1775658265 -> 439568815, dump_limits_check 1121151361 -> 825640247.
 FCP1_KEYS = {"dump_op_ceiling_w": 4011231450, "dump_max_export_w": 2816060941, "dump_limits_cap_w": 439568815,
              "dump_limits_check": 825640247}
+# fcp2 final rework: + the persisted Stop SOC of an owed Dump restore. Known answer from ESPHome 2026.8.2's own codegen of the fcp2
+# firmware (generated main.cpp: dump_owed_stop_soc_rec->set_name_hash(2426307371UL)): 1944399030 ^ 2426307371 = 3816533917.
+FCP2_KEYS = {"dump_owed_stop_soc_rec": 3816533917}
 check("restore_value globals of every firmware YAML: exactly reg244_last_applied_value / _valid, keys "
       "1944399030 ^ md5(id)[:8] = 1425646640 / 1452813359 (known answers from ESPHome 2026.8.2's own codegen), plus fcp1's four "
-      "persisted Dump operating-limit globals at their own known-answer keys, all distinct",
-      RESTORE_GLOBALS == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", *FCP1_KEYS])
+      "persisted Dump operating-limit globals and fcp2's persisted Stop SOC record at their own known-answer keys, all distinct",
+      RESTORE_GLOBALS == sorted(["reg244_last_applied_valid", "reg244_last_applied_value", *FCP1_KEYS, *FCP2_KEYS])
       and (globals_key("reg244_last_applied_value"), globals_key("reg244_last_applied_valid")) == (1425646640, 1452813359)
-      and all(globals_key(k) == v for k, v in FCP1_KEYS.items())
+      and all(globals_key(k) == v for k, v in {**FCP1_KEYS, **FCP2_KEYS}.items())
       and len({globals_key(k) for k in RESTORE_GLOBALS}) == len(RESTORE_GLOBALS))
 ENTITIES = set()
 for doc in YAMLS.values():
@@ -198,6 +201,12 @@ check("fcp1's Dump Power Limits Write Enable is ALWAYS_OFF (no preference key) a
       FCP1_ARM in ENTITIES and any(e.get("name") == FCP1_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
                                    for doc in YAMLS.values() for e in doc.get("switch") or []))
 n_sw -= 1 if FCP1_ARM in ENTITIES else 0
+# fcp2: likewise `Restart Override Arm` (ecco_restart_arm, restore_mode ALWAYS_OFF: no preference key), the only switch fcp2 adds.
+FCP2_ARM = ("switch", "Restart Override Arm")
+check("fcp2's Restart Override Arm is ALWAYS_OFF (no preference key) and the only switch fcp2 adds",
+      FCP2_ARM in ENTITIES and any(e.get("name") == FCP2_ARM[1] and e.get("restore_mode") == "ALWAYS_OFF"
+                                   for doc in YAMLS.values() for e in doc.get("switch") or []))
+n_sw -= 1 if FCP2_ARM in ENTITIES else 0
 check(f"entity preferences: {n_num} restore numbers and {n_sw} switches across all YAMLs (3 RESTORE_DEFAULT_ON + the "
       "ALWAYS_OFF ones as a historic superset), each under its object-id key and its 2026.8-beta raw-name key",
       # FB-B2: n_sw 9 -> 10 - the one new template switch `ECCO Fallback Profile Arm` (fallback_profile_arm, restore_mode

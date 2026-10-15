@@ -798,8 +798,9 @@ def static_detectors(text: str, fw: dict, header: str) -> dict[str, list[str]]:
         z6.append(f"restore_value not 'no': {bad}")
     yes = sorted(g["id"] for g in fw["globals"] if g.get("restore_value") in (True, "yes"))
     # fcp1: + the four persisted Dump operating-limit globals (fcp1's, not the shadow's: the shadow still persists nothing)
+    # fcp2 (final rework): + the persisted Stop SOC of an owed Dump restore (fcp2's, not the shadow's)
     if yes != sorted(["reg244_last_applied_valid", "reg244_last_applied_value", "dump_op_ceiling_w", "dump_max_export_w",
-                      "dump_limits_cap_w", "dump_limits_check"]):
+                      "dump_limits_cap_w", "dump_limits_check", "dump_owed_stop_soc_rec"]):
         z6.append(f"restore_value: yes set changed {yes}")
     missing = [i for i in scope.NEW_GLOBAL_IDS if i not in {g["id"] for g in fw["globals"]}]
     if missing:

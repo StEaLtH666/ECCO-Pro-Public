@@ -31,3 +31,6 @@ profiles:
       ecco_inverter_profile_name: 8 kW single-phase low-voltage Deye-family hybrid (reference installation H-001)
       ecco_inverter_tou_power_ceiling_w: 8000
       ecco_dump_capability_w: 8000
+      # fcp2: the DC-over-AC allowance of the absolute runaway backstop above 3000 W (percent of the command). Recorded residuals
+      # on this installation: +228..+357 W at 2000-3000 W (about 7-12 %); 12 is above every one of them.
+      ecco_dump_runaway_dc_allowance_pct: 12

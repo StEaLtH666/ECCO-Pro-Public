@@ -166,15 +166,19 @@ print("")
 print("[7] Restore write ordering: 244 (disable export) before 256-261 (the ceiling) - the reverse of activation")
 restore_256_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if op.start_address == 256]
 restore_244_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if op.start_address == 244]
+# fcp2 rework: the 256-261 step is the full 6-register write (nothing FOREIGN) OR one register at a time (never a FOREIGN
+# slot) - so the restore has one write starting at 256 for each form, plus one each starting at 257..261.
+restore_slot_offsets = [op.offset for op in by_name["restore_dump_to_grid_snapshot"].writes if 257 <= op.start_address <= 261]
 check(
-    "restore_dump_to_grid_snapshot writes 244 exactly once and 256-261 exactly once",
-    len(restore_244_offsets) == 1 and len(restore_256_offsets) == 1,
-    f"244-offsets={restore_244_offsets} 256-offsets={restore_256_offsets}",
+    "restore_dump_to_grid_snapshot writes 244 exactly once, and 256-261 through exactly one full-block write plus one "
+    "single-register write per slot (fcp2: a FOREIGN slot is never written)",
+    len(restore_244_offsets) == 1 and len(restore_256_offsets) == 2 and len(restore_slot_offsets) == 5,
+    f"244-offsets={restore_244_offsets} 256-offsets={restore_256_offsets} 257-261={restore_slot_offsets}",
 )
 if restore_244_offsets and restore_256_offsets:
     check(
-        "the 244 write happens BEFORE the 256-261 write on restore",
-        restore_244_offsets[0] < restore_256_offsets[0],
+        "the 244 write happens BEFORE every 256-261 write on restore",
+        restore_244_offsets[0] < min(restore_256_offsets + restore_slot_offsets),
     )
 
 print("")
@@ -435,23 +439,38 @@ check(
 )
 
 print("")
-print("[23] Restore ordering on the PARSED action tree: 244 write -> 244 verify read -> 256-261 write -> verify read")
+print("[23] Restore ordering on the PARSED action tree: (fcp2) ownership pre-read 244-261 -> 244 write -> 244 verify read -> "
+      "256-261 write -> verify read")
 restore_flat = flatten(restore_tree)
 ops = [(i, kind, body.get("start_address"), gates) for i, (kind, gates, body) in enumerate(restore_flat) if kind in (READ, WRITE)]
 seq = [(kind == WRITE and "W" or "R", addr) for _, kind, addr, _ in ops]
 check(
-    "restore issues exactly W244, R244, W256, R256 in that order",
-    seq == [("W", 244), ("R", 244), ("W", 256), ("R", 256)],
+    "restore issues exactly R244 (fcp2: the 18-register ownership pre-read), W244, R244, then the 256-261 step (the full "
+    "W256 x6, or W256..W261 one at a time) and R256, in that order",
+    seq == [("R", 244), ("W", 244), ("R", 244), ("W", 256), ("W", 256), ("W", 257), ("W", 258), ("W", 259), ("W", 260),
+            ("W", 261), ("R", 256)]
+    and restore_flat[ops[0][0]][2].get("count") == 18,
     f"{seq}",
 )
-if len(ops) == 4:
-    w256_gates = [c for c, branch in ops[2][3] if branch == "then"]
+if len(ops) == 11:
+    w244_gates = [c for c, branch in ops[1][3] if branch == "then"]
+    w256_gates = [c for c, branch in ops[3][3] if branch == "then"]
+    slot_gates = [[c for c, branch in ops[k][3] if branch == "then"] for k in range(4, 10)]
     check(
-        "the 256-261 restore write is gated on !dump_write_failed (i.e. only after 244 was written AND verified)",
-        "return !id(dump_write_failed);" in w256_gates,
-        f"{w256_gates}",
+        "fcp2: the 244 restore write is gated on a successful pre-read that found ECCO's own Allow Export there",
+        "return id(dump_restore_pre_ok) && id(dump_restore_244_action) == 1;" in w244_gates,
+        f"{w244_gates}",
     )
-    r244_body = restore_flat[ops[1][0]][2]
+    check(
+        "fcp2 rework: the full 256-261 write is gated on the plan writing all six slots (nothing FOREIGN) - the plan restores "
+        "ORIGINAL only once 244 is proven out of Allow Export, else it CONTAINS at the floor",
+        "return id(dump_restore_wmask) == 0x3F;" in w256_gates, f"{w256_gates}",
+    )
+    check(
+        "fcp2 rework: each single-register write is gated on its own slot bit of the plan (a FOREIGN slot is never in it)",
+        all(f"((id(dump_restore_wmask) >> {i}) & 1) != 0" in str(g) for i, g in enumerate(slot_gates)), f"{slot_gates}",
+    )
+    r244_body = restore_flat[ops[2][0]][2]
     r244_handler = r244_body["on_response"]["then"][0]["lambda"]
     check(
         "the 244 verify read's on_response fails the attempt when live 244 != the snapshot value",
@@ -514,7 +533,8 @@ print("")
 print("[26] 2026-09-26 review fix: Stop SOC fails closed on STALE or NaN telemetry, not only on a missing value")
 check(
     "ecco_battery_soc records a freshness timestamp on every publish (on_value, RAM only)",
-    re.search(r"id: ecco_battery_soc\n(?:    .*\n)*?    on_value:\n      then:\n        - lambda: 'id\(dump_soc_last_update_ms\) = millis\(\);'", FIRMWARE_TEXT) is not None,
+    # fcp2: the lambda also restarts the frozen-SOC energy count on a changed SOC; the freshness stamp is still its first statement.
+    re.search(r"id: ecco_battery_soc\n(?:    .*\n)*?    on_value:\n      then:\n        - lambda: \|-\n            id\(dump_soc_last_update_ms\) = millis\(\);\n", FIRMWARE_TEXT) is not None,
 )
 check(
     "START requires a fresh SOC sample",
@@ -601,9 +621,13 @@ if watchdog_section_match:
 batt = re.search(r"id: ecco_battery_power\n(?:    .*\n|\n)*?    on_value:\n((?:      .*\n|\n)*)", FIRMWARE_TEXT)
 check("ecco_battery_power's on_value maintains the runaway counter (RAM only, no Modbus I/O)",
       batt is not None and "id(dump_overpower_samples)++;" in batt.group(1) and "modbus_client" not in batt.group(1))
+# fcp2 final rework: the battery hook now also CROSS-CHECKS battery power against the grid CT (RF1, a separate frozen-telemetry
+# check); the RUNAWAY threshold itself - from the ordinary guard's `float requested` to its comparison - still never uses the grid.
+_runaway = batt.group(1)[batt.group(1).index("float requested = (float) id(dump_target_power);"):] if batt else ""
+_runaway = _runaway[:_runaway.index("x > requested + margin")] if "x > requested + margin" in _runaway else ""
 check("runaway threshold is requested + max(requested/2, margin) on battery DISCHARGE (x > ...), never grid export",
       batt is not None and "float margin = requested / 2.0f;" in batt.group(1)
-      and "x > requested + margin" in batt.group(1) and "grid" not in batt.group(1).split("on_value")[-1].lower().replace("grid export", ""))
+      and "x > requested + margin" in batt.group(1) and _runaway != "" and "grid" not in _runaway.lower())
 
 print("")
 print("[29] 2026-09-26 pre-live hardening: Accept residue gate, TOU slot gate, latched-value entities")

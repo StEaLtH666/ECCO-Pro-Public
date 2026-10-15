@@ -27,6 +27,51 @@ Development before the first public release happened in a private repository; se
   widened. See
   [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
   and the supervised live-proof procedure (not executed).
+- **Dump to Grid safety hardening, phase 2** (post-export entry `fcp2`; firmware, not yet flashed anywhere;
+  [docs/dev/dump-to-grid-safety-fcp2.md](docs/dev/dump-to-grid-safety-fcp2.md)).
+  - The closed-loop controller never writes once a lease is ending. An End or restore request that arrives while it is checking
+    the inverter before a write now cancels that write (SG-40).
+  - The battery runaway guard also judges a window of the last 8 samples. An overshoot that alternates above and below the
+    threshold now ends the lease, a skipped or NaN reading no longer resets it, and the decision cannot be missed between two
+    watchdog ticks.
+  - Above 3000 W the absolute backstop allows for the battery's normal DC conversion loss (a profile value, 12 % for the
+    reference profile), so a healthy high-power lease is not ended by mistake. At 3000 W and below it is unchanged.
+  - The Dump restore first reads the inverter.
+    - It restores only what ECCO still owns, one register at a time when needed, and never overwrites a setting someone else
+      changed.
+    - If export cannot be proven switched off, it holds ECCO's own TOU power settings at the 500 W floor instead of restoring
+      them, and keeps retrying.
+    - It asks for Force Restore Original or Accept Current State only once everything ECCO owns has been restored and checked.
+    - A repeat after a verified restore no longer rewrites anything.
+  - Telemetry that keeps arriving but never changes now ends a Dump lease safely: a grid CT, battery power or SOC that stays
+    exactly the same when it should move. After the inverter link comes back, an owed restore is retried at once instead of up to
+    5 minutes later.
+  - The **Restart** button no longer restarts the dongle in the middle of an inverter transaction, or while a lease, restore or
+    recovery decision is owed. An owed obligation (never a transaction in flight) can be overridden with **Restart Override Arm**.
+    New diagnostics: **ECCO Safe To Flash**, **ECCO Flash Readiness**, **ECCO Build Identity** and **Restart Status**. The
+    `safe_mode:` settings are now explicit, with no change in behaviour.
+  - An inverter transaction lock is never released because a timer ran out. A lock held far beyond any transaction's bound is
+    reported. If a lease or restore is owed, the lease is ended durably and the dongle restarts so the owed restore completes.
+  - Export safety (still a backup to the inverter's own export limit, which ECCO never writes):
+    - The maximum grid export guard now works from the first second of a lease and ends it within about a second of one reading
+      far over the limit, or of two readings over it.
+    - START refuses when the meter already shows export above the limit, when PV alone already exceeds it, or when the target
+      leaves no headroom.
+  - After the Dump power limits are reported invalid, both the power ceiling and the maximum grid export must be set again.
+  - Accept Current State refuses while ECCO's own raised TOU power setting is still in place.
+  - The runaway guard also ends a lease on a sustained average excess.
+  - A battery idle at exactly 0 W is no longer mistaken for frozen telemetry, but only when the grid meter agrees it is idle.
+  - Battery power is cross-checked against the grid meter: net export minus PV is the least the battery must be delivering. A
+    battery reading stuck at 0 W (or reading far too low) while the meter shows export now ends the lease within about a minute,
+    even with the SOC stuck as well.
+  - A change to the Dump power ceiling or maximum grid export is saved to flash at once, before it is reported. A power cut
+    straight after a reduction no longer brings the previous, higher value back.
+  - After a restart with a restore still owed, the Stop SOC supervision keeps the lease's own Stop SOC, and fails closed when it
+    cannot be recovered or the SOC reading is not fresh.
+  - The export guard also ends a lease on readings alternating just over and under the limit (two of the last three over, or the
+    average of four above it).
+  - Statuses and alarms name any externally changed TOU power setting that cannot be held at 500 W while export is not proven
+    off.
 - **Inverter capability profiles and persisted Dump to Grid operating limits** (post-export entry `fcp1`; firmware, not yet
   flashed anywhere; [docs/dev/inverter-capability-profiles.md](docs/dev/inverter-capability-profiles.md)). One firmware image can
   now serve an inverter's full validated capability, with power levels chosen in Home Assistant instead of by rebuilding.

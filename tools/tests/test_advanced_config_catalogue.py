@@ -378,7 +378,8 @@ def _walk_writes(node):
 
 _walk_writes(FW)
 check("no firmware write action starts at register 245 (the whole write surface is proven by registry/tests/test_write_surface_invariants.py)",
-      len(writes) == 52 and all(w.isdigit() for w in writes) and "245" not in writes and "0x00F5" not in FW_TEXT, str(len(writes)))
+      # fcp2 rework: 52 -> 58, the Dump restore's one-register writes of 256..261 (none at 245)
+      len(writes) == 58 and all(w.isdigit() for w in writes) and "245" not in writes and "0x00F5" not in FW_TEXT, str(len(writes)))
 
 # ===========================================================================
 print("")

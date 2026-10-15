@@ -452,7 +452,9 @@ for k, (kind, _) in enumerate(RESTORE_OPS):
 
         def watched(body, local, sim=sim, bad=bad, real=real_write):
             real(body, local)
-            if sim.bank.get(244) == 0 and any(sim.bank.get(r) not in (TARGET,) for r in range(256, 262)):
+            # fcp2 rework: when 244 cannot be proven out of Allow Export the restore CONTAINS ECCO's ceilings at the floor
+            # (below the lease's), so the invariant is "never Allow Export under a ceiling ABOVE the lease's".
+            if sim.bank.get(244) == 0 and any(sim.bank.get(r, 0) > TARGET for r in range(256, 262)):
                 bad.append(dict(sim.bank))
         sim._modbus_write = watched
         sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
@@ -489,7 +491,9 @@ check("once comms recover, the watchdog completes the restore exactly", owned(si
 
 # Verify mismatches DO lock out after the second one.
 sim = started()
-sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)  # 244 always reads Essentials
+# fcp2: EVERY read of 244 says Essentials, the restore's ownership pre-read (244-261) included: ECCO now sees a FOREIGN 244 before
+# writing and locks out at once (obligation kept, nothing overwritten) instead of after a second verify mismatch.
+sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)  # 244 always reads Essentials
 sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
 tick(sim)
 check("second consecutive verify mismatch: durable operator lockout", sim.g["dump_operator_needed"]
@@ -633,6 +637,18 @@ for w in (1100, 8605, 1100, 8620, 1120):  # isolated spikes
     sim.run_actions(watchdog_of(sim.fw))
 check("isolated single-sample spikes: no trip", still_active(sim))
 
+# fcp2 (R-1): the same 8.6 kW spikes ALTERNATING with normal samples (a 50 % duty oscillation never forms a consecutive run, so the
+# consecutive counters alone never trip it - the weakness the windowed guard closes): the third spike in the window ends the lease.
+sim = started()
+tick(sim, ms=31000, soc=60.0)
+for w in (8605, 1100, 8620, 1100, 8618, 1100):
+    sim.advance(10000)
+    sim.ent("ecco_battery_power").publish_state(float(w))
+    sim.run_actions(watchdog_of(sim.fw))
+check("fcp2: alternating 8.6 kW spikes (50 % duty) trip the WINDOWED guard (GROSS POWER RUNAWAY)",
+      not still_active(sim) and str(sim.ent("dump_last_end_reason").state).startswith("GROSS POWER RUNAWAY (windowed)"),
+      str(sim.ent("dump_last_end_reason").state))
+
 sim = started()
 tick(sim, ms=31000, soc=60.0)
 for w in (8605, 8620, 8618):  # recorded 2026-09-22 anomaly values
@@ -695,7 +711,9 @@ for w in (1900, 1900):
     sim.run_actions(watchdog_of(sim.fw))
 assert still_active(sim), sim.status()
 for _ in range(7):  # then telemetry freezes
-    tick(sim)
+    # fcp2: the grid CT, SOC and battery power come from ONE telemetry read, so a frozen read republishes none of them (a CT that
+    # kept being republished unchanged while the battery moved is itself a FROZEN CT - test_dump_safety_fcp2.py [T]).
+    tick(sim, grid_fresh=False)
 check("telemetry freezing mid-runaway still fails closed (TELEMETRY LOST), never silently continues",
       sim.ent("dump_last_end_reason").state == "TELEMETRY LOST - failing closed" and owned(sim) == ORIGINAL)
 
@@ -706,7 +724,7 @@ print("[E] Accept Current State residue protection (zero Modbus I/O)")
 
 def locked_out():
     sim = started()
-    sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)
+    sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)
     sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
     tick(sim, poll=False)
     sim.read_override_fn = None
@@ -742,7 +760,9 @@ sim.execute("dump_accept_current_state")
 check("post-operation readback older than 120s: Accept REFUSED", marker_state(sim) == 1, sim.status())
 
 sim = locked_out()
-sim.bank.update({244: 1})  # operator set a non-export mode by hand; ceiling still the lease value
+# fcp2: the ownership-checked restore already returned ECCO's own 256-261 to the original before locking out on the FOREIGN 244, so
+# the lease-value ceiling residue this check is about is set explicitly (as the pre-fcp2 restore left it).
+sim.bank.update({244: 1, 256: 1000, 257: 1000, 258: 1000, 259: 1000, 260: 1000, 261: 1000})  # operator set a non-export mode by hand; ceiling still the lease value
 config_poll(sim)
 io = len(sim.modbus_log)
 sim.execute("dump_accept_current_state")
@@ -1076,11 +1096,14 @@ print("")
 print("[H] Sensitivity: each safety scenario FAILS against a firmware copy with that safeguard removed")
 
 
-def mutant(old: str, new: str) -> dict:
+def mutant(old, new) -> dict:
+    """One exact (old, new) replacement, or (fcp2) a tuple of them applied in order - a safeguard with two parts."""
     text = FW["_text"]
-    if text.count(old) != 1:
-        raise AssertionError(f"mutation anchor not unique/present: {old!r}")
-    return ds.load_firmware_text(text.replace(old, new))
+    for o, n in (zip(old, new) if isinstance(old, tuple) else ((old, new),)):
+        if text.count(o) != 1:
+            raise AssertionError(f"mutation anchor not unique/present: {o!r}")
+        text = text.replace(o, n)
+    return ds.load_firmware_text(text)
 
 
 def s_verify_gate(fw):
@@ -1121,7 +1144,7 @@ def s_drift_detected(fw):
 
 def s_locked(fw):
     sim = started(fw=fw)
-    sim.read_override_fn = lambda addr, count, values: ([1] if addr == 244 else values)
+    sim.read_override_fn = lambda addr, count, values: ([1] + values[1:] if addr == 244 else values)
     sim.execute("request_dump_end", {"reason": ds.CStr("manual End button")})
     tick(sim, poll=False)
     sim.read_override_fn = None
@@ -1145,9 +1168,12 @@ def s_accept_needs_fresh_readback(fw):
 
 
 def s_runaway_needs_consecutive(fw):
+    # fcp2 (R-1): alternating 8.6 kW spikes now END the lease (the windowed guard - see [D]). What the consecutive requirement
+    # still protects is a LOW-duty, modest overshoot: 1 sample in 3 above the ordinary threshold (2000 W vs 1750 W at 1000 W),
+    # never above the backstop - 3 of the last 8, below the window's 4, so no trip; a counter that never resets trips at the third.
     sim = started(fw=fw)
     tick(sim, ms=31000, soc=60.0)
-    for w in (8605, 1100, 8620, 1100, 8618, 1100):
+    for w in (2000, 1100, 1100, 2000, 1100, 1100, 2000):
         sim.advance(10000)
         sim.ent("ecco_battery_power").publish_state(float(w))
         sim.run_actions(watchdog_of(fw))
@@ -1212,7 +1238,10 @@ def s_b1_dispatch_fence(fw):
 
 
 def s_b2_floor(fw):
-    sim = started(target=500, duration=90, grid_w=-20000.0, fw=fw)
+    # fcp2 rework: START now refuses when the meter ALREADY shows export above the maximum grid export, so the lease starts
+    # at its target and the PV-driven export (7 kW: under the 8 kW limit, far above the 500 W target) arrives afterwards.
+    sim = started(target=500, duration=90, grid_w=-500.0, fw=fw)
+    sim.grid_w = -7000.0
     for _ in range(6):
         tick(sim, soc=70.0)
     # Exact equality, not >=500: without the clamp the computed ceiling goes
@@ -1452,8 +1481,10 @@ def s_r3_external_mutation_before_ownership_read_blocks_write(fw):
     256-261 immediately before ECCO's next dynamic controller correction.
     ECCO's immediate pre-write ownership re-read must observe the drift,
     perform ZERO controller overwrite of it, and fail the lease closed via
-    the common restore path - restoring the ORIGINAL pre-lease snapshot,
-    never re-asserting its own believed value over the external change."""
+    the common restore path - never re-asserting its own believed value over
+    the external change. fcp2 (SG-08): the restore no longer overwrites it
+    either - export is turned off (244 was still ECCO's), the external value
+    is KEPT and the obligation waits for the operator."""
     sim = started(target=500, duration=90, grid_w=1810.0, fw=fw)
     tick(sim, soc=60.0); tick(sim, soc=60.0)  # t+30s - still settling, no write yet
     real = sim.outcome_fn
@@ -1471,7 +1502,8 @@ def s_r3_external_mutation_before_ownership_read_blocks_write(fw):
     return (
         fired["once"]
         and not still_active(sim)
-        and owned(sim) == ORIGINAL
+        and sim.bank[259] == 4242 and sim.bank[244] == ORIGINAL[244]
+        and sim.g["dump_operator_needed"] and marker_state(sim) == 1
         and "CONFIG DRIFT (immediate pre-write check)" in str(sim.ent("dump_last_end_reason").state)
         and "register 259" in str(sim.ent("dump_last_end_reason").state)
     )
@@ -1560,9 +1592,12 @@ MUTATIONS = [
      "if (rounded < ${ecco_dump_controller_min_ceiling_w}.0f) rounded = ${ecco_dump_controller_min_ceiling_w}.0f;", ""),
     ("H1 fix removed: independent absolute runaway backstop no longer checked by the watchdog",
      s_h1_absolute_backstop,
-     "return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples} ||\n"
-     "                        id(dump_absolute_overpower_samples) >= ${ecco_dump_runaway_absolute_samples};",
-     "return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples};"),
+     # fcp2: the backstop's consecutive run is ALSO read from the windowed history, so removing it means removing both.
+     ("return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples} ||\n"
+      "                        id(dump_absolute_overpower_samples) >= ${ecco_dump_runaway_absolute_samples};",
+      "} else if (n_abs >= ${ecco_dump_runaway_window_k} || ((uint32_t) id(dump_runaway_win_abs) & run_abs) == run_abs) {"),
+     ("return id(dump_overpower_samples) >= ${ecco_dump_runaway_samples};",
+      "} else if (false) {")),
     ("M2 fix removed: controller no longer checks manual_write_in_progress is free before taking it",
      s_m2_lock_check,
      "return !id(manual_write_in_progress) && !id(correction_in_progress) &&\n"
@@ -1819,13 +1854,18 @@ tick(sim, soc=70.0, grid_fresh=False)
 check("grid telemetry never available (last-update timestamp still zero): fails closed immediately",
       not still_active(sim) and "GRID TELEMETRY LOST" in sim.ent("dump_last_end_reason").state, sim.status())
 
-sim = started(target=8000, duration=90, grid_w=20000.0)  # extreme but plausible sustained import
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=90, grid_w=20000.0)  # extreme but plausible sustained import
 for _ in range(8):
     tick(sim, soc=70.0)
 check("controller command max clamp: never exceeds ecco_dump_controller_max_ceiling_w (3000W)",
       sim.g["dump_target_power"] == 3000, sim.status())
 
-sim = started(target=500, duration=90, grid_w=-20000.0)  # extreme but plausible sustained export
+# fcp2 rework: START refuses while the meter ALREADY exports above the maximum grid export, and 20 kW would now end the lease
+# through the export guard - so the export (7 kW, under the 8 kW limit, far above the 500 W target) arrives after START.
+sim = started(target=500, duration=90, grid_w=-500.0)
+sim.grid_w = -7000.0  # extreme but plausible sustained export
 for _ in range(6):
     tick(sim, soc=70.0)
 check("BLOCKER B2: controller command min clamp never goes below the 500W floor (never 0W, never 100W)",
@@ -1896,14 +1936,16 @@ tick(sim, soc=70.0)  # t+90s - the 30s post-write TRANSITION window (H1) has als
 # NEW threshold (1500 + max(750, 750) = 2250) must NOT trip at 2200W. Both
 # comfortably under the 3750W absolute backstop, so only the ordinary
 # ceiling-relative guard is exercised here.
-tick(sim, soc=70.0, battery_w=2200.0)
-tick(sim, soc=70.0, battery_w=2200.0)
-tick(sim, soc=70.0, battery_w=2200.0)
+# fcp2: a real CT never repeats exactly while the battery moves (that is the FROZEN CT detector's signal), so the grid reading
+# carries 1 W of meter noise here - inside the controller's deadband.
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-501.0)
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-500.0)
+tick(sim, soc=70.0, battery_w=2200.0, grid_w=-501.0)
 check("2200W battery discharge is BELOW the new 2250W threshold: does not trip",
       still_active(sim), sim.status())
-tick(sim, soc=70.0, battery_w=2300.0)
-tick(sim, soc=70.0, battery_w=2300.0)
-tick(sim, soc=70.0, battery_w=2300.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-500.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-501.0)
+tick(sim, soc=70.0, battery_w=2300.0, grid_w=-500.0)
 check("2300W battery discharge is ABOVE the new 2250W threshold: trips POWER RUNAWAY",
       not still_active(sim) and "POWER RUNAWAY" in sim.ent("dump_last_end_reason").state, sim.status())
 
@@ -2304,7 +2346,9 @@ check("R1-1: SATURATED LOW remains SATURATED LOW for many ticks, never drifting 
       and sim.g["dump_controller_wrong_direction_count"] == 0 and still_active(sim), sim.status())
 
 # R1-2: SATURATED HIGH remains SATURATED HIGH for many ticks.
-sim = started(target=8000, duration=30, grid_w=20000.0)
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=30, grid_w=20000.0)
 force_ceiling(sim, 3000)  # V1.2 feed-forward's START-only 2000W limiter means START itself no longer lands
                           # exactly on 3000W here - this test is about the controller/anti-windup behaviour AT
                           # the cap, not feed-forward's own START computation (see [FF]), so force it directly.
@@ -2411,7 +2455,9 @@ print("    must still have its own response judged exactly once, decoupled from 
 # write's own judgement should show NO regression, simply confirming
 # judging still runs at all for a capped write (proven by the ineffective
 # counter moving once conditions stop improving further).
-sim = started(target=8000, duration=90, grid_w=6000.0)
+# fcp2 rework: START now needs headroom below the maximum grid export (8000 W here) - a 7700 W target still asks for far
+# more than the controller's 3000 W cap, which is what this scenario is about.
+sim = started(target=7700, duration=90, grid_w=6000.0)
 force_ceiling(sim, 3000)  # V1.2 feed-forward's START-only 2000W limiter means START itself no longer lands
                           # exactly on 3000W here - this test is about judging-at-the-cap, not feed-forward's
                           # own START computation (see [FF]), so force it directly.
@@ -2689,8 +2735,9 @@ def _mutate_reg256_before_ownership_read(kind, addr, count):
 
 sim.outcome_fn = _mutate_reg256_before_ownership_read
 tick(sim, soc=60.0)  # t+45s
-check("R3: an external mutation of a DIFFERENT owned register (256, not 259) is caught identically",
-      fired_256["once"] and not still_active(sim) and owned(sim) == ORIGINAL
+check("R3: an external mutation of a DIFFERENT owned register (256, not 259) is caught identically (fcp2: and kept, not overwritten)",
+      fired_256["once"] and not still_active(sim) and sim.bank[256] == 1234 and sim.bank[244] == ORIGINAL[244]
+      and sim.g["dump_operator_needed"] and marker_state(sim) == 1
       and "register 256" in str(sim.ent("dump_last_end_reason").state), sim.status())
 
 # --- R3: the last-verified-owned state (dump_target_power) only ever
@@ -2736,7 +2783,7 @@ for _ in range(4):
 check("R2 x R3: a bounded retry's own write still passes through the SAME immediate ownership check - there is "
       "one obvious mutation gate, not a weaker path for retries",
       fired_retry["once"] and sim.g["dump_controller_recovery_attempts"] == 1 and not still_active(sim)
-      and owned(sim) == ORIGINAL
+      and sim.bank[260] == 9191 and sim.bank[244] == ORIGINAL[244] and sim.g["dump_operator_needed"]   # fcp2: kept, not overwritten
       and "CONFIG DRIFT (immediate pre-write check)" in str(sim.ent("dump_last_end_reason").state)
       and "register 260" in str(sim.ent("dump_last_end_reason").state), sim.status())
 
