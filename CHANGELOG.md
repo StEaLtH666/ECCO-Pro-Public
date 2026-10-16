@@ -265,6 +265,24 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
 
 ### Fixed
 
+- Advanced Configuration Stage 0 (`acs0`) no longer presses Apply into a routine Modbus poll (acs0r1; source only, NOT
+  installed; [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md) section 3b).
+  - **What happened:** in the 2026-10-16 supervised live proof on the S3:
+    - slot 1 100 -> 99 % was APPLIED AND VERIFIED;
+    - both 99 -> 100 % restores were refused by the firmware's Apply gate (`Modbus bus busy`, nothing written: counter and
+      later reads agree). The Apply pressed a fixed ~5.3 s after the configuration read, at the 10 s telemetry poll's last
+      frame. The first edit succeeded only because its Load was delayed 7 s;
+    - the owner restored 100 % through Manual Controls (verified, B10 MATCH).
+  - **The fix** (Home Assistant package only):
+    - before the fresh read, the Apply observes one inverter clock read (its phase) and two clean telemetry completions
+      (their period);
+    - after the staging it presses 1.5 s after an observed clean completion, only when that window holds no clock read and
+      lies at most 25 s after the fresh read;
+    - otherwise FAILED, nothing pressed. Neither observation is ever assumed.
+  - **Unchanged:** still exactly one press; a refusal is still final; every gate, the fresh evidence, the staged == live
+    proof and the independent later-read verdict.
+  - **Tests:** the offline suite (162 checks) reproduces B2, a B1-type and an A-type refusal or success on the exact pre-fix
+    package, and sweeps phases, scheduler jitter and changed poll timing.
 - Scheduled Free Power now starts reliably and reports every failure (post-export entry `fps1`; incident record
   [docs/incidents/2026-10-11-scheduled-free-power-start.md](docs/incidents/2026-10-11-scheduled-free-power-start.md)). On
   11 Oct 2026 the 11:00 session never started. The firmware start gate correctly refused both presses because a routine telemetry
