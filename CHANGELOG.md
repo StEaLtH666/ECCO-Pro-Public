@@ -9,6 +9,18 @@ Development before the first public release happened in a private repository; se
 
 ## [Unreleased]
 
+### Fixed
+- **House load no longer reads 0 W while exporting** (post-export entry `hd1`;
+  [docs/HOUSE_LOAD_HD1.md](docs/HOUSE_LOAD_HD1.md)). The inverter's native load (register 178) reads 0 W in some states,
+  notably during export. `sensor.ecco_house_power` (same entity, unit and statistics) is now derived with the Energy Flow
+  card's and the firmware's rule: the native load when credible, inverter AC output + grid CT when the native load is
+  unavailable or falsely 0 W. It is unavailable, never 0 W, when the evidence is stale or cannot confirm a zero. A new
+  diagnostic `sensor.ecco_house_power_model` holds the resolution.
+  - The House Load Snapshot, the learning gate and 16 dashboard house-load reads now use it. The register table still
+    shows register 178.
+  - The Battery Outlook learning excludes 0 W samples. No history is rewritten.
+  - No firmware, inverter write or write-surface change. FE-1 and the Energy Flow card are unchanged.
+
 ### Added
 - **The owner's manual Dump to Grid / Free Power values restored after a scheduled start** (post-export entry `smr1`;
   [docs/dev/schedule-manual-restore.md](docs/dev/schedule-manual-restore.md)). A scheduled start stages its own values into

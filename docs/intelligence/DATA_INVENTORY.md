@@ -13,7 +13,7 @@ stable canonical aliases (`home-assistant/packages/ecco_canonical_telemetry.yaml
 
 | Need | Entity (dongle unless noted) | Unit / notes |
 |---|---|---|
-| House load (instantaneous) | `…_ecco_load_power` (alias `sensor.ecco_house_power`) | W, ~10 s |
+| House load (instantaneous) | `sensor.ecco_house_power`: since hd1 DERIVED - the native `…_ecco_load_power` when credible, inverter AC output + grid CT when it is unavailable or falsely 0 W during export; unavailable when not fresh ([HOUSE_LOAD_HD1.md](../HOUSE_LOAD_HD1.md)) | W, ~10 s |
 | House load (cumulative) | `…_ecco_total_load_energy`, `…_ecco_day_load_energy` | kWh, 0.1 kWh resolution, published ~10 min |
 | Grid power | `…_ecco_grid_power_ct_clamp` (alias `sensor.ecco_grid_power`; + import / − export). Inverter's own reading: `…_ecco_grid_load` | W |
 | Grid energy | `…_ecco_total_grid_import`, `…_total_grid_export`, `…_day_grid_import`, `…_day_grid_export` | kWh |

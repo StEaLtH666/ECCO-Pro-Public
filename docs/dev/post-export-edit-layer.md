@@ -170,3 +170,20 @@ post-export entry; its scope pairs, checkpoints and fingerprint were regenerated
 package, deployment, registry, Intelligence or ecco_core file, and adds no service
 call. The earlier suites read the dashboard as of their own entry, so `test_ovw1_transition.py` no longer asserts that `ovw1`
 is the last chain entry (its position and parent are pinned instead).
+
+## What hd1 changed
+
+`hd1` makes the canonical house load trustworthy (`registry/tests/_hd1_scope.py`, proofs in
+`home-assistant/tests/test_ecco_house_power_hd1.py`, details in [docs/HOUSE_LOAD_HD1.md](../HOUSE_LOAD_HD1.md)).
+It edits no chain-pinned artifact; the manifest is untouched because the canonical package is already deployed.
+Its frozen edits are:
+
+- the canonical package: a header note, and the house block replaced by the model entity and the derived
+  `sensor.ecco_house_power`;
+- the core package: the House Load Snapshot and the Model Inputs Ready gate read the canonical house load;
+- the dashboard: 16 house-load reads move from the native load to the canonical one. The Inverter / Advanced
+  register table still shows register 178;
+- the Battery Outlook learning task: 0 W samples are excluded from the load profile, and no history is rewritten;
+- `registry/system_health_checks.yaml`: the designed canonical-vs-raw check records the hd1 exception.
+
+`hd1` changed no firmware, inverter write path, write surface, FE-1 package or Energy Flow card.
