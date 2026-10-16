@@ -17,7 +17,7 @@ Development before the first public release happened in a private repository; se
   unavailable or falsely 0 W. It is unavailable, never 0 W, when the evidence is stale or cannot confirm a zero. A new
   diagnostic `sensor.ecco_house_power_model` holds the resolution.
   - The House Load Snapshot, the learning gate and 16 dashboard house-load reads now use it. The register table still
-    shows register 178.
+    shows register 178. Seven runtime blends use their average alone while it is unavailable, so they never show NaN.
   - The Battery Outlook learning excludes 0 W samples. No history is rewritten.
   - No firmware, inverter write or write-surface change. FE-1 and the Energy Flow card are unchanged.
 

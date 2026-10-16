@@ -19,23 +19,30 @@ consumers, the House Load Snapshot and the Battery Outlook learning, which there
 
 ## The rule
 
-The same rule the card and the firmware use, applied to one canonical sensor:
+The card's and the firmware's rule (native preferred; inverter + grid when the native load reads exactly 0 W while inverter +
+grid exceeds 150 W, or is unusable), applied to one canonical sensor:
 
 | Native load | Inverter + grid CT | `sensor.ecco_house_power` | `source` |
 |---|---|---|---|
-| a credible non-zero reading | any | the native reading (never negative) | `native` |
+| a credible non-zero reading (finite, above 0, at most 30000 W) | any | the native reading | `native` |
 | exactly 0 W | more than 150 W | inverter + grid | `derived` |
 | exactly 0 W | 150 W or less | 0 W (confirmed) | `native` |
 | exactly 0 W | unavailable | **unavailable** | `none` |
-| unavailable / garbage / out of range | available | inverter + grid | `derived` |
+| unavailable / garbage / out of range / **negative** | available | inverter + grid | `derived` |
 | unavailable | unavailable | **unavailable** | `none` |
 
 - **Inverter + grid CT:** the inverter's AC output (register 175; positive while it supplies AC, negative while it charges
   from AC) plus the grid CT (register 172; positive = import), clamped at 0. It is the house load while exporting and while
   charging from the grid alike, so battery and PV need no term of their own. Measured while charging from the grid: grid
   +8149 W and inverter -6785 W gave 1364 W.
-- **The one deliberate difference from the card:** a native 0 W that inverter + grid cannot confirm is shown by the card as
-  0 W but is **unavailable** here. A canonical sensor that feeds statistics and learning never records an unconfirmed zero.
+- **Deliberate differences from the card:**
+  - a native 0 W that inverter + grid cannot confirm is shown by the card as 0 W but is **unavailable** here, because a
+    canonical sensor that feeds statistics and learning never records an unconfirmed zero;
+  - a negative native reading is clamped to 0 W by the card but is **not credible** here, as in the firmware, so inverter + grid
+    is used.
+- **A difference from the firmware:** the firmware's feed-forward accepts only a non-negative inverter reading, because it runs
+  while discharging. Here a negative inverter reading (charging from AC) is valid: grid +8149 W with inverter -6785 W is
+  1364 W of house load, measured on 11 Oct.
 - **Freshness:** the value is shown only while the telemetry is fresh:
   - the dongle reports telemetry online;
   - the dongle's per-poll text (`sensor.<slug>_last_telemetry_update`, published only after a complete poll) has changed,
@@ -45,18 +52,22 @@ The same rule the card and the firmware use, applied to one canonical sensor:
   - Before the dongle has NTP time that text is not published, so the newest report of the three readings is used instead.
     Readings that stay unchanged for more than 60 s then make it unavailable.
 - **Consistency:** the value is recomputed only when a complete poll has landed. A half-published poll (the inverter already
-  new, the grid not yet) never mixes two polls; the previous value is held until the poll completes.
+  new, the grid not yet) never mixes two polls; the previous value is held until the poll completes. Without NTP time there
+  is no per-poll text: the value is then recomputed on the 10 s tick, never on a single reading's write.
 - **Unavailable, never 0 W:** stale, unconfirmable or missing data makes the sensor unavailable. Statistics show a gap, the
   dashboard shows the value as not reporting, and the Battery Outlook learning gets no sample.
 
 ## The entities
 
 **`sensor.ecco_house_power_model` (new).**
-- A trigger-based template sensor in `ecco_canonical_telemetry.yaml`. Its state is the time of the last evaluation.
+- A trigger-based template sensor in `ecco_canonical_telemetry.yaml`. Its state is the constant `model`.
 - Its `model` attribute holds the resolution: value, source, reason, native / inverter / grid / derived W, freshness,
   telemetry age, and the poll text and when it was seen.
 - It is always available, so this memory survives a template reload and a restart.
-- **It updates every 10 s; consider excluding it from the recorder.**
+- Its memory changes only on a new poll, a new value or a freshness change. An idle tick writes nothing, and with a constant
+  state there are no logbook entries. It still changes about once per poll (every 10 s), each change a recorder row and an
+  Influx point (the options file's `sensor.ecco_*` glob). Excluding it from the recorder and InfluxDB is recommended at the
+  next planned restart.
 
 **`sensor.ecco_house_power` (changed).**
 - Same entity, `unique_id`, unit (W), device class (power) and state class (measurement), so long-term statistics continue.
@@ -71,15 +82,15 @@ The same rule the card and the firmware use, applied to one canonical sensor:
 |---|---|---|
 | `sensor.ecco_house_load_snapshot` (`ecco_pro.yaml`) | native load | `sensor.ecco_house_power` |
 | `binary_sensor.ecco_model_inputs_ready` (`ecco_pro.yaml`, the learning gate) | native load available | `sensor.ecco_house_power` available |
-| Dashboard: ECCO Today status and runtime blend (Overview, Intelligence) | native load | canonical |
-| Dashboard: Rest of Today runtime blend (Intelligence) | native load | canonical |
-| Dashboard: Smart Charge Strategy live load (Intelligence, Tariffs, Control, Recommended) | native load | canonical |
+| Dashboard: ECCO Today status and runtime blend (Overview, Intelligence) | native load | canonical; the blend uses the average alone while it is unavailable (no NaN) |
+| Dashboard: Rest of Today runtime blend (Intelligence) | native load | canonical, average alone while unavailable |
+| Dashboard: Smart Charge Strategy live load (Intelligence, Tariffs, Control, Recommended) | native load | canonical, average alone while unavailable |
 | Dashboard: "not reporting" notices, House (Overview, Intelligence, System) | native load | canonical |
 | Dashboard: the three House chart series (Overview, Intelligence, System) | native load | canonical |
 | Dashboard: Live Energy Flow `essential_power` (System) | native load | canonical |
 | Battery Outlook learning (`influxdb/tasks/ecco_battery_outlook_5m.flux`) | 5-minute samples of 0 W included | 0 W samples excluded |
 
-That is 16 dashboard reads in all.
+That is 16 dashboard reads in all, plus 7 runtime blends guarded against an unavailable value.
 
 **Unchanged:**
 - **The Inverter / Advanced register table** keeps showing register 178 itself (Load Power L1 / L2 / Total).
@@ -98,6 +109,11 @@ That is 16 dashboard reads in all.
   The canonical-vs-raw comparisons there will now show the derived exports as differences. That is expected.
 
 ## Limitations
+
+- **A fast restart.** At start the presentation can render once from the restored model before the model's own start
+  trigger. That is at most one value at most 70 s old.
+- **Legacy fill-in.** Where the canonical series has no point at all for a window (it was unavailable), the learning still
+  fills that window from the native series, as before hd1. A native 0 W there is excluded by the filter.
 
 - **Partial-depression bias.** A 5-minute window that was only partly an export before hd1 was averaged with the 0 W
   readings and is not excluded. Its bias leaves the 30-day learning window within 30 days of deployment.

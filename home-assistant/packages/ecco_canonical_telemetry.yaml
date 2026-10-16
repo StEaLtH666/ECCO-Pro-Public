@@ -50,7 +50,10 @@ template:
   # CHANGE seen by this model within the last 60 s (a reconnect that replays an old text does not count). Before the dongle
   # has NTP time that text is not published: the newest report of the three inputs is the fallback.
   # Consistency: the value is recomputed only when a complete poll has landed (a new poll text), at start, or - with no
-  # per-poll text - on any input, so one value never mixes readings of two polls.
+  # per-poll text - on the 10 s tick (never on a single reading's write), so one value never mixes readings of two polls.
+  # Credible native: a finite reading 0..30000 W. A negative native is not credible (as in the firmware): inverter + grid.
+  # The model's state is constant and its memory changes only on a new poll, a new value or a freshness change, so an idle
+  # tick writes nothing (no logbook entry, no recorder row).
   - triggers:
       - trigger: state
         entity_id: sensor.ecco_clock_dongle_last_telemetry_update
@@ -74,8 +77,7 @@ template:
       - name: ECCO House Power Model
         unique_id: ecco_house_power_model
         icon: mdi:home-lightning-bolt-outline
-        device_class: timestamp
-        state: "{{ now().isoformat() }}"
+        state: "model"
         attributes:
           model: >-
             {%- set e_native = 'sensor.ecco_clock_dongle_ecco_load_power' -%}
@@ -107,13 +109,14 @@ template:
             {%- endif -%}
             {%- set age = (now_ts - (seen.ts | max)) if seen.ts | count > 0 else none -%}
             {%- set fresh = online and age is not none and age >= -5 and age <= 60 -%}
-            {%- set recompute = new_poll or tid == 'start' or not poll_valid or pm.get('computed_at') is not number -%}
+            {%- set recompute = new_poll or tid == 'start' or (not poll_valid and tid == 'tick')
+                               or (pm.get('computed_at') is not number and tid != 'input') -%}
             {%- set r = namespace(v=pm.get('value_w'), src=pm.get('source', 'none'), why=pm.get('reason', ''),
                                   n=pm.get('native_w'), i=pm.get('inverter_w'), g=pm.get('grid_w'), d=pm.get('derived_w'),
-                                  at=pm.get('computed_at')) -%}
+                                  at=pm.get('computed_at'), at_iso=pm.get('computed_iso')) -%}
             {%- if recompute -%}
               {%- set n = states(e_native) | float(none) -%}
-              {%- set n_ok = n is number and n == n and (n | abs) <= 30000 -%}
+              {%- set n_ok = n is number and n == n and n >= 0 and n <= 30000 -%}
               {%- set i = states(e_inv) | float(none) -%}
               {%- set g = states(e_grid) | float(none) -%}
               {%- set d_ok = i is number and i == i and (i | abs) <= 30000 and g is number and g == g and (g | abs) <= 30000 -%}
@@ -123,8 +126,9 @@ template:
               {%- set r.g = (g | round(1)) if d_ok else none -%}
               {%- set r.d = (d | round(1)) if d_ok else none -%}
               {%- set r.at = now_ts -%}
+              {%- set r.at_iso = now().isoformat() -%}
               {%- if not n_ok and d_ok -%}
-                {%- set r.v = d | round(1) -%}{%- set r.src = 'derived' -%}{%- set r.why = 'native load unavailable' -%}
+                {%- set r.v = d | round(1) -%}{%- set r.src = 'derived' -%}{%- set r.why = 'native load unavailable or not credible' -%}
               {%- elif not n_ok -%}
                 {%- set r.v = none -%}{%- set r.src = 'none' -%}{%- set r.why = 'no usable load, inverter or grid reading' -%}
               {%- elif n == 0 and d_ok and d > 150 -%}
@@ -134,7 +138,7 @@ template:
               {%- elif n == 0 -%}
                 {%- set r.v = none -%}{%- set r.src = 'none' -%}{%- set r.why = 'native 0 W cannot be confirmed (inverter or grid reading unavailable)' -%}
               {%- else -%}
-                {%- set r.v = ([0, n] | max) | round(1) -%}{%- set r.src = 'native' -%}{%- set r.why = '' -%}
+                {%- set r.v = n | round(1) -%}{%- set r.src = 'native' -%}{%- set r.why = '' -%}
               {%- endif -%}
             {%- endif -%}
             {%- set model = {
@@ -146,11 +150,11 @@ template:
                   'grid_w': r.g,
                   'derived_w': r.d,
                   'fresh': fresh,
-                  'telemetry_age_s': (age | round(1)) if age is not none else none,
+                  'seen_at': (seen.ts | max) if seen.ts | count > 0 else none,
                   'poll_text': poll_text if poll_valid else pm.get('poll_text'),
                   'poll_seen_at': poll_seen_at,
                   'computed_at': r.at,
-                  'evaluated_at': now().isoformat()
+                  'computed_iso': r.at_iso
                 } -%}
             {{ model }}
 
@@ -164,8 +168,8 @@ template:
         state_class: measurement
         availability: >-
           {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
-          {{ m is mapping and m.get('fresh') is sameas true and m.get('value_w') is number
-             and (as_timestamp(now()) - as_timestamp(m.get('evaluated_at'), 0)) <= 60 }}
+          {{ m is mapping and m.get('fresh') is sameas true and m.get('value_w') is number and m.get('seen_at') is number
+             and (as_timestamp(now()) - m.get('seen_at')) <= 70 }}
         state: >-
           {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
           {{ m.get('value_w') if m is mapping and m.get('value_w') is number else none }}
@@ -190,10 +194,10 @@ template:
             {{ m.get('grid_w') if m is mapping else none }}
           telemetry_age_s: >-
             {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
-            {{ m.get('telemetry_age_s') if m is mapping else none }}
+            {{ ((as_timestamp(now()) - m.get('seen_at')) | round(1)) if m is mapping and m.get('seen_at') is number else none }}
           refreshed_at: >-
             {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
-            {{ m.get('evaluated_at') if m is mapping else none }}
+            {{ m.get('computed_iso') if m is mapping else none }}
           source_entity: sensor.ecco_house_power_model
           note: "Whole-house consumption (hd1): the native load, or inverter + grid CT when the native load is unavailable or falsely 0 W. Never negative; unavailable, never 0 W, when not fresh."
           sign_convention: "Grid CT positive = import; inverter AC output positive = supplying AC"

@@ -391,8 +391,11 @@ s.step("nan", 2000, -700)
 check("native 'nan': treated as unavailable, inverter + grid used", near(s.value(), 1300.0), str(s.presented()))
 s.step(40000, 2000, -700)
 check("native out of range (40000 W): treated as unavailable, inverter + grid used", near(s.value(), 1300.0), str(s.presented()))
-s.step(-250, 100, 50)
-check("a negative native reading clamps to 0 W", s.value() == 0.0, str(s.presented()))
+s.step(-250, 1000, 300)
+check("a negative native reading is not credible (as in the firmware): inverter + grid (1300 W), never a trusted 0 W",
+      near(s.value(), 1300.0) and s.presented()[2]["source"] == "derived", str(s.presented()))
+s.step(-5, "unavailable", 300)
+check("...and a negative native with inverter + grid unavailable is UNAVAILABLE", s.value() is None, str(s.presented()))
 s.step(1200, 2000, -700)
 check("recovery: native credible again", s.value() == 1200.0, str(s.presented()))
 
@@ -420,12 +423,26 @@ check("a reconnect that replays the OLD poll text does not count as a poll: stil
       str(s.model))
 s = Sim(PKG, ntp=False)
 s.step(1200, 1180, 20)
+s.advance(10)                                                 # no NTP: computed on the tick, not on a single reading's write
 check("no NTP time yet (poll text 'Waiting'): the newest report of the readings is the liveness fallback - current",
       s.value() == 1200.0, str(s.model))
 s.advance(70)
 check("...and with readings unchanged for 70 s it is UNAVAILABLE rather than trusted", s.value() is None)
 s.step(1300, 1250, 50)
-check("...a changed reading makes it current again", s.value() == 1300.0)
+s.advance(10)
+check("...a changed reading makes it current again (recomputed on the next 10 s tick)", s.value() == 1300.0)
+s = Sim(PKG, ntp=False)
+s.step(0, 2000, -700)
+s.advance(10)
+shown = [s.value()]
+s.poll(inv=-6800, partial={E_INV})                            # no NTP: the inverter's write arrives first ...
+shown.append(s.value())
+s.poll(0, -6800, 8100)                                        # ... the rest of the poll a moment later
+shown.append(s.value())
+s.advance(10)
+shown.append(s.value())
+check("no NTP time: a single reading's write never recomputes (no mixed '0 W confirmed' between two polls); the next tick "
+      "computes the complete poll", shown[:3] == [1300.0, 1300.0, 1300.0] and near(shown[3], 1300.0), str(shown))
 
 # ===========================================================================================================================
 print("\n[7] telemetry timestamp inconsistencies")
@@ -477,8 +494,11 @@ check("...and the next poll is used", s2.value() == 1100.0)
 s3 = Sim(PKG)
 s3.step(1100, 1080, 20)
 s3.model = parse_result(str(s3.model))                        # a template reload: the attribute round-trips through its text form
-s3.fire("start")
-check("a template reload right after a poll keeps the value current (the poll text was seen 0 s ago)", s3.value() == 1100.0)
+s3.advance(5)
+s3.fire("tick")                                               # the start trigger does not fire on a reload: the first render is a tick
+check("a template reload: the first render is a tick with the restored memory - the value is held and current", s3.value() == 1100.0)
+s3.advance(70)
+check("...and it still goes UNAVAILABLE when no new poll arrives", s3.value() is None)
 
 # ===========================================================================================================================
 print("\n[9] parity with the Energy Flow card's resolveHomeW() (homePower.test.ts)")
@@ -486,7 +506,7 @@ print("\n[9] parity with the Energy Flow card's resolveHomeW() (homePower.test.t
 CARD_TEST = (ROOT / "frontend/ecco-energy-flow-card/test/homePower.test.ts").read_text(encoding="utf-8")
 CARD_SRC = (ROOT / "frontend/ecco-energy-flow-card/src/config.ts").read_text(encoding="utf-8")
 VECTORS = [((1200, 1000, 500), 1200.0), ((None, 1240, 1810), 3050.0), ((0, 3030, 20), 3050.0), ((0, 0, 0), 0.0),
-           ((0, 10, -5), 0.0), ((0, 100, 50), 0.0), ((0, 100, 51), 151.0), ((-30, 10, 10), 0.0), ((3050, 3030, 210), 3050.0)]
+           ((0, 10, -5), 0.0), ((0, 100, 50), 0.0), ((0, 100, 51), 151.0), ((3050, 3030, 210), 3050.0)]
 mism = []
 for (n, i, g), want in VECTORS:
     s = Sim(PKG)
@@ -497,10 +517,23 @@ check("the card's resolveHomeW vectors give the same house load here (native, th
       "clamp)", not mism and "export const HOME_FALLBACK_MIN_W = 150;" in CARD_SRC and "resolveHomeW" in CARD_TEST, str(mism))
 s = Sim(PKG)
 s.step(0, "unavailable", "unavailable")
-check("the one deliberate difference: native 0 W with inverter and grid unavailable is UNAVAILABLE here (the card shows "
-      "0 W); a canonical sensor that feeds statistics never records an unconfirmed zero", s.value() is None)
+check("deliberate difference 1: native 0 W with inverter and grid unavailable is UNAVAILABLE here (the card shows 0 W); a "
+      "canonical sensor that feeds statistics never records an unconfirmed zero", s.value() is None)
+s = Sim(PKG)
+s.step(-30, 10, 10)
+check("deliberate difference 2: a negative native (-30 W) is not credible here, as in the firmware (the card clamps it to "
+      "0 W): inverter + grid, 20 W", near(s.value(), 20.0), str(s.presented()))
 
 # ===========================================================================================================================
+s = Sim(PKG)
+s.step(1200, 1180, 20)
+s.advance(1)
+before_m = dict(s.model)
+s.fire("tick")
+s.fire("tick")
+check("an idle tick writes nothing: the model's state is constant ('model') and its memory identical (no logbook entry, no "
+      "recorder row between polls)", s.model == before_m and s.model_state == "model"
+      and "device_class" not in PKG.model_cfg, str(set(s.model.items()) ^ set(before_m.items())))
 print("\n[10] the presentation sensor")
 # ===========================================================================================================================
 s = Sim(PKG)
@@ -510,8 +543,9 @@ check("attributes: source, reason, native / inverter / grid / derived W, telemet
       av and at["source"] == "derived" and at["native_w"] == 0.0 and at["inverter_w"] == 2000.0 and at["grid_w"] == -700.0
       and at["derived_w"] == 1300.0 and isinstance(at["telemetry_age_s"], (int, float)) and at["refreshed_at"]
       and PKG.house_cfg["attributes"]["source_entity"] == E_MODEL, str(at))
-s.model = dict(s.model, evaluated_at=(s.now - timedelta(seconds=90)).isoformat())
-check("a model that stops updating (evaluated 90 s ago) is not shown as current: UNAVAILABLE", s.value() is None)
+s.model = dict(s.model, seen_at=s.model["seen_at"] - 90)
+check("a model that stops updating (last poll seen 90 s ago, still marked fresh) is not shown as current: UNAVAILABLE",
+      s.value() is None)
 s = Sim(PKG)
 s.model = None
 check("no model at all: UNAVAILABLE, attributes say so", s.value() is None and s.presented()[2]["source"] == "none")
@@ -543,6 +577,9 @@ canon = len(re.findall(r"sensor\.ecco_house_power(?![a-z0-9_])", DASH))
 check("...and the canonical house load in 17 (the 16 moved house-load reads: Today / Smart Charge status and runtime blends, the "
       "not-reporting lists, the three House chart series, the Live Energy Flow essential power; plus the Energy Flow card)",
       canon == 17, str(canon))
+guards = DASH.count("Number.isFinite(load) ? load / 1000 : avgSoFar;") + DASH.count("Number.isFinite(loadW)?loadW/1000:avgKw;")
+check("the seven runtime blends use the average alone when the house load is unavailable (never NaN)",
+      guards == 7 and "const liveKw = load / 1000;" not in DASH and "const liveKw=loadW/1000;" not in DASH, str(guards))
 learn = FLUX.split("loadHistory =", 1)[1].split("trainingRecord", 1)[0]
 check("the Battery Outlook learning keeps canonical-first / legacy-fill, and excludes 5-minute house samples of 0 W or less "
       "(no history rewrite: a filter in the read only)", 'canonicalMeasurement: "sensor.ecco_house_power"' in learn
@@ -600,6 +637,18 @@ def battery(text: str) -> dict:
         s.step(1200, 1180, 20)
         s.poll(ok=False)
         res["offline"] = s.value() is None
+        s = Sim(p)
+        s.step(1200, 1180, 20)
+        s.model = dict(s.model, seen_at=s.model["seen_at"] - 90)
+        res["backstop"] = s.value() is None
+        s = Sim(p)
+        s.step(-250, 1000, 300)
+        res["negative"] = near(s.value(), 1300.0)
+        s = Sim(p, ntp=False)
+        s.step(0, 2000, -700)
+        s.advance(10)
+        s.poll(inv=-6800, partial={E_INV})
+        res["nontp_mix"] = s.value() == 1300.0
     except Exception as exc:  # noqa: BLE001
         res["crash"] = f"{type(exc).__name__}: {exc}"
     return res
@@ -617,15 +666,19 @@ MUTANTS = [
      "stale"),
     ("a replayed poll text counted as a poll", "{%- set new_poll = poll_valid and poll_text != pm.get('poll_text') -%}",
      "{%- set new_poll = poll_valid -%}", "replay"),
-    ("recomputed on any input (mixing two polls)", "{%- set recompute = new_poll or tid == 'start' or not poll_valid",
-     "{%- set recompute = true or new_poll or tid == 'start' or not poll_valid", "mix"),
+    ("recomputed on any input (mixing two polls)", "{%- set recompute = new_poll or tid == 'start' or (not poll_valid",
+     "{%- set recompute = true or new_poll or tid == 'start' or (not poll_valid", "mix"),
     ("the grid sign inverted (inverter - grid)", "{%- set d = ([0, i + g] | max) if d_ok else none -%}",
      "{%- set d = ([0, i - g] | max) if d_ok else none -%}", "charging"),
     ("the clamp at 0 dropped", "{%- set d = ([0, i + g] | max) if d_ok else none -%}", "{%- set d = (i + g) if d_ok else none -%}",
      "clamp"),
+    ("a negative native trusted (clamped to 0 W)", "{%- set n_ok = n is number and n == n and n >= 0 and n <= 30000 -%}",
+     "{%- set n_ok = n is number and n == n and (n | abs) <= 30000 -%}", "negative"),
+    ("no-NTP recompute on any reading's write", "or (not poll_valid and tid == 'tick')", "or (not poll_valid)", "nontp_mix"),
     ("the offline flag ignored", "{%- set online = is_state(e_online, 'on') -%}", "{%- set online = true -%}", "offline"),
     ("the presentation available without freshness", "{{ m is mapping and m.get('fresh') is sameas true and m.get('value_w') is number",
      "{{ m is mapping and m.get('value_w') is number", "stale"),
+    ("the presentation's own age backstop dropped", "and (as_timestamp(now()) - m.get('seen_at')) <= 70 }}", "}}", "backstop"),
 ]
 for name, a, b, key in MUTANTS:
     if PKG_TEXT.count(a) < 1:
@@ -641,7 +694,7 @@ import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins hd1's declaration)
 import _hd1_scope as F  # noqa: E402
 
-HD1_FINGERPRINT = "990ebacac54a396852aa73f152f966711c671fcb6513ae24565a61841b5c4736"
+HD1_FINGERPRINT = "9d1bc8e00415411f40caf57a1818fb46397c172e12ed4e88b789e7178642ebe2"
 E = sc.CHAIN.entry("hd1")
 ids = [x.id for x in sc.POST_EXPORT_ENTRIES]
 FROZEN_FILES = {"home-assistant/packages/ecco_canonical_telemetry.yaml", "home-assistant/packages/ecco_pro.yaml",

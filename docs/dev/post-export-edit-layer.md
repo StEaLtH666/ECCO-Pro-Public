@@ -181,8 +181,8 @@ Its frozen edits are:
 - the canonical package: a header note, and the house block replaced by the model entity and the derived
   `sensor.ecco_house_power`;
 - the core package: the House Load Snapshot and the Model Inputs Ready gate read the canonical house load;
-- the dashboard: 16 house-load reads move from the native load to the canonical one. The Inverter / Advanced
-  register table still shows register 178;
+- the dashboard: 16 house-load reads move from the native load to the canonical one, and 7 runtime blends use their
+  average alone while it is unavailable. The Inverter / Advanced register table still shows register 178;
 - the Battery Outlook learning task: 0 W samples are excluded from the load profile, and no history is rewritten;
 - `registry/system_health_checks.yaml`: the designed canonical-vs-raw check records the hd1 exception.
 

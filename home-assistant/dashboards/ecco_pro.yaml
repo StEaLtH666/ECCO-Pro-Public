@@ -1214,7 +1214,7 @@ views:
                   const now = new Date();
                   const elapsed = Math.max(now.getHours() + now.getMinutes()/60, 1);
                   const avgSoFar = loadToday / elapsed;
-                  const liveKw = load / 1000;
+                  const liveKw = Number.isFinite(load) ? load / 1000 : avgSoFar;   // hd1: house load unavailable -> the average alone
                   const blendedKw = clamp(avgSoFar * 0.65 + liveKw * 0.35, 0.15, 5);
 
                   const targetTimeRaw = states['sensor.ecco_config_charge_start_time']?.state;
@@ -2383,7 +2383,7 @@ views:
                   const now = new Date();
                   const elapsed = Math.max(now.getHours() + now.getMinutes()/60, 1);
                   const avgSoFar = loadToday / elapsed;
-                  const liveKw = load / 1000;
+                  const liveKw = Number.isFinite(load) ? load / 1000 : avgSoFar;   // hd1: house load unavailable -> the average alone
                   const blendedKw = clamp(avgSoFar * 0.65 + liveKw * 0.35, 0.15, 5);
 
                   const targetTimeRaw = states['sensor.ecco_config_charge_start_time']?.state;
@@ -3049,7 +3049,7 @@ views:
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const hoursLeft=Math.max(24-elapsed,0);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const loadRemaining=runKw*hoursLeft;
                   const usefulSolar=remaining!==null?remaining*factor*.95:null;
@@ -3340,7 +3340,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -4152,7 +4152,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -5215,7 +5215,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -6191,7 +6191,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
