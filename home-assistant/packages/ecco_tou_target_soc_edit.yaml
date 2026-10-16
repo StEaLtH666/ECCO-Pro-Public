@@ -14,7 +14,9 @@
 #   CONFIRM  the exact phrase "SET SLOT <n> TARGET SOC <x> REVIEW <code>"
 #   APPLY    script.ecco_cfg_apply_tou_slot_soc - re-runs the gate; waits for a fresh configuration read; re-reads the
 #            shutdown SOC and the reserve; Loads; waits until the Manual Controls helper sync is at a fixed point; stages
-#            only the SOC; proves staged == live for every other field; arms; re-checks; presses Apply ONCE
+#            only the SOC; proves staged == live for every other field; waits for a quiet gap of the dongle's Modbus poll
+#            cycle (acs0r1: 1.5 s after an observed telemetry poll completion, clear of the inverter clock read, at most
+#            25 s after the fresh read); arms; re-checks; presses Apply ONCE
 #   VERIFY   success only on the firmware's VERIFIED OK AND an independent later configuration read in which the SOC is
 #            the request and every other written register is its pre-edit value
 #   ANYTHING ELSE: stop, disarm, alert with the observed values and recovery steps, and lock further edits until the owner
@@ -412,6 +414,34 @@ script:
             data:
               value: >-
                 IN PROGRESS - slot {{ n }} target SOC {{ before }} -> {{ want }} %: waiting for a fresh configuration read
+          # 0. acs0r1: observe the dongle's routine Modbus poll cycle BEFORE the fresh evidence below (so the cache age at the Load is
+          #    unaffected): (a) one inverter clock read (Inverter Time changes; a 0.3 s frame once a minute) gives its phase clk_at;
+          #    (b) two CLEAN telemetry poll completions (Last Telemetry Update, published with the poll's last frame, valid and
+          #    strictly later than before - an `unavailable` blip or a reconnect's re-sent value is not a completion) give its
+          #    period. Either not observed = no quiet window can be predicted: the edit fails at the fresh-evidence check below,
+          #    nothing pressed (a stalled inverter clock or a dropped publish is never taken to mean "no bus user").
+          - variables:
+              clk_mark: "{{ states('sensor.ecco_clock_dongle_inverter_time') }}"
+          - wait_template: "{{ states('sensor.ecco_clock_dongle_inverter_time') != clk_mark }}"
+            timeout: "00:01:05"
+            continue_on_timeout: true
+          - variables:
+              clk_at: >-
+                {{ as_timestamp(now()) if states('sensor.ecco_clock_dongle_inverter_time') != clk_mark
+                   and clk_mark not in ['unknown', 'unavailable']
+                   and states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable'] else 0 }}
+              tel_mark: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') }}"
+          - wait_template: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0) }}"
+            timeout: "00:00:15"
+            continue_on_timeout: true
+          - variables:
+              tel_p0: "{{ as_timestamp(now()) if states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0) else 0 }}"
+              tel_mark: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') }}"
+          - wait_template: "{{ tel_p0 == 0 or (states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0)) }}"
+            timeout: "00:00:15"
+            continue_on_timeout: true
+          - variables:
+              tel_period: "{{ (as_timestamp(now()) - tel_p0) if tel_p0 > 0 and (states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0)) else 0 }}"
           # 1. Fresh evidence, not just a connected API. (a) A live round trip (defence in depth): Home Assistant receives a NEW
           #    dongle-counted heartbeat count after the Apply began (heartbeats every 30 s; the count is published every 30 s).
           #    (b) Then a NEW configuration poll: its dongle-stamped time strictly later than the one seen after (a), and within
@@ -434,11 +464,13 @@ script:
               fresh_poll: "{{ round_trip and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_before, 0) }}"
               coherent: "{{ ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) <= 120 }}"
           - variables:
-              fresh: "{{ round_trip and fresh_poll and coherent }}"
+              fresh: "{{ round_trip and fresh_poll and coherent and clk_at > 0 and tel_period >= 8 }}"
               fresh_why: >-
                 {{ 'no live heartbeat round trip (the dongle counted no new heartbeat)' if not round_trip
                    else ('no fresh configuration read' if not fresh_poll
-                   else 'the dongle configuration time is not current (clock or a replayed value)') }}
+                   else ('the dongle configuration time is not current (clock or a replayed value)' if not coherent
+                   else ('no inverter clock read was seen within 65 s, so no quiet Modbus window can be predicted' if clk_at == 0
+                   else 'the telemetry poll period could not be measured or is under 8 s, so no quiet Modbus window can be predicted'))) }}
               fresh_at: "{{ as_timestamp(now()) }}"
               refusal2: >-
                 {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
@@ -566,6 +598,38 @@ script:
                          and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
                     timeout: "00:00:10"
                     continue_on_timeout: true
+                  # 3b. acs0r1: the ONE press goes into a quiet gap of the dongle's Modbus poll cycle. The firmware refuses an Apply
+                  #    while ANY frame is queued or in flight (tx_buffer_empty / tx_blocked), routine reads included. On 2026-10-16
+                  #    two restores pressed a fixed ~5.3 s after the configuration read, at the 10 s telemetry poll's last frame,
+                  #    and were refused (nothing written). No offset from the configuration read: the press follows a CLEAN
+                  #    telemetry completion x by 1.5 s (the middle of the gap; a completion's publish can reach Home Assistant in
+                  #    the same batch as a frame still running) and x is accepted only if the press window [x, x + 5.0 s] holds no
+                  #    inverter clock read (clk_at + 60 k, 0.3 s frame) and x is at most 25 s after the fresh read (cache age at
+                  #    the press under 30 s). The next telemetry frame is x + period - 2.8 s >= x + 5.2 s (period >= 8 s, measured
+                  #    in step 0); this minute's configuration blocks ended before the staging, the next minute's start about
+                  #    57 s after the fresh read. A second completion is tried if the first does not qualify; otherwise FAILED,
+                  #    nothing pressed. Still exactly one press; a refusal is still final.
+                  - variables:
+                      tel_mark: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') }}"
+                  - wait_template: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0) }}"
+                    timeout: "00:00:15"
+                    continue_on_timeout: true
+                  - variables:
+                      tel_b: "{{ as_timestamp(now()) if states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0) else 0 }}"
+                      tel_mark: "{{ states('sensor.ecco_clock_dongle_last_telemetry_update') }}"
+                  - variables:
+                      quiet_b: "{{ tel_b > 0 and tel_b <= fresh_at + 25 and ((clk_at - tel_b) % 60) >= 5.3 }}"
+                  - wait_template: "{{ quiet_b or tel_b == 0 or (states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0)) }}"
+                    timeout: "00:00:15"
+                    continue_on_timeout: true
+                  - variables:
+                      tel_c: "{{ 0 if quiet_b or tel_b == 0 else (as_timestamp(now()) if states('sensor.ecco_clock_dongle_last_telemetry_update') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] and as_timestamp(states('sensor.ecco_clock_dongle_last_telemetry_update'), 0) > as_timestamp(tel_mark, 0) else 0) }}"
+                  - variables:
+                      quiet_c: "{{ tel_c > 0 and tel_c <= fresh_at + 25 and ((clk_at - tel_c) % 60) >= 5.3 }}"
+                      tel_at: "{{ tel_b if quiet_b else tel_c }}"
+                      bus_quiet: "{{ quiet_b or quiet_c }}"
+                  - delay:
+                      seconds: "{{ 1.5 if bus_quiet else 0 }}"
                   - action: switch.turn_on
                     continue_on_error: true
                     target:
@@ -631,6 +695,8 @@ script:
                       - condition: template
                         value_template: >-
                           {{ refusal3 | length == 0
+                             and bus_quiet
+                             and (as_timestamp(now()) - tel_at) <= 4.5
                              and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'on')
                              and (states(e.soc) | float(-1)) == (want | float(-2))
                              and (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
@@ -781,7 +847,7 @@ script:
                           entity_id: input_text.ecco_cfg_edit_last_result
                         data:
                           value: >-
-                            FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else 'the staged values, the helper sync or the arm could not be confirmed' }}); nothing pressed, nothing written
+                            FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else ('no quiet Modbus window was found: no clean telemetry poll completion clear of the inverter clock read within 25 s of the fresh read' if not bus_quiet else 'the staged values, the helper sync, the arm or the quiet-window timing could not be confirmed') }}); nothing pressed, nothing written
                 else:
                   - action: input_text.set_value
                     target:

@@ -45,6 +45,19 @@
 Wait at least 2 minutes after step A. Repeat it with target 40, using a new review code. Expect `APPLIED AND VERIFIED`, the
 live match returning to MATCH, and the counters advancing by +1 / +1 / 0 again.
 
+## History and acs0r1
+
+On 2026-10-16 the proof ran on slot 1 (100 -> 99 -> 100 %) instead, because slot 3 was 0 %, below ACS0's lower bound.
+- 100 -> 99 %: APPLIED AND VERIFIED.
+- Both 99 -> 100 % Applies: refused by the firmware's bus-busy gate, nothing written. The owner restored 100 % through Manual
+  Controls (verified).
+- acs0r1 (safety case section 3b) synchronises the press with the poll cycle. Re-run this procedure after deploying it:
+  - choose a slot whose current target SOC and the edited value are both inside ACS0's range;
+  - expect up to about 90 s more before the fresh read (one inverter clock read and two telemetry completions are
+    observed first), and about 10-25 s between the fresh read and the press;
+  - capture `esphome logs` (bounded, read-only) through each Apply, to see what holds the bus around the press (the cause of
+    B1 is not yet proven).
+
 ## Acceptance (from raw evidence only)
 
 Pull HA history (read-only) for the window and check:

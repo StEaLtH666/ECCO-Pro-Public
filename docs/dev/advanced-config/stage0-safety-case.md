@@ -60,7 +60,8 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   - An inverter change made after the previous poll (for example on the inverter's own panel) is kept, not reverted.
   - With no fresh read, nothing is written.
   - A late Load is refused.
-  - On the happy path the cache age at the Apply press is measured: 5.2 s in the model.
+  - On the happy path the cache age at the Apply press is measured: 17 s in the model (acs0r1; 9.4-19.0 s across the
+    phase sweep, section 3b).
   - A frozen view (API up, nothing new published), heartbeats that stop reaching the dongle, a replayed configuration time,
     a dongle clock 10 minutes off (at the Review, or stepping between the Review and the Apply) and an unknown or old heartbeat
     age are each refused before anything is pressed; a dongle clock jump after the write ends UNCERTAIN. Mutants that drop the
@@ -78,7 +79,8 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   change would see its later reads go backwards and end UNCERTAIN and locked. Do not edit around 01:00-02:00 that night.
   The offline model uses one fixed zone for both sides, so it cannot test this; the live-proof preconditions check it.
 - **BOUNDED:**
-  - The cache is at most about 30 s plus the settle waits (about 45 s in total) old at the press.
+  - The cache is under 30 s old at the press: the Load within 30 s of the fresh read, and acs0r1's press within 25 s +
+    1.5 s + the arm (at most 4.5 s after a completion that is at most 25 s after the fresh read).
   - Within that window, a change made by another Modbus master to slot N's start/end/power/SOC/flags or register 232 would be
     rewritten with the cached value. The documented second master (SmartDeye) must not be used concurrently.
   - Detection: the independent later read compares every written register with its pre-edit value, but a value reverted to
@@ -123,6 +125,57 @@ Stage 0 does not change the firmware. It compensates in Home Assistant, as follo
   the Load (RTC, supervision, reserve raised, Free Power). Every case refuses or stops before the press.
 - **BOUNDED:** the firmware gate re-checks its own interlocks at the press. A change after the press is the firmware's to
   refuse.
+
+## 3b. The press and routine Modbus polling (acs0r1)
+
+- **LIVE EVIDENCE (2026-10-16, S3, firmware `d1c9a3e1`):**
+  - the firmware's Apply gate refuses while ANY frame is queued or in flight (`!tx_buffer_empty() || tx_blocked()`),
+    routine reads included;
+  - the pre-acs0r1 Apply pressed a fixed ~5.3 s after the configuration read. Both 99 -> 100 % restores were refused,
+    nothing written:
+    - B2's refusal (17:06:09.602) came within the telemetry poll's last frame, whose publish was seen at 17:06:09.624;
+    - B1's refusal (17:00:09.692) reached Home Assistant 1 ms AFTER the telemetry publish (17:00:09.691). So the bus can still
+      be busy right after a completion: a publish can arrive in the same API batch as a frame still running, or another
+      frame follows.
+  - The 100 -> 99 % edit succeeded only because its Load was answered 7.3 s late.
+- **BY CONSTRUCTION (acs0r1):** no offset from the configuration read. Every time used is observed by the Apply itself:
+  - **Step 0, before the fresh evidence** (the cache age is unaffected):
+    - one inverter clock read (Inverter Time changes; a 0.3 s frame once a minute) gives its phase;
+    - two CLEAN telemetry completions (Last Telemetry Update valid and strictly later; an `unavailable` blip or a reconnect's
+      re-sent value does not count) give its period, which must be at least 8 s.
+    Either not observed: FAILED at the fresh-evidence check, nothing pressed. A stalled inverter clock or a dropped publish is
+    never taken to mean "no bus user".
+  - **Step 3b, after the staging:**
+    - the press follows a clean completion x by **1.5 s**, the middle of the gap, never at the completion;
+    - x qualifies only if the window [x, x + 5.0 s] holds no clock read and x is at most 25 s after the fresh read;
+    - the next telemetry frame is at x + period - 2.8 s >= x + 5.2 s;
+    - this minute's configuration blocks ended before the staging, and the next minute's begin about 57 s after the fresh
+      read;
+    - a second completion is tried, otherwise FAILED, nothing pressed;
+    - the press must follow the completion within 4.5 s.
+- **UNCHANGED:** exactly one press; a firmware refusal is final; the gates, the fresh evidence, staged == live and the
+  independent later-read verdict.
+- **PROVEN-OFFLINE (suite section 13):**
+  - the pre-acs0r1 package, reconstructed exactly (sha256-pinned to main `1332decf`), reproduces against the dongle model's
+    bus timeline (calibrated to the live offsets):
+    - B2 exactly (a press inside the telemetry poll's last frame);
+    - a B1-type refusal (the gate 0.1 s after the publish, in a post-publish tail);
+    - an A-type success (a late Load: model +9.6 s, live +13.1 s);
+    - the whole live sequence (slot 1 left at 99);
+  - acs0r1 applies all of them, including a bus busy for up to 1.2 s after the publish;
+  - sweeps: 25 telemetry phases, 20 clock-read phases, a 20-point configuration x telemetry grid, and arm latency 0.05-2.6 s
+    x press latency 0.05-0.4 s;
+  - changed poll timing: telemetry periods of 12 s (applied) and 5 s (FAILED, nothing pressed); no clock read seen and a
+    stalled clock (both FAILED, nothing pressed); telemetry `unavailable` blips and re-sends (ignored); telemetry stopping;
+  - the cache age at the press is 9.4-19.0 s across the sweep (bound < 30 s);
+  - seven targeted mutants are each caught. Without the clock exclusion, a press at the live offsets lands on the clock read's
+    frame.
+- **BOUNDED / RESIDUAL:**
+  - A bus user the model does not schedule can still meet the press: an RTC correction write, a catch-up configuration poll,
+    or a post-write refresh used as the fresh read. The firmware then refuses, nothing is written, the outcome is FAILED, and
+    the owner Reviews and Applies again.
+  - The cause of B1 (a frame after the publish, or the publish batched early) is not proven. The 1.5 s offset covers both up
+    to a 1.2 s tail; the dongle logs (`esphome logs`) during the next live proof should show it.
 
 ## 4. Partial multi-register writes
 

@@ -10,6 +10,16 @@ load_manual_slot1_staging ~21492, the configuration poll that publishes ECCO Tim
     (sequentially, 700 ms apart) from STAGING, verifies by readback and reports VERIFIED OK or VERIFY FAILED, then polls;
   - fault injection: refuse_bus (bus busy at the gate), verify_fail (all written, readback fails), partial=k (only the
     first k writes land, then FAILED), clamp_soc=x (the inverter stores x instead of the requested SOC), drop_press.
+  - acs0r1: the Modbus BUS TIMELINE the Apply gate's `tx_buffer_empty() / tx_blocked()` check sees (firmware intervals at
+    ~24516-24550: telemetry every 10 s, configuration and inverter clock read every 60 s). The configuration poll reads
+    blocks A / B / C 2.5 s apart and publishes Last Configuration Update with B (at `poll_phase`); the telemetry poll reads
+    two blocks 2.5 s apart and publishes Last Telemetry Update with the second (`tel_offset` s after a configuration
+    publish, mod 10); the clock read publishes Inverter Time (`clock_offset` s after it, mod 60). Each frame holds the
+    bus for `busy` s; an Apply whose gate runs inside any such frame is REFUSED "bus busy", exactly as on the live S3 on
+    2026-10-16 (defaults: the live offsets 5.35 s / 7.37 s). `arm_latency` / `press_latency` model Home Assistant ->
+    dongle delays (scheduler jitter). `post_busy` keeps the bus busy for that long AFTER each telemetry publish (the 2026-10-16
+    B1 refusal reached Home Assistant 1 ms after the publish: a frame still running, or the publish batched early);
+    `clock_stalled` keeps the clock read's frame on the bus but never changes Inverter Time (a stalled inverter RTC).
 """
 from __future__ import annotations
 
@@ -29,6 +39,8 @@ CFG_UPDATE = f"sensor.{P}last_configuration_update"
 HB_COUNT = f"sensor.{P}ecco_supervision_valid_heartbeat_count"
 HB_AGE = f"sensor.{P}ecco_supervision_heartbeat_age"
 SHUTDOWN = f"sensor.{P}ecco_battery_shutdown"
+TEL_UPDATE = f"sensor.{P}last_telemetry_update"
+CLOCK = f"sensor.{P}inverter_time"
 FLAGS = {
     "tel": f"binary_sensor.{P}telemetry_online", "cfg": f"binary_sensor.{P}configuration_online",
     "fp_active": f"binary_sensor.{P}free_power_active", "fp_op": f"binary_sensor.{P}free_power_operation_in_progress",
@@ -74,8 +86,14 @@ DEFAULT_SLOTS = {
 
 
 class ManualTouDongle:
-    def __init__(self, world: World, poll_phase: float = 42.0, shutdown_soc: int = 10):
+    def __init__(self, world: World, poll_phase: float = 42.0, shutdown_soc: int = 10, tel_offset: float = 5.35,
+                 clock_offset: float | None = 7.37, busy: float = 0.3, arm_latency: float = 0.1, press_latency: float = 0.1,
+                 tel_period: float = 10.0, post_busy: float = 0.0, clock_stalled: bool = False):
         self.w = world
+        self.tel_offset, self.clock_offset, self.busy, self.tel_period = tel_offset, clock_offset, busy, tel_period
+        self.post_busy, self.clock_stalled = post_busy, clock_stalled
+        self.arm_latency, self.press_latency = arm_latency, press_latency
+        self.bus_refusals: list[float] = []               # gate times refused because a frame was on the bus
         self.regs = {"slots": copy.deepcopy(DEFAULT_SLOTS), "gc": True}
         self.cache = copy.deepcopy(self.regs)
         self.staging = {n: dict(start=0, end=0, power=0, soc=0, src="None", mode="None") for n in range(1, 7)}
@@ -117,6 +135,13 @@ class ManualTouDongle:
         self.phase = poll_phase
         first = (world.t // 60) * 60 + poll_phase
         world.at(first if first > world.t else first + 60, self._poll_tick)
+        world.set(TEL_UPDATE, local_str(world.t - 4.0))
+        world.set(CLOCK, local_str(world.t - 30.0 + 22.0))
+        tel = world.t + ((poll_phase + tel_offset - world.t) % tel_period or tel_period)
+        world.at(tel, self._tel_tick)
+        if clock_offset is not None:                      # None: the clock read is not polling (no bus user, no publish)
+            clk = world.t + ((poll_phase + clock_offset - world.t) % 60.0 or 60.0)
+            world.at(clk, self._clock_tick)
         world.service_handlers.update({
             "button.press": self._press, "number.set_value": self._number, "select.select_option": self._select,
             "switch.turn_on": self._switch(True), "switch.turn_off": self._switch(False),
@@ -189,6 +214,32 @@ class ManualTouDongle:
         self.poll()
         self.w.after(60.0, self._poll_tick)
 
+    def _tel_tick(self):
+        """The 10 s telemetry poll: Last Telemetry Update is published with its second (last) block's response."""
+        if self.flags["tel"] and not self.manual and not self.flags["rtc"]:
+            self.w.set(TEL_UPDATE, local_str(self.w.t))
+        self.w.after(self.tel_period, self._tel_tick)
+
+    def _clock_tick(self):
+        """The once-a-minute inverter clock read (registers 22-24): publishes Inverter Time (the inverter's own clock)."""
+        if self.flags["tel"] and not self.manual and not self.flags["rtc"]:
+            if not self.clock_stalled:
+                self.w.set(CLOCK, local_str(self.w.t + 22.0))
+        self.w.after(60.0, self._clock_tick)
+
+    def bus_busy(self, t: float) -> bool:
+        """Is a routine poll frame queued / in flight at time t (what tx_buffer_empty()/tx_blocked() refuses on)?
+        Frames end at their publish (response) instant and hold the bus for `busy` s before it."""
+        tel, cfg, tp = self.phase + self.tel_offset, self.phase, self.tel_period
+        frames = [(tel, 0.0, tp), (tel, -2.5, tp),                     # telemetry block 2 (publish), block 1
+                  (cfg, -2.5, 60.0), (cfg, 0.0, 60.0), (cfg, 2.5, 60.0)]   # configuration blocks A, B (publish), C
+        if self.clock_offset is not None:
+            frames.append((self.phase + self.clock_offset, 0.0, 60.0))     # inverter clock read
+        # a frame whose response lands at anchor+offset (mod period) holds the bus for `busy` s up to that instant
+        if self.post_busy and (t - tel) % tp < self.post_busy:   # a tail after the telemetry publish (B1 hypothesis)
+            return True
+        return any((anchor + offset - t) % period < self.busy for anchor, offset, period in frames)
+
     # ---- services -----------------------------------------------------------------------------------------------
     def _switch(self, on: bool):
         def h(entity, data):
@@ -196,7 +247,7 @@ class ManualTouDongle:
                 return                                  # Home Assistant cannot reach an unavailable ESPHome entity
             if entity == ARM:
                 self.arm = on
-                self.w.after(0.1, lambda: self.w.set(ARM, "on" if on else "off"))
+                self.w.after(self.arm_latency, lambda: self.w.set(ARM, "on" if on else "off"))
             elif entity == GC_STAGED:
                 self.staged_gc = on
                 self.w.after(0.1, lambda: self.w.set(GC_STAGED, "on" if on else "off"))
@@ -226,7 +277,7 @@ class ManualTouDongle:
                 self.w.after(self.fault.get("slow_load", 0.1), lambda n=n: self._load(n))
                 return
             if entity == f"button.{P}apply_manual_slot_{n}_settings":
-                self.w.after(0.1, lambda n=n: self._apply(n))
+                self.w.after(self.press_latency, lambda n=n: self._apply(n))
                 return
         raise Unsupported(f"button {entity}")
 
@@ -255,7 +306,9 @@ class ManualTouDongle:
         refuse = None
         if self._owner():
             refuse = "REJECTED - Free Power or Dump to Grid override/recovery owns TOU settings"
-        elif self.fault.get("refuse_bus"):
+        elif self.fault.get("refuse_bus") or self.bus_busy(self.w.t):
+            if not self.fault.get("refuse_bus"):
+                self.bus_refusals.append(self.w.t)
             refuse = "REJECTED - Modbus bus busy with another transaction; try again shortly"
         elif not self.flags["cfg"]:
             refuse = "REJECTED - inverter configuration is offline"

@@ -26,6 +26,11 @@ automation interpreter) against _manual_tou_sim.py, a model of the firmware's ex
   [11] PEX          the acs0 declaration
   [12] tokens       the owner-approved reserved-token amendment: exactly six ids, read only, in exactly three files; no
                     seventh id, variant, undeclared file, write or indirect route
+  [13] acs0r1       the ONE press synchronised with the dongle's Modbus poll cycle: the pre-acs0r1 package (reconstructed
+                    exactly, sha256-pinned) reproduces the 2026-10-16 live proof (B2, a B1-type and an A-type outcome, the
+                    whole sequence); acs0r1 applies all; sweeps over telemetry / clock / configuration phase, scheduler
+                    jitter and changed poll timing; fail-closed when the clock read or the telemetry period is not
+                    observed; telemetry blips ignored; the cache age bound; targeted mutants
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package against models of the firmware path
 and of Home Assistant; it does NOT prove how a real interrupted multi-register write behaves on the inverter.
@@ -96,11 +101,12 @@ T0 = S.parse_local("2026-10-12 14:00:00")
 class Run:
     """Home Assistant with the edit package and the Manual Controls helper package, and the dongle model."""
 
-    def __init__(self, text=PKG_TEXT, setup=None, fp_sched=None, dump_sched=None, reserve=20, shutdown=10, helpers=True):
+    def __init__(self, text=PKG_TEXT, setup=None, fp_sched=None, dump_sched=None, reserve=20, shutdown=10, helpers=True,
+                 dkw=None):
         self.w = S.World(T0)
         w = self.w
         pk = [yaml.safe_load(text)] + ([yaml.safe_load(HELPERS_TEXT)] if helpers else [])
-        self.d = M.ManualTouDongle(w, shutdown_soc=shutdown)
+        self.d = M.ManualTouDongle(w, shutdown_soc=shutdown, **(dkw or {}))   # dkw: the bus timeline (acs0r1, [13])
         w.set("input_boolean.ecco_free_power_schedule_armed", "on" if fp_sched else "off")
         w.set("input_boolean.ecco_dump_to_grid_schedule_armed", "on" if dump_sched else "off")
         w.set("input_datetime.ecco_free_power_schedule_start", fp_sched or "2026-10-13 11:00:00")
@@ -412,7 +418,10 @@ print("\n[5] freshness of the configuration read")
 
 
 def external_change(r):
-    r.w.at(T0 + 75, lambda: r.d.regs["slots"][3].__setitem__("power", 3000))   # e.g. the inverter's own panel
+    # e.g. the inverter's own panel, AFTER the last configuration poll before the Load: acs0r1's step 0 holds the Apply until
+    # the first inverter clock read after it starts (T0+71 -> T0+109.37, the poll at T0+102 already seen), so the change lands
+    # just after that, and only a fresh read (T0+162) can carry it into the Load
+    r.w.at(T0 + 42 + 7.37 + 60 + 1.5, lambda: r.d.regs["slots"][3].__setitem__("power", 3000))
 
 
 r = Run(setup=external_change).edit(3, 41)
@@ -1128,6 +1137,245 @@ check("...and each applies to exactly acs0's files: the strict rule and the B10 
       and files_of(F.SUITE_RD_0_NEW) == {PKG_REL}
       and files_of(F.SUITE_PS_1_NEW) - files_of(F.SUITE_PS_1_OLD) == set(F.BANNED_FILES)
       and files_of(F.SUITE_PS_1_OLD) <= files_of(F.SUITE_PS_1_NEW))
+
+# ======================================================================================================================
+print("\n[13] acs0r1: the ONE press synchronised with the dongle's Modbus poll cycle (the 2026-10-16 live-proof refusals)")
+# ======================================================================================================================
+# Live evidence (S3, firmware d1c9a3e1, HA recorder ms): the firmware's Apply gate refuses while ANY frame is queued or in flight
+# (`!tx_buffer_empty() || tx_blocked()`). The pre-acs0r1 Apply pressed a fixed ~5.3 s after the configuration publish:
+#   A  100 -> 99   cfg 16:54:04.787, Load late (+7.3 s, an inverter clock transaction), press 16:54:17.893 (+13.1 s) -> APPLIED
+#   B1  99 -> 100  cfg 17:00:04.270, REJECTED 17:00:09.692, telemetry publish seen 17:00:09.691 (1 ms BEFORE)   -> REFUSED bus busy
+#   B2  99 -> 100  cfg 17:06:04.261, REJECTED 17:06:09.602, telemetry publish seen 17:06:09.624 (22 ms after)   -> REFUSED bus busy
+# B2 is a press inside the telemetry poll's last frame. B1 reached Home Assistant just AFTER the publish, so the bus can still be
+# busy (or the publish was batched early) right after a completion: the model's `post_busy` tail reproduces that, and acs0r1
+# therefore presses 1.5 s INTO the gap, never at the completion. The model's bus timeline uses the live offsets (telemetry +5.35 s,
+# clock read +7.37 s after the configuration publish). A's live press was +13.1 s; the model's late Load gives +9.6 s: both outside
+# every poll frame, which is what matters.
+import hashlib  # noqa: E402
+
+MAIN_SHA = "e115015beac96ef26d386f036d839accc4eac8e2a4931399171427b44ad6b96f"   # the package on public main 1332decf (live: 2daf8b5e)
+TEL = f"sensor.{D}last_telemetry_update"
+
+
+def legacy(text: str) -> str:
+    """The package with acs0r1's six hunks reversed exactly: the logic that ran on the S3 on 2026-10-16."""
+    t = text.replace(
+        "#            only the SOC; proves staged == live for every other field; waits for a quiet gap of the dongle's Modbus poll\n"
+        "#            cycle (acs0r1: 1.5 s after an observed telemetry poll completion, clear of the inverter clock read, at most\n"
+        "#            25 s after the fresh read); arms; re-checks; presses Apply ONCE",
+        "#            only the SOC; proves staged == live for every other field; arms; re-checks; presses Apply ONCE")
+    a = t.index("          # 0. acs0r1:")
+    t = t[:a] + t[t.index("          # 1. Fresh evidence", a):]
+    a = t.index("                  # 3b. acs0r1:")
+    t = t[:a] + t[t.index("                  - action: switch.turn_on\n", a):]
+    a = t.index('              fresh: "{{ round_trip and fresh_poll and coherent and clk_at > 0 and tel_period >= 8 }}"')
+    b = t.index("              fresh_at:", a)
+    t = t[:a] + ('              fresh: "{{ round_trip and fresh_poll and coherent }}"\n'
+                 "              fresh_why: >-\n"
+                 "                {{ 'no live heartbeat round trip (the dongle counted no new heartbeat)' if not round_trip\n"
+                 "                   else ('no fresh configuration read' if not fresh_poll\n"
+                 "                   else 'the dongle configuration time is not current (clock or a replayed value)') }}\n") + t[b:]
+    for line in ("                             and bus_quiet\n", "                             and (as_timestamp(now()) - tel_at) <= 4.5\n"):
+        assert t.count(line) == 1, line
+        t = t.replace(line, "")
+    return t.replace("({{ refusal3 if refusal3 else ('no quiet Modbus window was found: no clean telemetry poll completion clear of the "
+                     "inverter clock read within 25 s of the fresh read' if not bus_quiet else 'the staged values, the helper sync, the "
+                     "arm or the quiet-window timing could not be confirmed') }})",
+                     "({{ refusal3 if refusal3 else 'the staged values, the helper sync or the arm could not be confirmed' }})")
+
+
+LEGACY = legacy(PKG_TEXT)
+check("the pre-acs0r1 package is reconstructed exactly (sha256 = public main 1332decf's file, the logic live on 2026-10-16)",
+      hashlib.sha256(LEGACY.encode("utf-8")).hexdigest() == MAIN_SHA, hashlib.sha256(LEGACY.encode("utf-8")).hexdigest())
+
+
+def cfg_before_press(r):
+    ap = r.applies()
+    cfgs = [t for t, e, s in r.w.history if e == f"sensor.{D}last_configuration_update" and ap and t < ap[0][0]]
+    return round(ap[0][0] - max(cfgs), 2) if ap and cfgs else None
+
+
+def tel_before_press(r):
+    ap = r.applies()
+    tels = [t for t, e, s in r.w.history if e == TEL and s not in ("unknown", "unavailable") and ap and t < ap[0][0]]
+    return round(ap[0][0] - max(tels), 2) if ap and tels else None
+
+
+def slow(s):
+    return lambda x: x.d.fault.__setitem__("slow_load", s)
+
+
+def ok1(r):
+    """APPLIED with exactly one press, no bus refusal, and the press 1.5-4.6 s after a real telemetry completion."""
+    d = tel_before_press(r)
+    return (not r.d.bus_refusals and len(r.applies()) == 1 and r.res().startswith("APPLIED") and d is not None
+            and 1.5 <= d <= 4.6 and cfg_before_press(r) < 30)
+
+
+# --- the live events, on the legacy package (reproduction) and on acs0r1 (the fix)
+r = Run(LEGACY).edit(3, 41)
+check(f"REPRODUCED B2 (legacy): the press lands {cfg_before_press(r)} s after the configuration publish, inside the telemetry poll's "
+      "last frame: REFUSED bus busy, FAILED, nothing written, no second press", r.d.bus_refusals and len(r.applies()) == 1
+      and r.res().startswith("FAILED - the firmware refused the Apply (REJECTED - Modbus bus busy") and r.changed() == {}
+      and r.d.attempts == 0 and not r.locked(), f"{r.res()} {r.applies()}")
+r = Run(LEGACY, dkw=dict(tel_offset=5.1, post_busy=0.3)).edit(3, 41)
+g = [r.d.bus_refusals[0] - max(t for t, e, v in r.w.history if e == TEL and t <= r.d.bus_refusals[0])] if r.d.bus_refusals else [None]
+check(f"REPRODUCED B1-type (legacy): the firmware gate runs {g[0] if g[0] is None else round(g[0], 2)} s AFTER the telemetry publish "
+      "(live: the refusal reached Home Assistant 1 ms after it), inside a post-publish tail: REFUSED bus busy, nothing written",
+      r.d.bus_refusals and r.res().startswith("FAILED - the firmware refused") and r.changed() == {} and g[0] is not None
+      and 0 < g[0] <= 0.3, f"{r.res()} {g}")
+r = Run(LEGACY, setup=slow(7.3)).edit(3, 41)
+check(f"REPRODUCED A-type (legacy): a Load answered 7.3 s late moves the press out of every frame (model +{cfg_before_press(r)} s, "
+      "live +13.1 s): APPLIED", not r.d.bus_refusals and r.res().startswith("APPLIED") and r.changed() == {(3, "soc"): (40, 41)},
+      r.res())
+r = Run().edit(3, 41)
+check(f"FIXED B2 (acs0r1): the press is {tel_before_press(r)} s after a telemetry completion, {cfg_before_press(r)} s after the fresh "
+      "read: APPLIED, one press, no refusal", ok1(r) and r.changed() == {(3, "soc"): (40, 41)}, r.res())
+bad = []
+for tail in (0.1, 0.3, 0.6, 1.0, 1.2):
+    r = Run(dkw=dict(tel_offset=5.1, post_busy=tail)).edit(3, 41)
+    if not ok1(r):
+        bad.append((tail, r.res()[:60], r.d.bus_refusals))
+check("FIXED B1-type (acs0r1): a bus still busy 0.1-1.2 s after the telemetry publish does not meet the press (1.5 s into the gap)",
+      bad == [], str(bad))
+r = Run(setup=slow(7.3)).edit(3, 41)
+check("FIXED A-type (acs0r1): the late Load still gives one quiet press", ok1(r), r.res())
+
+
+def restore_sequence(text):
+    """The live proof as it happened: slot 1 100 -> 99 (A, late Load), then two 99 -> 100 restores (B1, B2)."""
+    x = Run(text, setup=slow(7.3)).edit(1, 99)
+    out = [x.res()[:30]]
+    x.d.fault.pop("slow_load", None)
+    for _ in range(2):
+        if x.d.regs["slots"][1]["soc"] == 100:
+            break
+        x.w.run_until(x.w.t + 150)
+        x.edit(1, 100)
+        out.append(x.res()[:30])
+    return x, out
+
+
+x, out = restore_sequence(LEGACY)
+check("REPRODUCED the live sequence (legacy): A APPLIED, both restores FAILED (bus busy, nothing written), slot 1 left at 99",
+      out[0].startswith("APPLIED") and len(out) == 3 and all(o.startswith("FAILED") for o in out[1:])
+      and x.d.regs["slots"][1]["soc"] == 99 and len(x.d.bus_refusals) == 2 and x.d.attempts == 1, f"{out} {x.d.bus_refusals}")
+x, out = restore_sequence(PKG_TEXT)
+check("FIXED the live sequence (acs0r1): 100 -> 99 and the 99 -> 100 restore both APPLIED, slot 1 back at 100, no refusal",
+      out[0].startswith("APPLIED") and out[1:] and out[1].startswith("APPLIED") and x.d.regs["slots"][1]["soc"] == 100
+      and not x.d.bus_refusals and x.d.attempts == 2, f"{out} {x.d.bus_refusals}")
+
+# --- robustness: every telemetry / clock / configuration phase, scheduler jitter, changed poll timing; cache age always < 30 s
+legacy_hits, bad, ages = 0, [], []
+for i in range(25):
+    off = round(0.1 + i * 0.4, 2)
+    if Run(LEGACY, dkw=dict(tel_offset=off)).edit(3, 41).d.bus_refusals:
+        legacy_hits += 1
+    r = Run(dkw=dict(tel_offset=off)).edit(3, 41)
+    ages.append(cfg_before_press(r) or 99)
+    if not ok1(r):
+        bad.append((off, r.res()[:60]))
+check(f"telemetry phase sweep (25 offsets): acs0r1 APPLIED, one press 1.5-4.6 s after a completion, cache age at the press "
+      f"{min(ages):.1f}-{max(ages):.1f} s (< 30); the legacy press is refused at {legacy_hits} of them (the sweep is sensitive)",
+      bad == [] and legacy_hits >= 1, str(bad))
+bad = []
+for clk in range(0, 60, 3):
+    r = Run(dkw=dict(clock_offset=clk + 0.37)).edit(3, 41)
+    if not ok1(r):
+        bad.append((clk, r.res()[:60]))
+check("inverter clock read phase sweep (20 offsets across the minute): APPLIED, one quiet press, cache age < 30 s", bad == [], str(bad))
+bad = []
+for ph in (5.0, 17.5, 30.0, 42.0, 57.9):
+    for off in (0.3, 2.6, 5.35, 7.9):
+        r = Run(dkw=dict(poll_phase=ph, tel_offset=off, clock_offset=(off + 2.1) % 60)).edit(3, 41)
+        if not ok1(r):
+            bad.append((ph, off, r.res()[:60]))
+check("configuration phase x telemetry offset grid (20), each with a clock read 2.1 s after a telemetry completion: APPLIED",
+      bad == [], str(bad))
+bad = []
+for arm in (0.05, 0.6, 1.5, 2.6):
+    for press in (0.05, 0.4):
+        r = Run(dkw=dict(arm_latency=arm, press_latency=press)).edit(3, 41)
+        if r.d.bus_refusals or len(r.applies()) != 1 or not r.res().startswith("APPLIED"):
+            bad.append((arm, press, r.res()[:60]))
+check("scheduler jitter: Home Assistant -> dongle arm latency 0.05-2.6 s x press latency 0.05-0.4 s: APPLIED, no refusal",
+      bad == [], str(bad))
+r = Run(dkw=dict(arm_latency=4.5)).edit(3, 41)
+check("an arm confirmed only 4.5 s after the delay: the press would leave the quiet window, so nothing is pressed (FAILED)",
+      r.applies() == [] and r.res().startswith("FAILED - a safety check changed just before the Apply") and r.changed() == {}
+      and not r.arm_on(), r.res())
+r = Run(dkw=dict(tel_period=12.0)).edit(3, 41)
+check("changed poll timing: a 12 s telemetry period is measured and used: APPLIED, no refusal",
+      not r.d.bus_refusals and r.res().startswith("APPLIED"), r.res())
+r = Run(dkw=dict(tel_period=5.0)).edit(3, 41)
+check("changed poll timing: a 5 s telemetry period (no gap long enough): FAILED before the Load, nothing pressed",
+      r.d.presses == [] and "telemetry poll period" in r.res() and r.changed() == {}, r.res())
+r = Run(dkw=dict(clock_offset=None)).edit(3, 41)
+check("no inverter clock read seen within 65 s: its phase is unknown, so FAILED before the Load, nothing pressed (fail-closed)",
+      r.d.presses == [] and "no inverter clock read was seen" in r.res() and r.changed() == {}, r.res())
+r = Run(dkw=dict(clock_stalled=True)).edit(3, 41)
+check("a stalled inverter clock (the read's frame still on the bus, Inverter Time never changes): FAILED, nothing pressed",
+      r.d.presses == [] and "no inverter clock read was seen" in r.res() and r.changed() == {}, r.res())
+
+
+def flapper(x):
+    """Last Telemetry Update blips `unavailable` 6.6 s after each real publish and the old value is re-sent 0.2 s later (an API
+    reconnect): neither is a completion."""
+    def tick():
+        old = x.w.state(TEL)
+        x.w.after(6.6, lambda: x.w.set(TEL, "unavailable"))
+        x.w.after(6.8, lambda: x.w.set(TEL, old))
+        x.w.after(10.0, tick)
+    x.w.at(T0 + 70 + ((42 + 5.35 - 70) % 10) + 0.01, tick)
+
+
+r = Run(setup=flapper).edit(3, 41)
+check("Last Telemetry Update blipping `unavailable` and re-sent unchanged (API reconnect) every poll: only real completions count; "
+      "APPLIED with the press 1.5-4.6 s after a real publish", ok1(r), f"{r.res()} {tel_before_press(r)}")
+# the fresh read is at T0+162 (step 0: clock read T0+109.4, completions T0+117.4 / +127.4, heartbeat, poll); stop before T0+167.35
+r = Run(setup=lambda x: x.w.at(T0 + 165, lambda: x.d.flags.__setitem__("tel", False))).edit(3, 41)
+check("telemetry stops after the fresh read (no completion to follow): FAILED, nothing pressed, write enable off",
+      r.applies() == [] and r.res().startswith("FAILED") and r.changed() == {} and not r.arm_on(), r.res())
+r = Run(setup=lambda x: x.d.fault.__setitem__("refuse_bus", True)).edit(3, 41)
+check("a refusal at the quiet press (another, unmodelled bus user) is still final: one press, FAILED, nothing written, no retry",
+      len(r.applies()) == 1 and r.res().startswith("FAILED - the firmware refused") and r.changed() == {}, r.res())
+check("still exactly one Apply press and one Load in the package; no repeat in the Apply (no retry path)",
+      PKG_TEXT.count('entity_id: "{{ e.apply }}"') == 1 and PKG_TEXT.count('entity_id: "{{ e.load }}"') == 1
+      and "repeat:" not in PKG_TEXT.split("ecco_cfg_apply_tou_slot_soc:", 1)[1].split("ecco_cfg_acknowledge_edit_review:", 1)[0])
+
+# --- targeted mutants of the synchronisation: each is caught
+CLEAN_GUARD = (f"states('{TEL}') not in ['unknown', 'unavailable'] and tel_mark not in ['unknown', 'unavailable'] "
+               f"and as_timestamp(states('{TEL}'), 0) > as_timestamp(tel_mark, 0)")
+R1_MUTANTS = [
+    ("no synchronisation (step 3b deleted: the press follows the staging at once, as before acs0r1)",
+     [("BLOCK3B", ""), ("                             and bus_quiet\n", ""),
+      ("                             and (as_timestamp(now()) - tel_at) <= 4.5\n", "")],
+     dict(tel_offset=5.35), None, lambda r: bool(r.d.bus_refusals)),
+    ("the press at the completion, not 1.5 s into the gap", [('seconds: "{{ 1.5 if bus_quiet else 0 }}"', 'seconds: 0')],
+     dict(tel_offset=5.1, post_busy=0.6), None, lambda r: bool(r.d.bus_refusals)),
+    ("the inverter clock read not excluded", [("((clk_at - tel_b) % 60) >= 5.3", "true"), ("((clk_at - tel_c) % 60) >= 5.3", "true")],
+     dict(clock_offset=7.2), None, lambda r: bool(r.d.bus_refusals)),   # unguarded, the press at the first completion + 1.7 s meets the clock frame
+    ("the telemetry period not checked", [("and clk_at > 0 and tel_period >= 8 }}", "and clk_at > 0 }}")],
+     dict(tel_period=5.0), None, lambda r: bool(r.applies())),
+    ("the clock phase assumed when no read was seen", [("and clk_at > 0 and tel_period >= 8 }}", "and tel_period >= 8 }}")],
+     dict(clock_stalled=True), None, lambda r: bool(r.applies())),
+    ("no limit on the press delay after the completion", [("and (as_timestamp(now()) - tel_at) <= 4.5\n", "and true\n")],
+     dict(arm_latency=4.5), None, lambda r: bool(r.applies())),
+    ("an `unavailable` blip or a re-sent value taken as a completion",
+     [(CLEAN_GUARD, f"states('{TEL}') != tel_mark")], None, flapper,
+     lambda r: not ok1(r)),
+]
+for name, pairs, dkw, setup, caught in R1_MUTANTS:
+    mt = PKG_TEXT
+    for a, b in pairs:
+        if a == "BLOCK3B":
+            i = mt.index("                  # 3b. acs0r1:")
+            mt = mt[:i] + mt[mt.index("                  - action: switch.turn_on\n", i):]
+            continue
+        assert mt.count(a) >= 1, (name, a)
+        mt = mt.replace(a, b)
+    rr = Run(mt, dkw=dkw, setup=setup).edit(3, 41)
+    check(f"acs0r1 mutant '{name}' is caught", caught(rr), f"{rr.res()} {rr.d.bus_refusals} {rr.applies()}")
 
 print("")
 if FAILURES:
