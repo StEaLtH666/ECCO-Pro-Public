@@ -33,7 +33,9 @@ Development before the first public release happened in a private repository; se
   Review state exactly (a fresh, trusted, compared verdict; exactly one IDLE Review), so unknown, stale, malformed or incompatible
   fallback state refuses. The owner-approved reserved-token amendment authorises exactly six fallback / failback ids, read only,
   in exactly the editor's three files; five exact allowlist checks are amended (three frozen suites by PEX), nothing else is
-  widened. See
+  widened. Fresh evidence, not just a connected API: before the Load the Apply requires a live round trip (the dongle's
+  own heartbeat count rises) and a genuinely new configuration poll stamped by the dongle's clock, strictly later and within
+  120 s of Home Assistant's clock; every gate also requires a current configuration time and heartbeat age. See
   [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md), the S3 evidence record
   and the supervised live-proof procedure (not executed).
 - **Dump to Grid safety hardening, phase 2** (post-export entry `fcp2`; firmware, not yet flashed anywhere;

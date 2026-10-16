@@ -165,6 +165,7 @@ script:
             {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                   or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+            {% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or not (0 <= (states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') | float(-1)) <= 60) %}the dongle's configuration time or heartbeat is not current (configuration {{ states('sensor.ecco_clock_dongle_last_configuration_update')[:19] }}, heartbeat age {{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age')[:8] }} s)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
                   or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
@@ -346,6 +347,7 @@ script:
             {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                   or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+            {% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or not (0 <= (states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') | float(-1)) <= 60) %}the dongle's configuration time or heartbeat is not current (configuration {{ states('sensor.ecco_clock_dongle_last_configuration_update')[:19] }}, heartbeat age {{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age')[:8] }} s)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
                   or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
             {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
@@ -410,14 +412,33 @@ script:
             data:
               value: >-
                 IN PROGRESS - slot {{ n }} target SOC {{ before }} -> {{ want }} %: waiting for a fresh configuration read
-          # 1. A fresh configuration read (bounds the cache age at the Load to seconds).
+          # 1. Fresh evidence, not just a connected API. (a) A live round trip (defence in depth): Home Assistant receives a NEW
+          #    dongle-counted heartbeat count after the Apply began (heartbeats every 30 s; the count is published every 30 s).
+          #    (b) Then a NEW configuration poll: its dongle-stamped time strictly later than the one seen after (a), and within
+          #    120 s of Home Assistant's clock (a replayed or buffered value, or an unsynchronised dongle clock, fails). This bounds
+          #    the cache age at the Load to seconds. The dongle's zone-less local time is read in Home Assistant's configured time
+          #    zone, which must be the dongle's (Europe/London); a mismatch refuses.
           - variables:
-              cfg_before: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
-          - wait_template: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_before }}"
+              hb_before: "{{ states('sensor.ecco_clock_dongle_ecco_supervision_valid_heartbeat_count') | float(-1) }}"
+          - wait_template: "{{ hb_before | float(-1) >= 0 and (states('sensor.ecco_clock_dongle_ecco_supervision_valid_heartbeat_count') | float(-1)) > (hb_before | float(-1)) }}"
             timeout: "00:01:30"
             continue_on_timeout: true
           - variables:
-              fresh: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') != cfg_before }}"
+              round_trip: "{{ hb_before | float(-1) >= 0 and (states('sensor.ecco_clock_dongle_ecco_supervision_valid_heartbeat_count') | float(-1)) > (hb_before | float(-1)) }}"
+              cfg_before: "{{ states('sensor.ecco_clock_dongle_last_configuration_update') }}"
+          - wait_template: >-
+              {{ not round_trip or as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_before, 0) }}
+            timeout: "00:01:30"
+            continue_on_timeout: true
+          - variables:
+              fresh_poll: "{{ round_trip and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_before, 0) }}"
+              coherent: "{{ ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) <= 120 }}"
+          - variables:
+              fresh: "{{ round_trip and fresh_poll and coherent }}"
+              fresh_why: >-
+                {{ 'no live heartbeat round trip (the dongle counted no new heartbeat)' if not round_trip
+                   else ('no fresh configuration read' if not fresh_poll
+                   else 'the dongle configuration time is not current (clock or a replayed value)') }}
               fresh_at: "{{ as_timestamp(now()) }}"
               refusal2: >-
                 {% set shutdown = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') | int(-1) %}
@@ -439,6 +460,7 @@ script:
                 {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
                 {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                       or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+                {% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or not (0 <= (states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') | float(-1)) <= 60) %}the dongle's configuration time or heartbeat is not current (configuration {{ states('sensor.ecco_clock_dongle_last_configuration_update')[:19] }}, heartbeat age {{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age')[:8] }} s)
                 {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
                       or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
                 {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
@@ -482,7 +504,7 @@ script:
                       entity_id: input_text.ecco_cfg_edit_last_result
                     data:
                       value: >-
-                        FAILED - {{ 'no fresh configuration read' if not fresh else (refusal2 if refusal2 else 'the slot changed since the review') }}; nothing written
+                        FAILED - {{ fresh_why if not fresh else (refusal2 if refusal2 else 'the slot changed since the review') }}; nothing written
             default:
               # 2. Load (staging = the live slot from that read), then the helper sync must reach a fixed point.
               - action: button.press
@@ -575,6 +597,7 @@ script:
                         {% elif live_soc == want %}no change (slot {{ n }} is already {{ want }} %)
                         {% elif not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on') or not is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                               or not is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') %}dongle offline or configuration cache not valid
+                        {% elif ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) > 150 or not (0 <= (states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age') | float(-1)) <= 60) %}the dongle's configuration time or heartbeat is not current (configuration {{ states('sensor.ecco_clock_dongle_last_configuration_update')[:19] }}, heartbeat age {{ states('sensor.ecco_clock_dongle_ecco_supervision_heartbeat_age')[:8] }} s)
                         {% elif not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
                               or not is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off') %}Free Power owns the TOU settings (active, starting or restore owed)
                         {% elif not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') or not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
@@ -665,6 +688,7 @@ script:
                           later_read: >-
                             {{ as_timestamp(cfg_0, 0) > 0 and as_timestamp(cfg_1, 0) > as_timestamp(cfg_0, 0)
                                and as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0) > as_timestamp(cfg_1, 0)
+                               and ((as_timestamp(now()) - as_timestamp(states('sensor.ecco_clock_dongle_last_configuration_update'), 0)) | abs) <= 150
                                and is_state('binary_sensor.ecco_clock_dongle_configuration_online', 'on')
                                and is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') }}
                           attempts_moved: >-
