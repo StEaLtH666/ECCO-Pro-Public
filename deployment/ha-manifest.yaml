@@ -77,6 +77,14 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Restore the owner's manual Dump to Grid / Free Power request values after a scheduled start - SMR1 (saves each value a
+  # scheduled start replaces; one verified restore once nothing owns control; writes only its helpers and the five request
+  # numbers, never the inverter). Deploy with or after the two schedule packages.
+  - source: home-assistant/packages/ecco_schedule_manual_restore.yaml
+    destination: /config/packages/ecco_schedule_manual_restore.yaml
+    method: ssh_file_copy
+    restart_required: true
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml

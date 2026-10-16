@@ -111,6 +111,7 @@ import _dgs1_scope as _dgs1  # noqa: E402
 import _fcp1_scope as _fcp1  # noqa: E402
 import _fcp2_scope as _fcp2  # noqa: E402
 import _fcc1_scope as _fcc1  # noqa: E402
+import _smr1_scope as _smr1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
@@ -1001,7 +1002,32 @@ FCC1 = Entry(
          "controls (protected by the firmware) and the restore / containment / lockout / readiness states; one package stanza in "
          "the manifest: ZERO firmware change, no automatic write to the dongle or the inverter",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1)
+# smr1 (restore the owner's manual request values after a scheduled start; _smr1_scope.py): made on public main a298e563 after
+# fcc1 (FCC1 A10 readiness, finding F3). A scheduled Dump to Grid / Free Power start stages the schedule's values into the
+# dongle's single set of request numbers that the owner's manual controls share, and nothing put the owner's values back. A
+# Home Assistant package saves each value a running scheduled start replaces and, once nothing owns control (no lease,
+# transaction, snapshot, recovery, write enable, manual write or scheduled start), restores it in one verified attempt - only a
+# valid saved value, only where the number still holds the schedule's value (the owner's own later change wins); stale (> 24 h)
+# or invalid records and failures are notified, never retried. CHAIN-PINNED edit: the deployment manifest, one package stanza
+# (_smr1_scope.PINNED_REVERTERS). No frozen file; the schedule packages are unchanged. Measured, not declared: ZERO firmware byte;
+# no Modbus service, no switch / button / script / esphome action; the only dongle writes are the five request numbers (staging
+# values the firmware reads at START).
+SMR1 = Entry(
+    id="smr1", pr="SMR1", commit="unmerged",
+    reverts=dict(_smr1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after smr1
+        HA_MANIFEST: "53e29810221c46a2a34c6de7a32fdc8cfa165ff9d8c50135ce596a98c6a85a62",
+    },
+    added_files=_smr1.ADDED_FILES,
+    # _pex.fingerprint(SMR1): hashes its parent fcc1's fingerprint and every declaration above
+    fingerprint="79bdd41293c210c1394f2c58fc7ae49df210973b9a6da812f8055ab22bbd5478",
+    note="restore the owner's manual Dump to Grid / Free Power request values after a scheduled start: a Home Assistant package "
+         "that saves each value a running scheduled start replaces and restores it once, verified, when nothing owns control "
+         "(valid saved values only, never over the owner's own later change; stale or invalid records and failures notified, "
+         "never retried); one package stanza in the manifest: ZERO firmware change, the schedule packages unchanged, no write to "
+         "the inverter",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

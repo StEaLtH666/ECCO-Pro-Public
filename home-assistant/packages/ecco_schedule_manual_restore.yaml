@@ -1,0 +1,799 @@
+# ECCO - restore the owner's MANUAL Dump to Grid / Free Power request values after a SCHEDULED start (post-export entry smr1).
+#
+# WHY. The dongle has ONE set of request numbers per function, shared by the owner's manual controls and the schedules:
+#   Dump to Grid  number.ecco_clock_dongle_dump_to_grid_export_power, number.ecco_clock_dongle_dump_to_grid_stop_soc,
+#                 number.ecco_clock_dongle_dump_to_grid_duration
+#   Free Power    number.ecco_clock_dongle_free_power_max_charge_power, number.ecco_clock_dongle_free_power_duration
+# A scheduled start (script.ecco_dump_to_grid_start_scheduled / script.ecco_free_power_start_scheduled) stages its own values
+# into them and nothing put the owner's values back: after a scheduled Dump the manual Stop SOC read the schedule's (for
+# example 15 %) instead of the owner's (for example 10 %). The numbers are staging values on the dongle (restore_value, no
+# Modbus, never published by the firmware itself). The firmware reads them at START - and the Dump Stop SOC also while a Dump
+# restore is still owed after END (a higher Stop SOC also applies then); that is while the Dump snapshot is pending, when
+# this package never writes.
+#
+# WHAT THIS DOES (Home Assistant only; no firmware change; nothing here starts, ends, arms or presses anything, and nothing is
+# written to the inverter):
+#   1. TRACK (one automation per function, queued). A request number that changes WHILE that function's scheduled start
+#      script is running, to the schedule's own request (the duration may be clamped to the window, never above it), is the
+#      schedule's write: the value it replaced is SAVED (the first time in an episode only - a retry re-staging a shorter
+#      duration keeps the owner's value) and the value written is remembered. The function is then OWED. Any other change of
+#      a number while the function is owed is the owner's (or another tool's): that field is dropped - their choice wins.
+#      Only a change of the VALUE counts (`to: ~`: an attribute-only update, such as a rename, is not a change).
+#   2. RESTORE (one automation per function, single). Only while the function is owed AND nothing owns control:
+#      sensor.ecco_schedule_restore_blocker reads `none` (no Dump / Free Power lease, start transaction, pending snapshot or
+#      armed write enable, no manual inverter write, neither scheduled start script running, every request number readable;
+#      anything not exactly `off` blocks). A field is written back only when its saved value is valid for that number (the
+#      dongle's own min / max / step) and the number still holds exactly the value the schedule wrote. ONE attempt, verified;
+#      the result (RESTORED / PARTIAL / FAILED / STALE / KEPT) is kept in the function's state helper, and anything not
+#      restored is notified. Never retried, never a loop: the restore's own writes are ignored by the track (RESTORING), and
+#      a finished restore leaves nothing owed. The firmware's Recovery State texts are NOT used: they are diagnostic mirrors
+#      that keep their last text until the dongle reboots; the snapshot / transaction / lease flags are the ownership.
+#   An obligation older than 24 hours is STALE - even while something still blocks it: nothing is written, the saved values
+#   are notified for the owner to set by hand, and nothing is owed any more. A scheduled start of the same function that
+#   begins DURING a restore keeps the function owed; it is restored after that start's lease instead.
+#
+# Persistence: the helpers have no `initial:` - Home Assistant restores them across a restart, so an obligation survives a
+# graceful restart and is restored once the dongle is back and idle (a restore cut short by a restart resumes the same way).
+# Home Assistant saves restored states every 15 minutes and at a clean stop: a crash or power cut within 15 minutes of a
+# scheduled start can lose the obligation (the manual values then stay at the schedule's, as without this package).
+#
+#   sensor.ecco_schedule_restore_blocker   `none`, or what currently prevents a restore (in words)
+#   sensor.ecco_schedule_manual_restore    CLEAR, or OWED with what each owed function is waiting for
+#   input_text.ecco_sched_restore_dump_state / _fp_state   OWED <epoch> / RESTORING <epoch> / the last result, in words
+
+input_number:
+  # The owner's value a scheduled start replaced (0 = none saved) and the value it wrote (0 = nothing owed for that field).
+  ecco_sched_restore_dump_power_saved:
+    name: "ECCO Restore Dump Export Power Saved"
+    icon: mdi:content-save-outline
+    min: 0
+    max: 100000
+    step: 1
+    mode: box
+    unit_of_measurement: "W"
+  ecco_sched_restore_dump_power_written:
+    name: "ECCO Restore Dump Export Power Written"
+    icon: mdi:calendar-clock
+    min: 0
+    max: 100000
+    step: 1
+    mode: box
+    unit_of_measurement: "W"
+  ecco_sched_restore_dump_stop_soc_saved:
+    name: "ECCO Restore Dump Stop SOC Saved"
+    icon: mdi:content-save-outline
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+  ecco_sched_restore_dump_stop_soc_written:
+    name: "ECCO Restore Dump Stop SOC Written"
+    icon: mdi:calendar-clock
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+  ecco_sched_restore_dump_duration_saved:
+    name: "ECCO Restore Dump Duration Saved"
+    icon: mdi:content-save-outline
+    min: 0
+    max: 1440
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+  ecco_sched_restore_dump_duration_written:
+    name: "ECCO Restore Dump Duration Written"
+    icon: mdi:calendar-clock
+    min: 0
+    max: 1440
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+  ecco_sched_restore_fp_power_saved:
+    name: "ECCO Restore Free Power Charge Power Saved"
+    icon: mdi:content-save-outline
+    min: 0
+    max: 100000
+    step: 1
+    mode: box
+    unit_of_measurement: "W"
+  ecco_sched_restore_fp_power_written:
+    name: "ECCO Restore Free Power Charge Power Written"
+    icon: mdi:calendar-clock
+    min: 0
+    max: 100000
+    step: 1
+    mode: box
+    unit_of_measurement: "W"
+  ecco_sched_restore_fp_duration_saved:
+    name: "ECCO Restore Free Power Duration Saved"
+    icon: mdi:content-save-outline
+    min: 0
+    max: 1440
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+  ecco_sched_restore_fp_duration_written:
+    name: "ECCO Restore Free Power Duration Written"
+    icon: mdi:calendar-clock
+    min: 0
+    max: 1440
+    step: 1
+    mode: box
+    unit_of_measurement: "min"
+
+input_text:
+  ecco_sched_restore_dump_state:
+    name: "ECCO Restore Dump Manual Values State"
+    max: 255
+  ecco_sched_restore_fp_state:
+    name: "ECCO Restore Free Power Manual Values State"
+    max: 255
+
+template:
+  - sensor:
+      - name: "ECCO Schedule Restore Blocker"
+        unique_id: ecco_schedule_restore_blocker
+        icon: mdi:lock-clock
+        # Fail-safe: anything that is not exactly `off` (on, unknown, unavailable) blocks, and so does an unreadable request
+        # number. The firmware's Recovery State texts are deliberately NOT read (diagnostic mirrors that keep their last text
+        # until the dongle reboots); a pending restore shows as the snapshot flag.
+        state: >-
+          {% set ns = namespace(b=[]) %}
+          {% set checks = [
+               ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'Dump to Grid lease active'),
+               ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'Dump to Grid transaction in progress'),
+               ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'Dump to Grid snapshot pending restore'),
+               ('switch.ecco_clock_dongle_dump_to_grid_write_enable', 'Dump to Grid write enable armed'),
+               ('binary_sensor.ecco_clock_dongle_free_power_active', 'Free Power active'),
+               ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'Free Power transaction in progress'),
+               ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'Free Power snapshot pending restore'),
+               ('switch.ecco_clock_dongle_free_power_write_enable', 'Free Power write enable armed'),
+               ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'manual inverter write in progress'),
+               ('script.ecco_dump_to_grid_start_scheduled', 'scheduled Dump to Grid start running'),
+               ('script.ecco_free_power_start_scheduled', 'scheduled Free Power start running')] %}
+          {% for e, why in checks if not is_state(e, 'off') %}
+            {% set ns.b = ns.b + [why if is_state(e, 'on') else why ~ ' (' ~ states(e) ~ ')'] %}
+          {% endfor %}
+          {% for e in ['number.ecco_clock_dongle_dump_to_grid_export_power', 'number.ecco_clock_dongle_dump_to_grid_stop_soc',
+                       'number.ecco_clock_dongle_dump_to_grid_duration', 'number.ecco_clock_dongle_free_power_max_charge_power',
+                       'number.ecco_clock_dongle_free_power_duration'] if (states(e) | float(-1)) <= 0 %}
+            {% set ns.b = ns.b + ['request number unreadable'] %}
+          {% endfor %}
+          {{ (ns.b | unique | join('; ') if ns.b else 'none')[:250] }}
+      - name: "ECCO Schedule Manual Restore"
+        unique_id: ecco_schedule_manual_restore
+        icon: mdi:backup-restore
+        state: >-
+          {% set ns = namespace(o=[]) %}
+          {% for e, what in [('input_text.ecco_sched_restore_dump_state', 'Dump to Grid'),
+                             ('input_text.ecco_sched_restore_fp_state', 'Free Power')]
+               if states(e).startswith('OWED') or states(e).startswith('RESTORING') %}
+            {% set ns.o = ns.o + [what] %}
+          {% endfor %}
+          {% set b = states('sensor.ecco_schedule_restore_blocker') %}
+          {{ ('CLEAR' if not ns.o else 'OWED - ' ~ (ns.o | join(', ')) ~ ('; restoring' if b == 'none' else '; waiting: ' ~ b))[:250] }}
+
+automation:
+  # ---- Dump to Grid --------------------------------------------------------------------------------------------------------------
+  - id: ecco_sched_restore_dump_track
+    alias: "ECCO - Track scheduled changes to the manual Dump to Grid values"
+    description: >-
+      Saves the owner's Dump to Grid request value the first time a scheduled start replaces it, remembers the value the
+      schedule wrote, and drops a field the owner changes afterwards. Writes only this package's helpers.
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: state
+        entity_id: number.ecco_clock_dongle_dump_to_grid_export_power
+        to: ~
+        id: power
+      - trigger: state
+        entity_id: number.ecco_clock_dongle_dump_to_grid_stop_soc
+        to: ~
+        id: stop_soc
+      - trigger: state
+        entity_id: number.ecco_clock_dongle_dump_to_grid_duration
+        to: ~
+        id: duration
+    actions:
+      - variables:
+          old: "{{ trigger.from_state.state if trigger.from_state else 'unknown' }}"
+          new: "{{ trigger.to_state.state if trigger.to_state else 'unknown' }}"
+          saved: "input_number.ecco_sched_restore_dump_{{ trigger.id }}_saved"
+          written: "input_number.ecco_sched_restore_dump_{{ trigger.id }}_written"
+          state_now: "{{ states('input_text.ecco_sched_restore_dump_state') }}"
+          # The schedule's own request for this field (the duration may be clamped to the window, never above it).
+          schedule_value: >-
+            {% set n = new | float(-1) %}
+            {% if trigger.id == 'power' %}{{ n == (states('input_number.ecco_dump_to_grid_schedule_power') | float(-2)) }}
+            {% elif trigger.id == 'stop_soc' %}{{ n == (states('input_number.ecco_dump_to_grid_schedule_stop_soc') | float(-2)) }}
+            {% else %}{{ 1 <= n <= (states('input_number.ecco_dump_to_grid_schedule_duration') | float(0)) }}{% endif %}
+      # Only a change between two real values counts: a dongle reconnect or a Home Assistant start is not a change.
+      - condition: template
+        value_template: "{{ (old | float(-1)) > 0 and (new | float(-1)) > 0 and (old | float(-1)) != (new | float(-1)) }}"
+      - choose:
+          # The scheduled start is staging its request: keep the owner's value (once per episode), remember the write.
+          - conditions:
+              - condition: state
+                entity_id: script.ecco_dump_to_grid_start_scheduled
+                state: "on"
+              - condition: template
+                value_template: "{{ schedule_value }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ (states(written) | float(0)) <= 0 }}"
+                then:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ saved }}"
+                    data:
+                      value: "{{ old | float(0) }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ written }}"
+                data:
+                  value: "{{ new | float(0) }}"
+              # Read the state NOW (not at the start of this run): a restore that finished meanwhile left a result, and a
+              # restore still running (RESTORING) sees this write itself and keeps the function owed.
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {% set s = states('input_text.ecco_sched_restore_dump_state') %}
+                      {{ not (s.startswith('OWED') or s.startswith('RESTORING')) }}
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_sched_restore_dump_state
+                    data:
+                      value: >-
+                        OWED {{ as_timestamp(now()) | int(0) }} - a scheduled start changed the manual Dump to Grid values
+                        at {{ now().strftime('%Y-%m-%d %H:%M') }}
+          # Any other change while owed is the owner's (or another tool's): never restore that field over it.
+          - conditions:
+              - condition: template
+                value_template: "{{ state_now.startswith('OWED') and (states(written) | float(0)) > 0 }}"
+            sequence:
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ written }}"
+                data:
+                  value: 0
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ (states('input_number.ecco_sched_restore_dump_power_written') | float(0)) <= 0
+                         and (states('input_number.ecco_sched_restore_dump_stop_soc_written') | float(0)) <= 0
+                         and (states('input_number.ecco_sched_restore_dump_duration_written') | float(0)) <= 0 }}
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_sched_restore_dump_state
+                    data:
+                      value: >-
+                        KEPT {{ now().strftime('%Y-%m-%d %H:%M') }} - the owner changed the Dump to Grid values after the
+                        scheduled start; nothing to restore
+
+  - id: ecco_sched_restore_dump_restore
+    alias: "ECCO - Restore the manual Dump to Grid values after a scheduled start"
+    description: >-
+      Once nothing owns control, puts back each manual Dump to Grid value a scheduled start replaced, if it is valid and the
+      number still holds the schedule's value. One verified attempt; the result is recorded and failures are notified. An
+      obligation older than 24 h is dropped with a notification, without a write, even while something still blocks it.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        value_template: >-
+          {% set s = states('input_text.ecco_sched_restore_dump_state') %}
+          {{ (s.startswith('OWED') or s.startswith('RESTORING')) and is_state('sensor.ecco_schedule_restore_blocker', 'none') }}
+        id: ready
+      # Re-rendered every minute (now()): fires once the obligation is 24 h old, whatever blocks it.
+      - trigger: template
+        value_template: >-
+          {% set s = states('input_text.ecco_sched_restore_dump_state') %}
+          {% set t = (s.split(' ')[1] if (s.split(' ') | count) > 1 else '0') | int(0) %}
+          {{ (s.startswith('OWED') or s.startswith('RESTORING')) and (t <= 0 or (as_timestamp(now()) - t) > 86400) }}
+        id: stale
+      - trigger: homeassistant
+        event: start
+        id: start
+      # An automation reload (an update of this package) sets the template triggers up already true, which never fire.
+      - trigger: event
+        event_type: automation_reloaded
+        id: reloaded
+    actions:
+      # Let the dongle's own end-of-lease publishes settle, then look again.
+      - delay:
+          seconds: 5
+      - variables:
+          state_was: "{{ states('input_text.ecco_sched_restore_dump_state') }}"
+          owed_since: "{{ (state_was.split(' ')[1] if (state_was.split(' ') | count) > 1 else '0') | int(0) }}"
+          stale: "{{ owed_since <= 0 or (as_timestamp(now()) - owed_since) > 86400 }}"
+      - condition: template
+        value_template: >-
+          {{ (state_was.startswith('OWED') or state_was.startswith('RESTORING'))
+             and (stale or is_state('sensor.ecco_schedule_restore_blocker', 'none')) }}
+      - variables:
+          fields:
+            - label: export power
+              unit: " W"
+              number: number.ecco_clock_dongle_dump_to_grid_export_power
+              saved: input_number.ecco_sched_restore_dump_power_saved
+              written: input_number.ecco_sched_restore_dump_power_written
+              key: power
+            - label: Stop SOC
+              unit: " %"
+              number: number.ecco_clock_dongle_dump_to_grid_stop_soc
+              saved: input_number.ecco_sched_restore_dump_stop_soc_saved
+              written: input_number.ecco_sched_restore_dump_stop_soc_written
+              key: stop_soc
+            - label: duration
+              unit: " min"
+              number: number.ecco_clock_dongle_dump_to_grid_duration
+              saved: input_number.ecco_sched_restore_dump_duration_saved
+              written: input_number.ecco_sched_restore_dump_duration_written
+              key: duration
+          # Per field: none (nothing owed), done (already the saved value), invalid (saved value not valid for the number),
+          # restore (still the schedule's value), changed (anything else: the owner's own value - kept).
+          plan: >-
+            {% set ns = namespace(k=[]) %}
+            {% for f in fields %}
+              {% set w = states(f.written) | float(0) %}
+              {% set v = states(f.saved) | float(0) %}
+              {% set c = states(f.number) | float(-1) %}
+              {% set lo = state_attr(f.number, 'min') | float(-1) %}
+              {% set hi = state_attr(f.number, 'max') | float(-1) %}
+              {% set st = state_attr(f.number, 'step') | float(0) %}
+              {% set q = ((v - lo) / st) if st > 0 else 0.5 %}
+              {% set valid = st > 0 and lo > 0 and lo <= v <= hi and ((q - (q | round(0))) | abs) < 0.001 %}
+              {% if w <= 0 %}{% set ns.k = ns.k + ['none'] %}
+              {% elif c == v %}{% set ns.k = ns.k + ['done'] %}
+              {% elif not valid %}{% set ns.k = ns.k + ['invalid'] %}
+              {% elif c == w %}{% set ns.k = ns.k + ['restore'] %}
+              {% else %}{% set ns.k = ns.k + ['changed'] %}{% endif %}
+            {% endfor %}
+            {{ ns.k }}
+          # The written values this run settles (a later write by a new scheduled start is never cleared by it).
+          wplan: >-
+            {% set ns = namespace(w=[]) %}
+            {% for f in fields %}{% set ns.w = ns.w + [states(f.written) | float(0)] %}{% endfor %}
+            {{ ns.w }}
+      - choose:
+          # Too old to trust (for example Home Assistant was down while the owner changed things on the dongle, or the
+          # obligation was blocked for a day): keep everything as it is and tell the owner.
+          - conditions:
+              - condition: template
+                value_template: "{{ stale }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_sched_restore_dump_state
+                data:
+                  value: >-
+                    {% set ns = namespace(t=[]) %}
+                    {% for f in fields if (states(f.written) | float(0)) > 0 %}
+                      {% set ns.t = ns.t + [f.label ~ ' ' ~ (states(f.saved) | int(0)) ~ f.unit] %}
+                    {% endfor %}
+                    {{ ('STALE ' ~ now().strftime('%Y-%m-%d %H:%M') ~ ' - owed for more than 24 h, NOT restored; set by hand if '
+                        ~ 'wanted: ' ~ (ns.t | join(', ')))[:255] }}
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_sched_restore_dump
+                  title: "ECCO - manual Dump to Grid values NOT restored"
+                  message: "{{ states('input_text.ecco_sched_restore_dump_state') }}"
+              - repeat:
+                  for_each: "{{ fields }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: "input_number.ecco_sched_restore_dump_{{ repeat.item.key }}_written"
+                      data:
+                        value: 0
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_sched_restore_dump_state
+            data:
+              value: "RESTORING {{ owed_since }} - putting back the manual Dump to Grid values"
+          - repeat:
+              for_each: "{{ range(fields | count) | list }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set f = fields[repeat.item] %}
+                        {{ plan[repeat.item] == 'restore' and is_state('sensor.ecco_schedule_restore_blocker', 'none')
+                           and (states(f.number) | float(-1)) == (states(f.written) | float(-2)) }}
+                  then:
+                    - action: number.set_value
+                      continue_on_error: true
+                      target:
+                        entity_id: "{{ fields[repeat.item].number }}"
+                      data:
+                        value: "{{ states(fields[repeat.item].saved) | int(0) }}"
+          - wait_template: >-
+              {% set ns = namespace(ok=true) %}
+              {% for i in range(fields | count) if plan[i] == 'restore'
+                   and (states(fields[i].number) | float(-1)) != (states(fields[i].saved) | float(-2)) %}
+                {% set ns.ok = false %}
+              {% endfor %}
+              {{ ns.ok }}
+            timeout: "00:00:15"
+            continue_on_timeout: true
+          - variables:
+              result: >-
+                {% set ns = namespace(ok=[], kept=[], bad=[]) %}
+                {% for f in fields %}
+                  {% set k = plan[loop.index0] %}
+                  {% set v = states(f.saved) | int(0) %}
+                  {% set c = states(f.number) %}
+                  {% if k in ['done', 'restore'] and (c | float(-1)) == (v | float(-2)) %}
+                    {% set ns.ok = ns.ok + [f.label ~ ' ' ~ v ~ f.unit] %}
+                  {% elif k == 'changed' %}
+                    {% set ns.kept = ns.kept + [f.label ~ ' ' ~ (c | float(0) | int(0)) ~ f.unit] %}
+                  {% elif k == 'invalid' %}
+                    {% set ns.bad = ns.bad + [f.label ~ ' (saved value ' ~ v ~ ' not valid)'] %}
+                  {% elif k in ['done', 'restore'] %}
+                    {% set ns.bad = ns.bad + [f.label ~ ' (reads ' ~ c ~ ', should be ' ~ v ~ f.unit ~ ')'] %}
+                  {% endif %}
+                {% endfor %}
+                {% set head = ('RESTORED' if not ns.bad else ('PARTIAL' if ns.ok else 'FAILED')) %}
+                {{ (head ~ ' ' ~ now().strftime('%Y-%m-%d %H:%M')
+                    ~ (' - restored: ' ~ (ns.ok | join(', ')) if ns.ok else '')
+                    ~ ('; kept your change: ' ~ (ns.kept | join(', ')) if ns.kept else '')
+                    ~ ('; NOT restored, set by hand: ' ~ (ns.bad | join(', ')) if ns.bad else '')
+                    ~ (' - nothing left to restore' if not (ns.ok or ns.kept or ns.bad) else ''))[:255] }}
+          # Settle what this run planned (one attempt only - a failure is reported, never retried): a field that reads its
+          # saved value is done; otherwise only while no scheduled start of this function runs and the written value is
+          # still the one this run planned with (a new start's write is kept for the next restore).
+          - repeat:
+              for_each: "{{ fields }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set w = states(repeat.item.written) | float(0) %}
+                        {{ w > 0 and ((states(repeat.item.number) | float(-1)) == (states(repeat.item.saved) | float(-2))
+                           or (not is_state('script.ecco_dump_to_grid_start_scheduled', 'on') and w == wplan[repeat.index - 1])) }}
+                  then:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: "input_number.ecco_sched_restore_dump_{{ repeat.item.key }}_written"
+                      data:
+                        value: 0
+          # One action decides: anything still written (a scheduled start began during the restore) keeps the function owed.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_sched_restore_dump_state
+            data:
+              value: >-
+                {% set owed = (states('input_number.ecco_sched_restore_dump_power_written') | float(0)) > 0
+                   or (states('input_number.ecco_sched_restore_dump_stop_soc_written') | float(0)) > 0
+                   or (states('input_number.ecco_sched_restore_dump_duration_written') | float(0)) > 0 %}
+                {{ ('OWED ' ~ owed_since ~ ' - a scheduled start began during the restore; the rest is restored after it')
+                   if owed else result }}
+          - if:
+              - condition: template
+                value_template: "{{ states('input_text.ecco_sched_restore_dump_state').startswith('RESTORED') }}"
+            then:
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_sched_restore_dump
+            else:
+              - if:
+                  - condition: template
+                    value_template: "{{ not states('input_text.ecco_sched_restore_dump_state').startswith('OWED') }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_sched_restore_dump
+                      title: "ECCO - manual Dump to Grid values NOT fully restored"
+                      message: "{{ states('input_text.ecco_sched_restore_dump_state') }}"
+
+  # ---- Free Power ----------------------------------------------------------------------------------------------------------------
+  - id: ecco_sched_restore_fp_track
+    alias: "ECCO - Track scheduled changes to the manual Free Power values"
+    description: >-
+      Saves the owner's Free Power request value the first time a scheduled start replaces it, remembers the value the
+      schedule wrote, and drops a field the owner changes afterwards. Writes only this package's helpers.
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: state
+        entity_id: number.ecco_clock_dongle_free_power_max_charge_power
+        to: ~
+        id: power
+      - trigger: state
+        entity_id: number.ecco_clock_dongle_free_power_duration
+        to: ~
+        id: duration
+    actions:
+      - variables:
+          old: "{{ trigger.from_state.state if trigger.from_state else 'unknown' }}"
+          new: "{{ trigger.to_state.state if trigger.to_state else 'unknown' }}"
+          saved: "input_number.ecco_sched_restore_fp_{{ trigger.id }}_saved"
+          written: "input_number.ecco_sched_restore_fp_{{ trigger.id }}_written"
+          state_now: "{{ states('input_text.ecco_sched_restore_fp_state') }}"
+          # The schedule's own request for this field (the duration may be clamped to the window, never above it).
+          schedule_value: >-
+            {% set n = new | float(-1) %}
+            {% if trigger.id == 'power' %}{{ n == (states('input_number.ecco_free_power_schedule_power') | float(-2)) }}
+            {% else %}{{ 1 <= n <= (states('input_number.ecco_free_power_schedule_duration') | float(0)) }}{% endif %}
+      # Only a change between two real values counts: a dongle reconnect or a Home Assistant start is not a change.
+      - condition: template
+        value_template: "{{ (old | float(-1)) > 0 and (new | float(-1)) > 0 and (old | float(-1)) != (new | float(-1)) }}"
+      - choose:
+          # The scheduled start is staging its request: keep the owner's value (once per episode), remember the write.
+          - conditions:
+              - condition: state
+                entity_id: script.ecco_free_power_start_scheduled
+                state: "on"
+              - condition: template
+                value_template: "{{ schedule_value }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ (states(written) | float(0)) <= 0 }}"
+                then:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ saved }}"
+                    data:
+                      value: "{{ old | float(0) }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ written }}"
+                data:
+                  value: "{{ new | float(0) }}"
+              # Read the state NOW (not at the start of this run): a restore that finished meanwhile left a result, and a
+              # restore still running (RESTORING) sees this write itself and keeps the function owed.
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {% set s = states('input_text.ecco_sched_restore_fp_state') %}
+                      {{ not (s.startswith('OWED') or s.startswith('RESTORING')) }}
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_sched_restore_fp_state
+                    data:
+                      value: >-
+                        OWED {{ as_timestamp(now()) | int(0) }} - a scheduled start changed the manual Free Power values
+                        at {{ now().strftime('%Y-%m-%d %H:%M') }}
+          # Any other change while owed is the owner's (or another tool's): never restore that field over it.
+          - conditions:
+              - condition: template
+                value_template: "{{ state_now.startswith('OWED') and (states(written) | float(0)) > 0 }}"
+            sequence:
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ written }}"
+                data:
+                  value: 0
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ (states('input_number.ecco_sched_restore_fp_power_written') | float(0)) <= 0
+                         and (states('input_number.ecco_sched_restore_fp_duration_written') | float(0)) <= 0 }}
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_sched_restore_fp_state
+                    data:
+                      value: >-
+                        KEPT {{ now().strftime('%Y-%m-%d %H:%M') }} - the owner changed the Free Power values after the
+                        scheduled start; nothing to restore
+
+  - id: ecco_sched_restore_fp_restore
+    alias: "ECCO - Restore the manual Free Power values after a scheduled start"
+    description: >-
+      Once nothing owns control, puts back each manual Free Power value a scheduled start replaced, if it is valid and the
+      number still holds the schedule's value. One verified attempt; the result is recorded and failures are notified. An
+      obligation older than 24 h is dropped with a notification, without a write, even while something still blocks it.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        value_template: >-
+          {% set s = states('input_text.ecco_sched_restore_fp_state') %}
+          {{ (s.startswith('OWED') or s.startswith('RESTORING')) and is_state('sensor.ecco_schedule_restore_blocker', 'none') }}
+        id: ready
+      # Re-rendered every minute (now()): fires once the obligation is 24 h old, whatever blocks it.
+      - trigger: template
+        value_template: >-
+          {% set s = states('input_text.ecco_sched_restore_fp_state') %}
+          {% set t = (s.split(' ')[1] if (s.split(' ') | count) > 1 else '0') | int(0) %}
+          {{ (s.startswith('OWED') or s.startswith('RESTORING')) and (t <= 0 or (as_timestamp(now()) - t) > 86400) }}
+        id: stale
+      - trigger: homeassistant
+        event: start
+        id: start
+      # An automation reload (an update of this package) sets the template triggers up already true, which never fire.
+      - trigger: event
+        event_type: automation_reloaded
+        id: reloaded
+    actions:
+      # Let the dongle's own end-of-lease publishes settle, then look again.
+      - delay:
+          seconds: 5
+      - variables:
+          state_was: "{{ states('input_text.ecco_sched_restore_fp_state') }}"
+          owed_since: "{{ (state_was.split(' ')[1] if (state_was.split(' ') | count) > 1 else '0') | int(0) }}"
+          stale: "{{ owed_since <= 0 or (as_timestamp(now()) - owed_since) > 86400 }}"
+      - condition: template
+        value_template: >-
+          {{ (state_was.startswith('OWED') or state_was.startswith('RESTORING'))
+             and (stale or is_state('sensor.ecco_schedule_restore_blocker', 'none')) }}
+      - variables:
+          fields:
+            - label: charge power
+              unit: " W"
+              number: number.ecco_clock_dongle_free_power_max_charge_power
+              saved: input_number.ecco_sched_restore_fp_power_saved
+              written: input_number.ecco_sched_restore_fp_power_written
+              key: power
+            - label: duration
+              unit: " min"
+              number: number.ecco_clock_dongle_free_power_duration
+              saved: input_number.ecco_sched_restore_fp_duration_saved
+              written: input_number.ecco_sched_restore_fp_duration_written
+              key: duration
+          # Per field: none (nothing owed), done (already the saved value), invalid (saved value not valid for the number),
+          # restore (still the schedule's value), changed (anything else: the owner's own value - kept).
+          plan: >-
+            {% set ns = namespace(k=[]) %}
+            {% for f in fields %}
+              {% set w = states(f.written) | float(0) %}
+              {% set v = states(f.saved) | float(0) %}
+              {% set c = states(f.number) | float(-1) %}
+              {% set lo = state_attr(f.number, 'min') | float(-1) %}
+              {% set hi = state_attr(f.number, 'max') | float(-1) %}
+              {% set st = state_attr(f.number, 'step') | float(0) %}
+              {% set q = ((v - lo) / st) if st > 0 else 0.5 %}
+              {% set valid = st > 0 and lo > 0 and lo <= v <= hi and ((q - (q | round(0))) | abs) < 0.001 %}
+              {% if w <= 0 %}{% set ns.k = ns.k + ['none'] %}
+              {% elif c == v %}{% set ns.k = ns.k + ['done'] %}
+              {% elif not valid %}{% set ns.k = ns.k + ['invalid'] %}
+              {% elif c == w %}{% set ns.k = ns.k + ['restore'] %}
+              {% else %}{% set ns.k = ns.k + ['changed'] %}{% endif %}
+            {% endfor %}
+            {{ ns.k }}
+          # The written values this run settles (a later write by a new scheduled start is never cleared by it).
+          wplan: >-
+            {% set ns = namespace(w=[]) %}
+            {% for f in fields %}{% set ns.w = ns.w + [states(f.written) | float(0)] %}{% endfor %}
+            {{ ns.w }}
+      - choose:
+          # Too old to trust (for example Home Assistant was down while the owner changed things on the dongle, or the
+          # obligation was blocked for a day): keep everything as it is and tell the owner.
+          - conditions:
+              - condition: template
+                value_template: "{{ stale }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_sched_restore_fp_state
+                data:
+                  value: >-
+                    {% set ns = namespace(t=[]) %}
+                    {% for f in fields if (states(f.written) | float(0)) > 0 %}
+                      {% set ns.t = ns.t + [f.label ~ ' ' ~ (states(f.saved) | int(0)) ~ f.unit] %}
+                    {% endfor %}
+                    {{ ('STALE ' ~ now().strftime('%Y-%m-%d %H:%M') ~ ' - owed for more than 24 h, NOT restored; set by hand if '
+                        ~ 'wanted: ' ~ (ns.t | join(', ')))[:255] }}
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_sched_restore_fp
+                  title: "ECCO - manual Free Power values NOT restored"
+                  message: "{{ states('input_text.ecco_sched_restore_fp_state') }}"
+              - repeat:
+                  for_each: "{{ fields }}"
+                  sequence:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: "input_number.ecco_sched_restore_fp_{{ repeat.item.key }}_written"
+                      data:
+                        value: 0
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_sched_restore_fp_state
+            data:
+              value: "RESTORING {{ owed_since }} - putting back the manual Free Power values"
+          - repeat:
+              for_each: "{{ range(fields | count) | list }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set f = fields[repeat.item] %}
+                        {{ plan[repeat.item] == 'restore' and is_state('sensor.ecco_schedule_restore_blocker', 'none')
+                           and (states(f.number) | float(-1)) == (states(f.written) | float(-2)) }}
+                  then:
+                    - action: number.set_value
+                      continue_on_error: true
+                      target:
+                        entity_id: "{{ fields[repeat.item].number }}"
+                      data:
+                        value: "{{ states(fields[repeat.item].saved) | int(0) }}"
+          - wait_template: >-
+              {% set ns = namespace(ok=true) %}
+              {% for i in range(fields | count) if plan[i] == 'restore'
+                   and (states(fields[i].number) | float(-1)) != (states(fields[i].saved) | float(-2)) %}
+                {% set ns.ok = false %}
+              {% endfor %}
+              {{ ns.ok }}
+            timeout: "00:00:15"
+            continue_on_timeout: true
+          - variables:
+              result: >-
+                {% set ns = namespace(ok=[], kept=[], bad=[]) %}
+                {% for f in fields %}
+                  {% set k = plan[loop.index0] %}
+                  {% set v = states(f.saved) | int(0) %}
+                  {% set c = states(f.number) %}
+                  {% if k in ['done', 'restore'] and (c | float(-1)) == (v | float(-2)) %}
+                    {% set ns.ok = ns.ok + [f.label ~ ' ' ~ v ~ f.unit] %}
+                  {% elif k == 'changed' %}
+                    {% set ns.kept = ns.kept + [f.label ~ ' ' ~ (c | float(0) | int(0)) ~ f.unit] %}
+                  {% elif k == 'invalid' %}
+                    {% set ns.bad = ns.bad + [f.label ~ ' (saved value ' ~ v ~ ' not valid)'] %}
+                  {% elif k in ['done', 'restore'] %}
+                    {% set ns.bad = ns.bad + [f.label ~ ' (reads ' ~ c ~ ', should be ' ~ v ~ f.unit ~ ')'] %}
+                  {% endif %}
+                {% endfor %}
+                {% set head = ('RESTORED' if not ns.bad else ('PARTIAL' if ns.ok else 'FAILED')) %}
+                {{ (head ~ ' ' ~ now().strftime('%Y-%m-%d %H:%M')
+                    ~ (' - restored: ' ~ (ns.ok | join(', ')) if ns.ok else '')
+                    ~ ('; kept your change: ' ~ (ns.kept | join(', ')) if ns.kept else '')
+                    ~ ('; NOT restored, set by hand: ' ~ (ns.bad | join(', ')) if ns.bad else '')
+                    ~ (' - nothing left to restore' if not (ns.ok or ns.kept or ns.bad) else ''))[:255] }}
+          # Settle what this run planned (one attempt only - a failure is reported, never retried): a field that reads its
+          # saved value is done; otherwise only while no scheduled start of this function runs and the written value is
+          # still the one this run planned with (a new start's write is kept for the next restore).
+          - repeat:
+              for_each: "{{ fields }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set w = states(repeat.item.written) | float(0) %}
+                        {{ w > 0 and ((states(repeat.item.number) | float(-1)) == (states(repeat.item.saved) | float(-2))
+                           or (not is_state('script.ecco_free_power_start_scheduled', 'on') and w == wplan[repeat.index - 1])) }}
+                  then:
+                    - action: input_number.set_value
+                      target:
+                        entity_id: "input_number.ecco_sched_restore_fp_{{ repeat.item.key }}_written"
+                      data:
+                        value: 0
+          # One action decides: anything still written (a scheduled start began during the restore) keeps the function owed.
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_sched_restore_fp_state
+            data:
+              value: >-
+                {% set owed = (states('input_number.ecco_sched_restore_fp_power_written') | float(0)) > 0
+                   or (states('input_number.ecco_sched_restore_fp_duration_written') | float(0)) > 0 %}
+                {{ ('OWED ' ~ owed_since ~ ' - a scheduled start began during the restore; the rest is restored after it')
+                   if owed else result }}
+          - if:
+              - condition: template
+                value_template: "{{ states('input_text.ecco_sched_restore_fp_state').startswith('RESTORED') }}"
+            then:
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_sched_restore_fp
+            else:
+              - if:
+                  - condition: template
+                    value_template: "{{ not states('input_text.ecco_sched_restore_fp_state').startswith('OWED') }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_sched_restore_fp
+                      title: "ECCO - manual Free Power values NOT fully restored"
+                      message: "{{ states('input_text.ecco_sched_restore_fp_state') }}"

@@ -10,7 +10,8 @@ supported subset raises Unsupported instead of being guessed. Semantics follow H
   - conditions: state, template, or, and, not, trigger (id); a list of conditions is AND;
   - calling `script.<name>` as an action waits for it; a `mode: single` script that is already running is not
     started again (HA logs a warning and continues);
-  - automation triggers: time (`at: input_datetime.x`, fires once at a date+time helper's instant), template
+  - automation triggers: time (`at: input_datetime.x`, fires once at a date+time helper's instant), event (fired
+    only through HA.fire_event), template
     (fires on a false -> true change; re-rendered on every state change and at every minute boundary, as HA does
     for now() templates), homeassistant start; automation `mode: single` drops a trigger while running;
   - the state machine records only changes (an identical value is not a new state), and a template sensor is
@@ -596,6 +597,13 @@ class HA:
         for a in self.automations:
             a.poll(kind)
 
+    def fire_event(self, event_type: str):
+        """An event on the bus (smr1: `automation_reloaded`): fire the event triggers that match its type."""
+        for a in self.automations:
+            for i, tr in enumerate(a.triggers):
+                if a.ready and tr["trigger"] == "event" and tr.get("event_type") == event_type:
+                    a.fire({"id": tr.get("id", str(i)), "platform": "event", "event": {"event_type": event_type}})
+
     def start(self):
         """homeassistant start: arm the automations' trigger state, fire start triggers."""
         for a in self.automations:
@@ -629,7 +637,7 @@ class _Automation:
                 self._tpl_last[i] = _truthy(self.ha.w.render_native(tr["value_template"], {}))
             elif kind == "time":
                 self._time_fired.discard(i)
-            elif kind in ("state", "homeassistant"):
+            elif kind in ("state", "homeassistant", "event"):
                 pass
             else:
                 raise Unsupported(f"trigger {kind}")
@@ -672,7 +680,8 @@ class _Automation:
                 for ent in ents:
                     new = w.states.get(ent, ("unknown", {}))
                     old = self._last_states.get(ent, ("unknown", {}))
-                    if new[0] != old[0] and str(tr.get("to", new[0])) == new[0]:
+                    want = tr.get("to", new[0])     # smr1: `to: ~` (None) = any change of the state, never of attributes alone
+                    if new[0] != old[0] and str(new[0] if want is None else want) == new[0]:
                         self.fire({"id": tid, "platform": "state", "entity_id": ent,
                                    "to_state": {"state": new[0], "attributes": dict(new[1])},
                                    "from_state": {"state": old[0], "attributes": dict(old[1])}})

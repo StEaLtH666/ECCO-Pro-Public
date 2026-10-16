@@ -19,7 +19,7 @@ the Home Assistant functions they use (states / is_state / state_attr / this, th
       factory, valid and above-proven states; every entity it shows exists
   [7] the firmware factory state after the flash (3000 W, export 0) reads NOT CONFIGURED, shows the banner and raises attention
   [8] the post-export declaration (PEX entry fcc1): its place after fcp2, exactly the manifest chain-pinned, no frozen file, the
-      files it adds, its fingerprint; undone, the manifest is its fcp2 state byte for byte
+      files it adds, its fingerprint; undone, the manifest (as of fcc1) is its fcp2 state byte for byte
   [9] mutation: each named mutant of the package or the dashboard is caught
   [10] the old firmware (no fcp1 / fcp2 entities, e.g. the 4 October 2026 image): UNAVAILABLE, both flags unavailable, no
        notification even with a schedule armed, no banner, no values in the summary
@@ -419,12 +419,13 @@ check("first boot: NOT CONFIGURED, the banner flag on, attention on", st == "NOT
 print("\n[8] the post-export declaration (PEX entry fcc1)")
 E = chain.CHAIN.entry("fcc1")
 ids = [e.id for e in chain.POST_EXPORT_ENTRIES]
-check("fcc1 is appended right after fcp2", ids[-1] == "fcc1" and chain.CHAIN.prev_id("fcc1") == "fcp2", str(ids))
+check("fcc1 sits right after fcp2", "fcc1" in ids and chain.CHAIN.prev_id("fcc1") == "fcp2", str(ids))   # smr1: no longer the newest
 check("fcc1 chain-pins exactly the manifest, edits no frozen file, adds exactly its five files (all present)",
       set(E.reverts) == {F.MANIFEST_REL} and not E.frozen_reverts and E.added_files == F.ADDED_FILES
       and all((ROOT / p).is_file() for p in F.ADDED_FILES), str(sorted(E.added_files)))
-cur = _pex.read(F.MANIFEST_REL)   # PEX: today's manifest
-before = _pex.as_of(F.MANIFEST_REL, "fcp2", cur)   # PEX: the manifest as of fcp2 (fcc1 undone exactly, sha256-checked)
+live = _pex.read(F.MANIFEST_REL)   # PEX: today's manifest
+cur = _pex.as_of(F.MANIFEST_REL, "fcc1", live)   # PEX: the manifest as of fcc1 (smr1 edits it later)
+before = _pex.as_of(F.MANIFEST_REL, "fcp2", live)   # PEX: the manifest as of fcp2 (fcc1 undone exactly, sha256-checked)
 check("undone exactly, the manifest is its fcp2 state, and applying fcc1's pair to it gives today's manifest; the checkpoint is its sha256",
       F.pre_fcc1_manifest(cur) == before and F.add_fcc1_manifest(before) == cur and E.checkpoints == {chain.HA_MANIFEST: F.sha(cur)})
 check("fcc1's fingerprint is sealed and linked to fcp2's", E.fingerprint == _pex.fingerprint(E)   # PEX: hash link

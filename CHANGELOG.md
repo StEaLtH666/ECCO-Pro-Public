@@ -10,6 +10,19 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **The owner's manual Dump to Grid / Free Power values restored after a scheduled start** (post-export entry `smr1`;
+  [docs/dev/schedule-manual-restore.md](docs/dev/schedule-manual-restore.md)). A scheduled start stages its own values into
+  the dongle's single set of request numbers, which the manual controls share, and nothing put the owner's values back
+  (after a scheduled Dump with Stop SOC 15 % the manual Stop SOC read 15 % instead of the owner's 10 %).
+  - A Home Assistant package saves each value a running scheduled start replaces, once per episode, and restores it in ONE
+    verified attempt once nothing owns control: no lease, start transaction, pending snapshot or armed write enable, no
+    manual inverter write, no scheduled start running.
+  - Only a valid saved value is written, and only where the number still holds the schedule's value; the owner's own later
+    change always wins.
+  - Failures are notified and never retried. An obligation older than 24 h is dropped with a notification, without a write,
+    even while something still blocks it.
+  - No firmware change; the schedule packages are unchanged; no Modbus, switch, button, script or esphome action.
+
 - **Dump to Grid limits in Home Assistant** (post-export entry `fcc1`; for the fcp1 / fcp2 firmware, not yet flashed;
   [docs/dev/full-capability-controls.md](docs/dev/full-capability-controls.md)).
   - A package that describes the dongle's limits: VALID, NOT CONFIGURED, INVALID or AWAITING CONFIRMATION; the power ceiling
