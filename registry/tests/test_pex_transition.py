@@ -287,6 +287,7 @@ LEDGER = {   # file -> exact number of calls of each _pex function
     "home-assistant/tests/test_ecco_free_power_schedule_reliability.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fps1: the pre-fix package for the reproduction, and fps1's declaration
     "home-assistant/tests/test_ecco_dump_to_grid_schedule_reliability.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # dgs1: the pre-fix package for the reproduction, and dgs1's declaration
     "home-assistant/tests/test_ecco_tou_target_soc_edit.py": {"read": 6, "as_of": 3, "fingerprint": 1, "record": 1},   # acs0: its declaration, the manifest and the three amended frozen suites as of the previous entry (+ their round trips; the manifest also as of acs0, since fcc1 edits it later)
+    "home-assistant/tests/test_ecco_house_power_hd1.py": {"read": 2, "as_of": 1, "fingerprint": 1, "record": 1},   # hd1: its declaration and the five frozen files as of fcc1 (+ their round trips)
     "registry/tests/test_ovw2_transition.py": {"read": 2, "as_of": 1, "fingerprint": 1, "record": 1, "historical_chain_sha": 1, "checkpoint": 1, "exact_pairs": 1},   # ovw2's own proofs
     "home-assistant/tests/test_ecco_overview_v21.py": {"read": 1, "as_of": 1},   # ovw2: reads the dashboard and VERSION.yaml as of ovw2 (one helper)
     "registry/tests/test_dump_capability_limits.py": {"fingerprint": 1, "record": 1},   # fcp1: its declaration's hash link
