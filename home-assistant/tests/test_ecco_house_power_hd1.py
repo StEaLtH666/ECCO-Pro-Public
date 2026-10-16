@@ -732,7 +732,8 @@ ids = [x.id for x in sc.POST_EXPORT_ENTRIES]
 FROZEN_FILES = {"home-assistant/packages/ecco_canonical_telemetry.yaml", "home-assistant/packages/ecco_pro.yaml",
                 "home-assistant/dashboards/ecco_pro.yaml", "influxdb/tasks/ecco_battery_outlook_5m.flux",
                 "registry/system_health_checks.yaml"}
-check("hd1 is appended right after smr1", ids[-1] == "hd1" and sc.CHAIN.prev_id("hd1") == "smr1", str(ids[-4:]))
+check("hd1 is appended right after smr1 (the twentieth post-export entry; position and parent pinned, not 'last')",
+      "hd1" in ids and ids.index("hd1") == 19 and sc.CHAIN.prev_id("hd1") == "smr1", str(ids[-4:]))
 check("hd1 declares exactly its five frozen edits (each with its reverter and checkpoint), its added files, and nothing else "
       "(no chain-pinned edit, delta, op path, include, substitution, banned token or tag)",
       set(E.frozen_reverts) == set(E.frozen_checkpoints) == set(F.FROZEN_REVERTERS) == FROZEN_FILES
