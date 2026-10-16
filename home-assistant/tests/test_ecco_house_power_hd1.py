@@ -461,6 +461,24 @@ check("a half-published poll (charging inverter -6800 W next to the old export g
       "held until the poll is complete, then recomputed (1300 W)", before == 1300.0 and mid == 1300.0 and mid_tick == 1300.0
       and near(after, 1300.0), f"{before} {mid} {mid_tick} {after}")
 check("...the mixed reading (-6800 + -700 = 0 W) is never shown", 0.0 not in (mid, mid_tick))
+s = Sim(PKG, native=0, inv=0, grid=500, started=False)     # NO memory (first deploy, or a restore that brings none back)
+shown = []
+s.poll(grid=-5500, partial={E_GRID})                          # a Dump start: the grid CT is published first (register 172)
+shown.append(s.value())
+s.advance(1)
+s.poll(0, 6000, -5500)                                        # the rest of the poll, then its text
+shown.append(s.value())
+check("with NO memory a reading's write is never taken for a poll: the half-published poll (grid -5500 W next to the old "
+      "inverter 0 W) is never shown as a confirmed 0 W; the complete poll is (500 W)", shown[0] is None and near(shown[1], 500.0)
+      and 0.0 not in shown, str(shown))
+s = Sim(PKG, ntp=False)
+s.step(0, 400, 0)
+s.advance(10)
+s.poll(ok=False)
+s.advance(47)
+s.poll(0, 1500, -500)                                         # reconnect: the readings, then the online flag (same lambda)
+check("no NTP time: after a dongle reconnect the value is recomputed at once on the online flag - the pre-outage value is never "
+      "shown as current (1000 W, not the old 400 W)", near(s.value(), 1000.0), str(s.presented()))
 s = Sim(PKG)
 s.step(1200, 1180, 20)
 s.ent[E_POLLED]["state"] = "2026-10-15 19:40:00"            # the dongle's clock stepped back (a new, older-looking text)
@@ -649,6 +667,16 @@ def battery(text: str) -> dict:
         s.advance(10)
         s.poll(inv=-6800, partial={E_INV})
         res["nontp_mix"] = s.value() == 1300.0
+        s = Sim(p, native=0, inv=0, grid=500, started=False)
+        s.poll(grid=-5500, partial={E_GRID})
+        res["first_input"] = s.value() is None
+        s = Sim(p, ntp=False)
+        s.step(0, 400, 0)
+        s.advance(10)
+        s.poll(ok=False)
+        s.advance(47)
+        s.poll(0, 1500, -500)
+        res["reconnect"] = near(s.value(), 1000.0)
     except Exception as exc:  # noqa: BLE001
         res["crash"] = f"{type(exc).__name__}: {exc}"
     return res
@@ -664,8 +692,8 @@ MUTANTS = [
      "{%- set r.v = 0.0 -%}{%- set r.src = 'none' -%}{%- set r.why = 'native 0 W cannot", "unconfirmed"),
     ("freshness ignored", "{%- set fresh = online and age is not none and age >= -5 and age <= 60 -%}", "{%- set fresh = true -%}",
      "stale"),
-    ("a replayed poll text counted as a poll", "{%- set new_poll = poll_valid and poll_text != pm.get('poll_text') -%}",
-     "{%- set new_poll = poll_valid -%}", "replay"),
+    ("a replayed poll text counted as a poll", "{%- set new_poll = poll_valid and tid != 'input' and poll_text != pm.get('poll_text') -%}",
+     "{%- set new_poll = poll_valid and tid != 'input' -%}", "replay"),
     ("recomputed on any input (mixing two polls)", "{%- set recompute = new_poll or tid == 'start' or (not poll_valid",
      "{%- set recompute = true or new_poll or tid == 'start' or (not poll_valid", "mix"),
     ("the grid sign inverted (inverter - grid)", "{%- set d = ([0, i + g] | max) if d_ok else none -%}",
@@ -674,7 +702,11 @@ MUTANTS = [
      "clamp"),
     ("a negative native trusted (clamped to 0 W)", "{%- set n_ok = n is number and n == n and n >= 0 and n <= 30000 -%}",
      "{%- set n_ok = n is number and n == n and (n | abs) <= 30000 -%}", "negative"),
-    ("no-NTP recompute on any reading's write", "or (not poll_valid and tid == 'tick')", "or (not poll_valid)", "nontp_mix"),
+    ("no-NTP recompute on any reading's write", "or (not poll_valid and tid in ['tick', 'liveness'])", "or (not poll_valid)", "nontp_mix"),
+    ("a reading's write counted as a poll", "{%- set new_poll = poll_valid and tid != 'input' and poll_text",
+     "{%- set new_poll = poll_valid and poll_text", "first_input"),
+    ("no NTP: not recomputed on the online flag", "(not poll_valid and tid in ['tick', 'liveness'])",
+     "(not poll_valid and tid == 'tick')", "reconnect"),
     ("the offline flag ignored", "{%- set online = is_state(e_online, 'on') -%}", "{%- set online = true -%}", "offline"),
     ("the presentation available without freshness", "{{ m is mapping and m.get('fresh') is sameas true and m.get('value_w') is number",
      "{{ m is mapping and m.get('value_w') is number", "stale"),
@@ -694,7 +726,7 @@ import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins hd1's declaration)
 import _hd1_scope as F  # noqa: E402
 
-HD1_FINGERPRINT = "9d1bc8e00415411f40caf57a1818fb46397c172e12ed4e88b789e7178642ebe2"
+HD1_FINGERPRINT = "0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e"
 E = sc.CHAIN.entry("hd1")
 ids = [x.id for x in sc.POST_EXPORT_ENTRIES]
 FROZEN_FILES = {"home-assistant/packages/ecco_canonical_telemetry.yaml", "home-assistant/packages/ecco_pro.yaml",

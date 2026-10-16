@@ -124,11 +124,12 @@ CANONICAL_1_NEW = _blk(r"""
   # Liveness: the dongle's sensor.ecco_clock_dongle_last_telemetry_update text, published only after a COMPLETE poll, as a
   # CHANGE seen by this model within the last 60 s (a reconnect that replays an old text does not count). Before the dongle
   # has NTP time that text is not published: the newest report of the three inputs is the fallback.
-  # Consistency: the value is recomputed only when a complete poll has landed (a new poll text), at start, or - with no
-  # per-poll text - on the 10 s tick (never on a single reading's write), so one value never mixes readings of two polls.
+  # Consistency: the value is recomputed only when a complete poll has landed (a new poll text, seen on its OWN trigger -
+  # a reading's write never counts as a poll, even with no memory), at start, or - with no per-poll text - on the 10 s tick
+  # and on the online flag (the dongle writes all three readings before it), never on a single reading's write.
   # Credible native: a finite reading 0..30000 W. A negative native is not credible (as in the firmware): inverter + grid.
-  # The model's state is constant and its memory changes only on a new poll, a new value or a freshness change, so an idle
-  # tick writes nothing (no logbook entry, no recorder row).
+  # The model's state is constant (no logbook entries). With the per-poll text its memory changes only on a new poll, a new
+  # value or a freshness change, so an idle tick writes nothing; without it, each tick recomputes and writes.
   - triggers:
       - trigger: state
         entity_id: sensor.ecco_clock_dongle_last_telemetry_update
@@ -169,7 +170,7 @@ CANONICAL_1_NEW = _blk(r"""
             {%- set poll_text = states(e_polled) -%}
             {%- set poll_valid = poll_text not in ['unknown', 'unavailable', 'none', '', 'Waiting'] -%}
             {%- set prev_poll_at = pm.get('poll_seen_at') if pm.get('poll_seen_at') is number else none -%}
-            {%- set new_poll = poll_valid and poll_text != pm.get('poll_text') -%}
+            {%- set new_poll = poll_valid and tid != 'input' and poll_text != pm.get('poll_text') -%}
             {%- set poll_seen_at = now_ts if new_poll else prev_poll_at -%}
             {%- set seen = namespace(ts=[]) -%}
             {%- if poll_valid -%}
@@ -184,7 +185,7 @@ CANONICAL_1_NEW = _blk(r"""
             {%- endif -%}
             {%- set age = (now_ts - (seen.ts | max)) if seen.ts | count > 0 else none -%}
             {%- set fresh = online and age is not none and age >= -5 and age <= 60 -%}
-            {%- set recompute = new_poll or tid == 'start' or (not poll_valid and tid == 'tick')
+            {%- set recompute = new_poll or tid == 'start' or (not poll_valid and tid in ['tick', 'liveness'])
                                or (pm.get('computed_at') is not number and tid != 'input') -%}
             {%- set r = namespace(v=pm.get('value_w'), src=pm.get('source', 'none'), why=pm.get('reason', ''),
                                   n=pm.get('native_w'), i=pm.get('inverter_w'), g=pm.get('grid_w'), d=pm.get('derived_w'),
@@ -226,7 +227,7 @@ CANONICAL_1_NEW = _blk(r"""
                   'derived_w': r.d,
                   'fresh': fresh,
                   'seen_at': (seen.ts | max) if seen.ts | count > 0 else none,
-                  'poll_text': poll_text if poll_valid else pm.get('poll_text'),
+                  'poll_text': poll_text if (poll_valid and tid != 'input') else pm.get('poll_text'),
                   'poll_seen_at': poll_seen_at,
                   'computed_at': r.at,
                   'computed_iso': r.at_iso

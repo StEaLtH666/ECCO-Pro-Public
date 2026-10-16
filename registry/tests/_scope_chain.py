@@ -1044,14 +1044,14 @@ HD1 = Entry(
     added_files=_hd1.ADDED_FILES,
     frozen_reverts=dict(_hd1.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after hd1; as of pub0 each is its pub0 state (manifest result hash)
-        _hd1.CANONICAL_REL: "b774b75d0c7fbe22546bbd35cbc8d5bb532aaa1dc0a71fe324aa81cb29cfb47e",
+        _hd1.CANONICAL_REL: "3c092ec2be73bdd205c1d9726ab317e8655e2749f5030e4c633bbcf9632a55da",
         _hd1.CORE_REL: "c24c553f54f3f5f12297985d0ea45e9fbd413d503137ebac997901aa705724ff",
         _hd1.DASHBOARD_REL: "8a642e171bbbd9747fa617c92421ef33be1d6b8545783363d3acf586979600b0",
         _hd1.OUTLOOK_REL: "e3bea25c762f33eda8d3be86b0aca50c33f610cd3de9918100b1a270f46abdf2",
         _hd1.HEALTH_REL: "4b8e5adb68a37f3c11677c1c6840f9328ee561bdbd290326962cf8c10cd10fbb",
     },
     # _pex.fingerprint(HD1): hashes its parent smr1's fingerprint and every declaration above
-    fingerprint="9d1bc8e00415411f40caf57a1818fb46397c172e12ed4e88b789e7178642ebe2",
+    fingerprint="0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e",
     note="derived house load: sensor.ecco_house_power is the native load when credible, inverter + grid CT when the native load "
          "is unavailable or falsely 0 W during export (the Energy Flow card's and the firmware's rule), unavailable - never 0 W - "
          "when it cannot be confirmed or telemetry is not fresh; a model entity in the canonical package; the snapshot, the "

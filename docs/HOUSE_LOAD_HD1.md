@@ -51,9 +51,13 @@ grid exceeds 150 W, or is unusable), applied to one canonical sensor:
   - A reconnect that replays an old text does not count.
   - Before the dongle has NTP time that text is not published, so the newest report of the three readings is used instead.
     Readings that stay unchanged for more than 60 s then make it unavailable.
-- **Consistency:** the value is recomputed only when a complete poll has landed. A half-published poll (the inverter already
-  new, the grid not yet) never mixes two polls; the previous value is held until the poll completes. Without NTP time there
-  is no per-poll text: the value is then recomputed on the 10 s tick, never on a single reading's write.
+- **Consistency:** the value is recomputed only when a complete poll has landed.
+  - A half-published poll (the inverter already new, the grid not yet) never mixes two polls: the previous value is held
+    until the poll completes.
+  - A reading's own write is never taken for a poll, even with no memory (the first evaluation after deployment).
+  - Without NTP time there is no per-poll text. The value is then recomputed on the 10 s tick and on the online flag (the
+    dongle writes all three readings before it), never on a single reading's write. A tick could mix readings only if
+    Home Assistant split one ESPHome batch across event-loop slices, which is negligible.
 - **Unavailable, never 0 W:** stale, unconfirmable or missing data makes the sensor unavailable. Statistics show a gap, the
   dashboard shows the value as not reporting, and the Battery Outlook learning gets no sample.
 
@@ -64,13 +68,16 @@ grid exceeds 150 W, or is unusable), applied to one canonical sensor:
 - Its `model` attribute holds the resolution: value, source, reason, native / inverter / grid / derived W, freshness,
   telemetry age, and the poll text and when it was seen.
 - It is always available, so this memory survives a template reload and a restart.
-- Its memory changes only on a new poll, a new value or a freshness change. An idle tick writes nothing, and with a constant
-  state there are no logbook entries. It still changes about once per poll (every 10 s), each change a recorder row and an
+- With a constant state there are no logbook entries. With NTP time its memory changes only on a new poll, a new value or a
+  freshness change, so an idle tick writes nothing. Without NTP time each tick recomputes and writes. It still changes about once per poll (every 10 s), each change a recorder row and an
   Influx point (the options file's `sensor.ecco_*` glob). Excluding it from the recorder and InfluxDB is recommended at the
   next planned restart.
 
 **`sensor.ecco_house_power` (changed).**
 - Same entity, `unique_id`, unit (W), device class (power) and state class (measurement), so long-term statistics continue.
+- Unavailable 60-70 s after the last complete poll through the model's freshness. If the model itself stopped updating, the
+  presentation's own backstop (at most 70 s since the last poll, re-checked by Home Assistant's once-a-minute re-render)
+  takes 70-130 s.
 - It now presents the model. It is unavailable unless the model is fresh and updating.
 - Attributes: `source`, `reason`, `native_w`, `inverter_w`, `grid_w`, `derived_w`, `telemetry_age_s`, `refreshed_at`,
   `source_entity` (the model), `note`, `sign_convention`.
