@@ -768,7 +768,9 @@ checks:
   evidence: home-assistant/packages/ecco_canonical_telemetry.yaml - applies uniformly to all 4 canonical
     sensors (ecco_battery_soc, ecco_house_power, ecco_pv_power, ecco_grid_power), each structurally identical.
     Canonical state is a direct float/round of the raw value with no unit conversion, so this should be
-    exactly 0 normally.
+    exactly 0 normally. Exception since hd1 - ecco_house_power is derived (the native load, or inverter +
+    grid CT while the native load is unavailable or falsely 0 W during export), so for it the raw comparison
+    is its model's source attribute, not register 178 alone (docs/HOUSE_LOAD_HD1.md).
   implementation_status: designed
   live_proof_status: unknown
 - id: canonical_stale_raw_fresh

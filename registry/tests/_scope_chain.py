@@ -116,6 +116,7 @@ import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
+import _hd1_scope as _hd1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1027,7 +1028,37 @@ SMR1 = Entry(
          "never retried); one package stanza in the manifest: ZERO firmware change, the schedule packages unchanged, no write to "
          "the inverter",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1)
+# hd1 (derived house load; _hd1_scope.py): made on the export after smr1. The inverter's native load (register 178) reads 0 W in
+# some states, notably during export, although the house still draws power; the Energy Flow card and the firmware's Dump
+# feed-forward already resolve it, Home Assistant did not. sensor.ecco_house_power becomes DERIVED by the same rule (native when
+# credible; inverter AC output + grid CT, import positive, clamped at 0, when the native load is unavailable or reads exactly 0 W
+# while inverter + grid exceeds 150 W), never a guessed zero (an unconfirmable 0 W or non-fresh telemetry = unavailable), through
+# a new model entity sensor.ecco_house_power_model in the same package; its consumers follow. FROZEN edits (PEX): the canonical
+# package, the core package (House Load Snapshot, Model Inputs Ready), the dashboard (16 house-load reads), the Battery Outlook
+# learning task (0 W samples excluded, no history rewrite) and the designed health-check record (_hd1_scope.FROZEN_REVERTERS); as
+# of pub0 each is the export byte for byte. Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path;
+# ZERO firmware byte, inverter write or write surface; no manifest stanza (the canonical package is already deployed); the FE-1
+# package and the Energy Flow card are unchanged.
+HD1 = Entry(
+    id="hd1", pr="HD1", commit="unmerged",
+    added_files=_hd1.ADDED_FILES,
+    frozen_reverts=dict(_hd1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after hd1; as of pub0 each is its pub0 state (manifest result hash)
+        _hd1.CANONICAL_REL: "3c092ec2be73bdd205c1d9726ab317e8655e2749f5030e4c633bbcf9632a55da",
+        _hd1.CORE_REL: "c24c553f54f3f5f12297985d0ea45e9fbd413d503137ebac997901aa705724ff",
+        _hd1.DASHBOARD_REL: "8a642e171bbbd9747fa617c92421ef33be1d6b8545783363d3acf586979600b0",
+        _hd1.OUTLOOK_REL: "e3bea25c762f33eda8d3be86b0aca50c33f610cd3de9918100b1a270f46abdf2",
+        _hd1.HEALTH_REL: "4b8e5adb68a37f3c11677c1c6840f9328ee561bdbd290326962cf8c10cd10fbb",
+    },
+    # _pex.fingerprint(HD1): hashes its parent smr1's fingerprint and every declaration above
+    fingerprint="0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e",
+    note="derived house load: sensor.ecco_house_power is the native load when credible, inverter + grid CT when the native load "
+         "is unavailable or falsely 0 W during export (the Energy Flow card's and the firmware's rule), unavailable - never 0 W - "
+         "when it cannot be confirmed or telemetry is not fresh; a model entity in the canonical package; the snapshot, the "
+         "learning gate, 16 dashboard house-load reads and the Battery Outlook learning follow: ZERO firmware, inverter write, "
+         "write surface or manifest change",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

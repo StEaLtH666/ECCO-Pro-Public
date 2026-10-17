@@ -892,14 +892,15 @@ template:
         attributes:
           sampled_at: "{{ now().isoformat() }}"
           sign_convention: "Positive = discharge, negative = charge"
+      # hd1: the house load is the derived canonical sensor (never the native load's false 0 W during export)
       - name: ECCO House Load Snapshot
         unique_id: ecco_house_load_snapshot
         availability: >
-          {{ states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none',''] }}
+          {{ states('sensor.ecco_house_power') not in ['unknown','unavailable','none',''] }}
         unit_of_measurement: W
         device_class: power
         state_class: measurement
-        state: "{{ states('sensor.ecco_clock_dongle_ecco_load_power') | float(0) | round(1) }}"
+        state: "{{ states('sensor.ecco_house_power') | float(0) | round(1) }}"
         attributes:
           sampled_at: "{{ now().isoformat() }}"
       - name: ECCO Grid Power Snapshot
@@ -1148,7 +1149,7 @@ template:
           {{ is_state('input_boolean.ecco_defaults_initialized','on')
              and states('sensor.ecco_clock_dongle_ecco_battery_soc') not in ['unknown','unavailable','none','']
              and states('sensor.ecco_clock_dongle_ecco_battery_output_power') not in ['unknown','unavailable','none','']
-             and states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none','']
+             and states('sensor.ecco_house_power') not in ['unknown','unavailable','none','']
              and states('sensor.ecco_clock_dongle_ecco_pv_power') not in ['unknown','unavailable','none','']
              and states('sensor.octopus_energy_electricity_your_meter_serial_your_import_mpan_current_rate') not in ['unknown','unavailable','none','']
              and states('sensor.energy_production_today_remaining') not in ['unknown','unavailable','none',''] }}

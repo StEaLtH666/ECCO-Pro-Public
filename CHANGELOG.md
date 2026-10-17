@@ -277,6 +277,17 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   card now resolves esbuild 0.28.1. No firmware, Home Assistant, dashboard or Modbus change.
 
 ### Fixed
+- **House load no longer reads 0 W while exporting** (post-export entry `hd1`;
+  [docs/HOUSE_LOAD_HD1.md](docs/HOUSE_LOAD_HD1.md)). The inverter's native load (register 178) reads 0 W in some states,
+  notably during export. `sensor.ecco_house_power` (same entity, unit and statistics) is now derived with the Energy Flow
+  card's and the firmware's rule: the native load when credible, inverter AC output + grid CT when the native load is
+  unavailable or falsely 0 W. It is unavailable, never 0 W, when the evidence is stale or cannot confirm a zero. A new
+  diagnostic `sensor.ecco_house_power_model` holds the resolution.
+  - The House Load Snapshot, the learning gate and 16 dashboard house-load reads now use it. The register table still
+    shows register 178. Seven runtime blends use their average alone while it is unavailable, so they never show NaN.
+  - The Battery Outlook learning excludes 0 W samples. No history is rewritten.
+  - No firmware, inverter write or write-surface change. FE-1 and the Energy Flow card are unchanged.
+
 
 - Advanced Configuration Stage 0 (`acs0`) no longer presses Apply into a routine Modbus poll (acs0r1; source only, NOT
   installed; [docs/dev/advanced-config/stage0-safety-case.md](docs/dev/advanced-config/stage0-safety-case.md) section 3b).

@@ -739,7 +739,9 @@ import _smr1_scope as M  # noqa: E402
 
 E = chain.CHAIN.entry("smr1")
 ids = [e.id for e in chain.POST_EXPORT_ENTRIES]
-check("smr1 is appended right after fcc1", ids[-1] == "smr1" and chain.CHAIN.prev_id("smr1") == "fcc1", str(ids[-3:]))
+# Position and parent are pinned, not "last": a later entry (hd1) is appended after smr1.
+check("smr1 is appended right after fcc1 (the nineteenth post-export entry)", "smr1" in ids and ids.index("smr1") == 18
+      and chain.CHAIN.prev_id("smr1") == "fcc1", str(ids[-3:]))
 check("smr1 chain-pins exactly the manifest, edits no frozen file, adds exactly its files (all present)",
       set(E.reverts) == {M.MANIFEST_REL} and not E.frozen_reverts and E.added_files == M.ADDED_FILES
       and all((ROOT / p).is_file() for p in M.ADDED_FILES), str(sorted(E.added_files)))

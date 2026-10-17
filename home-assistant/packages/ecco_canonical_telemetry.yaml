@@ -11,6 +11,9 @@
 #
 # Introduced alongside the existing *_snapshot sensors in ecco_pro.yaml,
 # not as a replacement for them. Those are untouched by this file.
+#
+# Exception (hd1): ECCO House Power is DERIVED, not a plain alias - the native load, or inverter + grid CT when the
+# native load is unavailable or falsely reads 0 W (see its block below and docs/HOUSE_LOAD_HD1.md).
 
 template:
   - triggers:
@@ -32,25 +35,173 @@ template:
           source_entity: sensor.ecco_clock_dongle_ecco_battery_soc
           refreshed_at: "{{ now().isoformat() }}"
 
+  # hd1 - ECCO House Power is DERIVED, not a plain alias (docs/HOUSE_LOAD_HD1.md). The inverter's native load (register 178,
+  # sensor.ecco_clock_dongle_ecco_load_power) reads 0 W in some states, notably while the system exports, although the house
+  # still draws power. The same rule the Energy Flow card (resolveHomeW) and the firmware's Dump feed-forward already use:
+  #   house = the native load when it is a credible reading; inverter AC output + grid CT (import positive, clamped at 0)
+  #           when the native load is unavailable, or reads exactly 0 W while inverter + grid shows more than 150 W.
+  # Inverter AC output (register 175) is positive when it supplies AC and negative when it charges from AC, so inverter + grid
+  # is the house both while exporting and while charging from the grid. Battery and PV need no term of their own.
+  # Never a guessed zero: a native 0 W that inverter + grid cannot confirm, or telemetry that is not fresh, is UNAVAILABLE.
+  #
+  # The model below holds the resolution and its liveness memory (it is always available, so the memory survives a reload or a
+  # restart); ECCO House Power presents it and is unavailable unless the evidence is fresh.
+  # Liveness: the dongle's sensor.ecco_clock_dongle_last_telemetry_update text, published only after a COMPLETE poll, as a
+  # CHANGE seen by this model within the last 60 s (a reconnect that replays an old text does not count). Before the dongle
+  # has NTP time that text is not published: the newest report of the three inputs is the fallback.
+  # Consistency: the value is recomputed only when a complete poll has landed (a new poll text, seen on its OWN trigger -
+  # a reading's write never counts as a poll, even with no memory), at start, or - with no per-poll text - on the 10 s tick
+  # and on the online flag (the dongle writes all three readings before it), never on a single reading's write.
+  # Credible native: a finite reading 0..30000 W. A negative native is not credible (as in the firmware): inverter + grid.
+  # The model's state is constant (no logbook entries). With the per-poll text its memory changes only on a new poll, a new
+  # value or a freshness change, so an idle tick writes nothing; without it, each tick recomputes and writes.
   - triggers:
+      - trigger: state
+        entity_id: sensor.ecco_clock_dongle_last_telemetry_update
+        id: poll
+      - trigger: state
+        entity_id:
+          - sensor.ecco_clock_dongle_ecco_load_power
+          - sensor.ecco_clock_dongle_ecco_inverter_output_power
+          - sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp
+        id: input
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+        id: liveness
+      - trigger: time_pattern
+        seconds: "/10"
+        id: tick
       - trigger: homeassistant
         event: start
-      - trigger: state
-        entity_id: sensor.ecco_clock_dongle_ecco_load_power
+        id: start
     sensor:
+      - name: ECCO House Power Model
+        unique_id: ecco_house_power_model
+        icon: mdi:home-lightning-bolt-outline
+        state: "model"
+        attributes:
+          model: >-
+            {%- set e_native = 'sensor.ecco_clock_dongle_ecco_load_power' -%}
+            {%- set e_inv = 'sensor.ecco_clock_dongle_ecco_inverter_output_power' -%}
+            {%- set e_grid = 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp' -%}
+            {%- set e_online = 'binary_sensor.ecco_clock_dongle_telemetry_online' -%}
+            {%- set e_polled = 'sensor.ecco_clock_dongle_last_telemetry_update' -%}
+            {%- set prev = this.attributes.get('model') if this is defined and this.attributes is defined else none -%}
+            {%- set pm = prev if prev is mapping else {} -%}
+            {%- set t = trigger if trigger is defined else none -%}
+            {%- set tid = t.id if t is not none and t.id is defined else 'start' -%}
+            {%- set now_ts = as_timestamp(now()) -%}
+            {%- set online = is_state(e_online, 'on') -%}
+            {%- set poll_text = states(e_polled) -%}
+            {%- set poll_valid = poll_text not in ['unknown', 'unavailable', 'none', '', 'Waiting'] -%}
+            {%- set prev_poll_at = pm.get('poll_seen_at') if pm.get('poll_seen_at') is number else none -%}
+            {%- set new_poll = poll_valid and tid != 'input' and poll_text != pm.get('poll_text') -%}
+            {%- set poll_seen_at = now_ts if new_poll else prev_poll_at -%}
+            {%- set seen = namespace(ts=[]) -%}
+            {%- if poll_valid -%}
+              {%- if poll_seen_at is number -%}{%- set seen.ts = [poll_seen_at] -%}{%- endif -%}
+            {%- else -%}
+              {%- for e in [e_native, e_inv, e_grid] -%}
+                {%- set so = states[e] -%}
+                {%- if so is not none and so.state not in ['unknown', 'unavailable', 'none', ''] -%}
+                  {%- set seen.ts = seen.ts + [as_timestamp(so.last_reported if so.last_reported is defined and so.last_reported is not none else so.last_updated, 0)] -%}
+                {%- endif -%}
+              {%- endfor -%}
+            {%- endif -%}
+            {%- set age = (now_ts - (seen.ts | max)) if seen.ts | count > 0 else none -%}
+            {%- set fresh = online and age is not none and age >= -5 and age <= 60 -%}
+            {%- set recompute = new_poll or tid == 'start' or (not poll_valid and tid in ['tick', 'liveness'])
+                               or (pm.get('computed_at') is not number and tid != 'input') -%}
+            {%- set r = namespace(v=pm.get('value_w'), src=pm.get('source', 'none'), why=pm.get('reason', ''),
+                                  n=pm.get('native_w'), i=pm.get('inverter_w'), g=pm.get('grid_w'), d=pm.get('derived_w'),
+                                  at=pm.get('computed_at'), at_iso=pm.get('computed_iso')) -%}
+            {%- if recompute -%}
+              {%- set n = states(e_native) | float(none) -%}
+              {%- set n_ok = n is number and n == n and n >= 0 and n <= 30000 -%}
+              {%- set i = states(e_inv) | float(none) -%}
+              {%- set g = states(e_grid) | float(none) -%}
+              {%- set d_ok = i is number and i == i and (i | abs) <= 30000 and g is number and g == g and (g | abs) <= 30000 -%}
+              {%- set d = ([0, i + g] | max) if d_ok else none -%}
+              {%- set r.n = (n | round(1)) if n_ok else none -%}
+              {%- set r.i = (i | round(1)) if d_ok else none -%}
+              {%- set r.g = (g | round(1)) if d_ok else none -%}
+              {%- set r.d = (d | round(1)) if d_ok else none -%}
+              {%- set r.at = now_ts -%}
+              {%- set r.at_iso = now().isoformat() -%}
+              {%- if not n_ok and d_ok -%}
+                {%- set r.v = d | round(1) -%}{%- set r.src = 'derived' -%}{%- set r.why = 'native load unavailable or not credible' -%}
+              {%- elif not n_ok -%}
+                {%- set r.v = none -%}{%- set r.src = 'none' -%}{%- set r.why = 'no usable load, inverter or grid reading' -%}
+              {%- elif n == 0 and d_ok and d > 150 -%}
+                {%- set r.v = d | round(1) -%}{%- set r.src = 'derived' -%}{%- set r.why = 'native load reads 0 W while inverter + grid shows consumption' -%}
+              {%- elif n == 0 and d_ok -%}
+                {%- set r.v = 0.0 -%}{%- set r.src = 'native' -%}{%- set r.why = 'native 0 W confirmed by inverter + grid' -%}
+              {%- elif n == 0 -%}
+                {%- set r.v = none -%}{%- set r.src = 'none' -%}{%- set r.why = 'native 0 W cannot be confirmed (inverter or grid reading unavailable)' -%}
+              {%- else -%}
+                {%- set r.v = n | round(1) -%}{%- set r.src = 'native' -%}{%- set r.why = '' -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- set model = {
+                  'value_w': r.v,
+                  'source': r.src,
+                  'reason': r.why,
+                  'native_w': r.n,
+                  'inverter_w': r.i,
+                  'grid_w': r.g,
+                  'derived_w': r.d,
+                  'fresh': fresh,
+                  'seen_at': (seen.ts | max) if seen.ts | count > 0 else none,
+                  'poll_text': poll_text if (poll_valid and tid != 'input') else pm.get('poll_text'),
+                  'poll_seen_at': poll_seen_at,
+                  'computed_at': r.at,
+                  'computed_iso': r.at_iso
+                } -%}
+            {{ model }}
+
+  # The canonical house load, for dashboards, the Energy Flow card and the Battery Outlook learning. Lookups only: every value
+  # comes from the model above. Unavailable (never 0 W) unless the evidence is fresh and the model is updating.
+  - sensor:
       - name: ECCO House Power
         unique_id: ecco_house_power
         unit_of_measurement: W
         device_class: power
         state_class: measurement
         availability: >-
-          {{ states('sensor.ecco_clock_dongle_ecco_load_power') not in ['unknown','unavailable','none',''] }}
+          {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+          {{ m is mapping and m.get('fresh') is sameas true and m.get('value_w') is number and m.get('seen_at') is number
+             and (as_timestamp(now()) - m.get('seen_at')) <= 70 }}
         state: >-
-          {{ states('sensor.ecco_clock_dongle_ecco_load_power') | float(0) | round(1) }}
+          {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+          {{ m.get('value_w') if m is mapping and m.get('value_w') is number else none }}
         attributes:
-          source_entity: sensor.ecco_clock_dongle_ecco_load_power
-          note: "Whole-house consumption. Always non-negative in current usage."
-          refreshed_at: "{{ now().isoformat() }}"
+          source: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('source') if m is mapping else 'none' }}
+          reason: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('reason') if m is mapping else 'model not available' }}
+          native_w: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('native_w') if m is mapping else none }}
+          derived_w: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('derived_w') if m is mapping else none }}
+          inverter_w: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('inverter_w') if m is mapping else none }}
+          grid_w: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('grid_w') if m is mapping else none }}
+          telemetry_age_s: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ ((as_timestamp(now()) - m.get('seen_at')) | round(1)) if m is mapping and m.get('seen_at') is number else none }}
+          refreshed_at: >-
+            {%- set m = state_attr('sensor.ecco_house_power_model', 'model') -%}
+            {{ m.get('computed_iso') if m is mapping else none }}
+          source_entity: sensor.ecco_house_power_model
+          note: "Whole-house consumption (hd1): the native load, or inverter + grid CT when the native load is unavailable or falsely 0 W. Never negative; unavailable, never 0 W, when not fresh."
+          sign_convention: "Grid CT positive = import; inverter AC output positive = supplying AC"
 
   - triggers:
       - trigger: homeassistant

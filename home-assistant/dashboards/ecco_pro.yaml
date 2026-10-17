@@ -1100,7 +1100,7 @@ views:
                 [[[
                   const n = (id) => Number(states[id]?.state ?? 0);
                   const pv = n('sensor.ecco_clock_dongle_ecco_pv_power');
-                  const load = n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const load = n('sensor.ecco_house_power');
                   const batt = n('sensor.ecco_clock_dongle_ecco_battery_output_power');
                   const grid = n('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp');
                   const gen = n('sensor.ecco_clock_dongle_ecco_generator_port_power');
@@ -1138,7 +1138,7 @@ views:
                   const n = (id) => Number(states[id]?.state ?? 0);
                   const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
                   const pv = n('sensor.ecco_clock_dongle_ecco_pv_power');
-                  const load = n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const load = n('sensor.ecco_house_power');
                   const soc = n('sensor.ecco_clock_dongle_ecco_battery_soc');
                   const loadToday = n('sensor.ecco_clock_dongle_ecco_day_load_energy');
                   const capAh = n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah') || 620;
@@ -1214,7 +1214,7 @@ views:
                   const now = new Date();
                   const elapsed = Math.max(now.getHours() + now.getMinutes()/60, 1);
                   const avgSoFar = loadToday / elapsed;
-                  const liveKw = load / 1000;
+                  const liveKw = Number.isFinite(load) ? load / 1000 : avgSoFar;   // hd1: house load unavailable -> the average alone
                   const blendedKw = clamp(avgSoFar * 0.65 + liveKw * 0.35, 0.15, 5);
 
                   const targetTimeRaw = states['sensor.ecco_config_charge_start_time']?.state;
@@ -1639,7 +1639,7 @@ views:
             variables:
               msg: >
                 [[[
-                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_clock_dongle_ecco_load_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
+                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_house_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
                   const bad = ids.filter(([, id]) => {
                     const s = states[id]?.state;
                     return s === undefined || ['unknown', 'unavailable'].includes(String(s).toLowerCase());
@@ -1723,7 +1723,7 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
-              - entity: sensor.ecco_clock_dongle_ecco_load_power
+              - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
                 type: line
@@ -2190,7 +2190,7 @@ views:
                 [[[
                   const n = (id) => Number(states[id]?.state ?? 0);
                   const pv = n('sensor.ecco_clock_dongle_ecco_pv_power');
-                  const load = n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const load = n('sensor.ecco_house_power');
                   const batt = n('sensor.ecco_clock_dongle_ecco_battery_output_power');
                   const grid = n('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp');
                   const gen = n('sensor.ecco_clock_dongle_ecco_generator_port_power');
@@ -2307,7 +2307,7 @@ views:
                   const n = (id) => Number(states[id]?.state ?? 0);
                   const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
                   const pv = n('sensor.ecco_clock_dongle_ecco_pv_power');
-                  const load = n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const load = n('sensor.ecco_house_power');
                   const soc = n('sensor.ecco_clock_dongle_ecco_battery_soc');
                   const loadToday = n('sensor.ecco_clock_dongle_ecco_day_load_energy');
                   const capAh = n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah') || 620;
@@ -2383,7 +2383,7 @@ views:
                   const now = new Date();
                   const elapsed = Math.max(now.getHours() + now.getMinutes()/60, 1);
                   const avgSoFar = loadToday / elapsed;
-                  const liveKw = load / 1000;
+                  const liveKw = Number.isFinite(load) ? load / 1000 : avgSoFar;   // hd1: house load unavailable -> the average alone
                   const blendedKw = clamp(avgSoFar * 0.65 + liveKw * 0.35, 0.15, 5);
 
                   const targetTimeRaw = states['sensor.ecco_config_charge_start_time']?.state;
@@ -3018,7 +3018,7 @@ views:
                   const n=(id)=>Number(states[id]?.state??0);
                   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
                   const loadToday=n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const loadW=n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const loadW=n('sensor.ecco_house_power');
                   const pvW=n('sensor.ecco_clock_dongle_ecco_pv_power');
                   const actualPV=n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
                   const soc=n('sensor.ecco_clock_dongle_ecco_battery_soc');
@@ -3049,7 +3049,7 @@ views:
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const hoursLeft=Math.max(24-elapsed,0);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const loadRemaining=runKw*hoursLeft;
                   const usefulSolar=remaining!==null?remaining*factor*.95:null;
@@ -3319,7 +3319,7 @@ views:
                   const capAh=n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah')||620;
                   const capKwh=capAh*51.2/1000;
                   const loadToday=n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const loadW=n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const loadW=n('sensor.ecco_house_power');
                   const pvW=n('sensor.ecco_clock_dongle_ecco_pv_power');
                   const actualPV=n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
 
@@ -3340,7 +3340,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -3714,7 +3714,7 @@ views:
             variables:
               msg: >
                 [[[
-                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_clock_dongle_ecco_load_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
+                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_house_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
                   const bad = ids.filter(([, id]) => {
                     const s = states[id]?.state;
                     return s === undefined || ['unknown', 'unavailable'].includes(String(s).toLowerCase());
@@ -3798,7 +3798,7 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
-              - entity: sensor.ecco_clock_dongle_ecco_load_power
+              - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
                 type: line
@@ -4131,7 +4131,7 @@ views:
                   const capAh=n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah')||620;
                   const capKwh=capAh*51.2/1000;
                   const loadToday=n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const loadW=n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const loadW=n('sensor.ecco_house_power');
                   const pvW=n('sensor.ecco_clock_dongle_ecco_pv_power');
                   const actualPV=n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
 
@@ -4152,7 +4152,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -5194,7 +5194,7 @@ views:
                   const capAh=n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah')||620;
                   const capKwh=capAh*51.2/1000;
                   const loadToday=n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const loadW=n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const loadW=n('sensor.ecco_house_power');
                   const pvW=n('sensor.ecco_clock_dongle_ecco_pv_power');
                   const actualPV=n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
 
@@ -5215,7 +5215,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -6170,7 +6170,7 @@ views:
                   const capAh=n('sensor.ecco_clock_dongle_ecco_battery_capacity_ah')||620;
                   const capKwh=capAh*51.2/1000;
                   const loadToday=n('sensor.ecco_clock_dongle_ecco_day_load_energy');
-                  const loadW=n('sensor.ecco_clock_dongle_ecco_load_power');
+                  const loadW=n('sensor.ecco_house_power');
                   const pvW=n('sensor.ecco_clock_dongle_ecco_pv_power');
                   const actualPV=n('sensor.ecco_clock_dongle_ecco_day_pv_energy');
 
@@ -6191,7 +6191,7 @@ views:
                   const now=new Date();
                   const elapsed=Math.max(now.getHours()+now.getMinutes()/60,1);
                   const avgKw=loadToday/elapsed;
-                  const liveKw=loadW/1000;
+                  const liveKw=Number.isFinite(loadW)?loadW/1000:avgKw;   // hd1: house load unavailable -> the average alone
                   const runKw=clamp(avgKw*.65+liveKw*.35,.15,5);
                   const projectedDaily=clamp(runKw*24,6,60);
 
@@ -6773,7 +6773,7 @@ views:
               battery_soc_184: sensor.ecco_clock_dongle_ecco_battery_soc
               battery_rated_capacity: sensor.ecco_clock_dongle_ecco_battery_capacity_ah
               day_load_energy_84: sensor.ecco_clock_dongle_ecco_day_load_energy
-              essential_power: sensor.ecco_clock_dongle_ecco_load_power
+              essential_power: sensor.ecco_house_power
               nonessential_power: 'no'
               aux_power_166: sensor.ecco_clock_dongle_ecco_generator_port_power
               aux_connected_status: binary_sensor.ecco_clock_dongle_ecco_generator_connected
@@ -6818,7 +6818,7 @@ views:
             variables:
               msg: >
                 [[[
-                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_clock_dongle_ecco_load_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
+                  const ids = [['Solar', 'sensor.ecco_clock_dongle_ecco_pv_power'], ['House', 'sensor.ecco_house_power'], ['Battery', 'sensor.ecco_clock_dongle_ecco_battery_output_power'], ['Grid', 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp'], ['SOC', 'sensor.ecco_clock_dongle_ecco_battery_soc']];
                   const bad = ids.filter(([, id]) => {
                     const s = states[id]?.state;
                     return s === undefined || ['unknown', 'unavailable'].includes(String(s).toLowerCase());
@@ -6902,7 +6902,7 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
-              - entity: sensor.ecco_clock_dongle_ecco_load_power
+              - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
                 type: line

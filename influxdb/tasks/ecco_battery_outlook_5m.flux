@@ -191,6 +191,11 @@ currentSOC = float(v: socRecord._value)
 // Canonical data is preferred per 5-minute window, with legacy history used
 // only where canonical has no point, preserving training continuity without
 // double-counting overlapping history.
+//
+// hd1: a 5-minute house-load sample of 0 W or less is not consumption. Before hd1 the inverter's native load read 0 W
+// whenever the system exported, and up to 30 days of such samples are still in the history (canonical and legacy alike).
+// They are left untouched in the bucket - no history is rewritten - and only excluded here. Since hd1 the canonical
+// sensor reports the derived house load during export and is unavailable (no sample), never 0 W, when it is not fresh.
 loadHistory =
   readEccoTelemetryHistory(
     bucket: "ecco_5m",
@@ -199,6 +204,7 @@ loadHistory =
     field: "value",
     rangeStart: -30d,
   )
+    |> filter(fn: (r) => r._value > 0.0)
 
 trainingRecord =
   loadHistory
