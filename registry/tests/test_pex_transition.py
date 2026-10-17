@@ -291,7 +291,8 @@ LEDGER = {   # file -> exact number of calls of each _pex function
     "home-assistant/tests/test_ecco_overview_v21.py": {"read": 1, "as_of": 1},   # ovw2: reads the dashboard and VERSION.yaml as of ovw2 (one helper)
     "registry/tests/test_dump_capability_limits.py": {"fingerprint": 1, "record": 1},   # fcp1: its declaration's hash link
     "registry/tests/test_dump_safety_fcp2.py": {"fingerprint": 1, "record": 1},   # fcp2: its declaration's hash link
-    "home-assistant/tests/test_ecco_dump_limits.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # fcc1: the manifest as of fcp2 and its declaration's hash link
+    "home-assistant/tests/test_ecco_dump_limits.py": {"read": 1, "as_of": 2, "fingerprint": 1, "record": 1},   # fcc1: the manifest as of fcp2 and its declaration's hash link; smr1: +1 as_of (the manifest as of fcc1)
+    "home-assistant/tests/test_ecco_schedule_manual_restore.py": {"read": 1, "as_of": 1, "fingerprint": 1, "record": 1},   # smr1: the manifest as of fcc1 and its declaration's hash link
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}
 CALL = re.compile(r"\b_pex\.(\w+)\(")
