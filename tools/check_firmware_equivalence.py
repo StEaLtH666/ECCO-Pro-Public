@@ -32,8 +32,10 @@ Layers (every check is STRICT: nothing is normalised, a difference is a FAIL, ne
                  < 2026.9.0); any other version is BLOCKED.
                  ESPHome fetches library sources from the PlatformIO registry while generating. L3 therefore runs only
                  with `--esphome-cache DIR` (a pio_components/ seed copied into each sandbox, no download expected) or
-                 with `--allow-toolchain-downloads`; every download URL is reported, and a download despite a seeded
-                 cache FAILS. ESPHome runs with PYTHONHASHSEED=0: `esphome config` prints some keys in hash-seed order
+                 with `--allow-toolchain-downloads`. This is DETECTION, not network blocking: the tool scrapes ESPHome's
+                 log for "Downloading <url>" lines, reports each one, and FAILS on a logged download despite a seeded
+                 cache. It does not isolate the network, and PlatformIO / user caches outside ESPHOME_DATA_DIR are not
+                 sandboxed, so traffic ESPHome or PlatformIO do not log is not seen. ESPHome runs with PYTHONHASHSEED=0: `esphome config` prints some keys in hash-seed order
                  (the generated C++ and the config hash were observed seed-independent). The generated hashes depend on
                  the sandbox path (ESPHome echoes include paths into comments), so a baseline that must be reproduced
                  later uses `--sandbox <fixed path>`.
@@ -333,7 +335,7 @@ def compare_inventories(rep: Report, target: str, ia: dict, ib: dict) -> None:
             detail = (_first_list_diff(sa[k], sb[k], f"section {k!r}") if isinstance(sa[k], list) and isinstance(sb[k], list)
                       else f"section {k!r} content differs") + (f" (also: {bad[1:6]})" if len(bad) > 1 else "")
         rep.add("L1", "section items identical (ordered, per-item digest)", target, not bad, detail)
-    rep.add("L1", "lambda text identical (count + digest)", target,
+    rep.add("L1", "C++ text identical (every lambda body: count + digest)", target,
             (ia["lambda_count"], ia["lambda_digest"]) == (ib["lambda_count"], ib["lambda_digest"]),
             f"{ia['lambda_count']} -> {ib['lambda_count']} lambdas, digest {ia['lambda_digest'][:12]} -> {ib['lambda_digest'][:12]}")
     rep.add("L1", "header durable-tag inventory identical", target, ia["header_tags"] == ib["header_tags"],
@@ -395,13 +397,13 @@ def _authority(tree: Tree) -> dict:
 def compare_authority(rep: Report, aa: dict, ab: dict) -> None:
     for side, a in (("before", aa), ("after", ab)):
         problems = a["unknown_extent_writes"] + a["bus_access_findings"]
-        rep.add("L2", f"write surface determinable ({side})", "classic+s3", not problems,
+        rep.add("L2", f"write surface determinable ({side})", "classic", not problems,
                 f"{len(problems)} unknown-extent / unclassified bus access: {problems[:3]}")
     na = [p["name"] for p in aa["paths"]]
     nb = [p["name"] for p in ab["paths"]]
-    rep.add("L2", "write paths identical (names, order)", "classic+s3", na == nb, _first_list_diff(na, nb, "write paths"))
+    rep.add("L2", "write paths identical (names, order)", "classic", na == nb, _first_list_diff(na, nb, "write paths"))
     bad = [x["name"] for x, y in zip(aa["paths"], ab["paths"]) if x != y]
-    rep.add("L2", "per-path Modbus ops, flags, arms, obligations identical", "classic+s3", na == nb and not bad,
+    rep.add("L2", "per-path Modbus ops, flags, arms, obligations identical", "classic", na == nb and not bad,
             f"differs in: {bad[:6]}")
 
 
@@ -435,6 +437,9 @@ BUILD_TIME_LINE = re.compile(r'^const (time_t ESPHOME_BUILD_TIME = \d+;|char ESP
                              r'^const char ESPHOME_BUILD_TIME_STR\[\] (PROGMEM )?= "[^"]*";$')
 CONFIG_HASH_LINE = re.compile(r"^const uint32_t ESPHOME_CONFIG_HASH = (0x[0-9a-fA-F]+)U;")
 DOWNLOAD_LINE = re.compile(r"Downloading (\S+)")
+CACHE_RULE = ("cache gate: ESPHome may fetch library sources (PlatformIO registry) while generating; pass --esphome-cache "
+              "DIR holding pio_components/, or --allow-toolchain-downloads to permit the download (logged downloads are "
+              "reported; the network is not blocked)")
 
 
 def generate(tree: Tree, target: str, work: Path, cache: Path | None) -> dict:
@@ -557,7 +562,8 @@ def run(before: "str | Tree", after: "str | Tree", do_generate: bool = False, re
         }
         compare_inventories(rep, target, ia, ib)
 
-    # L2 (the analyser models the production YAML; the S3 wrapper adds no logic and is covered by L0/L1/L3)
+    # L2 is classic-only: the analyser models the production YAML. The S3 wrapper (which only pulls production in as a
+    # package and overrides esp32/logger) is covered by L0 (bytes), L1 (its own inventory) and L3 (generated C++).
     aa, ab = authority(ta), authority(tb)
     bl["authority"] = {"write_paths": len(ab["paths"]),
                        "write_ops": sum(1 for p in ab["paths"] for o in p["ops"] if o[0] == "write"),
@@ -581,8 +587,7 @@ def run(before: "str | Tree", after: "str | Tree", do_generate: bool = False, re
     if not have_cache and not allow_downloads:
         for target in TARGETS:
             rep.mark("L3", "generated C++ / validated config", target, "BLOCKED",
-                     "ESPHome fetches library sources (PlatformIO registry) while generating: pass --esphome-cache DIR "
-                     "holding pio_components/, or --allow-toolchain-downloads to permit (and record) the download")
+                     CACHE_RULE)
         return rep
     bl["commands"] = [" ".join(ESPHOME_COMMANDS[k]) + " <target yaml>" for k in ("config", "generate")]
     bl["declared_exclusions"] = [f"{BUILD_INFO}: ESPHOME_BUILD_TIME and ESPHOME_BUILD_TIME_STR (wall clock)"]
@@ -630,12 +635,12 @@ def run(before: "str | Tree", after: "str | Tree", do_generate: bool = False, re
     finally:
         shutil.rmtree(root, ignore_errors=True)
     bl["toolchain_downloads"] = sorted(set(downloads))
-    rep.mark("L3", "toolchain downloads during generation", "classic+s3",
+    rep.mark("L3", "toolchain downloads logged by ESPHome (detection, not blocking)", "classic+s3",
              "PASS" if not downloads or allow_downloads else "FAIL",
              (f"{len(set(downloads))} download(s), permitted by --allow-toolchain-downloads: {sorted(set(downloads))}"
               if downloads and allow_downloads else
-              f"unexpected download(s) with a seeded cache: {sorted(set(downloads))}" if downloads else
-              "none (library sources taken from the --esphome-cache seed)"))
+              f"unexpected logged download(s) with a seeded cache: {sorted(set(downloads))}" if downloads else
+              "none logged (library sources taken from the --esphome-cache seed; unlogged traffic is not detected)"))
     return rep
 
 
@@ -662,7 +667,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="directory (outside the repository) holding pio_components/ to seed each L3 sandbox; with "
                          "--allow-toolchain-downloads an empty one is filled by the first run")
     ap.add_argument("--allow-toolchain-downloads", action="store_true",
-                    help="permit ESPHome to download library sources while generating (each URL is reported)")
+                    help="permit ESPHome to download library sources while generating (each logged URL is reported; the network is not blocked either way)")
     ap.add_argument("--sandbox", type=Path,
                     help="fixed L3 sandbox path (outside the repository, must not exist; removed afterwards) so the "
                          "path-dependent generated hashes in the baseline are reproducible")
