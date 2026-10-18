@@ -1,0 +1,20 @@
+{
+  "schema": "ecco-health-v2-ha-mapping/1",
+  "source": "home-assistant/packages/ecco_system_health.yaml at public main 555cf859 (read only)",
+  "note": "What each of the ten existing sensor.ecco_health_* entities represents. 'attribute' = the sensor declares represented_checks itself (the test parses the package and compares). 'comment' = the package states it only in a comment. 'simplified' = covered in a reduced online/offline form that does not reproduce the registry brackets.",
+  "sensors": [
+    {"unique_id": "ecco_health_communications", "subsystems": ["communications"], "represented_checks": [], "simplified_checks": ["telemetry_freshness", "configuration_freshness"], "source": "comment", "declares_partial": false},
+    {"unique_id": "ecco_health_runtime_configuration", "subsystems": ["runtime_configuration"], "represented_checks": ["runtime_config_ready"], "simplified_checks": [], "source": "comment", "declares_partial": false},
+    {"unique_id": "ecco_health_manual_write_system", "subsystems": ["manual_write_system"], "represented_checks": ["manual_write_duration"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_rtc", "subsystems": ["rtc_time"], "represented_checks": ["rtc_correction_duration", "rtc_stall_detected", "rtc_ntp_synced", "rtc_correction_failures_recent"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_free_power", "subsystems": ["free_power"], "represented_checks": ["free_power_operation_duration", "free_power_active_state", "free_power_snapshot_recovery"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_start_failures", "subsystems": ["free_power", "manual_write_system"], "represented_checks": ["free_power_start_failed_recent", "dump_to_grid_start_failed_recent"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_configuration", "subsystems": ["inverter_configuration"], "represented_checks": ["config_cache_valid"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_inverter_telemetry", "subsystems": ["inverter_telemetry"], "represented_checks": ["inverter_alarm_fault", "inverter_grid_connected"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_supervision", "subsystems": ["supervision"], "represented_checks": ["supervision_status_available", "supervision_startup", "supervision_not_stable", "supervision_suspect", "supervision_lost"], "simplified_checks": [], "source": "attribute", "declares_partial": true},
+    {"unique_id": "ecco_health_fallback", "subsystems": ["fallback"], "represented_checks": "ALL_FALLBACK_SUBSYSTEM_CHECKS", "simplified_checks": [], "source": "attribute", "declares_partial": true}
+  ],
+  "required_checks_not_fully_represented": ["configuration_freshness", "esphome_reachable", "telemetry_freshness"],
+  "non_gating_reference_entity": "ecco_manual_control_ready_reference",
+  "absent_designed_entities": ["ecco_system_health", "ecco_system_attention_required", "ecco_manual_control_ready"]
+}
