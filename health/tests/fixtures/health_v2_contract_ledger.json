@@ -1,0 +1,40 @@
+{
+  "schema": "ecco-health-v2-ledger/1",
+  "description": "Facts about the CURRENT design/implementation that the Health v2 contract records. Each entry is asserted by the golden test, so a change to existing code, registry, package or docs that alters one of them fails the test and forces the contract to be revisited. Nothing here changes behaviour.",
+  "registry": {
+    "checks_total": 63,
+    "implementation_status": {"designed": 41, "implemented_offline": 22},
+    "live_proof_status": {"unknown": 63},
+    "rollup_participation": {"automatic": 58, "diagnostic_only": 3, "manual_only": 2},
+    "reason_codes_total": 70,
+    "subsystems_total": 16,
+    "required_control_checks": [
+      "config_cache_valid", "configuration_freshness", "esphome_reachable", "free_power_active_state",
+      "free_power_operation_duration", "free_power_snapshot_recovery", "inverter_alarm_fault", "manual_write_duration",
+      "rtc_correction_duration", "runtime_config_ready", "telemetry_freshness"
+    ]
+  },
+  "ha_package": {
+    "health_sensor_unique_ids": [
+      "ecco_health_communications", "ecco_health_configuration", "ecco_health_fallback", "ecco_health_free_power",
+      "ecco_health_inverter_telemetry", "ecco_health_manual_write_system", "ecco_health_rtc",
+      "ecco_health_runtime_configuration", "ecco_health_start_failures", "ecco_health_supervision"
+    ]
+  },
+  "mismatches": [
+    {"id": "M-01", "area": "docs", "statement": "docs/SYSTEM_HEALTH_ARCHITECTURE.md still says 'The full 43-check architecture' and '17 of 46 reason codes'; the registry has 63 checks and 70 reason codes."},
+    {"id": "M-02", "area": "ha", "statement": "Home Assistant implements ten per-subsystem sensors only. The rollup sensor.ecco_system_health, the attention flag and a gating manual-control-ready entity do not exist; the one readiness entity is labelled REFERENCE ONLY, DO NOT USE TO GATE."},
+    {"id": "M-03", "area": "engine", "statement": "The engine result types lack the evidence fields the architecture document lists (last_good, source_signals, age_seconds and the three subsystem flags on SubsystemResult)."},
+    {"id": "M-04", "area": "engine", "statement": "evaluate_all does not treat an absent check as UNKNOWN in the overall rollup: overall can read HEALTHY while a required check is missing (readiness correctly fails closed)."},
+    {"id": "M-05", "area": "engine", "statement": "A freshness timestamp in the future yields a negative age and HEALTHY; ecco_core.freshness treats a future observation time as never fresh."},
+    {"id": "M-06", "area": "engine", "statement": "Datetime subtraction between two aware datetimes that share one tzinfo ignores the UTC offset. With Europe/London local datetimes this gives wrong ages on the 25 h (25 Oct 2026) and 23 h (28 Mar 2027) nights. UTC-aware inputs, or different tzinfo objects, are correct."},
+    {"id": "M-07", "area": "engine", "statement": "OverallHealthResult.severity_rank is the tier-capped rank, so UNKNOWN from an INFORMATIONAL subsystem reports state UNKNOWN with rank 1 while SEVERITY_RANK[UNKNOWN] is 2."},
+    {"id": "M-08", "area": "ha", "statement": "The HA communications row evaluates the two online flags only (no 60/180/600 s brackets) and maps any state other than 'on', including unknown and unavailable, to FAILED; the engine separates UNKNOWN from FAILED."},
+    {"id": "M-09", "area": "engine", "statement": "rtc_stall_detected is a plain boolean check: an isolated and a sustained stall give the same WARNING; there is no duration input."},
+    {"id": "M-10", "area": "engine", "statement": "With automatic clock sync OFF, rtc_drift_uncorrected is SUPPRESSED with no reason code; overall stays HEALTHY and control stays ready; no registry reason code names 'sync disabled'; HA does not represent rtc_drift_uncorrected."},
+    {"id": "M-11", "area": "engine-vs-ha", "statement": "failure_counter_delta needs a baseline at least window_seconds old (otherwise UNKNOWN) and reports UNKNOWN after a reset; the HA RTC row, per its documentation, latches WARNING for 1800 s after an observed increase and treats a reset as baseline-only. HA templates were not evaluated in this job."},
+    {"id": "M-12", "area": "ha", "statement": "HA transaction durations are derived from last_changed and under-report across a Home Assistant restart or ESPHome reconnect (documented limitation)."},
+    {"id": "M-13", "area": "engine", "statement": "The reason an UNKNOWN was produced exists only as free human_reason text; there is no machine-readable subtype."},
+    {"id": "M-14", "area": "freshness", "statement": "Freshness limits live in three places: registry warning and failure thresholds, the ecco_core.freshness catalogue (failure threshold only; the 60/180 s warning tiers appear only in a note), and HA templates (none). Registry failure thresholds and the catalogue agree today for telemetry (180 s) and configuration (600 s)."}
+  ]
+}

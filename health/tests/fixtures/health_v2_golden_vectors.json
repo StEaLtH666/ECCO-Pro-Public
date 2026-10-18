@@ -1,0 +1,545 @@
+{
+  "schema": "ecco-health-v2-golden/1",
+  "description": "Synthetic golden vectors for the existing pure engine health/system_health.py and the real registry. kind ENGINE = asserted against the current engine; kind PENDING = a future Home Assistant / Health v2 semantic, NOT asserted, never a PASS. No live data, no real HA history.",
+  "default_now": "2026-09-18T12:00:00Z",
+  "engine_vectors": [
+    {
+      "id": "HV-A01", "group": "A healthy/current", "title": "every check healthy and current",
+      "set": {},
+      "expect": {
+        "overall": {"state": "HEALTHY", "rank": 0},
+        "readiness": {"ready": true, "blocking": [], "insufficient": [], "missing": []},
+        "subsystems": {"communications": "HEALTHY", "rtc_time": "HEALTHY", "inverter_telemetry": "HEALTHY", "fallback": "HEALTHY", "supervision": "HEALTHY"}
+      }
+    },
+    {
+      "id": "HV-A02", "group": "A healthy/current", "title": "ONLY the checks the ten HA sensors represent are supplied (all healthy): 10/10 is not overall clearance",
+      "only_checks_from": "ha_represented",
+      "note": "Every represented check is healthy, as in a 10/10 reading. The engine still reports UNKNOWN overall (subsystems with no evaluated check) and NOT READY (three required checks missing).",
+      "expect": {
+        "overall": {"state": "UNKNOWN", "rank": 2},
+        "readiness": {"ready": false, "blocking": [], "insufficient": [], "missing": ["configuration_freshness", "esphome_reachable", "telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-B01", "group": "B UNKNOWN/unavailable/missing", "title": "telemetry never updated -> UNKNOWN, never HEALTHY",
+      "set": {"telemetry_freshness": {"last_updated": null}},
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "UNKNOWN", "codes": []}},
+        "subsystems": {"inverter_telemetry": "UNKNOWN"},
+        "overall": {"state": "UNKNOWN", "rank": 2, "contains": ["inverter_telemetry"]},
+        "readiness": {"ready": false, "blocking": [], "insufficient": ["telemetry_freshness"], "missing": []}
+      }
+    },
+    {
+      "id": "HV-B02", "group": "B UNKNOWN/unavailable/missing", "title": "a required check is absent from the snapshot: readiness fails closed but the overall label stays HEALTHY (gap M-04)",
+      "omit": ["telemetry_freshness"], "known_gap": "M-04",
+      "expect": {
+        "absent": ["telemetry_freshness"],
+        "overall": {"state": "HEALTHY", "rank": 0},
+        "readiness": {"ready": false, "blocking": [], "insufficient": [], "missing": ["telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-B03", "group": "B UNKNOWN/unavailable/missing", "title": "ESPHome availability unknown (available=None) -> UNKNOWN INSUFFICIENT_EVIDENCE",
+      "set": {"esphome_reachable": {"available": null}},
+      "expect": {
+        "checks": {"esphome_reachable": {"state": "UNKNOWN", "codes": ["INSUFFICIENT_EVIDENCE"]}},
+        "subsystems": {"communications": "UNKNOWN"},
+        "overall": {"state": "UNKNOWN", "rank": 2, "contains": ["communications"]},
+        "readiness": {"ready": false, "blocking": [], "insufficient": ["esphome_reachable"], "missing": []}
+      }
+    },
+    {
+      "id": "HV-B04", "group": "B UNKNOWN/unavailable/missing", "title": "ESPHome never observed -> UNKNOWN",
+      "set": {"esphome_reachable": {"ever_observed": false, "available": null}},
+      "expect": {
+        "checks": {"esphome_reachable": {"state": "UNKNOWN", "codes": ["INSUFFICIENT_EVIDENCE"], "reason_contains": "Never observed"}},
+        "overall": {"state": "UNKNOWN", "rank": 2},
+        "readiness": {"ready": false, "insufficient": ["esphome_reachable"]}
+      }
+    },
+    {
+      "id": "HV-B05", "group": "B UNKNOWN/unavailable/missing", "title": "ESPHome unavailable (available=False) -> FAILED ESPHOME_UNAVAILABLE, blocks control",
+      "set": {"esphome_reachable": {"available": false}},
+      "expect": {
+        "checks": {"esphome_reachable": {"state": "FAILED", "codes": ["ESPHOME_UNAVAILABLE"]}},
+        "overall": {"state": "FAILED", "rank": 3, "contains": ["communications"]},
+        "readiness": {"ready": false, "blocking": ["esphome_reachable"], "insufficient": [], "missing": []}
+      }
+    },
+    {
+      "id": "HV-B06", "group": "B UNKNOWN/unavailable/missing", "title": "a real WARNING and an UNKNOWN at the same rank: the label is WARNING, UNKNOWN stays visible only through contributing subsystems and readiness",
+      "set": {"rtc_stall_detected": {"value": true}, "telemetry_freshness": {"last_updated": null}},
+      "known_gap": "M-04b",
+      "expect": {
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time", "inverter_telemetry"], "codes": ["RTC_STALL_DETECTED"]},
+        "readiness": {"ready": false, "insufficient": ["telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-B07", "group": "B UNKNOWN/unavailable/missing", "title": "UNKNOWN from an INFORMATIONAL subsystem alone: overall UNKNOWN with rank 1 (rank not comparable with the label, gap M-07)",
+      "set": {"battery_outlook_freshness": {"last_updated": null}},
+      "known_gap": "M-07",
+      "expect": {
+        "checks": {"battery_outlook_freshness": {"state": "UNKNOWN", "codes": []}},
+        "subsystems": {"battery_outlook": "UNKNOWN"},
+        "overall": {"state": "UNKNOWN", "rank": 1, "contains": ["battery_outlook"]},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-C01", "group": "C RTC", "title": "RTC stall flag true (isolated or sustained, the engine cannot tell): WARNING RTC_STALL_DETECTED, does not block control",
+      "set": {"rtc_stall_detected": {"value": true}},
+      "expect": {
+        "checks": {"rtc_stall_detected": {"state": "WARNING", "codes": ["RTC_STALL_DETECTED"]}},
+        "subsystems": {"rtc_time": "WARNING"},
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time"], "codes": ["RTC_STALL_DETECTED"]},
+        "readiness": {"ready": true, "blocking": [], "insufficient": [], "missing": []}
+      }
+    },
+    {
+      "id": "HV-C02", "group": "C RTC", "title": "the same stall flag after 400 s of continuous stall: identical result (the engine has no stall-duration input; split is design-only, see P01)",
+      "set": {"rtc_stall_detected": {"value": true}},
+      "context": {"stall_duration_s": 400, "engine_blind_to": "stall duration"},
+      "known_gap": "M-09",
+      "expect": {
+        "checks": {"rtc_stall_detected": {"state": "WARNING", "codes": ["RTC_STALL_DETECTED"]}},
+        "overall": {"state": "WARNING", "rank": 2, "codes": ["RTC_STALL_DETECTED"]},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-C03", "group": "C RTC", "title": "correction in progress for 5 s: WARNING RTC_CORRECTION_ACTIVE and blocks control",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": {"age_s": 5}}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "WARNING", "codes": ["RTC_CORRECTION_ACTIVE"], "age_s": 5.0}},
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time"]},
+        "readiness": {"ready": false, "blocking": ["rtc_correction_duration"], "insufficient": [], "missing": []}
+      }
+    },
+    {
+      "id": "HV-C04", "group": "C RTC", "title": "correction in progress for 179 s: still WARNING (boundary)",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": {"age_s": 179}}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "WARNING", "codes": ["RTC_CORRECTION_ACTIVE"], "age_s": 179.0}},
+        "readiness": {"ready": false, "blocking": ["rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-C05", "group": "C RTC", "title": "correction in progress for 180 s: FAILED RTC_CORRECTION_STUCK (boundary)",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": {"age_s": 180}}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "FAILED", "codes": ["RTC_CORRECTION_STUCK"], "age_s": 180.0}},
+        "overall": {"state": "FAILED", "rank": 3, "contains": ["rtc_time"]},
+        "readiness": {"ready": false, "blocking": ["rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-C06", "group": "C RTC", "title": "correction active but its start time is unknown: UNKNOWN, never 'just started'",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": null}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "UNKNOWN", "codes": []}},
+        "overall": {"state": "UNKNOWN", "rank": 2},
+        "readiness": {"ready": false, "insufficient": ["rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-C07", "group": "C RTC", "title": "one failed correction, baseline older than the 1800 s window: WARNING RTC_CORRECTION_FAILURES_RECENT, does not block",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 6, "baseline_observed_at": {"age_s": 1810}}},
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "WARNING", "codes": ["RTC_CORRECTION_FAILURES_RECENT"], "reason_contains": "(ongoing)"}},
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time"]},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-C08", "group": "C RTC", "title": "same failure with recovered=true: still WARNING, text says recovered",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 6, "baseline_observed_at": {"age_s": 1810}, "recovered": true}},
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "WARNING", "codes": ["RTC_CORRECTION_FAILURES_RECENT"], "reason_contains": "recovered"}}
+      }
+    },
+    {
+      "id": "HV-C09", "group": "C RTC", "title": "failed correction but the baseline is only 600 s old (< 1800 s window): UNKNOWN, not WARNING (engine window semantics, mismatch M-11)",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 6, "baseline_observed_at": {"age_s": 600}}},
+      "known_gap": "M-11",
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": [], "reason_contains": "not enough evidence"}},
+        "overall": {"state": "UNKNOWN", "rank": 2},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-C10", "group": "C RTC", "title": "no failures, absolute counter large (4000): HEALTHY, a historical counter is not a current fault",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 4000, "counter_value": 4000, "baseline_observed_at": {"age_s": 1810}}},
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "HEALTHY", "codes": []}},
+        "overall": {"state": "HEALTHY", "rank": 0}
+      }
+    },
+    {
+      "id": "HV-C11", "group": "C RTC", "title": "automatic clock sync OFF: the uncorrected-drift check is SUPPRESSED with no reason code; overall HEALTHY, ready (gap M-10: sync-off is invisible)",
+      "set": {"rtc_drift_uncorrected": {"applicable": false}},
+      "known_gap": "M-10",
+      "expect": {
+        "checks": {"rtc_drift_uncorrected": {"state": "SUPPRESSED", "codes": []}},
+        "overall": {"state": "HEALTHY", "rank": 0},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-C12", "group": "C RTC", "title": "NTP not synced: WARNING RTC_NTP_UNSYNCED",
+      "set": {"rtc_ntp_synced": {"value": false}},
+      "expect": {
+        "checks": {"rtc_ntp_synced": {"state": "WARNING", "codes": ["RTC_NTP_UNSYNCED"]}},
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time"]}
+      }
+    },
+    {
+      "id": "HV-C13", "group": "C RTC", "title": "RTC read 200 s old: DEGRADED RTC_READ_STALE; the check has no FAILED tier",
+      "set": {"rtc_read_freshness": {"last_updated": {"age_s": 200}}},
+      "expect": {
+        "checks": {"rtc_read_freshness": {"state": "DEGRADED", "codes": ["RTC_READ_STALE"], "age_s": 200.0}},
+        "overall": {"state": "DEGRADED", "rank": 1}
+      }
+    },
+    {
+      "id": "HV-C14", "group": "C RTC", "title": "RTC stall and correction busy together: both codes reported at rank 2",
+      "set": {"rtc_stall_detected": {"value": true}, "rtc_correction_duration": {"active": true, "active_since": {"age_s": 10}}},
+      "expect": {
+        "overall": {"state": "WARNING", "rank": 2, "contains": ["rtc_time"], "codes": ["RTC_CORRECTION_ACTIVE", "RTC_STALL_DETECTED"]},
+        "readiness": {"ready": false, "blocking": ["rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-D01", "group": "D telemetry/config age", "title": "telemetry 59 s: HEALTHY (boundary)",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 59}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "HEALTHY", "codes": [], "age_s": 59.0}}, "overall": {"state": "HEALTHY", "rank": 0}}
+    },
+    {
+      "id": "HV-D02", "group": "D telemetry/config age", "title": "telemetry 60 s: DEGRADED (boundary)",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 60}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 60.0}}, "overall": {"state": "DEGRADED", "rank": 1}}
+    },
+    {
+      "id": "HV-D03", "group": "D telemetry/config age", "title": "telemetry 70 s: DEGRADED and still ready",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 70}}},
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 70.0}},
+        "subsystems": {"inverter_telemetry": "DEGRADED"},
+        "overall": {"state": "DEGRADED", "rank": 1, "contains": ["inverter_telemetry"]},
+        "readiness": {"ready": true, "blocking": [], "insufficient": [], "missing": []}
+      }
+    },
+    {
+      "id": "HV-D04", "group": "D telemetry/config age", "title": "telemetry 179 s: DEGRADED (boundary)",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 179}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 179.0}}, "readiness": {"ready": true}}
+    },
+    {
+      "id": "HV-D05", "group": "D telemetry/config age", "title": "telemetry 180 s: FAILED MODBUS_TELEMETRY_STALE, blocks control (boundary)",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 180}}},
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "FAILED", "codes": ["MODBUS_TELEMETRY_STALE"], "age_s": 180.0}},
+        "overall": {"state": "FAILED", "rank": 3, "contains": ["inverter_telemetry"]},
+        "readiness": {"ready": false, "blocking": ["telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-D06", "group": "D telemetry/config age", "title": "telemetry 200 s: FAILED, blocks control",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": 200}}},
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "FAILED", "codes": ["MODBUS_TELEMETRY_STALE"], "age_s": 200.0}},
+        "overall": {"state": "FAILED", "rank": 3},
+        "readiness": {"ready": false, "blocking": ["telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-D07", "group": "D telemetry/config age", "title": "configuration 179 s: HEALTHY (boundary)",
+      "set": {"configuration_freshness": {"last_updated": {"age_s": 179}}},
+      "expect": {"checks": {"configuration_freshness": {"state": "HEALTHY", "codes": [], "age_s": 179.0}}, "overall": {"state": "HEALTHY", "rank": 0}}
+    },
+    {
+      "id": "HV-D08", "group": "D telemetry/config age", "title": "configuration 180 s: DEGRADED (boundary)",
+      "set": {"configuration_freshness": {"last_updated": {"age_s": 180}}},
+      "expect": {"checks": {"configuration_freshness": {"state": "DEGRADED", "codes": ["MODBUS_CONFIG_DEGRADED"], "age_s": 180.0}}, "readiness": {"ready": true}}
+    },
+    {
+      "id": "HV-D09", "group": "D telemetry/config age", "title": "configuration 599 s: DEGRADED (boundary)",
+      "set": {"configuration_freshness": {"last_updated": {"age_s": 599}}},
+      "expect": {"checks": {"configuration_freshness": {"state": "DEGRADED", "codes": ["MODBUS_CONFIG_DEGRADED"], "age_s": 599.0}}, "readiness": {"ready": true}}
+    },
+    {
+      "id": "HV-D10", "group": "D telemetry/config age", "title": "configuration 600 s: FAILED MODBUS_CONFIG_STALE, blocks control (boundary)",
+      "set": {"configuration_freshness": {"last_updated": {"age_s": 600}}},
+      "expect": {
+        "checks": {"configuration_freshness": {"state": "FAILED", "codes": ["MODBUS_CONFIG_STALE"], "age_s": 600.0}},
+        "subsystems": {"inverter_configuration": "FAILED"},
+        "overall": {"state": "FAILED", "rank": 3, "contains": ["inverter_configuration"]},
+        "readiness": {"ready": false, "blocking": ["configuration_freshness"]}
+      }
+    },
+    {
+      "id": "HV-D11", "group": "D telemetry/config age", "title": "telemetry timestamp 30 s in the FUTURE (clock skew): the engine reports HEALTHY with age -30 (gap M-05; ecco_core treats a future time as never fresh)",
+      "set": {"telemetry_freshness": {"last_updated": {"age_s": -30}}},
+      "known_gap": "M-05",
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "HEALTHY", "codes": [], "age_s": -30.0}},
+        "overall": {"state": "HEALTHY", "rank": 0},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-E01", "group": "E restart/counter reset", "title": "HA restart: every counter baseline lost and every transaction flag unknown -> those checks UNKNOWN, overall UNKNOWN, not ready",
+      "transform": "ha_restart",
+      "expect": {
+        "checks": {
+          "rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": []},
+          "telemetry_failures_recent": {"state": "UNKNOWN", "codes": []},
+          "manual_write_failures_recent": {"state": "UNKNOWN", "codes": []},
+          "rtc_correction_duration": {"state": "UNKNOWN", "codes": []},
+          "manual_write_duration": {"state": "UNKNOWN", "codes": []},
+          "free_power_operation_duration": {"state": "UNKNOWN", "codes": []}
+        },
+        "overall": {"state": "UNKNOWN", "rank": 2},
+        "readiness": {"ready": false, "insufficient": ["free_power_operation_duration", "free_power_snapshot_recovery", "manual_write_duration", "rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-E02", "group": "E restart/counter reset", "title": "ESP reboot: the since-boot counter went backwards (2 < 5) -> UNKNOWN 'counter went backwards', never HEALTHY",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 2, "baseline_observed_at": {"age_s": 1810}}},
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": [], "reason_contains": "went backwards"}},
+        "overall": {"state": "UNKNOWN", "rank": 2}
+      }
+    },
+    {
+      "id": "HV-E03", "group": "E restart/counter reset", "title": "counter value unavailable (None) with a baseline: UNKNOWN",
+      "set": {"rtc_correction_failures_recent": {"counter_value": null}},
+      "expect": {
+        "checks": {"rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": [], "reason_contains": "No baseline"}}
+      }
+    },
+    {
+      "id": "HV-E04", "group": "E restart/counter reset", "title": "counter restarted at 0 after a long uptime (baseline 4000, counter 0): UNKNOWN",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 4000, "counter_value": 0, "baseline_observed_at": {"age_s": 1810}}},
+      "expect": {"checks": {"rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": [], "reason_contains": "went backwards"}}}
+    },
+    {
+      "id": "HV-F01", "group": "F UK clock-change nights", "title": "25 h night (fall-back 25 Oct 2026): telemetry 60 s old across the repeated hour, UTC-aware -> DEGRADED, correct",
+      "now": "2026-10-25T01:00:50Z", "render": "utc",
+      "set": {"telemetry_freshness": {"last_updated": {"utc": "2026-10-25T00:59:50Z"}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 60.0}}}
+    },
+    {
+      "id": "HV-F02", "group": "F UK clock-change nights", "title": "same instants rendered as Europe/London local datetimes sharing one tzinfo (01:59:50 BST -> 01:00:50 GMT): wall-clock subtraction gives age -3540 s -> HEALTHY (HAZARD M-06)",
+      "now": "2026-10-25T01:00:50Z", "render": "london_same_tz", "known_gap": "M-06",
+      "set": {"telemetry_freshness": {"last_updated": {"utc": "2026-10-25T00:59:50Z"}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "HEALTHY", "codes": [], "age_s": -3540.0}}}
+    },
+    {
+      "id": "HV-F03", "group": "F UK clock-change nights", "title": "fall-back, 'now' in London local and inputs in UTC (different tzinfo): correct, DEGRADED",
+      "now": "2026-10-25T01:00:50Z", "render": "london_now_utc_inputs",
+      "set": {"telemetry_freshness": {"last_updated": {"utc": "2026-10-25T00:59:50Z"}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 60.0}}}
+    },
+    {
+      "id": "HV-F04", "group": "F UK clock-change nights", "title": "23 h night (spring-forward 28 Mar 2027): telemetry 60 s old, UTC-aware -> DEGRADED, correct",
+      "now": "2027-03-28T01:00:50Z", "render": "utc",
+      "set": {"telemetry_freshness": {"last_updated": {"utc": "2027-03-28T00:59:50Z"}}},
+      "expect": {"checks": {"telemetry_freshness": {"state": "DEGRADED", "codes": ["MODBUS_TELEMETRY_DEGRADED"], "age_s": 60.0}}}
+    },
+    {
+      "id": "HV-F05", "group": "F UK clock-change nights", "title": "same instants as same-tzinfo London local (00:59:50 GMT -> 02:00:50 BST): naive age 3660 s -> false FAILED and not ready (HAZARD M-06)",
+      "now": "2027-03-28T01:00:50Z", "render": "london_same_tz", "known_gap": "M-06",
+      "set": {"telemetry_freshness": {"last_updated": {"utc": "2027-03-28T00:59:50Z"}}},
+      "expect": {
+        "checks": {"telemetry_freshness": {"state": "FAILED", "codes": ["MODBUS_TELEMETRY_STALE"], "age_s": 3660.0}},
+        "readiness": {"ready": false, "blocking": ["telemetry_freshness"]}
+      }
+    },
+    {
+      "id": "HV-F06", "group": "F UK clock-change nights", "title": "fall-back: RTC correction active for 180 s across the change, UTC-aware -> FAILED STUCK",
+      "now": "2026-10-25T01:02:00Z", "render": "utc",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": {"utc": "2026-10-25T00:59:00Z"}}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "FAILED", "codes": ["RTC_CORRECTION_STUCK"], "age_s": 180.0}},
+        "readiness": {"ready": false, "blocking": ["rtc_correction_duration"]}
+      }
+    },
+    {
+      "id": "HV-F07", "group": "F UK clock-change nights", "title": "same stuck correction as same-tzinfo London local (01:59:00 BST -> 01:02:00 GMT): negative duration -3420 s -> HEALTHY, the stuck correction is missed (HAZARD M-06)",
+      "now": "2026-10-25T01:02:00Z", "render": "london_same_tz", "known_gap": "M-06",
+      "set": {"rtc_correction_duration": {"active": true, "active_since": {"utc": "2026-10-25T00:59:00Z"}}},
+      "expect": {
+        "checks": {"rtc_correction_duration": {"state": "HEALTHY", "codes": [], "age_s": -3420.0}},
+        "readiness": {"ready": true}
+      }
+    },
+    {
+      "id": "HV-F08", "group": "F UK clock-change nights", "title": "fall-back: failed-correction counter 5 -> 6, baseline 2400 s old, UTC-aware -> WARNING",
+      "now": "2026-10-25T01:10:00Z", "render": "utc",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 6, "baseline_observed_at": {"utc": "2026-10-25T00:30:00Z"}}},
+      "expect": {"checks": {"rtc_correction_failures_recent": {"state": "WARNING", "codes": ["RTC_CORRECTION_FAILURES_RECENT"]}}}
+    },
+    {
+      "id": "HV-F09", "group": "F UK clock-change nights", "title": "same failure as same-tzinfo London local (01:30 BST baseline, 01:10 GMT now): negative elapsed -> UNKNOWN, the failure is not reported (HAZARD M-06, fails quiet)",
+      "now": "2026-10-25T01:10:00Z", "render": "london_same_tz", "known_gap": "M-06",
+      "set": {"rtc_correction_failures_recent": {"baseline_counter_value": 5, "counter_value": 6, "baseline_observed_at": {"utc": "2026-10-25T00:30:00Z"}}},
+      "expect": {"checks": {"rtc_correction_failures_recent": {"state": "UNKNOWN", "codes": [], "reason_contains": "not enough evidence"}}}
+    }
+  ],
+  "aggregation_vectors": [
+    {
+      "id": "HV-G01", "title": "CRITICAL FAILED is uncapped",
+      "results": [{"subsystem": "communications", "state": "FAILED", "codes": ["ESPHOME_UNAVAILABLE"]}],
+      "expect": {"state": "FAILED", "rank": 3, "contains": ["communications"], "codes": ["ESPHOME_UNAVAILABLE"]}
+    },
+    {
+      "id": "HV-G02", "title": "STANDARD FAILED is capped to the WARNING band and reported as a definite WARNING",
+      "results": [{"subsystem": "supervision", "state": "FAILED", "codes": []}],
+      "expect": {"state": "WARNING", "rank": 2, "contains": ["supervision"]}
+    },
+    {
+      "id": "HV-G03", "title": "INFORMATIONAL FAILED is capped to DEGRADED",
+      "results": [{"subsystem": "battery_outlook", "state": "FAILED", "codes": []}],
+      "expect": {"state": "DEGRADED", "rank": 1, "contains": ["battery_outlook"]}
+    },
+    {
+      "id": "HV-G04", "title": "INFORMATIONAL WARNING is capped to DEGRADED",
+      "results": [{"subsystem": "battery_outlook", "state": "WARNING", "codes": []}],
+      "expect": {"state": "DEGRADED", "rank": 1}
+    },
+    {
+      "id": "HV-G05", "title": "a CRITICAL subsystem with only UNKNOWN evidence makes the overall UNKNOWN",
+      "results": [{"subsystem": "inverter_telemetry", "state": "UNKNOWN", "codes": []}],
+      "expect": {"state": "UNKNOWN", "rank": 2, "contains": ["inverter_telemetry"]}
+    },
+    {
+      "id": "HV-G06", "title": "WARNING and UNKNOWN at the same rank: WARNING wins the label",
+      "results": [
+        {"subsystem": "rtc_time", "state": "WARNING", "codes": ["RTC_STALL_DETECTED"]},
+        {"subsystem": "communications", "state": "UNKNOWN", "codes": []}
+      ],
+      "expect": {"state": "WARNING", "rank": 2, "contains": ["rtc_time", "communications"]}
+    },
+    {
+      "id": "HV-G07", "title": "UNKNOWN (rank 2) outranks DEGRADED (rank 1)",
+      "results": [
+        {"subsystem": "inverter_configuration", "state": "DEGRADED", "codes": ["MODBUS_CONFIG_DEGRADED"]},
+        {"subsystem": "inverter_telemetry", "state": "UNKNOWN", "codes": []}
+      ],
+      "expect": {"state": "UNKNOWN", "rank": 2, "contains": ["inverter_telemetry"]}
+    },
+    {
+      "id": "HV-G08", "title": "only SUPPRESSED results: the subsystem and the overall read SUPPRESSED, not HEALTHY",
+      "results": [{"subsystem": "free_power", "state": "SUPPRESSED", "codes": []}],
+      "expect": {"state": "SUPPRESSED", "rank": 0}
+    },
+    {
+      "id": "HV-G09", "title": "a diagnostic-only subsystem is excluded from the overall; HEALTHY elsewhere stays HEALTHY",
+      "results": [
+        {"subsystem": "influx_raw", "state": "UNKNOWN", "codes": [], "rollup": "diagnostic_only"},
+        {"subsystem": "free_power", "state": "HEALTHY", "codes": []}
+      ],
+      "expect": {"state": "HEALTHY", "rank": 0, "contains": ["free_power"], "excludes": ["influx_raw"]}
+    },
+    {
+      "id": "HV-G10", "title": "only a diagnostic-only subsystem: nothing contributes -> UNKNOWN, never a fabricated HEALTHY",
+      "results": [{"subsystem": "influx_raw", "state": "UNKNOWN", "codes": [], "rollup": "diagnostic_only"}],
+      "expect": {"state": "UNKNOWN", "rank": 2, "contains": []}
+    },
+    {
+      "id": "HV-G11", "title": "no subsystem results at all: UNKNOWN",
+      "results": [],
+      "expect": {"state": "UNKNOWN", "rank": 2, "contains": []}
+    }
+  ],
+  "pending_vectors": [
+    {
+      "id": "HV-P01", "title": "RTC stall: isolated/transient versus sustained presentation",
+      "requires": "H4 + owner decision O-2 (separate approval; registry reason-code change)",
+      "semantics": "A single stall episode shorter than a configurable duration is shown as a noted, lower-prominence condition; a stall that persists beyond that duration, or recurs beyond a configurable rate, is shown at WARNING or higher. The raw RTC_STALL_DETECTED boolean, its episode history and the WARNING-eligible record are always preserved and visible. A stall alone can never reach FAILED. A stall never clears an RTC_CORRECTION_ACTIVE/STUCK, NTP or failed-correction finding. UNKNOWN inputs are never reclassified.",
+      "engine_today": "HV-C01 and HV-C02: identical WARNING for any stall duration.",
+      "ledger": "M-09"
+    },
+    {
+      "id": "HV-P02", "title": "Automatic clock sync OFF as its own visible condition",
+      "requires": "H4 + owner decision (new reason code in registry/health_reason_codes.yaml)",
+      "semantics": "When automatic clock sync is OFF the RTC row carries a distinct reason (working name RTC_SYNC_DISABLED) with a duration, instead of rtc_drift_uncorrected being silently SUPPRESSED. It must remain visible after a reboot (the dongle setting persists OFF silently). It must not be 'fixed' by any HA write.",
+      "engine_today": "HV-C11: SUPPRESSED, no reason code, overall HEALTHY.",
+      "ledger": "M-10"
+    },
+    {
+      "id": "HV-P03", "title": "Coverage-qualified rollup",
+      "requires": "H2 + owner decision O-1",
+      "semantics": "A future rollup cannot read HEALTHY while a required check, or any check the contract marks automatic, has no evaluated result. It reports UNKNOWN, or an explicit coverage object with complete=false, depending on the owner choice.",
+      "engine_today": "HV-B02: overall HEALTHY with a required check absent; HV-A02: UNKNOWN only because whole subsystems are empty.",
+      "ledger": "M-04"
+    },
+    {
+      "id": "HV-P04", "title": "UNKNOWN stays visible beside a definite finding",
+      "requires": "H2",
+      "semantics": "The rollup exposes unknown_subsystems[] and unknown_checks[] as separate attributes so a WARNING label never hides an UNKNOWN.",
+      "engine_today": "HV-B06: the label is WARNING; UNKNOWN is visible only through contributing_subsystems.",
+      "ledger": "M-04"
+    },
+    {
+      "id": "HV-P05", "title": "Future or negative-age evidence is UNKNOWN",
+      "requires": "H1 follow-up in the engine (runtime change, separate scope) and H3",
+      "semantics": "An observation time later than 'now' beyond a small skew allowance is UNKNOWN with a distinct reason (working name FUTURE_TIMESTAMP), never HEALTHY, matching ecco_core.freshness.",
+      "engine_today": "HV-D11: HEALTHY, age -30.",
+      "ledger": "M-05"
+    },
+    {
+      "id": "HV-P06", "title": "Evidence attributes on every health entity",
+      "requires": "H2/H3",
+      "semantics": "Every health row and the rollup expose evidence_age_s, last_good_at, observed_at, source entity ids and provenance kind (raw / normalised / derived) per the contract section 4.",
+      "engine_today": "CheckResult carries age_seconds only for freshness and transaction checks; SubsystemResult and OverallHealthResult carry none of the others.",
+      "ledger": "M-03"
+    },
+    {
+      "id": "HV-P07", "title": "Two-tier freshness (60/180/600 s) in Home Assistant",
+      "requires": "H3",
+      "semantics": "Telemetry, configuration and RTC-read freshness are evaluated from the change time of the dongle's last-update text, reproducing HV-D01..HV-D10 boundary for boundary.",
+      "engine_today": "Engine proves the boundaries (HV-D*). The HA communications row evaluates the online flags only.",
+      "ledger": "M-08"
+    },
+    {
+      "id": "HV-P08", "title": "Communications: unknown/unavailable is UNKNOWN or FAILED, decided explicitly",
+      "requires": "H2/H3 + owner decision",
+      "semantics": "The HA communications row distinguishes 'device previously seen and now unavailable' (FAILED ESPHOME_UNAVAILABLE) from 'state unknown / never observed' (UNKNOWN INSUFFICIENT_EVIDENCE), as the engine does in HV-B03..HV-B05.",
+      "engine_today": "HA template: any state other than 'on' for either online flag is FAILED with MODBUS_TELEMETRY_STALE / MODBUS_CONFIG_STALE.",
+      "ledger": "M-08"
+    },
+    {
+      "id": "HV-P09", "title": "Restart-safe transaction durations",
+      "requires": "H3",
+      "semantics": "After an HA restart or ESPHome reconnect with a transaction flag already on, the duration check is UNKNOWN (start time unknown), not an under-reported duration and not HEALTHY, until the start time is re-established.",
+      "engine_today": "HV-C06 and HV-E01 prove the engine behaviour. The HA rows derive duration from last_changed and under-report across a restart (documented limitation).",
+      "ledger": "M-12"
+    },
+    {
+      "id": "HV-P10", "title": "Counter-reset parity between the engine and the HA RTC row",
+      "requires": "H3 + owner decision",
+      "semantics": "One agreed rule for a since-boot counter that goes backwards or is first seen after unknown: either UNKNOWN until a fresh window (engine, HV-E02) or baseline-only with no state change (documented HA behaviour). The contract must name one.",
+      "engine_today": "Engine: UNKNOWN (HV-E02, HV-E04). HA RTC row per its documentation: baseline only, no failure counted. HA Jinja was not evaluated in this job.",
+      "ledger": "M-11"
+    },
+    {
+      "id": "HV-P11", "title": "Machine-readable UNKNOWN subtype",
+      "requires": "H2",
+      "semantics": "An UNKNOWN carries one of: NEVER_OBSERVED, UNAVAILABLE, BASELINE_PENDING, COUNTER_RESET, START_TIME_UNKNOWN, NOT_EVALUATED, THRESHOLD_UNRESOLVED, FUTURE_TIMESTAMP. Free text is not parsed.",
+      "engine_today": "The subtype exists only as free human_reason text (distinct per cause, checked by the golden suite).",
+      "ledger": "M-13"
+    },
+    {
+      "id": "HV-P12", "title": "Clock-change safe evidence age in Home Assistant",
+      "requires": "H3",
+      "semantics": "Every age is computed from epoch seconds or UTC-aware times so HV-F01..HV-F09 give the UTC-aware answers on the 25 h and 23 h nights.",
+      "engine_today": "Engine is correct for UTC-aware and mixed-timezone inputs and wrong for same-tzinfo local inputs (HV-F02, HV-F05, HV-F07, HV-F09).",
+      "ledger": "M-06"
+    }
+  ]
+}
