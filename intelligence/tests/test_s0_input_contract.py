@@ -13,6 +13,8 @@ no Home Assistant, statistics export, network or device is touched.
   [7] history periods against the derived-load cut-over (HD1); the load counter stays UNKNOWN offline
   [8] the 25 h autumn and 23 h spring UK local days / nights, against the real learner and a flat synthetic house
   [9] owner decisions stay OPEN until supplied; verdict ordering; determinism; JSON; strict declaration loader; CLI
+  [10] review corrections I1/I2: the synthetic examples cannot be mistaken for site data or owner decisions, and the
+       DRAFT / D1-D9 OPEN / PROPOSED / SHADOW-only / not-runtime-policy wording is present in the tool and the document
 """
 
 from __future__ import annotations
@@ -133,7 +135,8 @@ rep = s0.run(s0.example_declaration())
 d = rep.to_dict()
 check("a report is SHADOW and applies nothing", d["mode"] == "SHADOW" and d["applies_nothing"] is True)
 check("a report has exactly the documented keys (no 'recommended' / 'target' / 'apply' field)",
-      set(d) == {"model_version", "mode", "applies_nothing", "verdict", "counts", "findings", "decisions", "proposed_thresholds"})
+      set(d) == {"model_version", "status", "notice", "declaration_origin", "mode", "applies_nothing", "verdict", "counts",
+                 "findings", "decisions", "proposed_thresholds"})
 check("no finding carries a recommended value", not [f for f in d["findings"] if any("recommend" in k.lower() for k in f["evidence"])])
 check("every proposed threshold is labelled PROPOSED_PENDING_OWNER", d["proposed_thresholds"]["status"] == "PROPOSED_PENDING_OWNER")
 
@@ -480,6 +483,82 @@ with contextlib.redirect_stdout(buf):
     rc2 = s0.main(["--example"])
 check("the built-in example is BLOCKED (inverter protection not supplied) and says so in text", rc2 == 1 and "VERDICT: BLOCKED" in buf.getvalue()
       and "nothing above is a recommendation" in buf.getvalue())
+
+# ---------------------------------------------------------------------------------------------------------------------
+section("[10] I1: a synthetic example cannot be mistaken for site data or an owner decision")
+for label, faulty in (("--example", False), ("--example-faulty", True)):
+    r = s0.run(s0.example_declaration(faulty))
+    dd = r.to_dict()
+    txt = s0.render_text(r)
+    check(f"{label}: declaration_origin says synthetic / not site evidence",
+          dd["declaration_origin"] == s0.ORIGIN_SYNTHETIC == "SYNTHETIC_EXAMPLE_NOT_SITE_EVIDENCE")
+    check(f"{label}: the text output carries the SYNTHETIC EXAMPLE banner above the verdict",
+          "SYNTHETIC EXAMPLE: every value below is fictional" in txt and txt.index("SYNTHETIC EXAMPLE:") < txt.index("VERDICT:"))
+    recorded = [x for x in r.decisions if x.status == s0.RECORDED]
+    check(f"{label}: every RECORDED decision carries provenance SYNTHETIC_EXAMPLE (object and JSON)",
+          all(x.provenance == s0.PROV_SYNTHETIC for x in recorded)
+          and all(x["provenance"] == "SYNTHETIC_EXAMPLE" for x in dd["decisions"] if x["status"] == s0.RECORDED))
+    dlines = [ln for ln in txt.splitlines() if ln.startswith("  D") and ln[3:4].isdigit()]
+    rec_lines = [ln for ln in dlines if "[RECORDED" in ln]
+    check(f"{label}: every RECORDED decision line says it is a synthetic example, not an owner decision",
+          len(rec_lines) == len(recorded) and all("SYNTHETIC EXAMPLE, NOT AN OWNER DECISION" in ln for ln in rec_lines), str(rec_lines))
+    check(f"{label}: nine decision lines; an OPEN decision carries no provenance and is plainly OPEN",
+          len(dlines) == 9 and all(x.provenance == "" for x in r.decisions if x.status == s0.OPEN)
+          and all("[OPEN" in ln for ln in dlines if "[RECORDED" not in ln))
+    decl = s0.example_declaration(faulty)
+    check(f"{label}: every named reserve / capacity / efficiency item is prefixed [SYNTHETIC], every reading source synthetic:",
+          all(x.name.startswith("[SYNTHETIC] ") for x in decl.reserves + decl.capacities + decl.efficiencies)
+          and all(x.source_id.startswith("synthetic:") for x in decl.readings))
+    check(f"{label}: the verdict is still BLOCKED (fail-closed semantics unchanged)", r.verdict == "BLOCKED")
+r_ex = s0.run(s0.example_declaration())
+d8 = [x for x in r_ex.decisions if x.id == "D8"][0]
+check("I1 regression: D8 in --example is RECORDED but marked as a synthetic example (fictional 2030 cut-over)",
+      d8.status == s0.RECORDED and d8.provenance == "SYNTHETIC_EXAMPLE" and "2030" in str(d8.recorded)
+      and "D8 [RECORDED - SYNTHETIC EXAMPLE, NOT AN OWNER DECISION]" in s0.render_text(r_ex))
+real = s0.run(clean())
+rtxt = s0.render_text(real)
+check("a caller's own declaration is labelled CALLER_DECLARATION and gets no synthetic banner",
+      real.origin == s0.ORIGIN_CALLER and "SYNTHETIC EXAMPLE:" not in rtxt and "SYNTHETIC EXAMPLE, NOT AN OWNER" not in rtxt
+      and all(x.provenance == s0.PROV_CALLER for x in real.decisions if x.status == s0.RECORDED))
+check("... and its origin says the tool did not verify it against the site", "NOT_VERIFIED_AGAINST_THE_SITE" in real.origin)
+check("the loader flag synthetic_example=true labels a hand-written file as synthetic; absent, it is a caller declaration",
+      s0.declaration_from_dict({"synthetic_example": True}).synthetic is True and s0.declaration_from_dict({}).synthetic is False)
+check("a declaration flagged synthetic is always reported as a synthetic example",
+      s0.run(replace(clean(), synthetic=True)).origin == s0.ORIGIN_SYNTHETIC)
+
+section("[10] I2: DRAFT / D1-D9 OPEN / PROPOSED / SHADOW-only / not-runtime-policy wording")
+check("the report notice carries every required phrase",
+      all(n in s0.DRAFT_NOTICE for n in ("DRAFT S0", "D1-D9", "OPEN", "PROPOSED", "SHADOW-only", "NOT configured runtime policy")),
+      s0.DRAFT_NOTICE)
+for label, r in (("example", r_ex), ("caller declaration", real)):
+    check(f"{label}: JSON status is DRAFT_S0 and the notice is present",
+          r.to_dict()["status"] == "DRAFT_S0" and r.to_dict()["notice"] == s0.DRAFT_NOTICE)
+    check(f"{label}: the text output's first lines carry the draft notice", s0.DRAFT_NOTICE in "\n".join(s0.render_text(r).splitlines()[:3]))
+tool_doc = ast.get_docstring(tool_tree)
+check("the tool's module docstring opens with DRAFT / D1-D9 OPEN and says NOT configured runtime policy",
+      "DRAFT" in tool_doc.splitlines()[0] and "D1-D9 OPEN" in tool_doc.splitlines()[0] and "NOT configured runtime policy" in tool_doc[:400])
+check("the model version still says draft", s0.MODEL_VERSION.endswith("-draft"))
+buf_h = io.StringIO()
+with contextlib.redirect_stdout(buf_h):
+    s0.main(["--example"])
+check("CLI --example output carries the draft notice on its second line", buf_h.getvalue().splitlines()[1] == s0.DRAFT_NOTICE)
+if DOC.is_file():
+    doc_lines = DOC.read_text(encoding="utf-8").splitlines()
+    head = " ".join(ln.lstrip("> ").strip() for ln in doc_lines[:12])  # unwrap the quoted block
+    body = "\n".join(doc_lines)
+    check("the document title and first block say DRAFT, D1-D9 OPEN, PROPOSED, SHADOW-only and NOT configured runtime policy",
+          doc_lines[0].startswith("# ") and "DRAFT" in doc_lines[0] and "D1-D9 OPEN" in doc_lines[0]
+          and all(n in head for n in ("thresholds PROPOSED", "offline, SHADOW-only", "NOT configured runtime policy")), head)
+    check("the document's first block says the examples are fictional, not site evidence and not an owner decision",
+          "fictional" in head and "not site evidence" in head and "not an owner decision" in head)
+    check("the document tells the later PR to use the same wording and offers a title",
+          "Wording the later pull request must use" in body and "Suggested title: `Intelligence S0 (DRAFT)" in body
+          and "decisions D1-D9 open, not runtime policy" in body)
+    check("the document states the expected BLOCKED examples and the local-environment note",
+          "Expected outputs and local-environment notes" in body and "core.autocrlf=true" in body)
+    rows = [ln for ln in doc_lines if ln[:6] in {f"| D{i} |" for i in range(1, 10)}]
+    check("all nine decisions in the register are still OPEN",
+          len(rows) == 9 and all(ln.rstrip().rstrip("|").rstrip().endswith(("OPEN", "OPEN (proposal only)")) for ln in rows), str(len(rows)))
 
 section("document and tool agree")
 if DOC.is_file():

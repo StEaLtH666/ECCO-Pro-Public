@@ -1,4 +1,11 @@
-# Intelligence S0: the input contract (DRAFT, owner decisions open)
+# Intelligence S0: the input contract (DRAFT, decisions D1-D9 OPEN)
+
+> **DRAFT S0 | decisions D1-D9 OPEN | thresholds PROPOSED | offline, SHADOW-only | NOT configured runtime policy**
+>
+> Nothing in this document, the diagnostic or its tests has been accepted by the owner. No reserve, capacity, efficiency,
+> freshness limit, required-signal set, cut-over or clock-change policy is chosen here, and nothing reads this tool's output as
+> configuration. The tool's built-in examples (`--example`, `--example-faulty`) use **fictional values**: they are not site
+> evidence and any "RECORDED" decision they show is not an owner decision.
 
 Status: **draft, offline only, no decision made.** This document and its tool define *what the Intelligence advisors would
 rest on* and check that a written-down set of inputs is consistent. It chooses no reserve, no capacity, no efficiency and no
@@ -80,8 +87,9 @@ value, the helper and the example can all differ, and the architecture states a 
 
 ## 3. The diagnostic (what it checks, fail closed)
 
-Input: a *declaration* the caller writes (or `--example` / `--example-faulty`, synthetic). Output: a `Report` with `mode: SHADOW`,
-`applies_nothing: true`, a verdict, findings and the decision register. There is no field in which it could state a recommended
+Input: a *declaration* the caller writes (or `--example` / `--example-faulty`, synthetic with fictional values). Output: a `Report` with
+`status: DRAFT_S0`, a `notice` repeating the draft wording, `declaration_origin` (synthetic example or caller declaration),
+`mode: SHADOW`, `applies_nothing: true`, a verdict, findings and the decision register (each recorded decision carries its provenance). There is no field in which it could state a recommended
 value; it only says whether the declared values are consistent and what is still undecided.
 
 ```
@@ -215,7 +223,40 @@ Status is computed by the tool from what the owner has supplied; `OPEN` means th
 software change. D4/D5/D9 are one-line answers. D3, D6, D7 and D8 need the owner's knowledge of the installation. Nothing needs a
 live read until the later S1 data-quality step, which is a separate authorisation.
 
-## 9. What this does not do
+## 9. Expected outputs and local-environment notes
+
+| Run | Expected verdict | Exit code | Why |
+|---|---|---|---|
+| `--example` | `BLOCKED` | 1 | the synthetic declaration leaves the inverter protection level unsupplied (D2); this is the intended fail-closed result, not an error |
+| `--example-faulty` | `BLOCKED` | 1 | seeded faults (10 BLOCK, 14 WARN at the time of writing) |
+| `--declaration file.json` | depends on the file | 0 unless `BLOCKED` | the tool does not verify the file against the site |
+
+Both examples print the banner `SYNTHETIC EXAMPLE: every value below is fictional ...`, report
+`declaration_origin: SYNTHETIC_EXAMPLE_NOT_SITE_EVIDENCE`, prefix every named item with `[SYNTHETIC]` and show any recorded
+decision as `RECORDED - SYNTHETIC EXAMPLE, NOT AN OWNER DECISION` (JSON: `provenance: SYNTHETIC_EXAMPLE`). A declaration a person
+writes is labelled `CALLER_DECLARATION_NOT_VERIFIED_AGAINST_THE_SITE`.
+
+Local environment: on Windows with `core.autocrlf=true` a checkout has CRLF line endings and several **unrelated** suites under
+`tools/tests` (privacy placeholder notes, the weather card, the deploy pre-flight) fail locally and on unchanged `main`; GitHub CI
+(Linux, LF) is the proof for those. The S0 suite reads files in text mode and does not depend on line endings. A local pass is a
+pre-check, not CI proof and not hardware proof.
+
+## 10. Wording the later pull request must use
+
+The pull request (not opened by this work) must say the same thing as the header of this document, in the same words, in its
+title, its description and any release note:
+
+- **DRAFT S0** and **decisions D1-D9 OPEN**;
+- thresholds (the 8 % capacity band, the efficiency plausibility levels, the agreement tolerances) are **PROPOSED**;
+- **offline, SHADOW-only, NOT configured runtime policy**: no runner, no Home Assistant contact, no change to `SiteConfig`, `ecco_core`,
+  the V1 or V1.1 outputs, firmware, Home Assistant packages or the registry;
+- the examples are **synthetic**, with fictional values;
+- the tests pin the existing `SiteConfig` defaults and freshness constants as a ratchet, not as owner decisions;
+- local test results are not CI proof; a merge is not an install.
+
+Suggested title: `Intelligence S0 (DRAFT): offline input-contract document, consistency diagnostic and tests - decisions D1-D9 open, not runtime policy`
+
+## 11. What this does not do
 
 No runner, no Home Assistant contact, no statistics export, no sensor, no helper, no change to a default, no recommendation, no
 control and no effect on the 25 October clock-change plan. It does not settle capacity, reserve or freshness; it makes the open

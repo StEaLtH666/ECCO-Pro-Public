@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Intelligence S0: an OFFLINE consistency diagnostic for the inputs a recommendation would rest on (SHADOW, advisory).
+"""Intelligence S0 (DRAFT, decisions D1-D9 OPEN): an OFFLINE consistency diagnostic for the inputs a recommendation would rest on
+(SHADOW, advisory). It is NOT configured runtime policy and nothing reads its output as configuration.
 
 It answers one question about a *declaration* of inputs that the caller writes down by hand (or the built-in synthetic
 example): are the reserve levels, battery capacity, efficiency, signal readings and history periods mutually consistent,
@@ -31,7 +32,7 @@ import argparse
 import json
 import math
 import sys
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -45,6 +46,14 @@ from intelligence.timeutil import UTC, local_wall, zone  # noqa: E402
 
 MODEL_VERSION = "intel-s0-input-consistency-0.1.0-draft"
 MODE = "SHADOW"
+STATUS = "DRAFT_S0"
+DRAFT_NOTICE = ("DRAFT S0: offline, SHADOW-only, NOT configured runtime policy. Decisions D1-D9 are OPEN unless the caller's own "
+                "declaration records them (this repository records none). Every threshold is PROPOSED, not accepted.")
+ORIGIN_SYNTHETIC = "SYNTHETIC_EXAMPLE_NOT_SITE_EVIDENCE"
+ORIGIN_CALLER = "CALLER_DECLARATION_NOT_VERIFIED_AGAINST_THE_SITE"
+PROV_SYNTHETIC, PROV_CALLER = "SYNTHETIC_EXAMPLE", "CALLER_DECLARATION"
+SYNTHETIC_LABEL = "SYNTHETIC EXAMPLE, NOT AN OWNER DECISION"
+SYNTHETIC_PREFIX = "[SYNTHETIC] "
 
 INFO, WARN, BLOCK = "INFO", "WARN", "BLOCK"
 OPEN, RECORDED = "OPEN", "RECORDED"
@@ -180,6 +189,7 @@ class Declaration:
     nights: NightSpec | None = None
     decisions: OwnerDecisions = field(default_factory=OwnerDecisions)
     thresholds: ProposedThresholds = field(default_factory=ProposedThresholds)
+    synthetic: bool = False                # True only for the built-in examples: every value is fictional, none is site evidence
 
 
 @dataclass(frozen=True)
@@ -203,10 +213,11 @@ class DecisionState:
     question: str
     blocks: tuple[str, ...]
     recorded: object = None
+    provenance: str = ""                   # who supplied a RECORDED value: SYNTHETIC_EXAMPLE or CALLER_DECLARATION (empty when OPEN)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "title": self.title, "status": self.status, "question": self.question,
-                "blocks": list(self.blocks), "recorded": self.recorded}
+                "blocks": list(self.blocks), "recorded": self.recorded, "provenance": self.provenance}
 
 
 @dataclass(frozen=True)
@@ -218,13 +229,17 @@ class Report:
     mode: str = MODE
     applies_nothing: bool = True
     model_version: str = MODEL_VERSION
+    origin: str = ORIGIN_CALLER
+    status: str = STATUS
+    notice: str = DRAFT_NOTICE
 
     def codes(self, severity: str | None = None) -> list[str]:
         return [f.code for f in self.findings if severity is None or f.severity == severity]
 
     def to_dict(self) -> dict:
         counts = {s: sum(1 for f in self.findings if f.severity == s) for s in (BLOCK, WARN, INFO)}
-        return {"model_version": self.model_version, "mode": self.mode, "applies_nothing": self.applies_nothing,
+        return {"model_version": self.model_version, "status": self.status, "notice": self.notice,
+                "declaration_origin": self.origin, "mode": self.mode, "applies_nothing": self.applies_nothing,
                 "verdict": self.verdict, "counts": counts, "findings": [f.to_dict() for f in self.findings],
                 "decisions": [d.to_dict() for d in self.decisions],
                 "proposed_thresholds": {k.name: _jsonable(getattr(self.thresholds, k.name)) for k in fields(self.thresholds)}}
@@ -669,6 +684,12 @@ def check_nights(spec: NightSpec | None) -> list[Finding]:
 # ---------------------------------------------------------------------------------------------------------------------
 
 def decision_states(decl: Declaration) -> tuple[DecisionState, ...]:
+    states = _decision_states(decl)
+    prov = PROV_SYNTHETIC if decl.synthetic else PROV_CALLER
+    return tuple(replace(d, provenance=prov) if d.status == RECORDED else d for d in states)
+
+
+def _decision_states(decl: Declaration) -> tuple[DecisionState, ...]:
     o = decl.decisions
     prot_known = any(r.role == PHYSICAL_PROTECTION and _num(r.value_pct) is not None for r in decl.reserves)
 
@@ -725,7 +746,8 @@ def run(decl: Declaration) -> Report:
         verdict = "CONSISTENT_WITH_WARNINGS"
     else:
         verdict = "CONSISTENT"
-    return Report(verdict, tuple(findings), decisions, decl.thresholds)
+    return Report(verdict, tuple(findings), decisions, decl.thresholds,
+                  origin=ORIGIN_SYNTHETIC if decl.synthetic else ORIGIN_CALLER)
 
 
 # ---- synthetic examples (no real site values; the fictional year follows the other Intelligence fixtures) ------------
@@ -757,9 +779,9 @@ def example_declaration(faulty: bool = False) -> Declaration:
     reserves = (
         ReserveDecl("Intelligence user reserve (SiteConfig default)", SOFT_PLANNING_FLOOR, cfg.user_reserve_soc_pct,
                     "SiteConfig.user_reserve_soc_pct", ("Intelligence advisors",), None),
-        ReserveDecl("HA reserve helper (example value)", HA_RESERVE_HELPER, 15.0, "input_number.ecco_minimum_reserve_soc",
+        ReserveDecl("HA reserve helper (fictional value)", HA_RESERVE_HELPER, 25.0, "input_number.ecco_minimum_reserve_soc",
                     ("Intelligence input", "advanced-config bound", "time-to-reserve display"), None),
-        ReserveDecl("Dump to Grid stop SOC (example value)", FEATURE_STOP_LEVEL, 10.0, "Dump to Grid Stop SOC control",
+        ReserveDecl("Dump to Grid stop SOC (fictional value)", FEATURE_STOP_LEVEL, 15.0, "Dump to Grid Stop SOC control",
                     ("Dump to Grid",), "firmware refuses a stop level below 10 %"),
         ReserveDecl("Inverter protection level (not supplied)", PHYSICAL_PROTECTION, None,
                     "read-only inverter setting", ("inverter",), "inverter", False),
@@ -768,7 +790,7 @@ def example_declaration(faulty: bool = False) -> Declaration:
         EfficiencyDecl("HA helper round-trip efficiency", 90.0, "percent", ROUND_TRIP, "input_number.ecco_round_trip_efficiency"),
     )
     capacities = (
-        CapacityDecl("HA helper capacity (example)", "CONFIGURED_HELPER", cfg.battery_capacity_kwh, provenance="owner-set helper"),
+        CapacityDecl("HA helper capacity (fictional)", "CONFIGURED_HELPER", cfg.battery_capacity_kwh, provenance="fictional example helper"),
     )
     if faulty:
         reserves = reserves[:3] + (
@@ -786,12 +808,29 @@ def example_declaration(faulty: bool = False) -> Declaration:
         HistoryPeriod(LOAD_POWER_MEAN, datetime(2030, 3, 10, 0, 0, tzinfo=UTC), datetime(2030, 3, 20, tzinfo=UTC)),
         HistoryPeriod(LOAD_ENERGY_COUNTER, datetime(2030, 2, 1, tzinfo=UTC), datetime(2030, 3, 20, tzinfo=UTC)),
     )
-    return Declaration(
+    decl = Declaration(
         cfg=cfg, reserves=reserves, capacities=capacities, efficiencies=efficiencies,
         readings=_example_readings(faulty=faulty), history=history,
         nights=NightSpec(date(2026, 10, 23), date(2026, 10, 27), cfg.cheap_window_start_min, cfg.cheap_window_end_min, tz),
         decisions=OwnerDecisions(hd1_effective_from=None if faulty else cutover),
+        synthetic=True,
     )
+    return _label_synthetic(decl)
+
+
+def _label_synthetic(decl: Declaration) -> Declaration:
+    """Prefix every named item of a built-in example so that no line of its output can be mistaken for site data. The
+    fictional values are: reserve helper and Dump stop (not the site's), the year 2030 history and cut-over, and made-up readings.
+    (SiteConfig's own shipped example defaults and the real UK clock-change dates are calendar / code facts, not site data.)"""
+    def tag(name: str) -> str:
+        return name if name.startswith(SYNTHETIC_PREFIX) else SYNTHETIC_PREFIX + name
+    return replace(
+        decl,
+        reserves=tuple(replace(r, name=tag(r.name)) for r in decl.reserves),
+        capacities=tuple(replace(c, name=tag(c.name)) for c in decl.capacities),
+        efficiencies=tuple(replace(e, name=tag(e.name)) for e in decl.efficiencies),
+        readings=tuple(replace(r, source_id=("synthetic:" + r.source_id) if not r.source_id.startswith("synthetic:") else r.source_id)
+                       for r in decl.readings))
 
 
 def _dt(s: str | None) -> datetime | None:
@@ -806,7 +845,8 @@ def declaration_from_dict(d: dict) -> Declaration:
             raise ValueError(f"{what}: unknown keys {sorted(extra)}")
         return obj
 
-    only(d, {"cfg", "reserves", "capacities", "efficiencies", "readings", "history", "nights", "decisions"}, "declaration")
+    only(d, {"cfg", "reserves", "capacities", "efficiencies", "readings", "history", "nights", "decisions", "synthetic_example"},
+         "declaration")
     cfg = SiteConfig(**d["cfg"]) if "cfg" in d else SiteConfig()
     o = dict(d.get("decisions", {}))
     if "hd1_effective_from" in o:
@@ -825,17 +865,23 @@ def declaration_from_dict(d: dict) -> Declaration:
         efficiencies=tuple(EfficiencyDecl(**e) for e in d.get("efficiencies", [])),
         readings=tuple(ReadingDecl(**r) for r in d.get("readings", [])),
         history=tuple(HistoryPeriod(**{**p, "start": _dt(p["start"]), "end": _dt(p["end"])}) for p in d.get("history", [])),
-        nights=nights, decisions=OwnerDecisions(**o))
+        nights=nights, decisions=OwnerDecisions(**o), synthetic=bool(d.get("synthetic_example", False)))
 
 
 def render_text(rep: Report) -> str:
-    lines = [f"{rep.model_version}  mode={rep.mode}  applies_nothing={rep.applies_nothing}", f"VERDICT: {rep.verdict}", ""]
+    lines = [f"{rep.model_version}  status={rep.status}  mode={rep.mode}  applies_nothing={rep.applies_nothing}", rep.notice,
+             f"Declaration origin: {rep.origin}"]
+    if rep.origin == ORIGIN_SYNTHETIC:
+        lines.append("*** SYNTHETIC EXAMPLE: every value below is fictional. It is not site evidence and not an owner decision. ***")
+    lines += [f"VERDICT: {rep.verdict}", ""]
     for sev in (BLOCK, WARN, INFO):
         for f in rep.findings:
             if f.severity == sev:
                 lines.append(f"  {sev:5} {f.code:36} {f.subject}: {f.message}")
     lines += ["", "Owner decisions:"]
-    lines += [f"  {d.id} [{d.status:8}] {d.title}: {d.question}" for d in rep.decisions]
+    for d in rep.decisions:
+        tag = d.status if not (d.status == RECORDED and d.provenance == PROV_SYNTHETIC) else f"{d.status} - {SYNTHETIC_LABEL}"
+        lines.append(f"  {d.id} [{tag:8}] {d.title}: {d.question}")
     lines += ["", f"Thresholds are {rep.thresholds.status}; nothing above is a recommendation."]
     return "\n".join(lines)
 
@@ -843,9 +889,9 @@ def render_text(rep: Report) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--example", action="store_true")
-    g.add_argument("--example-faulty", action="store_true")
-    g.add_argument("--declaration", help="path to a declaration JSON written by hand (synthetic or owner-supplied)")
+    g.add_argument("--example", action="store_true", help="a SYNTHETIC example with fictional values (not site data)")
+    g.add_argument("--example-faulty", action="store_true", help="a SYNTHETIC example with seeded faults (not site data)")
+    g.add_argument("--declaration", help="path to a declaration JSON written by hand; its values are not verified against the site by this tool")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.declaration:
