@@ -1,12 +1,19 @@
 # Advanced Configuration Stage 1: guarded TOU settings editor (local offline candidate)
 
-Status: **OFFLINE CANDIDATE. NOT INSTALLED. NO REGISTER WRITTEN. NO NEW FIRMWARE WRITE SCOPE.**
+Status: **OFFLINE CANDIDATE, since INTEGRATED AS SOURCE (post-export entry `acs1`; see [acs-stage1-integration.md](acs-stage1-integration.md)).
+NOT INSTALLED. NO REGISTER WRITTEN. NO NEW FIRMWARE WRITE SCOPE.**
 Branch `dev/acs-stage1-settings` (local), base public main `e7a265b8`.
+
+Integration note: the candidate's package is now the installed source file `home-assistant/packages/ecco_tou_target_soc_edit.yaml`, the
+prototype suite became `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` (it tests the installed file and proves the provenance
+with `unrender_stage1`, so no git history is needed), and the transform module documents how the installed package was derived. The
+sections below are the candidate's reuse proof, matrix, contract, risks and plan, kept as reviewed; where they say "candidate",
+"prototype" or "in memory", read the integration document.
 
 | File | Role |
 |---|---|
-| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | the candidate, expressed as exact edits to the installed Stage 0 editor (see section 2) |
-| `home-assistant/tests/test_ecco_acs_stage1_prototype.py` | the offline suite (runs the generated package against the firmware model and the real Manual Controls helpers) |
+| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | the candidate, expressed as exact, invertible edits to the Stage 0 editor (see section 2); after integration, the record of how the installed package was derived |
+| `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` (candidate name: `test_ecco_acs_stage1_prototype.py`) | the offline suite (runs the package against the firmware model and the real Manual Controls helpers) |
 | this document | reuse proof, per-setting matrix, refusal and rollback contract, residual risks, GUI storyboard, deployment plan |
 | Appendix A of this document | what must exist in ECCO before SmartDeye could be retired |
 
@@ -227,7 +234,7 @@ All offline, local, run as `python -I -B` (no bytecode left behind; stale byteco
 
 | Suite | Result |
 |---|---|
-| `home-assistant/tests/test_ecco_acs_stage1_prototype.py` | **277 checks passed** (about 210 s) |
+| `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` (candidate name: `test_ecco_acs_stage1_prototype.py`) | **277 checks passed** (about 210 s), as a candidate |
 | `home-assistant/tests/test_ecco_tou_target_soc_edit.py` (ACS0, unchanged) | 162 checks passed |
 | frozen: `registry/tests/test_fallback_profile_schema.py`, `test_fallback_save_scope.py`, `test_fallback_live_match.py`, `test_fallback_recovery_dashboard.py` | all pass |
 | `registry/tests/test_write_surface_invariants.py` (the firmware's written registers and paths) | passes: no new write scope |
@@ -271,7 +278,7 @@ The live proof in section 8 exists for these.
    - move the Stage 1 suite next to or in place of the ACS0 suite;
    - update the ACS0 suite's pins deliberately;
    - decide whether the Stage 0 script ids stay as thin wrappers for existing callers;
-   - no firmware, registry or manifest change (same package path).
+   - no firmware, registry YAML or manifest change (same package path); one chain entry in `registry/tests`.
 3. **CI green** on that PR. Merge is a separate decision.
 4. **Install preview:**
    - fresh full HA backup;

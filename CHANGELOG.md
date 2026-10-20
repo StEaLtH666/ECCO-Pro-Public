@@ -10,6 +10,21 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Advanced Configuration Stage 1: the guarded TOU settings editor** (post-export entry `acs1`; offline, source only, NOT installed,
+  NOT live-proven; [docs/dev/acs-stage1-integration.md](docs/dev/acs-stage1-integration.md)). It replaces the Stage 0 target-SOC editor
+  at the same package path (`ecco_tou_target_soc_edit.yaml`, so the deployment manifest is unchanged): one setting of one TOU slot per
+  request - the target SOC as before, the power (500-8000 W in steps of 100), the start time (5-minute grid) or the charge source
+  (None or Grid) - through the existing verified manual TOU firmware path, with the same review, typed confirmation, fresh read,
+  staged-equals-live proof, one Apply in a quiet gap of the Modbus poll cycle, firmware readback plus two later reads and manual-review
+  lock. No firmware change, no new register or write path.
+  - The scripts are renamed `script.ecco_cfg_review_tou_slot_setting` (fields `slot`, `setting`, `value`) and
+    `script.ecco_cfg_apply_tou_slot_setting`; the helpers, the acknowledge script and the watchdog automation keep their ids.
+  - New refusals for every setting, the target SOC included: no edit 00:00-03:00 local on the UK clock change nights.
+  - The package is derived from the Stage 0 text by 40 exact edits; the transform is invertible (`unrender_stage1`), which gives
+    the rollback file and the provenance proof without git history.
+  - **Pending owner decisions:** re-approval of the 2026-10-12 reserved-token amendment, which was given for a SOC-only editor (the
+    package reads exactly the same six ids in the same three files); and the policy values (power floor 500 W, None / Grid only, the
+    start-time rules).
 - **Firmware source assembler and navigator (S2a, tooling only)** ([docs/dev/firmware-source-modules.md](docs/dev/firmware-source-modules.md)).
   `tools/assemble_firmware.py` splits the production firmware YAML into ordered region fragments grouped by review area and
   reassembles them byte for byte, fail closed. It also maps lines, ids and device-log positions to areas (`--map`, `--where`,
