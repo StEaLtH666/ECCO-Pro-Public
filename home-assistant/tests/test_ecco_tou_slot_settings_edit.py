@@ -2197,6 +2197,50 @@ for name, pairs, key in MUTANTS:
     # a kill is a behavioural check that FAILS on the mutant; a crash of the harness is not a kill
     check(f"mutant '{name}' is KILLED by the failing check '{key}'", res.get(key) is False and "crash" not in res, str(res))
 
+# ======================================================================================================================
+print("\n[13] the post-export declaration (PEX entry acs1)")
+# ======================================================================================================================
+sys.path.insert(0, str(ROOT / "registry" / "tests"))
+import _scope_chain as sc  # noqa: E402
+import _pex  # noqa: E402  (PEX: this suite pins acs1's declaration)
+import _acs0_scope as F0  # noqa: E402
+import _acs1_scope as F1  # noqa: E402
+
+ACS1_FINGERPRINT = "e0bb9298dbcdb84041abd25633d3305d2338cba92a88fcefe826e6ad587bc318"
+HD1_FINGERPRINT = "0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e"
+PKG_REL = X.ACS0_REL
+E1 = sc.CHAIN.entry("acs1")
+ids1 = [x.id for x in sc.POST_EXPORT_ENTRIES]
+check("acs1 is the twenty-first post-export entry, appended right after hd1", ids1.index("acs1") == 20 and sc.CHAIN.prev_id("acs1") == "hd1",
+      str(ids1[-3:]))
+check("acs1 declares NO reverter and NO checkpoint (chain-pinned or frozen), no reserved-token holder, no delta, op path, include, substitution, "
+      "firmware banned token or tag: the package is an added file of acs0, neither chain-pinned nor frozen, so the chain could not even hold a "
+      "reverter for it; its record is the invertible transform proved in [0]",
+      not E1.reverts and not E1.checkpoints and not E1.frozen_reverts and not E1.frozen_checkpoints and not E1.banned_files
+      and not E1.deltas and not E1.op_paths_changed and not E1.includes_added and not E1.subst_added and not E1.subst_changed
+      and not E1.subst_removed and not E1.banned_fw_added and not E1.fbh_includers and not E1.tags_declared and not E1.tags_promoted
+      and PKG_REL not in sc.PINNED and PKG_REL not in _pex.FROZEN and PKG_REL in F0.ADDED_FILES and PKG_REL == F1.PACKAGE_REL)
+check("the reserved-token holders are exactly those declared before acs1 (acs1 adds none and amends no allowlist; acs0's three files are among "
+      "them and the package is one of those), and the package still names exactly the six ids acs0's amendment authorises (read from the "
+      "installed text, spelled nowhere in this suite)",
+      sc.CHAIN.declared_banned_files() == frozenset().union(*(e.banned_files for e in sc.CHAIN.upto("hd1"))) >= F0.BANNED_FILES
+      and PKG_REL in F0.BANNED_FILES
+      and sorted(set(re.findall(r"[a-z_]+\.[a-z0-9_]*(?:" + RES_TOKENS[0] + "|" + RES_TOKENS[4] + r")[a-z0-9_]*", S1))) == sorted(F0.RESERVED_IDS)
+      and sorted(set(re.findall(r"[a-z_]+\.[a-z0-9_]*(?:" + RES_TOKENS[0] + "|" + RES_TOKENS[4] + r")[a-z0-9_]*", PKG0))) == sorted(F0.RESERVED_IDS))
+check("acs1 declares the files it adds, each exists, none is deny-listed historical data, and its scope module spells no reserved token",
+      E1.added_files == F1.ADDED_FILES and all((ROOT / f).is_file() for f in E1.added_files) and not (E1.added_files & _pex.DENY)
+      and "registry/tests/_acs1_scope.py" in E1.added_files and not any(t in Path(F1.__file__).read_text(encoding="utf-8") for t in RES_TOKENS)
+      and {Path(__file__).resolve().relative_to(ROOT).as_posix(), "home-assistant/prototypes/acs-stage1/acs_stage1_transform.py"} <= E1.added_files)
+check("acs1's fingerprint is the pinned value, the sha256 of its record, linked to hd1's", E1.fingerprint == ACS1_FINGERPRINT == _pex.fingerprint(E1)   # PEX: its own fingerprint
+      and _pex.record(E1)["parent"] == HD1_FINGERPRINT == sc.CHAIN.entry("hd1").fingerprint)   # PEX: hash link
+man_txt = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
+check("the deployment manifest is unchanged by acs1 (no chain-pinned edit: its checkpoint is hd1's, and acs0's stanza names the same package path as "
+      "source and destination)", _pex.checkpoint(sc.HA_MANIFEST, "acs1") == _pex.checkpoint(sc.HA_MANIFEST, "hd1")   # PEX: no manifest edit
+      and man_txt.count("ecco_tou_target_soc_edit.yaml") == 2 and man_txt.count(PKG_REL) == 1 and f"source: {PKG_REL}\n    destination: /config/packages/ecco_tou_target_soc_edit.yaml\n" in man_txt)
+check("the scope module's pins are the suite's and the transform's: the Stage 0 package and the installed package hashes, the two renamed script ids "
+      "and the four settings", F1.ACS0_PACKAGE_SHA256 == ACS0_SHA == X.ACS0_BASE_SHA256 and F1.STAGE1_PACKAGE_SHA256 == S1_SHA and F1.PAIRS_SHA256 == PAIRS_SHA
+      and F1.SCRIPT_RENAMES == tuple((o, n) for o, n, _c in X.RENAMES) == ((REVIEW0, REVIEW), (APPLY0, APPLY)) and F1.SETTINGS == X.SETTINGS)
+
 print("")
 dt = time.time() - T_START
 if FAILURES:
