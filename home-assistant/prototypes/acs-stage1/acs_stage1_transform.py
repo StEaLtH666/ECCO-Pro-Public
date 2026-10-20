@@ -38,9 +38,9 @@ ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"     # the pac
 # sha256 of the Stage 0 package text (LF line ends) that PAIRS apply to: unrender_stage1(<the installed package>) must hash to this.
 ACS0_BASE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
 # sha256 of the installed Stage 1 package text (LF line ends): render_stage1(<the Stage 0 text>).
-STAGE1_SHA256 = "271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d"
+STAGE1_SHA256 = "4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816"
 # sha256 of the canonical serialisation of PAIRS (pairs_sha256()): a silent edit of any pair changes it.
-PAIRS_SHA256 = "68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c"
+PAIRS_SHA256 = "13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17"
 SETTINGS = ("target_soc", "power", "start_time", "charge_source")
 
 
@@ -694,6 +694,123 @@ F2_AFTER = (
     "                {{ states('input_text.ecco_cfg_edit_last_result') }}{% if f2_load %} {% if f2_ok %}Slot {{ n }}'s Manual Controls staging was refreshed to the live values (one Load Current Slot {{ n }} press, no register written).{% else %}Slot {{ n }}'s Manual Controls staging may still hold the reviewed value and could NOT be refreshed: press Load Current Slot {{ n }} (or Load All) before any Manual Controls Apply of that slot.{% endif %}{% endif %}\n")
 
 
+# ---- F2 correction (acs1 review): "nothing pressed" is not "no inverter write". The write enable is shared: the firmware accepts ANY Apply press while it
+# is on, so an Apply by someone else can land in the window in which the editor is armed. Before it stages anything the editor now records the firmware's
+# gate-pass counter and clears an 'inverter write seen' marker (set by a small automation on any sign of a manual-path write); a FAILED-before-press
+# outcome is claimed "nothing written", and slot N re-Loaded, ONLY when, after the counter had time to publish, the counter is unchanged, no write was
+# seen and the firmware's last result shows no write. Anything else is UNCERTAIN (lock, notification, no re-Load).
+_ATT = "sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot"
+_FWRES = "sensor.ecco_clock_dongle_manual_configuration_last_result"
+_WIP = "binary_sensor.ecco_clock_dongle_manual_write_in_progress"
+_ARMSW = "switch.ecco_clock_dongle_manual_configuration_write_enable"
+
+W_HELPER_BEFORE = ("  ecco_cfg_edit_in_flight:\n    name: ECCO Advanced Config Edit In Flight\n    icon: mdi:progress-wrench\n")
+W_HELPER_AFTER = (W_HELPER_BEFORE + "  ecco_cfg_edit_write_seen:\n    name: ECCO Advanced Config Edit Inverter Write Seen\n    icon: mdi:eye-check\n")
+
+W_AUTO_BEFORE = ("                    off (it reads {{ states('switch.ecco_clock_dongle_manual_configuration_write_enable') }}). Turn it off in Manual Controls now, then check every TOU slot.\n")
+W_AUTO_AFTER = (W_AUTO_BEFORE + """
+  # acs1: the editor's own record of an inverter write it did not make. While an edit is in flight, any sign of a manual-path write (the write-in-progress
+  # flag leaving off, or the firmware's last result showing a write) sets input_boolean.ecco_cfg_edit_write_seen. The Apply clears it before it stages
+  # anything and reads it when a run stops before its press: a set marker means an Apply by someone else may have run while the editor was armed.
+  - id: ecco_cfg_edit_write_seen
+    alias: "ECCO - Configuration edit saw an inverter write"
+    mode: queued
+    triggers:
+      - trigger: template
+        value_template: >-
+          {{ not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('Writing Slot')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('VERIFIED OK - manual Slot')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('FAILED - one or more write transactions')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('VERIFY FAILED') }}
+    conditions:
+      - condition: template
+        value_template: "{{ is_state('input_boolean.ecco_cfg_edit_in_flight', 'on') }}"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ecco_cfg_edit_write_seen
+""")
+
+W_STAGE_BEFORE = "                  # 3. Stage ONLY the edited field - the slot's target SOC, power or start time number, or its charge source select -\n"
+W_STAGE_AFTER = (
+    "                  # From here the staging holds the reviewed value and the editor is about to arm. BEFORE anything is staged record what the\n"
+    "                  #    firmware has done so far: its gate-pass counter (att0) and a cleared 'inverter write seen' marker. A later 'nothing\n"
+    "                  #    pressed' is believed only if the counter is unchanged and no write was seen since (see the pre-press branch below).\n"
+    "                  - action: input_boolean.turn_off\n"
+    "                    continue_on_error: true\n"
+    "                    target:\n"
+    "                      entity_id: input_boolean.ecco_cfg_edit_write_seen\n"
+    "                  - variables:\n"
+    "                      att0: \"{{ states('" + _ATT + "') | float(-1) }}\"\n"
+    + W_STAGE_BEFORE)
+
+W_PRE_FAILED = ("                            FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else ('no quiet Modbus window was found: no clean telemetry poll "
+                "completion clear of the inverter clock read within 25 s of the fresh read' if not bus_quiet else 'the staged values, the helper sync, the arm or the quiet-window "
+                "timing could not be confirmed') }}); nothing pressed, nothing written\n")
+W_PRE_BEFORE = ("                    else:\n"
+                "                      - action: input_text.set_value\n"
+                "                        target:\n"
+                "                          entity_id: input_text.ecco_cfg_edit_last_result\n"
+                "                        data:\n"
+                "                          value: >-\n" + W_PRE_FAILED)
+_I = " " * 22
+W_PRE_AFTER = (
+    "                    else:\n"
+    + _I + "# The Apply was NOT pressed, but the write enable was ON and the firmware accepts ANY Apply press while it is on, so 'nothing pressed' is not\n"
+    + _I + "#    'nothing written': an Apply by someone else can land in the armed window. Disarm now, give the firmware's gate-pass counter time to\n"
+    + _I + "#    publish (every 30 s), and claim 'nothing written' only if the counter is unchanged since before the staging, no inverter write was\n"
+    + _I + "#    seen since (the marker, the write-in-progress flag) and the firmware's last result shows no write. Otherwise UNCERTAIN and locked.\n"
+    + _I + "- action: switch.turn_off\n" + _I + "  continue_on_error: true\n" + _I + "  target:\n" + _I + "    entity_id: " + _ARMSW + "\n"
+    + _I + "- wait_template: \"{{ is_state('" + _ARMSW + "', 'off') }}\"\n" + _I + "  timeout: \"00:00:10\"\n" + _I + "  continue_on_timeout: true\n"
+    + _I + "- delay:\n" + _I + "    seconds: 35\n"
+    + _I + "- variables:\n"
+    + _I + "    w_att: \"{{ states('" + _ATT + "') | float(-1) }}\"\n"
+    + _I + "    w_txt: \"{{ states('" + _FWRES + "')[:120] }}\"\n"
+    + _I + "    w_seen: >-\n"
+    + _I + "      {{ not is_state('input_boolean.ecco_cfg_edit_write_seen', 'off') or not is_state('" + _WIP + "', 'off')\n"
+    + _I + "         or w_txt.startswith('Writing Slot') or w_txt.startswith('VERIFIED OK') or w_txt.startswith('FAILED - one or more write transactions')\n"
+    + _I + "         or w_txt.startswith('VERIFY FAILED') }}\n"
+    + _I + "    w_proven: \"{{ att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen }}\"\n"
+    + _I + "- choose:\n"
+    + _I + "    - conditions:\n" + _I + "        - condition: template\n" + _I + "          value_template: \"{{ w_proven }}\"\n"
+    + _I + "      sequence:\n"
+    + _I + "        - action: input_text.set_value\n" + _I + "          target:\n" + _I + "            entity_id: input_text.ecco_cfg_edit_last_result\n"
+    + _I + "          data:\n" + _I + "            value: >-\n" + W_PRE_FAILED.replace("                            FAILED", _I + "              FAILED")
+    + _I + "  default:\n"
+    + _I + "    - action: input_text.set_value\n" + _I + "      target:\n" + _I + "        entity_id: input_text.ecco_cfg_edit_last_result\n"
+    + _I + "      data:\n" + _I + "        value: >-\n"
+    + _I + "          UNCERTAIN - the Apply was not pressed, but an inverter write may have happened while the editor was armed (gate counter {{ att0 }} -> {{ w_att }}, write seen {{ 'yes' if w_seen else 'no' }}, firmware: {{ w_txt[:50] }})\n"
+    + _I + "    - action: input_boolean.turn_on\n" + _I + "      target:\n" + _I + "        entity_id: input_boolean.ecco_cfg_edit_review_required\n"
+    + _I + "    - action: persistent_notification.create\n" + _I + "      data:\n" + _I + "        notification_id: ecco_cfg_edit\n"
+    + _I + "        title: \"ECCO: configuration edit outcome NOT proven - manual review needed\"\n"
+    + _I + "        message: >-\n"
+    + _I + "          Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. The editor stopped before it pressed Apply ({{ refusal3 if refusal3 else 'a safety check changed' }}),\n"
+    + _I + "          but the Manual Configuration Write Enable was on and the firmware accepts any Apply press while it is on, so an Apply by someone else may have run.\n"
+    + _I + "          Observed: firmware gate-pass counter {{ att0 }} before the staging and {{ w_att }} now; an inverter write was {{ 'seen' if w_seen else 'not seen' }}; firmware last result: {{ w_txt }}.\n"
+    + _I + "          Live slot {{ n }}: start {{ states(e.live_t) }}, end {{ states(e.live_t_next) }}, power {{ states(e.live_pw) }} W, SOC {{ states(e.live_soc) }} %, charge source {{ states(e.live_src) }}, mode {{ states(e.live_mode) }}.\n"
+    + _I + "          Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately.\n"
+    + _I + "          Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.\n")
+
+W_F2C_BEFORE = (
+    "      # F2 (acs1): slot N's Manual Controls staging holds the reviewed value once the editor staged it. It is re-Loaded (ONE Load Current Slot N\n"
+    "      #    press: no register written, never armed, never an Apply) ONLY when this run has CONCLUSIVELY established that no inverter write was\n"
+    "      #    attempted, and only these two outcomes establish it: (a) it stopped after staging and before the Apply press ('a safety check changed just\n"
+    "      #    before the Apply': nothing pressed), (b) the firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both\n"
+    "      #    later reads at the pre-edit values (the verdict above). Evaluated AFTER the write enable was confirmed off, so an UNCERTAIN verdict\n"
+    "      #    (already replaced the result) and the review-required lock keep the manual recovery exactly as it is. Never clears uncertainty.\n")
+W_F2C_AFTER = (
+    "      # F2 (acs1): slot N's Manual Controls staging holds the reviewed value once the editor staged it. It is re-Loaded (ONE Load Current Slot N\n"
+    "      #    press: no register written, never armed, never an Apply) ONLY after one of two PROVEN outcomes: (a) the run stopped after the staging and\n"
+    "      #    before the Apply press AND the pre-press branch above proved that no manual-path write happened (the firmware's gate-pass counter is\n"
+    "      #    unchanged since before the staging, after the time it needs to publish; no write-in-progress and no write text was seen), or (b) the\n"
+    "      #    firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both later reads at the pre-edit values (the\n"
+    "      #    verdict above). Any other outcome is UNCERTAIN with the lock (already set, which also keeps this block off). Evaluated AFTER the write\n"
+    "      #    enable was confirmed off. Never clears uncertainty.\n")
+
+W_PAIRS = [(W_HELPER_BEFORE, W_HELPER_AFTER, 1), (W_AUTO_BEFORE, W_AUTO_AFTER, 1), (W_STAGE_BEFORE, W_STAGE_AFTER, 1),
+           (W_PRE_BEFORE, W_PRE_AFTER, 1), (W_F2C_BEFORE, W_F2C_AFTER, 1)]
+
 def _followup_pairs() -> "list[tuple[str, str, int]]":
     p: list[tuple[str, str, int]] = []
     for ind, count in ((12, 2), (16, 1), (24, 1)):                   # F3 in the four copies of the gate: Review, Apply, fresh read, last check
@@ -708,6 +825,7 @@ def _followup_pairs() -> "list[tuple[str, str, int]]":
     p.append((F1_ANCHOR, F1_BLOCK + F1_ANCHOR, 1))
     p.append((F1_MSG_BEFORE, F1_MSG_AFTER, 1))
     p.append((F2_BEFORE, F2_AFTER, 1))
+    p.extend(W_PAIRS)                                                 # F2 correction: the counter / write-seen proof
     return p
 
 

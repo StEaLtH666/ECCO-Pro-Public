@@ -65,6 +65,9 @@ input_boolean:
   ecco_cfg_edit_in_flight:
     name: ECCO Advanced Config Edit In Flight
     icon: mdi:progress-wrench
+  ecco_cfg_edit_write_seen:
+    name: ECCO Advanced Config Edit Inverter Write Seen
+    icon: mdi:eye-check
 
 script:
   ecco_cfg_review_tou_slot_setting:
@@ -713,6 +716,15 @@ script:
                          and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
                          and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
                 then:
+                  # From here the staging holds the reviewed value and the editor is about to arm. BEFORE anything is staged record what the
+                  #    firmware has done so far: its gate-pass counter (att0) and a cleared 'inverter write seen' marker. A later 'nothing
+                  #    pressed' is believed only if the counter is unchanged and no write was seen since (see the pre-press branch below).
+                  - action: input_boolean.turn_off
+                    continue_on_error: true
+                    target:
+                      entity_id: input_boolean.ecco_cfg_edit_write_seen
+                  - variables:
+                      att0: "{{ states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-1) }}"
                   # 3. Stage ONLY the edited field - the slot's target SOC, power or start time number, or its charge source select -
                   #    then wait for the sync's echo and a fixed point again.
                   - choose:
@@ -1098,12 +1110,59 @@ script:
                                   message: >-
                                     Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. Firmware said: {{ fw_result }}. Independent read: {{ 'no complete later configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
                     else:
-                      - action: input_text.set_value
+                      # The Apply was NOT pressed, but the write enable was ON and the firmware accepts ANY Apply press while it is on, so 'nothing pressed' is not
+                      #    'nothing written': an Apply by someone else can land in the armed window. Disarm now, give the firmware's gate-pass counter time to
+                      #    publish (every 30 s), and claim 'nothing written' only if the counter is unchanged since before the staging, no inverter write was
+                      #    seen since (the marker, the write-in-progress flag) and the firmware's last result shows no write. Otherwise UNCERTAIN and locked.
+                      - action: switch.turn_off
+                        continue_on_error: true
                         target:
-                          entity_id: input_text.ecco_cfg_edit_last_result
-                        data:
-                          value: >-
-                            FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else ('no quiet Modbus window was found: no clean telemetry poll completion clear of the inverter clock read within 25 s of the fresh read' if not bus_quiet else 'the staged values, the helper sync, the arm or the quiet-window timing could not be confirmed') }}); nothing pressed, nothing written
+                          entity_id: switch.ecco_clock_dongle_manual_configuration_write_enable
+                      - wait_template: "{{ is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off') }}"
+                        timeout: "00:00:10"
+                        continue_on_timeout: true
+                      - delay:
+                          seconds: 35
+                      - variables:
+                          w_att: "{{ states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-1) }}"
+                          w_txt: "{{ states('sensor.ecco_clock_dongle_manual_configuration_last_result')[:120] }}"
+                          w_seen: >-
+                            {{ not is_state('input_boolean.ecco_cfg_edit_write_seen', 'off') or not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+                               or w_txt.startswith('Writing Slot') or w_txt.startswith('VERIFIED OK') or w_txt.startswith('FAILED - one or more write transactions')
+                               or w_txt.startswith('VERIFY FAILED') }}
+                          w_proven: "{{ att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen }}"
+                      - choose:
+                          - conditions:
+                              - condition: template
+                                value_template: "{{ w_proven }}"
+                            sequence:
+                              - action: input_text.set_value
+                                target:
+                                  entity_id: input_text.ecco_cfg_edit_last_result
+                                data:
+                                  value: >-
+                                    FAILED - a safety check changed just before the Apply ({{ refusal3 if refusal3 else ('no quiet Modbus window was found: no clean telemetry poll completion clear of the inverter clock read within 25 s of the fresh read' if not bus_quiet else 'the staged values, the helper sync, the arm or the quiet-window timing could not be confirmed') }}); nothing pressed, nothing written
+                        default:
+                          - action: input_text.set_value
+                            target:
+                              entity_id: input_text.ecco_cfg_edit_last_result
+                            data:
+                              value: >-
+                                UNCERTAIN - the Apply was not pressed, but an inverter write may have happened while the editor was armed (gate counter {{ att0 }} -> {{ w_att }}, write seen {{ 'yes' if w_seen else 'no' }}, firmware: {{ w_txt[:50] }})
+                          - action: input_boolean.turn_on
+                            target:
+                              entity_id: input_boolean.ecco_cfg_edit_review_required
+                          - action: persistent_notification.create
+                            data:
+                              notification_id: ecco_cfg_edit
+                              title: "ECCO: configuration edit outcome NOT proven - manual review needed"
+                              message: >-
+                                Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. The editor stopped before it pressed Apply ({{ refusal3 if refusal3 else 'a safety check changed' }}),
+                                but the Manual Configuration Write Enable was on and the firmware accepts any Apply press while it is on, so an Apply by someone else may have run.
+                                Observed: firmware gate-pass counter {{ att0 }} before the staging and {{ w_att }} now; an inverter write was {{ 'seen' if w_seen else 'not seen' }}; firmware last result: {{ w_txt }}.
+                                Live slot {{ n }}: start {{ states(e.live_t) }}, end {{ states(e.live_t_next) }}, power {{ states(e.live_pw) }} W, SOC {{ states(e.live_soc) }} %, charge source {{ states(e.live_src) }}, mode {{ states(e.live_mode) }}.
+                                Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately.
+                                Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
                 else:
                   - action: input_text.set_value
                     target:
@@ -1141,11 +1200,12 @@ script:
               message: >-
                 Turn it off in Manual Controls and check every TOU slot. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
       # F2 (acs1): slot N's Manual Controls staging holds the reviewed value once the editor staged it. It is re-Loaded (ONE Load Current Slot N
-      #    press: no register written, never armed, never an Apply) ONLY when this run has CONCLUSIVELY established that no inverter write was
-      #    attempted, and only these two outcomes establish it: (a) it stopped after staging and before the Apply press ('a safety check changed just
-      #    before the Apply': nothing pressed), (b) the firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both
-      #    later reads at the pre-edit values (the verdict above). Evaluated AFTER the write enable was confirmed off, so an UNCERTAIN verdict
-      #    (already replaced the result) and the review-required lock keep the manual recovery exactly as it is. Never clears uncertainty.
+      #    press: no register written, never armed, never an Apply) ONLY after one of two PROVEN outcomes: (a) the run stopped after the staging and
+      #    before the Apply press AND the pre-press branch above proved that no manual-path write happened (the firmware's gate-pass counter is
+      #    unchanged since before the staging, after the time it needs to publish; no write-in-progress and no write text was seen), or (b) the
+      #    firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both later reads at the pre-edit values (the
+      #    verdict above). Any other outcome is UNCERTAIN with the lock (already set, which also keeps this block off). Evaluated AFTER the write
+      #    enable was confirmed off. Never clears uncertainty.
       - variables:
           f2_load: >-
             {{ is_state('input_boolean.ecco_cfg_edit_review_required', 'off')
@@ -1326,3 +1386,25 @@ automation:
                   message: >-
                     After an interrupted configuration edit the Manual Configuration Write Enable could not be confirmed
                     off (it reads {{ states('switch.ecco_clock_dongle_manual_configuration_write_enable') }}). Turn it off in Manual Controls now, then check every TOU slot.
+
+  # acs1: the editor's own record of an inverter write it did not make. While an edit is in flight, any sign of a manual-path write (the write-in-progress
+  # flag leaving off, or the firmware's last result showing a write) sets input_boolean.ecco_cfg_edit_write_seen. The Apply clears it before it stages
+  # anything and reads it when a run stops before its press: a set marker means an Apply by someone else may have run while the editor was armed.
+  - id: ecco_cfg_edit_write_seen
+    alias: "ECCO - Configuration edit saw an inverter write"
+    mode: queued
+    triggers:
+      - trigger: template
+        value_template: >-
+          {{ not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('Writing Slot')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('VERIFIED OK - manual Slot')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('FAILED - one or more write transactions')
+             or states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('VERIFY FAILED') }}
+    conditions:
+      - condition: template
+        value_template: "{{ is_state('input_boolean.ecco_cfg_edit_in_flight', 'on') }}"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ecco_cfg_edit_write_seen

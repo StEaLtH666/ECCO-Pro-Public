@@ -27,7 +27,7 @@ a pre-acs0 state of it, the chain refuses a reverter for an unpinned artifact (C
 non-frozen file. Public PRs #31 and #32 edited it later without a chain entry for exactly that reason. acs1 therefore declares NO
 reverter and NO checkpoint, and edits NO chain-pinned or frozen file: the deployment manifest, the four reserved-token suites and every
 frozen allowlist are unchanged. The EXACT record of the package edit is held elsewhere and is proven offline:
-  * home-assistant/prototypes/acs-stage1/acs_stage1_transform.py: 53 exact (before, after, count) pairs (40 reviewed + 13 follow-up); render_stage1(<Stage 0 text>) is
+  * home-assistant/prototypes/acs-stage1/acs_stage1_transform.py: 58 exact (before, after, count) pairs (40 reviewed + 18 follow-up); render_stage1(<Stage 0 text>) is
     the installed package byte for byte and unrender_stage1(<installed>) is the Stage 0 text again (sha256 ACS0_PACKAGE_SHA256);
   * home-assistant/tests/test_ecco_tou_slot_settings_edit.py: the installed file is tested directly, and [0] proves both directions, the
     pinned hashes (kept here as well, checked equal by [13]) and that the rollback file (the unrendered text) equals the old bytes.
@@ -69,9 +69,9 @@ ADDED_FILES = frozenset({
 # sha256 (LF text) of the package before acs1 (acs0 + acs0r1 + the PR #31 / #32 edits, public main e7a265b8) and after it. The Stage 1
 # suite proves that unrender_stage1(<installed>) and the installed text hash to these, and that they equal the transform module's pin.
 ACS0_PACKAGE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
-STAGE1_PACKAGE_SHA256 = "271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d"
-# sha256 of the canonical serialisation of the transform's 53 (before, after, count) pairs (acs_stage1_transform.pairs_sha256()).
-PAIRS_SHA256 = "68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c"
+STAGE1_PACKAGE_SHA256 = "4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816"
+# sha256 of the canonical serialisation of the transform's 58 (before, after, count) pairs (acs_stage1_transform.pairs_sha256()).
+PAIRS_SHA256 = "13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17"
 
 # The script ids acs1 renames (nothing but documents refers to them; the helpers, the acknowledge script and the watchdog automation keep
 # their ids) and the settings the new Review takes.

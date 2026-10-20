@@ -127,8 +127,8 @@ PKG0 = X.unrender_stage1(S1)                               # the Stage 0 text it
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
-S1_SHA = "271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d"      # the installed Stage 1 package, LF line ends
-PAIRS_SHA = "68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c"   # the canonical serialisation of the 53 pairs (40 reviewed + 13 follow-up)
+S1_SHA = "4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816"      # the installed Stage 1 package, LF line ends
+PAIRS_SHA = "13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17"   # the canonical serialisation of the 58 pairs (40 reviewed + 18 follow-up)
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -540,9 +540,9 @@ check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned St
       "render_stage1(unrender_stage1(installed)) == installed, from the LF text and from a CRLF copy", hashlib.sha256(PKG0.encode()).hexdigest()
       == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1)) == S1
       and X.unrender_stage1(S1.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1.replace("\n", "\r\n"))) == S1)
-check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 53 pairs hash "
+check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 58 pairs hash "
       "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
-      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 53 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 58 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
 SENT = "\x00"
 
 
@@ -573,7 +573,7 @@ def outside_pairs(installed):
 
 
 OUT = outside_pairs(S1)
-check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 13 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
+check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 18 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
       f"times (the acs0r1 press timing, the fresh-evidence code, the gate, the verdict reads...): {OUT[1] if OUT else '?'} of the baseline's "
       f"{OUT[2] if OUT else '?'} lines are wholly outside the 40 reviewed pairs, and the follow-up pairs are undone exactly first", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
 OUT_MUTANTS = [
@@ -595,14 +595,17 @@ check(f"the check kills {len(OUT_MUTANTS)} in-memory mutants that alter one unto
 check("the Stage 0 text is itself NOT a rendered package (unrender refuses it) and the installed package is NOT a Stage 0 text (render refuses it): "
       "the two directions cannot be confused", all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1))))
 pkg = yaml.safe_load(S1)
-check("the result parses as YAML with Stage 0's shape: 3 text helpers, 2 booleans, 3 scripts (review, apply, acknowledge), 1 automation",
-      {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 2, "script": 3, "automation": 1}
+check("the result parses as YAML with Stage 0's shape plus the write-seen recorder: 3 text helpers, 3 booleans (Stage 0's two and ecco_cfg_edit_write_seen), "
+      "3 scripts (review, apply, acknowledge), 2 automations (the watchdog and the write-seen recorder)",
+      {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 3, "script": 3, "automation": 2}
       and sorted(pkg["script"]) == sorted([REVIEW, APPLY, ACK]) and pkg["automation"][0]["id"] == "ecco_cfg_edit_interrupted"
+      and pkg["automation"][1]["id"] == "ecco_cfg_edit_write_seen" and "ecco_cfg_edit_write_seen" in pkg["input_boolean"]
       and sorted(pkg["script"][REVIEW]["fields"]) == ["setting", "slot", "value"] and list(pkg["script"][APPLY]["fields"]) == ["confirmation"]
       and not any("initial" in (v or {}) for v in pkg["input_boolean"].values()))
 pkg0 = yaml.safe_load(PKG0)
-check("same helpers (same ids) as Stage 0 - a drop-in superset that replaced it; the watchdog automation (same id) watches the NEW apply script",
-      pkg["input_text"] == pkg0["input_text"] and pkg["input_boolean"] == pkg0["input_boolean"]
+check("Stage 0's helpers keep their ids and definitions (one NEW helper: the write-seen marker) - a drop-in superset that replaced it; the watchdog automation (same id) watches the NEW apply script",
+      pkg["input_text"] == pkg0["input_text"]
+      and {k: v for k, v in pkg["input_boolean"].items() if k != "ecco_cfg_edit_write_seen"} == pkg0["input_boolean"]
       and pkg["script"][ACK] == pkg0["script"][ACK] | {"sequence": pkg["script"][ACK]["sequence"]}
       and f"script.{APPLY}" in S1 and f"script.{APPLY0}" not in S1 and REVIEW0 not in S1
       and str(pkg["automation"][0]).count(f"script.{APPLY}") == str(pkg0["automation"][0]).count(f"script.{APPLY0}") == 2
@@ -831,10 +834,12 @@ def touched(acts, mp):
 
 
 new_touch = touched(acts1, mp1) - touched(acts0, mp0)
+WRITE_SEEN = "input_boolean.ecco_cfg_edit_write_seen"        # the F2 proof's marker: the editor's own helper, cleared before the staging
 check("the entities the installed package ACTS on beyond Stage 0's are exactly the 18 allowed ones (6 power numbers, 6 start_hhmm numbers, "
-      "6 charge_source selects); everything else is read-only or already Stage 0's", len(new_touch) == 18
-      and new_touch == {f"{d}.{D}{s}" for s, d in [(x, "number") for x in sorted(allowed_new) if not x.endswith("source")]
-                        + [(x, "select") for x in sorted(allowed_new) if x.endswith("source")]}, str(sorted(new_touch)))
+      "6 charge_source selects) plus the editor's own write-seen marker (input_boolean, cleared before the staging, set by its recorder automation); "
+      "everything else is read-only or already Stage 0's", len(new_touch) == 19
+      and new_touch == {WRITE_SEEN} | {f"{d}.{D}{s}" for s, d in [(x, "number") for x in sorted(allowed_new) if not x.endswith("source")]
+                                       + [(x, "select") for x in sorted(allowed_new) if x.endswith("source")]}, str(sorted(new_touch)))
 check("the per-slot map is exact for slots 1-6: own Load / Apply / staging / live TimezoneN, the next slot's start as the end, own helpers",
       all(mp1[n].get("load") == f"button.{D}load_current_slot_{n}_to_manual_staging"
           and mp1[n].get("apply") == f"button.{D}apply_manual_slot_{n}_settings"
@@ -2030,6 +2035,9 @@ print("\n[11b] follow-up behaviours (owner-approved 2026-10-20): F1 Load of slot
 # ======================================================================================================================
 
 
+WSEEN = "input_boolean.ecco_cfg_edit_write_seen"
+
+
 def btn(r):
     """The entities of every button.press service call, in order."""
     return [c[2] for c in r.w.service_log if c[1] == "button.press"]
@@ -2157,7 +2165,8 @@ F2_NOTE_OK, F2_NOTE_BAD = "staging was refreshed to the live values", "staging m
 
 def f2_ok_case(r, n=3):
     return (r.res().startswith("FAILED") and load_seq(r) == [f"load{n}", f"load{n}"] and staged_eq_live(r, n) and not r.locked() and not r.arm_on()
-            and r.changed() == {} and F2_NOTE_OK in r.note() and F2_NOTE_BAD not in r.note() and r.w.state(FLIGHT) == "off")
+            and r.changed() == {} and F2_NOTE_OK in r.note() and F2_NOTE_BAD not in r.note() and r.w.state(FLIGHT) == "off"
+            and r.d.attempts == 0 and r.w.state(M.ATTEMPTS) == "0.0" and r.w.state(WSEEN) == "off" and "nothing written" in r.res())   # the counter-proven path
 
 
 bad = []
@@ -2331,6 +2340,117 @@ if not (len(r.res()) < 255 and len(r.w.state(PLAN)) < 255 and not r.w.warnings):
 check("F4: every input_text value (plan, last result, last owner edit) stays under 255 characters, through Review and Apply and a firmware refusal, "
       "for every setting (no Home Assistant overflow)", not bad, str(bad))
 
+
+# --- F2 correction: "nothing pressed" is not "no inverter write" - the write enable is shared and the firmware accepts ANY Apply press while it is on
+def after_load(fn, delay):
+    """Run fn(run) `delay` s after every Load the dongle receives."""
+    def setup(x):
+        orig = x.d._load
+
+        def ld(n):
+            orig(n)
+            x.w.after(delay, lambda: fn(x))
+        x.d._load = ld
+    return setup
+
+
+def ext_apply_after_arm(delay, slot=3):
+    """Another actor presses Apply of `slot` `delay` s after the write enable is switched on (the editor's own arm)."""
+    def setup(x):
+        orig = x.w.service_handlers["switch.turn_on"]
+
+        def on(ent, data):
+            orig(ent, data)
+            if ent == M.ARM:
+                x.w.after(delay, lambda: x.w.call("button.press", [f"button.{D}apply_manual_slot_{slot}_settings"], {}))
+        x.w.service_handlers["switch.turn_on"] = on
+    return setup
+
+
+def counter_unavailable(x):
+    real = x.w.set
+    x.w.set = lambda e, v, a=None: real(e, "unavailable" if e == M.ATTEMPTS else v, a)
+    real(M.ATTEMPTS, "unavailable")
+
+
+def bump_counter(x):
+    x.d.attempts += 1
+    x.w.set(M.ATTEMPTS, f"{float(x.d.attempts)}")
+
+
+def blip_write_in_progress(x):
+    x.w.set(M.MANUAL, "on")
+    x.w.after(2.0, lambda: x.w.set(M.MANUAL, "off"))
+
+
+RTC_LATE = lambda: late_flip(f"binary_sensor.{D}rtc_correction_in_progress", "on")      # noqa: E731  (a pre-press FAILED, after the staging)
+
+
+def both(*setups):
+    return lambda x: [f(x) for f in setups]
+
+
+def unproven_ok(r, n=3):
+    """UNCERTAIN, locked, the existing UNCERTAIN notification, NO extra Load, and the claim 'nothing written' appears nowhere."""
+    every = r.res() + " " + str(r.w.notifications)
+    return (r.res().startswith("UNCERTAIN") and r.locked() and load_seq(r) == [f"load{n}"] and "Do NOT retry" in r.note()
+            and "nothing written" not in every and F2_NOTE_OK not in r.note() and F2_NOTE_BAD not in r.note() and r.w.state(FLIGHT) == "off" and not r.arm_on())
+
+
+bad = []
+for setting in ("power", "start_time", "target_soc"):
+    for dly in (0.02, 0.1):
+        # the editor's last check runs 0.5 s after it armed (a slow arm confirmation), so the write-in-progress flag of the other actor's Apply is visible:
+        # the run stops before its press (the pre-press branch) and cannot prove that nothing was written
+        r = Run(setup=ext_apply_after_arm(dly), dkw=dict(arm_latency=0.5)).edit(3, setting, value_for(3, setting), run=520)
+        if not (unproven_ok(r) and r.changed() == expected_change(3, setting) and "an Apply by someone else may have run" in r.note()):
+            bad.append((setting, dly, r.res()[:90], load_seq(r), r.locked(), r.changed()))
+check("F2 correction: an Apply by ANOTHER actor lands 0.02 s / 0.1 s after the editor armed and its write-in-progress is visible at the editor's last check "
+      "(the firmware accepts any Apply press while the write enable is on) - the inverter IS written (power, start time and target SOC): the run stops "
+      "before its press and is UNCERTAIN, locked, with the manual-recovery notification saying an Apply by someone else may have run, NO re-Load, and "
+      "'nothing written' appears in neither the result nor any notification", not bad, str(bad[:3]))
+bad = []
+for setting in ("power", "start_time", "target_soc"):
+    # the other actor's Apply lands before the editor's last check can see its flag: the editor presses (the firmware refuses it, a write is running)
+    r = Run(setup=ext_apply_after_arm(0.05)).edit(3, setting, value_for(3, setting), run=520)
+    every = r.res() + " " + str(r.w.notifications)
+    if not ("nothing written" not in every and F2_NOTE_OK not in r.note() and load_seq(r)[:1] == ["load3"] and "load3" not in load_seq(r)[1:]
+            and r.changed() == expected_change(3, setting) and len(r.applies()) >= 1):
+        bad.append((setting, r.res()[:80], load_seq(r), r.changed()))
+check("F2 correction: the same external Apply landing so early that the editor's flag check misses it: the editor presses (refused by the firmware: a write is "
+      "running) and the usual success verdict judges the final state (the requested value, firmware readback, two later reads); no 'nothing written' claim, no "
+      "re-Load of slot N (a start-time edit's F1 Load of slot N-1 may follow a verified success)", not bad, str(bad[:3]))
+bad = []
+for label, setup in (
+        ("only the firmware's gate-pass counter moved (an Apply whose write-in-progress and text were never seen)", both(RTC_LATE(), after_load(bump_counter, 5.0))),
+        ("the gate-pass counter is unavailable (unreadable)", both(RTC_LATE(), counter_unavailable)),
+        ("the write-in-progress flag was on for 2 s inside the staged window, the counter unchanged", both(RTC_LATE(), after_load(blip_write_in_progress, 6.0))),
+        ("the firmware's last result showed a write", both(RTC_LATE(), after_load(lambda x: x.w.set(M.RESULT, "Writing Slot3 0900-1600, 8000W, 40%, None/General, grid charge on"), 6.0)))):
+    r = Run(setup=setup).edit(3, "power", 3000, run=520)
+    if not unproven_ok(r):
+        bad.append((label, r.res()[:90], load_seq(r), r.locked()))
+check("F2 correction: after a pre-press FAILED the 'nothing written' claim needs ALL of: the counter unchanged since before the staging, no write-in-progress "
+      "or write text seen. Counter moved only / counter unavailable / write-in-progress seen / a write text seen: UNCERTAIN, locked, no re-Load", not bad, str(bad[:3]))
+r = Run(setup=RTC_LATE()).edit(3, "power", 3000, run=520)
+fail_t = [t for t, e, v in r.w.history if e == RESULT and v.startswith("FAILED - a safety check")]
+arm_off_t = [t for t, e, v in r.w.history if e == M.ARM and v == "off" and fail_t and t < fail_t[0]]
+check("F2 correction: the proven path waits for the counter to publish (the FAILED result is set at least 35 s after the editor disarmed) and then still "
+      "re-Loads: counter unchanged, no write seen", bool(fail_t) and bool(arm_off_t) and fail_t[0] - arm_off_t[-1] >= 35 and f2_ok_case(r), f"{fail_t} {arm_off_t} {r.res()}")
+
+
+def live_power_fraction_after_review(t):
+    x = Run(t, layout=slot_set(3, power=2500)).review(3, "power", 3000)
+    x.d.regs["slots"][3]["power"] = 2500.5            # int() of it is still the reviewed 2500, so only the live-power rule can refuse
+    x.d.poll()
+    x.w.run_until(x.w.t + 100)
+    x.apply()
+    return x
+
+
+r = live_power_fraction_after_review(S1)
+check("F3: the Apply-start gate copy itself: the live power becomes 2500.5 W after a Review made at 2500 W (the reviewed integer is unchanged): REFUSED with the "
+      "multiple-of-100 reason, nothing pressed", r.res().startswith("REFUSED") and "multiple of 100" in r.res() and r.d.presses == [], r.res())
+
 # ======================================================================================================================
 print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
 # ======================================================================================================================
@@ -2461,6 +2581,27 @@ def f4_check(t):
     return DUMP_W in a and SMART_W in a and DUMP_W not in b and SMART_W in b
 
 
+def f2_ext(t):
+    return all(unproven_ok(Run(t, setup=ext_apply_after_arm(0.05), dkw=dict(arm_latency=0.5)).edit(3, st, value_for(3, st), run=520)) for st in ("power", "target_soc"))
+
+
+def f2_cnt(t):
+    return unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(bump_counter, 5.0))).edit(3, "power", 3000, run=520))
+
+
+def f2_unav(t):
+    return unproven_ok(Run(t, setup=both(RTC_LATE(), counter_unavailable)).edit(3, "power", 3000, run=520))
+
+
+def f2_wip(t):
+    return unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(blip_write_in_progress, 6.0))).edit(3, "power", 3000, run=520))
+
+
+def f2_cap(t):
+    # the counter moves AFTER the staging began and BEFORE a capture made after the staging: only a capture before the staging notices it
+    return unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(bump_counter, 3.5))).edit(3, "power", 3000, run=520))
+
+
 CHECKS = {
     **{f"happy_{s}": happy(s) for s in SETTINGS},
     "phrase": phrase_check,
@@ -2493,7 +2634,10 @@ CHECKS = {
                          in Run(t, setup=fp_on_finish).edit(3, "start_time", "09:30", run=480).note()
                          and "refreshed by the editor" in Run(t).edit(3, "start_time", "09:30").note()),
     "f1": f1_check, "f1_nonstart": f1_nonstart, "f2_pre": f2_pre, "f2_unc": f2_unc, "f2_counter": f2_counter,
-    "f3_review": f3_review, "f3_fresh": f3_fresh, "f3_last": f3_last, "f4": f4_check,
+    "f3_review": f3_review, "f3_fresh": f3_fresh, "f3_last": f3_last, "f3_start": lambda t: (lambda x: x.res().startswith("REFUSED") and "multiple of 100" in x.res()
+                                                                                              and x.d.presses == [])(live_power_fraction_after_review(t)),
+    "f4": f4_check,
+    "f2_ext": f2_ext, "f2_cnt": f2_cnt, "f2_unav": f2_unav, "f2_wip": f2_wip, "f2_cap": f2_cap,
     "inv_clock": lambda t: (rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, S.local_str(x.w.t + 400))))
                             and rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, "unavailable")))),
     "mid": lambda t: (rejects(rv(t, 3, "start_time", "11:00", t0=S.parse_local("2026-10-12 10:00:00") - 70))
@@ -2649,6 +2793,35 @@ MUTANTS += [
     ("F3: the rule is removed from the fresh-read gate only", _f3_gone(16), "f3_fresh"),
     ("F3: the rule is removed from the last check only", _f3_gone(24), "f3_last"),
     ("F4: the Dump to Grid warning is removed", [(DUMP_W, "")], "f4"),
+]
+_ATT_VAR = "                  - variables:\n                      att0: \"{{ states('" + X._ATT + "') | float(-1) }}\"\n"
+
+
+def _f2_capture_after_staging(t):
+    assert t.count(_ATT_VAR) == 1
+    t = t.replace(_ATT_VAR, "")
+    anchor = "                  # 3b. acs0r1:"
+    assert t.count(anchor) == 1
+    return t.replace(anchor, _ATT_VAR + anchor)
+
+
+def _f3_start_gone(t):
+    a, b = X._ind(X.F3_AFTER, 12), X._ind(X.F3_BEFORE, 12)
+    i = t.index(a, t.index(a) + 1)                     # the Apply-start gate is the SECOND 12-space copy (the Review has the first)
+    return t[:i] + b + t[i + len(a):]
+
+
+MUTANTS += [
+    ("F2 correction: the gate-pass counter comparison is dropped from the pre-press proof", [("att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen", "att0 >= 0 and w_att >= 0 and not w_seen")], "f2_cnt"),
+    ("F2 correction: the write-in-progress tracking (the marker and the flag) is dropped", [(
+        "{{ not is_state('input_boolean.ecco_cfg_edit_write_seen', 'off') or not is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')\n",
+        "{{ false\n")], "f2_wip"),
+    ("F2 correction: the counter is captured AFTER the staging instead of before", _f2_capture_after_staging, "f2_cap"),
+    ("F2 correction: an unavailable counter is treated as unchanged", [("att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen", "w_att == att0 and not w_seen")], "f2_unav"),
+    ("F2 correction: the pre-press branch claims 'nothing written' without any proof (the old behaviour)", [(
+        "{{ att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen }}", "{{ true }}")], "f2_ext"),
+    ("F4: the SmartDeye / inverter-panel advice is removed", [(SMART_W, "")], "f4"),
+    ("F3: the rule is removed from the Apply-start gate copy only", _f3_start_gone, "f3_start"),
 ]
 for name, pairs, key in MUTANTS:
     if callable(pairs):
