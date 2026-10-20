@@ -217,6 +217,18 @@ Development before the first public release happened in a private repository; se
 
 ### Changed
 
+- **The Overview's daily weather forecast opens a day's hourly forecast in the same card** (Weather & Solar card,
+  `daily_compact` layout; source only, not installed). Each day row of the Overview's "Next days" block is now a button.
+  Selecting one replaces the list with a Back to days control and the date, that day's summary line and its hourly cells in one
+  horizontally scrolling strip; the cells are the dedicated Weather & Solar view's own (`hourCell()`, unchanged), fed by the
+  same read-only `weather/subscribe_forecast` hourly message. The idle list keeps only the daily subscription; the hourly one
+  exists only while a day is open. Days follow the Home Assistant time zone: 2026-10-25 shows 25 hours (01:00 BST, then 01:00
+  GMT) and 2027-03-28 shows 23 with no 01:00; missing hours are never filled in, and a day the forecast does not reach says so.
+  Focus moves to Back on open and returns to the day row on close. The `full` layout and the solar strip are unchanged; the
+  card's Python suite now pins its three local view actions (`chart-day`, `weather-days`, `weather-hours`) and still one
+  click listener and no service call. Display only: no firmware, package, dashboard YAML, service call or Modbus change.
+  **Deployment:** the card stays a manual Lovelace resource; the new bundle takes effect only once the owner copies it and
+  refreshes the resource.
 - **Overview V2.1 polish and accuracy pass** (dashboard 7.21.1, staged; display only; re-chained after FE-1 and FPS1, keeping FE-1's time to reserve). ECCO Today and Smart Charge Strategy now
   count only the solar that can arrive before their target time (between 00:00 and the 00:30 target the projected SOC had been
   overstated by about 25 points, because the forecast is for the rest of the current day), say which day the target is, and show
