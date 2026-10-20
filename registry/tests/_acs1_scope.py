@@ -38,6 +38,16 @@ document (the reuse proof, the per-setting matrix and the residual risks). The S
 file, one of the three declared holders, and keeps its name and path: it now proves the Stage 0 baseline by running unchanged on
 unrender_stage1(<installed>); the installed editor's behaviour is proven by the Stage 1 suite.
 
+MERGE ORDER. acs1 is sealed to its parent hd1 (the fingerprint hashes hd1's). If another post-export entry merges first, acs1 must be
+re-sealed on top of it: recompute the fingerprint with the sealed() helper of _pex (the chain up to the new parent, then ACS1), then update, together, the fingerprint
+literal in _scope_chain.py, ACS1_FINGERPRINT and HD1_FINGERPRINT (the parent's) and the entry-position check in
+home-assistant/tests/test_ecco_tou_slot_settings_edit.py, and the position of ACS1 in POST_EXPORT_ENTRIES.
+
+FUTURE EDITS OF THE PACKAGE. The record is exact only while the package is render_stage1() of the Stage 0 text. A later edit of
+home-assistant/packages/ecco_tou_target_soc_edit.yaml must APPEND pairs to the transform (and update its three pins - the transform's
+STAGE1_SHA256 / PAIRS_SHA256, the Stage 1 suite's S1_SHA / PAIRS_SHA, and this module's STAGE1_PACKAGE_SHA256 / PAIRS_SHA256) or deliberately
+retire the mechanism (a new chain entry that says so). An unpinned edit fails the Stage 1 suite.
+
 This module imports no other scope module, not _scope_chain (the chain imports it) and not _pex. No I/O.
 """
 

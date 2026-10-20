@@ -19,7 +19,12 @@ Development before the first public release happened in a private repository; se
   lock. No firmware change, no new register or write path.
   - The scripts are renamed `script.ecco_cfg_review_tou_slot_setting` (fields `slot`, `setting`, `value`) and
     `script.ecco_cfg_apply_tou_slot_setting`; the helpers, the acknowledge script and the watchdog automation keep their ids.
-  - New refusals for every setting, the target SOC included: no edit 00:00-03:00 local on the UK clock change nights.
+  - **Target-SOC behaviour differs from Stage 0 in three ways** (every other Stage 0 refusal and outcome is unchanged):
+    - it is refused 00:00-03:00 local on the UK clock change nights (last Sunday of March and of October), as is every setting;
+    - it is refused when the slot's raw flags are unreadable (they are needed by the charge-source verdict, so they are now a
+      precondition for every setting);
+    - the "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC unavailable" refusals now apply to
+      target-SOC edits only (they are that bound's inputs); the other Stage 0 refusals apply to every setting.
   - The package is derived from the Stage 0 text by 40 exact edits; the transform is invertible (`unrender_stage1`), which gives
     the rollback file and the provenance proof without git history.
   - **Pending owner decisions:** re-approval of the 2026-10-12 reserved-token amendment, which was given for a SOC-only editor (the

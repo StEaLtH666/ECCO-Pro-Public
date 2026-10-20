@@ -16,7 +16,7 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [0] provenance      the installed package IS render(Stage 0) and unrender(installed) IS the pinned Stage 0 text (sha256), both ways; every
                       pair applies exactly its declared count; the result is YAML; the gate lines that carry a reserved token are inherited
                       byte for byte; neither file spells a reserved token; deterministic; an altered anchor raises, both ways
-  [1] static scope    which services and entities the generated package may touch; every firmware entity exists; Stage 0 untouched
+  [1] static scope    which services and entities the installed package may touch; every firmware entity exists; Stage 0 untouched
   [2] happy path      every slot x every setting: Review -> typed phrase -> Apply; exactly the intended register changes; verified
   [3] SOC parity      the Stage 0 package (unrendered from the installed one) and the installed one (setting target_soc) on identical
                       worlds: same outcome class, same writes, same lock
@@ -541,6 +541,50 @@ check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned St
 check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 40 pairs hash "
       "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
       == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+SENT = "\x00"
+
+
+def outside_pairs(installed):
+    """(identical, covered, total): the installed package and the Stage 0 baseline, each with every pair's region (the `after` text in the
+    installed one, the `before` text in the baseline; the two id renames applied to the baseline first) replaced by a sentinel, must be
+    EQUAL; `covered` is the number of baseline lines no pair touches. None when a pair's text is not present the declared number of times."""
+    a = installed
+    for _b, aft, c in reversed(X.PAIRS[2:]):
+        if a.count(aft) != c:
+            return None
+        a = a.replace(aft, SENT)
+    base = PKG0
+    for old, new, _c in X.PAIRS[:2]:
+        base = base.replace(old, new)
+    for bef, _a, c in X.PAIRS[2:]:
+        if base.count(bef) != c:
+            return None
+        base = base.replace(bef, SENT)
+    ren = [n for _o, n, _c in X.PAIRS[:2]]
+    lines = base.split("\n")
+    return a == base, sum(1 for ln in lines if SENT not in ln and not any(n in ln for n in ren)), len(PKG0.split("\n"))
+
+
+OUT = outside_pairs(S1)
+check(f"EVERY part of the Stage 0 baseline that no pair touches is byte-identical in the installed package, in the same place and the same number of "
+      f"times (the acs0r1 press timing, the fresh-evidence code, the gate, the verdict reads...): {OUT[1] if OUT else '?'} of the baseline's "
+      f"{OUT[2] if OUT else '?'} lines are wholly outside every pair", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
+OUT_MUTANTS = [
+    ("the acs0r1 press delay", 'seconds: "{{ 1.5 if bus_quiet else 0 }}"', 'seconds: "{{ 1.6 if bus_quiet else 0 }}"'),
+    ("the telemetry period bound of the fresh evidence", "and clk_at > 0 and tel_period >= 8 }}", "and clk_at > 0 and tel_period >= 7 }}"),
+    ("the gate-pass counter condition", "and later_read and not attempts_moved and unchanged", "and later_read and unchanged"),
+    ("the final disarm", "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n      - action: switch.turn_off\n",
+     "      # The write enable always ends off (it only permits an Apply) - and must be SEEN off.\n      - action: switch.turn_on\n"),
+]
+bad = []
+for name, anchor, repl in OUT_MUTANTS:
+    n_anchor = S1.count(anchor)
+    mut = S1.replace(anchor, repl, 1)
+    got = outside_pairs(mut)
+    if n_anchor < 1 or mut == S1 or got is None or got[0] is not False:
+        bad.append((name, n_anchor, got))
+check(f"the check kills {len(OUT_MUTANTS)} in-memory mutants that alter one untouched line of the installed package (the press delay, the telemetry "
+      "period bound, the gate-pass counter condition, the final disarm)", not bad, str(bad))
 check("the Stage 0 text is itself NOT a rendered package (unrender refuses it) and the installed package is NOT a Stage 0 text (render refuses it): "
       "the two directions cannot be confused", all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1))))
 pkg = yaml.safe_load(S1)
@@ -639,7 +683,7 @@ check("the transform performs no I/O at all and uses no network (no read_text / 
       not re.search(r"read_text|read_bytes|write_text|write_bytes|\bopen\(|socket|urllib|requests|subprocess|os\.system|import pathlib|from pathlib", src_t))
 
 # ======================================================================================================================
-print("\n[1] static scope of the generated package")
+print("\n[1] static scope of the installed package")
 # ======================================================================================================================
 
 
@@ -698,7 +742,7 @@ def ha_nonstring_statics(text):
 check("Home Assistant's result parsing is reproduced (None, True, 12, 0042, Grid, 09:30, 41 %): None -> None, True -> True, 12 -> 12, "
       "0042 / Grid / 09:30 / '41 %' stay strings", ha_native("None") is None and ha_native("True") is True and ha_native("12") == 12
       and ha_native("0042") == "0042" and ha_native("Grid") == "Grid" and ha_native("09:30") == "09:30" and ha_native("41 %") == "41 %")
-check("no static service-data value in the generated package would be parsed by Home Assistant into a non-string (the class of bug that "
+check("no static service-data value in the installed package would be parsed by Home Assistant into a non-string (the class of bug that "
       "makes a static `option: \"None\"` reach the select as Python None); the check does flag the old form",
       ha_nonstring_statics(S1) == [] and ha_nonstring_statics(S1.replace("action: select.select_first", "action: select.select_option\n"
                                                                          + " " * 28 + "data:\n" + " " * 30 + "option: \"None\"\n" + " " * 28 + "x: y"))
@@ -728,7 +772,7 @@ ENT = re.compile(r"\b(?:binary_sensor|sensor|switch|button|number|select)\.ecco_
 used1, used0 = set(ENT.findall(S1)), set(ENT.findall(PKG0))
 allowed_new = ({f"manual_slot_{n}_power" for n in range(1, 7)} | {f"manual_slot_{n}_start_hhmm" for n in range(1, 7)}
                | {f"manual_slot_{n}_charge_source" for n in range(1, 7)})
-check(f"every dongle entity the generated package names exists in the firmware ({len(used1)} ids), and any beyond Stage 0's is one of the "
+check(f"every dongle entity the installed package names exists in the firmware ({len(used1)} ids), and any beyond Stage 0's is one of the "
       f"18 allowed (power, start_hhmm, charge_source x 6): {len(used1 - used0)} beyond Stage 0", used1 <= fw_slugs and (used1 - used0) <= allowed_new,
       str(sorted(used1 - fw_slugs)) + str(sorted((used1 - used0) - allowed_new)))
 
@@ -756,7 +800,7 @@ def touched(acts, mp):
 
 
 new_touch = touched(acts1, mp1) - touched(acts0, mp0)
-check("the entities the generated package ACTS on beyond Stage 0's are exactly the 18 allowed ones (6 power numbers, 6 start_hhmm numbers, "
+check("the entities the installed package ACTS on beyond Stage 0's are exactly the 18 allowed ones (6 power numbers, 6 start_hhmm numbers, "
       "6 charge_source selects); everything else is read-only or already Stage 0's", len(new_touch) == 18
       and new_touch == {f"{d}.{D}{s}" for s, d in [(x, "number") for x in sorted(allowed_new) if not x.endswith("source")]
                         + [(x, "select") for x in sorted(allowed_new) if x.endswith("source")]}, str(sorted(new_touch)))
@@ -1972,7 +2016,7 @@ check("still exactly one Apply press and one Load in the package; no repeat (no 
       and "repeat:" not in S1.split(f"{APPLY}:", 1)[1].split(f"{ACK}:", 1)[0])
 
 # ======================================================================================================================
-print("\n[12] mutation: in-memory mutants of the generated output, each caught by the battery")
+print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
 # ======================================================================================================================
 
 
@@ -2104,7 +2148,7 @@ def battery(text: str, keys=None) -> dict:
 
 
 base = battery(S1)
-check(f"the mutation battery ({len(CHECKS)} checks) holds on the generated package", all(v is True for v in base.values()),
+check(f"the mutation battery ({len(CHECKS)} checks) holds on the installed package", all(v is True for v in base.values()),
       str({k: v for k, v in base.items() if v is not True}))
 PW_LIVE = "else (states(e.live_pw) | float(-2)))"
 MUTANTS = [
@@ -2246,6 +2290,6 @@ dt = time.time() - T_START
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed in {dt:.0f}s")
     sys.exit(1)
-print(f"All {PASSES} Advanced Configuration Stage 1 prototype checks passed in {dt:.0f}s.")
-print("These prove the generated package's control flow against models of the firmware's manual TOU path and of Home Assistant offline; they prove "
+print(f"All {PASSES} Advanced Configuration Stage 1 checks passed in {dt:.0f}s.")
+print("These prove the installed package's control flow against models of the firmware's manual TOU path and of Home Assistant offline; they prove "
       "nothing about a live Home Assistant, the dongle, the inverter, the Home Assistant time zone, or how a real interrupted write behaves.")

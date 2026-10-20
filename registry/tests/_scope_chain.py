@@ -1071,7 +1071,7 @@ HD1 = Entry(
 # its exact record is the invertible transform (home-assistant/prototypes/acs-stage1/acs_stage1_transform.py: unrender_stage1(installed)
 # is the Stage 0 text, sha256 pinned) proven by home-assistant/tests/test_ecco_tou_slot_settings_edit.py. No frozen file, no reserved-token
 # allowlist and no older suite is edited; banned_files is empty (the holders stay acs0's three). Measured, not declared: ZERO firmware,
-# registry, deployment (the manifest stanza is unchanged: same source, same destination), dashboard, Intelligence or ecco_core byte; the
+# registry YAML, deployment (the manifest stanza is unchanged: same source, same destination), dashboard, Intelligence or ecco_core byte; the
 # firmware write surface is unchanged (no new register, no new path); no ESPHome action or Modbus service in the package.
 ACS1 = Entry(
     id="acs1", pr="ACS1", commit="unmerged",

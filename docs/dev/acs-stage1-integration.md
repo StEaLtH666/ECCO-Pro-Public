@@ -53,45 +53,86 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89`; a text that is neither raises, naming the pair.
 - To make the inverse exact, the two script-id renames became the first two pairs of the transform (previously the last two).
   The rendered text is unchanged.
-- The Stage 0 text is the file a rollback restores (section 6).
+- The Stage 0 text is what a rollback is built from if the previously installed file was not kept (section 6). It is the GENERIC text
+  (default device slug `ecco_clock_dongle`); the file on a site is a site render of it.
 - The chain entry `acs1` declares **no reverter and no checkpoint**, deliberately: the package is an `added_files` entry of `acs0`,
   neither chain-pinned nor frozen. The chain refuses a reverter for an unpinned artifact and the PEX report a frozen edit to a
   non-frozen file; public PRs #31 and #32 edited the package without a chain entry for the same reason. No chain-pinned or frozen file
   and no reserved-token allowlist is edited. The four reserved-token suites are unchanged and pass.
+- **Merge order.** `acs1` is sealed to its parent `hd1` (its fingerprint hashes hd1's). If another post-export entry merges first,
+  `acs1` must be re-sealed on top of it: recompute the fingerprint with `_pex.sealed`, then update together the fingerprint literal in
+  `registry/tests/_scope_chain.py`, `ACS1_FINGERPRINT` and `HD1_FINGERPRINT` (the new parent's) and the entry-position check in the
+  Stage 1 suite, and the position of `ACS1` in `POST_EXPORT_ENTRIES`.
+- **Future edits of the package.** The record is exact only while the package is `render_stage1()` of the Stage 0 text. Any later edit
+  must APPEND pairs to the transform and update its three pins (the transform's `STAGE1_SHA256` / `PAIRS_SHA256`, the Stage 1 suite's
+  `S1_SHA` / `PAIRS_SHA`, and `_acs1_scope.py`'s `STAGE1_PACKAGE_SHA256` / `PAIRS_SHA256`), or deliberately retire the mechanism with a
+  new chain entry that says so. An unpinned edit fails the Stage 1 suite.
+- The Stage 1 suite also proves that everything of the Stage 0 baseline that no pair touches (834 of its 1003 lines wholly outside
+  every pair, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
+  the fresh-evidence code are proven on the installed file; it kills mutants that alter one such line.
 
 ## 3. Install procedure (owner-run; each live step needs its own authorisation)
 
-Nothing here is done by this change.
+Nothing here is done by this change. The repository is generic (device slug `ecco_clock_dongle`); a site installs a **site render**,
+never the repository file itself.
 
 **Reload or restart: an owner decision.** `deployment/ha-manifest.yaml` lists this package with `restart_required: true` (and its
 comment, lines 66-67, still describes the SOC-only Stage 0 editor; that text is **stale** after this change, but rewording it is a
 chain-pinned manifest edit and an owner decision, so it is left as it is). The acs0r1 update kit installed the package with script and
-automation reloads. For this replacement the helper definitions are byte-identical, so a reload is sufficient and this document
-describes it; a restart is the manifest's stated method and is also acceptable when the editor is idle. The owner chooses.
+automation reloads. Both are possible: a restart is the manifest's stated method; a reload is sufficient because the helper
+definitions are byte-identical. The owner chooses. The reload sequence below is the one to use if reloading.
 
-**The editor must be IDLE before the swap.** Both scripts off (no Review or Apply running), `input_boolean.ecco_cfg_edit_in_flight`
-off, and the review-required lock off or acknowledged. If an Apply is in flight when the automations are reloaded, the watchdog's
-template trigger does not fire again after the reload; the in-flight marker then stays on and every Review, Apply and Acknowledge
-refuses until a Home Assistant restart. Do not swap during an edit.
+**The editor must be IDLE before the swap, and this is mandatory.** Both scripts off (no Review or Apply running),
+`input_boolean.ecco_cfg_edit_in_flight` off, and the review-required lock off or acknowledged. The watchdog does NOT protect a swap:
+the Apply script's id changes, so the old watchdog sees the old script disappear while the new watchdog's condition is already true
+and does not fire. An Apply in flight during the swap leaves the in-flight marker on, and every Review, Apply and Acknowledge then
+refuses until a Home Assistant restart.
 
-**New dependencies, to be verified before the swap (read-only).** The Stage 1 gate needs entities the Stage 0 package did not read,
-and an unavailable one now makes even a target-SOC Review refuse: the six `sensor.ecco_clock_dongle_ecco_timezoneN_raw_flags`
-(the raw flags are a precondition for every setting, SOC included), the six `sensor.ecco_clock_dongle_ecco_timezoneN_time` with valid
-HH:MM values, `sensor.ecco_clock_dongle_inverter_time`, the six `number.ecco_clock_dongle_manual_slot_N_power` and
-`..._start_hhmm`, and the six `select.ecco_clock_dongle_manual_slot_N_charge_source` (first option None). Check that each exists, is
-not unavailable or unknown, and is numeric or a valid time where applicable, in Developer tools, States.
+**New dependencies, to be verified before the swap (read-only).** The Stage 1 gate reads entities the Stage 0 package did not, and an
+unavailable one makes even a target-SOC Review refuse. In Developer tools, States, check that each exists, is not unavailable or
+unknown, and is numeric or a valid time where applicable. Entity ids below use the default device slug: replace `ecco_clock_dongle`
+by your device slug.
+- the six `sensor.ecco_clock_dongle_ecco_timezoneN_raw_flags` (the raw flags are a precondition for every setting, the target SOC
+  included);
+- the six `sensor.ecco_clock_dongle_ecco_timezoneN_time`, each a valid HH:MM;
+- `sensor.ecco_clock_dongle_inverter_time`;
+- the six `number.ecco_clock_dongle_manual_slot_N_power` and the six `number.ecco_clock_dongle_manual_slot_N_start_hhmm`;
+- the six `select.ecco_clock_dongle_manual_slot_N_charge_source` (first option None).
 
-1. **Preconditions.** No Free Power or Dump to Grid session, schedule or recovery active or armed within the next 60 minutes; no
-   fallback Review or Save open; `input_boolean.ecco_cfg_edit_in_flight` off and `input_boolean.ecco_cfg_edit_review_required`
-   off (no edit running, none awaiting acknowledgement); not on a UK clock change night.
+Steps:
+
+1. **Preconditions.** The idle condition above. No Free Power or Dump to Grid session, schedule or recovery active or armed within
+   the next 60 minutes; no fallback Review or Save open; not on a UK clock change night.
 2. **Record the Stage 0 baseline (read-only).** Run the old *ECCO - Review a TOU slot target SOC edit* (Review writes nothing) for a
    few cases on slot 3 and note each result text: a value in range, the current value (no change), a value below the reserve. Do not
-   run any Apply.
+   run any Apply. (A Review leaves a harmless plan record that expires after 10 minutes; do it BEFORE the swap and let the editor
+   settle.)
 3. **Fresh full Home Assistant backup.**
-4. **Copy one file**, `home-assistant/packages/ecco_tou_target_soc_edit.yaml`, to `/config/packages/ecco_tou_target_soc_edit.yaml`
-   with the project's usual method. Keep the file it replaces (or the backup) for the rollback.
-5. **`ha core check`** (or Developer tools, Check configuration) must pass.
-6. **One `script.reload` and one `automation.reload`** (or a restart, per the decision above).
+4. **Keep a byte copy of the package that is installed now** (`/config/packages/ecco_tou_target_soc_edit.yaml`) outside the Home
+   Assistant configuration, and record its sha256:
+
+```powershell
+cls
+Get-FileHash -Algorithm SHA256 "<your kept copy of ecco_tou_target_soc_edit.yaml>"
+```
+
+5. **Render the package for your site** with the repository's own tool and your local, git-ignored site file (schema in
+   `ecco_site.example.yaml`). From the repository root of the Stage 1 source:
+
+```powershell
+cls
+python -I -B tools/ecco_site_render.py --site ecco_site.local.yaml --dry-run
+python -I -B tools/ecco_site_render.py --site ecco_site.local.yaml
+```
+
+   The first command reports and writes nothing; the second writes the rendered copies below `dist/site` (the default `--out`,
+   git-ignored), here `dist/site/home-assistant/packages/ecco_tou_target_soc_edit.yaml`. Nothing is rendered in place.
+6. **Copy the RENDERED file** (not the repository file) to `/config/packages/ecco_tou_target_soc_edit.yaml` with the project's usual
+   method.
+7. **`ha core check`** (or Developer tools, Check configuration) must pass.
+8. **Reload in this order** (or restart, per the decision above): reload the `input_text` and `input_boolean` helpers (their
+   definitions are unchanged, so their state persists); `script.reload`; confirm the two new scripts exist and the two old `_soc`
+   ones are gone; only then `automation.reload`; confirm the watchdog automation `ecco_cfg_edit_interrupted` exists and is on.
 
 ## 4. Acceptance checks before any live write (all read-only)
 
@@ -126,30 +167,55 @@ edit stays on the inverter exactly as any other TOU change. **ACS0 cannot undo a
 edits the target SOC only): if such an edit must go back, undo it with the Stage 1 editor BEFORE the rollback. After any start-time
 edit, press Load All (or Load Current Slot N-1) before any Manual Controls Apply (residual risk 7 of the candidate document).
 
-1. **Wait for any edit to be judged.** If an Apply is running or `input_boolean.ecco_cfg_edit_in_flight` is on, or the lock
-   `input_boolean.ecco_cfg_edit_review_required` is on after an UNCERTAIN outcome, do not roll back yet: let the Apply finish, or
-   acknowledge the lock (`script.ecco_cfg_acknowledge_edit_review`) after checking the TOU slots. A reload during an Apply is caught
-   by the watchdog and locks the editor, which is safe but leaves an UNCERTAIN record to acknowledge.
-2. **Restore the previous package file** to `/config/packages/ecco_tou_target_soc_edit.yaml`: the copy kept at install time, or the
-   Stage 0 text rebuilt offline from the installed Stage 1 file (the suite proves it is the old file byte for byte). From a
-   checkout of the Stage 1 source, in a PowerShell window:
+1. **The editor must be idle** (same mandatory condition as the install). If an Apply is running, or
+   `input_boolean.ecco_cfg_edit_in_flight` is on, or the lock `input_boolean.ecco_cfg_edit_review_required` is on after an UNCERTAIN
+   outcome, do not roll back yet: let the Apply finish, or acknowledge the lock (`script.ecco_cfg_acknowledge_edit_review`) after
+   checking the TOU slots. The watchdog does not protect a swap (section 3).
+2. **Restore the previously installed file: the byte copy kept at install time** (preferred). Check its sha256 against the one
+   recorded at install.
+3. **If that copy is lost**, rebuild it: the Stage 0 text is `unrender_stage1(<the repository package>)`, a generic (default slug)
+   text which the Stage 1 suite proves equals the pinned Stage 0 package (sha256 `9fa32b9b...`). The file that ran on a site was a site
+   render of that text, so render it with the same site file and compare the sha256 with the recorded one, if you have it. In a
+   scratch checkout of the Stage 1 source (never your working checkout), in a PowerShell window:
 
 ```powershell
 cls
-python -I -B -c "import sys, hashlib, pathlib; sys.path.insert(0, 'home-assistant/prototypes/acs-stage1'); import acs_stage1_transform as X; u = X.unrender_stage1(pathlib.Path('home-assistant/packages/ecco_tou_target_soc_edit.yaml').read_text(encoding='utf-8')); assert hashlib.sha256(u.encode()).hexdigest() == X.ACS0_BASE_SHA256; pathlib.Path(sys.argv[1]).write_text(u, encoding='utf-8', newline='\n')" "$env:TEMP\ecco_tou_target_soc_edit.yaml"
+python -I -B -c "import sys, hashlib, pathlib; sys.path.insert(0, 'home-assistant/prototypes/acs-stage1'); import acs_stage1_transform as X; p = pathlib.Path('home-assistant/packages/ecco_tou_target_soc_edit.yaml'); u = X.unrender_stage1(p.read_text(encoding='utf-8')); assert hashlib.sha256(u.encode()).hexdigest() == X.ACS0_BASE_SHA256; p.write_text(u, encoding='utf-8', newline='\n')"
+python -I -B tools/ecco_site_render.py --site ecco_site.local.yaml
+Get-FileHash -Algorithm SHA256 dist/site/home-assistant/packages/ecco_tou_target_soc_edit.yaml
 ```
 
-3. `ha core check`, then the same reloads (or restart) as at install, with the same idle precondition. The helpers are unchanged, so
-   their state persists.
-4. Run the same read-only acceptance checks as in section 4 with the old ids. Confirm the old ids `script.ecco_cfg_review_tou_slot_soc` and `script.ecco_cfg_apply_tou_slot_soc` are back and the new ones are gone;
-   nothing armed.
+   (`ecco_site.local.yaml` is your local site file, copied into the scratch checkout.) Install the rendered file, not the generic one.
+4. `ha core check`, then the same reloads (or restart) as at install, in the same order, with the same idle precondition. The helpers
+   are unchanged, so their state persists.
+5. Run the same read-only acceptance checks as in section 4, with the old ids: `script.ecco_cfg_review_tou_slot_soc` and
+   `script.ecco_cfg_apply_tou_slot_soc` are back, the new ones are gone, the watchdog exists, nothing is armed.
 
 ## 7. Verification of this change (offline; `python -I -B`)
 
-The Stage 1 suite, the adapted Stage 0 suite, the four frozen reserved-token suites, `registry/tests/test_pex_transition.py`,
+The Stage 1 suite, the Stage 0 suite (it runs unchanged on the Stage 0 text unrendered from the installed package), the four frozen reserved-token suites, `registry/tests/test_pex_transition.py`,
 `test_scope_chain.py`, `test_pub0_transition.py`, `test_pub0_privacy.py`, `test_write_surface_invariants.py`, the three suites that
 scan all of `home-assistant/`, `tools/validate_repo.py`, `tools/tests/test_public_privacy.py` and `tools/run_offline_tests.py`
 all run; the results are recorded in the pull request, not here. `tools/analyze_write_surface.py` shows no change.
 
 Not provable offline, and the reason for sections 4 and 5: real Home Assistant service schemas and time zone; whether the inverter
 accepts and keeps the written power, start-time and charge-source values; register 232's other bits; a torn multi-register write.
+
+## 8. Residual risks to know about before the live proof (documented; none is fixed by this change)
+
+Each is also in the candidate document (section 5). Where a fix exists it is an **owner decision**; none is implemented.
+
+- **A FAILED run after staging leaves the edited value loaded in slot N's Manual Controls staging.** A later Manual Controls Apply of
+  that slot would write it, without any of the Stage 1 guards. Owner decision: an automatic re-Load of slot N after a FAILED-after-staging
+  outcome (a Load writes no register but widens the editor's action set).
+- **The success notice can offer an undo the Review refuses.** The undo phrase names the old value, but the Review's own rules apply
+  to it: for example a live power of 2550 W is not a multiple of 100, so the undo to 2550 W is refused. Owner decision: the multiple-of-100
+  rule for the undo, or a warning in the Review text.
+- **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
+  whose window overlaps a slot with a charge source set refuses to start, so a Grid source, or a Grid slot moved into the window, can
+  make a later scheduled Dump refuse at its start; no health alert counts that refusal. Owner decision: a Review-text warning (or a
+  check). Verify the gate in the firmware source before relying on this note.
+- **Stale neighbour staging after a start-time edit** (candidate residual 7): press Load All (or Load Current Slot N-1) before any
+  Manual Controls Apply. Owner decision: an automatic Load of slot N-1.
+- **SmartDeye or the inverter panel during an edit.** A second Modbus master can have its change overwritten with the cached value.
+  Do not use either during an edit. This is documentation only today; nothing in Home Assistant enforces it.

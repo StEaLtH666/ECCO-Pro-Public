@@ -163,7 +163,7 @@ selects; the suite checks that and renders service data the way Home Assistant d
    not visible to Home Assistant (the firmware preserves them from its cache).
 3. **A second Modbus master** (SmartDeye, the inverter panel) changing the slot during the cache window would be overwritten with
    the cached value. The window is bounded by about 30 s and detected by the later reads, except a change reverted to exactly its
-   pre-edit value. **Do not use SmartDeye or the inverter panel during an edit.**
+   pre-edit value. **Do not use SmartDeye or the inverter panel during an edit.** (Documentation only today: nothing in Home Assistant enforces it.)
 4. **Start-time edits move an active window.** The 15-minute guard keeps the edit away from the transitions themselves. The
    inverter's behaviour when the current slot's window changes is not separately proven; the live proof must use a boundary far
    from now.
@@ -179,11 +179,19 @@ selects; the suite checks that and renders service data the way Home Assistant d
      decision.
    - The suite demonstrates the revert in the model.
 8. **A FAILED run leaves the reviewed value in staging (inherited from ACS0).** When an Apply stops before its press, slot N's
-   staging stays loaded with the edited value. A later Manual Controls Apply of slot N would write it.
+   staging stays loaded with the edited value. A later Manual Controls Apply of slot N would write it, without any of Stage 1's
+   guards. *Owner decision:* an automatic re-Load of slot N after a FAILED-after-staging outcome (not implemented).
 9. **Long refusal texts (inherited from ACS0).** One combined FAILED text can exceed the 255-character `input_text` limit;
    Home Assistant then keeps the previous value ("IN PROGRESS") and no FAILED notice fires. Nothing is written in that case.
 10. **Firmware line numbers.** `docs/dev/advanced-config/write-surface.md` and the model cite older firmware line numbers
     (for example about 12570 for `apply_manual_slot1`, now about 13666). The behaviour cited is unchanged.
+11. **The success notice can offer an undo the Review refuses.** The undo phrase names the old value, but the Review applies its own
+    rules to it: for example a live power of 2550 W is not a multiple of 100, so the undo back to 2550 W is refused. *Owner decision:*
+    the multiple-of-100 rule for an undo, or a Review-text warning (not implemented).
+12. **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
+    whose window overlaps a slot with a charge source set refuses to start; a Grid source, or a Grid slot moved into the window, can
+    therefore make a later scheduled Dump refuse at its start, and no health alert counts that refusal. *Owner decision:* a Review-text
+    warning or a check (not implemented). Verify the gate in the firmware source before relying on this note.
 
 ## 6. GUI storyboard (for the later card; no frontend change in this stage)
 
@@ -235,7 +243,7 @@ All offline, local, run as `python -I -B` (no bytecode left behind; stale byteco
 | Suite | Result |
 |---|---|
 | `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` (candidate name: `test_ecco_acs_stage1_prototype.py`) | **277 checks passed** (about 210 s), as a candidate |
-| `home-assistant/tests/test_ecco_tou_target_soc_edit.py` (ACS0, unchanged) | 162 checks passed |
+| `home-assistant/tests/test_ecco_tou_target_soc_edit.py` (ACS0; as integrated by acs1 it runs unchanged on the Stage 0 text unrendered from the installed package) | 162 checks passed |
 | frozen: `registry/tests/test_fallback_profile_schema.py`, `test_fallback_save_scope.py`, `test_fallback_live_match.py`, `test_fallback_recovery_dashboard.py` | all pass |
 | `registry/tests/test_write_surface_invariants.py` (the firmware's written registers and paths) | passes: no new write scope |
 | suites that scan all of `home-assistant/`: `test_ecco_shadow_check_ux.py`, `test_ecco_fallback_packages.py`, `test_ecco_reserve_default.py` | pass |
@@ -275,8 +283,8 @@ The live proof in section 8 exists for these.
 2. **Integration PR** (source only, DCO sign-off after fresh approval):
    - replace `home-assistant/packages/ecco_tou_target_soc_edit.yaml` with the generated text under a declared chain entry
      (the reserved-token holder list is unchanged: same file);
-   - move the Stage 1 suite next to or in place of the ACS0 suite;
-   - update the ACS0 suite's pins deliberately;
+   - the Stage 1 suite is a separate file (as built by acs1); the ACS0 suite keeps its name and path and runs unchanged on the ACS0
+     text that `unrender_stage1` recovers from the installed package, so no pin is re-hashed;
    - decide whether the Stage 0 script ids stay as thin wrappers for existing callers;
    - no firmware, registry YAML or manifest change (same package path); one chain entry in `registry/tests`.
 3. **CI green** on that PR. Merge is a separate decision.
