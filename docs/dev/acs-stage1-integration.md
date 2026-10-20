@@ -214,7 +214,7 @@ Each is also in the candidate document (section 5). Where a fix exists it is an 
 - **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
   whose window overlaps a slot with a charge source set refuses to start, so a Grid source, or a Grid slot moved into the window, can
   make a later scheduled Dump refuse at its start; no health alert counts that refusal. Owner decision: a Review-text warning (or a
-  check). Verify the gate in the firmware source before relying on this note.
+  check). Verified in the firmware source: Dump to Grid START refuses with "REJECTED - lease window overlaps TOU slot <n>, which has a charge source set" (firmware/ecco_clock_dongle_stage3_4_free_power.yaml, around line 18908; the conflict scan around line 17998).
 - **Stale neighbour staging after a start-time edit** (candidate residual 7): press Load All (or Load Current Slot N-1) before any
   Manual Controls Apply. Owner decision: an automatic Load of slot N-1.
 - **SmartDeye or the inverter panel during an edit.** A second Modbus master can have its change overwritten with the cached value.

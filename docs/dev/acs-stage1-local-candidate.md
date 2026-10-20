@@ -191,7 +191,7 @@ selects; the suite checks that and renders service data the way Home Assistant d
 12. **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
     whose window overlaps a slot with a charge source set refuses to start; a Grid source, or a Grid slot moved into the window, can
     therefore make a later scheduled Dump refuse at its start, and no health alert counts that refusal. *Owner decision:* a Review-text
-    warning or a check (not implemented). Verify the gate in the firmware source before relying on this note.
+    warning or a check (not implemented). Verified in the firmware source: Dump to Grid START refuses with "REJECTED - lease window overlaps TOU slot <n>, which has a charge source set" (firmware/ecco_clock_dongle_stage3_4_free_power.yaml, around line 18908; the conflict scan around line 17998).
 
 ## 6. GUI storyboard (for the later card; no frontend change in this stage)
 
