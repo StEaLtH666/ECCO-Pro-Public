@@ -25,8 +25,19 @@ Development before the first public release happened in a private repository; se
       precondition for every setting);
     - the "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC unavailable" refusals now apply to
       target-SOC edits only (they are that bound's inputs); the other Stage 0 refusals apply to every setting.
-  - The package is derived from the Stage 0 text by 40 exact edits; the transform is invertible (`unrender_stage1`), which gives
-    the rollback file and the provenance proof without git history.
+  - The package is derived from the Stage 0 text by 53 exact edits (the 40 reviewed ones plus 13 appended for the follow-ups below); the
+    transform is invertible (`unrender_stage1`), which gives the rollback file and the provenance proof without git history.
+  - **Owner-approved follow-ups (2026-10-20):**
+    - **F1:** after a verified start-time edit of slot N the editor presses Load Current Slot N-1 (slot 1 -> slot 6) once and checks
+      that slot's staged end; when the Load is refused or does not match, the edit stays successful and the notice says plainly that
+      the staging could not be refreshed. It writes no register, never arms and never presses an Apply.
+    - **F2 (conditional):** after a FAILED run the editor re-Loads slot N only when no inverter write was attempted for certain (the run
+      stopped before the Apply press, or the firmware refusal is proven by its text, an unchanged gate-pass counter and both later
+      reads); never after an UNCERTAIN, partial or unproven outcome, and uncertainty is never cleared automatically.
+    - **F3:** a power edit is refused when the live slot power is not a multiple of 100 W.
+    - **F4:** the Review notification says not to use SmartDeye or the inverter's own panel until the edit is finished, and warns that
+      a charge source set on a slot makes a Dump to Grid whose window overlaps it refuse at start (charge source -> Grid, and a
+      start-time edit on a slot whose live source is not None).
   - **Pending owner decisions:** re-approval of the 2026-10-12 reserved-token amendment, which was given for a SOC-only editor (the
     package reads exactly the same six ids in the same three files); and the policy values (power floor 500 W, None / Grid only, the
     start-time rules).

@@ -73,7 +73,7 @@ sections below are the candidate's reuse proof, matrix, contract, risks and plan
 | Setting | Register(s) changed | Staging entity set | Bounds (HA policy / firmware) | Coupling | Fallback B10 after a successful edit | Owners that refuse the edit |
 |---|---|---|---|---|---|---|
 | Target SOC (unchanged ACS0) | 267+N | `number.…_manual_slot_N_target_soc` | max(shutdown SOC, ECCO reserve)..100 / 0..100 | none | DRIFT | all below |
-| Power | 255+N | `number.…_manual_slot_N_power` | **500..8000, step 100** / 0..8000 | its meaning depends on register 244 (load/export mode); Dump to Grid and Free Power overwrite it while they own the slot | DRIFT | all below |
+| Power | 255+N | `number.…_manual_slot_N_power` | **500..8000, step 100** (and the LIVE slot power must be a multiple of 100 W, F3) / 0..8000 | its meaning depends on register 244 (load/export mode); Dump to Grid and Free Power overwrite it while they own the slot | DRIFT | all below |
 | Start time | 249+N (= slot N-1's end; slot 1's start = slot 6's end) | `number.…_manual_slot_N_start_hhmm` | 5-minute grid; the six starts strictly ascending before and after; new != old; not within 15 minutes of the old or new boundary / HHMM valid, mm%5==0, start != end | moves two slots' window at once; moves the RTC precision-correction and quiet windows (`ecco_rtc_policy.h`) | CONTEXT (slot times are context) | all below |
 | Charge source | 273+N bits 0-1 | `select.…_manual_slot_N_charge_source` | **None or Grid only**; refused if the live source is a generator value / firmware: 0-3 | mode bits 2-4 and reserved bits preserved (staged mode == live mode, firmware keeps cache & 0xFFE0) | DRIFT | all below |
 
@@ -102,12 +102,41 @@ inherited from ACS0):
 **New in Stage 1 (HA policy):**
 - refused 00:00-03:00 local on the last Sunday of March and of October (UK clock changes), for every setting;
 - the slot's raw flags must be readable before the Load (the charge-source verdict needs them), for every setting;
+- a **power** edit is refused when the LIVE slot power is not a multiple of 100 W (F3; at the Review and at every later gate copy that
+  re-reads the live value: the Apply start, after the fresh read and immediately before the press), with the reason "the live slot
+  power X W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls". The requested value stays
+  500..8000 W in steps of 100. (Without it the success notice could offer an undo the Review would refuse.)
 - start-time edits only:
   - refused if the inverter's own clock and Home Assistant's clock differ by more than 120 s, or the inverter clock is
     unreadable (the inverter runs TOU on its own clock);
   - refused if the change would switch which slot is active right now (the current time lies between the old and new
     boundary);
   - refused if any slot's live start is not a well-formed HH:MM (the firmware publishes `?nnnn` for out-of-range words).
+
+**Added after the owner's review decisions of 2026-10-20 (F1-F4, see section 9):**
+- **F1, a start-time edit refreshes slot N-1's Manual Controls staging.** After a VERIFIED SUCCESSFUL start-time edit of slot N the
+  editor presses Load Current Slot N-1 once (slot 1 -> slot 6), so that slot's staged end holds the new boundary. It first waits (at
+  most 60 s) until the firmware would accept a Load (raw cache valid, no manual write in progress, the write enable off, neither Free
+  Power nor Dump to Grid owning the TOU settings, no register 244 transaction), then verifies, within 20 s, that the staged end equals
+  the new boundary and that the firmware reported that Load. The Load writes no inverter register; it never arms and never presses an
+  Apply; it is never retried. If the Load is refused or the end does not match, the edit STAYS successful (the inverter write was
+  verified) and the success notice says plainly that slot N-1's staging could not be refreshed and to press Load Current Slot N-1 (or
+  Load All) before any Manual Controls Apply. Only for the start time: SOC, power and charge-source edits press no extra Load.
+- **F2, slot N's staging is refreshed after a FAILED run, but only when no inverter write was attempted for certain.** The editor
+  re-presses Load Current Slot N (then verifies that slot N's staging equals the live slot in every field, within a bounded wait) in
+  exactly two cases: (a) the run stopped after it staged the value and BEFORE the Apply press was sent ("a safety check changed just
+  before the Apply": a changed gate, no quiet Modbus window, a late arm, another actor changing staging); (b) the firmware refused
+  at its gate and the editor's existing verdict holds in full: refusal text AND an unchanged gate-pass counter AND both later reads at
+  the pre-edit values. In every other case - UNCERTAIN, a partial write, verify failure, clamp, disagreeing or missing later reads, a
+  dropped press, a press whose outcome is unknown, the write enable not confirmed off, a restart or watchdog interruption - there is
+  no re-Load, the lock is not cleared and the manual recovery stays exactly as it was. Uncertainty is never cleared automatically.
+  A run that stopped before it staged anything (no fresh evidence, a refused Apply, the staging not matching the live slot after the
+  first Load) is not re-Loaded either: the value was never staged. If the re-Load is refused or does not match, the FAILED notice says
+  slot N's staging may still hold the reviewed value and to press Load Current Slot N before any Manual Controls Apply.
+- **F4, the Review notification** (a persistent notification; no input_text value grows, all stay under 255 characters) says: "Do not
+  use SmartDeye or the inverter's own panel until this edit is finished." always, and "A slot with a charge source set makes a
+  scheduled Dump to Grid whose window overlaps it refuse at start (no health alert counts that refusal)." for charge source -> Grid
+  and for a start-time edit on a slot whose live charge source is not None.
 
 **Different from ACS0 (stated deliberately):** "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC
 unavailable" refuse only target-SOC edits, because they are the SOC bound's inputs. Every other ACS0 refusal applies to every
@@ -144,6 +173,8 @@ selects; the suite checks that and renders service data the way Home Assistant d
   - both later reads at pre-edit values.
 - **Anything else is UNCERTAIN:** the editor disarms, alerts with every observed difference and locks until the owner types
   `I HAVE CHECKED THE TOU SLOTS`. An interrupted run (restart, reload) is locked by the watchdog.
+- **Staging refreshes write nothing** (F1/F2, section 3): at most one Load per case, never an arm, never an Apply, never a retry, and
+  never on an UNCERTAIN outcome.
 - **Rollback is an undo, not an automatic restore.** The success notice gives the exact phrase for the same setting back to its
   old value, through the same guarded flow. No snapshot-backed automatic restore exists for permanent edits; that is
   deliberate, as in ACS0.
@@ -163,7 +194,7 @@ selects; the suite checks that and renders service data the way Home Assistant d
    not visible to Home Assistant (the firmware preserves them from its cache).
 3. **A second Modbus master** (SmartDeye, the inverter panel) changing the slot during the cache window would be overwritten with
    the cached value. The window is bounded by about 30 s and detected by the later reads, except a change reverted to exactly its
-   pre-edit value. **Do not use SmartDeye or the inverter panel during an edit.** (Documentation only today: nothing in Home Assistant enforces it.)
+   pre-edit value. **Do not use SmartDeye or the inverter panel during an edit.** (F4: the Review notification now says so on every Review. Still advice only: nothing in Home Assistant enforces it.)
 4. **Start-time edits move an active window.** The 15-minute guard keeps the edit away from the transitions themselves. The
    inverter's behaviour when the current slot's window changes is not separately proven; the live proof must use a boundary far
    from now.
@@ -173,25 +204,30 @@ selects; the suite checks that and renders service data the way Home Assistant d
    or all slots via Load All, was loaded into Manual Controls staging before the edit, its staged end still holds the old time.
    A later Manual Controls Apply of slot N-1 writes the old boundary back, and the firmware reports `VERIFIED OK` because it
    verifies what it wrote.
-   - The success notice tells the owner to press Load Current Slot N-1 (or Load All) before any Manual Controls Apply of that
-     slot.
-   - An automatic extra Load press is possible (it writes no register) but widens the editor's action set, so it is an owner
-     decision.
-   - The suite demonstrates the revert in the model.
+   - **Repaired by F1 (owner-approved 2026-10-20):** after a verified start-time edit the editor presses Load Current Slot N-1
+     itself and verifies that slot's staged end. The suite shows that a later Manual Controls Apply of slot N-1 no longer reverts
+     the boundary.
+   - The fallback, when the Load is refused (for example Free Power takes the TOU settings right after the edit) or has no effect:
+     the success notice says plainly that the staging could not be refreshed and tells the owner to press Load Current Slot N-1
+     (or Load All) before any Manual Controls Apply of that slot. The edit stays successful.
 8. **A FAILED run leaves the reviewed value in staging (inherited from ACS0).** When an Apply stops before its press, slot N's
    staging stays loaded with the edited value. A later Manual Controls Apply of slot N would write it, without any of Stage 1's
-   guards. *Owner decision:* an automatic re-Load of slot N after a FAILED-after-staging outcome (not implemented).
+   guards. **Handled by F2 (owner-approved 2026-10-20, conditional):** slot N is re-Loaded when the run conclusively stopped before
+   the Apply press or the firmware's gate refusal is proven in full (section 3); after any UNCERTAIN, partial or unproven outcome the
+   staging is deliberately left alone and the manual recovery notice stands. If the re-Load is refused the FAILED notice carries the
+   warning.
 9. **Long refusal texts (inherited from ACS0).** One combined FAILED text can exceed the 255-character `input_text` limit;
    Home Assistant then keeps the previous value ("IN PROGRESS") and no FAILED notice fires. Nothing is written in that case.
 10. **Firmware line numbers.** `docs/dev/advanced-config/write-surface.md` and the model cite older firmware line numbers
     (for example about 12570 for `apply_manual_slot1`, now about 13666). The behaviour cited is unchanged.
-11. **The success notice can offer an undo the Review refuses.** The undo phrase names the old value, but the Review applies its own
-    rules to it: for example a live power of 2550 W is not a multiple of 100, so the undo back to 2550 W is refused. *Owner decision:*
-    the multiple-of-100 rule for an undo, or a Review-text warning (not implemented).
+11. **The success notice could offer an undo the Review refuses.** The undo phrase names the old value, but the Review applies its own
+    rules to it: for example a live power of 2550 W is not a multiple of 100, so the undo back to 2550 W would be refused. **Repaired by
+    F3 (owner-approved 2026-10-20):** a power edit is refused up front when the live slot power is not a multiple of 100 W.
 12. **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
     whose window overlaps a slot with a charge source set refuses to start; a Grid source, or a Grid slot moved into the window, can
-    therefore make a later scheduled Dump refuse at its start, and no health alert counts that refusal. *Owner decision:* a Review-text
-    warning or a check (not implemented). Verified in the firmware source: Dump to Grid START refuses with "REJECTED - lease window overlaps TOU slot <n>, which has a charge source set" (firmware/ecco_clock_dongle_stage3_4_free_power.yaml, around line 18908; the conflict scan around line 17998).
+    therefore make a later scheduled Dump refuse at its start, and no health alert counts that refusal. **Warned by F4 (owner-approved 2026-10-20):** the Review
+    notification carries the warning for charge source -> Grid and for a start-time edit on a slot with a charge source set; nothing checks
+    or blocks it. Verified in the firmware source: Dump to Grid START refuses with "REJECTED - lease window overlaps TOU slot <n>, which has a charge source set" (firmware/ecco_clock_dongle_stage3_4_free_power.yaml, around line 18908; the conflict scan around line 17998).
 
 ## 6. GUI storyboard (for the later card; no frontend change in this stage)
 
@@ -320,8 +356,18 @@ The live proof in section 8 exists for these.
 4. Start-time policy: strictly ascending starts, 15-minute distance from now, and no edits on the clock-change nights.
 5. Whether to keep the Stage 0 script names as wrappers for existing callers.
 6. After a verified start-time edit, whether the editor should also press Load Current Slot N-1 (writes no register; closes
-   residual 7 automatically) or only tell the owner to do so (as built).
+   residual 7 automatically) or only tell the owner to do so. **Decided 2026-10-20: the editor presses it (F1, owner-approved),
+   with the plain-warning fallback when the Load is refused.**
 7. Re-approval of the reserved-token amendment for the wider editor (section 2), before any integration PR.
+
+Owner decisions of 2026-10-20 on the review findings (implemented in the integration branch, offline, not installed):
+- **F1 approved:** Load Current Slot N-1 after a verified start-time edit (section 3).
+- **F2 approved conditionally:** re-Load slot N only when no inverter write was conclusively attempted - the run stopped before the
+  Apply press, or the firmware refusal is proven by text, unchanged counter and both later reads; never after an UNCERTAIN, partial
+  or unproven outcome, and uncertainty is never cleared automatically (section 3).
+- **F3 approved:** a power edit is refused when the live slot power is not a multiple of 100 W; the requested value stays 500..8000 W
+  in steps of 100.
+- **F4 approved:** the Review notification carries the Dump to Grid charge-slot warning and the SmartDeye / inverter-panel advice.
 
 ## Appendix A. SmartDeye retirement: dependency inventory (offline, 2026-10-20)
 

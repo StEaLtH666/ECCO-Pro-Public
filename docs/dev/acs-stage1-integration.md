@@ -25,6 +25,10 @@ installed, checked and rolled back.
 | Helpers, acknowledge script, watchdog automation | `ecco_cfg_*` helpers, `script.ecco_cfg_acknowledge_edit_review`, automation `ecco_cfg_edit_interrupted` | **unchanged ids and definitions** (the suite proves the helper definitions are identical, so their state persists across a reload) |
 | Staged values the editor sets | the slot's target SOC number | the slot's target SOC, power and start-time numbers; the slot's charge-source select (`select_option` Grid, `select_first` None). Never the end number, the mode select or the grid-charge switch |
 | Safety gate | fail-closed, reads six reserved ids | the same lines byte for byte (20 lines), plus the Stage 1 policy refusals (below) |
+| Staging refresh after a start-time edit (F1) | the success notice told the owner to press Load Current Slot N-1 | the editor presses Load Current Slot N-1 itself (slot 1 -> slot 6) after the VERIFIED edit and verifies that slot's staged end; if the Load is refused or does not match, the edit stays successful and the notice says plainly that the staging could not be refreshed |
+| Staging refresh after a FAILED run (F2) | slot N's staging kept the reviewed value | slot N is re-Loaded, and verified equal to the live slot, ONLY when no inverter write was attempted for certain (stopped before the Apply press, or the firmware refusal proven by text, unchanged counter and both later reads); never after an UNCERTAIN, partial or unproven outcome |
+| Live power rule (F3) | - | a power edit is refused when the LIVE slot power is not a multiple of 100 W, at the Review and at every later gate copy |
+| Review notification (F4) | - | always "Do not use SmartDeye or the inverter's own panel until this edit is finished."; charge source -> Grid and a start-time edit on a slot whose live source is not None also carry the Dump to Grid charge-slot warning |
 | Firmware, registry, manifest, dashboards, frontend | - | **not changed** |
 
 Policy values integrated **as built, not yet approved by the owner** (candidate document section 9): power 500-8000 W in steps of
@@ -38,7 +42,7 @@ The files:
 | File | Role |
 |---|---|
 | `home-assistant/packages/ecco_tou_target_soc_edit.yaml` | the installed Stage 1 package (byte for byte `render_stage1` of the Stage 0 text) |
-| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 40 exact (before, after, count) pairs, `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
+| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 53 exact (before, after, count) pairs (the 40 reviewed candidate pairs plus 13 follow-up pairs for F1-F4), `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
 | `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` | the Stage 1 suite (renamed from the prototype suite): tests the installed file directly, plus the provenance checks |
 | `home-assistant/tests/test_ecco_tou_target_soc_edit.py` | the Stage 0 suite, same name and path (a declared reserved-token holder): it now proves the Stage 0 BASELINE, running unchanged on `unrender_stage1(installed)` (asserted to be the pinned Stage 0 text). The installed editor's own behaviour, SOC parity included, is proven by the Stage 1 suite |
 | `registry/tests/_acs1_scope.py`, `_scope_chain.py` | the chain entry `acs1` (declaration, fingerprint) |
@@ -50,9 +54,14 @@ CI checks out most jobs with depth 1, so nothing relies on history.
 - `unrender_stage1(installed)` applies the pairs in reverse order as (after -> before), each with its exact count, and raises on any
   mismatch. The suite proves: the result is the Stage 0 text, whose sha256 is `9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe`
   (pinned in the transform, in the suite and in the scope module); `render_stage1` of it is the installed package, whose sha256 is
-  `8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89`; a text that is neither raises, naming the pair.
+  `271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d`; a text that is neither raises, naming the pair.
 - To make the inverse exact, the two script-id renames became the first two pairs of the transform (previously the last two).
-  The rendered text is unchanged.
+  The rendered text of the reviewed candidate is unchanged (sha256 `8af4d439...`, the value before F1-F4).
+- **Follow-up pairs.** F1-F4 (owner-approved 2026-10-20) were added by APPENDING 13 exact pairs (indices 40-52) to the transform; the
+  40 reviewed pairs are not edited or reordered, and `unrender_stage1(installed)` still gives the Stage 0 text, sha256 `9fa32b9b...`.
+  Pins changed: the installed package `STAGE1_SHA256` `8af4d439...` -> `271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d`
+  and `PAIRS_SHA256` `1a49696d...` -> `68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c`, in the transform, the Stage 1
+  suite and `_acs1_scope.py`. The chain entry's declared fields and note are unchanged, so its fingerprint is unchanged.
 - The Stage 0 text is what a rollback is built from if the previously installed file was not kept (section 6). It is the GENERIC text
   (default device slug `ecco_clock_dongle`); the file on a site is a site render of it.
 - The chain entry `acs1` declares **no reverter and no checkpoint**, deliberately: the package is an `added_files` entry of `acs0`,
@@ -68,7 +77,7 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `S1_SHA` / `PAIRS_SHA`, and `_acs1_scope.py`'s `STAGE1_PACKAGE_SHA256` / `PAIRS_SHA256`), or deliberately retire the mechanism with a
   new chain entry that says so. An unpinned edit fails the Stage 1 suite.
 - The Stage 1 suite also proves that everything of the Stage 0 baseline that no pair touches (834 of its 1003 lines wholly outside
-  every pair, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
+  the 40 reviewed pairs, with the 13 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
   the fresh-evidence code are proven on the installed file; it kills mutants that alter one such line.
 
 ## 3. Install procedure (owner-run; each live step needs its own authorisation)
@@ -146,6 +155,14 @@ python -I -B tools/ecco_site_render.py --site ecco_site.local.yaml
   difference is the clock-change-night rule (the target SOC is refused 00:00-03:00 on those nights).
 - Review for each other setting on an inactive slot refuses or accepts as the candidate document describes; **never press Apply
   during the acceptance checks.**
+- **The follow-up behaviours that a Review shows** (read-only):
+  - every Review notification says "Do not use SmartDeye or the inverter's own panel until this edit is finished.";
+  - a Review of a charge source -> Grid, and of a start-time edit on a slot whose live charge source is not None, also carries the
+    Dump to Grid charge-slot warning; a power or SOC Review does not;
+  - a power Review is refused with "the live slot power X W is not a multiple of 100 W; the undo would be refused - align it first in
+    Manual Controls" when the live slot power is not a multiple of 100 (check the six slots' live power first; a target-SOC Review on
+    such a slot is not affected);
+  - every input_text helper value (plan, last result, last owner edit) stays under 255 characters.
 
 ## 5. Supervised live proof (one setting at a time; every step needs the owner's approval)
 
@@ -155,7 +172,10 @@ SmartDeye and the inverter panel not used during the proof; Home Assistant set t
 1. Power 8000 -> 7900 -> 8000 W.
 2. Charge source on an inactive slot, None -> Grid -> None, outside any cheap-rate window (exercises both `select_option` and
    `select_first`).
-3. Start time moved by 5 minutes and back, then Load All before any Manual Controls use (residual risk 7).
+3. Start time moved by 5 minutes and back. After each verified start-time edit expect exactly one Load Current Slot N-1 (slot 6 for
+   slot 1) pressed by the editor, and in Manual Controls the slot N-1 staged end equal to the new boundary; the success notice says
+   the staging was refreshed. (If it says the staging could not be refreshed, press Load Current Slot N-1 or Load All before any
+   Manual Controls use.) A SOC, power or charge-source edit presses no extra Load.
 
 For every step check: `VERIFIED OK`; two later reads; the fallback status DRIFT or CONTEXT, then MATCH after the undo; no other
 register changed; health unchanged. The target SOC path is re-checked read-only by section 4 (the Stage 0 editor's own live-proof status is kept in the owner's project records, not in this repository).
@@ -201,21 +221,25 @@ all run; the results are recorded in the pull request, not here. `tools/analyze_
 Not provable offline, and the reason for sections 4 and 5: real Home Assistant service schemas and time zone; whether the inverter
 accepts and keeps the written power, start-time and charge-source values; register 232's other bits; a torn multi-register write.
 
-## 8. Residual risks to know about before the live proof (documented; none is fixed by this change)
+## 8. Residual risks to know about before the live proof
 
-Each is also in the candidate document (section 5). Where a fix exists it is an **owner decision**; none is implemented.
+Each is also in the candidate document (section 5). Items marked "decided" were settled by the owner on 2026-10-20 and are implemented
+offline in this change; the rest remain documented.
 
-- **A FAILED run after staging leaves the edited value loaded in slot N's Manual Controls staging.** A later Manual Controls Apply of
-  that slot would write it, without any of the Stage 1 guards. Owner decision: an automatic re-Load of slot N after a FAILED-after-staging
-  outcome (a Load writes no register but widens the editor's action set).
-- **The success notice can offer an undo the Review refuses.** The undo phrase names the old value, but the Review's own rules apply
-  to it: for example a live power of 2550 W is not a multiple of 100, so the undo to 2550 W is refused. Owner decision: the multiple-of-100
-  rule for the undo, or a warning in the Review text.
-- **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the review of the Dump start gate, a Dump to Grid
-  whose window overlaps a slot with a charge source set refuses to start, so a Grid source, or a Grid slot moved into the window, can
-  make a later scheduled Dump refuse at its start; no health alert counts that refusal. Owner decision: a Review-text warning (or a
-  check). Verified in the firmware source: Dump to Grid START refuses with "REJECTED - lease window overlaps TOU slot <n>, which has a charge source set" (firmware/ecco_clock_dongle_stage3_4_free_power.yaml, around line 18908; the conflict scan around line 17998).
-- **Stale neighbour staging after a start-time edit** (candidate residual 7): press Load All (or Load Current Slot N-1) before any
-  Manual Controls Apply. Owner decision: an automatic Load of slot N-1.
+- **A FAILED run after staging leaves the edited value loaded in slot N's Manual Controls staging.** Decided (F2, conditional): the
+  editor re-Loads slot N, and verifies its staging equals the live slot, only when no inverter write was attempted for certain (stopped
+  before the Apply press; or the firmware refusal proven by text, unchanged gate-pass counter and both later reads at pre-edit
+  values). After any UNCERTAIN, partial or unproven outcome the staging is deliberately left alone, the lock stays and the manual
+  recovery is unchanged. If the re-Load is refused, the FAILED notice says slot N's staging may still hold the reviewed value and to
+  press Load Current Slot N before any Manual Controls Apply.
+- **The success notice could offer an undo the Review refuses** (a live power of 2550 W is not a multiple of 100). Decided (F3): a
+  power edit is refused up front when the live power is not a multiple of 100 W.
+- **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the Dump start gate in the firmware source, a Dump to
+  Grid whose window overlaps a slot with a charge source set refuses to start ("REJECTED - lease window overlaps TOU slot <n>, which has
+  a charge source set"); a Grid source, or a Grid slot moved into the window, can make a later scheduled Dump refuse at its start, and no
+  health alert counts that refusal. Decided (F4): the Review notification warns. Nothing checks or blocks it.
+- **Stale neighbour staging after a start-time edit.** Decided (F1): the editor presses Load Current Slot N-1 and verifies that slot's
+  staged end; when it cannot, the notice says so and the owner presses Load Current Slot N-1 (or Load All) before any Manual Controls
+  Apply of that slot.
 - **SmartDeye or the inverter panel during an edit.** A second Modbus master can have its change overwritten with the cached value.
-  Do not use either during an edit. This is documentation only today; nothing in Home Assistant enforces it.
+  Do not use either during an edit. F4 puts the advice in every Review notification; nothing in Home Assistant enforces it.
