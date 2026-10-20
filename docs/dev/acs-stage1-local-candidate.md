@@ -149,6 +149,10 @@ inherited from ACS0):
   handled by the usual path: the editor presses its own Apply (the firmware refuses it, a write is running) and the success verdict
   judges the final state; it cannot tell who pressed, so such a run can read APPLIED AND VERIFIED (the requested value, verified, nothing
   else changed). It is never reported as "nothing written" and never re-Loads slot N.
+- **The write-seen recorder is edge-triggered.** A write already in progress when the staging window begins does not fire it again, but
+  the gate-pass counter delta (read after the counter published), the end-of-window write-in-progress sample and the last-result text
+  sample still catch it. The proof's "nothing written" is about the manual (armed) path; the RTC clock writes do not use the write
+  enable and are outside it.
 - **The editor stays "in flight" during the follow-up waits** (F1's Load wait, F2's counter and Load waits, about 80 s at most).
   That is deliberate: a Home Assistant restart in that window gives the watchdog's UNCERTAIN and the lock even after a verified success.
 - **F4, the Review notification** (a persistent notification; no input_text value grows, all stay under 255 characters) says: "Do not

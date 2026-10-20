@@ -2378,6 +2378,20 @@ def bump_counter(x):
     x.w.set(M.ATTEMPTS, f"{float(x.d.attempts)}")
 
 
+def bump_counter_late(x):
+    """An armed-window write whose write-in-progress edge nobody sees and whose gate-pass counter reaches Home Assistant only 40 s later (the firmware
+    publishes it every 30 s): only the counter delta, read after the publish wait, proves the write."""
+    real, t_pub = x.w.set, x.w.t + 40.0
+
+    def held(e, v, a=None):
+        if e == M.ATTEMPTS and x.w.t < t_pub:
+            return None
+        return real(e, v, a)
+    x.w.set = held
+    x.d.attempts += 1
+    x.w.after(40.0, lambda: real(M.ATTEMPTS, f"{float(x.d.attempts)}"))
+
+
 def blip_write_in_progress(x):
     x.w.set(M.MANUAL, "on")
     x.w.after(2.0, lambda: x.w.set(M.MANUAL, "off"))
@@ -2431,6 +2445,9 @@ for label, setup in (
         bad.append((label, r.res()[:90], load_seq(r), r.locked()))
 check("F2 correction: after a pre-press FAILED the 'nothing written' claim needs ALL of: the counter unchanged since before the staging, no write-in-progress "
       "or write text seen. Counter moved only / counter unavailable / write-in-progress seen / a write text seen: UNCERTAIN, locked, no re-Load", not bad, str(bad[:3]))
+r = Run(setup=both(RTC_LATE(), after_load(bump_counter_late, 5.0))).edit(3, "power", 3000, run=520)
+check("F2 correction: an armed-window write whose write-in-progress edge is never seen and whose gate-pass counter reaches Home Assistant 40 s late: only the counter "
+      "delta read AFTER the 35 s publish wait proves it - UNCERTAIN, locked, no re-Load, no 'nothing written'", unproven_ok(r), f"{r.res()} {load_seq(r)}")
 r = Run(setup=RTC_LATE()).edit(3, "power", 3000, run=520)
 fail_t = [t for t, e, v in r.w.history if e == RESULT and v.startswith("FAILED - a safety check")]
 arm_off_t = [t for t, e, v in r.w.history if e == M.ARM and v == "off" and fail_t and t < fail_t[0]]
@@ -2637,6 +2654,7 @@ CHECKS = {
     "f3_review": f3_review, "f3_fresh": f3_fresh, "f3_last": f3_last, "f3_start": lambda t: (lambda x: x.res().startswith("REFUSED") and "multiple of 100" in x.res()
                                                                                               and x.d.presses == [])(live_power_fraction_after_review(t)),
     "f4": f4_check,
+    "f2_late": lambda t: unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(bump_counter_late, 5.0))).edit(3, "power", 3000, run=520)),
     "f2_ext": f2_ext, "f2_cnt": f2_cnt, "f2_unav": f2_unav, "f2_wip": f2_wip, "f2_cap": f2_cap,
     "inv_clock": lambda t: (rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, S.local_str(x.w.t + 400))))
                             and rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, "unavailable")))),
@@ -2794,6 +2812,12 @@ MUTANTS += [
     ("F3: the rule is removed from the last check only", _f3_gone(24), "f3_last"),
     ("F4: the Dump to Grid warning is removed", [(DUMP_W, "")], "f4"),
 ]
+def _f2_no_publish_wait(t):
+    i = t.index("w_att:")
+    j = t.rindex("seconds: 35", 0, i)
+    return t[:j] + "seconds: 0" + t[j + len("seconds: 35"):]
+
+
 _ATT_VAR = "                  - variables:\n                      att0: \"{{ states('" + X._ATT + "') | float(-1) }}\"\n"
 
 
@@ -2820,6 +2844,7 @@ MUTANTS += [
     ("F2 correction: an unavailable counter is treated as unchanged", [("att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen", "w_att == att0 and not w_seen")], "f2_unav"),
     ("F2 correction: the pre-press branch claims 'nothing written' without any proof (the old behaviour)", [(
         "{{ att0 >= 0 and w_att >= 0 and w_att == att0 and not w_seen }}", "{{ true }}")], "f2_ext"),
+    ("F2 correction: the 35 s wait for the counter to publish is removed from the pre-press verdict", _f2_no_publish_wait, "f2_late"),
     ("F4: the SmartDeye / inverter-panel advice is removed", [(SMART_W, "")], "f4"),
     ("F3: the rule is removed from the Apply-start gate copy only", _f3_start_gone, "f3_start"),
 ]

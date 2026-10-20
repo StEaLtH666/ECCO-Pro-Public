@@ -25,11 +25,12 @@ Development before the first public release happened in a private repository; se
       precondition for every setting);
     - the "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC unavailable" refusals now apply to
       target-SOC edits only (they are that bound's inputs); the other Stage 0 refusals apply to every setting.
-  - **Stricter than Stage 0 (also for SOC edits): "nothing pressed" is no longer taken to mean "nothing written".** The Manual
+  - **Stricter than Stage 0 (also for SOC edits): "nothing pressed" is no longer taken to mean "no manual-path write".** The Manual
     Configuration Write Enable is shared and the firmware accepts ANY Apply press while it is on, so an Apply by someone else can land
     while the editor is armed. When a run stops after staging and before its press, the editor now disarms at once, waits 35 s for
-    the firmware's gate-pass counter to publish, and reports "nothing written" only if that counter is unchanged since before the
-    staging and no write was seen; otherwise the outcome is UNCERTAIN, the editor locks and the notification lists the observed values.
+    the firmware's gate-pass counter to publish, and reports "nothing written" (no manual-path, armed write; the automatic RTC clock
+    writes do not use the write enable and are outside this proof) only if that counter is unchanged since before the staging and
+    no write was seen; otherwise the outcome is UNCERTAIN, the editor locks and the notification lists the observed values.
   - The package is derived from the Stage 0 text by 58 exact edits (the 40 reviewed ones plus 18 appended for the follow-ups below); the
     transform is invertible (`unrender_stage1`), which gives the rollback file and the provenance proof without git history.
   - **Owner-approved follow-ups (2026-10-20):**

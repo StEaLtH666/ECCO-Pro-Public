@@ -90,8 +90,10 @@ never the repository file itself.
 **Reload or restart: an owner decision.** `deployment/ha-manifest.yaml` lists this package with `restart_required: true` (and its
 comment, lines 66-67, still describes the SOC-only Stage 0 editor; that text is **stale** after this change, but rewording it is a
 chain-pinned manifest edit and an owner decision, so it is left as it is). The acs0r1 update kit installed the package with script and
-automation reloads. Both are possible: a restart is the manifest's stated method; a reload is sufficient because the helper
-definitions are byte-identical. The owner chooses. The reload sequence below is the one to use if reloading.
+automation reloads. Both are possible: a restart is the manifest's stated method; a reload is sufficient: Stage 0's helpers, scripts and watchdog keep their
+definitions (the suite proves it), and the one NEW helper (`input_boolean.ecco_cfg_edit_write_seen`) and the one NEW automation
+(`ecco_cfg_edit_write_seen`) are created by the `input_boolean` reload and the `automation.reload` of the sequence below. The owner
+chooses. The reload sequence below is the one to use if reloading.
 
 **The editor must be IDLE before the swap, and this is mandatory.** Both scripts off (no Review or Apply running),
 `input_boolean.ecco_cfg_edit_in_flight` off, and the review-required lock off or acknowledged. The watchdog does NOT protect a swap:
@@ -213,7 +215,8 @@ Get-FileHash -Algorithm SHA256 dist/site/home-assistant/packages/ecco_tou_target
    (`ecco_site.local.yaml` is your local site file, copied into the scratch checkout.) Install the rendered file, not the generic one.
 4. `ha core check`, then the same reloads (or restart) as at install, in the same order, with the same idle precondition. The helpers
    are unchanged, so their state persists. The rollback leaves the helper `input_boolean.ecco_cfg_edit_write_seen` behind as an orphan
-   (restored state without a definition): harmless, and gone after the next restart or when it is deleted in the entity registry.
+   (restored state without a definition): harmless, nothing references it, and it is gone after the next restart or when it is deleted in the
+   entity registry. The recorder automation disappears with the file.
 5. Run the same read-only acceptance checks as in section 4, with the old ids: `script.ecco_cfg_review_tou_slot_soc` and
    `script.ecco_cfg_apply_tou_slot_soc` are back, the new ones are gone, the watchdog exists, nothing is armed.
 
@@ -249,6 +252,11 @@ offline in this change; the rest remain documented.
   verdict judges the final state (the requested value, the firmware's readback, two later reads, nothing else changed). The verdict cannot
   tell who pressed: such a run can read APPLIED AND VERIFIED. This is not a false "nothing written" claim and it never re-Loads slot N.
   If the other actor's flag is visible at the last check the run stops before its press and is UNCERTAIN (above).
+- **The write-seen recorder is edge-triggered** (it fires when its condition turns true). A write already in progress when the staging
+  window begins therefore does not fire it again, but it is still caught by the three other proofs: the gate-pass counter delta (read
+  after the 35 s it needs to publish), the end-of-window sample of the write-in-progress flag, and the sample of the firmware's last
+  result text. The "nothing written" claim of this proof is about the manual path (the armed Apply); the automatic RTC clock writes do
+  not use the write enable and are outside it.
 - **The editor stays "in flight" while the follow-up waits run.** The F1 Load wait (up to 60 s plus 20 s) and the F2 waits (35 s counter
   wait, up to 60 s Load wait) run while `input_boolean.ecco_cfg_edit_in_flight` is still on, deliberately: a Home Assistant restart in
   that window makes the watchdog report UNCERTAIN and lock the editor even after a verified success. That conservative behaviour is kept
