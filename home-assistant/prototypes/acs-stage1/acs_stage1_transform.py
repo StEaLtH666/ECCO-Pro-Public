@@ -38,9 +38,9 @@ ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"     # the pac
 # sha256 of the Stage 0 package text (LF line ends) that PAIRS apply to: unrender_stage1(<the installed package>) must hash to this.
 ACS0_BASE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
 # sha256 of the installed Stage 1 package text (LF line ends): render_stage1(<the Stage 0 text>).
-STAGE1_SHA256 = "8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89"
+STAGE1_SHA256 = "271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d"
 # sha256 of the canonical serialisation of PAIRS (pairs_sha256()): a silent edit of any pair changes it.
-PAIRS_SHA256 = "1a49696d5a3ba6dde154692b82852055c8f0d41e52897227b27078a18c30e5f1"
+PAIRS_SHA256 = "68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c"
 SETTINGS = ("target_soc", "power", "start_time", "charge_source")
 
 
@@ -555,7 +555,163 @@ def _pairs() -> "list[tuple[str, str, int]]":
     return p
 
 
-PAIRS: "list[tuple[str, str, int]]" = _pairs()
+# ---- follow-up pairs (acs1, owner-approved 2026-10-20: F1 Load slot N-1 after a start-time edit, F2 re-Load slot N after a conclusively
+# write-free FAILED run, F3 live power must be a multiple of 100, F4 Review warnings). They are APPENDED: the first BASE_PAIR_COUNT pairs above
+# are the reviewed candidate and are never edited or reordered; each pair below anchors on text those pairs produced or left untouched.
+BASE_PAIR_COUNT = 40
+
+# The Load button's gate as far as Home Assistant can see it (firmware "Load Current Slot N To Manual Staging": raw cache valid, no manual
+# write in progress, neither Free Power nor Dump to Grid owning the TOU registers, no register 244 transaction). The press itself is still
+# verified afterwards; this only avoids pressing into a refusal.
+_LOAD_OK = ("is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')\n"
+            "@I@and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')\n"
+            "@I@and is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')\n"
+            "@I@and is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off')\n"
+            "@I@and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')\n"
+            "@I@and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off')\n"
+            "@I@and is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '\u2014')")
+
+# Slot N's staging equals the live slot in every field (the Load's fixed point, as checked after the first Load of an Apply).
+_STAGED_LIVE = (
+    "(states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))\n"
+    "@I@and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))\n"
+    "@I@and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))\n"
+    "@I@and states(e.src) == states(e.live_src) and states(e.src) in " + SRC_WORDS + " and states(e.mode) == states(e.live_mode) and states(e.mode) in " + MODE_WORDS + "\n"
+    "@I@and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']\n"
+    "@I@and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')\n"
+    "@I@and (states(e.soc) | float(-1)) == (states(e.live_soc) | float(-2))\n"
+    "@I@and not is_state('script.ecco_refresh_manual_control_helpers', 'on')\n"
+    "@I@and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))\n"
+    "@I@and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))\n"
+    "@I@and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2)))")
+
+# F1: slot N-1's staged end holds the new boundary AND the firmware reported the Load of slot N-1 (so a coincidence is not taken for a Load).
+_F1_DONE = ("(states(e.p_en) | float(-1)) == (want | float(-2))\n"
+            "@I@and states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('Manual staging loaded from current inverter Slot ' ~ pn ~ ' ')")
+
+# F3: the live slot power must be a multiple of 100 W (the undo of any power edit goes back to it, and the Review accepts multiples of 100 only).
+F3_BEFORE = ("live slot {{ label }} unavailable\n"
+             "@I@{% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}")
+F3_AFTER = ("live slot {{ label }} unavailable\n"
+            "@I@{% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls\n"
+            "@I@{% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}")
+
+# F4: Review notification text (a persistent notification, not an input_text).
+F4_BEFORE = ("                To apply within 10 minutes, run ECCO - Apply a reviewed TOU slot setting edit with:\n")
+F4_AFTER = ("                {% if (setting == 'charge_source' and (want | string) == 'Grid') or (setting == 'start_time' and states(e.live_src) != 'None') %}A slot with a charge source set makes a scheduled Dump to Grid whose window overlaps it refuse at start (no health alert counts that refusal).\n"
+            "                {% endif %}Do not use SmartDeye or the inverter's own panel until this edit is finished.\n"
+            "                To apply within 10 minutes, run ECCO - Apply a reviewed TOU slot setting edit with:\n")
+
+# F1: the success branch, right before its notification (the notification is at 34 spaces).
+_F1_I = " " * 34
+F1_ANCHOR = (_F1_I + "- action: persistent_notification.create\n" + _F1_I + "  data:\n" + _F1_I + "    notification_id: ecco_cfg_edit\n"
+             + _F1_I + "    title: \"ECCO: TOU slot {{ n }} {{ label }} changed to {{ wdisp }}\"\n")
+F1_BLOCK = (
+    _F1_I + "# F1 (acs1): a start-time edit also moved slot N-1's END (slot 1's start is slot 6's end), so slot N-1's Manual Controls staging holds\n"
+    + _F1_I + "#    the old boundary. ONE Load Current Slot N-1 press refreshes it. It writes no inverter register, never arms and never presses\n"
+    + _F1_I + "#    an Apply; the edit is already judged SUCCESSFUL and stays so whatever happens here. Pressed only when the firmware would\n"
+    + _F1_I + "#    accept a Load (bounded wait), and only believed when slot N-1's staged end equals the new boundary after the firmware\n"
+    + _F1_I + "#    reported that Load. Not retried; the notification below says plainly when the staging could not be refreshed.\n"
+    + _F1_I + "- variables:\n" + _F1_I + "    pn: \"{{ 6 if n == 1 else n - 1 }}\"\n"
+    + _F1_I + "- if:\n" + _F1_I + "    - condition: template\n" + _F1_I + "      value_template: \"{{ setting == 'start_time' }}\"\n"
+    + _F1_I + "  then:\n"
+    + _F1_I + "    - wait_template: >-\n" + _F1_I + "        {{ " + _ind(_LOAD_OK, 34 + 11) + " }}\n"
+    + _F1_I + "      timeout: \"00:01:00\"\n" + _F1_I + "      continue_on_timeout: true\n"
+    + _F1_I + "    - if:\n" + _F1_I + "        - condition: template\n" + _F1_I + "          value_template: >-\n"
+    + _F1_I + "            {{ " + _ind(_LOAD_OK, 34 + 15) + " }}\n"
+    + _F1_I + "      then:\n"
+    + _F1_I + "        - action: button.press\n" + _F1_I + "          continue_on_error: true\n" + _F1_I + "          target:\n"
+    + _F1_I + "            entity_id: \"{{ e.p_load }}\"\n"
+    + _F1_I + "        - wait_template: >-\n" + _F1_I + "            {{ " + _ind(_F1_DONE, 34 + 15) + " }}\n"
+    + _F1_I + "          timeout: \"00:00:20\"\n" + _F1_I + "          continue_on_timeout: true\n"
+    + _F1_I + "- variables:\n" + _F1_I + "    f1_ok: >-\n" + _F1_I + "      {{ setting == 'start_time' and " + _ind(_F1_DONE, 34 + 8) + " }}\n")
+
+# F1: the success notification's staging sentence (the old sentence is kept verbatim for the case where the Load could not be done).
+F1_MSG_BEFORE = ("Before any Manual Controls Apply of slot {{ 6 if n == 1 else n - 1 }}, press Load Current Slot {{ 6 if n == 1 else n - 1 }} (or Load All): "
+                 "its staged end still holds the old {{ bdisp }}.")
+F1_MSG_AFTER = ("{% if f1_ok %}Slot {{ pn }}'s Manual Controls staging was refreshed by the editor (one Load Current Slot {{ pn }} press, no register written): its staged end now holds {{ wdisp }}."
+                "{% else %}Slot {{ pn }}'s Manual Controls staging could NOT be refreshed by the editor. Before any Manual Controls Apply of slot {{ pn }}, press Load Current Slot {{ pn }} (or Load All): "
+                "its staged end still holds the old {{ bdisp }}.{% endif %}")
+
+# F2: the tail, right before the FAILED notification (6 spaces).
+F2_BEFORE = (
+    "      - if:\n"
+    "          - condition: template\n"
+    "            value_template: \"{{ states('input_text.ecco_cfg_edit_last_result').startswith('FAILED') }}\"\n"
+    "        then:\n"
+    "          - action: persistent_notification.create\n"
+    "            data:\n"
+    "              notification_id: ecco_cfg_edit\n"
+    "              title: \"ECCO: configuration edit did not complete\"\n"
+    "              message: \"{{ states('input_text.ecco_cfg_edit_last_result') }}\"\n")
+F2_AFTER = (
+    "      # F2 (acs1): slot N's Manual Controls staging holds the reviewed value once the editor staged it. It is re-Loaded (ONE Load Current Slot N\n"
+    "      #    press: no register written, never armed, never an Apply) ONLY when this run has CONCLUSIVELY established that no inverter write was\n"
+    "      #    attempted, and only these two outcomes establish it: (a) it stopped after staging and before the Apply press ('a safety check changed just\n"
+    "      #    before the Apply': nothing pressed), (b) the firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both\n"
+    "      #    later reads at the pre-edit values (the verdict above). Evaluated AFTER the write enable was confirmed off, so an UNCERTAIN verdict\n"
+    "      #    (already replaced the result) and the review-required lock keep the manual recovery exactly as it is. Never clears uncertainty.\n"
+    "      - variables:\n"
+    "          f2_load: >-\n"
+    "            {{ is_state('input_boolean.ecco_cfg_edit_review_required', 'off')\n"
+    "               and (states('input_text.ecco_cfg_edit_last_result').startswith('FAILED - a safety check changed just before the Apply')\n"
+    "                    or states('input_text.ecco_cfg_edit_last_result').startswith('FAILED - the firmware refused the Apply')) }}\n"
+    "      - if:\n"
+    "          - condition: template\n"
+    "            value_template: \"{{ f2_load }}\"\n"
+    "        then:\n"
+    "          - wait_template: >-\n"
+    "              {{ " + _ind(_LOAD_OK, 17) + " }}\n"
+    "            timeout: \"00:01:00\"\n"
+    "            continue_on_timeout: true\n"
+    "          - if:\n"
+    "              - condition: template\n"
+    "                value_template: >-\n"
+    "                  {{ " + _ind(_LOAD_OK, 21) + " }}\n"
+    "            then:\n"
+    "              - action: button.press\n"
+    "                continue_on_error: true\n"
+    "                target:\n"
+    "                  entity_id: \"{{ e.load }}\"\n"
+    "              - delay:\n"
+    "                  seconds: 3\n"
+    "              - wait_template: >-\n"
+    "                  {{ " + _ind(_STAGED_LIVE, 21) + " }}\n"
+    "                timeout: \"00:00:15\"\n"
+    "                continue_on_timeout: true\n"
+    "      - variables:\n"
+    "          f2_ok: >-\n"
+    "            {{ f2_load and " + _ind(_STAGED_LIVE, 15) + " }}\n"
+    "      - if:\n"
+    "          - condition: template\n"
+    "            value_template: \"{{ states('input_text.ecco_cfg_edit_last_result').startswith('FAILED') }}\"\n"
+    "        then:\n"
+    "          - action: persistent_notification.create\n"
+    "            data:\n"
+    "              notification_id: ecco_cfg_edit\n"
+    "              title: \"ECCO: configuration edit did not complete\"\n"
+    "              message: >-\n"
+    "                {{ states('input_text.ecco_cfg_edit_last_result') }}{% if f2_load %} {% if f2_ok %}Slot {{ n }}'s Manual Controls staging was refreshed to the live values (one Load Current Slot {{ n }} press, no register written).{% else %}Slot {{ n }}'s Manual Controls staging may still hold the reviewed value and could NOT be refreshed: press Load Current Slot {{ n }} (or Load All) before any Manual Controls Apply of that slot.{% endif %}{% endif %}\n")
+
+
+def _followup_pairs() -> "list[tuple[str, str, int]]":
+    p: list[tuple[str, str, int]] = []
+    for ind, count in ((12, 2), (16, 1), (24, 1)):                   # F3 in the four copies of the gate: Review, Apply, fresh read, last check
+        p.append((_ind(F3_BEFORE, ind), _ind(F3_AFTER, ind), count))
+    p.append((F4_BEFORE, F4_AFTER, 1))
+    for slot in range(1, 7):                                         # F1: the per-slot map (Review and Apply copies) names slot N-1's Load and end number
+        prev = 6 if slot == 1 else slot - 1
+        before = ("'h_pw': 'input_number.ecco_manual_slot_%d_power_staged', 'h_soc': 'input_number.ecco_manual_slot_%d_soc_staged'}" % (slot, slot))
+        after = (before[:-1] + ",\n" + " " * 16 + "'p_load': 'button.ecco_clock_dongle_load_current_slot_%d_to_manual_staging', "
+                 "'p_en': 'number.ecco_clock_dongle_manual_slot_%d_end_hhmm'}" % (prev, prev))
+        p.append((before, after, 2))
+    p.append((F1_ANCHOR, F1_BLOCK + F1_ANCHOR, 1))
+    p.append((F1_MSG_BEFORE, F1_MSG_AFTER, 1))
+    p.append((F2_BEFORE, F2_AFTER, 1))
+    return p
+
+
+PAIRS: "list[tuple[str, str, int]]" = _pairs() + _followup_pairs()
 
 
 def render_stage1(acs0_text: str) -> str:

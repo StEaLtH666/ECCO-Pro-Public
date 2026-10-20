@@ -118,7 +118,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone1_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone1_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm'},
             2: {'reg_soc': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
@@ -129,7 +130,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone2_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone2_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm'},
             3: {'reg_soc': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
@@ -140,7 +142,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone3_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone3_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm'},
             4: {'reg_soc': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
@@ -151,7 +154,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone4_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone4_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm'},
             5: {'reg_soc': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
@@ -162,7 +166,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone5_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone5_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm'},
             6: {'reg_soc': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
@@ -173,7 +178,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone6_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone6_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged'}
+                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm'}
             } %}
             {{ m.get(n, {}) }}
       - variables:
@@ -211,6 +217,7 @@ script:
             {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
+            {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
             {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
@@ -294,6 +301,8 @@ script:
                 {% endif %}
                 Unchanged and rewritten with their current values: {% if setting != 'start_time' %}start {{ states(e.live_t) }}, {% endif %}end {{ states(e.live_t_next) }}, {% if setting != 'power' %}power {{ states(e.live_pw) }} W, {% endif %}{% if setting != 'target_soc' %}target SOC {{ states(e.live_soc) }} %, {% endif %}{% if setting != 'charge_source' %}charge source {{ states(e.live_src) }}, {% endif %}mode {{ states(e.live_mode) }},
                 grid charge {{ states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled') }}.
+                {% if (setting == 'charge_source' and (want | string) == 'Grid') or (setting == 'start_time' and states(e.live_src) != 'None') %}A slot with a charge source set makes a scheduled Dump to Grid whose window overlaps it refuse at start (no health alert counts that refusal).
+                {% endif %}Do not use SmartDeye or the inverter's own panel until this edit is finished.
                 To apply within 10 minutes, run ECCO - Apply a reviewed TOU slot setting edit with:
                 SET SLOT {{ n }} {{ phr }} REVIEW {{ code }}
 
@@ -342,7 +351,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone1_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone1_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm'},
             2: {'reg_soc': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
@@ -353,7 +363,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone2_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone2_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm'},
             3: {'reg_soc': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
@@ -364,7 +375,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone3_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone3_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm'},
             4: {'reg_soc': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
@@ -375,7 +387,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone4_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone4_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm'},
             5: {'reg_soc': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
@@ -386,7 +399,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone5_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone5_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged'},
+                'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm'},
             6: {'reg_soc': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
@@ -397,7 +411,8 @@ script:
                 'live_src': 'sensor.ecco_clock_dongle_ecco_timezone6_charge', 'live_mode': 'sensor.ecco_clock_dongle_ecco_timezone6_mode',
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
-                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged'}
+                'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged',
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm'}
             } %}
             {{ m.get(n, {}) }}
       - variables:
@@ -435,6 +450,7 @@ script:
             {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
+            {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
             {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
@@ -602,6 +618,7 @@ script:
                 {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                 {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                 {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
+                {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                 {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                 {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
                 {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
@@ -841,6 +858,7 @@ script:
                         {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                         {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                         {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
+                        {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                         {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                         {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
                         {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
@@ -1010,13 +1028,58 @@ script:
                                   - action: persistent_notification.dismiss
                                     data:
                                       notification_id: ecco_cfg_edit_review
+                                  # F1 (acs1): a start-time edit also moved slot N-1's END (slot 1's start is slot 6's end), so slot N-1's Manual Controls staging holds
+                                  #    the old boundary. ONE Load Current Slot N-1 press refreshes it. It writes no inverter register, never arms and never presses
+                                  #    an Apply; the edit is already judged SUCCESSFUL and stays so whatever happens here. Pressed only when the firmware would
+                                  #    accept a Load (bounded wait), and only believed when slot N-1's staged end equals the new boundary after the firmware
+                                  #    reported that Load. Not retried; the notification below says plainly when the staging could not be refreshed.
+                                  - variables:
+                                      pn: "{{ 6 if n == 1 else n - 1 }}"
+                                  - if:
+                                      - condition: template
+                                        value_template: "{{ setting == 'start_time' }}"
+                                    then:
+                                      - wait_template: >-
+                                          {{ is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+                                             and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                                             and is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                                             and is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off')
+                                             and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                                             and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off')
+                                             and is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') }}
+                                        timeout: "00:01:00"
+                                        continue_on_timeout: true
+                                      - if:
+                                          - condition: template
+                                            value_template: >-
+                                              {{ is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+                                                 and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                                                 and is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                                                 and is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off')
+                                                 and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                                                 and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off')
+                                                 and is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') }}
+                                        then:
+                                          - action: button.press
+                                            continue_on_error: true
+                                            target:
+                                              entity_id: "{{ e.p_load }}"
+                                          - wait_template: >-
+                                              {{ (states(e.p_en) | float(-1)) == (want | float(-2))
+                                                 and states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('Manual staging loaded from current inverter Slot ' ~ pn ~ ' ') }}
+                                            timeout: "00:00:20"
+                                            continue_on_timeout: true
+                                  - variables:
+                                      f1_ok: >-
+                                        {{ setting == 'start_time' and (states(e.p_en) | float(-1)) == (want | float(-2))
+                                          and states('sensor.ecco_clock_dongle_manual_configuration_last_result').startswith('Manual staging loaded from current inverter Slot ' ~ pn ~ ' ') }}
                                   - action: persistent_notification.create
                                     data:
                                       notification_id: ecco_cfg_edit
                                       title: "ECCO: TOU slot {{ n }} {{ label }} changed to {{ wdisp }}"
                                       message: >-
                                         Verified on the inverter (was {{ bdisp }}); every other value written with slot {{ n }} is unchanged{% if setting == 'start_time' %} (register {{ reg }} is also the end of slot {{ 6 if n == 1 else n - 1 }}, which now ends at {{ wdisp }}){% endif %}.
-                                        {% if setting == 'start_time' %}The fallback profile now shows CONTEXT (slot times are context): if this is the new normal, Review and Save the fallback profile. Before any Manual Controls Apply of slot {{ 6 if n == 1 else n - 1 }}, press Load Current Slot {{ 6 if n == 1 else n - 1 }} (or Load All): its staged end still holds the old {{ bdisp }}.{% else %}The fallback profile now differs from the inverter (Fallback status DRIFT): if this is the new normal, Review and Save the fallback profile.{% endif %}
+                                        {% if setting == 'start_time' %}The fallback profile now shows CONTEXT (slot times are context): if this is the new normal, Review and Save the fallback profile. {% if f1_ok %}Slot {{ pn }}'s Manual Controls staging was refreshed by the editor (one Load Current Slot {{ pn }} press, no register written): its staged end now holds {{ wdisp }}.{% else %}Slot {{ pn }}'s Manual Controls staging could NOT be refreshed by the editor. Before any Manual Controls Apply of slot {{ pn }}, press Load Current Slot {{ pn }} (or Load All): its staged end still holds the old {{ bdisp }}.{% endif %}{% else %}The fallback profile now differs from the inverter (Fallback status DRIFT): if this is the new normal, Review and Save the fallback profile.{% endif %}
                                         To undo, review slot {{ n }} {{ label }} back to {{ bdisp }} (setting {{ setting }}) and confirm with: SET SLOT {{ n }} {{ uphr }} REVIEW <the new review code>
                             default:
                               - action: input_text.set_value
@@ -1077,6 +1140,75 @@ script:
               title: "ECCO: Manual Configuration Write Enable not confirmed off"
               message: >-
                 Turn it off in Manual Controls and check every TOU slot. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
+      # F2 (acs1): slot N's Manual Controls staging holds the reviewed value once the editor staged it. It is re-Loaded (ONE Load Current Slot N
+      #    press: no register written, never armed, never an Apply) ONLY when this run has CONCLUSIVELY established that no inverter write was
+      #    attempted, and only these two outcomes establish it: (a) it stopped after staging and before the Apply press ('a safety check changed just
+      #    before the Apply': nothing pressed), (b) the firmware refused at its gate with the refusal text AND an unchanged gate-pass counter AND both
+      #    later reads at the pre-edit values (the verdict above). Evaluated AFTER the write enable was confirmed off, so an UNCERTAIN verdict
+      #    (already replaced the result) and the review-required lock keep the manual recovery exactly as it is. Never clears uncertainty.
+      - variables:
+          f2_load: >-
+            {{ is_state('input_boolean.ecco_cfg_edit_review_required', 'off')
+               and (states('input_text.ecco_cfg_edit_last_result').startswith('FAILED - a safety check changed just before the Apply')
+                    or states('input_text.ecco_cfg_edit_last_result').startswith('FAILED - the firmware refused the Apply')) }}
+      - if:
+          - condition: template
+            value_template: "{{ f2_load }}"
+        then:
+          - wait_template: >-
+              {{ is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+                 and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                 and is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                 and is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off')
+                 and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                 and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off')
+                 and is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') }}
+            timeout: "00:01:00"
+            continue_on_timeout: true
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ is_state('binary_sensor.ecco_clock_dongle_manual_configuration_raw_cache_valid', 'on') and is_state('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'off')
+                     and is_state('switch.ecco_clock_dongle_manual_configuration_write_enable', 'off')
+                     and is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off')
+                     and is_state('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'off')
+                     and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'off')
+                     and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'off')
+                     and is_state('sensor.ecco_clock_dongle_reg244_original_snapshot', '—') }}
+            then:
+              - action: button.press
+                continue_on_error: true
+                target:
+                  entity_id: "{{ e.load }}"
+              - delay:
+                  seconds: 3
+              - wait_template: >-
+                  {{ (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+                     and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+                     and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+                     and states(e.src) == states(e.live_src) and states(e.src) in ['None', 'Grid', 'Generator', 'Grid + Generator'] and states(e.mode) == states(e.live_mode) and states(e.mode) in ['None', 'General', 'Backup', 'Charge']
+                     and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+                     and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+                     and (states(e.soc) | float(-1)) == (states(e.live_soc) | float(-2))
+                     and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+                     and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+                     and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+                     and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
+                timeout: "00:00:15"
+                continue_on_timeout: true
+      - variables:
+          f2_ok: >-
+            {{ f2_load and (states(e.st) | float(-1)) == ((states(e.live_t) | replace(':', '')) | int(-2))
+               and (states(e.en) | float(-1)) == ((states(e.live_t_next) | replace(':', '')) | int(-2))
+               and (states(e.pw) | float(-1)) == (states(e.live_pw) | float(-2))
+               and states(e.src) == states(e.live_src) and states(e.src) in ['None', 'Grid', 'Generator', 'Grid + Generator'] and states(e.mode) == states(e.live_mode) and states(e.mode) in ['None', 'General', 'Backup', 'Charge']
+               and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') in ['on', 'off']
+               and states('switch.ecco_clock_dongle_manual_stage_grid_charge_enabled') == states('binary_sensor.ecco_clock_dongle_ecco_battery_grid_charge_enabled')
+               and (states(e.soc) | float(-1)) == (states(e.live_soc) | float(-2))
+               and not is_state('script.ecco_refresh_manual_control_helpers', 'on')
+               and (states(e.h_start) in ['unknown'] or states(e.h_start)[:5] | replace(':', '') | int(-1) == (states(e.st) | int(-2)))
+               and (states(e.h_pw) in ['unknown'] or (states(e.h_pw) | float(-1)) == (states(e.pw) | float(-2)))
+               and (states(e.h_soc) in ['unknown'] or (states(e.h_soc) | float(-1)) == (states(e.soc) | float(-2))) }}
       - if:
           - condition: template
             value_template: "{{ states('input_text.ecco_cfg_edit_last_result').startswith('FAILED') }}"
@@ -1085,7 +1217,8 @@ script:
             data:
               notification_id: ecco_cfg_edit
               title: "ECCO: configuration edit did not complete"
-              message: "{{ states('input_text.ecco_cfg_edit_last_result') }}"
+              message: >-
+                {{ states('input_text.ecco_cfg_edit_last_result') }}{% if f2_load %} {% if f2_ok %}Slot {{ n }}'s Manual Controls staging was refreshed to the live values (one Load Current Slot {{ n }} press, no register written).{% else %}Slot {{ n }}'s Manual Controls staging may still hold the reviewed value and could NOT be refreshed: press Load Current Slot {{ n }} (or Load All) before any Manual Controls Apply of that slot.{% endif %}{% endif %}
       # Judged: out of flight (a refused run never set it, and must not clear an earlier run's marker).
       - if:
           - condition: template

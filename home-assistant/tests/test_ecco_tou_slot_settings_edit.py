@@ -29,6 +29,8 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [9] faults          firmware refusal, verify failure, partial writes, clamps, disagreeing / missing later read, dropped press, restart
   [10] races          Free Power starting, a second Review / Apply during an Apply, the shared in-flight markers
   [11] acs0r1 timing  the quiet-gap press and a bus-busy refusal behave as in Stage 0
+  [11b] follow-ups    F1 (Load slot N-1 after a start-time edit), F2 (re-Load slot N after a conclusively write-free FAILED run, never otherwise),
+                      F3 (live power must be a multiple of 100), F4 (Review warnings; input_text values under 255 characters)
   [12] mutation       in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill)
   [13] PEX            the acs1 declaration: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
 
@@ -125,8 +127,8 @@ PKG0 = X.unrender_stage1(S1)                               # the Stage 0 text it
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
-S1_SHA = "8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89"      # the installed Stage 1 package, LF line ends
-PAIRS_SHA = "1a49696d5a3ba6dde154692b82852055c8f0d41e52897227b27078a18c30e5f1"   # the canonical serialisation of the 40 pairs
+S1_SHA = "271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d"      # the installed Stage 1 package, LF line ends
+PAIRS_SHA = "68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c"   # the canonical serialisation of the 53 pairs (40 reviewed + 13 follow-up)
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -538,25 +540,30 @@ check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned St
       "render_stage1(unrender_stage1(installed)) == installed, from the LF text and from a CRLF copy", hashlib.sha256(PKG0.encode()).hexdigest()
       == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1)) == S1
       and X.unrender_stage1(S1.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1.replace("\n", "\r\n"))) == S1)
-check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 40 pairs hash "
+check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 53 pairs hash "
       "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
-      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 53 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
 SENT = "\x00"
 
 
 def outside_pairs(installed):
-    """(identical, covered, total): the installed package and the Stage 0 baseline, each with every pair's region (the `after` text in the
-    installed one, the `before` text in the baseline; the two id renames applied to the baseline first) replaced by a sentinel, must be
-    EQUAL; `covered` is the number of baseline lines no pair touches. None when a pair's text is not present the declared number of times."""
+    """(identical, covered, total): the follow-up pairs (index 40 on) are undone exactly first; then the installed package and the Stage 0
+    baseline, each with every one of the 40 reviewed pairs' region (the `after` text in the installed one, the `before` text in the baseline;
+    the two id renames applied to the baseline first) replaced by a sentinel, must be EQUAL; `covered` is the number of baseline lines no
+    reviewed pair touches. None when a pair's text is not present the declared number of times."""
     a = installed
-    for _b, aft, c in reversed(X.PAIRS[2:]):
+    for bef, aft, c in reversed(X.PAIRS[X.BASE_PAIR_COUNT:]):
+        if a.count(aft) != c:
+            return None
+        a = a.replace(aft, bef)
+    for _b, aft, c in reversed(X.PAIRS[2:X.BASE_PAIR_COUNT]):
         if a.count(aft) != c:
             return None
         a = a.replace(aft, SENT)
     base = PKG0
     for old, new, _c in X.PAIRS[:2]:
         base = base.replace(old, new)
-    for bef, _a, c in X.PAIRS[2:]:
+    for bef, _a, c in X.PAIRS[2:X.BASE_PAIR_COUNT]:
         if base.count(bef) != c:
             return None
         base = base.replace(bef, SENT)
@@ -566,9 +573,9 @@ def outside_pairs(installed):
 
 
 OUT = outside_pairs(S1)
-check(f"EVERY part of the Stage 0 baseline that no pair touches is byte-identical in the installed package, in the same place and the same number of "
+check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 13 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
       f"times (the acs0r1 press timing, the fresh-evidence code, the gate, the verdict reads...): {OUT[1] if OUT else '?'} of the baseline's "
-      f"{OUT[2] if OUT else '?'} lines are wholly outside every pair", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
+      f"{OUT[2] if OUT else '?'} lines are wholly outside the 40 reviewed pairs, and the follow-up pairs are undone exactly first", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
 OUT_MUTANTS = [
     ("the acs0r1 press delay", 'seconds: "{{ 1.5 if bus_quiet else 0 }}"', 'seconds: "{{ 1.6 if bus_quiet else 0 }}"'),
     ("the telemetry period bound of the fresh evidence", "and clk_at > 0 and tel_period >= 8 }}", "and clk_at > 0 and tel_period >= 7 }}"),
@@ -656,18 +663,40 @@ except ValueError as exc:
         fail_to_raise.append(("altered message", str(exc)[:60]))
 check("a text with ANY pair's anchor removed or duplicated (taken at the state right before that pair), or the Stage 0 text altered, is "
       "refused with ValueError naming exactly that pair (no silent half-transformation)", not fail_to_raise, str(fail_to_raise[:5]))
-un_fail = []
+un_fail, n_real, n_state = [], 0, 0
+
+
+def unrender_from(text, start):
+    """unrender_stage1's loop from pair `start` down (the text is the state right AFTER that pair): ValueError names the pair."""
+    for j in range(start, -1, -1):
+        b_, a_, c_ = X.PAIRS[j]
+        if text.count(a_) != c_:
+            raise ValueError(f"stage1 unrender pair {j}: expected {c_} occurrence(s), found {text.count(a_)}")
+        text = text.replace(a_, b_)
+    return text
+
+
+prefix_states, _t = [], PKG0
+for _b, _a, _c in X.PAIRS:
+    _t = _t.replace(_b, _a)
+    prefix_states.append(_t)
 for i, (before, after, count) in enumerate(X.PAIRS):
-    fewer = S1.replace(after, "", 1) if count == 1 else None
-    more = S1 + "\n" + after
+    # a pair whose `after` text a LATER pair did not touch is tested on the installed text with the real unrender_stage1; a pair a later
+    # pair modified (the follow-up pairs edit text of earlier pairs) is tested on the state right after it with the same loop
+    intact = S1.count(after) == count
+    base = S1 if intact else prefix_states[i]
+    fn = X.unrender_stage1 if intact else (lambda v, i_=i: unrender_from(v, i_))
+    n_real, n_state = n_real + intact, n_state + (not intact)
+    fewer = base.replace(after, "", 1) if count == 1 else None
+    more = base + "\n" + after
     for label, variant in (("one occurrence removed", fewer), ("one occurrence added", more)):
         if variant is None:
             continue
         try:
-            X.unrender_stage1(variant)
+            fn(variant)
             un_fail.append((i, label))
         except ValueError as exc:
-            if "pair" not in str(exc):
+            if "pair" not in str(exc) or (not intact and f"pair {i}:" not in str(exc)):
                 un_fail.append((i, label, str(exc)[:60]))
 try:
     X.unrender_stage1(S1.replace("unknown setting (target_soc", "unknown setting  (target_soc", 1))
@@ -675,8 +704,9 @@ try:
 except ValueError as exc:
     if "pair" not in str(exc):
         un_fail.append(("altered message", str(exc)[:60]))
-check("an installed text with ANY pair's `after` text removed, duplicated or altered is refused by unrender_stage1 with ValueError naming the "
-      "pair (a rollback file can never be silently half-reconstructed)", not un_fail, str(un_fail[:5]))
+check(f"an installed text with ANY pair's `after` text removed, duplicated or altered is refused with ValueError naming the pair (a rollback file can "
+      f"never be silently half-reconstructed): {n_real} pairs on the installed text with unrender_stage1 itself, {n_state} pairs that a later "
+      "pair modified on the state right after them", not un_fail, str(un_fail[:5]))
 check("SETTINGS is exactly the four settings", X.SETTINGS == ("target_soc", "power", "start_time", "charge_source"))
 src_t = TRANSFORM_PATH.read_text(encoding="utf-8")
 check("the transform performs no I/O at all and uses no network (no read_text / open / write_text / socket / urllib / subprocess)",
@@ -754,8 +784,9 @@ for n_ in range(1, 7):
 check("the firmware lists exactly None, Grid, Generator, Grid + Generator - None FIRST - as the options of all six manual_slotN_charge_source "
       "selects (so select.select_first stages None), and the model's select has the same order",
       all(o == ["None", "Grid", "Generator", "Grid + Generator"] for o in fw_opts) and list(M.SRC_BITS) == fw_opts[0], str(fw_opts))
-check("button.press ONLY the slot's Load and Apply; switch.turn_on ONLY the Manual Configuration Write Enable",
-      sorted(t for a, t in acts1 if a == "button.press") == ["{{ e.apply }}", "{{ e.load }}"]
+check("button.press ONLY slot N's Load (the pre-Apply Load and the F2 re-Load), slot N's Apply and, for a start-time edit only, slot N-1's Load "
+      "(F1: p_load, the previous slot's Load); switch.turn_on ONLY the Manual Configuration Write Enable",
+      sorted(t for a, t in acts1 if a == "button.press") == ["{{ e.apply }}", "{{ e.load }}", "{{ e.load }}", "{{ e.p_load }}"]
       and {t for a, t in acts1 if a == "switch.turn_on"} == {M.ARM} and {t for a, t in acts1 if a == "switch.turn_off"} == {M.ARM})
 check("never the grid-charge staging switch, the end number or the mode select as a target, never an ESPHome / Modbus service, the reserve "
       "helper never written", not re.search(r"esphome\.|modbus|write_register|input_number\.set_value", S1)
@@ -810,6 +841,8 @@ check("the per-slot map is exact for slots 1-6: own Load / Apply / staging / liv
           and mp1[n].get("pw") == f"number.{D}manual_slot_{n}_power" and mp1[n].get("st") == f"number.{D}manual_slot_{n}_start_hhmm"
           and mp1[n].get("src") == f"select.{D}manual_slot_{n}_charge_source" and mp1[n].get("soc") == f"number.{D}manual_slot_{n}_target_soc"
           and mp1[n].get("live_t") == f"sensor.{D}ecco_timezone{n}_time" and mp1[n].get("live_t_next") == f"sensor.{D}ecco_timezone{n % 6 + 1}_time"
+          and mp1[n].get("p_load") == f"button.{D}load_current_slot_{6 if n == 1 else n - 1}_to_manual_staging"
+          and mp1[n].get("p_en") == f"number.{D}manual_slot_{6 if n == 1 else n - 1}_end_hhmm"
           and "reg" not in mp1[n] for n in range(1, 7))
       and all(S1.count(f"{n}: {{'reg_soc': {267 + n}, ") == 2 for n in range(1, 7)) and "'reg':" not in S1)
 check("no new firmware entity, no firmware / registry / package file is written by the transform or this suite (the Stage 0 text it derives "
@@ -835,7 +868,7 @@ for setting in SETTINGS:
         diff = {k for k in flat1 if flat1[k] != regs0[k]}
         reg = {"target_soc": 267, "power": 255, "start_time": 249, "charge_source": 273}[setting] + n
         ok = (reviewed and phrase_in_note and r.changed() == exp and diff == {f"{n}.{key_of(setting)}"} and len(r.applies()) == 1
-              and len(r.loads()) == 1 and r.applies()[0][2] == "PASSED" and r.d.successes == 1
+              and len(r.loads()) == (2 if setting == "start_time" else 1) and r.applies()[0][2] == "PASSED" and r.d.successes == 1
               and r.res().startswith("APPLIED AND VERIFIED") and f"register {reg}" in r.w.state(EDIT)
               and not r.arm_on() and not r.locked() and r.w.state(FLIGHT) == "off" and not r.w.warnings and not r.invalid()
               and f"SET SLOT {n} " in r.note() and "REVIEW <" in r.note())
@@ -876,7 +909,7 @@ r = Run().review(3, "charge_source", "Grid")
 n_ = r.note("ecco_cfg_edit_review")
 check("the charge-source review text: register 276, None -> Grid, mode and reserved bits kept, the other values listed as unchanged",
       "register 276" in n_ and "None -> Grid" in n_ and "mode bits and the reserved bits are kept" in n_ and "mode General" in n_
-      and "charge source" not in n_.split("Unchanged and rewritten", 1)[1], n_)
+      and "charge source" not in n_.split("Unchanged and rewritten", 1)[1].split(" A slot with a charge source set", 1)[0].split(" Do not use SmartDeye", 1)[0], n_)
 r = Run().review(3, "target_soc", 41)
 n_ = r.note("ecco_cfg_edit_review")
 check("the SOC review text is Stage 0's: register 270, 40 % -> 41 %, allowed range 20-100 %, DRIFT", "register 270" in n_
@@ -925,35 +958,7 @@ check("the harness reproduces the live symptom of the rejected design (a static 
       "watchdog locks with a misleading 'interrupted' UNCERTAIN", len(r.invalid()) == 1 and r.applies() == [] and r.changed() == {}
       and r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked(), f"{r.res()} {r.invalid()}")
 
-# --- M1: a start-time edit leaves slot N-1's Manual Controls staging (its END is register 249+N) stale
-bad = []
-for n, prev, old_t in ((3, 2, "09:00"), (1, 6, "00:00"), (2, 1, "05:00"), (6, 5, "23:00")):
-    r = Run().edit(n, "start_time", {1: "00:30", 2: "05:30", 3: "09:30", 6: "23:30"}[n])
-    want = (f"Before any Manual Controls Apply of slot {prev}, press Load Current Slot {prev} (or Load All): its staged end still holds the old "
-            f"{old_t}.")
-    if want not in r.note() or len(r.loads()) != 1 or [c[1] for c in r.w.service_log if c[1] == "button.press"] != ["button.press"] * 2:
-        bad.append((n, r.note()[-200:]))
-for setting in ("target_soc", "power", "charge_source"):
-    if "Before any Manual Controls Apply" in Run().edit(3, setting, value_for(3, setting)).note():
-        bad.append((setting, "notice on a setting that does not move a boundary"))
-check("the start-time success notice says plainly: Before any Manual Controls Apply of slot <N-1>, press Load Current Slot <N-1> (or Load All): its "
-      "staged end still holds the old <HH:MM> - for slots 3, 1 (slot 6), 2 and 6; only the Load and Apply buttons are ever pressed (no extra "
-      "Load); the other settings carry no such notice", not bad, str(bad))
-r = Run()
-r.d._load(2)                                         # the owner loaded slot 2 into Manual Controls earlier: staged end = 09:00
-r.w.run_until(r.w.t + 1)
-assert r.d.loaded[2] and r.d.staging[2]["end"] == 900
-r.edit(3, "start_time", "09:30")
-moved = r.d.regs["slots"][3]["start"] == 930 and r.d.loaded[2] and r.d.staging[2]["end"] == 900
-r.d.busy = 0.0                                       # a quiet bus: the point is the stale staging, not the poll timing
-r.w.call("switch.turn_on", [M.ARM], {})
-r.w.run_until(r.w.t + 2)
-r.w.call("button.press", [f"button.{D}apply_manual_slot_2_settings"], {})
-r.w.run_until(r.w.t + 20)
-check("RESIDUAL (documented, not fixed): after the edit moved slot 3's start to 09:30, a later Manual Controls Apply of slot 2 with its stale "
-      "loaded staging silently writes the old end back - slot 3's start is 09:00 again and the firmware says VERIFIED OK; only the notice's "
-      "Load-first instruction prevents it", moved and r.d.regs["slots"][3]["start"] == 900
-      and r.w.state(M.RESULT).startswith("VERIFIED OK - manual Slot 2"), f"{r.d.regs['slots'][3]} {r.w.state(M.RESULT)}")
+# (M1 / residual 7: repaired by F1, tested in section [11b])
 
 # --- the firmware's mode-canonical gate (existing flags register mode bits & 0x001C must be 0x00 / 0x04 / 0x08 / 0x10)
 r = Run(setup=lambda x: x.d.fault.__setitem__("noncanon", {3})).edit(3, "target_soc", 41)
@@ -974,8 +979,12 @@ def cls(r):
 
 
 def summary(r):
+    # F2 (acs1) re-Loads slot N after a conclusively write-free FAILED run, which Stage 0 does not: Loads after the Apply press are compared
+    # separately ([11b]), the rest of the presses must be identical
+    ap_t = min([p[0] for p in r.d.presses if p[1].startswith("apply")] or [float("inf")])
     return dict(cls=cls(r), writes=[(round(t - r.t0, 2), reg, val) for t, reg, val in r.d.writes],
-                presses=[(round(p[0] - r.t0, 2), p[1], p[2][:48]) for p in r.d.presses], regs=regs_flat(r), locked=r.locked(),
+                presses=[(round(p[0] - r.t0, 2), p[1], p[2][:48]) for p in r.d.presses if not (p[1].startswith("load") and p[0] > ap_t)],
+                regs=regs_flat(r), locked=r.locked(),
                 flight=r.w.state(FLIGHT), arm=r.arm_on(), attempts=r.d.attempts, plan_used=r.w.state(PLAN) == "used")
 
 
@@ -2011,9 +2020,316 @@ check("a bus-busy refusal at the quiet press (another, unmodelled bus user) is f
       "one press, FAILED - the firmware refused, nothing written, no retry, not locked", not bad, str(bad))
 r = Run(dkw=dict(tel_offset=5.1, post_busy=0.6)).edit(3, "power", 3000)
 check("a bus still busy 0.6 s after the telemetry publish does not meet the press (1.5 s into the gap)", ok1(r, "power"), r.res())
-check("still exactly one Apply press and one Load in the package; no repeat (no retry path) in the Apply",
-      S1.count('entity_id: "{{ e.apply }}"') == 1 and S1.count('entity_id: "{{ e.load }}"') == 1
+check("still exactly one Apply press in the package (Loads: the pre-Apply Load and F2's re-Load of slot N, F1's one Load of slot N-1); no repeat "
+      "(no retry path) in the Apply",
+      S1.count('entity_id: "{{ e.apply }}"') == 1 and S1.count('entity_id: "{{ e.load }}"') == 2 and S1.count('entity_id: "{{ e.p_load }}"') == 1
       and "repeat:" not in S1.split(f"{APPLY}:", 1)[1].split(f"{ACK}:", 1)[0])
+
+# ======================================================================================================================
+print("\n[11b] follow-up behaviours (owner-approved 2026-10-20): F1 Load of slot N-1, F2 re-Load of slot N, F3 live power multiple of 100, F4 Review warnings")
+# ======================================================================================================================
+
+
+def btn(r):
+    """The entities of every button.press service call, in order."""
+    return [c[2] for c in r.w.service_log if c[1] == "button.press"]
+
+
+def arms_on(r):
+    return [c for c in r.w.service_log if c[1] == "switch.turn_on" and M.ARM in c[2]]
+
+
+def load_seq(r, since=0):
+    return [p[1] for p in r.d.presses[since:] if p[1].startswith("load")]
+
+
+def staged_eq_live(r, n):
+    """Slot n's staging in the model equals the live slot in every field (start, end, power, SOC, source, mode)."""
+    s, st = r.d.regs["slots"][n], r.d.staging[n]
+    return (st["start"], st["end"], st["power"], st["soc"], st["src"], st["mode"]) == (
+        s["start"], r.d.end_of(r.d.regs, n), s["power"], s["soc"], s["src"], s["mode"])
+
+
+def prev_of(n):
+    return 6 if n == 1 else n - 1
+
+
+# --- F1: after a VERIFIED start-time edit of slot N the editor presses Load Current Slot N-1 (slot 1 -> slot 6) and verifies its staged end
+bad = []
+for n in range(1, 7):
+    pv = prev_of(n)
+    r = Run()
+    r.d._load(pv)                                     # the owner loaded slot N-1 into Manual Controls earlier: its staged end holds the OLD boundary
+    r.w.run_until(r.w.t + 1)
+    old_end, k0 = r.d.staging[pv]["end"], len(r.d.presses)
+    r.edit(n, "start_time", NEW_START[n])
+    new = hhmm_of(NEW_START[n])
+    ok = (r.res().startswith("APPLIED AND VERIFIED") and old_end != new and r.d.staging[pv]["end"] == new and r.d.loaded[pv]
+          and load_seq(r, k0) == [f"load{n}", f"load{pv}"] and len(r.applies()) == 1 and len(arms_on(r)) == 1
+          and btn(r) == [f"button.{D}load_current_slot_{n}_to_manual_staging", f"button.{D}apply_manual_slot_{n}_settings",
+                         f"button.{D}load_current_slot_{pv}_to_manual_staging"]
+          and r.changed() == expected_change(n, "start_time") and "refreshed by the editor" in r.note() and "could NOT" not in r.note()
+          and not r.locked() and r.w.state(FLIGHT) == "off" and not r.arm_on() and not r.w.warnings and not r.invalid())
+    if not ok:
+        bad.append((n, pv, r.res()[:60], load_seq(r, k0), r.d.staging[pv]["end"], r.note()[-160:]))
+check("F1: a verified start-time edit of every slot (1..6; slot 1 -> slot 6) is followed by exactly ONE Load Current Slot N-1 (after the Apply), "
+      "slot N-1's pre-loaded staged end holds the new boundary, ONE arm and ONE Apply in the whole run, the notice says the staging was refreshed, "
+      "only the edited register changed", not bad, str(bad[:3]))
+bad = []
+for setting in ("target_soc", "power", "charge_source"):
+    r = Run().edit(3, setting, value_for(3, setting))
+    if not (r.res().startswith("APPLIED") and load_seq(r) == ["load3"] and len(r.applies()) == 1
+            and btn(r) == [f"button.{D}load_current_slot_3_to_manual_staging", f"button.{D}apply_manual_slot_3_settings"]
+            and "Manual Controls staging" not in r.note()):
+        bad.append((setting, load_seq(r), btn(r)))
+check("F1: no extra Load for a SOC, power or charge-source edit (one Load, one Apply, no staging sentence in the notice)", not bad, str(bad))
+r = Run()
+r.d._load(2)
+r.w.run_until(r.w.t + 1)
+assert r.d.loaded[2] and r.d.staging[2]["end"] == 900
+r.edit(3, "start_time", "09:30")
+staged_new = r.d.staging[2]["end"] == 930
+r.d.busy = 0.0                                       # a quiet bus: the point is the staging, not the poll timing
+r.w.call("switch.turn_on", [M.ARM], {})
+r.w.run_until(r.w.t + 2)
+r.w.call("button.press", [f"button.{D}apply_manual_slot_2_settings"], {})
+r.w.run_until(r.w.t + 20)
+check("REPAIRED (was residual 7): after the edit moved slot 3's start to 09:30 the editor refreshed slot 2's staging, so a later Manual Controls "
+      "Apply of slot 2 no longer writes the old end back - slot 3's start stays 09:30 and the firmware says VERIFIED OK",
+      staged_new and r.d.regs["slots"][3]["start"] == 930 and r.w.state(M.RESULT).startswith("VERIFIED OK - manual Slot 2"),
+      f"{r.d.regs['slots'][3]} {r.w.state(M.RESULT)}")
+
+
+fp_on_finish = after_finish(lambda y, k: y.d.set_flag("fp_op", True))
+
+
+bad = []
+for n in (3, 1, 2, 6):
+    pv = prev_of(n)
+    r = Run(setup=fp_on_finish)
+    r.d._load(pv)
+    r.w.run_until(r.w.t + 1)
+    old_end, k0 = r.d.staging[pv]["end"], len(r.d.presses)
+    r.edit(n, "start_time", NEW_START[n], run=480)
+    ok = (r.res().startswith("APPLIED AND VERIFIED") and load_seq(r, k0) == [f"load{n}"] and r.d.staging[pv]["end"] == old_end
+          and f"Slot {pv}'s Manual Controls staging could NOT be refreshed by the editor" in r.note()
+          and f"Before any Manual Controls Apply of slot {pv}, press Load Current Slot {pv} (or Load All): its staged end still holds the old" in r.note()
+          and not r.locked() and len(r.applies()) == 1 and len(arms_on(r)) == 1 and r.changed() == expected_change(n, "start_time"))
+    if not ok:
+        bad.append((n, r.res()[:60], load_seq(r, k0), r.note()[-200:]))
+check("F1: when the Load is not allowed (Free Power takes the TOU settings right after the edit) the edit STAYS successful (verified, not locked), no "
+      "Load of slot N-1 is pressed, and the notice says plainly that the staging could not be refreshed and to press Load Current Slot N-1 "
+      "(or Load All) before any Manual Controls Apply", not bad, str(bad[:2]))
+
+
+def load_ignored(slot, after_first=False):
+    """The Load of `slot` is pressed but has no effect (the firmware dropped it); with after_first the first press still works."""
+    def setup(x):
+        orig, seen = x.d._load, {"n": 0}
+
+        def ld(n):
+            if n == slot:
+                seen["n"] += 1
+                if seen["n"] > (1 if after_first else 0):
+                    x.d.presses.append((x.w.t, f"load{n}", "IGNORED"))
+                    return
+            orig(n)
+        x.d._load = ld
+    return setup
+
+
+bad = []
+for n in (3, 1):
+    pv = prev_of(n)
+    r = Run(setup=load_ignored(pv))
+    r.d.staging[pv]["end"] = 1234                      # a stale value that is NOT the new boundary
+    r.d._publish_staging(pv)
+    r.edit(n, "start_time", NEW_START[n], run=480)
+    if not (r.res().startswith("APPLIED AND VERIFIED") and load_seq(r).count(f"load{pv}") == 1 and not r.locked()
+            and f"Slot {pv}'s Manual Controls staging could NOT be refreshed" in r.note() and len(r.applies()) == 1):
+        bad.append((n, r.res()[:60], load_seq(r), r.note()[-160:]))
+check("F1: the Load is pressed once but slot N-1's staged end does not become the new boundary: the edit stays SUCCESSFUL, never retried (one press), "
+      "the notice says the staging could not be refreshed", not bad, str(bad[:2]))
+
+# --- F2: re-Load slot N ONLY when the run has conclusively established that no inverter write was attempted
+F2_NOTE_OK, F2_NOTE_BAD = "staging was refreshed to the live values", "staging may still hold the reviewed value"
+
+
+def f2_ok_case(r, n=3):
+    return (r.res().startswith("FAILED") and load_seq(r) == [f"load{n}", f"load{n}"] and staged_eq_live(r, n) and not r.locked() and not r.arm_on()
+            and r.changed() == {} and F2_NOTE_OK in r.note() and F2_NOTE_BAD not in r.note() and r.w.state(FLIGHT) == "off")
+
+
+bad = []
+for setting in SETTINGS:
+    v = value_for(3, setting)
+    for label, setup, dkw in (
+            ("RTC correction starts after the Load", late_flip(f"binary_sensor.{D}rtc_correction_in_progress", "on"), None),
+            ("supervision turns SUSPECT after the Load", late_flip(f"sensor.{D}ecco_supervision_state", "SUSPECT"), None),
+            ("no quiet window (telemetry stops after the fresh read)", lambda x: x.w.at(T0 + 165, lambda: x.d.flags.__setitem__("tel", False)), None),
+            ("the arm confirmed too late", None, dict(arm_latency=4.5))):
+        r = Run(setup=setup, dkw=dkw).edit(3, setting, v)
+        if not (r.res().startswith("FAILED") and r.applies() == [] and f2_ok_case(r)):
+            bad.append((setting, label, r.res()[:60], load_seq(r), r.note()[-120:]))
+check("F2(a): every FAILED branch that ends after the editor staged the value and BEFORE the Apply press (a safety check changing after the Load, "
+      "no quiet window, a late arm) re-Loads slot N once: staging equals the live slot again, nothing pressed, nothing written, not locked, the notice says "
+      "so (4 branches x 4 settings)", not bad, str(bad[:3]))
+bad = []
+r = Run(setup=late_flip(RESERVE, "50.0")).edit(3, "target_soc", 41)
+if not (r.res().startswith("FAILED") and f2_ok_case(r)):
+    bad.append(("reserve", r.res()[:70], load_seq(r)))
+for setting in SETTINGS:
+    # another actor changes a staged field between the Load and the press: the re-Load puts the live values back
+    r = Run(setup=poke_after_load("soc" if setting == "power" else "power")).edit(3, setting, value_for(3, setting))
+    if not (r.res().startswith("FAILED") and r.applies() == [] and len(r.loads()) == 2 and F2_NOTE_OK in r.note() and not r.locked()):
+        bad.append((setting, "poke", r.res()[:60], load_seq(r), r.note()[-100:]))
+check("F2(a): the reserve rises after the Load (SOC edit) and another actor changes a staged field between the Load and the press: FAILED, re-Loaded once "
+      "(a poked field is overwritten by the Load), not locked", not bad, str(bad[:3]))
+bad = []
+for setting in SETTINGS:
+    r = Run(setup=lambda x: x.d.fault.__setitem__("refuse_bus", True)).edit(3, setting, value_for(3, setting))
+    if not (r.res().startswith("FAILED - the firmware refused") and f2_ok_case(r) and len(r.applies()) == 1 and r.d.attempts == 0):
+        bad.append((setting, r.res()[:70], load_seq(r), r.note()[-100:]))
+check("F2(b): the firmware refused at its gate - refusal text AND an unchanged gate-pass counter AND both later reads at the pre-edit values - re-Loads slot N "
+      "once (staging equals live), one Apply press only, not locked, for each setting", not bad, str(bad[:3]))
+
+# negatives: nothing but the two conclusive verdicts may re-Load
+bad = []
+NEG_CASES = [
+    ("the firmware's verification fails", lambda x: x.d.fault.__setitem__("verify_fail", True)),
+    *[(f"a partial write stopping after {k} transactions", lambda x, k_=k: x.d.fault.__setitem__("partial", k_)) for k in range(6)],
+    ("the inverter stores a clamped power", lambda x: x.d.fault.__setitem__("clamp", {"power": 7000})),
+    ("another register changes right after the Apply", other_field_changes("power")),
+    ("no later configuration read", no_later_read),
+    ("the cache invalid after the Apply", cache_invalid_after),
+    ("an API blip and a replayed time", api_blip()),
+    ("registers unchanged, a REJECTED text, but the counter moved", partial_then_rejected("power")),
+    ("a REJECTED text overwrites a real write", rejected_text_overwrites),
+    ("the write enable cannot be confirmed off", arm_stuck),
+    ("the Apply press never arrives", drop_apply),
+    ("the dongle clock jumps after the write", skew_after_write),
+]
+for label, setup in NEG_CASES:
+    r = Run(setup=setup).edit(3, "power", 3000, run=520)
+    if not (r.res().startswith("UNCERTAIN") and r.locked() and load_seq(r) == ["load3"] and "Do NOT retry" in r.note()
+            and F2_NOTE_OK not in r.note() and F2_NOTE_BAD not in r.note() and len(r.applies()) <= 1):
+        bad.append((label, r.res()[:70], load_seq(r), r.locked(), r.note()[-80:]))
+for setting in ("start_time", "charge_source", "target_soc"):
+    r = Run(setup=lambda x: x.d.fault.__setitem__("verify_fail", True)).edit(3, setting, value_for(3, setting))
+    if not (r.res().startswith("UNCERTAIN") and r.locked() and load_seq(r) == ["load3"] and btn(r)[-1].endswith("apply_manual_slot_3_settings")):
+        bad.append(("verify_fail", setting, r.res()[:50], load_seq(r)))
+for setting in SETTINGS:
+    r = restart_mid_edit(setting, value_for(3, setting))
+    r.w.run_until(r.w.t + 200)
+    if not (r.res().startswith("UNCERTAIN - the edit was interrupted") and r.locked() and len(load_seq(r)) <= 1):
+        bad.append(("restart", setting, r.res()[:50], load_seq(r)))
+check(f"F2 negatives: for EVERY unproven outcome ({len(NEG_CASES)} faults on power, verify failure on the other settings, a restart mid-edit for each "
+      "setting) - UNCERTAIN, partial writes 0-5, clamp, another register changing, no or incomplete later reads, a REJECTED text with a moved counter, a "
+      "dropped press, the arm not confirmed off, a clock jump - there is NO extra Load, the lock is kept, the notice is the unchanged manual-recovery one",
+      not bad, str(bad[:3]))
+bad = []
+for label, setup in (("the heartbeat is dead (no fresh evidence)", lambda x: x.d.fault.__setitem__("hb_dead", True)),
+                     ("the helpers do not settle after the Load", late_flip("input_number.ecco_manual_slot_3_power_staged", "2000.0"))):
+    r = Run(setup=setup).edit(3, "power", 3000)
+    if not (r.res().startswith("FAILED") and r.applies() == [] and len(r.loads()) <= 1 and F2_NOTE_OK not in r.note() and F2_NOTE_BAD not in r.note()):
+        bad.append((label, r.res()[:70], load_seq(r)))
+r = Run().review(3, "power", 3000)
+r.ha.start_script(APPLY, {"confirmation": "SET SLOT 3 POWER 3000 W REVIEW 0000"})
+r.w.run_until(r.w.t + 5)
+if not (r.res().startswith("REFUSED") and r.loads() == []):
+    bad.append(("refused", r.res()[:50], load_seq(r)))
+check("F2 scope: a run that stopped BEFORE the editor staged anything (a refused Apply, a Review problem, the helpers not settling after the Load) is not re-Loaded",
+      not bad, str(bad))
+bad = []
+for setting in ("power", "start_time"):
+    r = Run(setup=late_flip(f"binary_sensor.{D}free_power_operation_in_progress", "on")).edit(3, setting, value_for(3, setting), run=520)
+    if not (r.res().startswith("FAILED") and load_seq(r) == ["load3"] and F2_NOTE_BAD in r.note() and "Load Current Slot 3 (or Load All)" in r.note()
+            and not r.locked() and r.applies() == []):
+        bad.append((setting, "free power", r.res()[:60], load_seq(r), r.note()[-140:]))
+r = Run(setup=lambda x: (load_ignored(3, after_first=True)(x), late_flip(f"binary_sensor.{D}rtc_correction_in_progress", "on")(x))).edit(3, "power", 3000, run=520)
+if not (r.res().startswith("FAILED") and load_seq(r).count("load3") == 2 and not staged_eq_live(r, 3) and F2_NOTE_BAD in r.note() and not r.locked()):
+    bad.append(("ignored", r.res()[:60], load_seq(r), r.note()[-140:]))
+check("F2: when the re-Load is refused (Free Power owns the TOU settings) or has no effect, nothing else is done (one Load press at most, no Apply, not locked) and "
+      "the notice says slot N's staging may still hold the reviewed value and to press Load Current Slot N (or Load All) before any Manual Controls Apply",
+      not bad, str(bad[:2]))
+
+# --- F3: a power edit is refused when the LIVE slot power is not a multiple of 100 W (Review and every later gate copy)
+r = Run(layout=slot_set(3, power=2550)).review(3, "power", 3000)
+check("F3: live slot power 2550 W: the power Review is refused with the reason (not a multiple of 100 W; the undo would be refused; align it first in Manual Controls)",
+      rejects(r) and "the live slot power 2550.0 W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls" in r.res(), r.res())
+r = Run(layout=slot_set(3, power=2500)).edit(3, "power", 3000)
+check("F3: live 2500 W is fine - the power edit applies", r.res().startswith("APPLIED") and r.changed() == {(3, "power"): (2500, 3000)}, r.res())
+r = Run(layout=slot_set(3, power=2550)).review(3, "target_soc", 55)
+check("F3 scope: the rule is for power edits only - a target-SOC Review on a slot with live power 2550 W is accepted", accepts(r), r.res())
+r = Run().review(3, "power", 3000)
+r.d.regs["slots"][3]["power"] = 2550                 # the live power changes between the Review and the Apply
+r.d.poll()
+r.w.run_until(r.w.t + 100)
+r.apply()
+check("F3: the live power changes to 2550 W between the Review and the Apply: refused at the Apply, nothing pressed, nothing written",
+      r.res().startswith("REFUSED") and r.d.presses == [] and r.changed() == {(3, "power"): (8000, 2550)}, r.res())
+
+
+def power_to_2550_at(t_off):
+    def setup(x):
+        def go():
+            x.d.regs["slots"][3]["power"] = 2550
+            x.d.poll()
+        x.w.at(T0 + t_off, go)
+    return setup
+
+
+r = Run(setup=power_to_2550_at(100)).edit(3, "power", 3000)
+check("F3: the live power changes to 2550 W after the Apply started (the fresh-read gate): FAILED with the reason, nothing pressed",
+      r.res().startswith("FAILED") and "the live slot power 2550.0 W is not a multiple of 100 W" in r.res() and r.d.presses == [], r.res())
+
+
+def power_to_2550_after_load(x):
+    orig = x.d._load
+
+    def ld(n):
+        orig(n)
+
+        def go():
+            x.d.regs["slots"][3]["power"] = 2550
+            x.d.poll()
+        x.w.after(8.0, go)
+    x.d._load = ld
+
+
+r = Run(setup=power_to_2550_after_load).edit(3, "power", 3000)
+check("F3: the live power changes to 2550 W between the Load and the press (the last-check gate): FAILED with the reason, nothing pressed",
+      r.res().startswith("FAILED") and "the live slot power 2550.0 W is not a multiple of 100 W" in r.res() and r.applies() == [], r.res())
+
+# --- F4: Review notification text (a persistent notification) and the input_text limit
+DUMP_W = "A slot with a charge source set makes a scheduled Dump to Grid whose window overlaps it refuse at start (no health alert counts that refusal)."
+SMART_W = "Do not use SmartDeye or the inverter's own panel until this edit is finished."
+cases = [("charge_source -> Grid", 3, "charge_source", "Grid", None, True), ("charge_source -> None", 1, "charge_source", "None", None, False),
+         ("start_time on a slot whose live source is None", 3, "start_time", "09:30", None, False),
+         ("start_time on a slot whose live source is Grid", 1, "start_time", "00:30", None, True),
+         ("power", 3, "power", 3000, None, False), ("target_soc", 3, "target_soc", 41, None, False)]
+bad = []
+for label, n, setting, v, lay, dump in cases:
+    r = Run().review(n, setting, v)
+    nt = r.note("ecco_cfg_edit_review")
+    if not ((DUMP_W in nt) == dump and SMART_W in nt and r.res().startswith("REVIEWED")):
+        bad.append((label, DUMP_W in nt, SMART_W in nt))
+check("F4: the Review notification always says not to use SmartDeye or the inverter's own panel until the edit is finished, and carries the Dump to Grid "
+      "warning for a charge source set to Grid and for a start-time edit on a slot whose live charge source is not None - and for no other case", not bad, str(bad))
+bad = []
+for setting in SETTINGS:
+    for n in (1, 3):
+        r = Run().review(n, setting, value_for(n, setting))
+        vals = [r.w.state(PLAN), r.res()]
+        r.apply()
+        vals += [r.w.state(PLAN), r.res(), r.w.state(EDIT)]
+        if not (all(len(x) < 255 for x in vals) and not r.w.warnings):
+            bad.append((setting, n, [len(x) for x in vals]))
+r = Run(setup=lambda x: x.d.fault.__setitem__("refuse_bus", True)).edit(3, "charge_source", "Grid")
+if not (len(r.res()) < 255 and len(r.w.state(PLAN)) < 255 and not r.w.warnings):
+    bad.append(("refusal", len(r.res())))
+check("F4: every input_text value (plan, last result, last owner edit) stays under 255 characters, through Review and Apply and a firmware refusal, "
+      "for every setting (no Home Assistant overflow)", not bad, str(bad))
 
 # ======================================================================================================================
 print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
@@ -2093,6 +2409,58 @@ def clean_refusal(fn):
         return False
 
 
+def f1_check(t):
+    r = Run(t)
+    r.d._load(2)
+    r.w.run_until(r.w.t + 1)
+    k0 = len(r.d.presses)
+    r.edit(3, "start_time", "09:30")
+    r2 = Run(t).edit(1, "start_time", "00:30")
+    return (r.res().startswith("APPLIED") and load_seq(r, k0) == ["load3", "load2"] and r.d.staging[2]["end"] == 930
+            and r2.res().startswith("APPLIED") and load_seq(r2) == ["load1", "load6"] and r2.d.staging[6]["end"] == 30)
+
+
+def f1_nonstart(t):
+    return all(load_seq(Run(t).edit(3, st, value_for(3, st))) == ["load3"] for st in ("target_soc", "power", "charge_source"))
+
+
+def f2_pre(t):
+    return f2_ok_case(Run(t, setup=late_flip(f"binary_sensor.{D}rtc_correction_in_progress", "on")).edit(3, "power", 3000))
+
+
+def f2_unc(t):
+    out = []
+    for setup in (lambda x: x.d.fault.__setitem__("verify_fail", True), lambda x: x.d.fault.__setitem__("partial", 2), other_field_changes("power")):
+        x = Run(t, setup=setup).edit(3, "power", 3000)
+        out.append(x.res().startswith("UNCERTAIN") and load_seq(x) == ["load3"] and x.locked())
+    return all(out)
+
+
+def f2_counter(t):
+    x = Run(t, setup=partial_then_rejected("power")).edit(3, "power", 3000)
+    return x.res().startswith("UNCERTAIN") and load_seq(x) == ["load3"] and x.locked()
+
+
+def f3_review(t):
+    return rejects(rv(t, 3, "power", 3000, layout=slot_set(3, power=2550)))
+
+
+def f3_fresh(t):
+    x = Run(t, setup=power_to_2550_at(100)).edit(3, "power", 3000)
+    return x.res().startswith("FAILED") and "multiple of 100" in x.res() and x.d.presses == []
+
+
+def f3_last(t):
+    x = Run(t, setup=power_to_2550_after_load).edit(3, "power", 3000)
+    return x.res().startswith("FAILED") and "multiple of 100" in x.res() and x.applies() == []
+
+
+def f4_check(t):
+    a = Run(t).review(3, "charge_source", "Grid").note("ecco_cfg_edit_review")
+    b = Run(t).review(3, "power", 3000).note("ecco_cfg_edit_review")
+    return DUMP_W in a and SMART_W in a and DUMP_W not in b and SMART_W in b
+
+
 CHECKS = {
     **{f"happy_{s}": happy(s) for s in SETTINGS},
     "phrase": phrase_check,
@@ -2122,7 +2490,10 @@ CHECKS = {
     "happy_charge_none": lambda t: (lambda x: x.changed() == {(1, "src"): ("Grid", "None")} and x.res().startswith("APPLIED") and not x.invalid()
                                     and not x.arm_on())(Run(t).edit(1, "charge_source", "None")),
     "notice": lambda t: ("Before any Manual Controls Apply of slot 2, press Load Current Slot 2 (or Load All): its staged end still holds the old 09:00."
-                         in Run(t).edit(3, "start_time", "09:30").note()),
+                         in Run(t, setup=fp_on_finish).edit(3, "start_time", "09:30", run=480).note()
+                         and "refreshed by the editor" in Run(t).edit(3, "start_time", "09:30").note()),
+    "f1": f1_check, "f1_nonstart": f1_nonstart, "f2_pre": f2_pre, "f2_unc": f2_unc, "f2_counter": f2_counter,
+    "f3_review": f3_review, "f3_fresh": f3_fresh, "f3_last": f3_last, "f4": f4_check,
     "inv_clock": lambda t: (rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, S.local_str(x.w.t + 400))))
                             and rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, "unavailable")))),
     "mid": lambda t: (rejects(rv(t, 3, "start_time", "11:00", t0=S.parse_local("2026-10-12 10:00:00") - 70))
@@ -2222,6 +2593,62 @@ MUTANTS = [
     ("the live / staged source and mode need not be option words (unavailable == unavailable passes)", [
         (" and states(e.src) in " + X.SRC_WORDS, ""), (" and states(e.live_src) in " + X.SRC_WORDS, ""),
         (" and states(e.mode) in " + X.MODE_WORDS, ""), (" and states(e.live_mode) in " + X.MODE_WORDS, "")], "words"),
+]
+def _drop_f1_load(t):
+    i = t.index('entity_id: "{{ e.p_load }}"')
+    j = t.rindex("- action: button.press", 0, i)
+    return t[:t.rindex("\n", 0, j) + 1] + t[t.index("\n", i) + 1:]
+
+
+def _f1_wrong_slot(t):
+    return t.replace('entity_id: "{{ e.p_load }}"', 'entity_id: "button.ecco_clock_dongle_load_current_slot_{{ 1 if n == 6 else n + 1 }}_to_manual_staging"')
+
+
+def _f1_every_setting(t):
+    i = t.index('pn: "{{ 6 if n == 1 else n - 1 }}"')
+    old = "value_template: \"{{ setting == 'start_time' }}\""
+    j = t.index(old, i)
+    return t[:j] + "value_template: \"{{ true }}\"" + t[j + len(old):]
+
+
+def _f2_on_uncertain(t):
+    a = ("{{ is_state('input_boolean.ecco_cfg_edit_review_required', 'off')\n               and (states('input_text.ecco_cfg_edit_last_result')"
+         ".startswith('FAILED - a safety check")
+    b = ".startswith('FAILED - the firmware refused the Apply')) }}"
+    assert t.count(a) == 1 and t.count(b) == 1
+    t = t.replace(a, "{{ (states('input_text.ecco_cfg_edit_last_result').startswith('FAILED - a safety check")
+    return t.replace(b, ".startswith('FAILED - the firmware refused the Apply') or states('input_text.ecco_cfg_edit_last_result').startswith('UNCERTAIN')) }}")
+
+
+def _f2_no_load(t):
+    ind = " " * 14
+    blk = (ind + "- action: button.press\n" + ind + "  continue_on_error: true\n" + ind + "  target:\n" + ind + "    entity_id: \"{{ e.load }}\"\n")
+    i = t.rindex(blk)
+    return t[:i] + t[i + len(blk):]
+
+
+def _f3_gone(*inds):
+    def f(t):
+        for ind in inds:
+            assert t.count(X._ind(X.F3_AFTER, ind)) == {12: 2, 16: 1, 24: 1}[ind]
+            t = t.replace(X._ind(X.F3_AFTER, ind), X._ind(X.F3_BEFORE, ind))
+        return t
+    return f
+
+
+MUTANTS += [
+    ("F1: the Load of slot N-1 is removed", _drop_f1_load, "f1"),
+    ("F1: the Load is pressed for the WRONG slot (N+1)", _f1_wrong_slot, "f1"),
+    ("F1: the Load of slot N-1 is also pressed after a SOC, power or charge-source edit", _f1_every_setting, "f1_nonstart"),
+    ("F2: slot N is also re-Loaded after an UNCERTAIN outcome (and the lock is not consulted)", _f2_on_uncertain, "f2_unc"),
+    ("F2: the re-Load of slot N is removed", _f2_no_load, "f2_pre"),
+    ("F2(b): the firmware-refused verdict no longer needs the unchanged gate-pass counter", [(
+        "{{ fw_result.startswith('REJECTED') and later_read and not attempts_moved and unchanged }}",
+        "{{ fw_result.startswith('REJECTED') and later_read and unchanged }}")], "f2_counter"),
+    ("F3: the live-power multiple-of-100 rule is removed everywhere", _f3_gone(12, 16, 24), "f3_review"),
+    ("F3: the rule is removed from the fresh-read gate only", _f3_gone(16), "f3_fresh"),
+    ("F3: the rule is removed from the last check only", _f3_gone(24), "f3_last"),
+    ("F4: the Dump to Grid warning is removed", [(DUMP_W, "")], "f4"),
 ]
 for name, pairs, key in MUTANTS:
     if callable(pairs):
