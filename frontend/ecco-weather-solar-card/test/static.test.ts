@@ -1,7 +1,8 @@
 // Static proof of the read-only guarantee over the card's source and its built bundle. Unlike the Advanced Configuration
 // card (states only), this card needs Home Assistant's websocket for the weather forecast and hourly PV statistics, so the
 // guarantee is an ALLOWLIST: exactly two read-only message types, sent only from src/reader.ts; no service / action call,
-// no event subscription, no network, no storage, no timer, no dynamic code; one local view action.
+// no event subscription, no network, no storage, no timer, no dynamic code; three local view actions (the chart's Today /
+// Tomorrow switch, and the compact list's open-a-day and Back to days).
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -62,11 +63,16 @@ describe("the source", () => {
     assert.deepEqual([...new Set(props)].sort(), ["config", "connection", "states"]);
   });
 
-  it("listens only for click and handles only the chart-day view action", () => {
+  it("listens only for click and handles exactly the three local view actions", () => {
     const all = sources.map((s) => s.text).join("\n");
+    const VIEW_ACTIONS = ["chart-day", "weather-days", "weather-hours"];
     assert.deepEqual([...all.matchAll(/addEventListener\(\s*"([a-z]+)"/g)].map((m) => m[1]), ["click"]);
-    assert.deepEqual([...new Set([...all.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))], ["chart-day"]);
-    assert.deepEqual([...new Set([...all.matchAll(/getAttribute\("data-action"\) === "([a-z-]+)"/g)].map((m) => m[1]))], ["chart-day"]);
+    assert.deepEqual([...new Set([...all.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))].sort(), VIEW_ACTIONS);
+    assert.deepEqual([...new Set([...all.matchAll(/action === "([a-z-]+)"/g)].map((m) => m[1]))].sort(), VIEW_ACTIONS);
+    // Each handler changes view state and, for a day row, the forecast subscriptions - through the same reader, nothing else.
+    const card = code(read(join(SRC, "ecco-weather-solar-card.ts")));
+    const handlers = card.slice(card.indexOf("private _showDay("), card.indexOf("function emptySlot("));
+    assert.ok(handlers.length > 500 && !/\b(?:subscribeMessage|sendMessagePromise|hourlyStatistics)\b|this\._reader\./.test(handlers), "the click handlers send nothing themselves");
   });
 
   it("does not recompute or re-weight the ECCO blend: the displayed blend is the blend sensor's own state", () => {

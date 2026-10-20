@@ -7,18 +7,21 @@
 // READ-ONLY GUARANTEE (structural): the `hass` setter keeps three things only - the states map, the time zone / location
 // from hass.config, and a Reader (src/reader.ts) bound to the websocket connection that can send exactly two read-only
 // messages (weather/subscribe_forecast and recorder/statistics_during_period). Neither the Home Assistant object nor its
-// connection is ever stored, so no service / action call is reachable. The only event handled is the Today / Tomorrow chart switch, which
-// changes local view state. No timers: the card re-renders from Home Assistant's own state updates.
+// connection is ever stored, so no service / action call is reachable. The only event handled is a click on one of the card's own
+// view controls - the Today / Tomorrow chart switch, a day row of the compact list and its Back to days button - which changes
+// local view state. No timers: the card re-renders from Home Assistant's own state updates.
 //
 // LAYOUTS: `full` (default, the dedicated view) sends both forecast subscriptions and the statistics query. The Overview's two
 // compact instances send only what they show: `solar_strip` the statistics query alone (no forecast subscription at all),
-// `daily_compact` the daily forecast subscription alone (no hourly subscription, no statistics query).
+// `daily_compact` the daily forecast subscription, plus the hourly one only while a day's hourly breakdown is open (never the
+// statistics query). Back to days drops the hourly subscription again.
 import {
   HOUR_MS,
   MINUTE_MS,
   accuracyView,
   buildDayPoints,
   dateKey,
+  dayHours,
   entityNum,
   forecastSolarFreshness,
   haTimeZone,
@@ -26,6 +29,7 @@ import {
   isAvailable,
   nextDateKey,
   normalizeConfig,
+  parseTime,
   solarTotals,
   solcastFreshness,
   solcastHourly,
@@ -45,6 +49,7 @@ import {
   renderChart,
   renderDaily,
   renderDailyCompact,
+  renderDayHourly,
   renderFreshness,
   renderHourly,
   renderInsights,
@@ -68,19 +73,42 @@ export const STATS_REFRESH_MS = 10 * MINUTE_MS;
 /** Re-render at least once a minute when Home Assistant pushes any update, so ages and daylight-left stay current. */
 export const RENDER_BUCKET_MS = MINUTE_MS;
 
+interface ActionElementLike {
+  getAttribute(name: string): string | null;
+}
+
+interface StripLike extends ActionElementLike {
+  scrollLeft: number;
+}
+
 interface RegionLike {
   innerHTML: string;
+  querySelector?: (selector: string) => StripLike | null;
 }
 
 interface RootLike {
   innerHTML: string;
+  /** the focused element inside the card's shadow root (null when focus is elsewhere on the page) */
+  activeElement?: ActionElementLike | null;
   querySelector(selector: string): RegionLike | null;
   addEventListener(type: string, listener: (ev: Event) => void): void;
 }
 
-interface ActionElementLike {
-  getAttribute(name: string): string | null;
+interface FocusableLike {
+  focus?: (options?: { preventScroll?: boolean }) => void;
 }
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The selector that finds the counterpart of a focused `daily_compact` control (a day row, Back to days, the hourly strip) in
+ *  freshly rendered HTML, or null for anything else. */
+const compactControl = (el: ActionElementLike): string | null => {
+  const action = el.getAttribute("data-action");
+  const date = el.getAttribute("data-date");
+  if ((action === "weather-hours" || action === "weather-days") && date !== null && DATE_RE.test(date)) return `[data-action="${action}"][data-date="${date}"]`;
+  const strip = el.getAttribute("data-strip");
+  return strip !== null && DATE_RE.test(strip) ? `[data-strip="${strip}"]` : null;
+};
 
 type Kind = "hourly" | "daily";
 
@@ -101,8 +129,10 @@ const errText = (e: unknown): string => {
   return s.slice(0, 160);
 };
 
-/** The forecast subscriptions a layout needs: the strip shows no weather at all, the compact daily list only the daily one. */
-const kindsFor = (layout: Layout): Kind[] => (layout === "full" ? ["hourly", "daily"] : layout === "daily_compact" ? ["daily"] : []);
+/** The forecast subscriptions a layout needs: the strip shows no weather at all, the compact daily list the daily one, and the
+ *  hourly one too only while one of its days is open. */
+const kindsFor = (layout: Layout, dayOpen: boolean): Kind[] =>
+  layout === "full" ? ["hourly", "daily"] : layout === "daily_compact" ? (dayOpen ? ["daily", "hourly"] : ["daily"]) : [];
 
 /** Why a day has no Solcast hourly profile, or null when it has one (the same message in every layout). */
 const solcastNoteFor = (entity: EntityLike | undefined, id: string, hours: Map<string, unknown>): string | null =>
@@ -130,6 +160,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
   private _statsFor = "";
   private _statsInFlight = false;
   private _day: "today" | "tomorrow" = "today";
+  /** `daily_compact`: the local date (YYYY-MM-DD) whose hourly breakdown is open, or null for the day list. */
+  private _openDay: string | null = null;
   private _signature = "";
   private _version = 0;
 
@@ -138,6 +170,7 @@ export class EccoWeatherSolarCard extends HTMLElement {
     const weatherChanged = !this._config || this._config.entities.weather !== next.entities.weather;
     const layoutChanged = !this._config || this._config.layout !== next.layout;
     this._config = next;
+    if (weatherChanged || layoutChanged) this._openDay = null;
     this._buildShell();
     if (weatherChanged || layoutChanged) this._resubscribe();
     if (this._statsFor !== next.entities.pv_energy_statistic) this._statsAt = 0;
@@ -212,10 +245,27 @@ export class EccoWeatherSolarCard extends HTMLElement {
     this._ensureSubscribed();
   }
 
+  /** Ends one subscription (Back to days) and forgets its data; a late confirmation or event of it is then ignored, because its
+   *  slot is no longer the current one. */
+  private _dropForecast(kind: Kind): void {
+    const s = this._forecast[kind];
+    if (s.unsub) s.unsub();
+    this._forecast[kind] = emptySlot();
+  }
+
+  /** An open day that has become a past date (the card stayed open over midnight) closes, and its hourly subscription ends. */
+  private _expireOpenDay(now: number): void {
+    if (this._openDay !== null && this._openDay < dateKey(now, haTimeZone(this._haConfig))) {
+      this._openDay = null;
+      this._dropForecast("hourly");
+    }
+  }
+
   private _ensureSubscribed(): void {
     if (!this._config || !this._connected) return;
+    this._expireOpenDay(this.now());
     const entity = this._config.entities.weather;
-    const kinds = kindsFor(this._config.layout);
+    const kinds = kindsFor(this._config.layout, this._openDay !== null);
     if (!this._reader) {
       // Before the first hass update there is simply nothing yet: only a hass without a connection is an error.
       if (!this._hassSeen) return;
@@ -239,21 +289,23 @@ export class EccoWeatherSolarCard extends HTMLElement {
       if (slot.unsub || slot.pending) continue;
       if (slot.error && this.now() - slot.errorAt < FORECAST_RETRY_MS) continue;
       slot.pending = true;
+      // Stale = the card unsubscribed everything since (gen), or dropped this one subscription (Back to days: a new slot).
+      const stale = (): boolean => gen !== this._gen || this._forecast[kind] !== slot;
       this._reader.subscribeForecast(entity, kind, (entries) => {
-        if (gen !== this._gen) return;
+        if (stale()) return;
         slot.entries = entries;
         slot.error = null;
         this._version++;
         this._render(false);
       }).then((unsub) => {
-        if (gen !== this._gen) {
+        if (stale()) {
           unsub();
           return;
         }
         slot.pending = false;
         slot.unsub = unsub;
       }, (err: unknown) => {
-        if (gen !== this._gen) return;
+        if (stale()) return;
         slot.pending = false;
         slot.error = errText(err);
         slot.errorAt = this.now();
@@ -311,7 +363,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
 
   private _sig(now: number): string {
     if (!this._config) return "";
-    const parts: string[] = [String(Math.floor(now / RENDER_BUCKET_MS)), String(this._version), this._day, haTimeZone(this._haConfig)];
+    const parts: string[] = [String(Math.floor(now / RENDER_BUCKET_MS)), String(this._version), this._day, this._openDay ?? "",
+      haTimeZone(this._haConfig)];
     for (const id of Object.values(this._config.entities)) {
       const e = this._states[id];
       parts.push(e ? `${e.state}|${e.last_updated ?? ""}` : "-");
@@ -321,7 +374,28 @@ export class EccoWeatherSolarCard extends HTMLElement {
 
   private _set(name: string, html: string): void {
     const r = this._region(name);
-    if (r && r.innerHTML !== html) r.innerHTML = html;
+    if (!r || r.innerHTML === html) return;
+    if (this._config && this._config.layout === "daily_compact" && name === "daily") {
+      this._setKeepingPlace(r, html);
+      return;
+    }
+    r.innerHTML = html;
+  }
+
+  /** The compact list / day view is rewritten whenever its forecast changes (the hourly data arriving just after a day is
+   *  opened, a Met.no update, the next hour). Rewriting drops the focused control and the strip's scroll position, so both
+   *  carry over to their counterparts: focus only if it was already inside this card, the scroll only for the same day. */
+  private _setKeepingPlace(r: RegionLike, html: string): void {
+    const active = this._root && this._root.activeElement ? this._root.activeElement : null;
+    const focusAgain = active && typeof active.getAttribute === "function" ? compactControl(active) : null;
+    const find = (): StripLike | null => (typeof r.querySelector === "function" ? r.querySelector(".hours") : null);
+    const before = find();
+    const scroll = before && before.scrollLeft > 0 ? { day: before.getAttribute("data-strip"), left: before.scrollLeft } : null;
+    r.innerHTML = html;
+    const after = scroll ? find() : null;
+    if (scroll && after && after.getAttribute("data-strip") === scroll.day) after.scrollLeft = scroll.left;
+    // Its counterpart may be gone (the open day closed at midnight): then Back to days, else the first day row.
+    if (focusAgain) this._focus(focusAgain, '[data-action="weather-days"]', '[data-action="weather-hours"]');
   }
 
   /** Why today's actual-PV bars are missing, or null when they are not. */
@@ -336,6 +410,7 @@ export class EccoWeatherSolarCard extends HTMLElement {
   private _render(force: boolean): void {
     if (!this._config || !this._root) return;
     const now = this.now();
+    this._expireOpenDay(now);
     const sig = this._sig(now);
     if (!force && sig === this._signature) return;
     this._signature = sig;
@@ -454,7 +529,8 @@ export class EccoWeatherSolarCard extends HTMLElement {
     }));
   }
 
-  /** `daily_compact`: the weather freshness chip in the header and one row per available day (never padded). */
+  /** `daily_compact`: the weather freshness chip in the header, then either one clickable row per available day (never padded)
+   *  or, with a day open, that day's hourly breakdown (the dedicated view's hourly cells) with Back to days. */
   private _renderCompact(now: number, tz: string): void {
     if (!this._config) return;
     const e = this._config.entities;
@@ -462,27 +538,96 @@ export class EccoWeatherSolarCard extends HTMLElement {
     const w = stateOf(st, e.weather);
     const wa = (w && w.attributes) || {};
     const fd = this._forecast.daily;
-    this._set("fresh", renderFreshness([weatherFreshness(st, e, null, now, this._config.stale)]));
-    this._set("daily", renderDailyCompact({
-      entries: upcomingDays(fd.entries, now, this._config.daily_days, tz),
+    const fh = this._forecast.hourly;
+    const day = this._openDay;
+    const tempUnit = unit(wa.temperature_unit, "°C");
+    const rainUnit = unit(wa.precipitation_unit, "mm");
+    this._set("fresh", renderFreshness([weatherFreshness(st, e, day === null ? null : fh.entries, now, this._config.stale)]));
+    if (day === null) {
+      this._set("daily", renderDailyCompact({
+        entries: upcomingDays(fd.entries, now, this._config.daily_days, tz),
+        tz,
+        error: fd.error,
+        loading: fd.entries === null && !fd.error,
+        tempUnit,
+        windUnit: unit(wa.wind_speed_unit, "km/h"),
+        rainUnit,
+      }));
+      return;
+    }
+    const summary = (fd.entries ?? []).find((f) => {
+      const t = parseTime(f && f.datetime);
+      return t !== null && dateKey(t, tz) === day;
+    }) ?? null;
+    this._set("daily", renderDayHourly({
+      day,
+      summary,
+      hours: dayHours(fh.entries, day, tz, now),
       tz,
-      error: fd.error,
-      loading: fd.entries === null && !fd.error,
-      tempUnit: unit(wa.temperature_unit, "°C"),
-      windUnit: unit(wa.wind_speed_unit, "km/h"),
-      rainUnit: unit(wa.precipitation_unit, "mm"),
+      error: fh.error,
+      loading: fh.entries === null && !fh.error,
+      tempUnit,
+      rainUnit,
     }));
+  }
+
+  /** Opens the hourly breakdown of local date `d`, which must be one of the days the compact list is showing. */
+  private _showDay(d: string | null): void {
+    if (!this._config || this._config.layout !== "daily_compact" || this._openDay !== null || d === null || !DATE_RE.test(d)) return;
+    const now = this.now();
+    const tz = haTimeZone(this._haConfig);
+    const listed = upcomingDays(this._forecast.daily.entries, now, this._config.daily_days, tz).some((f) => {
+      const t = parseTime(f.datetime);
+      return t !== null && dateKey(t, tz) === d;
+    });
+    if (!listed) return;
+    this._openDay = d;
+    this._ensureSubscribed();
+    this._render(true);
+    this._focus('[data-action="weather-days"]');
+  }
+
+  /** Back to days: the list again, the hourly subscription ended, focus on the row of the day just closed (or the first row,
+   *  when that day is no longer listed). */
+  private _showDays(): void {
+    const d = this._openDay;
+    if (d === null) return;
+    this._openDay = null;
+    this._dropForecast("hourly");
+    this._render(true);
+    this._focus(`[data-action="weather-hours"][data-date="${d}"]`, '[data-action="weather-hours"]');
+  }
+
+  /** Re-rendering replaced the control that had focus; keyboard users continue from its counterpart in the new view (the
+   *  first of the selectors that finds one). */
+  private _focus(...selectors: string[]): void {
+    for (const selector of selectors) {
+      const el = this._root ? (this._root.querySelector(selector) as unknown as FocusableLike | null) : null;
+      if (el && typeof el.focus === "function") {
+        el.focus({ preventScroll: true });
+        return;
+      }
+    }
   }
 
   private _onClick = (ev: Event): void => {
     const target = ev.target as unknown as { closest?: (selector: string) => ActionElementLike | null } | null;
     const el = target && typeof target.closest === "function" ? target.closest("[data-action]") : null;
     if (!el) return;
-    if (el.getAttribute("data-action") === "chart-day") {
+    const action = el.getAttribute("data-action");
+    // The second click of a double click lands on whatever replaced the first one's target (Back to days sits where the first
+    // day row was), so it is not a new choice for the day view. Keyboard activation reports 0.
+    const detail = (ev as unknown as { detail?: unknown }).detail;
+    const repeat = typeof detail === "number" && detail > 1;
+    if (action === "chart-day") {
       const d = el.getAttribute("data-day");
       if (d !== "today" && d !== "tomorrow") return;
       this._day = d;
       this._render(true);
+    } else if (action === "weather-hours" && !repeat) {
+      this._showDay(el.getAttribute("data-date"));
+    } else if (action === "weather-days" && !repeat) {
+      this._showDays();
     }
     // Any other action value is ignored: there is nothing else this card can do.
   };

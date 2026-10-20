@@ -220,6 +220,29 @@ export function fmtWeekday(ms: number, tz: string): string {
   return zonedParts(ms, tz).weekday;
 }
 
+const zoneCache = new Map<string, Intl.DateTimeFormat>();
+
+/** The time zone's short name at `ms` ("BST" / "GMT" for Europe/London; "GMT+2" where the zone has no abbreviation). */
+export function fmtZone(ms: number, tz: string): string {
+  let f = zoneCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-GB", { timeZone: tz, timeZoneName: "short" });
+    zoneCache.set(tz, f);
+  }
+  return f.formatToParts(new Date(ms)).find((x) => x.type === "timeZoneName")?.value ?? tz;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Sun 25 Oct" for the local date key "2026-10-25" (a calendar date's weekday does not depend on the time zone). */
+export function fmtDayLabel(key: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!m) return key;
+  const wd = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay();
+  return `${WEEKDAYS[wd] ?? ""} ${Number(m[3])} ${MONTHS[Number(m[2]) - 1] ?? ""}`;
+}
+
 /** The epoch-ms starts of every whole hour that falls on local date `key` (23, 24 or 25 of them across DST changes). */
 export function hourStartsOfDay(key: string, tz: string): number[] {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
@@ -557,6 +580,92 @@ export function upcomingDays(daily: ForecastEntry[] | null, now: number, n: numb
     const t = parseTime(f && f.datetime);
     return t !== null && dateKey(t, tz) >= today;
   }).slice(0, n);
+}
+
+/** One local day's hourly forecast, for the Overview's day breakdown. */
+export interface DayHours {
+  /** the hourly entries on local date `key`, from the hour containing `now` onwards, in time order, one per instant */
+  entries: ForecastEntry[];
+  /** one label per entry: "HH:MM", plus the zone name ("01:00 BST" / "01:00 GMT") when that local time occurs twice on this day */
+  labels: string[];
+  /** the local day's length in hours: 24, or 23 / 25 on a DST change day (23.5 / 24.5 where the change is half an hour) */
+  dayLength: number;
+  /** how many forecast steps (whole UTC hours, as Home Assistant's hourly forecasts are stamped) fall on this local date */
+  hourSteps: number;
+  /** how many of those steps are not yet over at `now` (all of them for a future day) */
+  hoursAhead: number;
+  /** the local times that occur twice on this day (clocks go back), e.g. "01:00 to 01:59"; null on any other day */
+  repeated: string | null;
+  /** the local times that do not exist on this day (clocks go forward), e.g. "01:00 to 01:59"; null on any other day */
+  skipped: string | null;
+}
+
+const QUARTER_MS = 15 * MINUTE_MS;
+
+/** "01:00 to 01:59" for the quarter-hour grid times "01:00", ..., "01:45" (sorted; the span runs to the end of the last). */
+function timeSpan(times: string[]): string | null {
+  const first = times[0];
+  const last = times[times.length - 1];
+  if (first === undefined || last === undefined) return null;
+  const end = Number(last.slice(0, 2)) * 60 + Number(last.slice(3, 5)) + 14;
+  return `${first} to ${pad(Math.floor(end / 60))}:${pad(end % 60)}`;
+}
+
+/** The hourly forecast entries of local date `key` in the Home Assistant time zone. Only entries the forecast holds are
+ *  returned: a missing hour is never filled in, and a day the forecast does not reach has no entries. The day's DST facts
+ *  come from a quarter-hour walk over it, so zones with half-hour offsets or half-hour changes are described correctly. */
+export function dayHours(hourly: ForecastEntry[] | null, key: string, tz: string, now: number): DayHours {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  const base = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : NaN;
+  const wall = new Map<string, number>(); // local "HH:MM" on the quarter-hour grid -> how often it occurs on this date
+  let quarters = 0;
+  let hourSteps = 0;
+  let hoursAhead = 0;
+  // Every UTC offset in use lies within -12 h ... +14 h of the UTC date, and is a whole number of quarter hours.
+  for (let t = base - 15 * HOUR_MS; t <= base + 39 * HOUR_MS; t += QUARTER_MS) {
+    const p = zonedParts(t, tz);
+    if (`${p.year}-${pad(p.month)}-${pad(p.day)}` !== key) continue;
+    quarters++;
+    const hm = `${pad(p.hour)}:${pad(p.minute)}`;
+    wall.set(hm, (wall.get(hm) ?? 0) + 1);
+    if (t % HOUR_MS === 0) {
+      hourSteps++;
+      if (t + HOUR_MS > now) hoursAhead++;
+    }
+  }
+  const twice = [...wall].filter(([, n]) => n > 1).map(([hm]) => hm).sort();
+  const missing: string[] = [];
+  if (quarters > 0 && quarters < 96) {
+    for (let q = 0; q < 96; q++) {
+      const hm = `${pad(Math.floor(q / 4))}:${pad((q % 4) * 15)}`;
+      if (!wall.has(hm)) missing.push(hm);
+    }
+  }
+  const rows: Array<{ t: number; f: ForecastEntry }> = [];
+  const seen = new Set<number>();
+  for (const f of hourly ?? []) {
+    const t = parseTime(f && f.datetime);
+    if (t === null || t + HOUR_MS <= now || seen.has(t) || dateKey(t, tz) !== key) continue;
+    seen.add(t);
+    rows.push({ t, f });
+  }
+  rows.sort((a, b) => a.t - b.t);
+  const plain = rows.map((r) => fmtTime(r.t, tz));
+  const shown = new Map<string, number>();
+  for (const l of plain) shown.set(l, (shown.get(l) ?? 0) + 1);
+  return {
+    entries: rows.map((r) => r.f),
+    // A time that occurs twice on the day (or twice among the rows, off the quarter-hour grid) carries its zone name.
+    labels: rows.map((r, i) => {
+      const l = plain[i] as string;
+      return (wall.get(l) ?? 0) > 1 || (shown.get(l) ?? 0) > 1 ? `${l} ${fmtZone(r.t, tz)}` : l;
+    }),
+    dayLength: quarters / 4,
+    hourSteps,
+    hoursAhead,
+    repeated: timeSpan(twice),
+    skipped: timeSpan(missing),
+  };
 }
 
 /** True when any entry carries a rain probability (Met.no does not; other integrations may). */

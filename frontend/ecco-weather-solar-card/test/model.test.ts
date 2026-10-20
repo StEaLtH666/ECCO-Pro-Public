@@ -12,11 +12,14 @@ import {
   compass,
   condition,
   dateKey,
+  dayHours,
   daylightWeather,
   expectedSoFar,
   fmtAge,
+  fmtDayLabel,
   fmtDuration,
   fmtTime,
+  fmtZone,
   forecastSolarFreshness,
   haTimeZone,
   hasRainProbability,
@@ -400,6 +403,132 @@ describe("accuracy and insights", () => {
     const t = solarTotals(st, E.blend_today, E.solcast_today, E.forecast_solar_today);
     const out = insights({ today: t, tomorrow: t, now: NOW, tz: TZ, accuracy: accuracyView({}, E), pvToday: null, todayPoints: [], tomorrowPoints: [] });
     assert.ok(!out.some((s) => s.startsWith("So far today")));
+  });
+});
+
+describe("one day's hourly forecast (the Overview's day breakdown)", () => {
+  const H = HOUR_MS;
+  it("an ordinary future day: its 24 local hours, from local midnight (23:00 UTC in BST), in order", () => {
+    const d = dayHours(hourlyForecast(NOW, 72), "2026-10-09", TZ, NOW);
+    assert.equal(d.entries.length, 24);
+    assert.equal(d.entries[0]!.datetime, "2026-10-08T23:00:00.000Z", "local midnight of the 9th is the 8th in UTC");
+    assert.deepEqual([d.labels[0], d.labels[13], d.labels[23]], ["00:00", "13:00", "23:00"]);
+    assert.deepEqual([d.dayLength, d.hourSteps, d.hoursAhead, d.repeated, d.skipped], [24, 24, 24, null, null]);
+  });
+  it("today: from the hour containing now (13:00 at 13:30 BST); the hours already over are not counted", () => {
+    const d = dayHours(hourlyForecast(NOW - 3 * H, 72), "2026-10-08", TZ, NOW);
+    assert.equal(d.entries.length, 11);
+    assert.deepEqual([d.labels[0], d.labels[10]], ["13:00", "23:00"]);
+    assert.deepEqual([d.dayLength, d.hourSteps, d.hoursAhead], [24, 24, 11]);
+  });
+  it("a day the forecast reaches only partly keeps just the hours it has; a day it does not reach has none", () => {
+    const hourly = hourlyForecast(NOW, 48); // to 12:00 BST on the 10th
+    const part = dayHours(hourly, "2026-10-10", TZ, NOW);
+    assert.equal(part.entries.length, 13);
+    assert.deepEqual([part.labels[0], part.labels[12], part.hoursAhead], ["00:00", "12:00", 24]);
+    const none = dayHours(hourly, "2026-10-12", TZ, NOW);
+    assert.deepEqual([none.entries, none.labels, none.dayLength, none.hoursAhead], [[], [], 24, 24]);
+    assert.deepEqual(dayHours(null, "2026-10-09", TZ, NOW).entries, []);
+  });
+  it("Sun 25 Oct 2026 (clocks go back): 25 hours, the two 01:00 hours labelled BST then GMT, nothing invented", () => {
+    const now = Date.parse("2026-10-24T12:00:00Z");
+    const d = dayHours(hourlyForecast(now, 72), "2026-10-25", TZ, now);
+    assert.equal(d.entries.length, 25);
+    assert.deepEqual(d.labels.slice(0, 5), ["00:00", "01:00 BST", "01:00 GMT", "02:00", "03:00"]);
+    assert.deepEqual([d.entries[1]!.datetime, d.entries[2]!.datetime], ["2026-10-25T00:00:00.000Z", "2026-10-25T01:00:00.000Z"]);
+    assert.equal(d.labels[24], "23:00");
+    assert.equal(new Set(d.labels).size, 25, "every label is distinct");
+    assert.deepEqual([d.dayLength, d.hourSteps, d.hoursAhead, d.repeated, d.skipped], [25, 25, 25, "01:00 to 01:59", null]);
+  });
+  it("Sun 28 Mar 2027 (clocks go forward): 23 hours, no 01:00 at all, 00:00 GMT followed by 02:00 BST", () => {
+    const now = Date.parse("2027-03-27T12:00:00Z");
+    const d = dayHours(hourlyForecast(now, 72), "2027-03-28", TZ, now);
+    assert.equal(d.entries.length, 23);
+    assert.deepEqual(d.labels.slice(0, 3), ["00:00", "02:00", "03:00"]);
+    assert.deepEqual([d.entries[0]!.datetime, d.entries[1]!.datetime], ["2027-03-28T00:00:00.000Z", "2027-03-28T01:00:00.000Z"]);
+    assert.ok(!d.labels.some((l) => l.startsWith("01:")), "the missing hour is never made up");
+    assert.deepEqual([d.dayLength, d.hourSteps, d.hoursAhead, d.repeated, d.skipped], [23, 23, 23, null, "01:00 to 01:59"]);
+  });
+  it("on the autumn change day itself, in the second 01:00 hour, the strip starts at 01:00 GMT", () => {
+    const now = Date.parse("2026-10-25T01:30:00Z"); // 01:30 GMT, after the clocks went back
+    const d = dayHours(hourlyForecast(Date.parse("2026-10-24T22:00:00Z"), 48), "2026-10-25", TZ, now);
+    assert.equal(d.labels[0], "01:00 GMT");
+    assert.deepEqual([d.entries.length, d.hoursAhead, d.dayLength], [23, 23, 25]);
+  });
+  it("the day's neighbours keep their own 24 hours around both DST weekends", () => {
+    const autumn = hourlyForecast(Date.parse("2026-10-23T22:00:00Z"), 96);
+    assert.deepEqual(["2026-10-24", "2026-10-26"].map((k) => dayHours(autumn, k, TZ, 0).entries.length), [24, 24]);
+    const spring = hourlyForecast(Date.parse("2027-03-26T23:00:00Z"), 96);
+    assert.deepEqual(["2027-03-27", "2027-03-29"].map((k) => dayHours(spring, k, TZ, 0).entries.length), [24, 24]);
+  });
+  it("unordered, duplicated and malformed entries: sorted, one per instant, the malformed dropped", () => {
+    const base = hourlyForecast(Date.parse("2026-10-08T23:00:00Z"), 4);
+    const messy = [base[2]!, { ...base[0]!, temperature: 99 }, base[0]!, { datetime: "garbage" }, base[3]!, { datetime: "" }, base[1]!] as never[];
+    const d = dayHours(messy, "2026-10-09", TZ, NOW);
+    assert.deepEqual(d.labels, ["00:00", "01:00", "02:00", "03:00"]);
+    assert.equal(d.entries[0]!.temperature, 99, "the first entry of a duplicated instant is kept");
+  });
+  it("coarser steps (Met.no beyond about two days) are shown as they are, never interpolated", () => {
+    const six = [0, 6, 12, 18].map((h) => ({ datetime: `2026-10-13T${String(h).padStart(2, "0")}:00:00Z`, temperature: 10 + h }));
+    const d = dayHours(six, "2026-10-13", TZ, NOW);
+    assert.deepEqual(d.labels, ["01:00", "07:00", "13:00", "19:00"]);
+    assert.equal(d.hoursAhead, 24);
+  });
+  it("follows the Home Assistant time zone: the same instants, other zones, other days and labels", () => {
+    const hourly = hourlyForecast(Date.parse("2026-10-08T00:00:00Z"), 72);
+    assert.equal(dayHours(hourly, "2026-10-09", "UTC", NOW).entries[0]!.datetime, "2026-10-09T00:00:00.000Z");
+    const ny = Date.parse("2026-10-31T12:00:00Z");
+    const d = dayHours(hourlyForecast(ny, 72), "2026-11-01", "America/New_York", ny);
+    assert.equal(d.dayLength, 25);
+    assert.equal(d.repeated, "01:00 to 01:59");
+    assert.ok(d.labels[1]!.startsWith("01:00 ") && d.labels[2]!.startsWith("01:00 ") && d.labels[1] !== d.labels[2], d.labels.slice(0, 3).join(" | "));
+  });
+  it("zones on half-hour offsets: a repeated :30 time carries its zone name, and the day's length and steps are right", () => {
+    const twiceNamed = (labels: string[], time: string): void => {
+      const hits = labels.filter((l) => l.startsWith(`${time} `));
+      assert.equal(hits.length, 2, labels.join(" | "));
+      assert.notEqual(hits[0], hits[1]);
+      assert.ok(!labels.includes(time), "never the bare, ambiguous time");
+    };
+    const adl = Date.parse("2026-04-04T00:00:00Z"); // Adelaide: +10:30 -> +9:30 at 03:00 on Sun 5 Apr
+    const a = dayHours(hourlyForecast(adl, 72), "2026-04-05", "Australia/Adelaide", adl);
+    twiceNamed(a.labels, "02:30");
+    assert.deepEqual([a.dayLength, a.hourSteps, a.entries.length, a.repeated, a.skipped], [25, 25, 25, "02:00 to 02:59", null]);
+    const nl = Date.parse("2026-10-31T12:00:00Z"); // St John's: -2:30 -> -3:30 at 02:00 on Sun 1 Nov
+    const s = dayHours(hourlyForecast(nl, 72), "2026-11-01", "America/St_Johns", nl);
+    twiceNamed(s.labels, "01:30");
+    assert.deepEqual([s.dayLength, s.repeated], [25, "01:00 to 01:59"]);
+    const ind = Date.parse("2026-10-08T00:00:00Z"); // Kolkata: +5:30, no DST; steps fall at :30 local
+    const k = dayHours(hourlyForecast(ind, 96), "2026-10-10", "Asia/Kolkata", ind);
+    assert.deepEqual([k.dayLength, k.hourSteps, k.hoursAhead, k.entries.length, k.labels[0], k.repeated, k.skipped], [24, 24, 24, 24, "00:30", null, null]);
+    const kp = dayHours(hourlyForecast(ind, 60), "2026-10-10", "Asia/Kolkata", ind);
+    assert.ok(kp.entries.length > 0 && kp.entries.length < kp.hoursAhead, "a partly covered day is recognised as such");
+  });
+  it("half-hour clock changes (Lord Howe): 24.5 and 23.5 hour days, the half hour repeated or missing", () => {
+    const apr = Date.parse("2026-04-04T00:00:00Z"); // +11 -> +10:30 at 02:00 on Sun 5 Apr
+    const back = dayHours(hourlyForecast(apr, 72), "2026-04-05", "Australia/Lord_Howe", apr);
+    assert.deepEqual([back.dayLength, back.repeated, back.skipped], [24.5, "01:30 to 01:59", null]);
+    const oct = Date.parse("2026-10-03T00:00:00Z"); // +10:30 -> +11 at 02:00 on Sun 4 Oct
+    const fwd = dayHours(hourlyForecast(oct, 72), "2026-10-04", "Australia/Lord_Howe", oct);
+    assert.deepEqual([fwd.dayLength, fwd.repeated, fwd.skipped], [23.5, null, "02:00 to 02:29"]);
+    assert.equal(new Set(fwd.labels).size, fwd.labels.length);
+  });
+  it("other changes: at midnight (Santiago, the day starts at 01:00) and by two hours (Troll)", () => {
+    const scl = Date.parse("2026-09-05T12:00:00Z"); // Santiago: -4 -> -3 at 00:00 on Sun 6 Sep
+    const c = dayHours(hourlyForecast(scl, 72), "2026-09-06", "America/Santiago", scl);
+    assert.deepEqual([c.dayLength, c.skipped, c.labels[0]], [23, "00:00 to 00:59", "01:00"]);
+    const tr = Date.parse("2026-10-24T12:00:00Z"); // Troll: +2 -> +0 at 03:00 on Sun 25 Oct
+    const t = dayHours(hourlyForecast(tr, 72), "2026-10-25", "Antarctica/Troll", tr);
+    assert.deepEqual([t.dayLength, t.repeated], [26, "01:00 to 02:59"]);
+  });
+  it("zone names and day labels", () => {
+    assert.equal(fmtZone(NOW, TZ), "BST");
+    assert.equal(fmtZone(Date.parse("2026-12-01T12:00:00Z"), TZ), "GMT");
+    assert.equal(fmtZone(NOW, "UTC"), "UTC");
+    assert.equal(fmtDayLabel("2026-10-25"), "Sun 25 Oct");
+    assert.equal(fmtDayLabel("2027-03-28"), "Sun 28 Mar");
+    assert.equal(fmtDayLabel("2026-10-08"), "Thu 8 Oct");
+    assert.equal(fmtDayLabel("garbage"), "garbage");
   });
 });
 

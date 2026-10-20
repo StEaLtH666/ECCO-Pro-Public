@@ -26,7 +26,10 @@ The card cannot change anything in Home Assistant or on the inverter.
   - `weather/subscribe_forecast`, the hourly and daily forecast of the weather entity;
   - `recorder/statistics_during_period`, the hourly `change` of one energy counter, for actual PV.
 - There is no service or action call, no event subscription, no network request, no storage and no timer.
-- The only interactive element is the Today / Tomorrow switch of the chart, which changes the card's own view.
+- The interactive elements change only the card's own view:
+  - the Today / Tomorrow switch of the chart (`full`);
+  - the day rows and the **Back to days** button of the compact daily list (`daily_compact`, see
+    [Overview: one day's hourly forecast](#overview-one-days-hourly-forecast)).
 - `test/static.test.ts` and `tools/tests/test_weather_solar_card.py` pin all of this over the source and the bundle.
 
 ## Where the data comes from
@@ -81,8 +84,8 @@ only when the weather entity supplies one.
 ## Time zones
 
 Dates and hours follow the **Home Assistant time zone** (`hass.config.time_zone`), not the browser's. "Today", the
-chart's hours, the daily rows and every time shown are those of the installation. Days with a DST change have 23 or 25
-hours, and the tests cover both.
+chart's hours, the daily rows, the Overview's day breakdown and every time shown are those of the installation. Days with
+a DST change have 23 or 25 hours, and the tests cover both (2026-10-25 and 2027-03-28 in Europe/London).
 
 ## Configuration
 
@@ -124,7 +127,7 @@ layout reads the same entities in the same way; nothing is recomputed. An unknow
 |---|---|---|
 | `full` (default) | Everything above: current weather, sun, the blend totals, the hourly chart with its Today / Tomorrow switch, the hourly and daily lists, freshness, accuracy, insights. The dedicated **Weather & Solar** view uses this | `weather/subscribe_forecast` (hourly **and** daily) and `recorder/statistics_during_period` |
 | `solar_strip` | One compact row (about 84 px wide-screen, wrapping on narrow cards): the blend totals Today / Remaining today / Tomorrow, each with its "Solcast x.x · Forecast.Solar y.y · basis" line (a single-source basis in amber), "generated so far" beneath Remaining, a 220 x 48 sparkline of today's Solcast profile with actual PV bars, a "now" marker and sunrise / sunset ticks, and the Solcast and Forecast.Solar freshness chips. No weather, sun, hourly, daily, accuracy or insights section. Without Solcast's hourly detail the sparkline cell shows the plain message; a curve is never made up | `recorder/statistics_during_period` only - **no forecast subscription** |
-| `daily_compact` | A header (title and the Met.no freshness chip) and one row per available day - weekday, condition, high / low, rain amount - never padded to `daily_days` (Met.no gives six days). The rain-probability column appears only when the weather entity supplies one | `weather/subscribe_forecast` (daily) only - **no hourly subscription, no statistics query** |
+| `daily_compact` | A header (title and the Met.no freshness chip) and one row per available day - weekday, condition, high / low, rain amount - never padded to `daily_days` (Met.no gives six days). The rain-probability column appears only when the weather entity supplies one. Each row opens that day's hourly forecast in the same card (below) | `weather/subscribe_forecast` (daily); the hourly one **only while a day is open**; no statistics query |
 
 The ECCO Overview uses the two compact layouts (the PV forecast strip and the "Next days" block); the dedicated view uses
 `full`. The default `title` follows the layout ("Weather & Solar", "Solar forecast", "Next days"); an empty `title` hides
@@ -140,6 +143,39 @@ type: custom:ecco-weather-solar-card
 layout: daily_compact
 daily_days: 7
 ```
+
+## Overview: one day's hourly forecast
+
+In `daily_compact` (the Overview's "Next days" block) every day row is a button. Selecting a day replaces the list, in
+the same card, with that day's hourly forecast:
+
+- a **Back to days** button and the date ("Sun 25 Oct");
+- the day's summary line from the daily forecast, as plain text;
+- the dedicated view's hourly cells for that **local date**, in one horizontally scrolling strip: time, condition,
+  temperature, rain amount (and probability only when the source supplies one), cloud cover, wind;
+- a note when the forecast covers only part of the day, and on a DST day.
+
+**Back to days** returns to the list. The card does not navigate away or open any Home Assistant dialog.
+
+**Data:**
+- The card subscribes to the hourly forecast (`weather/subscribe_forecast`, the same message as the dedicated view) when
+  a day is opened, and unsubscribes on Back to days. The idle list holds the daily subscription only.
+- Leaving the page ends both subscriptions. Returning with a day still open subscribes to both again. A new connection
+  re-subscribes on it.
+- A new weather entity or layout closes the day. So does midnight, once the open day is in the past.
+- Only hours the forecast holds are shown. Met.no's hourly forecast covers about two days, so later days may say
+  **Hourly forecast not available for this day**, or show the hours there are. A missing hour is never filled in.
+
+**DST:** the day follows the Home Assistant time zone.
+- The autumn change day has 25 hours: 01:00 occurs twice and is labelled `01:00 BST`, then `01:00 GMT`.
+- The spring change day has 23 hours and no 01:00.
+- A note under the strip says so on both days.
+
+**Keyboard and touch:**
+- The rows and Back to days are native buttons (Tab, then Enter or Space). They have hover, focus and pressed states,
+  and the rows show a chevron.
+- Opening a day moves focus to Back to days. Going back returns focus to that day's row.
+- The hourly strip is a labelled, focusable region, so the arrow keys scroll it. On touch it scrolls sideways.
 
 ## Deployment
 
