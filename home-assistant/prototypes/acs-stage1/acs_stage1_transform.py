@@ -1,29 +1,41 @@
-"""Advanced Configuration Stage 1 prototype: the Stage 1 package as an exact TRANSFORMATION of the installed Stage 0 package.
+"""Advanced Configuration Stage 1: how the installed package was derived from the Stage 0 (acs0) editor, as an exact, INVERTIBLE
+transformation (post-export entry acs1).
 
-WHAT THIS IS. render_stage1() takes the text of the installed Stage 0 package (home-assistant/packages/ecco_tou_target_soc_edit.yaml,
-the guarded owner edit of ONE TOU slot's target SOC) and applies an ordered list of EXACT (before, after, expected_count) text
-replacements (PAIRS), the technique the repository's proof-chain scope modules use (for example registry/tests/_rtcf1_scope.py): each
-`before` must be present exactly the declared number of times, otherwise ValueError names the pair. The result is the Stage 1
-package: the same guarded flow (Review -> typed phrase -> Apply through the firmware's existing manual TOU path, fresh evidence,
-staged == live proof, quiet-gap press, two independent later reads, UNCERTAIN lock, restart watchdog) for ONE setting of ONE slot:
-target SOC, power, start time or charge source (SETTINGS).
+STATUS AT INTEGRATION. home-assistant/packages/ecco_tou_target_soc_edit.yaml now IS render_stage1(<the Stage 0 text>), byte for byte; this
+module is the provenance record that remains. Git history is not needed (CI checks out a shallow clone): unrender_stage1(<installed text>)
+gives back the Stage 0 text, whose sha256 is pinned here (ACS0_BASE_SHA256), and render_stage1(unrender_stage1(installed)) == installed.
+The unrendered text is also exactly the file to restore for a ROLLBACK (docs/dev/acs-stage1-integration.md).
+
+WHAT THIS IS. render_stage1() takes the text of the Stage 0 package (the guarded owner edit of ONE TOU slot's target SOC) and applies an
+ordered list of EXACT (before, after, expected_count) text replacements (PAIRS), the technique the repository's proof-chain scope modules
+use (for example registry/tests/_rtcf1_scope.py): each `before` must be present exactly the declared number of times, otherwise
+ValueError names the pair. The result is the Stage 1 package: the same guarded flow (Review -> typed phrase -> Apply through the firmware's
+existing manual TOU path, fresh evidence, staged == live proof, quiet-gap press, two independent later reads, UNCERTAIN lock, restart
+watchdog) for ONE setting of ONE slot: target SOC, power, start time or charge source (SETTINGS).
+
+INVERTIBLE. unrender_stage1() applies the pairs in reverse order as (after -> before), each with the same exact count, and raises
+ValueError naming the pair on any mismatch. To make that exact, the two script-id renames are the FIRST two pairs (a global rename applied
+last could not be undone without also rewriting the new ids that earlier pairs' `after` texts carry), and every later `before` is spelled
+with the renamed ids. The rendered text is byte for byte the one the reviewed candidate produced (sha256 pinned by the Stage 1 suite).
 
 WHY A TRANSFORMATION, NOT A FILE. The frozen proof-chain suites scan every file under home-assistant/ and fail when a file that no chain
 entry declares spells one of the reserved fallback / failback tokens. The Stage 0 package is a declared holder because its fail-closed
-gate reads six such entity ids. Stage 1 must keep that gate byte for byte, so it is derived from the Stage 0 text instead of being
-written out: every gate line that carries a reserved token is inherited untouched (no pair anchors on, spells or rewrites one), and
-neither this module nor its test spells a reserved token.
+gate reads six such entity ids. Stage 1 keeps that gate byte for byte, so it is derived from the Stage 0 text instead of being written
+out: every gate line that carries a reserved token is inherited untouched (no pair anchors on, spells or rewrites one), and neither this
+module nor the Stage 1 suite spells a reserved token.
 
-WHAT IT DOES NOT DO. It writes nothing (no file, no network, no Home Assistant, no hardware) and its output is never installed. Stage 1
-is a drop-in SUPERSET of Stage 0 (same helpers, same acknowledge script, same watchdog automation) and would REPLACE the Stage 0
-package at integration, under a reviewed chain entry that declares the Stage 1 holder files; the two can never be installed together.
+WHAT IT DOES NOT DO. It performs no I/O at all (no file, no network, no Home Assistant, no hardware). Stage 1 is a drop-in SUPERSET of
+Stage 0 (same helpers, same acknowledge script, same watchdog automation) that REPLACED the Stage 0 package under the chain entry acs1;
+the two can never be installed together.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"
+ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"     # the package path: Stage 0 before integration, Stage 1 after (unchanged)
+# sha256 of the Stage 0 package text (LF line ends) that PAIRS apply to: unrender_stage1(<the installed package>) must hash to this.
+ACS0_BASE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
 SETTINGS = ("target_soc", "power", "start_time", "charge_source")
 
 
@@ -488,9 +500,22 @@ UNCERTAIN_BEFORE = "Slot {{ n }} target SOC {{ before }} -> {{ want }} %. Firmwa
 UNCERTAIN_AFTER = "Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. Firmware said:"
 
 
+# the two script ids of Stage 0 and their Stage 1 names, with their number of mentions in the Stage 0 text. The renames are applied FIRST so
+# that they can be undone exactly (see INVERTIBLE).
+RENAMES = (("ecco_cfg_review_tou_slot_soc", "ecco_cfg_review_tou_slot_setting", 2),
+           ("ecco_cfg_apply_tou_slot_soc", "ecco_cfg_apply_tou_slot_setting", 7))
+
+
+def _rn(before: str) -> str:
+    """A `before` anchor as it reads once the renames have been applied."""
+    for old, new, _count in RENAMES:
+        before = before.replace(old, new)
+    return before
+
+
 def _pairs() -> "list[tuple[str, str, int]]":
-    p: list[tuple[str, str, int]] = []
-    add = lambda b, a, n=1: p.append((b, a, n))  # noqa: E731
+    p: list[tuple[str, str, int]] = list(RENAMES)   # first: every mention (the headers, the busy checks, the watchdog automation) follows
+    add = lambda b, a, n=1: p.append((_rn(b), a, n))  # noqa: E731
     add(HDR_BEFORE, HDR_AFTER)
     add(REVIEW_HEAD_BEFORE, REVIEW_HEAD_AFTER)
     add(REVIEW_WANT_BEFORE, REVIEW_WANT_AFTER)
@@ -522,9 +547,6 @@ def _pairs() -> "list[tuple[str, str, int]]":
     add(APPLIED_BEFORE, APPLIED_AFTER)
     add(OK_NOTE_BEFORE, OK_NOTE_AFTER)
     add(UNCERTAIN_BEFORE, UNCERTAIN_AFTER)
-    # the two script ids, last: every remaining mention (the busy checks, the watchdog automation) follows the new Apply script
-    add("ecco_cfg_review_tou_slot_soc", "ecco_cfg_review_tou_slot_setting", 1)
-    add("ecco_cfg_apply_tou_slot_soc", "ecco_cfg_apply_tou_slot_setting", 5)
     return p
 
 
@@ -540,6 +562,21 @@ def render_stage1(acs0_text: str) -> str:
         if found != count:
             raise ValueError(f"stage1 pair {i}: expected {count} occurrence(s) of {before[:90]!r}, found {found}")
         text = text.replace(before, after)
+    return text
+
+
+def unrender_stage1(stage1_text: str) -> str:
+    """The inverse of render_stage1: apply PAIRS in REVERSE order as (after -> before), each with its declared count. Raises ValueError
+    naming the pair if any `after` is present a different number of times than declared (so a package that is not exactly a rendered
+    Stage 0 package can never be silently half-reversed). Line ends are normalised to LF. For the installed package the result is the
+    Stage 0 text (sha256 ACS0_BASE_SHA256), the file a rollback restores."""
+    text = stage1_text.replace("\r\n", "\n")
+    for i in range(len(PAIRS) - 1, -1, -1):
+        before, after, count = PAIRS[i]
+        found = text.count(after)
+        if found != count:
+            raise ValueError(f"stage1 unrender pair {i}: expected {count} occurrence(s) of {after[:90]!r}, found {found}")
+        text = text.replace(after, before)
     return text
 
 
