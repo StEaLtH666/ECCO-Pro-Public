@@ -10,6 +10,16 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Firmware source assembler and navigator (S2a, tooling only)** ([docs/dev/firmware-source-modules.md](docs/dev/firmware-source-modules.md)).
+  `tools/assemble_firmware.py` splits the production firmware YAML into ordered region fragments grouped by review area and
+  reassembles them byte for byte, fail closed. It also maps lines, ids and device-log positions to areas (`--map`, `--where`,
+  `--lookup`, `--xref`, `--diff-regions`). `tools/firmware_areas.yaml` is the reviewed item-to-area map.
+  - Areas are review and navigation boundaries, not safety isolation.
+  - No firmware file is created or changed: fragments exist only in caller-chosen directories outside the repository, and
+    the monolith stays the only file ESPHome, the write-surface analyser, the S0 checker and the proof chain read.
+  - New suite `tools/tests/test_firmware_assembly.py`: the S1 acceptance checks A1-A8 and negative controls N1-N14 on
+    derived plans (no firmware shape pinned), path safety, line endings, navigation and an AST safety scan.
+
 - **The owner's manual Dump to Grid / Free Power values restored after a scheduled start** (post-export entry `smr1`;
   [docs/dev/schedule-manual-restore.md](docs/dev/schedule-manual-restore.md)). A scheduled start stages its own values into
   the dongle's single set of request numbers, which the manual controls share, and nothing put the owner's values back
