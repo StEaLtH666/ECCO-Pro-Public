@@ -1,20 +1,25 @@
-"""Offline suite for the Advanced Configuration Stage 1 PROTOTYPE: a guarded owner edit of ONE setting of ONE TOU slot (target SOC,
-power, start time or charge source), produced as an exact in-memory TRANSFORMATION of the installed Stage 0 package
-(home-assistant/prototypes/acs-stage1/acs_stage1_transform.py applied to home-assistant/packages/ecco_tou_target_soc_edit.yaml).
+"""Offline suite for Advanced Configuration Stage 1 (post-export entry acs1): a guarded owner edit of ONE setting of ONE TOU slot (target
+SOC, power, start time or charge source), the INSTALLED package home-assistant/packages/ecco_tou_target_soc_edit.yaml.
 
-The GENERATED package runs, together with the REAL Manual Controls helper package (ecco_manual_controls_helpers.yaml, whose sync
+That file is, byte for byte, render_stage1() of the Stage 0 package (home-assistant/prototypes/acs-stage1/acs_stage1_transform.py, which
+now documents how the installed package was derived). Git history is not needed: unrender_stage1(<installed>) gives the Stage 0 text back
+(sha256 pinned here and in the transform), so the reuse proof, the SOC parity checks and the rollback file all derive from the installed
+file alone.
+
+The INSTALLED package runs, together with the REAL Manual Controls helper package (ecco_manual_controls_helpers.yaml, whose sync
 automations touch the same staging entities), under _ha_script_sim.py (a fail-loud HA script / automation interpreter) against a
 subclass of _manual_tou_sim.py's model of the firmware's manual TOU path that adds what Stage 1 needs: the charge-source select, the
 firmware's EXACT verify of start / end / power / SOC / flags (+ register 232 bit 0), the select.select_first service, the mode-canonical
 gate and per-field clamp faults. In this process the sim also parses template results like Home Assistant does (static service data
 included) and aborts a run on service data that Home Assistant's schema would reject (see ha_native / InvalidServiceData below).
 
-  [0] transformation  every pair applies exactly its declared count; the result is YAML; the gate lines that carry a reserved token are
-                      inherited byte for byte; neither file spells a reserved token; deterministic; an altered Stage 0 anchor raises
+  [0] provenance      the installed package IS render(Stage 0) and unrender(installed) IS the pinned Stage 0 text (sha256), both ways; every
+                      pair applies exactly its declared count; the result is YAML; the gate lines that carry a reserved token are inherited
+                      byte for byte; neither file spells a reserved token; deterministic; an altered anchor raises, both ways
   [1] static scope    which services and entities the generated package may touch; every firmware entity exists; Stage 0 untouched
   [2] happy path      every slot x every setting: Review -> typed phrase -> Apply; exactly the intended register changes; verified
-  [3] SOC parity      the installed Stage 0 package and the generated one (setting target_soc) on identical worlds: same outcome class,
-                      same writes, same lock
+  [3] SOC parity      the Stage 0 package (unrendered from the installed one) and the installed one (setting target_soc) on identical
+                      worlds: same outcome class, same writes, same lock
   [4] validation      per setting (power floor, start grid / ordering / wrap / 15-minute guard / active-slot-now guard / inverter clock /
                       malformed live starts, charge source, SOC bounds), raw flags and source / mode words, the UK clock change nights
   [5] review          phrase per setting, code, expiry, single use, the edited value changed since the review
@@ -24,9 +29,10 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [9] faults          firmware refusal, verify failure, partial writes, clamps, disagreeing / missing later read, dropped press, restart
   [10] races          Free Power starting, a second Review / Apply during an Apply, the shared in-flight markers
   [11] acs0r1 timing  the quiet-gap press and a bus-busy refusal behave as in Stage 0
-  [12] mutation       in-memory mutants of the generated output, each KILLED by a failing behavioural check (a harness crash is no kill)
+  [12] mutation       in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill)
+  [13] PEX            the acs1 declaration: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
 
-PROVES: the control flow of the generated package against models of the firmware's manual TOU path and of Home Assistant, offline.
+PROVES: the control flow of the installed package against models of the firmware's manual TOU path and of Home Assistant, offline.
 DOES NOT PROVE: anything about a live Home Assistant, the dongle or the inverter; how a real interrupted multi-register write behaves
 on the inverter; that the real inverter accepts or keeps these values (no live write of power, start time or charge source has been
 proven through this path); the Home Assistant time zone (the sim has one fixed zone, so the real clock-change hour is not tested);
@@ -113,12 +119,14 @@ S.World.call = _ha_call
 
 T_START = time.time()
 TRANSFORM_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs_stage1_transform.py"
-ACS0_PATH = ROOT / X.ACS0_REL
-PKG0 = ACS0_PATH.read_text(encoding="utf-8")
-S1 = X.stage1_text(ROOT)
+PKG_PATH = ROOT / X.ACS0_REL
+S1 = PKG_PATH.read_text(encoding="utf-8")                  # the INSTALLED package (Stage 1)
+PKG0 = X.unrender_stage1(S1)                               # the Stage 0 text it was derived from, reconstructed from the installed file alone
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
-ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the installed Stage 0 package, LF line ends
+ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
+S1_SHA = "8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89"      # the installed Stage 1 package, LF line ends
+PAIRS_SHA = "1a49696d5a3ba6dde154692b82852055c8f0d41e52897227b27078a18c30e5f1"   # the canonical serialisation of the 40 pairs
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -307,7 +315,7 @@ def core(setting: str, want) -> str:
 
 
 class Run:
-    """Home Assistant with the package (Stage 1 by default; legacy=True runs the installed Stage 0 package) and the REAL Manual
+    """Home Assistant with the package (Stage 1 by default; legacy=True runs the Stage 0 package unrendered from it) and the REAL Manual
     Controls helper package, and the dongle model."""
 
     def __init__(self, text=None, setup=None, fp_sched=None, dump_sched=None, reserve=20, shutdown=10, helpers=True, dkw=None,
@@ -503,8 +511,16 @@ def after_finish(fn, delay=0.0):
     return setup
 
 
+def _raises(fn) -> bool:
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
 # ======================================================================================================================
-print("[0] the transformation")
+print("[0] provenance: the installed package and the Stage 0 text it was derived from")
 # ======================================================================================================================
 text = PKG0.replace("\r\n", "\n")
 bad = []
@@ -512,8 +528,21 @@ for i, (before, after, count) in enumerate(X.PAIRS):
     if text.count(before) != count or count < 1 or before == after:
         bad.append((i, text.count(before), count))
     text = text.replace(before, after)
-check(f"every one of the {len(X.PAIRS)} pairs applies exactly its declared count, in order, to the installed Stage 0 text, and changes it",
-      not bad and text == S1, str(bad))
+check(f"every one of the {len(X.PAIRS)} pairs applies exactly its declared count, in order, to the Stage 0 text (unrendered from the installed "
+      "package), and changes it, and the result is the installed package", not bad and text == S1, str(bad))
+raw_pkg = PKG_PATH.read_bytes()
+check("PROVENANCE (forward): the installed package IS render_stage1(Stage 0) byte for byte and its sha256 is the pinned one; the file has "
+      "consistent line ends (LF in the repository)", X.render_stage1(PKG0) == S1 and hashlib.sha256(S1.encode()).hexdigest() == S1_SHA
+      and b"\r" not in raw_pkg.replace(b"\r\n", b""))
+check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned Stage 0 sha256 (suite pin == the transform's constant) and "
+      "render_stage1(unrender_stage1(installed)) == installed, from the LF text and from a CRLF copy", hashlib.sha256(PKG0.encode()).hexdigest()
+      == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1)) == S1
+      and X.unrender_stage1(S1.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1.replace("\n", "\r\n"))) == S1)
+check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 40 pairs hash "
+      "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
+      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+check("the Stage 0 text is itself NOT a rendered package (unrender refuses it) and the installed package is NOT a Stage 0 text (render refuses it): "
+      "the two directions cannot be confused", all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1))))
 pkg = yaml.safe_load(S1)
 check("the result parses as YAML with Stage 0's shape: 3 text helpers, 2 booleans, 3 scripts (review, apply, acknowledge), 1 automation",
       {k: len(v) for k, v in pkg.items()} == {"input_text": 3, "input_boolean": 2, "script": 3, "automation": 1}
@@ -521,7 +550,7 @@ check("the result parses as YAML with Stage 0's shape: 3 text helpers, 2 boolean
       and sorted(pkg["script"][REVIEW]["fields"]) == ["setting", "slot", "value"] and list(pkg["script"][APPLY]["fields"]) == ["confirmation"]
       and not any("initial" in (v or {}) for v in pkg["input_boolean"].values()))
 pkg0 = yaml.safe_load(PKG0)
-check("same helpers (same ids) as Stage 0 - a drop-in superset that replaces it; the watchdog automation (same id) watches the NEW apply script",
+check("same helpers (same ids) as Stage 0 - a drop-in superset that replaced it; the watchdog automation (same id) watches the NEW apply script",
       pkg["input_text"] == pkg0["input_text"] and pkg["input_boolean"] == pkg0["input_boolean"]
       and pkg["script"][ACK] == pkg0["script"][ACK] | {"sequence": pkg["script"][ACK]["sequence"]}
       and f"script.{APPLY}" in S1 and f"script.{APPLY0}" not in S1 and REVIEW0 not in S1
@@ -539,37 +568,75 @@ own = {p.name: p.read_text(encoding="utf-8") for p in (Path(__file__).resolve(),
 check("neither new file contains any reserved token or fragment (ecco + fallback / failback, FALLBACK + PROFILE, FAILBACK + STATE, "
       "fallback + profile ids, fbc + raw)", all(not any(t in txt for t in RES_TOKENS) for txt in own.values()),
       str({k: [t for t in RES_TOKENS if t in v] for k, v in own.items()}))
-check("deterministic: rendering twice, and from a CRLF copy of Stage 0, gives identical text (sha256 pinned in the run output)",
-      X.render_stage1(PKG0) == S1 == X.render_stage1(PKG0.replace("\n", "\r\n")) == X.stage1_text(ROOT))
-print(f"        generated Stage 1 sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(X.PAIRS)} pairs)")
-check("the installed Stage 0 package is the pinned file (sha256 of its LF text)",
+check("deterministic: rendering twice, and from a CRLF copy of Stage 0, gives identical text (sha256 pinned above)",
+      X.render_stage1(PKG0) == S1 == X.render_stage1(PKG0.replace("\n", "\r\n")) == X.render_stage1(X.unrender_stage1(S1)))
+print(f"        installed Stage 1 sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(X.PAIRS)} pairs)")
+check("the Stage 0 text reconstructed from the installed package is the pinned file (sha256 of its LF text)",
       hashlib.sha256(PKG0.replace("\r\n", "\n").encode()).hexdigest() == ACS0_SHA)
 fail_to_raise = []
+
+
+def render_from(text, start):
+    """render_stage1's loop from pair `start` on (the text is the state right BEFORE that pair): ValueError names the pair."""
+    for j in range(start, len(X.PAIRS)):
+        b, a, c = X.PAIRS[j]
+        if text.count(b) != c:
+            raise ValueError(f"stage1 pair {j}: expected {c} occurrence(s), found {text.count(b)}")
+        text = text.replace(b, a)
+    return text
+
+
+state = PKG0.replace("\r\n", "\n")
 for i, (before, after, count) in enumerate(X.PAIRS):
-    fewer = PKG0.replace("\r\n", "\n").replace(before, "", 1) if count == 1 else None
-    more = PKG0.replace("\r\n", "\n") + "\n" + before
+    # `state` is the text right before pair i (pairs 0..i-1 applied): the anchors of the later pairs are spelled as they read there
+    fewer = state.replace(before, "", 1) if count == 1 else None
+    more = state + "\n" + before
     for label, variant in (("one occurrence removed", fewer), ("one occurrence added", more)):
         if variant is None:
             continue
         try:
-            X.render_stage1(variant)
+            render_from(variant, i)
             fail_to_raise.append((i, label))
         except ValueError as exc:
-            if "pair" not in str(exc):
+            if f"pair {i}:" not in str(exc):
                 fail_to_raise.append((i, label, str(exc)[:60]))
+    state = state.replace(before, after)
+assert state == S1
 altered = PKG0.replace("{% elif not e %}invalid slot (1-6)", "{% elif not e %}invalid slot (1-6) ")
+assert altered != PKG0
 try:
     X.render_stage1(altered)
     fail_to_raise.append(("anchor altered",))
 except ValueError as exc:
     if "pair" not in str(exc):
         fail_to_raise.append(("altered message", str(exc)[:60]))
-check("a Stage 0 text with ANY pair's anchor removed, duplicated or altered is refused with ValueError naming the pair (no silent "
-      "half-transformation)", not fail_to_raise, str(fail_to_raise[:5]))
+check("a text with ANY pair's anchor removed or duplicated (taken at the state right before that pair), or the Stage 0 text altered, is "
+      "refused with ValueError naming exactly that pair (no silent half-transformation)", not fail_to_raise, str(fail_to_raise[:5]))
+un_fail = []
+for i, (before, after, count) in enumerate(X.PAIRS):
+    fewer = S1.replace(after, "", 1) if count == 1 else None
+    more = S1 + "\n" + after
+    for label, variant in (("one occurrence removed", fewer), ("one occurrence added", more)):
+        if variant is None:
+            continue
+        try:
+            X.unrender_stage1(variant)
+            un_fail.append((i, label))
+        except ValueError as exc:
+            if "pair" not in str(exc):
+                un_fail.append((i, label, str(exc)[:60]))
+try:
+    X.unrender_stage1(S1.replace("unknown setting (target_soc", "unknown setting  (target_soc", 1))
+    un_fail.append(("after text altered",))
+except ValueError as exc:
+    if "pair" not in str(exc):
+        un_fail.append(("altered message", str(exc)[:60]))
+check("an installed text with ANY pair's `after` text removed, duplicated or altered is refused by unrender_stage1 with ValueError naming the "
+      "pair (a rollback file can never be silently half-reconstructed)", not un_fail, str(un_fail[:5]))
 check("SETTINGS is exactly the four settings", X.SETTINGS == ("target_soc", "power", "start_time", "charge_source"))
 src_t = TRANSFORM_PATH.read_text(encoding="utf-8")
-check("the transform writes nothing and uses no network (no write_text / open for writing / socket / urllib / subprocess)",
-      not re.search(r"write_text|write_bytes|open\([^)]*['\"][wax]|socket|urllib|requests|subprocess|os\.system", src_t))
+check("the transform performs no I/O at all and uses no network (no read_text / open / write_text / socket / urllib / subprocess)",
+      not re.search(r"read_text|read_bytes|write_text|write_bytes|\bopen\(|socket|urllib|requests|subprocess|os\.system|import pathlib|from pathlib", src_t))
 
 # ======================================================================================================================
 print("\n[1] static scope of the generated package")
@@ -701,9 +768,9 @@ check("the per-slot map is exact for slots 1-6: own Load / Apply / staging / liv
           and mp1[n].get("live_t") == f"sensor.{D}ecco_timezone{n}_time" and mp1[n].get("live_t_next") == f"sensor.{D}ecco_timezone{n % 6 + 1}_time"
           and "reg" not in mp1[n] for n in range(1, 7))
       and all(S1.count(f"{n}: {{'reg_soc': {267 + n}, ") == 2 for n in range(1, 7)) and "'reg':" not in S1)
-check("no new firmware entity, no firmware / registry / package file is written by the transform or this suite (the Stage 0 package is the "
-      "pinned file; the transform's only I/O is one read)", hashlib.sha256(PKG0.replace("\r\n", "\n").encode()).hexdigest() == ACS0_SHA
-      and src_t.count("read_text(") == 1)
+check("no new firmware entity, no firmware / registry / package file is written by the transform or this suite (the Stage 0 text it derives "
+      "from is the pinned base; the transform performs no I/O)", hashlib.sha256(PKG0.replace("\r\n", "\n").encode()).hexdigest() == ACS0_SHA
+      and src_t.count("read_text(") == 0)
 
 # ======================================================================================================================
 print("\n[2] the edit: every slot x every setting (with the real Manual Controls helper package running)")
@@ -854,7 +921,7 @@ check("the firmware refuses a slot whose cached flags have non-canonical mode bi
 
 
 # ======================================================================================================================
-print("\n[3] SOC parity: the installed Stage 0 package and the generated package (setting target_soc) on identical worlds")
+print("\n[3] SOC parity: the Stage 0 package (unrendered from the installed one) and the installed package (setting target_soc) on identical worlds")
 # ======================================================================================================================
 
 

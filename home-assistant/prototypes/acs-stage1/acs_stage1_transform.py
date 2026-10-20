@@ -31,11 +31,16 @@ the two can never be installed together.
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+import json
 
 ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"     # the package path: Stage 0 before integration, Stage 1 after (unchanged)
 # sha256 of the Stage 0 package text (LF line ends) that PAIRS apply to: unrender_stage1(<the installed package>) must hash to this.
 ACS0_BASE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
+# sha256 of the installed Stage 1 package text (LF line ends): render_stage1(<the Stage 0 text>).
+STAGE1_SHA256 = "8af4d4392c4f406aef16d9aa76f011da4be964be3085b3a595e4966346beae89"
+# sha256 of the canonical serialisation of PAIRS (pairs_sha256()): a silent edit of any pair changes it.
+PAIRS_SHA256 = "1a49696d5a3ba6dde154692b82852055c8f0d41e52897227b27078a18c30e5f1"
 SETTINGS = ("target_soc", "power", "start_time", "charge_source")
 
 
@@ -580,6 +585,7 @@ def unrender_stage1(stage1_text: str) -> str:
     return text
 
 
-def stage1_text(root: Path) -> str:
-    """The Stage 1 package text, derived from the Stage 0 package under `root` (the repository root). Writes nothing."""
-    return render_stage1((Path(root) / ACS0_REL).read_text(encoding="utf-8"))
+def pairs_sha256() -> str:
+    """sha256 of the canonical serialisation of PAIRS (JSON, ASCII-escaped, no whitespace): pinned as PAIRS_SHA256."""
+    blob = json.dumps([[b, a, c] for b, a, c in PAIRS], ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("ascii")).hexdigest()

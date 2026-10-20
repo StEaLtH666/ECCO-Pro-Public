@@ -1,6 +1,14 @@
 """Offline suite for Advanced Configuration Stage 0 (post-export entry acs0): a guarded owner edit of ONE TOU slot's
 target SOC, home-assistant/packages/ecco_tou_target_soc_edit.yaml.
 
+ACS1 NOTE. The post-export entry acs1 replaced that package, at the same path, with the Stage 1 editor (one setting of one slot). This
+suite now proves the STAGE 0 BASELINE from which the installed editor is derived: PKG_TEXT is unrender_stage1(<the installed package>),
+asserted to be the pinned Stage 0 text (sha256 9fa32b9b..., the file as of public main e7a265b8), and sections [1]-[13] run on it
+unchanged. The behaviour of the INSTALLED editor, target SOC parity with this baseline included, is proven by
+test_ecco_tou_slot_settings_edit.py. This file keeps its path and name: it is one of the three declared reserved-token holders (the same
+six ids, read only); section [12]'s live-file scan still reads the installed package and its two siblings, and the installed package
+still reads exactly those six ids.
+
 The REAL package runs, together with the REAL Manual Controls helper package (ecco_manual_controls_helpers.yaml, whose
 bidirectional sync automations touch the same staging entities), under _ha_script_sim.py (a fail-loud HA script /
 automation interpreter) against _manual_tou_sim.py, a model of the firmware's existing manual TOU path.
@@ -48,11 +56,18 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
+sys.path.insert(0, str(ROOT / "home-assistant" / "prototypes" / "acs-stage1"))
 import _ha_script_sim as S  # noqa: E402
 import _manual_tou_sim as M  # noqa: E402
+import acs_stage1_transform as X  # noqa: E402  (acs1: unrender_stage1 recovers the Stage 0 text from the installed package)
+import hashlib as _hl  # noqa: E402
 
 PKG_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"
-PKG_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")
+INSTALLED_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")        # the installed (Stage 1) package, read by the live-file scans in [12]
+PKG_TEXT = X.unrender_stage1(INSTALLED_TEXT)                         # acs1: the Stage 0 package this suite proves
+ACS0_PKG_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package at public main e7a265b8 (LF)
+assert _hl.sha256(PKG_TEXT.encode("utf-8")).hexdigest() == ACS0_PKG_SHA == X.ACS0_BASE_SHA256, "the unrendered package is not the Stage 0 text"
+assert X.render_stage1(PKG_TEXT) == INSTALLED_TEXT
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc", "ecco_cfg_acknowledge_edit_review"
