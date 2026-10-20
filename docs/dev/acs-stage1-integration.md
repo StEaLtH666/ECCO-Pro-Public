@@ -22,11 +22,12 @@ installed, checked and rolled back.
 | Apply script | `script.ecco_cfg_apply_tou_slot_soc` (field `confirmation`) | `script.ecco_cfg_apply_tou_slot_setting` (field `confirmation`) |
 | Plan record `input_text.ecco_cfg_edit_review` | 5 fields: `slot\|want\|code\|time\|before` | 6 fields: `slot\|setting\|want\|code\|time\|before` |
 | Typed phrase | `SET SLOT n TARGET SOC x REVIEW code` | the same for the SOC; `SET SLOT n POWER w W REVIEW code`, `SET SLOT n START HH:MM REVIEW code`, `SET SLOT n CHARGE SOURCE GRID\|NONE REVIEW code` |
-| Helpers, acknowledge script, watchdog automation | `ecco_cfg_*` helpers, `script.ecco_cfg_acknowledge_edit_review`, automation `ecco_cfg_edit_interrupted` | **unchanged ids and definitions** (the suite proves the helper definitions are identical, so their state persists across a reload) |
+| Helpers, acknowledge script, watchdog automation | `ecco_cfg_*` helpers, `script.ecco_cfg_acknowledge_edit_review`, automation `ecco_cfg_edit_interrupted` | Stage 0's ids and definitions are **unchanged** (the suite proves the three text helpers, the two booleans, the acknowledge script and the watchdog are as before, so their state persists across a reload). **New:** the helper `input_boolean.ecco_cfg_edit_write_seen` and the automation `ecco_cfg_edit_write_seen` (the F2 proof below) |
 | Staged values the editor sets | the slot's target SOC number | the slot's target SOC, power and start-time numbers; the slot's charge-source select (`select_option` Grid, `select_first` None). Never the end number, the mode select or the grid-charge switch |
 | Safety gate | fail-closed, reads six reserved ids | the same lines byte for byte (20 lines), plus the Stage 1 policy refusals (below) |
 | Staging refresh after a start-time edit (F1) | the success notice told the owner to press Load Current Slot N-1 | the editor presses Load Current Slot N-1 itself (slot 1 -> slot 6) after the VERIFIED edit and verifies that slot's staged end; if the Load is refused or does not match, the edit stays successful and the notice says plainly that the staging could not be refreshed |
-| Staging refresh after a FAILED run (F2) | slot N's staging kept the reviewed value | slot N is re-Loaded, and verified equal to the live slot, ONLY when no inverter write was attempted for certain (stopped before the Apply press, or the firmware refusal proven by text, unchanged counter and both later reads); never after an UNCERTAIN, partial or unproven outcome |
+| Staging refresh after a FAILED run (F2) | slot N's staging kept the reviewed value | slot N is re-Loaded, and verified equal to the live slot, ONLY after a PROVEN outcome: (a) the run stopped after staging and before the Apply press AND the firmware's gate-pass counter is unchanged since before the staging (after it had time to publish), with no write-in-progress and no write text seen; or (b) the firmware refused at its gate: refusal text AND unchanged counter AND both later reads at pre-edit values. Everything else is UNCERTAIN with the lock and no re-Load |
+| `nothing pressed` is no longer taken to mean `nothing written` (deliberately stricter than Stage 0, SOC edits included) | a run that stopped before the press reported "nothing written" without proof | the write enable is shared and the firmware accepts ANY Apply press while it is on, so an Apply by someone else can land in the armed window; the editor now records the gate-pass counter before staging, disarms at once when it stops, waits 35 s for the counter to publish and claims "nothing written" only with the proof; otherwise UNCERTAIN, locked, with the observed values |
 | Live power rule (F3) | - | a power edit is refused when the LIVE slot power is not a multiple of 100 W, at the Review and at every later gate copy |
 | Review notification (F4) | - | always "Do not use SmartDeye or the inverter's own panel until this edit is finished."; charge source -> Grid and a start-time edit on a slot whose live source is not None also carry the Dump to Grid charge-slot warning |
 | Firmware, registry, manifest, dashboards, frontend | - | **not changed** |
@@ -42,7 +43,7 @@ The files:
 | File | Role |
 |---|---|
 | `home-assistant/packages/ecco_tou_target_soc_edit.yaml` | the installed Stage 1 package (byte for byte `render_stage1` of the Stage 0 text) |
-| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 53 exact (before, after, count) pairs (the 40 reviewed candidate pairs plus 13 follow-up pairs for F1-F4), `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
+| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 58 exact (before, after, count) pairs (the 40 reviewed candidate pairs plus 18 follow-up pairs for F1-F4 and the F2 proof), `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
 | `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` | the Stage 1 suite (renamed from the prototype suite): tests the installed file directly, plus the provenance checks |
 | `home-assistant/tests/test_ecco_tou_target_soc_edit.py` | the Stage 0 suite, same name and path (a declared reserved-token holder): it now proves the Stage 0 BASELINE, running unchanged on `unrender_stage1(installed)` (asserted to be the pinned Stage 0 text). The installed editor's own behaviour, SOC parity included, is proven by the Stage 1 suite |
 | `registry/tests/_acs1_scope.py`, `_scope_chain.py` | the chain entry `acs1` (declaration, fingerprint) |
@@ -57,11 +58,12 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d`; a text that is neither raises, naming the pair.
 - To make the inverse exact, the two script-id renames became the first two pairs of the transform (previously the last two).
   The rendered text of the reviewed candidate is unchanged (sha256 `8af4d439...`, the value before F1-F4).
-- **Follow-up pairs.** F1-F4 (owner-approved 2026-10-20) were added by APPENDING 13 exact pairs (indices 40-52) to the transform; the
-  40 reviewed pairs are not edited or reordered, and `unrender_stage1(installed)` still gives the Stage 0 text, sha256 `9fa32b9b...`.
-  Pins changed: the installed package `STAGE1_SHA256` `8af4d439...` -> `271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d`
-  and `PAIRS_SHA256` `1a49696d...` -> `68a7071b645fb814231770def4da85892bef8215f57bc4255053f9940e5ed77c`, in the transform, the Stage 1
-  suite and `_acs1_scope.py`. The chain entry's declared fields and note are unchanged, so its fingerprint is unchanged.
+- **Follow-up pairs.** F1-F4 (owner-approved 2026-10-20) and the F2 correction (review finding: "nothing pressed" is not "nothing written")
+  were added by APPENDING 18 exact pairs (indices 40-57) to the transform; the 40 reviewed pairs are not edited or reordered, and
+  `unrender_stage1(installed)` still gives the Stage 0 text, sha256 `9fa32b9b...`. Pins changed in two steps (transform, Stage 1 suite and
+  `_acs1_scope.py`): the installed package `STAGE1_SHA256` `8af4d439...` (the reviewed candidate) -> `271beb52...` (F1-F4) ->
+  `4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816` (with the F2 proof), and `PAIRS_SHA256` `1a49696d...` -> `68a7071b...` -> `13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17`. The chain entry's declared fields
+  and note are unchanged, so its fingerprint is unchanged.
 - The Stage 0 text is what a rollback is built from if the previously installed file was not kept (section 6). It is the GENERIC text
   (default device slug `ecco_clock_dongle`); the file on a site is a site render of it.
 - The chain entry `acs1` declares **no reverter and no checkpoint**, deliberately: the package is an `added_files` entry of `acs0`,
@@ -77,7 +79,7 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `S1_SHA` / `PAIRS_SHA`, and `_acs1_scope.py`'s `STAGE1_PACKAGE_SHA256` / `PAIRS_SHA256`), or deliberately retire the mechanism with a
   new chain entry that says so. An unpinned edit fails the Stage 1 suite.
 - The Stage 1 suite also proves that everything of the Stage 0 baseline that no pair touches (834 of its 1003 lines wholly outside
-  the 40 reviewed pairs, with the 13 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
+  the 40 reviewed pairs, with the 18 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
   the fresh-evidence code are proven on the installed file; it kills mutants that alter one such line.
 
 ## 3. Install procedure (owner-run; each live step needs its own authorisation)
@@ -139,15 +141,18 @@ python -I -B tools/ecco_site_render.py --site ecco_site.local.yaml
 6. **Copy the RENDERED file** (not the repository file) to `/config/packages/ecco_tou_target_soc_edit.yaml` with the project's usual
    method.
 7. **`ha core check`** (or Developer tools, Check configuration) must pass.
-8. **Reload in this order** (or restart, per the decision above): reload the `input_text` and `input_boolean` helpers (their
-   definitions are unchanged, so their state persists); `script.reload`; confirm the two new scripts exist and the two old `_soc`
-   ones are gone; only then `automation.reload`; confirm the watchdog automation `ecco_cfg_edit_interrupted` exists and is on.
+8. **Reload in this order** (or restart, per the decision above): reload the `input_text` and `input_boolean` helpers (Stage 0's
+   definitions are unchanged, so their state persists; the reload creates the NEW helper `input_boolean.ecco_cfg_edit_write_seen`);
+   `script.reload`; confirm the two new scripts exist and the two old `_soc` ones are gone; only then `automation.reload`; confirm the
+   watchdog automation `ecco_cfg_edit_interrupted` and the new recorder `ecco_cfg_edit_write_seen` exist and are on, and the new helper
+   exists and is off.
 
 ## 4. Acceptance checks before any live write (all read-only)
 
 - The new scripts exist: `script.ecco_cfg_review_tou_slot_setting` and `script.ecco_cfg_apply_tou_slot_setting`; the two old
   ids are gone; `script.ecco_cfg_acknowledge_edit_review` exists.
-- The watchdog automation `ecco_cfg_edit_interrupted` exists and is on.
+- The watchdog automation `ecco_cfg_edit_interrupted` exists and is on; the write recorder `ecco_cfg_edit_write_seen` exists and is on,
+  and `input_boolean.ecco_cfg_edit_write_seen` exists and is off.
 - Nothing is armed: the Manual Configuration Write Enable is off, the in-flight marker and the review-required lock are off, and
   the plan and last-result helpers kept their values across the reload.
 - **The old SOC Review behaves exactly as before.** Run the new Review with `setting: target_soc` on the same slot and values as in
@@ -207,7 +212,8 @@ Get-FileHash -Algorithm SHA256 dist/site/home-assistant/packages/ecco_tou_target
 
    (`ecco_site.local.yaml` is your local site file, copied into the scratch checkout.) Install the rendered file, not the generic one.
 4. `ha core check`, then the same reloads (or restart) as at install, in the same order, with the same idle precondition. The helpers
-   are unchanged, so their state persists.
+   are unchanged, so their state persists. The rollback leaves the helper `input_boolean.ecco_cfg_edit_write_seen` behind as an orphan
+   (restored state without a definition): harmless, and gone after the next restart or when it is deleted in the entity registry.
 5. Run the same read-only acceptance checks as in section 4, with the old ids: `script.ecco_cfg_review_tou_slot_soc` and
    `script.ecco_cfg_apply_tou_slot_soc` are back, the new ones are gone, the watchdog exists, nothing is armed.
 
@@ -226,12 +232,27 @@ accepts and keeps the written power, start-time and charge-source values; regist
 Each is also in the candidate document (section 5). Items marked "decided" were settled by the owner on 2026-10-20 and are implemented
 offline in this change; the rest remain documented.
 
-- **A FAILED run after staging leaves the edited value loaded in slot N's Manual Controls staging.** Decided (F2, conditional): the
-  editor re-Loads slot N, and verifies its staging equals the live slot, only when no inverter write was attempted for certain (stopped
-  before the Apply press; or the firmware refusal proven by text, unchanged gate-pass counter and both later reads at pre-edit
-  values). After any UNCERTAIN, partial or unproven outcome the staging is deliberately left alone, the lock stays and the manual
-  recovery is unchanged. If the re-Load is refused, the FAILED notice says slot N's staging may still hold the reviewed value and to
-  press Load Current Slot N before any Manual Controls Apply.
+- **A FAILED run after staging leaves the edited value loaded in slot N's Manual Controls staging.** Decided (F2, conditional, as
+  corrected by the review): the editor re-Loads slot N, and verifies its staging equals the live slot, only after a PROVEN outcome. (a)
+  The run stopped after the staging and before the Apply press, AND the firmware's gate-pass counter is unchanged since before the
+  staging (read after the 35 s it needs to publish), AND no write-in-progress and no write text was seen since (the recorder
+  automation and the flag), AND the counter was readable. (b) The firmware refused at its gate with the refusal text, an unchanged
+  counter and both later reads at pre-edit values. Anything else that stopped before the press - the counter moved, unreadable, a write
+  seen - is **UNCERTAIN with the lock, the existing manual-recovery notification (listing the observed values) and no re-Load**, and so
+  is every other unproven outcome. This is a deliberate, stricter difference from Stage 0 and applies to SOC edits too: Stage 0 reported
+  "nothing pressed, nothing written" for a run that stopped while the editor was armed, although the shared write enable lets the firmware
+  accept ANY Apply press in that window (an Apply by someone else wrote the inverter in the reproduction). If a proven re-Load is
+  refused, the FAILED notice says slot N's staging may still hold the reviewed value and to press Load Current Slot N before any
+  Manual Controls Apply.
+- **An Apply by someone else inside the armed window.** If the other actor's Apply lands so early that the editor's last check cannot yet
+  see its write-in-progress flag, the editor presses its own Apply; the firmware refuses it (a write is running) and the usual success
+  verdict judges the final state (the requested value, the firmware's readback, two later reads, nothing else changed). The verdict cannot
+  tell who pressed: such a run can read APPLIED AND VERIFIED. This is not a false "nothing written" claim and it never re-Loads slot N.
+  If the other actor's flag is visible at the last check the run stops before its press and is UNCERTAIN (above).
+- **The editor stays "in flight" while the follow-up waits run.** The F1 Load wait (up to 60 s plus 20 s) and the F2 waits (35 s counter
+  wait, up to 60 s Load wait) run while `input_boolean.ecco_cfg_edit_in_flight` is still on, deliberately: a Home Assistant restart in
+  that window makes the watchdog report UNCERTAIN and lock the editor even after a verified success. That conservative behaviour is kept
+  (the marker is not turned off earlier); acknowledge the lock after checking the slots.
 - **The success notice could offer an undo the Review refuses** (a live power of 2550 W is not a multiple of 100). Decided (F3): a
   power edit is refused up front when the live power is not a multiple of 100 W.
 - **Dump to Grid can refuse to start after a charge-source or slot-time edit.** Per the Dump start gate in the firmware source, a Dump to

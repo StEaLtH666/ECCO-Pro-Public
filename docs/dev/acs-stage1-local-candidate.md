@@ -122,17 +122,35 @@ inherited from ACS0):
   Apply; it is never retried. If the Load is refused or the end does not match, the edit STAYS successful (the inverter write was
   verified) and the success notice says plainly that slot N-1's staging could not be refreshed and to press Load Current Slot N-1 (or
   Load All) before any Manual Controls Apply. Only for the start time: SOC, power and charge-source edits press no extra Load.
-- **F2, slot N's staging is refreshed after a FAILED run, but only when no inverter write was attempted for certain.** The editor
+- **F2, slot N's staging is refreshed after a FAILED run, but only after a PROVEN outcome (corrected by the review).** The editor
   re-presses Load Current Slot N (then verifies that slot N's staging equals the live slot in every field, within a bounded wait) in
-  exactly two cases: (a) the run stopped after it staged the value and BEFORE the Apply press was sent ("a safety check changed just
-  before the Apply": a changed gate, no quiet Modbus window, a late arm, another actor changing staging); (b) the firmware refused
-  at its gate and the editor's existing verdict holds in full: refusal text AND an unchanged gate-pass counter AND both later reads at
-  the pre-edit values. In every other case - UNCERTAIN, a partial write, verify failure, clamp, disagreeing or missing later reads, a
-  dropped press, a press whose outcome is unknown, the write enable not confirmed off, a restart or watchdog interruption - there is
-  no re-Load, the lock is not cleared and the manual recovery stays exactly as it was. Uncertainty is never cleared automatically.
+  exactly two cases:
+  - (a) The run stopped after it staged the value and BEFORE the Apply press was sent ("a safety check changed just before the Apply":
+    a changed gate, no quiet Modbus window, a late arm, another actor changing staging) AND that is proven to have written nothing.
+    "Nothing pressed" alone is not proof: the Manual Configuration Write Enable is shared and the firmware accepts ANY Apply press
+    while it is on, so an Apply by someone else can land while the editor is armed. The editor therefore records the firmware's
+    gate-pass counter (`manual_configuration_write_attempts_since_boot`) and clears an "inverter write seen" marker BEFORE it stages
+    anything; when it stops before the press it disarms at once, waits 35 s for the counter to publish (every 30 s), and claims
+    "nothing written" only if the counter is readable and unchanged, the write-in-progress flag was never seen on since the staging
+    (the marker, set by a small automation, and the live flag), and the firmware's last result shows no write.
+  - (b) The firmware refused at its gate and the editor's existing verdict holds in full: refusal text AND an unchanged gate-pass counter
+    AND both later reads at the pre-edit values.
+  In every other case - the counter moved or is unreadable, a write seen, UNCERTAIN, a partial write, verify failure, clamp,
+  disagreeing or missing later reads, a dropped press, a press whose outcome is unknown, the write enable not confirmed off, a restart
+  or watchdog interruption - the result is UNCERTAIN: the lock is set (or stays), the existing manual-recovery notification is raised
+  (for the pre-press case it says an Apply may have run while the editor was armed and lists the counter before and after, the write
+  seen, the firmware's last result and the live slot), there is no re-Load, and uncertainty is never cleared automatically. This is a
+  deliberate, stricter difference from Stage 0, whose inherited "nothing pressed, nothing written" claim in that window was false
+  in the reproduction, and it applies to SOC edits too.
   A run that stopped before it staged anything (no fresh evidence, a refused Apply, the staging not matching the live slot after the
-  first Load) is not re-Loaded either: the value was never staged. If the re-Load is refused or does not match, the FAILED notice says
-  slot N's staging may still hold the reviewed value and to press Load Current Slot N before any Manual Controls Apply.
+  first Load) is not re-Loaded either: the value was never staged. If a proven re-Load is refused or does not match, the FAILED notice
+  says slot N's staging may still hold the reviewed value and to press Load Current Slot N before any Manual Controls Apply.
+- **An Apply by someone else inside the armed window** that lands before the editor's last check can see its write-in-progress flag is
+  handled by the usual path: the editor presses its own Apply (the firmware refuses it, a write is running) and the success verdict
+  judges the final state; it cannot tell who pressed, so such a run can read APPLIED AND VERIFIED (the requested value, verified, nothing
+  else changed). It is never reported as "nothing written" and never re-Loads slot N.
+- **The editor stays "in flight" during the follow-up waits** (F1's Load wait, F2's counter and Load waits, about 80 s at most).
+  That is deliberate: a Home Assistant restart in that window gives the watchdog's UNCERTAIN and the lock even after a verified success.
 - **F4, the Review notification** (a persistent notification; no input_text value grows, all stay under 255 characters) says: "Do not
   use SmartDeye or the inverter's own panel until this edit is finished." always, and "A slot with a charge source set makes a
   scheduled Dump to Grid whose window overlaps it refuse at start (no health alert counts that refusal)." for charge source -> Grid
@@ -172,7 +190,9 @@ selects; the suite checks that and renders service data the way Home Assistant d
   - an unchanged gate-pass counter;
   - both later reads at pre-edit values.
 - **Anything else is UNCERTAIN:** the editor disarms, alerts with every observed difference and locks until the owner types
-  `I HAVE CHECKED THE TOU SLOTS`. An interrupted run (restart, reload) is locked by the watchdog.
+  `I HAVE CHECKED THE TOU SLOTS`. An interrupted run (restart, reload) is locked by the watchdog. This includes a run that stopped
+  before the press while the editor was armed but cannot prove (counter unchanged after it published, no write seen) that no Apply
+  ran: "nothing pressed" is not "nothing written" (the write enable is shared).
 - **Staging refreshes write nothing** (F1/F2, section 3): at most one Load per case, never an arm, never an Apply, never a retry, and
   never on an UNCERTAIN outcome.
 - **Rollback is an undo, not an automatic restore.** The success notice gives the exact phrase for the same setting back to its
@@ -212,10 +232,10 @@ selects; the suite checks that and renders service data the way Home Assistant d
      (or Load All) before any Manual Controls Apply of that slot. The edit stays successful.
 8. **A FAILED run leaves the reviewed value in staging (inherited from ACS0).** When an Apply stops before its press, slot N's
    staging stays loaded with the edited value. A later Manual Controls Apply of slot N would write it, without any of Stage 1's
-   guards. **Handled by F2 (owner-approved 2026-10-20, conditional):** slot N is re-Loaded when the run conclusively stopped before
-   the Apply press or the firmware's gate refusal is proven in full (section 3); after any UNCERTAIN, partial or unproven outcome the
-   staging is deliberately left alone and the manual recovery notice stands. If the re-Load is refused the FAILED notice carries the
-   warning.
+   guards. **Handled by F2 (owner-approved 2026-10-20, conditional, corrected by the review):** slot N is re-Loaded only after a
+   counter-proven "no manual-path write" before the press, or the full proven firmware refusal (section 3); after any UNCERTAIN,
+   partial or unproven outcome - including a pre-press stop whose counter moved - the staging is deliberately left alone and the manual
+   recovery notice stands. If a proven re-Load is refused the FAILED notice carries the warning.
 9. **Long refusal texts (inherited from ACS0).** One combined FAILED text can exceed the 255-character `input_text` limit;
    Home Assistant then keeps the previous value ("IN PROGRESS") and no FAILED notice fires. Nothing is written in that case.
 10. **Firmware line numbers.** `docs/dev/advanced-config/write-surface.md` and the model cite older firmware line numbers
@@ -362,9 +382,10 @@ The live proof in section 8 exists for these.
 
 Owner decisions of 2026-10-20 on the review findings (implemented in the integration branch, offline, not installed):
 - **F1 approved:** Load Current Slot N-1 after a verified start-time edit (section 3).
-- **F2 approved conditionally:** re-Load slot N only when no inverter write was conclusively attempted - the run stopped before the
-  Apply press, or the firmware refusal is proven by text, unchanged counter and both later reads; never after an UNCERTAIN, partial
-  or unproven outcome, and uncertainty is never cleared automatically (section 3).
+- **F2 approved conditionally:** re-Load slot N only after a PROVEN outcome - a stop before the Apply press with the gate-pass counter
+  unchanged since before the staging (after it published) and no write seen, or the firmware refusal proven by text, unchanged counter
+  and both later reads; never after an UNCERTAIN, partial or unproven outcome, and uncertainty is never cleared automatically
+  (section 3). The review corrected the first implementation, which took "nothing pressed" for "nothing written".
 - **F3 approved:** a power edit is refused when the live slot power is not a multiple of 100 W; the requested value stays 500..8000 W
   in steps of 100.
 - **F4 approved:** the Review notification carries the Dump to Grid charge-slot warning and the SmartDeye / inverter-panel advice.

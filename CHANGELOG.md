@@ -25,15 +25,22 @@ Development before the first public release happened in a private repository; se
       precondition for every setting);
     - the "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC unavailable" refusals now apply to
       target-SOC edits only (they are that bound's inputs); the other Stage 0 refusals apply to every setting.
-  - The package is derived from the Stage 0 text by 53 exact edits (the 40 reviewed ones plus 13 appended for the follow-ups below); the
+  - **Stricter than Stage 0 (also for SOC edits): "nothing pressed" is no longer taken to mean "nothing written".** The Manual
+    Configuration Write Enable is shared and the firmware accepts ANY Apply press while it is on, so an Apply by someone else can land
+    while the editor is armed. When a run stops after staging and before its press, the editor now disarms at once, waits 35 s for
+    the firmware's gate-pass counter to publish, and reports "nothing written" only if that counter is unchanged since before the
+    staging and no write was seen; otherwise the outcome is UNCERTAIN, the editor locks and the notification lists the observed values.
+  - The package is derived from the Stage 0 text by 58 exact edits (the 40 reviewed ones plus 18 appended for the follow-ups below); the
     transform is invertible (`unrender_stage1`), which gives the rollback file and the provenance proof without git history.
   - **Owner-approved follow-ups (2026-10-20):**
     - **F1:** after a verified start-time edit of slot N the editor presses Load Current Slot N-1 (slot 1 -> slot 6) once and checks
       that slot's staged end; when the Load is refused or does not match, the edit stays successful and the notice says plainly that
       the staging could not be refreshed. It writes no register, never arms and never presses an Apply.
-    - **F2 (conditional):** after a FAILED run the editor re-Loads slot N only when no inverter write was attempted for certain (the run
-      stopped before the Apply press, or the firmware refusal is proven by its text, an unchanged gate-pass counter and both later
-      reads); never after an UNCERTAIN, partial or unproven outcome, and uncertainty is never cleared automatically.
+    - **F2 (conditional):** after a FAILED run the editor re-Loads slot N only after a PROVEN outcome: a stop before the Apply press with
+      the firmware's gate-pass counter unchanged since before the staging (after it published) and no write seen, or the firmware
+      refusal proven by its text, an unchanged counter and both later reads. Never after an UNCERTAIN, partial or unproven outcome,
+      and uncertainty is never cleared automatically. Adds the helper `input_boolean.ecco_cfg_edit_write_seen` and the automation
+      `ecco_cfg_edit_write_seen` (a record of any manual-path write seen while an edit is in flight).
     - **F3:** a power edit is refused when the live slot power is not a multiple of 100 W.
     - **F4:** the Review notification says not to use SmartDeye or the inverter's own panel until the edit is finished, and warns that
       a charge source set on a slot makes a Dump to Grid whose window overlaps it refuse at start (charge source -> Grid, and a
