@@ -14,6 +14,12 @@
       module but one GET, no delete/rename/exec, writes only inside plan(); the deploy commands are text in plan.json
   [6] inputs: absent / truncated / wrong-shape / empty / malformed / stale / unavailable snapshots, missing bundle or dashboard files,
       a malformed plan, the --out location guard, and the shared-resource switch flags (a card the existing dashboard uses)
+  [7] verify-resource, the read-back gate for the manual resource switch: passes on a switched resource (with and without --before
+      and --base-url, and for a card that had no resource before); fails when the resource was not switched, another resource
+      changed / was added / was removed, the id or type changed, a card has two resources, the served bytes differ or are missing,
+      or the read-back is stale; prints a VERIFIED line only when the whole run passes; refuses unusable inputs
+  [8] deploy-ha.ps1 (static): the manual-resource reminder is printed for every /config/www/ecco/ destination, not only for
+      frontend/<card>/dist sources, and the script only ever reads the persisted resource list
 
 Synthetic values only. Test-only; the only network use is 127.0.0.1. I/O: reads the repo, writes only under a temp dir.
 """
@@ -27,10 +33,13 @@ import functools
 import http.server
 import io
 import json
+import os
+import re
 import shutil
 import sys
 import tempfile
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -245,12 +254,15 @@ check("it never deletes, renames or executes anything (no system/popen/rmtree/re
                          "check_output", "spawn", "exec"})
       and not (name_calls & {"exec", "eval", "compile", "__import__", "open"}), str(sorted(attr_calls & {"unlink", "remove", "rename"})))
 reqs = [c for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr in ("Request", "urlopen")]
-check("its one network use is a GET: every urllib Request names method=\"GET\", and they sit only in verify_served",
+funcs = {f.name: f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)}
+fetchers = sorted(n for n, f in funcs.items() if any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "fetch" for c in ast.walk(f)))
+check("its one network use is a GET: every urllib Request names method=\"GET\", they sit only in fetch(), and only verify-served and "
+      "verify-resource call it",
       reqs and all(c.func.attr == "urlopen" or any(k.arg == "method" and isinstance(k.value, ast.Constant) and k.value.value == "GET" for k in c.keywords)
                    for c in reqs)
-      and all(any(f.name == "verify_served" and c in list(ast.walk(f)) for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)) for c in reqs))
+      and all(c in list(ast.walk(funcs["fetch"])) for c in reqs) and fetchers == ["verify_resource", "verify_served"], str(fetchers))
 writers = [c for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr in ("write_bytes", "write_text", "mkdir")]
-check("it writes files only inside plan() (planning output under --out); verify-* write nothing",
+check("it writes files only inside plan() (planning output under --out); verify-* (verify-resource included) write nothing",
       writers and all(any(f.name == "plan" and c in list(ast.walk(f)) for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)) for c in writers))
 check("the deploy commands in plan.json are text only, and the plan says so and says it is local-only",
       "note_commands" in src_text and "never runs them" in src_text and plan["local_only"].startswith("LOCAL ONLY")
@@ -358,6 +370,199 @@ bad_plan.write_text("{}", encoding="utf-8")
 check("verify-staged and verify-served refuse a file that is not a preflight plan, and a missing plan",
       run(["verify-staged", "--plan", str(bad_plan)])[0] == 2 and run(["verify-served", "--plan", str(bad_plan), "--base-url", "http://127.0.0.1:9"])[0] == 2
       and run(["verify-staged", "--plan", str(TMP / "absent_plan.json")])[0] == 2)
+
+# --------------------------------------------------------------------------------------------------------------------------
+print("")
+print("[7] verify-resource: the read-back gate for the manual resource switch")
+VR = TMP / "vr"
+(VR / "www" / "local" / "ecco").mkdir(parents=True)
+WS_TAG = F.CARDS["weather-solar"][1]
+ws_body = b"customElements.define('ecco-weather-solar-card', class extends HTMLElement {});\n"   # a synthetic bundle
+ws_name = F.artefact_name(F.CARDS["weather-solar"][0], ws_body)
+NEW_URL, OLD_URL = "/local/ecco/" + ws_name, "/local/ecco/ecco-weather-solar-card.0123abcd.js"
+WS_ID = "c0ffee00" + "1" * 24
+OTHERS = [{"id": "a" * 32, "type": "module", "url": "/hacsfiles/button-card/button-card.js"},
+          {"id": "b" * 32, "type": "module", "url": "/local/ecco/ecco-energy-actions-card.4567cdef.js"},
+          {"id": "d" * 32, "type": "module", "url": "/local/community/card-mod.js?v=3"}]
+ws_card = {"card": "weather-solar", "tag": WS_TAG, "name": ws_name, "sha256": F.sha(ws_body), "resource_url": NEW_URL, "resource_type": "module"}
+vplan = VR / "plan.json"
+vplan.write_text(json.dumps({"schema": "ecco-deploy-plan/1", "cards": [ws_card]}), encoding="utf-8")
+
+
+def resources(name: str, items: list[dict], ws_message: bool = False) -> str:
+    """A synthetic read-back: the raw lovelace_resources storage file, or the websocket lovelace/resources result message."""
+    p = VR / name
+    doc = ({"id": 7, "type": "result", "success": True, "result": items} if ws_message
+           else {"version": 1, "minor_version": 1, "key": "lovelace_resources", "data": {"items": items}})
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    return str(p)
+
+
+def ws(url: str, rid: str = WS_ID, rtype: str = "module") -> dict:
+    return {"id": rid, "type": rtype, "url": url}
+
+
+def vr(now: str, *extra: str, plan_file: Path = vplan) -> tuple[int, str]:
+    return run(["verify-resource", "--plan", str(plan_file), "--resources", now, *extra])
+
+
+BEFORE = resources("before.json", [*OTHERS, ws(OLD_URL)])
+AFTER = resources("after.json", [*OTHERS, ws(NEW_URL)])
+VERIFIED_RE = re.compile(r"^RESOURCE VERIFIED ecco-weather-solar-card -> " + re.escape(NEW_URL)
+                         + r" \(id c0ffee00, persisted, read back at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\)$", re.M)
+
+code, log = vr(AFTER, "--before", BEFORE)
+check("PASS: the card's one resource now has the plan's URL, its id and type are unchanged and nothing else changed: exit 0, the fixed "
+      "VERIFIED line", code == 0 and bool(VERIFIED_RE.search(log))
+      and "verify-resource PASSED: 1 card(s) verified; not checked: served bytes (no --base-url)" in log, log[-700:])
+read_at = datetime.fromtimestamp(Path(AFTER).stat().st_mtime, timezone.utc)
+check("the VERIFIED line's read-back time is the read-back file's own time, in UTC", f"read back at {read_at:%Y-%m-%dT%H:%M:%SZ})" in log, log[-300:])
+code, log = vr(AFTER)
+check("without --before it still checks the URL, the type and uniqueness, and says id continuity and the other resources were not checked",
+      code == 0 and bool(VERIFIED_RE.search(log)) and "INFO  id continuity and the other resources were not checked" in log, log[-500:])
+code, log = vr(resources("after_ws.json", [*OTHERS, ws(NEW_URL)], ws_message=True), "--before", BEFORE)
+check("the websocket lovelace/resources result message is read like the storage file", code == 0 and bool(VERIFIED_RE.search(log)), log[-400:])
+listing = sorted(p.name for p in VR.iterdir())
+vr(AFTER, "--before", BEFORE)
+check("verify-resource writes nothing (the input directory is unchanged)", sorted(p.name for p in VR.iterdir()) == listing)
+
+code, log = vr(resources("same.json", [*OTHERS, ws(OLD_URL)]), "--before", BEFORE)
+check("NOT SWITCHED: the resource still has the old URL: exit 1, the fixed NOT SWITCHED line naming that URL, no VERIFIED line",
+      code == 1 and f"RESOURCE NOT SWITCHED ecco-weather-solar-card: still {OLD_URL}" in log and "RESOURCE VERIFIED" not in log
+      and "verify-resource FAILED" in log, log[-500:])
+code, log = vr(resources("none.json", OTHERS))
+check("NOT SWITCHED when no resource loads the card at all",
+      code == 1 and "RESOURCE NOT SWITCHED ecco-weather-solar-card: no resource for this card is registered" in log, log[-300:])
+code, log = vr(resources("query.json", [*OTHERS, ws(NEW_URL + "?v=2")]))
+check("the URL must equal the plan's exactly: the planned file with a query string added is not the planned resource",
+      code == 1 and f"RESOURCE NOT SWITCHED ecco-weather-solar-card: still {NEW_URL}?v=2" in log, log[-300:])
+
+code, log = vr(resources("changed.json", [dict(OTHERS[0], url="/hacsfiles/button-card/button-card.js?v=9"), *OTHERS[1:], ws(NEW_URL)]), "--before", BEFORE)
+check("EXTRA CHANGED RESOURCE: another resource changed alongside the switch: exit 1, the change is named, and the card's line is NOT "
+      "VERIFIED (never VERIFIED)",
+      code == 1 and "FAIL  no other resource changed" in log and "changed aaaaaaaa" in log
+      and f"RESOURCE NOT VERIFIED ecco-weather-solar-card -> {NEW_URL}: a check outside this card failed" in log and "RESOURCE VERIFIED" not in log,
+      log[-600:])
+code, log = vr(resources("removed.json", [*OTHERS[:2], ws(NEW_URL)]), "--before", BEFORE)
+check("another resource REMOVED fails", code == 1 and "removed dddddddd /local/community/card-mod.js?v=3" in log and "RESOURCE VERIFIED" not in log, log[-400:])
+code, log = vr(resources("added.json", [*OTHERS, ws(NEW_URL), {"id": "e" * 32, "type": "module", "url": "/local/extra.js"}]), "--before", BEFORE)
+check("a resource ADDED alongside the switch fails", code == 1 and "added eeeeeeee /local/extra.js" in log and "RESOURCE VERIFIED" not in log, log[-400:])
+
+code, log = vr(resources("newid.json", [*OTHERS, ws(NEW_URL, rid="f" * 32)]), "--before", BEFORE)
+check("ID CHANGED (the old entry deleted and a new one added): exit 1, the id check fails and the NOT VERIFIED line names it",
+      code == 1 and "FAIL  ecco-weather-solar-card: id and type unchanged" in log
+      and bool(re.search(r"RESOURCE NOT VERIFIED ecco-weather-solar-card -> \S+: failed: id and type unchanged", log)) and "RESOURCE VERIFIED" not in log,
+      log[-500:])
+code, log = vr(resources("type.json", [*OTHERS, ws(NEW_URL, rtype="js")]), "--before", BEFORE)
+check("a TYPE change (module -> js) fails the plan-type and the unchanged-type checks",
+      code == 1 and "FAIL  ecco-weather-solar-card: the resource type is the plan's 'module'" in log
+      and "FAIL  ecco-weather-solar-card: id and type unchanged" in log, log[-500:])
+
+code, log = vr(resources("dup.json", [*OTHERS, ws(OLD_URL), ws(NEW_URL, rid="9" * 32)]), "--before", BEFORE)
+check("DUPLICATE TAG: a new resource added next to the old one (two load the card): exit 1, both named, NOT VERIFIED",
+      code == 1 and "FAIL  ecco-weather-solar-card: exactly one ECCO resource loads the card - 2 found" in log and OLD_URL in log
+      and "RESOURCE NOT VERIFIED ecco-weather-solar-card" in log and "RESOURCE VERIFIED" not in log, log[-500:])
+code, log = vr(AFTER, "--before", resources("dup_before.json", [*OTHERS, ws(OLD_URL), ws("/local/ecco/ecco-weather-solar-card.89ab4567.js", rid="9" * 32)]))
+check("a pre-change list that already had two resources for the card fails (id continuity cannot be checked)",
+      code == 1 and "FAIL  ecco-weather-solar-card: the pre-change list has one resource for the card" in log, log[-400:])
+
+before_add = resources("before_add.json", OTHERS)
+code, log = vr(resources("after_add.json", [*OTHERS, ws(NEW_URL, rid="7" * 32)]), "--before", before_add)
+check("ADD: a card that had no resource before passes with a new entry",
+      code == 0 and "PASS  ecco-weather-solar-card: the card had no resource before" in log and "RESOURCE VERIFIED" in log, log[-400:])
+code, log = vr(resources("repointed.json", [dict(OTHERS[0], url=NEW_URL), *OTHERS[1:]]), "--before", before_add)
+check("... but repointing an unrelated resource to the card fails (not a new entry, and that resource is gone)",
+      code == 1 and "FAIL  ecco-weather-solar-card: the card had no resource before" in log and "repointed to a planned card aaaaaaaa" in log, log[-500:])
+
+srv2 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(VR / "www")))
+threading.Thread(target=srv2.serve_forever, daemon=True).start()
+base2 = f"http://127.0.0.1:{srv2.server_address[1]}"
+served = VR / "www" / "local" / "ecco" / ws_name
+served.write_bytes(ws_body)
+code, log = vr(AFTER, "--before", BEFORE, "--base-url", base2, "--timeout", "5")
+check("with --base-url it hashes the bytes served at THAT URL: equal to the plan, the gate passes with nothing left unchecked",
+      code == 0 and bool(VERIFIED_RE.search(log)) and "sha256 equals the plan" in log and "not checked: nothing" in log, log[-500:])
+served.write_bytes(ws_body + b"//x")
+code, log = vr(AFTER, "--before", BEFORE, "--base-url", base2, "--timeout", "5")
+check("SERVED SHA MISMATCH: exit 1, NOT VERIFIED naming the differing bytes",
+      code == 1 and "DIFFERS from the plan" in log and bool(re.search(r"RESOURCE NOT VERIFIED ecco-weather-solar-card -> \S+: failed: served \S+ sha256 DIFFERS", log))
+      and "RESOURCE VERIFIED" not in log, log[-500:])
+served.unlink()
+code, log = vr(AFTER, "--before", BEFORE, "--base-url", base2, "--timeout", "5")
+check("a 404 at the switched URL fails", code == 1 and "404" in log and "RESOURCE VERIFIED" not in log, log[-400:])
+srv2.shutdown()
+
+stale_rb = resources("stale.json", [*OTHERS, ws(NEW_URL)])
+old_t = Path(stale_rb).stat().st_mtime - 2 * 3600
+os.utime(stale_rb, (old_t, old_t))
+code, log = vr(stale_rb, "--before", BEFORE)
+check("a STALE read-back (written 2 h ago, limit 30 min) fails although it shows the switch",
+      code == 1 and "FAIL  the read-back is fresh" in log and "RESOURCE NOT VERIFIED" in log and "RESOURCE VERIFIED" not in log, log[-400:])
+code, log = vr(stale_rb, "--before", BEFORE, "--max-age-minutes", "180")
+check("the read-back age limit is configurable", code == 0 and bool(VERIFIED_RE.search(log)), log[-300:])
+
+aa_body = b"customElements.define('ecco-energy-actions-card', class extends HTMLElement {});\n"
+aa_name = F.artefact_name(F.CARDS["energy-actions"][0], aa_body)
+two = VR / "plan_two.json"
+two.write_text(json.dumps({"cards": [ws_card, {"card": "energy-actions", "tag": "ecco-energy-actions-card", "name": aa_name, "sha256": F.sha(aa_body),
+                                               "resource_url": "/local/ecco/" + aa_name, "resource_type": "module"}]}), encoding="utf-8")
+code, log = vr(AFTER, "--before", BEFORE, plan_file=two)
+check("a two-card plan where only one card was switched: exit 1, NOT SWITCHED for the other card, NOT VERIFIED (not VERIFIED) for the switched one",
+      code == 1 and "RESOURCE NOT SWITCHED ecco-energy-actions-card: still /local/ecco/ecco-energy-actions-card.4567cdef.js" in log
+      and "RESOURCE NOT VERIFIED ecco-weather-solar-card" in log and "RESOURCE VERIFIED" not in log, log[-600:])
+
+plain = VR / "plain.json"
+plain.write_text(json.dumps([{"url": NEW_URL}]), encoding="utf-8")
+code, log = vr(str(plain))
+check("a read-back without resource ids (a plain URL list) is refused (exit 2): verification needs the persisted list", code == 2 and "needs an id" in log, log[-300:])
+(VR / "trunc.json").write_text('{"data": {"items": [', encoding="utf-8")
+check("an empty read-back, a missing file and a truncated file are refused cleanly (exit 2, no traceback)",
+      all(c == 2 and "Traceback" not in t for c, t in (vr(p) for p in (resources("empty.json", []), str(VR / "absent.json"), str(VR / "trunc.json")))))
+check("duplicate resource ids are refused", vr(resources("dupid.json", [*OTHERS, ws(NEW_URL, rid="a" * 32)]))[0] == 2)
+(noplan := VR / "noplan.json").write_text(json.dumps({"cards": []}), encoding="utf-8")
+check("a plan with no card, a file that is not a plan and a missing --resources argument are refused (exit 2)",
+      vr(AFTER, plan_file=noplan)[0] == 2 and vr(AFTER, plan_file=bad_plan)[0] == 2 and run(["verify-resource", "--plan", str(vplan)])[0] == 2)
+(odd := VR / "odd.json").write_text(json.dumps({"data": {"items": [*OTHERS, ws(NEW_URL), "not a resource"]}}), encoding="utf-8")
+code, log = vr(str(odd))
+check("a read-back with an item that is not a resource object is refused, not silently skipped", code == 2 and "not a resource object" in log, log[-300:])
+weak = []
+for k, v in (("sha256", "abc"), ("resource_type", ""), ("tag", None)):
+    (p := VR / f"weak_{k}.json").write_text(json.dumps({"cards": [dict(ws_card, **{k: v})]}), encoding="utf-8")
+    weak.append(vr(AFTER, plan_file=p)[0])
+(p := VR / "weak_missing_type.json").write_text(json.dumps({"cards": [{k: v for k, v in ws_card.items() if k != "resource_type"}]}), encoding="utf-8")
+weak.append(vr(AFTER, plan_file=p)[0])
+check("a plan card with a malformed sha256, an empty or missing resource_type or a missing tag is refused (exit 2)", weak == [2, 2, 2, 2], str(weak))
+code, log = vr(AFTER, "--base-url", "homeassistant.local:8123")
+check("a --base-url without http:// or https:// is refused cleanly, not a traceback", code == 2 and "--base-url must start with" in log and "Traceback" not in log, log[-300:])
+code, log = vr(AFTER, "--before", AFTER)
+check("a --before list that already has the plan's URL (captured after the switch) is flagged with a WARN",
+      "WARN  ecco-weather-solar-card: the pre-change list already has the plan's URL" in log, log[-500:])
+
+# --------------------------------------------------------------------------------------------------------------------------
+print("")
+print("[8] deploy-ha.ps1: the manual-resource reminder (static)")
+
+
+def ps_code(rel: str) -> str:
+    """A PowerShell file without its comments (<# ... #> blocks and whole-line # comments)."""
+    text = re.sub(r"<#.*?#>", "", (ROOT / rel).read_text(encoding="utf-8"), flags=re.S)
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+dha, mod = ps_code("tools/deploy-ha.ps1"), ps_code("tools/EccoDeploy.psm1")
+check("the reminder is no longer gated on a frontend/<card>/dist source: no `if ($isFrontendAsset)` block is left (only the default-destination elseif)",
+      not re.search(r"(?<!else)if \(\$isFrontendAsset\)", dha) and "elseif ($isFrontendAsset)" in dha)
+check("it is printed for every /config/www/ecco/ destination: gated on Get-EccoLovelaceResourceUrl of the destination, then Format-EccoResourceReminder",
+      "if (Get-EccoLovelaceResourceUrl -Destination $Destination)" in dha and "Format-EccoResourceReminder -Destination $Destination" in dha
+      and "$prefix = '/config/www/ecco/'" in mod and "'/local/ecco/' + $Destination.Substring($prefix.Length)" in mod)
+storage = [ln.strip() for ln in dha.splitlines() if ".storage" in ln]
+check("deploy-ha.ps1 only READS the persisted resource list: its one .storage command is a captured `cat` of lovelace_resources",
+      len(storage) == 1 and "-Command 'cat /config/.storage/lovelace_resources' -Capture" in storage[0], str(storage))
+check("the deployment module names no .storage path in code: it parses the text it is given and never reads or writes Home Assistant storage",
+      "/config/.storage" not in mod)
+check("the reminder says when the copy is not live, names the persisted resource or why it is unknown, and points at verify-resource",
+      all(s in mod for s in ("RESOURCE NOT SWITCHED ${card}", "NOT LIVE", "RESOURCE NOT REGISTERED ${card}", "RESOURCE UNKNOWN ${card}",
+                             "This script never edits Home Assistant .storage", "tools/ecco_deploy_preflight.py verify-resource")))
 
 print("")
 if FAILURES:

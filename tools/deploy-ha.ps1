@@ -197,10 +197,27 @@ Write-Host "Destination : $Destination"
 Write-Host "Backup      : $(if ($hadOriginal) { $backupPath } else { 'none (new file)' })"
 Write-Host "Restart     : $(if ($Restart) { 'requested' } else { 'no' })"
 
-if ($isFrontendAsset) {
-    $resourceUrl = '/local/ecco/' + [System.IO.Path]::GetFileName($sourceFull)
+# Every file under /config/www/ecco/ is a Lovelace resource candidate,
+# whatever the source path (the documented content-addressed deploy copies
+# dist/deploy/stage/<card>.<sha8>.js, which never matched $isFrontendAsset).
+# Copying it changes nothing a dashboard loads until its resource points
+# at it, so name the card's persisted resource from one read-only read.
+# Best effort: the deployment has already passed and a failed read only
+# makes the reminder say the live state is unknown. Never written.
+if (Get-EccoLovelaceResourceUrl -Destination $Destination) {
+    $persistedResources = $null
+    $resourceReadProblem = $null
+    try {
+        $resourceRead = Invoke-EccoRemoteCommand -SshHost $SshHost -Command 'cat /config/.storage/lovelace_resources' -Capture
+        if ($resourceRead.ExitCode -ne 0) {
+            $resourceReadProblem = "ssh exit code $($resourceRead.ExitCode)"
+        } else {
+            $persistedResources = ConvertFrom-EccoLovelaceResources -Json ($resourceRead.Output -join "`n")
+        }
+    }
+    catch {
+        $resourceReadProblem = $_.Exception.Message
+    }
     Write-Host ''
-    Write-Host "Resource URL: $resourceUrl"
-    Write-Host 'Resource registration is manual: Settings -> Dashboards -> Resources.'
-    Write-Host 'This script never edits Home Assistant .storage - no resource was registered automatically.'
+    Format-EccoResourceReminder -Destination $Destination -Resources $persistedResources -ReadProblem $resourceReadProblem | ForEach-Object { Write-Host $_ }
 }
