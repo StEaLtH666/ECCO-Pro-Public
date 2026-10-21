@@ -6,7 +6,9 @@
     instead of being duplicated per script. Nothing in this module performs
     inverter writes, flashes firmware, or edits Home Assistant's internal
     .storage state - it only ever moves files under an explicit allowlist
-    on the remote /config tree and inspects/reverts them.
+    on the remote /config tree and inspects/reverts them. The Lovelace
+    resource helpers only parse and describe a resource list that
+    deploy-ha.ps1 has read back; they never change it.
 
     Windows PowerShell 5.1 compatible. No external module dependencies.
 #>
@@ -273,6 +275,110 @@ function Format-EccoRollbackResultMessage {
     return ($lines -join "`n")
 }
 
+function Get-EccoLovelaceResourceUrl {
+    <#
+        The browser URL of a file deployed under /config/www/ecco/
+        (/local/ecco/<file>), or $null for any other destination. Pure
+        string logic, unit tested offline. Every such file is a Lovelace
+        resource candidate, whatever the source path was: the documented
+        content-addressed deploy copies dist/deploy/stage/<card>.<sha8>.js.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $prefix = '/config/www/ecco/'
+    if ($Destination.StartsWith($prefix, [System.StringComparison]::Ordinal) -and $Destination.Length -gt $prefix.Length) {
+        return '/local/ecco/' + $Destination.Substring($prefix.Length)
+    }
+    return $null
+}
+
+function ConvertFrom-EccoLovelaceResources {
+    <#
+        Parses the text of /config/.storage/lovelace_resources
+        ({"data": {"items": [...]}}) into its resource items. Throws on
+        anything else, so a wrong or truncated read is never mistaken for
+        "no resources". Pure parsing - the caller does the read-only read.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json
+    )
+
+    $doc = $Json | ConvertFrom-Json
+    $data = if ($doc -and $doc.PSObject.Properties['data']) { $doc.data } else { $null }
+    if (-not $data -or -not $data.PSObject.Properties['items']) {
+        throw 'not a lovelace_resources storage file (no data.items)'
+    }
+    return , @($data.items)
+}
+
+function Format-EccoResourceReminder {
+    <#
+        The lines deploy-ha.ps1 prints after copying a file under
+        /config/www/ecco/ (none for any other destination). Copying a card
+        bundle changes nothing a dashboard loads until its Lovelace
+        resource points at that file, and no ECCO tool edits resources, so
+        the reminder names the card's PERSISTED resource and says plainly
+        whether this copy is live. A resource loads the card when its URL's
+        file name (query dropped) is <card>.js or <card>.<anything> - the
+        same rule as ecco_deploy_preflight.py verify-resource. -Resources
+        is the list read back after the copy, or $null when it could not be
+        read (-ReadProblem says why). Pure string logic, unit tested offline.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination,
+
+        [AllowNull()]
+        [object[]]$Resources,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$ReadProblem
+    )
+
+    $url = Get-EccoLovelaceResourceUrl -Destination $Destination
+    if (-not $url) {
+        return @()
+    }
+    $card = $url.Substring($url.LastIndexOf('/') + 1).Split('.')[0]
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    if ($null -eq $Resources) {
+        $lines.Add("RESOURCE UNKNOWN ${card}: the persisted resource list could not be read back ($ReadProblem). Whether any dashboard loads this file is not known.")
+    } else {
+        $cardResources = @()
+        foreach ($r in $Resources) {
+            $rUrl = if ($r -and $r.PSObject.Properties['url']) { [string]$r.url } else { '' }
+            $rId = if ($r -and $r.PSObject.Properties['id']) { [string]$r.id } else { '' }
+            $path = ($rUrl -split '[?#]', 2)[0]
+            if ($path.Substring($path.LastIndexOf('/') + 1).Split('.')[0] -eq $card) {
+                $cardResources += [pscustomobject]@{ Url = $rUrl; Path = $path; Id = $rId.Substring(0, [Math]::Min(8, $rId.Length)) }
+            }
+        }
+        $listed = ($cardResources | ForEach-Object { "$($_.Url) (id $($_.Id))" }) -join ', '
+        $pointing = @($cardResources | Where-Object { $_.Path -eq $url })
+        if ($cardResources.Count -eq 0) {
+            $lines.Add("RESOURCE NOT REGISTERED ${card}: no resource loads this card. This copy is NOT LIVE until a resource with URL $url (JavaScript module) is added.")
+        } elseif ($pointing.Count -eq 0) {
+            $lines.Add("RESOURCE NOT SWITCHED ${card}: the dashboards still load $listed. This copy is NOT LIVE until that resource is edited to $url.")
+        } else {
+            $lines.Add("RESOURCE ALREADY POINTS AT THIS FILE ${card}: $listed. Browsers may keep older cached bytes until a hard refresh.")
+        }
+        if ($cardResources.Count -gt 1) {
+            $lines.Add("WARNING: $($cardResources.Count) resources load ${card}; exactly one is expected.")
+        }
+    }
+    $lines.Add("Resource URL: $url")
+    $lines.Add('Resource registration is manual: Settings -> Dashboards -> Resources.')
+    $lines.Add('This script never edits Home Assistant .storage - no resource was registered automatically.')
+    $lines.Add('Report the install as done only after the read-back gate passes: python tools/ecco_deploy_preflight.py verify-resource --plan <plan.json> --resources <fresh lovelace_resources read-back> --before <pre-change capture> --base-url <HA URL>')
+    return $lines.ToArray()
+}
+
 function Invoke-EccoDeploymentRollback {
     <#
         The single rollback routine for every failure that can occur once
@@ -374,4 +480,7 @@ Export-ModuleMember -Function `
     Test-EccoDeploymentDestination, `
     Assert-EccoCleanWorkingTree, `
     Format-EccoRollbackResultMessage, `
+    Get-EccoLovelaceResourceUrl, `
+    ConvertFrom-EccoLovelaceResources, `
+    Format-EccoResourceReminder, `
     Invoke-EccoDeploymentRollback

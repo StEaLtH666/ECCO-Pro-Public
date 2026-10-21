@@ -58,6 +58,21 @@ Development before the first public release happened in a private repository; se
     Grid only (no generator is connected); P3 the start-time and inverter-clock rules; P4 the clock-change-night guard, SOC edits included.
     **Still open:** I1 install by restart or by reloads; I2 the manifest comment; I3 the supervised live proof; I4 push, pull request, merge,
     install and each live step (each needs its own authorisation).
+- **Read-back gate for the manual Lovelace resource switch** (`tools/ecco_deploy_preflight.py verify-resource`, read-only;
+  [docs/user/site-render.md](docs/user/site-render.md#card-bundles-the-resource-read-back-gate)). Copying a card bundle and
+  checking that it is served change nothing a dashboard loads until its resource points at the new file, and no ECCO tool edits
+  resources.
+  - Usage: `verify-resource --plan plan.json --resources <persisted list read back now> [--before <pre-change capture>]
+    [--base-url <HA URL>]`.
+  - For each planned card it checks that exactly one resource loads the card, that its URL and type are the plan's, and that the
+    read-back is fresh. With `--before`, the entry kept its id and type and no other resource changed. With `--base-url`, the
+    bytes served at that exact URL match the plan's sha256.
+  - One fixed line per card. `RESOURCE VERIFIED <tag> -> <url> (id <8>, persisted, read back at <UTC>)` is printed only when the
+    whole run passes. Otherwise it prints `RESOURCE NOT SWITCHED <tag>: still <url>` or
+    `RESOURCE NOT VERIFIED <tag> -> <url>: <reasons>` and exits non-zero. A card install is reported done only after it passes.
+  - It writes nothing, and its only network use is the optional GET. `tools/tests/test_ecco_deploy_preflight.py` covers, with
+    synthetic fixtures: a pass, not switched, another resource changed, added or removed, a changed id or type, a duplicate card
+    resource, a served-sha mismatch and a stale read-back.
 - **Firmware source assembler and navigator (S2a, tooling only)** ([docs/dev/firmware-source-modules.md](docs/dev/firmware-source-modules.md)).
   `tools/assemble_firmware.py` splits the production firmware YAML into ordered region fragments grouped by review area and
   reassembles them byte for byte, fail closed. It also maps lines, ids and device-log positions to areas (`--map`, `--where`,
@@ -347,6 +362,15 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   card now resolves esbuild 0.28.1. No firmware, Home Assistant, dashboard or Modbus change.
 
 ### Fixed
+- **`tools/deploy-ha.ps1` prints the manual-resource reminder for every file it copies to `/config/www/ecco/`**, not only for
+  `frontend/<card>/dist/<file>` sources.
+  - Before: the documented content-addressed deploy (`dist/deploy/stage/<card>.<sha8>.js`) printed only
+    `ECCO DEPLOYMENT PASSED`, with no sign that the dashboards still loaded the previous bundle.
+  - Now: after a passed copy the script reads the persisted resource list once, read-only. It reports the card's resource as
+    `NOT SWITCHED` (the copy is not live), `NOT REGISTERED`, `ALREADY POINTS AT THIS FILE` or `UNKNOWN`, and names
+    `verify-resource` as the gate.
+  - It still never edits `.storage`. The parsing and wording are pure functions in `tools/EccoDeploy.psm1`, tested in
+    `tools/tests/Test-EccoDeploy.ps1` (run locally) and statically in `tools/tests/test_ecco_deploy_preflight.py`.
 - **House load no longer reads 0 W while exporting** (post-export entry `hd1`;
   [docs/HOUSE_LOAD_HD1.md](docs/HOUSE_LOAD_HD1.md)). The inverter's native load (register 178) reads 0 W in some states,
   notably during export. `sensor.ecco_house_power` (same entity, unit and statistics) is now derived with the Energy Flow

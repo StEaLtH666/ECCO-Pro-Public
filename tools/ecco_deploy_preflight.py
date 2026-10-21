@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Offline, read-only deployment preflight for the ECCO Lovelace dashboard and its card bundles.
 
-It PLANS; it never deploys. It contacts no Home Assistant instance (the one optional network use is `verify-served`, which only GETs
-the bundle files a browser would fetch), runs no ssh/scp/Home Assistant CLI command, never restarts anything, never edits Lovelace
-resources or dashboards and never touches an inverter. Its only subprocesses are `git rev-parse` and `git status`. It writes only under
---out. The deploy commands it prints are text in plan.json for a human to run.
+It PLANS; it never deploys. It contacts no Home Assistant instance (the one optional network use is `verify-served`, and
+`verify-resource --base-url`, which only GET the bundle files a browser would fetch), runs no ssh/scp/Home Assistant CLI command,
+never restarts anything, never edits Lovelace resources or dashboards and never touches an inverter. Its only subprocesses are
+`git rev-parse` and `git status`. It writes only under --out. The deploy commands it prints are text in plan.json for a human to run.
 
     python tools/ecco_deploy_preflight.py plan --site ecco_site.local.yaml [--snapshot states.json] [--baseline-dashboard live.yaml]
                                                [--resources resources.json] [--expect-sha <git sha>] [--out dist/deploy]
     python tools/ecco_deploy_preflight.py verify-staged --plan dist/deploy/plan.json
     python tools/ecco_deploy_preflight.py verify-served --plan dist/deploy/plan.json --base-url http://homeassistant.local:8123
+    python tools/ecco_deploy_preflight.py verify-resource --plan dist/deploy/plan.json --resources now.json [--before before.json]
+                                                          [--base-url http://homeassistant.local:8123]
 
 `plan` renders the tree for the site in memory (the same exact rules as tools/ecco_site_render.py), then:
   - checks the git revision and, unless --allow-dirty, a clean working tree (dist/ is ignored);
@@ -31,6 +33,17 @@ resources or dashboards and never touches an inverter. Its only subprocesses are
 plan.json and the staged files contain the site's entity ids and device slug: keep them local, never commit or publish them.
 `verify-staged` re-hashes the staged files against plan.json. `verify-served` fetches each planned bundle over HTTP (GET only) and
 compares its sha256. Both are refused cleanly (exit 2) on an unreadable or malformed plan.
+`verify-resource` is the gate for the manual resource switch: copying a bundle (deploy-ha.ps1) and serving it (verify-served) change
+nothing a dashboard loads until its Lovelace resource points at it. It reads the PERSISTED resource list read back just now
+(--resources: the raw `/config/.storage/lovelace_resources` file or the websocket `lovelace/resources` result, both with ids) and, per
+card in the plan, checks that exactly one ECCO resource loads the card (the URL's file name is `<tag>.js` or `<tag>.<anything>`), that
+its URL equals the plan's `resource_url` and its type the plan's `resource_type`, and that the read-back is fresh (its file time, at most
+--max-age-minutes old). With --before (the pre-change capture) the card's resource keeps its id and type (an edit, not a new entry;
+a card that had none must get a new id) and no other resource was added, removed or changed. With --base-url it GETs THAT exact URL and
+compares the served sha256 with the plan. It prints one fixed line per card: `RESOURCE VERIFIED <tag> -> <url> (id <8>, persisted, read
+back at <UTC>)` only when every check of the run passed; `RESOURCE NOT SWITCHED <tag>: still <url>` when no resource for the card has
+the plan's URL; `RESOURCE NOT VERIFIED <tag> -> <url>: <reasons>` when it has, but another check failed. An install is reported done
+only after this passes, quoting its VERIFIED line.
 
 Exit 0 only when no check FAILED; 2 when an input is refused. Standard library + PyYAML.
 """
@@ -44,6 +57,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -192,16 +206,38 @@ def load_snapshot(path: Path) -> set[str]:
     return load_snapshot_full(path).ids
 
 
-def load_resources(path: Path) -> list[dict]:
-    """The Lovelace resource list: a plain list of {url}, {resources: [...]}, the websocket result, or the raw
-    `/config/.storage/lovelace_resources` file ({"data": {"items": [...]}})."""
+def load_resources(path: Path, strict: bool = False) -> list[dict]:
+    """The Lovelace resource list: a plain list of {url}, {resources: [...]}, the websocket result (the list, or the whole
+    {"type": "result", "result": [...]} message), or the raw `/config/.storage/lovelace_resources` file ({"data": {"items": [...]}}).
+    Items that are not objects are skipped, or with `strict` refused."""
     data = read_json(path, "resource list")
     if isinstance(data, dict):
         inner = data.get("data")
-        data = data.get("resources") or (inner.get("items") if isinstance(inner, dict) else inner) or data.get("items") or []
+        result = data.get("result") if isinstance(data.get("result"), list) else None
+        data = data.get("resources") or (inner.get("items") if isinstance(inner, dict) else inner) or data.get("items") or result or []
     if not isinstance(data, list):
         raise InputError(f"resource list {path.name}: expected a list of resources")
+    if strict and not all(isinstance(r, dict) for r in data):
+        raise InputError(f"resource list {path.name}: an item is not a resource object")
     return [r for r in data if isinstance(r, dict)]
+
+
+def load_persisted_resources(path: Path, what: str) -> list[dict]:
+    """A resource list for verify-resource: non-empty, every item an object with a string id and url, ids unique (refused otherwise)."""
+    items = load_resources(path, strict=True)
+    if not items:
+        raise InputError(f"{what} {path.name}: no resources (an empty or wrong file)")
+    if not all(isinstance(r.get("id"), str) and r["id"] and isinstance(r.get("url"), str) for r in items):
+        raise InputError(f"{what} {path.name}: every resource needs an id and a url (read the raw lovelace_resources file or the "
+                         "websocket lovelace/resources result)")
+    if len({r["id"] for r in items}) != len(items):
+        raise InputError(f"{what} {path.name}: duplicate resource ids")
+    return items
+
+
+def card_resources(resources: list[dict], tag: str) -> list[dict]:
+    """The resources that load the card `tag`: the URL's file name (query and fragment dropped) is `<tag>.js` or `<tag>.<anything>`."""
+    return [r for r in resources if urllib.parse.urlsplit(str(r.get("url", ""))).path.rsplit("/", 1)[-1].split(".", 1)[0] == tag]
 
 
 def check_dashboard(rep: Report, text: str, site: R.Site, version: str | None, bundles: dict[str, bytes]) -> dict | None:
@@ -442,6 +478,12 @@ def verify_staged(args: argparse.Namespace) -> int:
     return 1 if rep.failed else 0
 
 
+def fetch(url: str, timeout: float) -> tuple[bytes, str, str]:
+    """GET one file a browser would fetch: (body, Content-Type, Cache-Control). The tool's only network use."""
+    with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=timeout) as r:   # nosec: read-only GET
+        return r.read(), r.headers.get("Content-Type", "?"), r.headers.get("Cache-Control", "(none)")
+
+
 def verify_served(args: argparse.Namespace) -> int:
     rep = Report()
     data = read_json(Path(args.plan), "plan")
@@ -451,12 +493,8 @@ def verify_served(args: argparse.Namespace) -> int:
     except (KeyError, TypeError) as ex:
         raise InputError(f"plan {Path(args.plan).name}: not a preflight plan (missing {ex})") from None
     for c in cards:
-        url = base + c["resource_url"]
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=args.timeout) as r:   # nosec: read-only GET
-                body = r.read()
-                cache = r.headers.get("Cache-Control", "(none)")
-                ctype = r.headers.get("Content-Type", "?")
+            body, ctype, cache = fetch(base + c["resource_url"], args.timeout)
         except (urllib.error.URLError, OSError) as ex:
             rep.add("FAIL", f"GET {c['resource_url']}", str(ex)[:160])
             continue
@@ -464,6 +502,97 @@ def verify_served(args: argparse.Namespace) -> int:
         rep.add("PASS" if ok else "FAIL", f"served {c['name']}: sha256 {'matches' if ok else 'DIFFERS'}", f"{ctype}; Cache-Control: {cache}")
     rep.print()
     return 1 if rep.failed else 0
+
+
+def verify_resource(args: argparse.Namespace) -> int:
+    """Read-only gate for the manual Lovelace resource switch (see the module docstring). Writes nothing."""
+    rep = Report()
+    plan_path, now_path = Path(args.plan), Path(args.resources)
+    data = read_json(plan_path, "plan")
+    try:
+        cards = [(c["tag"], c["resource_url"], c["resource_type"], c["sha256"]) for c in data["cards"]]
+    except (KeyError, TypeError) as ex:
+        raise InputError(f"plan {plan_path.name}: not a preflight plan (missing {ex})") from None
+    if not cards:
+        raise InputError(f"plan {plan_path.name}: it plans no card, so there is no resource to verify")
+    if not all(isinstance(v, str) and v for card in cards for v in card) or not all(re.fullmatch(r"[0-9a-f]{64}", d) for *_x, d in cards):
+        raise InputError(f"plan {plan_path.name}: a card's tag, resource_url, resource_type or sha256 is empty or malformed")
+    if args.base_url and not re.match(r"https?://[^/]", args.base_url):
+        raise InputError("--base-url must start with http:// or https://")
+    resources = load_persisted_resources(now_path, "resource read-back")
+    before = load_persisted_resources(Path(args.before), "pre-change resource list") if args.before else None
+    now = _ts(args.now) if args.now else datetime.now(timezone.utc)
+    if now is None:
+        raise InputError("--now must be an ISO timestamp")
+    read_at = datetime.fromtimestamp(now_path.stat().st_mtime, timezone.utc)
+    stamp = f"{read_at:%Y-%m-%dT%H:%M:%SZ}"
+    age = (now - read_at).total_seconds() / 60
+    rep.add("PASS" if age <= args.max_age_minutes else "FAIL", f"the read-back is fresh: {now_path.name} written {stamp}, {age:.1f} min before {now:%H:%M:%S}Z",
+            f"limit {args.max_age_minutes:g} min: read the persisted resource list again" if age > args.max_age_minutes else "")
+    base = args.base_url.rstrip("/") if args.base_url else None
+    ids_now: set[str] = set()
+    ids_before: set[str] = set()
+    outcome = []   # (tag, plan url, resources for the card now, the switched resource or None, names of this card's failed checks)
+    for tag, url, rtype, digest in cards:
+        first = len(rep.rows)
+        found = card_resources(resources, tag)
+        ids_now |= {r["id"] for r in found}
+        listed = ", ".join(f"{r['url']} (id {r['id'][:8]})" for r in found) or "none"
+        rep.add("PASS" if len(found) == 1 else "FAIL", f"{tag}: exactly one ECCO resource loads the card", f"{len(found)} found: {listed}")
+        switched = [r for r in found if r["url"] == url]
+        rep.add("PASS" if switched else "FAIL", f"{tag}: the resource URL is the plan's {url}", "" if switched else f"persisted: {listed}")
+        res = switched[0] if len(found) == 1 and switched else None
+        if res is not None:
+            rep.add("PASS" if res.get("type") == rtype else "FAIL", f"{tag}: the resource type is the plan's {rtype!r}", f"persisted {res.get('type')!r}")
+        if before is not None:
+            prev = card_resources(before, tag)
+            ids_before |= {r["id"] for r in prev}
+            if any(r["url"] == url for r in prev):
+                rep.add("WARN", f"{tag}: the pre-change list already has the plan's URL", "it was captured after the switch: it cannot show what changed")
+            if len(prev) > 1:
+                rep.add("FAIL", f"{tag}: the pre-change list has one resource for the card", f"{len(prev)}: id continuity cannot be checked")
+            elif res is not None and prev:
+                same = res["id"] == prev[0]["id"] and res.get("type") == prev[0].get("type")
+                rep.add("PASS" if same else "FAIL", f"{tag}: id and type unchanged from the pre-change list (the existing entry was edited)",
+                        f"before id {prev[0]['id'][:8]} type {prev[0].get('type')!r}, now id {res['id'][:8]} type {res.get('type')!r}")
+            elif res is not None:
+                fresh = all(res["id"] != r["id"] for r in before)
+                rep.add("PASS" if fresh else "FAIL", f"{tag}: the card had no resource before, so its resource is a new entry", f"id {res['id'][:8]}")
+        if res is not None and base is not None:
+            try:
+                body, ctype, cache = fetch(base + res["url"], args.timeout)
+                ok = sha(body) == digest
+                rep.add("PASS" if ok else "FAIL", f"{tag}: served {res['url']}: sha256 {'equals' if ok else 'DIFFERS from'} the plan",
+                        f"{ctype}; Cache-Control: {cache}")
+            except Exception as ex:   # any failure to fetch the bytes (HTTP error, timeout, broken transfer) is a FAIL, never a pass
+                rep.add("FAIL", f"{tag}: GET {res['url']}", f"{type(ex).__name__}: {str(ex)[:160]}")
+        outcome.append((tag, url, found, res, [n.split(": ", 1)[-1] for s, n, _d in rep.rows[first:] if s == "FAIL"]))
+    if before is not None:
+        old = {r["id"]: r for r in before if r["id"] not in ids_before}
+        new = {r["id"]: r for r in resources if r["id"] not in ids_now}
+        diff = ([f"{'repointed to a planned card' if i in ids_now else 'removed'} {i[:8]} {old[i].get('url')}" for i in old if i not in new]
+                + [f"added {i[:8]} {new[i].get('url')}" for i in new if i not in old]
+                + [f"changed {i[:8]} {old[i].get('url')} -> {new[i].get('url')}" for i in old if i in new and old[i] != new[i]])
+        rep.add("PASS" if not diff else "FAIL", f"no other resource changed vs the pre-change list ({len(old)} other resource(s))", "; ".join(diff[:6]))
+    else:
+        rep.add("INFO", "id continuity and the other resources were not checked (pass --before with the pre-change capture)")
+    if base is None:
+        rep.add("INFO", "the served bytes were not checked (pass --base-url)")
+    rep.print()
+    print("")
+    for tag, url, found, res, failed in outcome:
+        if not any(r["url"] == url for r in found):
+            print(f"RESOURCE NOT SWITCHED {tag}: " + (f"still {', '.join(r['url'] for r in found)}" if found else "no resource for this card is registered"))
+        elif not rep.failed:
+            print(f"RESOURCE VERIFIED {tag} -> {url} (id {res['id'][:8]}, persisted, read back at {stamp})")
+        else:
+            print(f"RESOURCE NOT VERIFIED {tag} -> {url}: " + (f"failed: {'; '.join(failed)}" if failed else "a check outside this card failed (see FAIL above)"))
+    if rep.failed:
+        print(f"\nverify-resource FAILED: {rep.failed} check(s); the switch is not verified and the install must not be reported as done")
+        return 1
+    skipped = [w for w, skip in (("id continuity and other resources (no --before)", before is None), ("served bytes (no --base-url)", base is None)) if skip]
+    print(f"\nverify-resource PASSED: {len(cards)} card(s) verified; not checked: {', '.join(skipped) or 'nothing'}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -487,9 +616,17 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--plan", required=True)
     s.add_argument("--base-url", required=True)
     s.add_argument("--timeout", type=float, default=10.0)
+    v = sub.add_parser("verify-resource", help="check the persisted Lovelace resources read back now against plan.json (read-only)")
+    v.add_argument("--plan", required=True)
+    v.add_argument("--resources", required=True, help="the persisted resource list read back now (raw lovelace_resources file or websocket result)")
+    v.add_argument("--before", help="the resource list captured before the change")
+    v.add_argument("--base-url", help="also GET each switched resource URL and compare its sha256 with the plan")
+    v.add_argument("--timeout", type=float, default=10.0)
+    v.add_argument("--max-age-minutes", type=float, default=30.0, help="the oldest read-back accepted, by its file time (default %(default)s)")
+    v.add_argument("--now", help="ISO timestamp used for the read-back age (default: the current time)")
     a = ap.parse_args(argv)
     try:
-        return {"plan": plan, "verify-staged": verify_staged, "verify-served": verify_served}[a.cmd](a)
+        return {"plan": plan, "verify-staged": verify_staged, "verify-served": verify_served, "verify-resource": verify_resource}[a.cmd](a)
     except InputError as ex:
         print(f"refused: {ex}", file=sys.stderr)
         return 2

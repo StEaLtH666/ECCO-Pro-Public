@@ -250,6 +250,71 @@ foreach ($file in $psFiles) {
 }
 
 # ---------------------------------------------------------------------
+# 9. The manual-resource reminder deploy-ha.ps1 prints after a copy.
+#    Every destination under /config/www/ecco/ gets it, whatever the
+#    source path (the content-addressed deploy copies
+#    dist/deploy/stage/<card>.<sha8>.js, which the old frontend/<card>/dist
+#    gate never matched). Synthetic resource lists only, no SSH.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[9] Manual-resource reminder (synthetic resource lists, no SSH)'
+$newDest = '/config/www/ecco/ecco-weather-solar-card.88cd2d8a.js'
+$newUrl = '/local/ecco/ecco-weather-solar-card.88cd2d8a.js'
+$oldUrl = '/local/ecco/ecco-weather-solar-card.0123abcd.js'
+Assert-True -Name 'a /config/www/ecco/ destination maps to its /local/ecco/ URL' -Condition ((Get-EccoLovelaceResourceUrl -Destination $newDest) -eq $newUrl)
+Assert-True -Name 'package, dashboard and bare www/ecco destinations get no resource URL' -Condition (
+    ($null -eq (Get-EccoLovelaceResourceUrl -Destination '/config/packages/ecco_pro.yaml')) -and
+    ($null -eq (Get-EccoLovelaceResourceUrl -Destination '/config/ecco/dashboards/ecco_pro.yaml')) -and
+    ($null -eq (Get-EccoLovelaceResourceUrl -Destination '/config/www/ecco/')))
+Assert-True -Name 'no reminder for a destination outside /config/www/ecco/' -Condition (@(Format-EccoResourceReminder -Destination '/config/packages/ecco_pro.yaml' -Resources @()).Count -eq 0)
+
+$storage = '{"version": 1, "key": "lovelace_resources", "data": {"items": [' +
+    '{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "type": "module", "url": "/hacsfiles/button-card/button-card.js"},' +
+    '{"id": "c0ffee00111111111111111111111111", "type": "module", "url": "' + $oldUrl + '"}]}}'
+$items = ConvertFrom-EccoLovelaceResources -Json $storage
+Assert-True -Name 'the lovelace_resources storage file parses into its items' -Condition ($items.Count -eq 2 -and $items[1].url -eq $oldUrl)
+$emptyItems = ConvertFrom-EccoLovelaceResources -Json '{"data": {"items": []}}'
+Assert-True -Name 'an empty resource list parses as empty, not as "unknown"' -Condition (($null -ne $emptyItems) -and $emptyItems.Count -eq 0)
+foreach ($bad in @('{"data": {"items": [', '{"version": 1}', '[]')) {
+    $threw = $false
+    try { ConvertFrom-EccoLovelaceResources -Json $bad | Out-Null } catch { $threw = $true }
+    Assert-True -Name "a wrong or truncated read is an error, never 'no resources': $bad" -Condition $threw
+}
+
+$notSwitched = @(Format-EccoResourceReminder -Destination $newDest -Resources $items) -join "`n"
+Assert-True -Name 'resource still on the old file: NOT SWITCHED, names the old URL and id, says the copy is NOT LIVE' -Condition (
+    $notSwitched -match [regex]::Escape("RESOURCE NOT SWITCHED ecco-weather-solar-card: the dashboards still load $oldUrl (id c0ffee00)") -and
+    $notSwitched -match 'NOT LIVE')
+Assert-True -Name 'the reminder keeps the manual-registration and never-edits-.storage lines and names verify-resource' -Condition (
+    $notSwitched -match [regex]::Escape("Resource URL: $newUrl") -and
+    $notSwitched -match 'Resource registration is manual' -and
+    $notSwitched -match 'never edits Home Assistant \.storage' -and
+    $notSwitched -match 'ecco_deploy_preflight\.py verify-resource')
+
+$switched = ConvertFrom-EccoLovelaceResources -Json ($storage.Replace($oldUrl, $newUrl))
+$already = @(Format-EccoResourceReminder -Destination $newDest -Resources $switched) -join "`n"
+Assert-True -Name 'resource already on this file: says so and never claims NOT LIVE or VERIFIED' -Condition (
+    $already -match 'RESOURCE ALREADY POINTS AT THIS FILE ecco-weather-solar-card' -and $already -notmatch 'NOT LIVE' -and $already -notmatch 'VERIFIED')
+$withQuery = ConvertFrom-EccoLovelaceResources -Json ($storage.Replace($oldUrl, '/local/ecco/ecco-fallback-recovery-card.js?v=1234567'))
+$query = @(Format-EccoResourceReminder -Destination '/config/www/ecco/ecco-fallback-recovery-card.js' -Resources $withQuery) -join "`n"
+Assert-True -Name 'a resource with a ?v= query still matches its file' -Condition ($query -match 'RESOURCE ALREADY POINTS AT THIS FILE ecco-fallback-recovery-card')
+
+$none = @(Format-EccoResourceReminder -Destination $newDest -Resources $emptyItems) -join "`n"
+Assert-True -Name 'no resource for the card: NOT REGISTERED, NOT LIVE' -Condition ($none -match 'RESOURCE NOT REGISTERED ecco-weather-solar-card' -and $none -match 'NOT LIVE')
+$dupItems = ConvertFrom-EccoLovelaceResources -Json ($storage.Replace('"/hacsfiles/button-card/button-card.js"', '"' + $newUrl + '"'))
+$dup = @(Format-EccoResourceReminder -Destination $newDest -Resources $dupItems) -join "`n"
+Assert-True -Name 'two resources for the card: a WARNING that exactly one is expected' -Condition ($dup -match 'WARNING: 2 resources load ecco-weather-solar-card')
+$unknown = @(Format-EccoResourceReminder -Destination $newDest -Resources $null -ReadProblem 'ssh exit code 255') -join "`n"
+Assert-True -Name 'read-back failed: RESOURCE UNKNOWN with the reason, never NOT SWITCHED or ALREADY' -Condition (
+    $unknown -match 'RESOURCE UNKNOWN ecco-weather-solar-card' -and $unknown -match 'ssh exit code 255' -and
+    $unknown -notmatch 'NOT SWITCHED' -and $unknown -notmatch 'ALREADY POINTS')
+
+$deployText = Get-Content -Raw -Path (Join-Path $toolsDir 'deploy-ha.ps1')
+Assert-True -Name 'deploy-ha.ps1 gates the reminder on the destination, not on a frontend/<card>/dist source' -Condition (
+    $deployText -match [regex]::Escape('if (Get-EccoLovelaceResourceUrl -Destination $Destination)') -and
+    $deployText -notmatch '(?<!else)if \(\$isFrontendAsset\)')
+
+# ---------------------------------------------------------------------
 Write-Host ''
 Write-Host "Results: $script:pass passed, $script:fail failed"
 Write-Host ''

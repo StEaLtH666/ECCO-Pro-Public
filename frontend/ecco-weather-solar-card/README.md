@@ -187,7 +187,10 @@ deployed as a manual Lovelace resource.
 2. Copy the rendered bundle with `tools/deploy-ha.ps1 frontend/ecco-weather-solar-card/dist/ecco-weather-solar-card.js`. It lands in
    `/config/www/ecco/`.
 3. Register `/local/ecco/ecco-weather-solar-card.js` as a JavaScript module under Settings -> Dashboards -> Resources. The deploy
-   script never edits Home Assistant `.storage`.
+   script never edits Home Assistant `.storage`. With the content-addressed preflight deploy, edit the existing entry to the
+   planned `/local/ecco/ecco-weather-solar-card.<sha8>.js` instead. Then read the persisted resource list back and run
+   `tools/ecco_deploy_preflight.py verify-resource` before you call the card installed (see
+   [docs/user/site-render.md](../../docs/user/site-render.md#card-bundles-the-resource-read-back-gate)).
 4. Deploy the dashboard.
 
 ## Development
