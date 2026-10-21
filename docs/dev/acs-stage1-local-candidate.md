@@ -36,7 +36,7 @@ sections below are the candidate's reuse proof, matrix, contract, risks and plan
 - The firmware's own gates (arm, staging loaded, cache valid, online, no RTC correction, no write lock, no Free Power / Dump /
   register 244 ownership or corruption, bus quiet, value validation) are unchanged and still decide.
 
-## 2. Why the candidate is a transformation of ACS0, not a new file (owner decision point)
+## 2. Why the candidate is a transformation of ACS0, not a new file (owner decision point, approved 2026-10-21)
 
 - **The constraint.** The proof chain reserves the fallback/failback entity-id tokens. Four frozen suites scan every file under
   `home-assistant/` and fail on any file that spells them unless a chain entry declares that file. ACS0's fail-closed gate must
@@ -60,7 +60,7 @@ sections below are the candidate's reuse proof, matrix, contract, risks and plan
     file does under the same exemption.
 
   So the integration PR must:
-  1. **ask the owner to re-approve** the amendment for the wider editor;
+  1. **ask the owner to re-approve** the amendment for the wider editor (D1: re-approved 2026-10-21);
   2. add a new chain entry (for example `acs1`) whose scope module pins the exact replacement text, the unchanged six-id read set
      and the unchanged holder list;
   3. make the ACS0 suite and scope-pin updates declared edits;
@@ -343,20 +343,20 @@ The live proof in section 8 exists for these.
 
 ## 8. Staged deployment plan (every step needs its own owner approval)
 
-1. **Owner decisions** (section 9).
-2. **Integration PR** (source only, DCO sign-off after fresh approval):
+1. **Owner decisions** (section 9): D1-D4 and P1-P4 approved 2026-10-21; I1-I4 remain open.
+2. **Integration PR** (source only; DCO sign-off approved (D4), added by the owner):
    - replace `home-assistant/packages/ecco_tou_target_soc_edit.yaml` with the generated text under a declared chain entry
      (the reserved-token holder list is unchanged: same file);
    - the Stage 1 suite is a separate file (as built by acs1); the ACS0 suite keeps its name and path and runs unchanged on the ACS0
      text that `unrender_stage1` recovers from the installed package, so no pin is re-hashed;
-   - decide whether the Stage 0 script ids stay as thin wrappers for existing callers;
+   - the Stage 0 script ids are NOT kept as wrappers (D3: the single Stage 1 editor replaces ACS0);
    - no firmware, registry YAML or manifest change (same package path); one chain entry in `registry/tests`.
 3. **CI green** on that PR. Merge is a separate decision.
 4. **Install preview:**
    - fresh full HA backup;
    - a diff of the package against the installed one;
    - `ha core check`;
-   - one script/automation reload, no restart;
+   - the script/automation reloads or a restart (I1: open, the owner decides);
    - confirm the old SOC flow still works (Review only).
 5. **Supervised live proof, one setting at a time**, each on a slot that is not active and far from its boundaries, each followed
    at once by its undo:
@@ -378,15 +378,25 @@ The live proof in section 8 exists for these.
 
 ## 9. Owner decisions
 
-1. Accept the transformation approach and the "Stage 1 replaces ACS0" integration (section 2).
-2. Power floor 500 W, as chosen; or allow lower values knowing the fallback profile then blocks further edits until re-saved.
-3. Charge source None/Grid only (generator values refused); confirm no generator is fitted.
-4. Start-time policy: strictly ascending starts, 15-minute distance from now, and no edits on the clock-change nights.
-5. Whether to keep the Stage 0 script names as wrappers for existing callers.
+Decided by the owner on 2026-10-21:
+1. Accept the transformation approach and the "Stage 1 replaces ACS0" integration (section 2): **approved** (D2 the chain entry `acs1`, D3
+   the single Stage 1 editor replaces ACS0, no duplicate editors).
+2. Power floor 500 W, as chosen (P1: power 500-8000 W in steps of 100): **approved**.
+3. Charge source None/Grid only (generator values refused) (P2): **approved**; the owner confirms that NO generator is connected.
+4. Start-time policy: strictly ascending starts, 15-minute distance from now, the inverter-clock rule (P3), and no edits on the
+   clock-change nights, SOC edits included (P4): **approved**.
+5. Whether to keep the Stage 0 script names as wrappers for existing callers: **no** (D3: no duplicate editors).
 6. After a verified start-time edit, whether the editor should also press Load Current Slot N-1 (writes no register; closes
    residual 7 automatically) or only tell the owner to do so. **Decided 2026-10-20: the editor presses it (F1, owner-approved),
    with the plain-warning fallback when the Load is refused.**
-7. Re-approval of the reserved-token amendment for the wider editor (section 2), before any integration PR.
+7. Re-approval of the reserved-token amendment for the wider editor (section 2): **approved** (D1: the 2026-10-12 amendment, Option A, first
+   given for a SOC-only editor, is re-approved for the wider Stage 1 editor). DCO sign-off (D4): **approved**, added by the owner.
+8. N1 (keep the write-seen helper and recorder automation as built): **accepted**. N2 (the success verdict needs the gate-pass counter to
+   move by exactly 1): **approved**.
+
+Still open (the owner decides each): I1 install by restart or by reloads (the manifest says `restart_required: true`); I2 the stale comment in
+`deployment/ha-manifest.yaml` (a chain-pinned manifest edit, left as is); I3 the supervised live proof; I4 the push, pull request, merge,
+install and each live step.
 
 Owner decisions of 2026-10-20 on the review findings (implemented in the integration branch, offline, not installed):
 - **F1 approved:** Load Current Slot N-1 after a verified start-time edit (section 3).

@@ -12,10 +12,13 @@ that path already writes and verifies, for the slot, register 232 bit 0, the sta
 ZERO new register or write path (registry/tests/test_write_surface_invariants.py is unchanged), ZERO manifest change (same package path,
 same stanza).
 
-PENDING OWNER RE-APPROVAL. The reserved-token amendment of 2026-10-12 (Option A, see _acs0_scope.py) was approved for a SOC-only editor.
-acs1 widens what the declared package does (power, start time, charge source) while the package reads EXACTLY the same six reserved ids
-in the same three declared files, byte for byte (the gate lines that carry them are inherited untouched; the Stage 1 suite proves it).
-acs1 declares no new reserved-token holder and amends no frozen allowlist; whether that suffices is the owner's decision.
+OWNER RE-APPROVED 2026-10-21 (D1). The reserved-token amendment of 2026-10-12 (Option A, see _acs0_scope.py) was first approved for a
+SOC-only editor and is re-approved for this wider editor. acs1 widens what the declared package does (power, start time, charge source)
+while the package reads EXACTLY the same six reserved ids in the same three declared files, byte for byte (the gate lines that carry them
+are inherited untouched; the Stage 1 suite proves it). acs1 declares no new reserved-token holder and amends no frozen allowlist. The same
+day the owner approved this chain entry (D2), the replacement of ACS0 by the single Stage 1 editor (D3) and the policy values P1-P4 (power
+500-8000 W in steps of 100; charge source None / Grid only, no generator connected; the start-time and inverter-clock rules; the
+clock-change-night guard, SOC edits included); the DCO sign-off (D4) is the owner's.
 
 THE DECISION ON REVERTERS (study: _scope_chain.Chain, _pex.report, _pex.FROZEN). An entry declares an edit to an existing file only for
   * a CHAIN-PINNED artifact (`Entry.reverts` / `checkpoints`; _scope_chain.PINNED: the firmware, its two headers, the capability registry,

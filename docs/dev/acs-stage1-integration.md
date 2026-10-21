@@ -1,13 +1,17 @@
 # Advanced Configuration Stage 1: integration of the guarded TOU settings editor (post-export entry `acs1`)
 
 Status: **SOURCE ONLY. NOT INSTALLED. NOT LIVE-PROVEN. NO REGISTER WRITTEN. NO NEW FIRMWARE WRITE SCOPE.** Offline, local work on
-branch `dev/acs-stage1-integration`, based on public main `e7a265b8`. Nothing in this change touches Home Assistant, the dongle,
+branch `dev/acs-stage1-integration`; the Stage 0 source is public main `e7a265b8`, and the branch is rebased onto public main
+`c6691d1` (no change under `home-assistant/` or `registry/` in between). Nothing in this change touches Home Assistant, the dongle,
 the inverter or InfluxDB.
 
-**PENDING OWNER RE-APPROVAL.** The 2026-10-12 reserved-token amendment (Option A) was approved for a SOC-only editor. This change
-widens what the declared package does (power, start time and charge source) while it reads exactly the same six reserved entity
-ids in the same three declared files. It adds no new holder file and amends no frozen allowlist. Whether that is covered by the
-amendment is the owner's decision, to be taken before this is merged (candidate document section 9, item 7).
+**OWNER DECISIONS (2026-10-21).** D1 approved: the 2026-10-12 reserved-token amendment (Option A), first approved for a SOC-only editor, is
+re-approved for the wider Stage 1 editor (it reads exactly the same six reserved entity ids in the same three declared files, adds no holder
+file and amends no frozen allowlist). D2 approved: the chain entry `acs1`. D3 approved: ACS0 is replaced by the single Stage 1 editor (no
+duplicate editors, no wrappers for the old script ids). D4 approved: DCO sign-off, which the owner adds himself. Policy P1-P4 approved
+(below). N1 accepted, N2 approved. **Still open:** I1 install by restart or by reloads (section 3), I2 the stale comment in
+`deployment/ha-manifest.yaml`, I3 the supervised live proof (section 5), I4 the push, pull request, merge, install and each live step, each of
+which needs its own owner authorisation. Nothing is installed or live-proven.
 
 The reuse proof, the per-setting matrix, the refusal and rollback contract, the residual risks and the GUI storyboard are in
 [acs-stage1-local-candidate.md](acs-stage1-local-candidate.md); this document covers only what the integration changes and how it is
@@ -33,11 +37,11 @@ installed, checked and rolled back.
 | Success verdict (N2, owner-approved 2026-10-21) | APPLIED AND VERIFIED needed the firmware's `VERIFIED OK` and two later reads | additionally the firmware's gate-pass counter must have moved by EXACTLY 1 since before the staging (read at the verdict, at least 37 s after the Apply press, after the counter published); 0, 2 or more, a reset or an unreadable counter is UNCERTAIN with the lock, the manual-recovery notification (counter before and after, the delta, "another Apply - possibly of a different slot - may have run"), no undo offer, no F1 Load and no re-Load. Stricter than Stage 0, SOC edits included |
 | Firmware, registry, manifest, dashboards, frontend | - | **not changed** |
 
-Policy values integrated **as built, not yet approved by the owner** (candidate document section 9): power 500-8000 W in steps of
-100; charge source None or Grid only; start times strictly ascending, on the 5-minute grid, at least 15 minutes from now, never
-switching the active slot, inverter clock within 120 s of Home Assistant's; no edit 00:00-03:00 local on the UK clock change nights
-(last Sunday of March and of October), for every setting, the target SOC included. The old Stage 0 script ids are **not** kept as
-wrappers; nothing in the repository other than documents referred to them.
+Policy values, **approved by the owner on 2026-10-21 (P1-P4**, candidate document section 9): power 500-8000 W in steps of
+100 (P1); charge source None or Grid only, the owner confirming that no generator is connected (P2); start times strictly ascending, on the 5-minute grid, at least 15 minutes from now, never
+switching the active slot, inverter clock within 120 s of Home Assistant's (P3); no edit 00:00-03:00 local on the UK clock change nights
+(last Sunday of March and of October), for every setting, the target SOC included (P4). The old Stage 0 script ids are **not** kept as
+wrappers (D3); nothing in the repository other than documents referred to them.
 
 The files:
 

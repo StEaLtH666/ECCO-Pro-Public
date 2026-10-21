@@ -52,9 +52,12 @@ Development before the first public release happened in a private repository; se
     - **F4:** the Review notification says not to use SmartDeye or the inverter's own panel until the edit is finished, and warns that
       a charge source set on a slot makes a Dump to Grid whose window overlaps it refuse at start (charge source -> Grid, and a
       start-time edit on a slot whose live source is not None).
-  - **Pending owner decisions:** re-approval of the 2026-10-12 reserved-token amendment, which was given for a SOC-only editor (the
-    package reads exactly the same six ids in the same three files); and the policy values (power floor 500 W, None / Grid only, the
-    start-time rules).
+  - **Owner decisions of 2026-10-21:** D1 the 2026-10-12 reserved-token amendment (Option A), first given for a SOC-only editor, is
+    re-approved for the wider editor (the package reads exactly the same six ids in the same three files); D2 the chain entry `acs1`; D3 ACS0
+    is replaced by the single Stage 1 editor; D4 DCO sign-off (the owner's); P1 power 500-8000 W in steps of 100; P2 charge source None /
+    Grid only (no generator is connected); P3 the start-time and inverter-clock rules; P4 the clock-change-night guard, SOC edits included.
+    **Still open:** I1 install by restart or by reloads; I2 the manifest comment; I3 the supervised live proof; I4 push, pull request, merge,
+    install and each live step (each needs its own authorisation).
 - **Firmware source assembler and navigator (S2a, tooling only)** ([docs/dev/firmware-source-modules.md](docs/dev/firmware-source-modules.md)).
   `tools/assemble_firmware.py` splits the production firmware YAML into ordered region fragments grouped by review area and
   reassembles them byte for byte, fail closed. It also maps lines, ids and device-log positions to areas (`--map`, `--where`,
