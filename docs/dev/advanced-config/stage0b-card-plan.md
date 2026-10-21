@@ -1,5 +1,11 @@
 # Advanced Configuration Stage 0b: editable card (PLAN; live write control NOT enabled)
 
+> **Note (acs1, source only):** the Stage 0 scripts named below are replaced, at the same package path, by Stage 1 scripts with new
+> ids: `script.ecco_cfg_review_tou_slot_setting` (fields `slot`, `setting`, `value`; for this card `setting: target_soc`) and
+> `script.ecco_cfg_apply_tou_slot_setting`. The acknowledge script, the helpers and the typed phrase for the target SOC are unchanged.
+> The plan record now has six fields (`slot|setting|want|code|time|before`). See [../acs-stage1-integration.md](../acs-stage1-integration.md).
+> This plan is otherwise unchanged.
+
 **Goal:** the Advanced Configuration card (Inverter → Advanced) gets an editor for exactly one setting, the TOU slot target
 SOC. It calls only the Stage 0 scripts. The card itself never writes or arms anything.
 

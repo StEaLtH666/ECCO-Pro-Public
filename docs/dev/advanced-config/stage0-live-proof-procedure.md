@@ -1,5 +1,11 @@
 # Advanced Configuration Stage 0: supervised live-proof procedure (PREPARED, NOT EXECUTED)
 
+> **Note (acs1, source only):** once the Stage 1 package replaces the Stage 0 one, the two scripts named below have new ids and
+> aliases: *ECCO - Review a TOU slot setting edit* (`script.ecco_cfg_review_tou_slot_setting`, fields `slot`, `setting` =
+> `target_soc`, `value`) and *ECCO - Apply a reviewed TOU slot setting edit* (`script.ecco_cfg_apply_tou_slot_setting`). The typed phrase
+> for the target SOC is unchanged. The Stage 1 install, acceptance checks, live proof and rollback are in
+> [../acs-stage1-integration.md](../acs-stage1-integration.md). This procedure is otherwise unchanged.
+
 **Purpose:** prove Stage 0 on the live ESP32-S3: slot 3 target SOC 40 → 41 → 40 %.
 
 **Who:** the owner runs every step. A session may watch read-only (HA history and states) but never presses, arms or writes.

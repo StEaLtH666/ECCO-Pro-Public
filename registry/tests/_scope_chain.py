@@ -114,6 +114,7 @@ import _fcc1_scope as _fcc1  # noqa: E402
 import _smr1_scope as _smr1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
+import _acs1_scope as _acs1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
@@ -1058,7 +1059,39 @@ HD1 = Entry(
          "learning gate, 16 dashboard house-load reads and the Battery Outlook learning follow: ZERO firmware, inverter write, "
          "write surface or manifest change",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1)
+# acs1 (Advanced Configuration Stage 1: the guarded TOU settings editor replaces the Stage 0 target-SOC editor; _acs1_scope.py): made on
+# public main e7a265b8 after hd1. The acs0 package (home-assistant/packages/ecco_tou_target_soc_edit.yaml) is replaced, at the SAME path, by
+# its Stage 1 successor: the same guarded flow (review, typed confirmation with a one-time code, fresh read, staged-equals-live proof, one
+# Apply in a quiet gap of the Modbus poll cycle, VERIFIED OK plus two later reads, UNCERTAIN lock) for ONE setting of ONE slot: target SOC,
+# power, start time or charge source (None / Grid), through the EXISTING verified manual TOU firmware path. OWNER RE-APPROVED 2026-10-21 (D1):
+# the 2026-10-12 token amendment (Option A), first approved for a SOC-only editor, is re-approved for this wider editor; acs1 reads exactly
+# the same six reserved ids in the same three declared files, byte for byte, and the declared package now does more. Also approved that day:
+# this chain entry (D2), replacing ACS0 with the single Stage 1 editor (D3), and the policy values P1-P4 (power 500-8000 W in steps of 100;
+# charge source None / Grid only, no generator connected; the start-time and inverter-clock rules; the clock-change-night guard, SOC edits
+# included); N1 accepted, N2 approved. The DCO sign-off (D4) is the owner's. Declared: only the files it adds (not hashed) and its fingerprint.
+# NO reverter and NO checkpoint, deliberately: the package is an `added_files` entry of acs0, neither chain-pinned nor frozen (the chain
+# refuses a reverter for an unpinned artifact and _pex.report a frozen edit to a non-frozen file; PRs #31 and #32 edited it the same way);
+# its exact record is the invertible transform (home-assistant/prototypes/acs-stage1/acs_stage1_transform.py: unrender_stage1(installed)
+# is the Stage 0 text, sha256 pinned) proven by home-assistant/tests/test_ecco_tou_slot_settings_edit.py. No frozen file, no reserved-token
+# allowlist and no older suite is edited; banned_files is empty (the holders stay acs0's three). Measured, not declared: ZERO firmware,
+# registry YAML, deployment (the manifest stanza is unchanged: same source, same destination), dashboard, Intelligence or ecco_core byte; the
+# firmware write surface is unchanged (no new register, no new path); no ESPHome action or Modbus service in the package.
+ACS1 = Entry(
+    id="acs1", pr="ACS1", commit="unmerged",
+    added_files=_acs1.ADDED_FILES,
+    # _pex.fingerprint(ACS1): hashes its parent hd1's fingerprint and every declaration above
+    fingerprint="e0bb9298dbcdb84041abd25633d3305d2338cba92a88fcefe826e6ad587bc318",
+    note="OWNER RE-APPROVED 2026-10-21: the 2026-10-12 token amendment (Option A), first approved for a SOC-only editor, is re-approved for the "
+         "wider Stage 1 editor (D1; this chain entry D2; ACS0 replaced by the single Stage 1 editor D3; policy P1-P4 approved); acs1 widens what "
+         "the declared package does (power, start time, charge source) while reading exactly the same six ids in the same three files. "
+         "Advanced Configuration Stage 1: the guarded TOU editor replaces the Stage 0 target-SOC editor at the same package path (one "
+         "setting of one slot per request: target SOC, power 500-8000 W in steps of 100, start time on the 5-minute grid, charge source "
+         "None or Grid; the same review, typed confirmation, fresh read, staged-equals-live proof, one quiet-gap Apply, firmware readback "
+         "plus two later reads and manual-review lock), through the existing verified manual TOU firmware path; the package edit is "
+         "recorded by an invertible transform, not by a reverter (the package is neither chain-pinned nor frozen): ZERO firmware, "
+         "registry, deployment, frozen-file or reserved-token-allowlist change, unchanged write surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

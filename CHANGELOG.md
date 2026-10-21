@@ -10,6 +10,54 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Advanced Configuration Stage 1: the guarded TOU settings editor** (post-export entry `acs1`; offline, source only, NOT installed,
+  NOT live-proven; [docs/dev/acs-stage1-integration.md](docs/dev/acs-stage1-integration.md)). It replaces the Stage 0 target-SOC editor
+  at the same package path (`ecco_tou_target_soc_edit.yaml`, so the deployment manifest is unchanged): one setting of one TOU slot per
+  request - the target SOC as before, the power (500-8000 W in steps of 100), the start time (5-minute grid) or the charge source
+  (None or Grid) - through the existing verified manual TOU firmware path, with the same review, typed confirmation, fresh read,
+  staged-equals-live proof, one Apply in a quiet gap of the Modbus poll cycle, firmware readback plus two later reads and manual-review
+  lock. No firmware change, no new register or write path.
+  - The scripts are renamed `script.ecco_cfg_review_tou_slot_setting` (fields `slot`, `setting`, `value`) and
+    `script.ecco_cfg_apply_tou_slot_setting`; the helpers, the acknowledge script and the watchdog automation keep their ids.
+  - **Target-SOC behaviour differs from Stage 0 in three ways** (every other Stage 0 refusal and outcome is unchanged):
+    - it is refused 00:00-03:00 local on the UK clock change nights (last Sunday of March and of October), as is every setting;
+    - it is refused when the slot's raw flags are unreadable (they are needed by the charge-source verdict, so they are now a
+      precondition for every setting);
+    - the "inverter shutdown SOC unavailable", "ECCO reserve unavailable" and "live slot SOC unavailable" refusals now apply to
+      target-SOC edits only (they are that bound's inputs); the other Stage 0 refusals apply to every setting.
+  - **Stricter than Stage 0 (also for SOC edits): "nothing pressed" is no longer taken to mean "no manual-path write".** The Manual
+    Configuration Write Enable is shared and the firmware accepts ANY Apply press while it is on, so an Apply by someone else can land
+    while the editor is armed. When a run stops after staging and before its press, the editor now disarms at once, waits 35 s for
+    the firmware's gate-pass counter to publish, and reports "nothing written" (no manual-path, armed write; the automatic RTC clock
+    writes do not use the write enable and are outside this proof) only if that counter is unchanged since before the staging and
+    no write was seen; otherwise the outcome is UNCERTAIN, the editor locks and the notification lists the observed values.
+  - The package is derived from the Stage 0 text by 62 exact edits (the 40 reviewed ones plus 22 appended for the follow-ups below); the
+    transform is invertible (`unrender_stage1`), which gives the rollback file and the provenance proof without git history.
+  - **N2, owner-approved 2026-10-21 (stricter than Stage 0, also for SOC edits):** the success verdict also needs the firmware's
+    gate-pass counter to have moved by exactly 1 since before the staging, read at least 37 s after the Apply press (the counter publishes
+    every 30 s). Another Apply (possibly of a different slot) that passed in the armed window, a counter that did not move, was reset or
+    cannot be read gives UNCERTAIN, the lock and the manual-recovery notification, with no undo offer and no F1 Load. The one documented
+    exception is another actor's Apply that wrote the reviewed staging while the editor's own press was refused: delta 1, APPLIED.
+    N1 was accepted at the same time: the write-seen helper and recorder automation stay as built.
+  - **Owner-approved follow-ups (2026-10-20):**
+    - **F1:** after a verified start-time edit of slot N the editor presses Load Current Slot N-1 (slot 1 -> slot 6) once and checks
+      that slot's staged end; when the Load is refused or does not match, the edit stays successful and the notice says plainly that
+      the staging could not be refreshed. It writes no register, never arms and never presses an Apply.
+    - **F2 (conditional):** after a FAILED run the editor re-Loads slot N only after a PROVEN outcome: a stop before the Apply press with
+      the firmware's gate-pass counter unchanged since before the staging (after it published) and no write seen, or the firmware
+      refusal proven by its text, an unchanged counter and both later reads. Never after an UNCERTAIN, partial or unproven outcome,
+      and uncertainty is never cleared automatically. Adds the helper `input_boolean.ecco_cfg_edit_write_seen` and the automation
+      `ecco_cfg_edit_write_seen` (a record of any manual-path write seen while an edit is in flight).
+    - **F3:** a power edit is refused when the live slot power is not a multiple of 100 W.
+    - **F4:** the Review notification says not to use SmartDeye or the inverter's own panel until the edit is finished, and warns that
+      a charge source set on a slot makes a Dump to Grid whose window overlaps it refuse at start (charge source -> Grid, and a
+      start-time edit on a slot whose live source is not None).
+  - **Owner decisions of 2026-10-21:** D1 the 2026-10-12 reserved-token amendment (Option A), first given for a SOC-only editor, is
+    re-approved for the wider editor (the package reads exactly the same six ids in the same three files); D2 the chain entry `acs1`; D3 ACS0
+    is replaced by the single Stage 1 editor; D4 DCO sign-off (the owner's); P1 power 500-8000 W in steps of 100; P2 charge source None /
+    Grid only (no generator is connected); P3 the start-time and inverter-clock rules; P4 the clock-change-night guard, SOC edits included.
+    **Still open:** I1 install by restart or by reloads; I2 the manifest comment; I3 the supervised live proof; I4 push, pull request, merge,
+    install and each live step (each needs its own authorisation).
 - **Read-back gate for the manual Lovelace resource switch** (`tools/ecco_deploy_preflight.py verify-resource`, read-only;
   [docs/user/site-render.md](docs/user/site-render.md#card-bundles-the-resource-read-back-gate)). Copying a card bundle and
   checking that it is served change nothing a dashboard loads until its resource points at the new file, and no ECCO tool edits
