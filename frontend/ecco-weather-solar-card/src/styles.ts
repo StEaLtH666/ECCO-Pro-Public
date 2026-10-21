@@ -65,7 +65,7 @@ ul.ins{margin:0;padding-left:18px;font-size:.85rem;display:flex;flex-direction:c
 `;
 
 /** Added to STYLES for the two compact layouts: the Overview's PV forecast strip (`solar_strip`, one ~84 px row that wraps on
- *  narrow cards) and its "Next days" block (`daily_compact`). */
+ *  narrow cards) and its "Next days" block (`daily_compact`: clickable day rows, and one day's hourly strip with Back to days). */
 export const COMPACT_STYLES = `
 .wrap.strip{padding:10px 14px;gap:0}
 .srow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
@@ -85,11 +85,24 @@ svg.spark{width:100%;height:48px;display:block}
 .nowlbl.l{margin-left:-3px;transform:translateX(-100%)}
 .sfresh{margin-left:auto;justify-content:flex-end}
 .wrap.compact{padding:12px 14px;gap:8px}
-.dc{display:grid;grid-template-columns:2.8em 22px minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--ews-line);font-size:.82rem}
-.dc.p{grid-template-columns:2.8em 22px minmax(0,1fr) auto auto auto}
+.dc{display:grid;grid-template-columns:2.8em 22px minmax(0,1fr) auto auto 16px;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--ews-line);font-size:.82rem}
+.dc.p{grid-template-columns:2.8em 22px minmax(0,1fr) auto auto auto 16px}
 .dc:first-child{border-top:0}.dc .cl{color:var(--ews-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc .hl,.dc .rn,.dc .pp{font-variant-numeric:tabular-nums;white-space:nowrap}.dc .rn,.dc .pp{color:var(--ews-rain)}
-.dc ha-icon{--mdc-icon-size:20px}
+.dc ha-icon{--mdc-icon-size:20px}.dc ha-icon.go{--mdc-icon-size:16px;color:var(--ews-muted)}
+button.dc{font:inherit;font-size:.82rem;color:inherit;background:transparent;border:0;border-top:1px solid var(--ews-line);border-radius:0;
+margin:0 -6px;padding:4px 6px;width:calc(100% + 12px);text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button.dc:first-child{border-top:0}
+button.dc:hover{background:rgba(255,255,255,.05)}button.dc:hover ha-icon.go{color:var(--ews-blend)}button.dc:active{background:rgba(255,189,61,.12)}
+button.dc:focus-visible,button.back:focus-visible,.days .hours:focus-visible{outline:2px solid var(--ews-blend);outline-offset:-2px;border-radius:8px}
+.dhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.dtitle{margin:0;font-size:.9rem}
+button.back{display:inline-flex;align-items:center;gap:2px;font:inherit;font-size:.78rem;min-height:36px;padding:4px 12px 4px 6px;border-radius:999px;
+border:1px solid var(--ews-line);background:transparent;color:var(--ews-text);cursor:pointer;-webkit-tap-highlight-color:transparent}
+button.back ha-icon{--mdc-icon-size:18px}button.back:hover,button.back:active{border-color:var(--ews-blend);background:rgba(255,189,61,.12)}
+.dsum .dc{grid-template-columns:2.8em 22px minmax(0,1fr) auto auto}.dsum .dc.p{grid-template-columns:2.8em 22px minmax(0,1fr) auto auto auto}
+.dstate{padding:4px 0}
+.days .hours{margin-top:4px;scroll-snap-type:x proximity}.days .hc{scroll-snap-align:start}
 @container (max-width: 560px){
 .srow{gap:8px 12px}.scurve{flex-basis:100%}.sfresh{margin-left:0;justify-content:flex-start}}
 `;

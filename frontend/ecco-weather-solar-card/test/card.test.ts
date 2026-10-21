@@ -1,12 +1,13 @@
 // The custom element through a recording DOM / Home Assistant stand-in: registration, the exact websocket messages it sends
 // (two forecast subscriptions and one throttled statistics query - nothing else), subscription lifecycle, refresh, errors
-// and fallbacks, the Today / Tomorrow switch, no timers, and that neither the hass object nor its connection is kept.
+// and fallbacks, the Today / Tomorrow switch, the compact list's day breakdown (its hourly subscription exists only while a
+// day is open), no timers, and that neither the hass object nor its connection is kept.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { fakeConnection, installDomShim, makeEl, newRecorder, recordingHass } from "./dom-shim.ts";
 import type { FakeRoot, Recorder } from "./dom-shim.ts";
-import { HA_CONFIG, HOUR, NOW, dailyForecast, hourlyForecast, statRows, states } from "./fixtures.ts";
+import { HA_CONFIG, HOUR, NOW, dailyFor, dailyForecast, hourlyForecast, statRows, states } from "./fixtures.ts";
 import type { StatesLike } from "../src/types.ts";
 
 const shim = installDomShim();
@@ -470,6 +471,338 @@ describe("layouts: each compact instance sends only the message its section need
       assert.ok(!held.includes(r.conn), layout);
       assert.deepEqual(r.rec.calls, [], layout);
     }
+  });
+});
+
+describe("daily_compact: a day's hourly breakdown in the same card", () => {
+  const DAILY = { type: "weather/subscribe_forecast", entity_id: "weather.forecast_home", forecast_type: "daily" };
+  const HOURLY = { type: "weather/subscribe_forecast", entity_id: "weather.forecast_home", forecast_type: "hourly" };
+  const open = (r: Rig, date: string): void => r.root.dispatch("click", makeEl({ "data-action": "weather-hours", "data-date": date }));
+  const back = (r: Rig): void => r.root.dispatch("click", makeEl({ "data-action": "weather-days", "data-date": "ignored" }));
+  const rows = (r: Rig): number => (r.root.region("daily").match(/<button type="button" class="dc/g) ?? []).length;
+  const cells = (r: Rig): number => (r.root.region("daily").match(/class="hc"/g) ?? []).length;
+  const subs = (r: Rig) => r.rec.subscriptions.map((s) => [s.message.forecast_type, s.unsubscribed]);
+  /** A connected compact card whose daily list has arrived (six days from Thu 8 Oct), at `now`. */
+  async function compact(now = NOW, daily = dailyForecast(), opts?: Parameters<typeof rig>[0]): Promise<Rig> {
+    const r = rig(opts ?? { statistics: {} }, { layout: "daily_compact", daily_days: 7 });
+    r.clock.t = now;
+    r.card.connectedCallback();
+    r.push();
+    await flush();
+    r.rec.subscriptions[0]!.callback({ type: "daily", forecast: daily });
+    return r;
+  }
+
+  it("the idle day list keeps only the daily subscription, however many updates arrive", async () => {
+    const r = await compact();
+    for (let i = 0; i < 30; i++) {
+      r.clock.t = NOW + i * 30000;
+      r.push();
+      await flush();
+    }
+    assert.deepEqual(r.rec.messages, [DAILY]);
+    assert.equal(rows(r), 6);
+  });
+  it("clicking a day subscribes to the hourly forecast once, shows that day's hours and moves focus to Back to days", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY], "exactly one more message: the hourly forecast subscription");
+    assert.ok(r.root.region("daily").includes("Loading hourly forecast...") && r.root.region("daily").includes("Back to days"));
+    assert.deepEqual(r.root.focused, [{ selector: '[data-action="weather-days"]', options: { preventScroll: true } }]);
+    await flush();
+    r.rec.subscriptions[1]!.callback({ type: "hourly", forecast: hourlyForecast(NOW, 72) });
+    assert.equal(cells(r), 24);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Fri 9 Oct') && r.root.region("daily").includes('<div class="dsum">'));
+    assert.equal(rows(r), 0, "the list is replaced, in the same card");
+    for (let i = 1; i < 10; i++) {
+      r.clock.t = NOW + i * 60000;
+      r.push();
+      await flush();
+    }
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY], "updates while open send nothing more");
+    assert.deepEqual(r.rec.calls, []);
+  });
+  it("Back to days ends the hourly subscription, keeps the daily one, restores the list and returns focus to that day's row", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    back(r);
+    assert.deepEqual(subs(r), [["daily", false], ["hourly", true]]);
+    assert.equal(rows(r), 6);
+    assert.equal(r.root.focused.at(-1)?.selector, '[data-action="weather-hours"][data-date="2026-10-09"]');
+    assert.ok(r.root.activeElement?.tag.includes('data-date="2026-10-09"'));
+    const focusCalls = r.root.focused.length;
+    back(r);
+    assert.equal(r.root.focused.length, focusCalls, "Back with nothing open does nothing");
+    open(r, "2026-10-10");
+    await flush();
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY, HOURLY], "re-opening subscribes afresh; nothing is kept running in between");
+    assert.ok(r.root.region("daily").includes("Loading hourly forecast..."), "and shows no leftover hours of the earlier subscription");
+  });
+  it("Back before the subscription is confirmed unsubscribes it on arrival; its late events are ignored", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    back(r);
+    await flush();
+    assert.deepEqual(subs(r), [["daily", false], ["hourly", true]]);
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(rows(r), 6);
+    open(r, "2026-10-09");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.ok(r.root.region("daily").includes("Loading hourly forecast..."), "the dropped subscription cannot fill the new view");
+    r.rec.subscriptions[2]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(cells(r), 24);
+  });
+  it("ignores what it cannot honour: a date not in the list, a malformed one, a second open, and any other layout", async () => {
+    const r = await compact();
+    for (const d of ["2026-10-07", "2026-10-14", "2026-10-9", '"><img src=x onerror=alert(1)>', ""]) open(r, d);
+    r.root.dispatch("click", makeEl({ "data-action": "weather-hours" }));
+    assert.deepEqual(r.rec.messages, [DAILY]);
+    assert.equal(rows(r), 6);
+    open(r, "2026-10-09");
+    open(r, "2026-10-10");
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY]);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Fri 9 Oct'));
+    const f = rig();
+    f.card.connectedCallback();
+    f.push();
+    await flush();
+    f.rec.subscriptions[1]!.callback({ forecast: dailyForecast() });
+    const before = f.root.region("daily");
+    open(f, "2026-10-09");
+    f.root.dispatch("click", makeEl({ "data-action": "weather-days" }));
+    assert.equal(f.rec.messages.length, 3, "the full layout has no day breakdown and sends nothing new");
+    assert.equal(f.root.region("daily"), before);
+    assert.deepEqual(f.root.focused, []);
+  });
+  it("a failed hourly subscription is shown with Back to days; the daily list is unaffected; re-opening retries at once", async () => {
+    const r = await compact(NOW, dailyForecast(), { statistics: {}, subscribeErrorFor: { hourly: { code: "not_supported", message: "hourly forecast not supported" } } });
+    open(r, "2026-10-09");
+    await flush();
+    const html = r.root.region("daily");
+    assert.ok(html.includes("Hourly forecast unavailable: hourly forecast not supported") && html.includes("Back to days") && html.includes('<div class="dsum">'));
+    back(r);
+    assert.equal(rows(r), 6);
+    open(r, "2026-10-09");
+    await flush();
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY, HOURLY]);
+  });
+  it("a day the hourly forecast does not reach says so; nothing is filled in", async () => {
+    const r = await compact();
+    open(r, "2026-10-13");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 48) });
+    const html = r.root.region("daily");
+    assert.ok(html.includes("Hourly forecast not available for this day.") && html.includes("Back to days") && html.includes("Tue 13 Oct"));
+    assert.equal(cells(r), 0);
+    r.rec.subscriptions[1]!.callback({ forecast: "garbage" });
+    assert.ok(r.root.region("daily").includes("Hourly forecast not available for this day."));
+  });
+  it("Home Assistant reconnects while a day is open: both subscriptions move to the new connection, the day stays open", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    const rec2 = newRecorder();
+    (r.card as unknown as { hass: unknown }).hass = recordingHass(states(), rec2, fakeConnection(rec2, { statistics: {} }), HA_CONFIG);
+    await flush();
+    assert.deepEqual(subs(r), [["daily", true], ["hourly", true]]);
+    assert.deepEqual(rec2.messages, [DAILY, HOURLY]);
+    rec2.subscriptions[0]!.callback({ forecast: dailyForecast() });
+    rec2.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(cells(r), 24);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Fri 9 Oct'));
+  });
+  it("leaving the page while a day is open ends both subscriptions; returning restores the same day with fresh ones", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    r.card.disconnectedCallback();
+    assert.deepEqual(subs(r), [["daily", true], ["hourly", true]]);
+    r.push();
+    await flush();
+    assert.equal(r.rec.messages.length, 2, "nothing while detached");
+    r.card.connectedCallback();
+    await flush();
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY, DAILY, HOURLY]);
+    assert.deepEqual(subs(r).slice(2), [["daily", false], ["hourly", false]]);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Fri 9 Oct'));
+    back(r);
+    r.card.disconnectedCallback();
+    r.card.connectedCallback();
+    await flush();
+    assert.deepEqual(r.rec.messages.slice(4), [DAILY], "the idle list comes back with the daily subscription alone");
+  });
+  it("a new weather entity closes the day and subscribes to the daily forecast only", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    r.card.setConfig({ layout: "daily_compact", daily_days: 7, entities: { weather: "weather.other" } });
+    await flush();
+    assert.deepEqual(r.rec.subscriptions.map((s) => [s.message.entity_id, s.message.forecast_type, s.unsubscribed]), [
+      ["weather.forecast_home", "daily", true], ["weather.forecast_home", "hourly", true], ["weather.other", "daily", false]]);
+    assert.ok(r.root.region("daily").includes("Loading daily forecast"));
+    r.card.setConfig({ layout: "full" });
+    await flush();
+    assert.deepEqual(forecastMsgs(r.rec).slice(3).map((m) => m.forecast_type), ["hourly", "daily"], "full: its usual two subscriptions");
+    assert.equal(statMsgs(r.rec).length, 1, "and its statistics query");
+  });
+  it("an open day that becomes a past date (open over midnight) closes and its hourly subscription ends", async () => {
+    const r = await compact();
+    open(r, "2026-10-08");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(cells(r), 11, "today from the current hour: 13:00 to 23:00");
+    r.clock.t = Date.parse("2026-10-08T22:59:00Z");
+    r.push();
+    await flush();
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Thu 8 Oct') && rows(r) === 0, "still open: today at 23:59 BST");
+    r.clock.t = Date.parse("2026-10-08T23:01:00Z"); // 00:01 BST on the 9th
+    r.push();
+    await flush();
+    assert.deepEqual(subs(r), [["daily", false], ["hourly", true]]);
+    assert.equal(rows(r), 5, "the list again, from the new today");
+    assert.equal(r.rec.messages.length, 2);
+  });
+  it("while a day is open, the freshness chip also judges the hourly forecast (stale when it starts hours in the past)", async () => {
+    const r = await compact();
+    open(r, "2026-10-08");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW - 5 * HOUR, 72) });
+    assert.ok(r.root.region("fresh").includes("(stale)"), r.root.region("fresh"));
+    back(r);
+    assert.ok(!r.root.region("fresh").includes("(stale)"));
+  });
+  it("Sun 25 Oct 2026 opened on the Saturday: 25 hourly cells with 01:00 BST and 01:00 GMT", async () => {
+    const sat = Date.parse("2026-10-24T09:00:00Z");
+    const r = await compact(sat, dailyFor(["2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]));
+    assert.equal(rows(r), 7);
+    open(r, "2026-10-25");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(sat, 72) });
+    const html = r.root.region("daily");
+    assert.equal(cells(r), 25);
+    assert.ok(html.includes('<div class="t">01:00 BST</div>') && html.includes('<div class="t">01:00 GMT</div>'));
+    assert.ok(html.includes("Clocks go back on this day: it has 25 hours, and the times from 01:00 to 01:59 occur twice.") && html.includes("Sun 25 Oct"));
+  });
+  it("Sun 28 Mar 2027 opened on the Saturday: 23 hourly cells and no 01:00", async () => {
+    const sat = Date.parse("2027-03-27T09:00:00Z");
+    const r = await compact(sat, dailyFor(["2027-03-27", "2027-03-28", "2027-03-29"]));
+    open(r, "2027-03-28");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(sat, 72) });
+    const html = r.root.region("daily");
+    assert.equal(cells(r), 23);
+    assert.ok(!html.includes('<div class="t">01:00') && html.includes('<div class="t">02:00</div>'));
+    assert.ok(html.includes("Clocks go forward on this day: it has 23 hours, and there are no times from 01:00 to 01:59.") && html.includes("Sun 28 Mar"));
+  });
+  it("focus stays on Back to days when the hourly data arrives just after opening (the view is rewritten)", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    assert.ok(r.root.activeElement?.tag.includes('data-action="weather-days"'));
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(cells(r), 24, "the view was rewritten with the hours");
+    assert.ok(r.root.activeElement?.tag.includes('data-action="weather-days"'), "and Back to days has focus again");
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW + HOUR, 72) });
+    assert.ok(r.root.activeElement?.tag.includes('data-action="weather-days"'), "after a forecast update too");
+  });
+  it("a keyboard user keeps their place across forecast updates: on a day row, or on the hourly strip", async () => {
+    const r = await compact();
+    r.root.focusOn('data-date="2026-10-11"');
+    r.rec.subscriptions[0]!.callback({ forecast: dailyForecast().map((f) => ({ ...f, temperature: 30 })) });
+    assert.ok(r.root.region("daily").includes("30° /"), "the list was rewritten");
+    assert.ok(r.root.activeElement?.tag.includes('data-date="2026-10-11"') && r.root.activeElement.tag.includes("weather-hours"));
+    open(r, "2026-10-11");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 96) });
+    r.root.focusOn('data-strip="2026-10-11"');
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW + HOUR, 96) });
+    assert.equal(r.root.activeElement?.getAttribute("data-strip"), "2026-10-11");
+  });
+  it("a forecast update keeps the strip where the user scrolled it; another day starts at its beginning", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    const region = r.root.regions.get("daily")!;
+    region.strip!.scrollLeft = 420;
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW + HOUR, 72) });
+    assert.equal(region.strip!.scrollLeft, 420, "same day, new HTML: the scroll position carries over");
+    back(r);
+    open(r, "2026-10-10");
+    await flush();
+    r.rec.subscriptions[2]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    assert.equal(region.strip!.getAttribute("data-strip"), "2026-10-10");
+    assert.equal(region.strip!.scrollLeft, 0);
+  });
+  it("a double click opens the day once: its second click (on Back to days, now where the row was) is not a choice", async () => {
+    const r = await compact();
+    r.root.dispatch("click", makeEl({ "data-action": "weather-hours", "data-date": "2026-10-08" }), 1);
+    r.root.dispatch("click", makeEl({ "data-action": "weather-days", "data-date": "2026-10-08" }), 2);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Thu 8 Oct'), "still open");
+    assert.deepEqual(r.rec.messages, [DAILY, HOURLY]);
+    r.root.dispatch("click", makeEl({ "data-action": "weather-days", "data-date": "2026-10-08" }), 1);
+    r.root.dispatch("click", makeEl({ "data-action": "weather-hours", "data-date": "2026-10-08" }), 2);
+    assert.equal(rows(r), 6, "a double click on Back closes once, too");
+    r.root.dispatch("click", makeEl({ "data-action": "weather-hours", "data-date": "2026-10-09" }), 0);
+    assert.ok(r.root.region("daily").includes('<h3 class="dtitle">Fri 9 Oct'), "keyboard activation (detail 0) opens");
+  });
+  it("focus is never dropped: when the open day closes at midnight, or its row is no longer listed after Back, the first row takes it", async () => {
+    const r = await compact();
+    open(r, "2026-10-08");
+    await flush();
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    r.root.focusOn('data-strip="2026-10-08"');
+    r.clock.t = Date.parse("2026-10-08T23:01:00Z"); // 00:01 BST on the 9th: the open day is in the past
+    r.push();
+    await flush();
+    assert.equal(rows(r), 5);
+    assert.equal(r.root.focused.at(-1)?.selector, '[data-action="weather-hours"]');
+    assert.ok(r.root.activeElement?.tag.includes('data-date="2026-10-09"'), "the new first row");
+    const s = await compact(NOW, dailyForecast().slice(1)); // a list without today's row
+    s.card.setConfig({ layout: "daily_compact", daily_days: 7 });
+    s.rec.subscriptions[0]!.callback({ forecast: dailyForecast() });
+    open(s, "2026-10-08");
+    s.rec.subscriptions[0]!.callback({ forecast: dailyForecast().slice(1) }); // the daily forecast drops the open day
+    back(s);
+    assert.equal(s.root.focused.at(-1)?.selector, '[data-action="weather-hours"]');
+    assert.ok(s.root.activeElement?.tag.includes('data-date="2026-10-09"'));
+  });
+  it("never takes focus it did not have: with focus elsewhere on the page, updates move nothing", async () => {
+    const r = await compact();
+    open(r, "2026-10-09");
+    await flush();
+    r.root.focusOn(null);
+    const n = r.root.focused.length;
+    r.rec.subscriptions[1]!.callback({ forecast: hourlyForecast(NOW, 72) });
+    r.rec.subscriptions[0]!.callback({ forecast: dailyForecast().map((f) => ({ ...f, templow: 1 })) });
+    r.clock.t = NOW + 5 * 60000;
+    r.push();
+    assert.equal(r.root.focused.length, n);
+    assert.equal(r.root.activeElement, null);
+  });
+  it("uses no timer, keeps neither hass nor its connection, and calls nothing while opening and closing days", async () => {
+    const r = await compact();
+    shim.noTimers(() => {
+      open(r, "2026-10-09");
+      back(r);
+      open(r, "2026-10-10");
+    });
+    await flush();
+    shim.noTimers(() => {
+      r.rec.subscriptions[2]!.callback({ forecast: hourlyForecast(NOW, 72) });
+      back(r);
+      r.card.disconnectedCallback();
+    });
+    assert.deepEqual(shim.rec.calls.filter((c) => /Timeout|Interval|AnimationFrame/.test(c)), []);
+    const held = Object.values(r.card as unknown as Record<string, unknown>);
+    assert.ok(!held.includes(r.conn));
+    assert.deepEqual(r.rec.calls, []);
+    assert.deepEqual([...new Set(r.rec.messages.map((m) => m.type))], ["weather/subscribe_forecast"]);
+    assert.deepEqual([...new Set(r.rec.reads)].sort(), ["config", "connection", "states"]);
   });
 });
 

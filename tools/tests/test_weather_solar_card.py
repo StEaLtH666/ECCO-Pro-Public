@@ -4,7 +4,7 @@
   [1] the card folder: the expected files only, package / lock / hacs metadata, exact build-tool pins, text files only, LF
   [2] read-only allowlist over the source and the committed bundle: exactly two websocket message types
       (weather/subscribe_forecast, recorder/statistics_during_period), sent only from src/reader.ts; no service / action call,
-      event subscription, network, storage, timer or dynamic code; one local view action
+      event subscription, network, storage, timer or dynamic code; three local view actions (chart-day, weather-hours, weather-days)
   [3] no reserved fallback / shadow token in any card file
   [4] the card's default entity ids are the ones this repository defines (the ECCO blend, scorecard and canonical PV template
       sensors, the controller's PV energy counters); the blend is read, never re-weighted
@@ -127,9 +127,9 @@ check("the element reads only states / config / connection from hass and never a
       sorted(set(re.findall(r"\bh\.([A-Za-z_]+)", card_src))) == ["config", "connection", "states"]
       and not re.search(r"this\.(?:_?hass|_?connection|_?conn)\s*=", card_src) and card_src.count("set hass(") == 1)
 alls = "\n".join(code_only(t) for t in sources.values())
-check("one listener (click) and one local view action (chart-day)",
+check("one listener (click) and three local view actions (chart-day; the compact list's weather-hours / weather-days)",
       re.findall(r"addEventListener\(\s*\"([a-z]+)\"", alls) == ["click"]
-      and sorted(set(re.findall(r"data-action=\"([a-z-]+)\"", alls))) == ["chart-day"])
+      and sorted(set(re.findall(r"data-action=\"([a-z-]+)\"", alls))) == ["chart-day", "weather-days", "weather-hours"])
 bad = [t for t in FORBIDDEN if t in dist] + [r for r in FORBIDDEN_RE if re.search(r, dist)]
 check("the bundle names no forbidden API", not bad, str(bad))
 check("the bundle contains exactly the two allowed message types", sorted({m.group(0)[1:-1] for m in WS.finditer(dist)}) == ALLOWED)

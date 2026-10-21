@@ -90,6 +90,14 @@ export function dailyForecast(): ForecastEntry[] {
   }));
 }
 
+/** Met.no-shaped daily entries, one per local date key given (stamped 11:00 UTC like Met.no's), e.g. across a DST weekend. */
+export function dailyFor(keys: string[]): ForecastEntry[] {
+  return keys.map((k, i) => ({
+    datetime: `${k}T11:00:00+00:00`, condition: ["sunny", "rainy", "cloudy", "partlycloudy"][i % 4] as string, temperature: 13 + i, templow: 6 + i,
+    precipitation: i % 2 ? 2.4 : 0.1, wind_speed: 18, wind_bearing: 200, humidity: 75,
+  }));
+}
+
 /** Hourly `change` rows of the total PV energy counter for 2026-10-08 up to 13:00 BST (ms starts, as the recorder returns). */
 export function statRows(): StatRow[] {
   const day = Date.parse("2026-10-07T23:00:00Z");

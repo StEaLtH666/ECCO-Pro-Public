@@ -1,9 +1,10 @@
 // Rendering: every Home Assistant string is escaped, unknown values show "--" or a plain message (never 0), the chart
-// shows what exists and says what is missing, and the only interactive element is the Today / Tomorrow switch.
+// shows what exists and says what is missing, and the only interactive elements are view controls: the Today / Tomorrow
+// switch, the compact list's day rows and the day breakdown's Back to days button.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { DEFAULT_ENTITIES, accuracyView, buildDayPoints, solarTotals, solcastHourly, statisticsByHour, sunView, weatherByHour } from "../src/model.ts";
+import { DEFAULT_ENTITIES, accuracyView, buildDayPoints, dayHours, solarTotals, solcastHourly, statisticsByHour, sunView, weatherByHour } from "../src/model.ts";
 import {
   esc,
   niceAxis,
@@ -11,6 +12,7 @@ import {
   renderChart,
   renderDaily,
   renderDailyCompact,
+  renderDayHourly,
   renderFreshness,
   renderHourly,
   renderInsights,
@@ -21,10 +23,10 @@ import {
   renderStripChart,
   renderSun,
 } from "../src/render.ts";
-import type { CurrentWeather, StripChartInput } from "../src/render.ts";
+import type { CurrentWeather, DayViewInput, StripChartInput } from "../src/render.ts";
 import { COMPACT_STYLES, STYLES } from "../src/styles.ts";
 import type { ForecastEntry } from "../src/types.ts";
-import { HA_CONFIG, NOW, TZ, dailyForecast, hourlyForecast, statRows, states } from "./fixtures.ts";
+import { HA_CONFIG, NOW, TZ, dailyFor, dailyForecast, hourlyForecast, statRows, states } from "./fixtures.ts";
 
 const E = DEFAULT_ENTITIES;
 const XSS = `<img src=x onerror="alert(1)">'&`;
@@ -61,6 +63,11 @@ describe("escaping", () => {
       renderStripChart({ points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: XSS, sunrise: null, sunset: null }),
       renderDailyCompact({ entries: [{ datetime: "2026-10-08T11:00:00Z", condition: XSS }], tz: TZ, error: null, loading: false, tempUnit: XSS, windUnit: "km/h", rainUnit: XSS }),
       renderDailyCompact({ entries: [], tz: TZ, error: XSS, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" }),
+      renderDayHourly({
+        day: "2026-10-08", summary: { datetime: "2026-10-08T11:00:00Z", condition: XSS, precipitation_probability: 20 }, tz: TZ, error: null, loading: false,
+        tempUnit: XSS, rainUnit: XSS, hours: dayHours([{ datetime: "2026-10-08T12:00:00Z", condition: XSS, precipitation: 1, precipitation_probability: 40 }], "2026-10-08", TZ, NOW),
+      }),
+      renderDayHourly({ day: "2026-10-08", summary: null, tz: TZ, error: XSS, loading: false, tempUnit: "°C", rainUnit: "mm", hours: dayHours(null, "2026-10-08", TZ, NOW) }),
     ].join("");
     assert.ok(!html.includes("<img"), "raw markup leaked");
     assert.ok(!html.includes('onerror="'), "raw attribute leaked");
@@ -311,24 +318,117 @@ describe("accuracy", () => {
   });
 });
 
-describe("the only interactive element", () => {
-  it("is the Today / Tomorrow switch", () => {
+describe("the interactive elements are view controls only", () => {
+  const listBase = { tz: TZ, error: null, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" };
+  it("full layout: the Today / Tomorrow switch only (its hourly and daily lists stay plain)", () => {
     const all = [
       renderChart({ day: "today", points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: null, fsCurrentHour: 1, fsNextHour: 1, sunrise: null, sunset: null }),
       renderNow(current()), renderSolar({ today: solarTotals(states(), E.blend_today, E.solcast_today, E.forecast_solar_today), remaining: solarTotals(states(), E.blend_remaining, E.solcast_remaining, E.forecast_solar_remaining), tomorrow: solarTotals(states(), E.blend_tomorrow, E.solcast_tomorrow, E.forecast_solar_tomorrow), pvToday: 9.8, pvNow: 2350 }),
       renderAccuracy(accuracyView(states(), E), true),
+      renderHourly({ ...listBase, entries: hourlyForecast(NOW, 12) }), renderDaily({ ...listBase, entries: dailyForecast() }),
     ].join("");
     assert.deepEqual([...new Set([...all.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))], ["chart-day"]);
     assert.equal((all.match(/<button /g) ?? []).length, 2);
-    assert.ok(!/<(?:input|select|form|a )/.test(all));
+    assert.ok(!/<(?:input|select|form|a )|tabindex/.test(all));
   });
-  it("the compact layouts have none at all", () => {
+  it("solar strip: none at all", () => {
     const all = [
-      renderShell("S", STYLES + COMPACT_STYLES, "solar_strip"), renderShell("D", STYLES + COMPACT_STYLES, "daily_compact"),
+      renderShell("S", STYLES + COMPACT_STYLES, "solar_strip"),
       renderSolarStrip({ today: solarTotals(states(), E.blend_today, E.solcast_today, E.forecast_solar_today), remaining: solarTotals(states(), E.blend_remaining, E.solcast_remaining, E.forecast_solar_remaining), tomorrow: solarTotals(states(), E.blend_tomorrow, E.solcast_tomorrow, E.forecast_solar_tomorrow), pvToday: 9.8 }),
       renderStripChart({ points: points("2026-10-08"), now: NOW, tz: TZ, solcastNote: null, actualNote: null, sunrise: null, sunset: null }),
-      renderDailyCompact({ entries: dailyForecast(), tz: TZ, error: null, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" }),
     ].join("");
     assert.ok(!all.includes("data-action") && !/<(?:button|input|select|form|a )/.test(all));
+  });
+  it("compact daily list: every day row is one native button (keyboard: Tab, Enter, Space) carrying its local date; nothing else", () => {
+    const html = renderShell("D", STYLES + COMPACT_STYLES, "daily_compact") + renderDailyCompact({ ...listBase, entries: dailyForecast() });
+    const buttons = [...html.matchAll(/<button [^>]*>/g)].map((m) => m[0]);
+    assert.equal(buttons.length, 6);
+    assert.deepEqual(buttons.map((b) => /data-date="([^"]+)"/.exec(b)?.[1]), ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13"]);
+    for (const b of buttons) {
+      assert.ok(b.startsWith('<button type="button" class="dc" data-action="weather-hours" data-date="'), b);
+      assert.ok(/title="Show the hourly forecast for (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} Oct"/.test(b), b);
+    }
+    assert.deepEqual([...new Set([...html.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))], ["weather-hours"]);
+    assert.ok(!/<(?:input|select|form|a )|tabindex|role=|onclick/.test(html), "no other control, no inline handler, no custom focus order");
+    assert.equal((html.match(/icon="mdi:chevron-right"/g) ?? []).length, 6, "each row shows the open affordance");
+  });
+  it("a row whose date cannot be read stays plain text: it cannot be opened", () => {
+    const html = renderDailyCompact({ ...listBase, entries: [{ datetime: "garbage", condition: "sunny" }, dailyForecast()[0]!] });
+    assert.equal((html.match(/<button /g) ?? []).length, 1);
+    assert.ok(html.startsWith('<div class="dc"><span class="d">--</span>'));
+  });
+});
+
+describe("the Overview's day breakdown (daily_compact with a day open)", () => {
+  const view = (over: Partial<DayViewInput> = {}): string => renderDayHourly({
+    day: "2026-10-09", summary: dailyForecast()[1]!, tz: TZ, error: null, loading: false, tempUnit: "°C", rainUnit: "mm",
+    hours: dayHours(hourlyForecast(NOW, 72), "2026-10-09", TZ, NOW), ...over,
+  });
+  it("Back to days, the date, the day's summary line, then the dedicated view's hourly cells in one scrolling strip", () => {
+    const html = view();
+    assert.ok(html.startsWith('<div class="dhead"><button type="button" class="back" data-action="weather-days" data-date="2026-10-09">'), html.slice(0, 200));
+    assert.ok(html.includes("<span>Back to days</span>") && html.includes('<h3 class="dtitle">Fri 9 Oct <span class="sub">hourly</span></h3>'));
+    assert.ok(html.includes('<div class="dsum"><div class="dc"><span class="d">Fri</span>') && html.includes("Rain") && html.includes("16° / 9°") && html.includes("4.2 mm"),
+      "the daily summary stays visible, as plain text");
+    assert.ok(html.includes('<div class="hours" role="region" tabindex="0" aria-label="Hourly forecast for Fri 9 Oct" data-strip="2026-10-09">'),
+      "a keyboard-scrollable, labelled strip, marked with its day");
+    assert.equal((html.match(/class="hc"/g) ?? []).length, 24);
+    assert.equal((html.match(/<button /g) ?? []).length, 1, "the summary row is not a button");
+    assert.deepEqual([...new Set([...html.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]))], ["weather-days"]);
+    assert.ok(html.includes("provides no rain probability"), "Met.no: the amount only, and the note saying so");
+    assert.ok(!html.includes("Clocks go") && !html.includes("covers"), "an ordinary, fully covered day needs no note");
+  });
+  it("reuses the dedicated view's hourly cell byte for byte", () => {
+    const entries = hourlyForecast(Date.parse("2026-10-08T23:00:00Z"), 24);
+    const full = renderHourly({ entries, tz: TZ, error: null, loading: false, tempUnit: "°C", windUnit: "km/h", rainUnit: "mm" });
+    const cells = (h: string): string => /<div class="hours"[^>]*>([\s\S]*?)<\/div><div class="note">/.exec(h)?.[1] ?? "";
+    assert.ok(cells(full).length > 1000);
+    assert.equal(cells(view({ hours: dayHours(entries, "2026-10-09", TZ, NOW) })), cells(full));
+  });
+  it("rain probability appears only when the source supplies it", () => {
+    const html = view({ hours: dayHours(hourlyForecast(NOW, 72, true), "2026-10-09", TZ, NOW) });
+    assert.ok(!html.includes("provides no rain probability") && /<br>\d+%/.test(html));
+  });
+  it("Sun 25 Oct: 25 cells, 01:00 BST then 01:00 GMT, and a note saying the clocks go back", () => {
+    const now = Date.parse("2026-10-24T12:00:00Z");
+    const html = view({ day: "2026-10-25", summary: dailyFor(["2026-10-25"])[0]!, hours: dayHours(hourlyForecast(now, 72), "2026-10-25", TZ, now) });
+    assert.equal((html.match(/class="hc"/g) ?? []).length, 25);
+    assert.ok(html.includes('<div class="t">00:00</div>') && html.includes('<div class="t">01:00 BST</div>') && html.includes('<div class="t">01:00 GMT</div>'));
+    assert.ok(html.indexOf("01:00 BST") < html.indexOf("01:00 GMT"));
+    assert.ok(html.includes("Clocks go back on this day: it has 25 hours, and the times from 01:00 to 01:59 occur twice."));
+    assert.ok(html.includes('<h3 class="dtitle">Sun 25 Oct'));
+  });
+  it("Sun 28 Mar 2027: 23 cells, no 01:00, and a note saying the clocks go forward", () => {
+    const now = Date.parse("2027-03-27T12:00:00Z");
+    const html = view({ day: "2027-03-28", summary: null, hours: dayHours(hourlyForecast(now, 72), "2027-03-28", TZ, now) });
+    assert.equal((html.match(/class="hc"/g) ?? []).length, 23);
+    assert.ok(html.includes('<div class="t">00:00</div><ha-icon') && html.includes('<div class="t">02:00</div>') && !html.includes('<div class="t">01:00'));
+    assert.ok(html.includes("Clocks go forward on this day: it has 23 hours, and there are no times from 01:00 to 01:59."));
+    assert.ok(!html.includes('class="dsum"'), "no daily entry for that date: no summary line, nothing made up");
+  });
+  it("a day the hourly forecast does not reach says so, keeps Back and the daily summary, and draws no cell", () => {
+    const html = view({ day: "2026-10-13", summary: dailyForecast()[5]!, hours: dayHours(hourlyForecast(NOW, 48), "2026-10-13", TZ, NOW) });
+    assert.ok(html.includes('<div class="dstate"><span class="na">Hourly forecast not available for this day.</span></div>'));
+    assert.ok(html.includes('data-action="weather-days"') && html.includes('<div class="dsum">'));
+    assert.ok(!html.includes('class="hc"') && !html.includes("0.0 mm") && !html.includes('<div class="hours"'));
+  });
+  it("a partly covered day shows only the hours it has and says how many", () => {
+    const html = view({ day: "2026-10-10", hours: dayHours(hourlyForecast(NOW, 48), "2026-10-10", TZ, NOW) });
+    assert.equal((html.match(/class="hc"/g) ?? []).length, 13);
+    assert.ok(html.includes("The hourly forecast covers 13 of the 24 hours of this day; hours it does not include are not shown."));
+    const today = view({ day: "2026-10-08", hours: dayHours(hourlyForecast(NOW, 5), "2026-10-08", TZ, NOW) });
+    assert.ok(today.includes("covers 5 of the 11 remaining hours of this day"));
+  });
+  it("loading and error keep Back and the summary; the DST note stays on a DST day", () => {
+    const loading = view({ loading: true, hours: dayHours(null, "2026-10-09", TZ, NOW) });
+    assert.ok(loading.includes("Loading hourly forecast...") && loading.includes("Back to days") && loading.includes('<div class="dsum">'));
+    const err = view({ error: "Entity not found: weather.forecast_home", hours: dayHours(null, "2026-10-09", TZ, NOW) });
+    assert.ok(err.includes("Hourly forecast unavailable: Entity not found: weather.forecast_home") && err.includes("Back to days"));
+    const dstErr = view({ day: "2026-10-25", error: "x", hours: dayHours(null, "2026-10-25", TZ, NOW) });
+    assert.ok(dstErr.includes("Clocks go back on this day"));
+  });
+  it("unknown hourly values show --, never 0", () => {
+    const html = view({ hours: dayHours([{ datetime: "2026-10-09T09:00:00Z" }], "2026-10-09", TZ, NOW) });
+    assert.ok(html.includes('<div class="v" title="Unknown">--</div><div class="r">--</div><div class="c">-- cloud</div><div class="w">-- --</div>'), html);
   });
 });

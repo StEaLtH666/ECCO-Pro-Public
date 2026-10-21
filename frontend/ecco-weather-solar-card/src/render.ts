@@ -1,8 +1,11 @@
 // HTML / SVG string rendering. Pure functions of their arguments; every value that came from Home Assistant is escaped.
-// The only interactive element is the Today / Tomorrow chart switch (data-action="chart-day"), which changes local view
-// state only.
-import { HOUR_MS, compass, condition, fmtAge, fmtDuration, fmtKwh, fmtNum, fmtTime, fmtWeekday, hasRainProbability, parseTime, toNum } from "./model.ts";
-import type { AccuracyView } from "./model.ts";
+// The interactive elements change local view state only: the Today / Tomorrow chart switch (data-action="chart-day") in
+// the full layout, and in `daily_compact` the day rows (data-action="weather-hours", open that day's hourly breakdown) and
+// the Back to days button (data-action="weather-days").
+import {
+  HOUR_MS, compass, condition, dateKey, fmtAge, fmtDayLabel, fmtDuration, fmtKwh, fmtNum, fmtTime, fmtWeekday, hasRainProbability, parseTime, toNum,
+} from "./model.ts";
+import type { AccuracyView, DayHours } from "./model.ts";
 import type { ForecastEntry, FreshnessView, HourPoint, Layout, Num, SolarTotals, SunView } from "./types.ts";
 
 export function esc(v: unknown): string {
@@ -349,6 +352,21 @@ function forecastState(i: WeatherListInput, what: string): string | null {
   return null;
 }
 
+const NO_PROBABILITY = `<div class="note">Rain shows forecast amount; this weather source provides no rain probability.</div>`;
+
+/** One hourly weather cell - time, condition icon, temperature, rain amount (and its probability only when the source supplies
+ *  one), cloud cover, wind. The dedicated view's hourly list and the Overview's day breakdown both use it. */
+function hourCell(f: ForecastEntry, label: string, i: Pick<WeatherListInput, "tempUnit" | "rainUnit">, prob: boolean): string {
+  const c = condition(f.condition);
+  const temp = toNum(f.temperature);
+  const rain = toNum(f.precipitation);
+  const pp = toNum(f.precipitation_probability);
+  const cl = toNum(f.cloud_coverage);
+  return `<div class="hc"><div class="t">${esc(label)}</div>${icon(c.icon)}<div class="v" title="${esc(c.label)}">${esc(temp === null ? "--" : `${temp.toFixed(0)}${i.tempUnit}`)}</div>` +
+    `<div class="r">${esc(rain === null ? "--" : `${rain.toFixed(1)} ${i.rainUnit}`)}${prob ? `<br>${esc(pp === null ? "--" : `${Math.round(pp)}%`)}` : ""}</div>` +
+    `<div class="c">${esc(cl === null ? "--" : `${Math.round(cl)}%`)} cloud</div><div class="w">${esc(fmtNum(toNum(f.wind_speed), 0))} ${esc(compass(f.wind_bearing))}</div></div>`;
+}
+
 export function renderHourly(i: WeatherListInput): string {
   const head = `<h3>Hourly weather</h3>`;
   const st = forecastState(i, "Hourly forecast");
@@ -356,17 +374,9 @@ export function renderHourly(i: WeatherListInput): string {
   const prob = hasRainProbability(i.entries);
   const cells = i.entries.map((f) => {
     const t = parseTime(f.datetime);
-    const c = condition(f.condition);
-    const temp = toNum(f.temperature);
-    const rain = toNum(f.precipitation);
-    const pp = toNum(f.precipitation_probability);
-    const cl = toNum(f.cloud_coverage);
-    return `<div class="hc"><div class="t">${esc(t === null ? "--" : fmtTime(t, i.tz))}</div>${icon(c.icon)}<div class="v" title="${esc(c.label)}">${esc(temp === null ? "--" : `${temp.toFixed(0)}${i.tempUnit}`)}</div>` +
-      `<div class="r">${esc(rain === null ? "--" : `${rain.toFixed(1)} ${i.rainUnit}`)}${prob ? `<br>${esc(pp === null ? "--" : `${Math.round(pp)}%`)}` : ""}</div>` +
-      `<div class="c">${esc(cl === null ? "--" : `${Math.round(cl)}%`)} cloud</div><div class="w">${esc(fmtNum(toNum(f.wind_speed), 0))} ${esc(compass(f.wind_bearing))}</div></div>`;
+    return hourCell(f, t === null ? "--" : fmtTime(t, i.tz), i, prob);
   }).join("");
-  const note = prob ? "" : `<div class="note">Rain shows forecast amount; this weather source provides no rain probability.</div>`;
-  return `${head}<div class="hours">${cells}</div>${note}`;
+  return `${head}<div class="hours">${cells}</div>${prob ? "" : NO_PROBABILITY}`;
 }
 
 export function renderDaily(i: WeatherListInput): string {
@@ -389,30 +399,78 @@ export function renderDaily(i: WeatherListInput): string {
   return `${head}<div class="days">${rows}</div>`;
 }
 
+// Whole degrees, "--" for unknown; a value in (-0.5, 0) is "0", never "-0".
+const deg = (v: Num): string => {
+  if (v === null) return "--";
+  const s = v.toFixed(0);
+  return s === "-0" ? "0" : s;
+};
+
+/** One `daily_compact` row: weekday / condition / high and low / rain amount (/ probability). As a list row it is a button that
+ *  opens that local day's hourly breakdown; as the day breakdown's summary line it is plain text. */
+function compactRow(f: ForecastEntry, i: Pick<WeatherListInput, "tz" | "tempUnit" | "rainUnit">, prob: boolean, open: boolean): string {
+  const t = parseTime(f.datetime);
+  const c = condition(f.condition);
+  const pp = toNum(f.precipitation_probability);
+  const rain = toNum(f.precipitation);
+  const cells = `<span class="d">${esc(t === null ? "--" : fmtWeekday(t, i.tz))}</span>${icon(c.icon)}<span class="cl">${esc(c.label)}</span>` +
+    `<span class="hl" title="${esc(i.tempUnit)}">${esc(deg(toNum(f.temperature)))}° / ${esc(deg(toNum(f.templow)))}°</span>` +
+    `<span class="rn">${esc(rain === null ? "--" : `${rain.toFixed(1)} ${i.rainUnit}`)}</span>` +
+    `${prob ? `<span class="pp">${esc(pp === null ? "--" : `${Math.round(pp)}%`)}</span>` : ""}`;
+  const cls = `dc${prob ? " p" : ""}`;
+  if (!open || t === null) return `<div class="${cls}">${cells}</div>`;
+  const day = dateKey(t, i.tz);
+  return `<button type="button" class="${cls}" data-action="weather-hours" data-date="${esc(day)}" title="${esc(`Show the hourly forecast for ${fmtDayLabel(day)}`)}">` +
+    `${cells}${icon("mdi:chevron-right", "go")}</button>`;
+}
+
 /** The `daily_compact` rows: one per entry (never padded), weekday / condition / high and low / rain amount, and the
- *  rain-probability column only when the weather source supplies one. Loading / error / empty states as the full list. */
+ *  rain-probability column only when the weather source supplies one. Each row is a button opening that day's hourly
+ *  breakdown in the same card. Loading / error / empty states as the full list. */
 export function renderDailyCompact(i: WeatherListInput): string {
   const st = forecastState(i, "Daily forecast");
   if (st) return st;
   const prob = hasRainProbability(i.entries);
-  // Whole degrees, "--" for unknown; a value in (-0.5, 0) is "0", never "-0".
-  const deg = (v: Num): string => {
-    if (v === null) return "--";
-    const s = v.toFixed(0);
-    return s === "-0" ? "0" : s;
-  };
-  return i.entries.map((f) => {
-    const t = parseTime(f.datetime);
-    const c = condition(f.condition);
-    const hiT = toNum(f.temperature);
-    const loT = toNum(f.templow);
-    const rain = toNum(f.precipitation);
-    const pp = toNum(f.precipitation_probability);
-    return `<div class="dc${prob ? " p" : ""}"><span class="d">${esc(t === null ? "--" : fmtWeekday(t, i.tz))}</span>${icon(c.icon)}<span class="cl">${esc(c.label)}</span>` +
-      `<span class="hl" title="${esc(i.tempUnit)}">${esc(deg(hiT))}° / ${esc(deg(loT))}°</span>` +
-      `<span class="rn">${esc(rain === null ? "--" : `${rain.toFixed(1)} ${i.rainUnit}`)}</span>` +
-      `${prob ? `<span class="pp">${esc(pp === null ? "--" : `${Math.round(pp)}%`)}</span>` : ""}</div>`;
-  }).join("");
+  return i.entries.map((f) => compactRow(f, i, prob, true)).join("");
+}
+
+export interface DayViewInput {
+  /** the local date shown, YYYY-MM-DD in the Home Assistant time zone */
+  day: string;
+  /** that date's daily forecast entry, kept on screen as the summary line; null when the daily forecast no longer has it */
+  summary: ForecastEntry | null;
+  /** dayHours(): that date's hourly entries and its DST facts */
+  hours: DayHours;
+  tz: string;
+  error: string | null;
+  loading: boolean;
+  tempUnit: string;
+  rainUnit: string;
+}
+
+/** `daily_compact` with a day open: a Back to days button and the date, the day's summary line, then the hourly cells of the
+ *  dedicated view in one horizontally scrolling strip. Only hours the forecast holds are shown; a day it does not reach says
+ *  so. A DST day says it has 23 or 25 hours, and a repeated hour carries its zone name. */
+export function renderDayHourly(v: DayViewInput): string {
+  const label = fmtDayLabel(v.day);
+  const head = `<div class="dhead"><button type="button" class="back" data-action="weather-days" data-date="${esc(v.day)}">` +
+    `${icon("mdi:chevron-left")}<span>Back to days</span></button><h3 class="dtitle">${esc(label)} <span class="sub">hourly</span></h3></div>`;
+  const summary = v.summary ? `<div class="dsum">${compactRow(v.summary, v, hasRainProbability([v.summary]), false)}</div>` : "";
+  const h = v.hours;
+  const length = Number.isInteger(h.dayLength) ? String(h.dayLength) : h.dayLength.toFixed(2).replace(/0$/, "");
+  const dst = h.repeated ? `Clocks go back on this day: it has ${length} hours, and the times from ${h.repeated} occur twice.`
+    : h.skipped ? `Clocks go forward on this day: it has ${length} hours, and there are no times from ${h.skipped}.` : null;
+  const notes = (list: Array<string | null>): string => list.filter((n): n is string => !!n).map((n) => `<div class="note">${esc(n)}</div>`).join("");
+  const st = v.error ? muted(`Hourly forecast unavailable: ${v.error}`) : v.loading ? muted("Loading hourly forecast...")
+    : !h.entries.length ? muted("Hourly forecast not available for this day.") : null;
+  if (st) return `${head}${summary}<div class="dstate">${st}</div>${notes([dst])}`;
+  const prob = hasRainProbability(h.entries);
+  const cells = h.entries.map((f, n) => hourCell(f, h.labels[n] ?? "--", v, prob)).join("");
+  const partial = h.entries.length < h.hoursAhead
+    ? `The hourly forecast covers ${h.entries.length} of the ${h.hoursAhead} ${h.hoursAhead < h.hourSteps ? "remaining " : ""}hours of this day; hours it does not include are not shown.`
+    : null;
+  return `${head}${summary}<div class="hours" role="region" tabindex="0" aria-label="${esc(`Hourly forecast for ${label}`)}" data-strip="${esc(v.day)}">${cells}</div>` +
+    `${notes([partial, dst])}${prob ? "" : NO_PROBABILITY}`;
 }
 
 export function renderAccuracy(a: AccuracyView, show: boolean): string {
