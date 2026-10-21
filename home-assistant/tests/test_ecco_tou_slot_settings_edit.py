@@ -127,8 +127,8 @@ PKG0 = X.unrender_stage1(S1)                               # the Stage 0 text it
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
-S1_SHA = "4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816"      # the installed Stage 1 package, LF line ends
-PAIRS_SHA = "13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17"   # the canonical serialisation of the 58 pairs (40 reviewed + 18 follow-up)
+S1_SHA = "2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de"      # the installed Stage 1 package, LF line ends
+PAIRS_SHA = "9924673e2c512edb4048b897aa073c779727d88aa453c345eac0934f29d75a37"   # the canonical serialisation of the 62 pairs (40 reviewed + 22 follow-up)
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -540,9 +540,9 @@ check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned St
       "render_stage1(unrender_stage1(installed)) == installed, from the LF text and from a CRLF copy", hashlib.sha256(PKG0.encode()).hexdigest()
       == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1)) == S1
       and X.unrender_stage1(S1.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1.replace("\n", "\r\n"))) == S1)
-check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 58 pairs hash "
+check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 62 pairs hash "
       "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
-      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 58 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 62 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
 SENT = "\x00"
 
 
@@ -573,7 +573,7 @@ def outside_pairs(installed):
 
 
 OUT = outside_pairs(S1)
-check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 18 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
+check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 22 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
       f"times (the acs0r1 press timing, the fresh-evidence code, the gate, the verdict reads...): {OUT[1] if OUT else '?'} of the baseline's "
       f"{OUT[2] if OUT else '?'} lines are wholly outside the 40 reviewed pairs, and the follow-up pairs are undone exactly first", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
 OUT_MUTANTS = [
@@ -2468,6 +2468,80 @@ r = live_power_fraction_after_review(S1)
 check("F3: the Apply-start gate copy itself: the live power becomes 2500.5 W after a Review made at 2500 W (the reviewed integer is unchanged): REFUSED with the "
       "multiple-of-100 reason, nothing pressed", r.res().startswith("REFUSED") and "multiple of 100" in r.res() and r.d.presses == [], r.res())
 
+
+# --- N2 (owner-approved 2026-10-21): the success verdict also needs the firmware's gate-pass counter to have moved by EXACTLY 1 since before the staging
+def ext_after_finish(slot, delay=3.0, preload=True):
+    """Another actor: `delay` s after the editor's Apply finished it arms and presses Apply of `slot` (preloaded into Manual Controls staging at the start,
+    or loaded just before its own Apply). The firmware counts it as a second gate pass."""
+    def setup(x):
+        if preload:
+            x.d._load(slot)
+
+        fired = []
+
+        def go(y, n):
+            if fired:                                    # only the editor's own Apply triggers the other actor, once
+                return
+            fired.append(1)
+            if not preload:
+                y.d._load(slot)
+            y.d.busy = 0.0
+            y.w.call("switch.turn_on", [M.ARM], {})
+            y.w.after(1.5, lambda: (setattr(y.d, "busy", 0.0), y.w.call("button.press", [f"button.{D}apply_manual_slot_{slot}_settings"], {})))
+        after_finish(go, delay)(x)
+    return setup
+
+
+def counter_reset_setup(x):
+    x.d.attempts = 5
+    x.w.set(M.ATTEMPTS, "5.0")
+    after_finish(lambda y, n: setattr(y.d, "attempts", 0), 1.0)(x)
+
+
+def n2_uncertain(r, setting="start_time", n=3, passes=None, apply_presses=1):
+    """UNCERTAIN, locked, the manual-recovery notification names the counter and the delta, NO undo offer, NO F1 Load, NO re-Load, one editor Apply press."""
+    prev = 6 if n == 1 else n - 1
+    b = btn(r)
+    return (r.res().startswith("UNCERTAIN") and r.locked() and "To undo" not in r.note() and "gate-pass counter went" in r.note()
+            and "another Apply - possibly of a different slot - may have run" in r.note() and "Do NOT retry" in r.note()
+            and f"button.{D}load_current_slot_{prev}_to_manual_staging" not in b and b.count(f"button.{D}load_current_slot_{n}_to_manual_staging") == 1
+            and b.count(f"button.{D}apply_manual_slot_{n}_settings") == apply_presses and F2_NOTE_OK not in r.note() and F2_NOTE_BAD not in r.note()
+            and (passes is None or r.d.attempts == passes) and "APPLIED" not in r.res() and r.w.state(FLIGHT) == "off" and len(r.res()) < 255)
+
+
+bad = []
+for setting in SETTINGS:
+    r = Run().edit(3, setting, value_for(3, setting))
+    if not (r.res().startswith("APPLIED AND VERIFIED") and r.d.attempts == 1 and r.w.state(M.ATTEMPTS) == "1.0" and not r.locked()):
+        bad.append((setting, r.res()[:60], r.d.attempts))
+check("N2: a normal verified edit moves the gate-pass counter by exactly 1 (read 35 s after the press, after the counter published): APPLIED AND VERIFIED for "
+      "every setting", not bad, str(bad))
+bad = []
+for setting in ("power", "start_time", "target_soc"):
+    r = Run(setup=ext_apply_after_arm(0.05)).edit(3, setting, value_for(3, setting), run=520)
+    if not (r.res().startswith("APPLIED AND VERIFIED") and r.d.attempts == 1 and "nothing written" not in r.res()):
+        bad.append((setting, r.res()[:70], r.d.attempts))
+check("N2 caveat (i): another actor's Apply wrote the reviewed staging and the editor's own press was refused (the firmware was already writing): the counter "
+      "moved by exactly 1, the final state is the requested one and verified, so it stays APPLIED AND VERIFIED, as documented", not bad, str(bad))
+bad = []
+for setting in ("start_time", "power", "target_soc"):
+    r = Run(setup=ext_after_finish(5, 3.0)).edit(3, setting, value_for(3, setting), run=520)
+    if not (n2_uncertain(r, setting, passes=2)):
+        bad.append((setting, r.res()[:90], r.d.attempts, r.note()[-160:]))
+check("N2: another actor's Apply of a DIFFERENT, already loaded slot (5) passes the firmware's gate while the editor's own Apply also passed: the counter moved "
+      "by 2 - UNCERTAIN, locked, the notification shows the counter and says another Apply, possibly of a different slot, may have run, no undo offer, no F1 Load "
+      "of slot N-1, no re-Load, for a start-time, power and SOC edit", not bad, str(bad[:2]))
+r = Run(setup=ext_after_finish(3, 5.0, preload=False)).edit(3, "start_time", "09:30", run=520)
+check("N2: a second Apply of the SAME slot passes after the editor's own (counter +2): UNCERTAIN, locked, no undo, no F1 Load", n2_uncertain(r, passes=2, apply_presses=2),
+      f"{r.res()} {r.d.attempts} {btn(r)}")
+r = Run(setup=lambda x: after_finish(lambda y, n: counter_unavailable(y), 5.0)(x)).edit(3, "start_time", "09:30", run=520)
+check("N2: the counter is unavailable when the verdict reads it: UNCERTAIN, locked, no undo, no F1 Load", n2_uncertain(r), f"{r.res()} {r.note()[-120:]}")
+r = Run(setup=lambda x: after_finish(lambda y, n: setattr(y.d, "attempts", y.d.attempts - 1), 1.0)(x)).edit(3, "start_time", "09:30", run=520)
+check("N2: the counter did not move at all (delta 0) on an otherwise verified run: UNCERTAIN, locked, no undo, no F1 Load", n2_uncertain(r), f"{r.res()} {r.note()[-120:]}")
+r = Run(setup=counter_reset_setup).edit(3, "start_time", "09:30", run=520)
+check("N2: the counter was reset (the dongle rebooted: a value below the one recorded before the staging): UNCERTAIN, locked, no undo, no F1 Load",
+      n2_uncertain(r), f"{r.res()} {r.note()[-120:]}")
+
 # ======================================================================================================================
 print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
 # ======================================================================================================================
@@ -2619,6 +2693,30 @@ def f2_cap(t):
     return unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(bump_counter, 3.5))).edit(3, "power", 3000, run=520))
 
 
+def n2_ok_check(t):
+    return all(Run(t).edit(3, st, value_for(3, st)).res().startswith("APPLIED AND VERIFIED") for st in ("start_time", "power"))
+
+
+def n2_other_check(t):
+    return n2_uncertain(Run(t, setup=ext_after_finish(5, 3.0)).edit(3, "start_time", "09:30", run=520), passes=2)
+
+
+def n2_double_check(t):
+    return n2_uncertain(Run(t, setup=ext_after_finish(3, 5.0, preload=False)).edit(3, "start_time", "09:30", run=520), passes=2, apply_presses=2)
+
+
+def n2_unav_check(t):
+    return n2_uncertain(Run(t, setup=lambda x: after_finish(lambda y, n: counter_unavailable(y), 5.0)(x)).edit(3, "start_time", "09:30", run=520))
+
+
+def n2_zero_check(t):
+    return n2_uncertain(Run(t, setup=lambda x: after_finish(lambda y, n: setattr(y.d, "attempts", y.d.attempts - 1), 1.0)(x)).edit(3, "start_time", "09:30", run=520))
+
+
+def n2_reset_check(t):
+    return n2_uncertain(Run(t, setup=counter_reset_setup).edit(3, "start_time", "09:30", run=520))
+
+
 CHECKS = {
     **{f"happy_{s}": happy(s) for s in SETTINGS},
     "phrase": phrase_check,
@@ -2655,6 +2753,8 @@ CHECKS = {
                                                                                               and x.d.presses == [])(live_power_fraction_after_review(t)),
     "f4": f4_check,
     "f2_late": lambda t: unproven_ok(Run(t, setup=both(RTC_LATE(), after_load(bump_counter_late, 5.0))).edit(3, "power", 3000, run=520)),
+    "n2_ok": n2_ok_check, "n2_other": n2_other_check, "n2_double": n2_double_check, "n2_unav": n2_unav_check, "n2_zero": n2_zero_check,
+    "n2_reset": n2_reset_check,
     "f2_ext": f2_ext, "f2_cnt": f2_cnt, "f2_unav": f2_unav, "f2_wip": f2_wip, "f2_cap": f2_cap,
     "inv_clock": lambda t: (rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, S.local_str(x.w.t + 400))))
                             and rejects(rv(t, 3, "start_time", "09:30", setup=lambda x: x.w.set(M.CLOCK, "unavailable")))),
@@ -2847,6 +2947,35 @@ MUTANTS += [
     ("F2 correction: the 35 s wait for the counter to publish is removed from the pre-press verdict", _f2_no_publish_wait, "f2_late"),
     ("F4: the SmartDeye / inverter-panel advice is removed", [(SMART_W, "")], "f4"),
     ("F3: the rule is removed from the Apply-start gate copy only", _f3_start_gone, "f3_start"),
+]
+def _n2_after_f1(t):
+    """The counter check is moved to AFTER F1's Load of slot N-1: the verdict no longer needs it, a late block locks once the Load has been pressed."""
+    t = t.replace("and diff | length == 0 and n2_ok }}", "and diff | length == 0 }}")
+    ind = " " * 34
+    late = (ind + "- if:\n" + ind + "    - condition: template\n" + ind + "      value_template: \"{{ not n2_ok }}\"\n" + ind + "  then:\n"
+            + ind + "    - action: input_text.set_value\n" + ind + "      target:\n" + ind + "        entity_id: input_text.ecco_cfg_edit_last_result\n"
+            + ind + "      data:\n" + ind + "        value: \"UNCERTAIN - late counter check\"\n"
+            + ind + "    - action: input_boolean.turn_on\n" + ind + "      target:\n" + ind + "        entity_id: input_boolean.ecco_cfg_edit_review_required\n")
+    assert t.count(X.F1_ANCHOR) == 1
+    return t.replace(X.F1_ANCHOR, late + X.F1_ANCHOR)
+
+
+def _n2_read_before_wait(t):
+    """The counter is read right after the press (before the 35 s publish wait) instead of at the verdict."""
+    line = "                          att_now: \"{{ states('" + X._ATT + "') | float(-1) }}\"\n"
+    assert t.count(line) == 1
+    t = t.replace(line, "")
+    anchor = "                          fw_result: \"{{ states('" + X._FWRES + "')[:120] }}\"\n"
+    assert t.count(anchor) == 1
+    return t.replace(anchor, anchor + line)
+
+
+MUTANTS += [
+    ("N2: the gate-pass counter check is removed from the success verdict", [("and diff | length == 0 and n2_ok }}", "and diff | length == 0 }}")], "n2_other"),
+    ("N2: the delta may be 1 or more (>= 1 instead of == 1)", [("(att_now - att0) == 1 }}", "(att_now - att0) >= 1 }}")], "n2_double"),
+    ("N2: an unavailable counter is treated as delta 1", [("n2_ok: \"{{ att0 >= 0 and att_now >= 0 and (att_now - att0) == 1 }}\"", "n2_ok: \"{{ att_now < 0 or (att0 >= 0 and (att_now - att0) == 1) }}\"")], "n2_unav"),
+    ("N2: the check is placed after F1's Load of slot N-1", _n2_after_f1, "n2_other"),
+    ("N2: the counter is read before the 35 s publish wait", _n2_read_before_wait, "n2_ok"),
 ]
 for name, pairs, key in MUTANTS:
     if callable(pairs):

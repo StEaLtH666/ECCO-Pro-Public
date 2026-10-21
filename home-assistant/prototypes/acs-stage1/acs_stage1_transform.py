@@ -38,9 +38,9 @@ ACS0_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"     # the pac
 # sha256 of the Stage 0 package text (LF line ends) that PAIRS apply to: unrender_stage1(<the installed package>) must hash to this.
 ACS0_BASE_SHA256 = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"
 # sha256 of the installed Stage 1 package text (LF line ends): render_stage1(<the Stage 0 text>).
-STAGE1_SHA256 = "4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816"
+STAGE1_SHA256 = "2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de"
 # sha256 of the canonical serialisation of PAIRS (pairs_sha256()): a silent edit of any pair changes it.
-PAIRS_SHA256 = "13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17"
+PAIRS_SHA256 = "9924673e2c512edb4048b897aa073c779727d88aa453c345eac0934f29d75a37"
 SETTINGS = ("target_soc", "power", "start_time", "charge_source")
 
 
@@ -811,6 +811,36 @@ W_F2C_AFTER = (
 W_PAIRS = [(W_HELPER_BEFORE, W_HELPER_AFTER, 1), (W_AUTO_BEFORE, W_AUTO_AFTER, 1), (W_STAGE_BEFORE, W_STAGE_AFTER, 1),
            (W_PRE_BEFORE, W_PRE_AFTER, 1), (W_F2C_BEFORE, W_F2C_AFTER, 1)]
 
+# ---- N2 (owner-approved 2026-10-21): the success verdict also needs the firmware's gate-pass counter to have moved by EXACTLY 1 since before the staging.
+# One Apply of this edit passes the firmware's gate once; a counter that moved by 0, by 2 or more, was reset or cannot be read means that something else
+# happened (another Apply, possibly of a different slot, inside the armed window or while the verdict waited), so the outcome is UNCERTAIN with the lock.
+# The counter is read where the verdict is judged, after the two later configuration reads and the 35 s delay that follows the Apply press (the counter
+# publishes every 30 s), and BEFORE F1's Load of slot N-1 (which runs only on a final APPLIED).
+N2_ATT_BEFORE = ("                          attempts_moved: >-\n"
+                 "                            {{ (states('" + _ATT + "') | float(-2)) != (attempts_before | float(-3))\n"
+                 "                               or (attempts_before | float(-1)) < 0 }}\n")
+N2_ATT_AFTER = (N2_ATT_BEFORE
+                + "                          att_now: \"{{ states('" + _ATT + "') | float(-1) }}\"\n"
+                + "                          n2_delta: \"{{ (att_now - att0) if (att0 >= 0 and att_now >= 0) else 'n/a' }}\"\n"
+                + "                          n2_ok: \"{{ att0 >= 0 and att_now >= 0 and (att_now - att0) == 1 }}\"\n")
+
+N2_VERDICT_BEFORE = ("                                      {{ fw_result.startswith('VERIFIED OK - manual Slot ' ~ n ~ ' ') and later_read\n"
+                     "                                         and diff | length == 0 }}\n")
+N2_VERDICT_AFTER = ("                                      {{ fw_result.startswith('VERIFIED OK - manual Slot ' ~ n ~ ' ') and later_read\n"
+                    "                                         and diff | length == 0 and n2_ok }}\n")
+
+N2_RESULT_BEFORE = ("UNCERTAIN - firmware: {{ fw_result[:60] }}; later read: {{ 'incomplete' if not later_read else (diff[:110] if diff else 'all as expected') }}\n")
+N2_RESULT_AFTER = ("UNCERTAIN - firmware: {{ fw_result[:60] }}; later read: {{ 'incomplete' if not later_read else (diff[:80] if diff else 'all as expected') }}"
+                   "{% if not n2_ok %}; gate counter {{ att0 | int(-1) }} -> {{ att_now | int(-1) }}, not +1{% endif %}\n")
+
+N2_NOTE_BEFORE = ("Independent read: {{ 'no complete later configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}.")
+N2_NOTE_AFTER = (N2_NOTE_BEFORE
+                 + " {% if not n2_ok %}The firmware's gate-pass counter went {{ att0 | int(-1) }} -> {{ att_now | int(-1) }} (delta {{ n2_delta }}; exactly +1 was expected for this one "
+                   "Apply), so another Apply - possibly of a different slot - may have run while the editor was armed or while the outcome was being judged, or the counter is "
+                   "unreadable or was reset. No undo is offered.{% endif %}")
+
+N2_PAIRS = [(N2_ATT_BEFORE, N2_ATT_AFTER, 1), (N2_VERDICT_BEFORE, N2_VERDICT_AFTER, 1), (N2_RESULT_BEFORE, N2_RESULT_AFTER, 1), (N2_NOTE_BEFORE, N2_NOTE_AFTER, 1)]
+
 def _followup_pairs() -> "list[tuple[str, str, int]]":
     p: list[tuple[str, str, int]] = []
     for ind, count in ((12, 2), (16, 1), (24, 1)):                   # F3 in the four copies of the gate: Review, Apply, fresh read, last check
@@ -826,6 +856,7 @@ def _followup_pairs() -> "list[tuple[str, str, int]]":
     p.append((F1_MSG_BEFORE, F1_MSG_AFTER, 1))
     p.append((F2_BEFORE, F2_AFTER, 1))
     p.extend(W_PAIRS)                                                 # F2 correction: the counter / write-seen proof
+    p.extend(N2_PAIRS)                                                # N2: the gate-pass counter must have moved by exactly 1 (appended last: the earlier pairs keep their indices; att0 is defined by the F2 pairs)
     return p
 
 

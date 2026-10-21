@@ -981,6 +981,9 @@ script:
                           attempts_moved: >-
                             {{ (states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-2)) != (attempts_before | float(-3))
                                or (attempts_before | float(-1)) < 0 }}
+                          att_now: "{{ states('sensor.ecco_clock_dongle_manual_configuration_write_attempts_since_boot') | float(-1) }}"
+                          n2_delta: "{{ (att_now - att0) if (att0 >= 0 and att_now >= 0) else 'n/a' }}"
+                          n2_ok: "{{ att0 >= 0 and att_now >= 0 and (att_now - att0) == 1 }}"
                           diff: >-
                             {% set d = namespace(v=[]) %}
                             {% set flx = (pre.fl - pre.fl % 4 + (1 if (want | string) == 'Grid' else 0)) if setting == 'charge_source' else pre.fl %}
@@ -1023,7 +1026,7 @@ script:
                                   - condition: template
                                     value_template: >-
                                       {{ fw_result.startswith('VERIFIED OK - manual Slot ' ~ n ~ ' ') and later_read
-                                         and diff | length == 0 }}
+                                         and diff | length == 0 and n2_ok }}
                                 sequence:
                                   - action: input_text.set_value
                                     target:
@@ -1099,7 +1102,7 @@ script:
                                   entity_id: input_text.ecco_cfg_edit_last_result
                                 data:
                                   value: >-
-                                    UNCERTAIN - firmware: {{ fw_result[:60] }}; later read: {{ 'incomplete' if not later_read else (diff[:110] if diff else 'all as expected') }}
+                                    UNCERTAIN - firmware: {{ fw_result[:60] }}; later read: {{ 'incomplete' if not later_read else (diff[:80] if diff else 'all as expected') }}{% if not n2_ok %}; gate counter {{ att0 | int(-1) }} -> {{ att_now | int(-1) }}, not +1{% endif %}
                               - action: input_boolean.turn_on
                                 target:
                                   entity_id: input_boolean.ecco_cfg_edit_review_required
@@ -1108,7 +1111,7 @@ script:
                                   notification_id: ecco_cfg_edit
                                   title: "ECCO: configuration edit outcome NOT proven - manual review needed"
                                   message: >-
-                                    Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. Firmware said: {{ fw_result }}. Independent read: {{ 'no complete later configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
+                                    Slot {{ n }} {{ label }} {{ bdisp }} -> {{ wdisp }}. Firmware said: {{ fw_result }}. Independent read: {{ 'no complete later configuration read' if not later_read else (diff if diff else 'all registers as expected, but the firmware did not confirm') }}. {% if not n2_ok %}The firmware's gate-pass counter went {{ att0 | int(-1) }} -> {{ att_now | int(-1) }} (delta {{ n2_delta }}; exactly +1 was expected for this one Apply), so another Apply - possibly of a different slot - may have run while the editor was armed or while the outcome was being judged, or the counter is unreadable or was reset. No undo is offered.{% endif %} Do NOT retry. Open Manual Controls, press Load Current Slot {{ n }}, and compare every slot {{ n }} value with the inverter's own display; correct anything wrong there deliberately. Free Power and Dump to Grid restore whatever they snapshot next, so settle the slot first. Edits stay locked until you run ECCO - Acknowledge configuration edit review.
                     else:
                       # The Apply was NOT pressed, but the write enable was ON and the firmware accepts ANY Apply press while it is on, so 'nothing pressed' is not
                       #    'nothing written': an Apply by someone else can land in the armed window. Disarm now, give the firmware's gate-pass counter time to
