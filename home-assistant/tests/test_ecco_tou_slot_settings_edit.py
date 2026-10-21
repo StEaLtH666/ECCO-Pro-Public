@@ -2973,6 +2973,7 @@ def _n2_read_before_wait(t):
 MUTANTS += [
     ("N2: the gate-pass counter check is removed from the success verdict", [("and diff | length == 0 and n2_ok }}", "and diff | length == 0 }}")], "n2_other"),
     ("N2: the delta may be 1 or more (>= 1 instead of == 1)", [("(att_now - att0) == 1 }}", "(att_now - att0) >= 1 }}")], "n2_double"),
+    ("N2: the delta may be 1 or less (<= 1 instead of == 1)", [("(att_now - att0) == 1 }}", "(att_now - att0) <= 1 }}")], "n2_zero"),
     ("N2: an unavailable counter is treated as delta 1", [("n2_ok: \"{{ att0 >= 0 and att_now >= 0 and (att_now - att0) == 1 }}\"", "n2_ok: \"{{ att_now < 0 or (att0 >= 0 and (att_now - att0) == 1) }}\"")], "n2_unav"),
     ("N2: the check is placed after F1's Load of slot N-1", _n2_after_f1, "n2_other"),
     ("N2: the counter is read before the 35 s publish wait", _n2_read_before_wait, "n2_ok"),

@@ -185,7 +185,7 @@ SmartDeye and the inverter panel not used during the proof; Home Assistant set t
    the staging was refreshed. (If it says the staging could not be refreshed, press Load Current Slot N-1 or Load All before any
    Manual Controls use.) A SOC, power or charge-source edit presses no extra Load.
 
-For every step check: `VERIFIED OK`; the Manual Configuration Write Attempts Since Boot sensor moved by exactly 1 (read it before the Review and about a minute after the Apply; a different delta means another Apply ran and the editor reports UNCERTAIN); two later reads; the fallback status DRIFT or CONTEXT, then MATCH after the undo; no other
+For every step check: `VERIFIED OK`; the Manual Configuration Write Attempts Since Boot sensor moved by exactly 1 (the editor records the counter itself just before it stages, after the Review; your own reading before the Review is a cross-check that should match it when nothing else applied; read it again about a minute after the Apply; a different delta means another Apply ran and the editor reports UNCERTAIN); two later reads; the fallback status DRIFT or CONTEXT, then MATCH after the undo; no other
 register changed; health unchanged. The target SOC path is re-checked read-only by section 4 (the Stage 0 editor's own live-proof status is kept in the owner's project records, not in this repository).
 
 ## 6. Rollback
@@ -248,7 +248,7 @@ offline in this change; the rest remain documented.
   accept ANY Apply press in that window (an Apply by someone else wrote the inverter in the reproduction). If a proven re-Load is
   refused, the FAILED notice says slot N's staging may still hold the reviewed value and to press Load Current Slot N before any
   Manual Controls Apply.
-- **An Apply by someone else inside the armed window or while the outcome is judged (closed by N2, owner-approved 2026-10-21).** The
+- **An Apply by someone else inside the armed window or while the outcome is judged (closed by N2, owner-approved 2026-10-21).** This holds within the verdict window: an Apply that someone deliberately arms and presses after the editor has taken its counter sample (after the verdict) is outside the editor's view, as before. The
   success verdict needs the firmware's gate-pass counter to have moved by EXACTLY 1. The counter is incremented only when an Apply passes
   its gate (the six slot Apply paths in the firmware; the Load buttons and every other flow leave it alone) and publishes every 30 s. It is
   read where the verdict is judged, after the two later configuration reads and a 35 s delay that follow the Apply press, so at least 37 s

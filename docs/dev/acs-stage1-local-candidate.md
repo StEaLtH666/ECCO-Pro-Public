@@ -227,7 +227,7 @@ selects; the suite checks that and renders service data the way Home Assistant d
 5. **Time zone.** As ACS0: Home Assistant must be configured for Europe/London; otherwise edits are refused.
 6. **The shared write enable** and admin unlock are as documented for ACS0 (stage0-safety-case "Other residual points"). For the armed window
    this is **closed by N2 (owner-approved 2026-10-21)**: the success verdict needs the firmware's gate-pass counter to have moved by exactly 1
-   (see the note on an Apply by someone else below); the shared write enable itself is unchanged.
+   (see the note on an Apply by someone else below); the shared write enable itself is unchanged. This holds within the verdict window: an Apply that someone deliberately arms and presses after the editor has taken its counter sample (after the verdict) is outside the editor's view, as before.
 7. **Stale neighbour staging after a start-time edit (new with Stage 1).** Slot N's start is also slot N-1's end. If slot N-1,
    or all slots via Load All, was loaded into Manual Controls staging before the edit, its staged end still holds the old time.
    A later Manual Controls Apply of slot N-1 writes the old boundary back, and the firmware reports `VERIFIED OK` because it
