@@ -1,0 +1,160 @@
+# ECCO firmware area map (S2a): which review/navigation AREA every list item of the production firmware belongs to.
+#
+# Read by tools/assemble_firmware.py (--map, --where, --lookup, --xref, --plan, --diff-regions, --validate-map) and pinned
+# by tools/tests/test_firmware_assembly.py. It changes nothing in the firmware and is not read by ESPHome, the
+# write-surface analyser, the S0 equivalence checker or the proof chain.
+#
+# Rules
+# - `runs` cover every item of every list section exactly once, in monolith order; `n` is the run's item count.
+#   `first` / `last` name an item by its `id:`, or `name:<name>`, or `index:<0-based index in the section>`.
+# - Everything that is not a list item (substitutions, esphome incl. on_boot, api, ota, wifi, time, uart, modbus and the
+#   section key lines) is `core`.
+# - A firmware change that adds, removes or reorders items must update the affected run (the suite fails otherwise).
+#   `monolith_sha256_lf` records the monolith this map was reviewed against; a different monolith only warns.
+# - Two runs (81 globals and 5 text sensors of the FB-C failback evaluator, in the fallback area) are anchored by index
+#   instead of id: the FB-C core suite's Z5 non-authority pin (registry/tests, "Z5 no ... tools file references ...")
+#   requires that no tools/ file spells that evaluator's id prefix. The tool still prints the real ids at run time.
+# - `core_sections` lists the list sections whose items all stay in core (they get no runs).
+#
+# Provenance: classified by reading each item's id AND body (what it writes and reads), starting from the S1 research
+# module map, against public main e7a265b8 (monolith LF sha256 9cb4bd6c...); every run was re-verified against the source
+# order and counts. `# why:` notes record the non-obvious calls. Review boundaries only: see `warning`.
+schema: ecco-firmware-areas/1
+monolith: firmware/ecco_clock_dongle_stage3_4_free_power.yaml
+monolith_sha256_lf: 9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d
+reviewed_at: e7a265b8d8779b7c15a47a6716f61d6a2227bc6f
+core_sections: [ota, time]  # one platform item each (OTA password, SNTP clock with on_time_sync)
+warning: >-
+  Areas are review and navigation boundaries, NOT SAFETY ISOLATION. Areas share state (the write mutex
+  manual_write_in_progress, the configuration cache, snapshot flags, the 14 ordered intervals), and every safety argument
+  must still be made over the whole monolith. An item's area says where to read first, not what it may affect.
+areas:
+  core: Platform and configuration skeleton (substitutions, esphome incl. on_boot and the header includes, api actions, ota, wifi, time, uart, modbus, section keys)
+  telemetry: Read-only live telemetry, inverter configuration readback sinks and the capability profile entities (no writes)
+  diagnostics: Wi-Fi signal, lock-age and lock-held diagnostics, debug heap and reset reason, build identity
+  modbus: Telemetry and configuration polling, the configuration cache (manual_cfg_reg*_raw) and the Block-B fence
+  rtc: NTP and inverter clock reading, the clock correction write and its policy state
+  arbitration: The shared write mutex, safety census, lock escalation and the restart arm
+  tou: Manual TOU slots and the register-244 export-mode policy
+  free_power: Free Power override, its snapshot, verified restore and operator recovery
+  dump: Dump to Grid, its operating limits and the three Dump-coupled sensors whose on_value feeds the Dump guards
+  fallback: HA supervision heartbeat, the FB-C failback evaluator, the boot-time marker loads and the fallback profile (review, save, invalidate)
+runs:
+  - {section: globals, first: ntp_synced, last: previous_ntp_sod, area: rtc, n: 20}  # why: ntp_synced is written only by time on_time_sync (core) but is RTC state read by rtc/free_power/dump/fallback
+  - {section: globals, first: telemetry_failures, last: configuration_block1_ok, area: modbus, n: 3}
+  - {section: globals, first: rtc_txn_since_ms, last: rtc_policy_reason, area: rtc, n: 9}
+  - {section: globals, first: cfg_poll_owed, last: manual_cfg_reg279_raw, area: modbus, n: 28}  # why: configuration cache owned by the poll dispatch; also written by the TOU apply readback, the reg244 scripts and the RTC 1 s interval (cfg_poll_owed)
+  - {section: globals, first: manual_write_in_progress, last: manual_write_in_progress, area: arbitration, n: 1}  # why: the shared write mutex; acquired by free_power, tou, dump and fallback (22 sites)
+  - {section: globals, first: manual_write_failed, last: manual_write_failures, area: tou, n: 38}
+  - {section: globals, first: free_power_snapshot_valid, last: free_power_recovery_accept_successes, area: free_power, n: 192}  # why: snapshot/marker state is also loaded by core on_boot (NVS read only)
+  - {section: globals, first: reg244_staging_loaded, last: reg244_failures, area: tou, n: 16}  # why: reg244 is part of tou; its snapshot is also loaded by core on_boot
+  - {section: globals, first: dump_snapshot_valid, last: dump_soc_last_update_ms, area: dump, n: 72}  # why: includes the 7 operating-limit globals and the guard globals written by the 3 Dump-coupled sensors
+  - {section: globals, first: cfg_block_b_seq, last: cfg_block_b_response_dispatch_seq, area: modbus, n: 4}  # why: Block-B fence, written only by poll_inverter_configuration_dispatch; read by dump/fallback/tou
+  - {section: globals, first: dump_active_cfg_seq, last: dump_restore_failed_ms, area: dump, n: 50}
+  - {section: globals, first: ecco_unsafe_reason, last: ecco_lock_escalated, area: arbitration, n: 6}  # why: written only by ecco_safety_census, ecco_restart_arm and the 5 s interval
+  - {section: globals, first: dump_export_trip, last: dump_containment_cfg_fence_seq, area: dump, n: 46}  # why: includes the operating-limit global dump_limits_reconfirm
+  - {section: globals, first: supervision_state, last: supervision_last_invalid_reason, area: fallback, n: 19}  # why: supervision state; written by core on_boot, the api heartbeat action and the supervision tick
+  - {section: globals, first: diag_write_lock_held, last: diag_correction_lock_max_ms, area: diagnostics, n: 6}  # why: diag_* by the area rule; their only writer is the lock-sampling block of the supervision tick (fallback)
+  - {section: globals, first: "index:510", last: fallback_profile_live_fence_flags, area: fallback, n: 155}  # why: 81 FB-C failback evaluator globals (index anchor, see the header: Z5), the 3 boot-time marker load results free_power_/dump_/reg244_marker_boot_load (written only by core on_boot, read only by the fallback profile review; S1 had put them in arbitration) and the 71 fallback profile globals incl. fbc_raw_* (written by the poll dispatch, read only by fallback)
+  - {section: number, first: correction_threshold, last: correction_threshold, area: rtc, n: 1}
+  - {section: number, first: free_power_duration_minutes, last: free_power_max_power, area: free_power, n: 2}
+  - {section: number, first: dump_export_power, last: dump_duration_minutes, area: dump, n: 5}  # why: includes the durable operating-limit numbers dump_op_ceiling_number and dump_max_export_number
+  - {section: number, first: manual_slot1_start_hhmm, last: manual_slot6_soc, area: tou, n: 24}
+  - {section: switch, first: automatic_clock_sync, last: automatic_clock_sync, area: rtc, n: 1}
+  - {section: switch, first: live_telemetry, last: configuration_polling, area: modbus, n: 2}
+  - {section: switch, first: manual_config_write_enable, last: manual_stage_grid_charge_enabled, area: tou, n: 2}
+  - {section: switch, first: free_power_write_enable, last: free_power_recovery_arm, area: free_power, n: 2}
+  - {section: switch, first: dump_write_enable, last: dump_limits_arm, area: dump, n: 2}  # why: dump_limits_arm is auto-expired by the 5 s arbitration interval
+  - {section: switch, first: ecco_restart_arm, last: ecco_restart_arm, area: arbitration, n: 1}
+  - {section: switch, first: dump_recovery_arm, last: dump_recovery_arm, area: dump, n: 1}
+  - {section: switch, first: fallback_profile_arm, last: fallback_profile_arm, area: fallback, n: 1}
+  - {section: select, first: manual_slot1_charge_source, last: manual_reg244_staged_target, area: tou, n: 13}  # why: 12 manual TOU slot selects and the reg244 staged target
+  - {section: binary_sensor, first: ecco_safe_to_flash, last: ecco_safe_to_flash, area: arbitration, n: 1}
+  - {section: binary_sensor, first: ntp_synced_sensor, last: rtc_stall_detected, area: rtc, n: 2}
+  - {section: binary_sensor, first: ecco_grid_connected, last: ecco_generator_connected, area: telemetry, n: 2}
+  - {section: binary_sensor, first: telemetry_online, last: configuration_online, area: modbus, n: 2}
+  - {section: binary_sensor, first: supervision_stable_sensor, last: api_client_connected_sensor, area: fallback, n: 2}  # why: supervision entities; api_client_connected_sensor is read by the failback evaluator interval
+  - {section: binary_sensor, first: manual_write_in_progress_sensor, last: correction_in_progress_sensor, area: diagnostics, n: 2}
+  - {section: binary_sensor, first: free_power_operation_in_progress_sensor, last: free_power_snapshot_valid_sensor, area: free_power, n: 2}
+  - {section: binary_sensor, first: manual_config_raw_cache_valid_sensor, last: manual_config_raw_cache_valid_sensor, area: modbus, n: 1}
+  - {section: binary_sensor, first: ecco_generator_charge_enabled, last: ecco_on_grid_always_on, area: telemetry, n: 8}
+  - {section: binary_sensor, first: free_power_active_sensor, last: free_power_active_sensor, area: free_power, n: 1}
+  - {section: binary_sensor, first: dump_active_sensor, last: dump_operation_in_progress_sensor, area: dump, n: 3}
+  - {section: text_sensor, first: ntp_clock, last: inverter_clock, area: rtc, n: 2}
+  - {section: text_sensor, first: supervision_state_text, last: supervision_last_valid_text, area: fallback, n: 4}
+  - {section: text_sensor, first: "index:6", last: "index:6", area: diagnostics, n: 1}  # why: platform debug (reset reason); no id and no name
+  - {section: text_sensor, first: last_correction, last: last_correction_result, area: rtc, n: 2}
+  - {section: text_sensor, first: ecco_inverter_system_state, last: ecco_inverter_fault, area: telemetry, n: 3}
+  - {section: text_sensor, first: last_telemetry_update, last: last_configuration_update, area: modbus, n: 2}
+  - {section: text_sensor, first: configuration_access_mode, last: manual_config_last_result, area: tou, n: 2}  # why: configuration_access_mode carries the manual TOU write-access policy text (published once by core on_boot)
+  - {section: text_sensor, first: free_power_status, last: free_power_ends_at, area: free_power, n: 2}
+  - {section: text_sensor, first: dump_status, last: dump_status, area: dump, n: 1}
+  - {section: text_sensor, first: inverter_capability_profile, last: inverter_capability_profile, area: telemetry, n: 1}  # why: capability profile (from substitutions)
+  - {section: text_sensor, first: dump_limits_status, last: dump_limits_status, area: dump, n: 1}  # why: operating-limit status, published by the limit numbers and core on_boot
+  - {section: text_sensor, first: ecco_build_identity, last: ecco_build_identity, area: diagnostics, n: 1}
+  - {section: text_sensor, first: ecco_flash_readiness, last: ecco_restart_status, area: arbitration, n: 2}
+  - {section: text_sensor, first: dump_ends_at, last: dump_containment_state_sensor, area: dump, n: 5}
+  - {section: text_sensor, first: free_power_recovery_state, last: free_power_recovery_last_action, area: free_power, n: 8}
+  - {section: text_sensor, first: ecco_battery_control_mode, last: ecco_load_limit, area: telemetry, n: 10}  # why: configuration readback sinks published by the poll dispatch; ecco_load_limit is also republished by the reg244 and Dump scripts after their writes
+  - {section: text_sensor, first: free_power_reg244_context_diagnostic, last: free_power_reg244_context_diagnostic, area: free_power, n: 1}  # why: passive Free Power lease-context comparison; published by the poll dispatch but reviewed with Free Power
+  - {section: text_sensor, first: ecco_tou1_time, last: ecco_tou6_mode, area: telemetry, n: 18}  # why: TOU-slot readbacks (read-only sinks), not manual TOU control
+  - {section: text_sensor, first: reg244_snapshot_display, last: reg244_last_result, area: tou, n: 2}
+  - {section: text_sensor, first: "index:68", last: fallback_profile_live_match_text, area: fallback, n: 15}  # why: 5 FB-C evaluator texts (index anchor, see the header: Z5) and 10 fallback profile texts
+  - {section: sensor, first: "name:WiFi Signal", last: "name:WiFi Signal", area: diagnostics, n: 1}
+  - {section: sensor, first: supervision_heartbeat_age_sensor, last: supervision_generation_sensor, area: fallback, n: 9}  # why: the 9 supervision template sensors (S1 layout puts them in fallback)
+  - {section: sensor, first: diag_write_lock_age_sensor, last: "index:14", area: diagnostics, n: 5}  # why: 4 lock-age sensors and platform debug (heap), which has no id and no name
+  - {section: sensor, first: inverter_tou_power_ceiling, last: inverter_tou_power_ceiling, area: telemetry, n: 1}  # why: capability profile value
+  - {section: sensor, first: dump_max_ceiling_sensor, last: dump_lease_ceiling_sensor, area: dump, n: 3}  # why: operating-limit readbacks; dump_capability_sensor is the Dump capability bound beside them
+  - {section: sensor, first: clock_difference, last: maximum_clock_error_sensor, area: rtc, n: 6}
+  - {section: sensor, first: telemetry_failures_sensor, last: configuration_failures_sensor, area: modbus, n: 2}
+  - {section: sensor, first: manual_write_attempts_sensor, last: manual_write_failures_sensor, area: tou, n: 3}
+  - {section: sensor, first: free_power_start_attempts_sensor, last: free_power_failures_sensor, area: free_power, n: 4}
+  - {section: sensor, first: dump_start_attempts_sensor, last: dump_active_stop_soc_sensor, area: dump, n: 7}
+  - {section: sensor, first: free_power_recovery_evidence_age_sensor, last: free_power_recovery_accept_successes_sensor, area: free_power, n: 9}
+  - {section: sensor, first: ecco_battery_soc, last: ecco_battery_soc, area: dump, n: 1}  # why: Dump-coupled; its on_value writes 3 Dump guard globals
+  - {section: sensor, first: ecco_battery_voltage, last: ecco_battery_current, area: telemetry, n: 2}
+  - {section: sensor, first: ecco_battery_power, last: ecco_battery_power, area: dump, n: 1}  # why: Dump-coupled; its on_value writes 30 Dump guard globals
+  - {section: sensor, first: ecco_battery_temperature, last: ecco_grid_power_l2, area: telemetry, n: 25}
+  - {section: sensor, first: ecco_grid_ct_power, last: ecco_grid_ct_power, area: dump, n: 1}  # why: Dump-coupled; its on_value writes 13 Dump guard globals including dump_export_trip
+  - {section: sensor, first: ecco_grid_ct_power_l1, last: ecco_tou6_voltage, area: telemetry, n: 87}  # why: telemetry tail and 52 configuration readback sinks; ecco_inverter_power is read by dump_controller_tick
+  - {section: script, first: write_inverter_rtc, last: write_inverter_rtc, area: rtc, n: 1}
+  - {section: script, first: start_free_power_override, last: free_power_recovery_accept_current_state_dispatch, area: free_power, n: 10}
+  - {section: script, first: apply_manual_slot1, last: apply_manual_slot6, area: tou, n: 6}  # why: also write the configuration cache (readback) and take the mutex
+  - {section: script, first: poll_inverter_telemetry, last: poll_inverter_configuration_dispatch, area: modbus, n: 3}  # why: the dispatch also writes fbc_raw_* (declared in fallback) and publishes the readback sinks
+  - {section: script, first: apply_reg244_settings, last: restore_reg244_snapshot, area: tou, n: 2}
+  - {section: script, first: start_dump_to_grid_override, last: request_dump_end, area: dump, n: 4}
+  - {section: script, first: ecco_safety_census, last: ecco_lock_escalation, area: arbitration, n: 3}  # why: ecco_lock_escalation executes request_dump_end (dump); the comment block in front of the census belongs to the next Dump script by the attachment rule's labelling
+  - {section: script, first: dump_clear_verified_marker, last: dump_lockout_containment, area: dump, n: 4}
+  - {section: script, first: fallback_profile_review, last: fallback_profile_invalidate, area: fallback, n: 6}
+  - {section: button, first: ecco_restart_internal, last: ecco_restart_button, area: arbitration, n: 2}
+  - {section: button, first: read_inverter_clock, last: sync_inverter_clock, area: rtc, n: 2}
+  - {section: button, first: start_free_power_button, last: free_power_recovery_review_button, area: free_power, n: 3}
+  - {section: button, first: load_manual_slot1_staging, last: load_all_manual_tou_staging, area: tou, n: 13}
+  - {section: button, first: "name:Refresh Inverter Telemetry", last: refresh_inverter_configuration, area: modbus, n: 2}  # why: the telemetry refresh button has no id
+  - {section: button, first: load_reg244_staging, last: restore_reg244_button, area: tou, n: 3}
+  - {section: button, first: start_dump_to_grid_button, last: dump_accept_current_state_button, area: dump, n: 4}
+  - {section: button, first: fallback_profile_review_button, last: fallback_profile_review_button, area: fallback, n: 1}
+  - {section: interval, first: "index:0", last: "index:0", area: arbitration, n: 1}  # why: 5 s census / lock-age / escalation tick; also expires dump_limits_arm
+  - {section: interval, first: "index:1", last: "index:1", area: dump, n: 1}
+  - {section: interval, first: "index:2", last: "index:2", area: free_power, n: 1}
+  - {section: interval, first: "index:3", last: "index:3", area: dump, n: 1}
+  - {section: interval, first: "index:4", last: "index:4", area: rtc, n: 1}
+  - {section: interval, first: "index:5", last: "index:7", area: modbus, n: 3}  # why: 10 s telemetry, 60 s configuration and the 2 s catch-up, which must stay right after the 60 s one
+  - {section: interval, first: "index:8", last: "index:8", area: rtc, n: 1}  # why: RTC 1 s tick; also writes cfg_poll_owed (modbus)
+  - {section: interval, first: "index:9", last: "index:9", area: free_power, n: 1}
+  - {section: interval, first: "index:10", last: "index:12", area: fallback, n: 3}  # why: fallback profile review, failback evaluator (must stay immediately before the supervision tick), supervision tick (also writes the 6 diag_* globals)
+  - {section: interval, first: "index:13", last: "index:13", area: tou, n: 1}  # why: manual TOU staging tick; must stay the LAST interval
+cross_area:
+  - {id: manual_write_in_progress, owner: arbitration, written_by: [free_power, tou, dump, fallback], read_by: [diagnostics, rtc, free_power, tou, modbus, dump, arbitration, fallback], note: "the shared write mutex; 22 '= true' acquisitions (free_power 8, tou 8 incl. reg244 2, dump 4, fallback 2); arbitration itself never takes it"}
+  - {id: correction_in_progress, owner: rtc, written_by: [rtc], read_by: [diagnostics, free_power, tou, modbus, dump, arbitration, fallback], note: "set true only by read_inverter_clock and sync_inverter_clock; every other writer line is rtc"}
+  - {id: "manual_cfg_reg*_raw", owner: modbus, written_by: [modbus, tou], read_by: [tou, dump, fallback, rtc], note: "26 cache globals; the poll dispatch writes them, the TOU apply readback and reg244 scripts also write; companion manual_config_raw_cache_valid"}
+  - {id: "cfg_block_b_*", owner: modbus, written_by: [modbus], read_by: [dump, fallback, tou], note: "declared between Dump globals; written only by poll_inverter_configuration_dispatch"}
+  - {id: cfg_poll_owed, owner: modbus, written_by: [modbus, rtc], read_by: [modbus], note: "written by the poll dispatch and the RTC 1 s interval; read only by the 2 s catch-up interval"}
+  - {id: "fbc_raw_*", owner: fallback, written_by: [modbus], read_by: [fallback], note: "declared inside the fallback profile globals; written only by the poll dispatch"}
+  - {id: "dump guard globals (45)", owner: dump, written_by: [dump], read_by: [dump], note: "written in on_value of ecco_battery_soc (3), ecco_battery_power (30) and ecco_grid_ct_power (13), and by Dump scripts and intervals; nothing outside dump reads them"}
+  - {id: supervision_state, owner: fallback, written_by: [core, fallback], read_by: [core, fallback], note: "written by core on_boot, the api heartbeat action and the supervision tick"}
+  - {id: ecco_inverter_power, owner: telemetry, written_by: [modbus], read_by: [dump], note: "published by poll_inverter_telemetry; read by dump_controller_tick (feasibility / house estimate)"}
+  - {id: ntp_synced, owner: rtc, written_by: [core], read_by: [rtc, free_power, dump, fallback], note: "written only by time on_time_sync (core)"}
+  - {id: free_power_snapshot_valid, owner: free_power, written_by: [core, free_power], read_by: [core, free_power, tou, modbus, dump, arbitration, fallback], note: "loaded by core on_boot; read by every write path as a cross-domain START gate"}
+  - {id: dump_snapshot_valid, owner: dump, written_by: [core, dump], read_by: [core, dump, free_power, tou, arbitration, fallback], note: "loaded by core on_boot; a cross-domain START gate"}
+  - {id: reg244_snapshot_valid, owner: tou, written_by: [core, tou], read_by: [core, free_power, tou, dump, arbitration, fallback], note: "loaded by core on_boot; a cross-domain START gate"}
