@@ -30,6 +30,7 @@ installed, checked and rolled back.
 | `nothing pressed` is no longer taken to mean `nothing written` (deliberately stricter than Stage 0, SOC edits included) | a run that stopped before the press reported "nothing written" without proof | the write enable is shared and the firmware accepts ANY Apply press while it is on, so an Apply by someone else can land in the armed window; the editor now records the gate-pass counter before staging, disarms at once when it stops, waits 35 s for the counter to publish and claims "nothing written" only with the proof; otherwise UNCERTAIN, locked, with the observed values |
 | Live power rule (F3) | - | a power edit is refused when the LIVE slot power is not a multiple of 100 W, at the Review and at every later gate copy |
 | Review notification (F4) | - | always "Do not use SmartDeye or the inverter's own panel until this edit is finished."; charge source -> Grid and a start-time edit on a slot whose live source is not None also carry the Dump to Grid charge-slot warning |
+| Success verdict (N2, owner-approved 2026-10-21) | APPLIED AND VERIFIED needed the firmware's `VERIFIED OK` and two later reads | additionally the firmware's gate-pass counter must have moved by EXACTLY 1 since before the staging (read at the verdict, at least 37 s after the Apply press, after the counter published); 0, 2 or more, a reset or an unreadable counter is UNCERTAIN with the lock, the manual-recovery notification (counter before and after, the delta, "another Apply - possibly of a different slot - may have run"), no undo offer, no F1 Load and no re-Load. Stricter than Stage 0, SOC edits included |
 | Firmware, registry, manifest, dashboards, frontend | - | **not changed** |
 
 Policy values integrated **as built, not yet approved by the owner** (candidate document section 9): power 500-8000 W in steps of
@@ -43,7 +44,7 @@ The files:
 | File | Role |
 |---|---|
 | `home-assistant/packages/ecco_tou_target_soc_edit.yaml` | the installed Stage 1 package (byte for byte `render_stage1` of the Stage 0 text) |
-| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 58 exact (before, after, count) pairs (the 40 reviewed candidate pairs plus 18 follow-up pairs for F1-F4 and the F2 proof), `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
+| `home-assistant/prototypes/acs-stage1/acs_stage1_transform.py` | provenance: 62 exact (before, after, count) pairs (the 40 reviewed candidate pairs plus 22 follow-up pairs for F1-F4, the F2 proof and N2), `render_stage1`, and the inverse `unrender_stage1`; pins the Stage 0 base's sha256, the installed package's sha256 and a sha256 over the 40 pairs. No longer a prototype: it documents how the installed package was derived |
 | `home-assistant/tests/test_ecco_tou_slot_settings_edit.py` | the Stage 1 suite (renamed from the prototype suite): tests the installed file directly, plus the provenance checks |
 | `home-assistant/tests/test_ecco_tou_target_soc_edit.py` | the Stage 0 suite, same name and path (a declared reserved-token holder): it now proves the Stage 0 BASELINE, running unchanged on `unrender_stage1(installed)` (asserted to be the pinned Stage 0 text). The installed editor's own behaviour, SOC parity included, is proven by the Stage 1 suite |
 | `registry/tests/_acs1_scope.py`, `_scope_chain.py` | the chain entry `acs1` (declaration, fingerprint) |
@@ -58,12 +59,12 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `271beb523bb8c23971eac7d9ed6c953a14b1dbe102a905ba79c0674040e25f0d`; a text that is neither raises, naming the pair.
 - To make the inverse exact, the two script-id renames became the first two pairs of the transform (previously the last two).
   The rendered text of the reviewed candidate is unchanged (sha256 `8af4d439...`, the value before F1-F4).
-- **Follow-up pairs.** F1-F4 (owner-approved 2026-10-20) and the F2 correction (review finding: "nothing pressed" is not "nothing written")
-  were added by APPENDING 18 exact pairs (indices 40-57) to the transform; the 40 reviewed pairs are not edited or reordered, and
-  `unrender_stage1(installed)` still gives the Stage 0 text, sha256 `9fa32b9b...`. Pins changed in two steps (transform, Stage 1 suite and
-  `_acs1_scope.py`): the installed package `STAGE1_SHA256` `8af4d439...` (the reviewed candidate) -> `271beb52...` (F1-F4) ->
-  `4cafc1926055fa71533d8a409ca520078b1c661e177c370649b2ce254e254816` (with the F2 proof), and `PAIRS_SHA256` `1a49696d...` -> `68a7071b...` -> `13ffda0da6c709d4a4192b0f2f1c2e2914371e2491ef4c6a31d0fcdf098b4f17`. The chain entry's declared fields
-  and note are unchanged, so its fingerprint is unchanged.
+- **Follow-up pairs.** F1-F4 (owner-approved 2026-10-20), the F2 correction (review finding: "nothing pressed" is not "nothing written") and
+  N2 (owner-approved 2026-10-21) were added by APPENDING 22 exact pairs (indices 40-61) to the transform; the 40 reviewed pairs are not
+  edited or reordered, and `unrender_stage1(installed)` still gives the Stage 0 text, sha256 `9fa32b9b...`. Pins changed in steps
+  (transform, Stage 1 suite and `_acs1_scope.py`): the installed package `STAGE1_SHA256` `8af4d439...` (the reviewed candidate) ->
+  `271beb52...` (F1-F4) -> `4cafc192...` (F2 proof) -> `2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de` (N2), and `PAIRS_SHA256` `1a49696d...` -> `68a7071b...` -> `13ffda0d...` ->
+  `9924673e2c512edb4048b897aa073c779727d88aa453c345eac0934f29d75a37`. The chain entry's declared fields and note are unchanged, so its fingerprint is unchanged.
 - The Stage 0 text is what a rollback is built from if the previously installed file was not kept (section 6). It is the GENERIC text
   (default device slug `ecco_clock_dongle`); the file on a site is a site render of it.
 - The chain entry `acs1` declares **no reverter and no checkpoint**, deliberately: the package is an `added_files` entry of `acs0`,
@@ -79,7 +80,7 @@ CI checks out most jobs with depth 1, so nothing relies on history.
   `S1_SHA` / `PAIRS_SHA`, and `_acs1_scope.py`'s `STAGE1_PACKAGE_SHA256` / `PAIRS_SHA256`), or deliberately retire the mechanism with a
   new chain entry that says so. An unpinned edit fails the Stage 1 suite.
 - The Stage 1 suite also proves that everything of the Stage 0 baseline that no pair touches (834 of its 1003 lines wholly outside
-  the 40 reviewed pairs, with the 18 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
+  the 40 reviewed pairs, with the 22 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
   the fresh-evidence code are proven on the installed file; it kills mutants that alter one such line.
 
 ## 3. Install procedure (owner-run; each live step needs its own authorisation)
@@ -184,7 +185,7 @@ SmartDeye and the inverter panel not used during the proof; Home Assistant set t
    the staging was refreshed. (If it says the staging could not be refreshed, press Load Current Slot N-1 or Load All before any
    Manual Controls use.) A SOC, power or charge-source edit presses no extra Load.
 
-For every step check: `VERIFIED OK`; two later reads; the fallback status DRIFT or CONTEXT, then MATCH after the undo; no other
+For every step check: `VERIFIED OK`; the Manual Configuration Write Attempts Since Boot sensor moved by exactly 1 (read it before the Review and about a minute after the Apply; a different delta means another Apply ran and the editor reports UNCERTAIN); two later reads; the fallback status DRIFT or CONTEXT, then MATCH after the undo; no other
 register changed; health unchanged. The target SOC path is re-checked read-only by section 4 (the Stage 0 editor's own live-proof status is kept in the owner's project records, not in this repository).
 
 ## 6. Rollback
@@ -247,11 +248,18 @@ offline in this change; the rest remain documented.
   accept ANY Apply press in that window (an Apply by someone else wrote the inverter in the reproduction). If a proven re-Load is
   refused, the FAILED notice says slot N's staging may still hold the reviewed value and to press Load Current Slot N before any
   Manual Controls Apply.
-- **An Apply by someone else inside the armed window.** If the other actor's Apply lands so early that the editor's last check cannot yet
-  see its write-in-progress flag, the editor presses its own Apply; the firmware refuses it (a write is running) and the usual success
-  verdict judges the final state (the requested value, the firmware's readback, two later reads, nothing else changed). The verdict cannot
-  tell who pressed: such a run can read APPLIED AND VERIFIED. This is not a false "nothing written" claim and it never re-Loads slot N.
-  If the other actor's flag is visible at the last check the run stops before its press and is UNCERTAIN (above).
+- **An Apply by someone else inside the armed window or while the outcome is judged (closed by N2, owner-approved 2026-10-21).** The
+  success verdict needs the firmware's gate-pass counter to have moved by EXACTLY 1. The counter is incremented only when an Apply passes
+  its gate (the six slot Apply paths in the firmware; the Load buttons and every other flow leave it alone) and publishes every 30 s. It is
+  read where the verdict is judged, after the two later configuration reads and a 35 s delay that follow the Apply press, so at least 37 s
+  after the press and a delta of 0 cannot arise from a not-yet-published counter. Delta 2 or more (the editor's Apply passed AND another
+  actor's Apply, of the same or another slot, passed: before the verdict is judged), 0, a reset or an unreadable counter is UNCERTAIN with
+  the lock and the manual-recovery notification, before F1's Load, with no undo offer. The documented caveat: if another actor's Apply of the
+  reviewed staging wrote the value and the editor's own press was refused by the firmware (a write was already running), the delta is exactly
+  1, the final state is the requested one and verified, and the run stays APPLIED AND VERIFIED (the verdict cannot tell who pressed). If the
+  other actor's write-in-progress flag is visible at the editor's last check, the run stops before its press and is UNCERTAIN (above).
+  A conservative limit: an Apply that passed just before the staging but whose counter had not yet been published when the counter was
+  recorded also reads as delta 2 and gives UNCERTAIN.
 - **The write-seen recorder is edge-triggered** (it fires when its condition turns true). A write already in progress when the staging
   window begins therefore does not fire it again, but it is still caught by the three other proofs: the gate-pass counter delta (read
   after the 35 s it needs to publish), the end-of-window sample of the write-in-progress flag, and the sample of the firmware's last

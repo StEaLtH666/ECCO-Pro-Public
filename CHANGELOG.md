@@ -31,8 +31,14 @@ Development before the first public release happened in a private repository; se
     the firmware's gate-pass counter to publish, and reports "nothing written" (no manual-path, armed write; the automatic RTC clock
     writes do not use the write enable and are outside this proof) only if that counter is unchanged since before the staging and
     no write was seen; otherwise the outcome is UNCERTAIN, the editor locks and the notification lists the observed values.
-  - The package is derived from the Stage 0 text by 58 exact edits (the 40 reviewed ones plus 18 appended for the follow-ups below); the
+  - The package is derived from the Stage 0 text by 62 exact edits (the 40 reviewed ones plus 22 appended for the follow-ups below); the
     transform is invertible (`unrender_stage1`), which gives the rollback file and the provenance proof without git history.
+  - **N2, owner-approved 2026-10-21 (stricter than Stage 0, also for SOC edits):** the success verdict also needs the firmware's
+    gate-pass counter to have moved by exactly 1 since before the staging, read at least 37 s after the Apply press (the counter publishes
+    every 30 s). Another Apply (possibly of a different slot) that passed in the armed window, a counter that did not move, was reset or
+    cannot be read gives UNCERTAIN, the lock and the manual-recovery notification, with no undo offer and no F1 Load. The one documented
+    exception is another actor's Apply that wrote the reviewed staging while the editor's own press was refused: delta 1, APPLIED.
+    N1 was accepted at the same time: the write-seen helper and recorder automation stay as built.
   - **Owner-approved follow-ups (2026-10-20):**
     - **F1:** after a verified start-time edit of slot N the editor presses Load Current Slot N-1 (slot 1 -> slot 6) once and checks
       that slot's staged end; when the Load is refused or does not match, the edit stays successful and the notice says plainly that

@@ -145,10 +145,12 @@ inherited from ACS0):
   A run that stopped before it staged anything (no fresh evidence, a refused Apply, the staging not matching the live slot after the
   first Load) is not re-Loaded either: the value was never staged. If a proven re-Load is refused or does not match, the FAILED notice
   says slot N's staging may still hold the reviewed value and to press Load Current Slot N before any Manual Controls Apply.
-- **An Apply by someone else inside the armed window** that lands before the editor's last check can see its write-in-progress flag is
-  handled by the usual path: the editor presses its own Apply (the firmware refuses it, a write is running) and the success verdict
-  judges the final state; it cannot tell who pressed, so such a run can read APPLIED AND VERIFIED (the requested value, verified, nothing
-  else changed). It is never reported as "nothing written" and never re-Loads slot N.
+- **An Apply by someone else inside the armed window** (or while the outcome is judged) is caught by N2 (owner-approved 2026-10-21): the
+  success verdict also needs the gate-pass counter to have moved by exactly 1 since before the staging (read at the verdict, at least 37 s
+  after the press, after the counter published; only the six slot Apply gates increment it, not the Load buttons). Delta 0, 2 or more, a
+  reset or an unreadable counter is UNCERTAIN with the lock and the manual-recovery notification (before F1's Load, no undo offer). The
+  documented caveat: another actor's Apply that wrote the reviewed staging while the editor's own press was refused gives delta 1 and stays
+  APPLIED AND VERIFIED (the requested value, verified, nothing else changed). It is never reported as "nothing written" and never re-Loads slot N.
 - **The write-seen recorder is edge-triggered.** A write already in progress when the staging window begins does not fire it again, but
   the gate-pass counter delta (read after the counter published), the end-of-window write-in-progress sample and the last-result text
   sample still catch it. The proof's "nothing written" is about the manual (armed) path; the RTC clock writes do not use the write
@@ -223,7 +225,9 @@ selects; the suite checks that and renders service data the way Home Assistant d
    inverter's behaviour when the current slot's window changes is not separately proven; the live proof must use a boundary far
    from now.
 5. **Time zone.** As ACS0: Home Assistant must be configured for Europe/London; otherwise edits are refused.
-6. **The shared write enable** and admin unlock are as documented for ACS0 (stage0-safety-case "Other residual points").
+6. **The shared write enable** and admin unlock are as documented for ACS0 (stage0-safety-case "Other residual points"). For the armed window
+   this is **closed by N2 (owner-approved 2026-10-21)**: the success verdict needs the firmware's gate-pass counter to have moved by exactly 1
+   (see the note on an Apply by someone else below); the shared write enable itself is unchanged.
 7. **Stale neighbour staging after a start-time edit (new with Stage 1).** Slot N's start is also slot N-1's end. If slot N-1,
    or all slots via Load All, was loaded into Manual Controls staging before the edit, its staged end still holds the old time.
    A later Manual Controls Apply of slot N-1 writes the old boundary back, and the firmware reports `VERIFIED OK` because it
