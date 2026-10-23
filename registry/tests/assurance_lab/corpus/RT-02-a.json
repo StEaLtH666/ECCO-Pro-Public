@@ -1,0 +1,108 @@
+{
+  "actions": [
+    {
+      "args": {
+        "name": "dump_restore_requested",
+        "value": true
+      },
+      "at_s": 0,
+      "do": "poke"
+    },
+    {
+      "args": {
+        "seconds": 2400
+      },
+      "at_s": 0,
+      "do": "run_for"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "reason": "large",
+        "verified": true
+      },
+      "observe": "n_corrections",
+      "op": "==",
+      "value": 5
+    },
+    {
+      "args": {},
+      "observe": "n_corrections",
+      "op": "==",
+      "value": 5
+    },
+    {
+      "args": {
+        "name": "failed_corrections"
+      },
+      "observe": "global_value",
+      "op": "==",
+      "value": 0
+    },
+    {
+      "args": {
+        "name": "rtc_stall_count"
+      },
+      "observe": "global_value",
+      "op": "==",
+      "value": 34
+    }
+  ],
+  "failure_outcome": "a stopped inverter clock with no signal at all (no stall detection) or with unbounded drift",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "RT-02-a",
+  "invariant": "INV-RTC-STALL-SURFACED",
+  "notes": "reclassified from FINDING-NEW to PASS after review; 'Verified OK' means the readback matched the write, not that the clock runs; failed_corrections is scoped to retries, comms errors and the breaker; the stall entity drops to off for about 108 s after each verified correction; with correction_threshold 10 the readback fails instead; a stopped clock is INFERRED, never observed",
+  "ownership": "RTC path owns 22-24; synthetic stopped inverter clock (rate -1.0); a Dump restore obligation stays owed (MODEL: poked dump_restore_requested; not load-bearing, the no-obligation control is identical)",
+  "scenario_priority": "P3",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (documented behaviour: the readback contract is met and the stall detector is the documented RTC hardware signal); optional, HA health only: hold RTC_STALL_DETECTED for a window after an rtc_stall_count rise",
+  "source_anchors": [
+    {
+      "line_at_record": 22913,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "bool verified = !date_mismatch && abs_difference <= threshold;"
+    },
+    {
+      "line_at_record": 23050,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "rp.lease_active = id(free_power_active_persisted) || id(free_power_restore_requested) ||"
+    },
+    {
+      "line_at_record": 23005,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "bool stalled = inverter_elapsed < (ntp_elapsed - 15);"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b"
+  },
+  "synthetic": true,
+  "tier": "rtc",
+  "title": "Stopped inverter clock (a documented design case) with an outstanding Dump restore obligation: only large corrections, each read back 'Verified OK', failed_corrections 0, rtc_stall_count rising",
+  "trace_digest": "8d717bc561253a80d3b4ea8d0a6bc29dd9729a533b42864f0b568892c9719293",
+  "utc_start": "2026-10-24T11:00:15Z",
+  "world": {
+    "kind": "fall",
+    "rate": -1.0
+  }
+}

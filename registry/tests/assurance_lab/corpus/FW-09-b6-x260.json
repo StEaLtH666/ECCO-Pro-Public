@@ -1,0 +1,200 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "actor": "inverter",
+        "addr": 261,
+        "value": 4000
+      },
+      "at_s": 120,
+      "do": "set_register"
+    },
+    {
+      "args": {
+        "table": {
+          "write:260x1": "ack_not_applied"
+        }
+      },
+      "at_s": 120,
+      "do": "modbus_policy"
+    },
+    {
+      "args": {},
+      "at_s": 120,
+      "do": "dump_end"
+    },
+    {
+      "args": {
+        "seconds": 180
+      },
+      "at_s": 120,
+      "do": "run_for"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "RESTORE_REQUIRED"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status_history",
+      "op": "not_contains",
+      "value": "RESTORED OK - original inverter settings verified"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status_history",
+      "op": "contains",
+      "value": "OPERATOR DECISION REQUIRED - repeated verify mismatch restoring Dump to Grid; use Force Restore Original or Accept Current State"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status_history",
+      "op": "not_contains",
+      "value": "OPERATOR DECISION REQUIRED - ECCO's own settings restored and verified; external change NOT overwritten (register 261 reads 4000W (original 5000W; ECCO's ceiling 1000W, pending 1000W)); use Force Restore Original or Accept Current State"
+    },
+    {
+      "args": {
+        "addrs": [
+          244,
+          256,
+          257,
+          258,
+          259,
+          260,
+          261
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "244": 2,
+        "256": 3000,
+        "257": 8000,
+        "258": 7000,
+        "259": 1000,
+        "260": 1000,
+        "261": 4000
+      }
+    },
+    {
+      "args": {
+        "names": [
+          "dump_snapshot_valid",
+          "dump_operator_needed",
+          "dump_verify_mismatch_count",
+          "dump_comms_restore_attempts"
+        ]
+      },
+      "observe": "globals",
+      "op": "==",
+      "value": {
+        "dump_comms_restore_attempts": 0,
+        "dump_operator_needed": true,
+        "dump_snapshot_valid": true,
+        "dump_verify_mismatch_count": 2
+      }
+    },
+    {
+      "args": {},
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    }
+  ],
+  "failure_outcome": "260's readback (1000 W) is compared with 259's expected value (its original 1000 W) instead of its own 4500 W: the FOREIGN lockout claims ECCO's own settings 'restored and verified' while 260 holds the lease power (the C6r4 and C6v34 mutants)",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "FW-09-b6-x260",
+  "invariant": "INV-NO-SILENT-OVERRIDE",
+  "notes": "Derived from FW:19856-19881 (259 reads its ORIGINAL 1000 W, which equals the lease value: neither owned nor FOREIGN, FW:19860-19867; 256-258 and 260 at 1000 W are ECCO-owned; 261 FOREIGN), FW:20027-20035 (the per-slot plan 256-258 and 260, wmask 0x17), FW:20087-20314 (slot 260 at FW:20241), FW:20331-20341 (v[] in slot order: 260 reads 1000 W against its own 4500 W -> mismatch) and FW:20482-20507; the retry finds 244, 256-259 ORIGINAL, so the plan is 260 alone (wmask 0x10). Under C6r4 (260 compared with v[3], 259's 1000 W) and C6v34 (v[4] initialised from dump_restore_v3, 259's 1000 W) the first attempt ends in the FOREIGN lockout text 'restored and verified' (FW:20373-20377, FW:20460-20481) with 260 at 1000 W.",
+  "ownership": "ECCO-owned Dump lease (owner START, owner End & Restore; synthetic SITE ORIGINAL with pairwise-distinct 256-261 = 3000/8000/7000/1000/4500/5000 W); at the End the inverter itself has changed 261 to 4000 W (FOREIGN); every single-register write of 260 is acknowledged but not applied (synthetic Modbus outcome policy 'write:260x1')",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (PASS): key guard decision - 260's readback is compared with its own original 4500 W: the per-slot attempt and its single-slot retry fail, operator lockout; 259 (at its ORIGINAL) is not written, the FOREIGN 261 is never written",
+  "source_anchors": [
+    {
+      "line_at_record": 20336,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "if (((id(dump_restore_wmask) >> i) & 1) && values[i] != v[i]) {"
+    },
+    {
+      "line_at_record": 20030,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "bool is_foreign = ((id(dump_restore_foreign_mask) >> i) & 1) != 0;     // a FOREIGN slot is never written"
+    },
+    {
+      "line_at_record": 20241,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "return id(dump_restore_wmask) != 0x3F && ((id(dump_restore_wmask) >> 4) & 1) != 0 && !id(dump_restore_block_failed);"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Dump restore with a FOREIGN 261 on pairwise-distinct originals whose 259 equals the 1000 W lease value: 260 acknowledged but not applied",
+  "trace_digest": "f3293abb11cac20d4902c6fa63dcc3e3362128c7475978089e6eb77781f3b0b4",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {
+    "bank": {
+      "256": 3000,
+      "257": 8000,
+      "258": 7000,
+      "259": 1000,
+      "260": 4500,
+      "261": 5000
+    }
+  }
+}
