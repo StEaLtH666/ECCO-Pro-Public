@@ -105,6 +105,119 @@ export const PILLS = {
   battery: { x: 8, y: 388, w: 184, h: 70, port: { x: 108, y: 388 } },
 } satisfies Record<string, PillBox>;
 
+// ---------------------------------------------------------------------------
+// Artwork layout for the approved V4 scene pack (ten 1448 x 1086 variants of
+// one fixed-perspective house). Hardware anchors, the overlay safe zones and
+// the five routes come from the pack's config/anchor-map.json; the overlays
+// (pills, paths, pulses, junction) are drawn by the card on top of the plate,
+// which carries no lines, labels or values of its own. Used when
+// `scene.pack` is configured; the vector scene above is the no-asset fallback.
+
+export interface ArtworkLayout {
+  width: number;
+  height: number;
+  /** Overlay unit scale relative to the vector scene (strokes, pulses, pill internals, type). */
+  scale: number;
+  pills: Record<"solar" | "grid" | "home" | "battery", PillBox>;
+  /** The inverter junction where every path meets. */
+  inverter: Pt;
+  /** Routes; `solar2` is the second PV array's own path (the garage roof). */
+  paths: () => Record<"solar" | "solar2" | "battery" | "grid" | "home", string>;
+}
+
+/** Catmull-Rom spline through the points, emitted as cubic Beziers: a smooth route that passes through every anchor. */
+export function smoothPath(points: Pt[], tension = 0.5): string {
+  if (points.length < 2) return "";
+  if (points.length === 2) return `M ${points[0]!.x.toFixed(1)} ${points[0]!.y.toFixed(1)} L ${points[1]!.x.toFixed(1)} ${points[1]!.y.toFixed(1)}`;
+  let d = `M ${points[0]!.x.toFixed(1)} ${points[0]!.y.toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]!;
+    const p1 = points[i]!;
+    const p2 = points[i + 1]!;
+    const p3 = points[Math.min(points.length - 1, i + 2)]!;
+    const c1 = { x: p1.x + ((p2.x - p0.x) / 6) * tension * 2, y: p1.y + ((p2.y - p0.y) / 6) * tension * 2 };
+    const c2 = { x: p2.x - ((p3.x - p1.x) / 6) * tension * 2, y: p2.y - ((p3.y - p1.y) / 6) * tension * 2 };
+    d += ` C ${c1.x.toFixed(1)} ${c1.y.toFixed(1)}, ${c2.x.toFixed(1)} ${c2.y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+/** Hardware anchors of the V4 plates (anchor-map.json "hardware"). */
+export const V4_ANCHORS = {
+  main_solar_array: { x: 684, y: 466 },
+  garage_solar_array: { x: 1086, y: 582 },
+  wall_inverter: { x: 1002, y: 698 },
+  battery_cabinet: { x: 150, y: 622 },
+  ev_charger: { x: 1090, y: 761 },
+  house_energy_center: { x: 748, y: 694 },
+  grid_pylon: { x: 1317, y: 452 },
+} as const;
+
+/** Overlay safe zones of the V4 plates (anchor-map.json "overlay_safe_zones"), for reference and tests. */
+export const V4_SAFE_ZONES = {
+  top_banner: { x: 44, y: 30, w: 1360, h: 122 },
+  left_info_column: { x: 36, y: 170, w: 280, h: 705 },
+  right_info_column: { x: 1128, y: 170, w: 284, h: 705 },
+  bottom_strip: { x: 58, y: 920, w: 1330, h: 120 },
+} as const;
+
+/**
+ * The V4 layout at overlay scale `k`. Pill boxes keep the vector scene's
+ * proportions times k and stay anchored to the pack's safe zones (Solar and
+ * Grid in the top banner's corners, Battery in the left column above the
+ * hedge, Home in the bottom strip); the hardware anchors and the routes
+ * between them never move. Phones use a larger k than desktops so the
+ * figures stay legible when the whole 1448-unit canvas is 390 px wide.
+ */
+export function v4Layout(k: number): ArtworkLayout {
+  const A = V4_ANCHORS;
+  const Z = V4_SAFE_ZONES;
+  const solarW = 150 * k;
+  const solarH = 58 * k;
+  const battW = 182 * k;
+  const battH = 78 * k;
+  const homeW = 140 * k;
+  const homeH = 54 * k;
+  const pills = {
+    solar: { x: Z.top_banner.x, y: Z.top_banner.y, w: solarW, h: solarH, port: { x: Z.top_banner.x + solarW * 0.72, y: Z.top_banner.y + solarH } },
+    grid: { x: Z.top_banner.x + Z.top_banner.w - solarW, y: Z.top_banner.y, w: solarW, h: solarH, port: { x: Z.top_banner.x + Z.top_banner.w - solarW * 0.28, y: Z.top_banner.y + solarH } },
+    // Below the cabinet anchor (y 622), over the lawn and the left hedge; never over the patio or the house.
+    battery: { x: Z.left_info_column.x, y: 672, w: battW, h: battH, port: A.battery_cabinet },
+    // Bottom strip, right of the battery pill, under the front garden.
+    home: { x: 930 - homeW / 2, y: Z.bottom_strip.y + Z.bottom_strip.h + 26 - homeH, w: homeW, h: homeH, port: { x: 930, y: Z.bottom_strip.y + Z.bottom_strip.h + 26 - homeH } },
+  } satisfies Record<string, PillBox>;
+  return {
+    width: 1448,
+    height: 1086,
+    scale: k,
+    pills,
+    inverter: A.wall_inverter,
+    paths: () => ({
+      // Solar pill -> main array -> (anchor route) -> inverter
+      solar: smoothPath([pills.solar.port, { x: 440, y: 290 }, { x: 570, y: 385 }, A.main_solar_array, { x: 758, y: 522 }, { x: 868, y: 610 }, { x: 975, y: 692 }, A.wall_inverter]),
+      // Garage array -> inverter (the second PV array's own route)
+      solar2: smoothPath([A.garage_solar_array, { x: 1068, y: 624 }, { x: 1042, y: 660 }, { x: 1016, y: 688 }, A.wall_inverter]),
+      // Battery cabinet -> inverter (anchor route)
+      battery: smoothPath([A.battery_cabinet, { x: 350, y: 622 }, { x: 560, y: 636 }, { x: 790, y: 670 }, A.wall_inverter]),
+      // Grid pill -> pylon -> (anchor route) -> inverter
+      grid: smoothPath([pills.grid.port, { x: 1314, y: 320 }, A.grid_pylon, { x: 1288, y: 550 }, { x: 1190, y: 626 }, { x: 1088, y: 682 }, A.wall_inverter]),
+      // Inverter -> house energy centre (anchor route) -> Home pill
+      home: smoothPath([A.wall_inverter, { x: 928, y: 704 }, { x: 846, y: 705 }, { x: 790, y: 700 }, A.house_energy_center, { x: 840, y: (A.house_energy_center.y + pills.home.port.y) / 2 + 10 }, pills.home.port]),
+    }),
+  };
+}
+
+/** Overlay scale for a given card width: larger on phones so the pills stay readable. */
+export function v4ScaleForWidth(cardWidthPx: number): number {
+  if (cardWidthPx < 520) return 3.4;
+  if (cardWidthPx < 760) return 3.2;
+  if (cardWidthPx < 1100) return 3.1;
+  return 3.0;
+}
+
+export const V4_LAYOUT: ArtworkLayout = v4Layout(3.0);
+export const ARTWORK_LAYOUTS: Record<string, ArtworkLayout> = { v4: V4_LAYOUT };
+
 /** Canonical path geometry per flow; direction reversal never changes it. */
 export function flowPaths(): Record<"solar" | "battery" | "grid" | "home", string> {
   const inv = INVERTER_PORT;

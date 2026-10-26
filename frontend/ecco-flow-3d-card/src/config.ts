@@ -129,6 +129,8 @@ export interface EccoConfig {
   telemetry_online?: string;
   /** sun.sun, for the scene's day/night ambience only. */
   sun?: string;
+  /** weather entity (e.g. weather.forecast_home); its condition picks the scene variant. Ambience only. */
+  weather?: string;
   free_power?: SessionFeatureConfig;
   dump_to_grid?: SessionFeatureConfig;
   tou?: TouConfig;
@@ -176,10 +178,38 @@ export interface FormatConfig {
   power_unit?: PowerUnitMode;
 }
 
+/**
+ * Scene artwork. When `image` is set, the card draws that fixed-perspective
+ * house illustration (a local Home Assistant resource such as
+ * `/local/ecco/ecco-house-night.png`; never a CDN) as the scene plate, with
+ * the live pills and the animated power paths overlaid in the approved
+ * composition. The artwork must not contain energy lines or figures of its
+ * own: every value and every moving element comes from the overlays. Without
+ * `image` the card falls back to its built-in vector scene.
+ */
+export interface SceneConfig {
+  /**
+   * Base path of the V4 scene pack (ten PNGs named as in the pack, e.g.
+   * `/local/ecco/scenes/`). A local Home Assistant resource path, never a CDN.
+   * The card picks the variant from the date, the sun and the weather entity
+   * (see core/scenes.ts) and crossfades between variants.
+   */
+  pack?: string;
+  /** Per-scene file-name or URL overrides, keyed by scene key. */
+  scenes?: Partial<Record<string, string>>;
+  /** Pin one scene key (demos, previews); the rules are then ignored. */
+  force?: string;
+  /** Crossfade duration in ms when the scene changes. Default 900. */
+  crossfade_ms?: number;
+}
+
 export interface EccoFlow3dCardConfig {
   type: string;
   title?: string;
   subtitle?: string;
+  /** Brand word shown above the title (default "ECCO"; "" hides it). */
+  brand?: string;
+  scene?: SceneConfig;
   nodes?: NodesConfig;
   ecco?: EccoConfig;
   today?: TodayConfig;

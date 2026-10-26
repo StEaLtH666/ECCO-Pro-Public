@@ -13,6 +13,16 @@ type: custom:ecco-flow-3d-card
 title: Energy Flow
 subtitle: Live power overview
 
+# Approved V4 scene pack: ten 1448 x 1086 variants of the same house (bright
+# summer day, soft clear day, misty morning, golden hour, clear night, rainy
+# day, storm night, winter day, Christmas day / night). Copy the ten PNGs to
+# /config/www/ecco/scenes/ (a local resource; the card never loads from a
+# CDN). The variant follows the date, sun.sun and the weather condition and
+# changes with a crossfade; it is ambience only and carries no values.
+scene:
+  pack: /local/ecco/scenes/
+  crossfade_ms: 900
+
 nodes:
   solar:
     - label: Array 1
@@ -51,6 +61,8 @@ nodes:
 ecco:
   telemetry_online: binary_sensor.ecco_clock_dongle_telemetry_online
   sun: sun.sun
+  # Same weather entity the Weather & Solar card uses; picks the scene variant.
+  weather: weather.forecast_home
 
   free_power:
     active: binary_sensor.ecco_clock_dongle_free_power_active

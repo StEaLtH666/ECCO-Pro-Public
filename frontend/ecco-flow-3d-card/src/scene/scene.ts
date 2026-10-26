@@ -17,6 +17,7 @@ import {
   PYLON_BASE,
   SCENE_H,
   SCENE_W,
+  type ArtworkLayout,
   box,
   flowPaths,
   iso,
@@ -36,6 +37,8 @@ export interface PillData {
   clickable: boolean;
   /** Battery only: 0-100 or null (no ring fill when unknown). */
   soc?: number | null;
+  /** Battery only: the FE-1 time-to-reserve line, shown on its own line under the state. */
+  extra?: string;
 }
 
 export interface FlowView {
@@ -52,13 +55,25 @@ export interface SceneModel {
   pills: Record<FlowId, PillData>;
   inverterLed: "ok" | "warn" | "off";
   onPill: (id: FlowId) => void;
+  /** Second PV array's own flow (the garage roof) when two arrays are configured and individually known. */
+  solar2?: FlowView;
+  /**
+   * Artwork plates: when set, the overlay layout is drawn over the scene
+   * image instead of the vector scene. `layers` holds the current plate and,
+   * during a crossfade, the previous one underneath it.
+   */
+  artwork?: { layers: Array<{ url: string; key: string; entering: boolean }>; layout: ArtworkLayout; onError: (url: string) => void; onLoad: (url: string) => void };
 }
 
-const FLOW_COLOUR: Record<FlowId, string> = {
+/** The packet dash cycle in vector-scene units (motion.DASH_PERIOD); the keyframe travel is twice this, scaled per layout. */
+const DASH_PERIOD_UNITS = 15;
+
+const FLOW_COLOUR: Record<FlowId | "solar2", string> = {
   solar: "#f7c948",
+  solar2: "#f7c948",
   battery: "#35e08a",
   grid: "#3ea6ff",
-  home: "#a9dcff",
+  home: "#22d3ee",
 };
 
 function icon(name: IconName, x: number, y: number, size: number, colour: string): TemplateResult {
@@ -279,24 +294,24 @@ function pylon(gridMoving: boolean, gridUnknown: boolean): TemplateResult {
 // ---------------------------------------------------------------------------
 // Flow paths
 
-function flowPath(id: FlowId, d: string, view: FlowView, animate: boolean): TemplateResult {
+function flowPath(id: FlowId | "solar2", d: string, view: FlowView, animate: boolean, k = 1): TemplateResult {
   const { edge, motion } = view;
   const colour = FLOW_COLOUR[id];
   const cls = `flow flow-${id} ${edge.unknown ? "unknown" : ""} ${edge.idle ? "idle" : ""} ${motion.moving && animate ? "moving" : ""} ${edge.reversed ? "reversed" : ""}`;
   const pathId = `ef3d-path-${id}`;
   const dashStyle = motion.moving
-    ? `stroke-dasharray:${motion.dashLen.toFixed(1)} ${motion.gapLen.toFixed(1)}; animation-duration:${motion.dashDurationS.toFixed(2)}s; stroke-width:${motion.packetWidthPx.toFixed(2)}; opacity:${motion.packetOpacity.toFixed(2)}`
+    ? `stroke-dasharray:${(motion.dashLen * k).toFixed(1)} ${(motion.gapLen * k).toFixed(1)}; animation-duration:${motion.dashDurationS.toFixed(2)}s; stroke-width:${(motion.packetWidthPx * k).toFixed(2)}; opacity:${motion.packetOpacity.toFixed(2)}; --dash-travel:${(-2 * DASH_PERIOD_UNITS * k).toFixed(1)}`
     : "";
-  const glowStyle = motion.moving ? `stroke-width:${(motion.packetWidthPx * 2.6).toFixed(1)}; opacity:${(0.18 + motion.intensity * 0.3).toFixed(2)}` : "";
+  const glowStyle = motion.moving ? `stroke-width:${(motion.packetWidthPx * 2.6 * k).toFixed(1)}; opacity:${(0.18 + motion.intensity * 0.3).toFixed(2)}` : "";
   const balls: TemplateResult[] = [];
   if (motion.moving && animate) {
     const n = motion.ballCount;
     for (let i = 0; i < n; i++) {
       balls.push(svg`
         <g class="pulse" data-path=${pathId} data-duration=${motion.ballDurationS.toFixed(3)} data-phase=${(i / n).toFixed(3)} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}>
-          <circle r=${(motion.ballRadiusPx * 1.9).toFixed(2)} class="pulse-halo"></circle>
-          <circle r=${motion.ballRadiusPx.toFixed(2)} class="pulse-glow"></circle>
-          <circle r=${(motion.ballRadiusPx * 0.42).toFixed(2)} class="pulse-core"></circle>
+          <circle r=${(motion.ballRadiusPx * 1.9 * k).toFixed(2)} class="pulse-halo"></circle>
+          <circle r=${(motion.ballRadiusPx * k).toFixed(2)} class="pulse-glow"></circle>
+          <circle r=${(motion.ballRadiusPx * 0.42 * k).toFixed(2)} class="pulse-core"></circle>
         </g>`);
     }
   }
@@ -304,13 +319,13 @@ function flowPath(id: FlowId, d: string, view: FlowView, animate: boolean): Temp
   const chevrons: TemplateResult[] = [];
   if (motion.moving && !animate) {
     for (const phase of [0.3, 0.55, 0.8]) {
-      chevrons.push(svg`<g class="chevron" data-path=${pathId} data-phase=${phase} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}><path d="M -4 -4 L 2 0 L -4 4" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></g>`);
+      chevrons.push(svg`<g class="chevron" data-path=${pathId} data-phase=${phase} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}><path d="M -4 -4 L 2 0 L -4 4" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform=${`scale(${k})`}></path></g>`);
     }
   }
   return svg`
     <g class=${cls} style=${`--flow-colour:${colour}`}>
-      <path d=${d} class="flow-base" style=${`stroke-width:${motion.baseWidthPx.toFixed(2)}`}></path>
-      <path d=${d} class="flow-dots"></path>
+      <path d=${d} class="flow-base" style=${`stroke-width:${(motion.baseWidthPx * k).toFixed(2)}`}></path>
+      <path d=${d} class="flow-dots" style=${`stroke-width:${(2.4 * k).toFixed(1)}; stroke-dasharray:0.1 ${(7 * k).toFixed(1)}`}></path>
       <path d=${d} class="flow-glow" style=${glowStyle}></path>
       <path id=${pathId} d=${d} class="flow-packets" style=${dashStyle}></path>
       ${balls}${chevrons}
@@ -320,16 +335,16 @@ function flowPath(id: FlowId, d: string, view: FlowView, animate: boolean): Temp
 // ---------------------------------------------------------------------------
 // Pills
 
-function pill(id: FlowId, boxDef: PillBox, data: PillData, onPill: (id: FlowId) => void, flow: FlowView): TemplateResult {
+function pill(id: FlowId, boxDef: PillBox, data: PillData, onPill: (id: FlowId) => void, flow: FlowView, k = 1): TemplateResult {
   const colour = FLOW_COLOUR[id];
-  const r = 14;
+  const r = 14 * k;
   const withRing = id === "battery";
-  const ringR = 22;
+  const ringR = 20 * k;
   const ringC = 2 * Math.PI * ringR;
   const soc = data.soc ?? null;
   const socDash = soc === null ? 0 : (Math.max(0, Math.min(100, soc)) / 100) * ringC;
-  const valueX = boxDef.x + 52;
-  const ringCx = boxDef.x + boxDef.w - 36;
+  const valueX = boxDef.x + 52 * k;
+  const ringCx = boxDef.x + boxDef.w - 32 * k;
   const ringCy = boxDef.y + boxDef.h / 2;
   const state = flow.edge.unknown ? "unknown" : flow.edge.idle ? "idle" : "active";
   return svg`
@@ -347,20 +362,21 @@ function pill(id: FlowId, boxDef: PillBox, data: PillData, onPill: (id: FlowId) 
        }}>
       <rect x=${boxDef.x} y=${boxDef.y} width=${boxDef.w} height=${boxDef.h} rx=${r} class="pill-bg"></rect>
       <rect x=${boxDef.x} y=${boxDef.y} width=${boxDef.w} height=${boxDef.h} rx=${r} class="pill-border"></rect>
-      <circle cx=${boxDef.x + 27} cy=${boxDef.y + boxDef.h / 2} r="15" class="pill-icon-bg"></circle>
-      ${icon(data.icon, boxDef.x + 16, boxDef.y + boxDef.h / 2 - 11, 22, colour)}
-      <text x=${valueX} y=${boxDef.y + 19} class="pill-label">${data.label}</text>
-      <text x=${valueX} y=${boxDef.y + (data.sub ? 39 : 42)} class="pill-value">${data.value}</text>
-      ${data.sub ? svg`<text x=${valueX} y=${boxDef.y + boxDef.h - 8} class="pill-sub">${data.sub}</text>` : nothing}
+      <circle cx=${boxDef.x + 27 * k} cy=${boxDef.y + boxDef.h / 2} r=${15 * k} class="pill-icon-bg"></circle>
+      ${icon(data.icon, boxDef.x + 16 * k, boxDef.y + boxDef.h / 2 - 11 * k, 22 * k, colour)}
+      <text x=${valueX} y=${boxDef.y + 19 * k} class="pill-label">${data.label}</text>
+      <text x=${valueX} y=${boxDef.y + (data.sub ? 39 : 42) * k} class="pill-value">${data.value}</text>
+      ${data.sub ? svg`<text x=${valueX} y=${boxDef.y + (data.extra ? 52 : boxDef.h / k - 8) * k} class="pill-sub">${data.sub}</text>` : nothing}
+      ${data.extra ? svg`<text x=${valueX} y=${boxDef.y + boxDef.h - 9 * k} class="pill-extra">${data.extra}</text>` : nothing}
       ${
         withRing
           ? svg`
             <circle cx=${ringCx} cy=${ringCy} r=${ringR} class="ring-track"></circle>
             ${soc === null ? nothing : svg`<circle cx=${ringCx} cy=${ringCy} r=${ringR} class="ring-fill" stroke-dasharray=${`${socDash.toFixed(1)} ${ringC.toFixed(1)}`} transform=${`rotate(-90 ${ringCx} ${ringCy})`}></circle>`}
-            <text x=${ringCx} y=${ringCy + 4} class="ring-value">${soc === null ? "--" : `${Math.round(soc)}%`}</text>
-            <text x=${ringCx} y=${ringCy + 14} class="ring-caption">SOC</text>`
+            <text x=${ringCx} y=${ringCy + 4 * k} class="ring-value">${soc === null ? "--" : `${Math.round(soc)}%`}</text>
+            <text x=${ringCx} y=${ringCy + 14 * k} class="ring-caption">SOC</text>`
           : data.clickable
-            ? icon("chevron", boxDef.x + boxDef.w - 24, boxDef.y + boxDef.h / 2 - 8, 16, "rgba(255,255,255,0.45)")
+            ? icon("chevron", boxDef.x + boxDef.w - 24 * k, boxDef.y + boxDef.h / 2 - 8 * k, 16 * k, "rgba(255,255,255,0.45)")
             : nothing
       }
     </g>`;
@@ -370,6 +386,7 @@ function pill(id: FlowId, boxDef: PillBox, data: PillData, onPill: (id: FlowId) 
 // Scene
 
 export function renderScene(m: SceneModel): TemplateResult {
+  if (m.artwork) return renderArtworkScene(m, m.artwork);
   const paths = flowPaths();
   const gridMoving = m.flows.grid.motion.moving;
   const inv = INVERTER_PORT;
@@ -439,6 +456,42 @@ export function renderScene(m: SceneModel): TemplateResult {
       ${pill("grid", PILLS.grid, m.pills.grid, m.onPill, m.flows.grid)}
       ${pill("home", PILLS.home, m.pills.home, m.onPill, m.flows.home)}
       ${pill("battery", PILLS.battery, m.pills.battery, m.onPill, m.flows.battery)}
+    </svg>`;
+}
+
+/**
+ * Artwork plate + live overlays. The plate is a fixed-perspective illustration
+ * with no lines, labels or figures of its own; every value and every moving
+ * element is drawn here, so the picture can never contradict the telemetry.
+ */
+function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"]>): TemplateResult {
+  const L = art.layout;
+  const paths = L.paths();
+  const k = L.scale;
+  const inv = L.inverter;
+  const solar2 = m.solar2;
+  return svg`
+    <svg class=${`scene artwork ${m.daylight} ${m.stale ? "stale" : ""} ${m.animate ? "" : "still"}`} viewBox=${`0 0 ${L.width} ${L.height}`} preserveAspectRatio="xMidYMid meet" style=${`--k:${k}`} aria-label="Energy flow scene">
+      <defs>
+        <filter id="ef3d-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=${(2.4 * k).toFixed(1)}></feGaussianBlur></filter>
+        <filter id="ef3d-blur-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=${(5 * k).toFixed(1)}></feGaussianBlur></filter>
+      </defs>
+      ${art.layers.map(
+        (layer) => svg`<image href=${layer.url} x="0" y="0" width=${L.width} height=${L.height} preserveAspectRatio="xMidYMid meet" class=${`plate ${layer.entering ? "entering" : ""}`} data-scene=${layer.key} @error=${() => art.onError(layer.url)} @load=${() => art.onLoad(layer.url)}></image>`
+      )}
+      <g class="flows">
+        ${flowPath("grid", paths.grid, m.flows.grid, m.animate, k)}
+        ${flowPath("solar", paths.solar, m.flows.solar, m.animate, k)}
+        ${solar2 ? flowPath("solar2", paths.solar2, solar2, m.animate, k) : nothing}
+        ${flowPath("battery", paths.battery, m.flows.battery, m.animate, k)}
+        ${flowPath("home", paths.home, m.flows.home, m.animate, k)}
+        <circle cx=${inv.x} cy=${inv.y} r=${(4.2 * k).toFixed(1)} class=${`junction led-${m.inverterLed}`}></circle>
+        <circle cx=${inv.x} cy=${inv.y} r=${(9 * k).toFixed(1)} class=${`junction-halo led-${m.inverterLed}`}></circle>
+      </g>
+      ${pill("solar", L.pills.solar, m.pills.solar, m.onPill, m.flows.solar, k)}
+      ${pill("grid", L.pills.grid, m.pills.grid, m.onPill, m.flows.grid, k)}
+      ${pill("home", L.pills.home, m.pills.home, m.onPill, m.flows.home, k)}
+      ${pill("battery", L.pills.battery, m.pills.battery, m.onPill, m.flows.battery, k)}
     </svg>`;
 }
 

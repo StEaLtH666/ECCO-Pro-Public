@@ -20,6 +20,7 @@ import {
   classifyOnOff,
   minutesOfDay,
   numberOf,
+  reserveRuntimeLine,
   reserveRuntimeTile,
   reserveRuntimeTooltip,
   resolveDaylight,
@@ -36,6 +37,8 @@ import {
   type Tone,
 } from "./core/status.ts";
 import { renderScene, type PillData, type SceneModel } from "./scene/scene.ts";
+import { v4Layout, v4ScaleForWidth } from "./scene/iso.ts";
+import { SCENE_KEYS, sceneUrl, selectScene, type SceneKey } from "./core/scenes.ts";
 import { ICONS, type IconName } from "./scene/icons.ts";
 
 interface HomeAssistantLike {
@@ -62,6 +65,14 @@ export class EccoFlow3dCard extends LitElement {
   @state() private _config?: EccoFlow3dCardConfig;
   @state() private _detailsOpen = false;
   @state() private _nowMs = Date.now();
+  /** Scene plates currently drawn: the active one and, during a crossfade, the previous one underneath. */
+  @state() private _layers: Array<{ url: string; key: string; entering: boolean }> = [];
+  /** Plate URLs that failed to load; the vector scene takes over while the active plate is one of them. */
+  private _failedPlates = new Set<string>();
+  private _fadeTimer = 0;
+  /** Card width in px (ResizeObserver): picks the overlay scale of the artwork layout. */
+  @state() private _widthPx = 0;
+  private _resize?: ResizeObserver;
 
   private _raf = 0;
   private _timer = 0;
@@ -89,6 +100,62 @@ export class EccoFlow3dCard extends LitElement {
   public setConfig(config: EccoFlow3dCardConfig): void {
     validateConfig(config);
     this._config = config;
+    this._failedPlates = new Set();
+  }
+
+  /**
+   * Which scene plate to show now: the pinned scene, else the pack's rules
+   * over the date, the sun and the weather condition. Ambience only.
+   */
+  private _resolveScene(states: States, now: Date): { key: SceneKey; url: string } | null {
+    const sc = this._config?.scene;
+    if (!sc?.pack) return null;
+    const ecco = this._config?.ecco ?? {};
+    const sun = ecco.sun ? states[ecco.sun] : undefined;
+    const elevation = typeof sun?.attributes?.elevation === "number" ? (sun.attributes.elevation as number) : null;
+    const rising = typeof sun?.attributes?.rising === "boolean" ? (sun.attributes.rising as boolean) : null;
+    const forced = sc.force && (SCENE_KEYS as string[]).includes(sc.force) ? (sc.force as SceneKey) : null;
+    const key =
+      forced ??
+      selectScene({
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+        sunUp: sun ? (sun.state === "above_horizon" ? true : sun.state === "below_horizon" ? false : null) : null,
+        elevation,
+        rising,
+        weather: ecco.weather ? stateOf(states, ecco.weather) : undefined,
+        hour: now.getHours(),
+      });
+    return { key, url: sceneUrl(sc.pack, key, sc.scenes as Partial<Record<SceneKey, string>> | undefined) };
+  }
+
+  protected willUpdate(): void {
+    const target = this._resolveScene(this.hass?.states ?? {}, new Date(this._nowMs));
+    if (!target) {
+      if (this._layers.length) this._layers = [];
+      return;
+    }
+    const top = this._layers[this._layers.length - 1];
+    if (top && top.url === target.url) return;
+    // First plate: no fade. Later plates: enter on top and fade in; the old one stays beneath until the fade ends.
+    this._layers = this._layers.length === 0 ? [{ url: target.url, key: target.key, entering: false }] : [...this._layers.slice(-1), { url: target.url, key: target.key, entering: true }];
+  }
+
+  private _plateLoaded(url: string): void {
+    const top = this._layers[this._layers.length - 1];
+    if (!top || top.url !== url || this._layers.length < 2) return;
+    window.clearTimeout(this._fadeTimer);
+    this._fadeTimer = window.setTimeout(
+      () => {
+        this._layers = this._layers.filter((l) => l.url === url).map((l) => ({ ...l, entering: false }));
+      },
+      (this._config?.scene?.crossfade_ms ?? 900) + 50
+    );
+  }
+
+  private _plateFailed(url: string): void {
+    this._failedPlates.add(url);
+    this.requestUpdate();
   }
 
   public getCardSize(): number {
@@ -104,12 +171,21 @@ export class EccoFlow3dCard extends LitElement {
     this._timer = window.setInterval(() => {
       this._nowMs = Date.now();
     }, REFRESH_MS);
+    if (typeof ResizeObserver !== "undefined") {
+      this._resize = new ResizeObserver((entries) => {
+        const w = Math.round(entries[0]?.contentRect.width ?? 0);
+        if (w && Math.abs(w - this._widthPx) > 8) this._widthPx = w;
+      });
+      this._resize.observe(this);
+    }
   }
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
     this._reducedMotionQuery?.removeEventListener?.("change", this._onMotionPref);
     window.clearInterval(this._timer);
+    window.clearTimeout(this._fadeTimer);
+    this._resize?.disconnect();
     cancelAnimationFrame(this._raf);
     this._raf = 0;
   }
@@ -155,6 +231,11 @@ export class EccoFlow3dCard extends LitElement {
     const soc = numberOf(states, nodes.battery?.soc);
     const edges = buildFlowEdges({ solarW, batteryW, gridW, homeW });
     const byId = Object.fromEntries(edges.map((e) => [e.id, e])) as Record<FlowId, FlowEdge>;
+    // Artwork plates draw one route per PV array (main roof, garage roof) when two arrays are individually known;
+    // the Solar pill always shows the authoritative total, so nothing is counted twice.
+    const twoArrays = arrays.length >= 2 && (arrayW[0] !== null || arrayW[1] !== null);
+    const solarMainEdge = twoArrays ? buildFlowEdges({ solarW: arrayW[0] ?? null, batteryW: null, gridW: null, homeW: null })[0]! : byId.solar;
+    const solar2Edge = twoArrays ? buildFlowEdges({ solarW: arrayW[1] ?? null, batteryW: null, gridW: null, homeW: null })[0]! : null;
 
     // --- freshness ---
     const telemetry = classifyOnOff(stateOf(states, ecco.telemetry_online));
@@ -167,6 +248,11 @@ export class EccoFlow3dCard extends LitElement {
     );
     const stale = fresh.stale;
     const animate = (config.features?.animate_flow ?? true) && !this._reducedMotion;
+
+    // --- FE-1 runtime (shown in the battery pill and the Runtime tile) ---
+    const ttrId = nodes.battery?.time_to_reserve;
+    const rt = resolveReserveRuntime(ttrId, resolveTimeToReserveMinutes(ttrId, numberOf(states, ttrId), attrsOf(states, ttrId)?.unit_of_measurement), attrsOf(states, ttrId));
+    const runtimeWord = rt && (rt.status === "discharging" || rt.status === "at_reserve") ? reserveRuntimeLine(rt) : "";
 
     // --- scene pills ---
     const bState = batteryState(batteryW);
@@ -202,6 +288,7 @@ export class EccoFlow3dCard extends LitElement {
         label: "Battery Storage",
         value: formatPowerCompact(batteryW === null ? null : Math.abs(batteryW)),
         sub: bState === "charging" ? "Charging" : bState === "discharging" ? "Discharging" : bState === "idle" ? "Idle" : "Unknown",
+        extra: runtimeWord,
         tone: bState === "unknown" ? "muted" : "ok",
         icon: "battery",
         clickable: !!(nodes.battery?.power ?? nodes.battery?.soc),
@@ -209,10 +296,22 @@ export class EccoFlow3dCard extends LitElement {
       },
     };
 
+    const daylight = resolveDaylight(ecco.sun ? states[ecco.sun] : undefined, now);
+    const activePlate = this._layers[this._layers.length - 1];
+    const artworkOn = !!activePlate && !this._failedPlates.has(activePlate.url);
     const scene: SceneModel = {
-      daylight: resolveDaylight(ecco.sun ? states[ecco.sun] : undefined, now),
+      daylight,
+      artwork: artworkOn
+        ? {
+            layers: this._layers,
+            layout: v4Layout(v4ScaleForWidth(this._widthPx || this.getBoundingClientRect().width || 1200)),
+            onError: (url) => this._plateFailed(url),
+            onLoad: (url) => this._plateLoaded(url),
+          }
+        : undefined,
+      solar2: artworkOn && solar2Edge ? { edge: solar2Edge, motion: motionFor(solar2Edge, stale) } : undefined,
       flows: {
-        solar: { edge: byId.solar, motion: motionFor(byId.solar, stale) },
+        solar: artworkOn ? { edge: solarMainEdge, motion: motionFor(solarMainEdge, stale) } : { edge: byId.solar, motion: motionFor(byId.solar, stale) },
         battery: { edge: byId.battery, motion: motionFor(byId.battery, stale) },
         grid: { edge: byId.grid, motion: motionFor(byId.grid, stale) },
         home: { edge: byId.home, motion: motionFor(byId.home, stale) },
@@ -232,10 +331,11 @@ export class EccoFlow3dCard extends LitElement {
     const chip = this._chip(telemetry, fresh.ageS, stale, fresh.reason);
 
     return html`
-      <ha-card>
+      <ha-card style=${`--ef-crossfade:${config.scene?.crossfade_ms ?? 900}ms`}>
         <div class="card">
           <header class="head">
             <div class="titles">
+              ${(config.brand ?? "ECCO") !== "" ? html`<div class="wordmark"><span class="wm-accent">${(config.brand ?? "ECCO").slice(0, 1)}</span>${(config.brand ?? "ECCO").slice(1)}</div>` : nothing}
               <div class="brand">${config.title ?? "Energy Flow"}</div>
               ${config.subtitle ? html`<div class="subtitle">${config.subtitle}</div>` : nothing}
             </div>
@@ -633,6 +733,16 @@ export class EccoFlow3dCard extends LitElement {
       gap: 12px;
       padding: 4px 4px 8px;
     }
+    .wordmark {
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: 0.34em;
+      color: #dfe7f7;
+      margin-bottom: 2px;
+    }
+    .wm-accent {
+      color: var(--ef-ok);
+    }
     .brand {
       font-size: 24px;
       font-weight: 800;
@@ -688,9 +798,58 @@ export class EccoFlow3dCard extends LitElement {
     }
     @container (min-width: 760px) {
       .body {
-        grid-template-columns: minmax(0, 1.2fr) minmax(300px, 1fr);
+        grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr);
         align-items: start;
       }
+    }
+    /* Artwork plates: the whole 1448 x 1086 canvas at every width (no crop, so the hardware anchors never move). */
+    .scene.artwork {
+      aspect-ratio: 1448 / 1086;
+      max-height: none;
+      height: auto;
+      background: #0a1322;
+    }
+    .scene.artwork .plate {
+      image-rendering: auto;
+    }
+    .scene.artwork .plate.entering {
+      animation: ef3d-plate-in var(--ef-crossfade, 900ms) ease-in-out both;
+    }
+    @keyframes ef3d-plate-in {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+    .scene.artwork .pill-label {
+      font-size: calc(11px * var(--k, 1));
+    }
+    .scene.artwork .pill-value {
+      font-size: calc(19px * var(--k, 1));
+    }
+    .scene.artwork .pill-sub {
+      font-size: calc(10px * var(--k, 1));
+    }
+    .scene.artwork .ring-value {
+      font-size: calc(12px * var(--k, 1));
+    }
+    .scene.artwork .ring-caption {
+      font-size: calc(6.5px * var(--k, 1));
+    }
+    .scene.artwork .pill-border {
+      stroke-width: calc(1.4px * var(--k, 1));
+    }
+    .scene.artwork .ring-track,
+    .scene.artwork .ring-fill {
+      stroke-width: calc(5px * var(--k, 1));
+    }
+    .scene.artwork .pill-bg {
+      fill: rgba(7, 12, 24, 0.78);
+    }
+    .scene.artwork .chevron path {
+      stroke-width: 2;
     }
     .scene-wrap {
       position: relative;
@@ -738,6 +897,7 @@ export class EccoFlow3dCard extends LitElement {
       flex-direction: column;
       gap: 10px;
       min-width: 0;
+      container-type: inline-size;
     }
     .idle-banner {
       color: var(--ef-muted);
@@ -1120,7 +1280,7 @@ export class EccoFlow3dCard extends LitElement {
     }
     @keyframes ef3d-dash {
       to {
-        stroke-dashoffset: -30;
+        stroke-dashoffset: var(--dash-travel, -30);
       }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -1187,6 +1347,14 @@ export class EccoFlow3dCard extends LitElement {
       font-size: 10px;
       font-weight: 600;
       fill: var(--pill-colour);
+    }
+    .pill-extra {
+      font-size: 10px;
+      font-weight: 600;
+      fill: #dfe7f7;
+    }
+    .scene.artwork .pill-extra {
+      font-size: calc(10px * var(--k, 1));
     }
     .pill.tone-alert .pill-sub {
       fill: var(--ef-alert);

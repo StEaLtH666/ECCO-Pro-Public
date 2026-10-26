@@ -7,6 +7,9 @@ param(
     [string]$OutDir = (Join-Path $env:TEMP "ecco-flow-3d-preview"),
     [int]$Port = 8765,
     [string[]]$Scenarios = @("day-export", "night-discharge", "night-import-charge", "dump-active", "idle", "unknown", "stale", "attention"),
+    [string]$Assets = "",
+    [string]$Img = "",
+    [string[]]$Scenes = @(),
     [switch]$KeepServer
 )
 cls
@@ -21,22 +24,32 @@ $browser = @(
 if (-not $browser) { throw "No Chrome or Edge found for headless capture." }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-$server = Start-Process -FilePath "node" -ArgumentList @("preview/serve.mjs", "$Port") -WorkingDirectory $card -PassThru -WindowStyle Hidden
+$serverArgs = @("preview/serve.mjs", "$Port"); if ($Assets) { $serverArgs += $Assets }
+$server = Start-Process -FilePath "node" -ArgumentList $serverArgs -WorkingDirectory $card -PassThru -WindowStyle Hidden
 try {
     Start-Sleep -Milliseconds 900
     $profile = Join-Path $env:TEMP ("ecco-flow-3d-capture-" + [guid]::NewGuid().ToString("N"))
     # Chrome clamps a headless window to roughly 500 px wide, so the phone
     # capture renders a 390 px frame left-aligned in a 520 px window and is
     # cropped to the frame afterwards (System.Drawing, no extra tooling).
-    Add-Type -AssemblyName System.Drawing
     $sizes = @(
         @{ name = "mobile"; w = 520; h = 1320; frame = 390; crop = 414 },
         @{ name = "desktop"; w = 1280; h = 980; frame = 1200; crop = 0 }
     )
-    foreach ($s in $Scenarios) {
+    # With -Scenes, one capture per scene (night scenes use the night-discharge telemetry, day scenes day-export).
+    $jobs = @()
+    if ($Scenes.Count -gt 0) {
+        foreach ($sc in $Scenes) {
+            $scenario = if ($sc -match "night") { "night-discharge" } else { "day-export" }
+            $jobs += @{ name = "scene-$sc"; query = "s=$scenario&scene=$sc" }
+        }
+    } else {
+        foreach ($s in $Scenarios) { $jobs += @{ name = $s; query = "s=$s" } }
+    }
+    foreach ($j in $jobs) {
         foreach ($z in $sizes) {
-            $out = Join-Path $OutDir ("{0}-{1}.png" -f $s, $z.name)
-            $url = "http://127.0.0.1:$Port/preview/index.html?s=$s&w=$($z.frame)&chrome=0"
+            $out = Join-Path $OutDir ("{0}-{1}.png" -f $j.name, $z.name)
+            $url = "http://127.0.0.1:$Port/preview/index.html?$($j.query)&w=$($z.frame)&chrome=0" + $(if ($Img) { "&img=$Img" } else { "" })
             $args = @(
                 "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
                 "--user-data-dir=$profile", "--window-size=$($z.w),$($z.h)", "--virtual-time-budget=2500",
@@ -45,12 +58,9 @@ try {
             # Start-Process keeps Chrome's own stderr chatter out of PowerShell 5.1's error stream.
             Start-Process -FilePath $browser -ArgumentList $args -Wait -WindowStyle Hidden
             if ((Test-Path $out) -and $z.crop -gt 0) {
-                $img = [System.Drawing.Image]::FromFile($out)
-                $rect = New-Object System.Drawing.Rectangle 0, 0, ([Math]::Min($z.crop, $img.Width)), $img.Height
-                $bmp = (New-Object System.Drawing.Bitmap $img).Clone($rect, $img.PixelFormat)
-                $img.Dispose()
-                $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-                $bmp.Dispose()
+                # Crop the left-aligned phone frame out of the clamped window (PIL; System.Drawing proved flaky here).
+                $py = "from PIL import Image; im = Image.open(r'$out'); im.crop((0, 0, min($($z.crop), im.width), im.height)).save(r'$out')"
+                & python -I -c $py
             }
             if (Test-Path $out) { Write-Host ("captured {0}" -f $out) } else { Write-Host ("FAILED {0}" -f $out) -ForegroundColor Red }
         }

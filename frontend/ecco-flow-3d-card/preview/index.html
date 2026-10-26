@@ -72,6 +72,7 @@
       import { buildStates, SCENARIOS } from "./mock.js";
 
       const params = new URLSearchParams(location.search);
+      const SCENES = ["bright_summer_day", "soft_clear_day", "misty_morning", "golden_hour", "clear_night", "rainy_day", "storm_night", "winter_clear_day", "christmas_day", "christmas_night"];
       const scenario = params.get("s") ?? "day-export";
       const width = params.get("w");
       const chrome = params.get("chrome") !== "0";
@@ -84,9 +85,30 @@
       }
       for (const s of SCENARIOS) {
         const a = document.createElement("a");
-        a.href = `?s=${s}${width ? `&w=${width}` : ""}`;
+        a.href = `?s=${s}${width ? `&w=${width}` : ""}${params.get("img") ? `&img=${params.get("img")}` : ""}`;
         a.textContent = s;
         if (s === scenario) a.classList.add("on");
+        bar.appendChild(a);
+      }
+      for (const sc of SCENES) {
+        const a = document.createElement("a");
+        a.href = `?s=${scenario}${width ? `&w=${width}` : ""}&scene=${sc}`;
+        a.textContent = sc.replace(/_/g, " ");
+        if (params.get("scene") === sc) a.classList.add("on");
+        bar.appendChild(a);
+      }
+      {
+        const a = document.createElement("a");
+        a.href = `?s=${scenario}${width ? `&w=${width}` : ""}&demo=1`;
+        a.textContent = "demo cycle";
+        if (params.get("demo")) a.classList.add("on");
+        bar.appendChild(a);
+      }
+      for (const [label, v] of [["artwork", "1"], ["vector", "0"]]) {
+        const a = document.createElement("a");
+        a.href = `?s=${scenario}${width ? `&w=${width}` : ""}&img=${v}`;
+        a.textContent = label;
+        if ((params.get("img") ?? "1") === v) a.classList.add("on");
         bar.appendChild(a);
       }
       for (const w of [360, 430, 600, 900, 1200]) {
@@ -102,6 +124,17 @@
       // comments) so the preview exercises the SAME file a user would paste.
       const yaml = await (await fetch("../examples/ecco-example.yaml")).text();
       const config = parseYaml(yaml);
+      // Scene pack: ?img=0 forces the built-in vector scene; otherwise the V4 pack served from the preview
+      // server's assets mount (/assets/scenes/) is used when present. ?scene=<key> pins one scene; ?demo=1
+      // cycles through every scene with the card's own crossfade.
+      const imgParam = params.get("img");
+      if (imgParam !== "0") {
+        const head = await fetch("/assets/scenes/00_bright_summer_day.png", { method: "HEAD" }).catch(() => null);
+        if (head && head.ok) {
+          config.scene = { pack: "/assets/scenes/", crossfade_ms: Number(params.get("fade") ?? 900) };
+          if (params.get("scene")) config.scene.force = params.get("scene");
+        }
+      }
 
       await customElements.whenDefined("ecco-flow-3d-card");
       const card = document.createElement("ecco-flow-3d-card");
@@ -115,6 +148,20 @@
       window.__eccoScenario = (name) => {
         card.hass = { states: buildStates(name) };
       };
+      window.__eccoScene = (key) => {
+        card.setConfig({ ...config, scene: { ...(config.scene ?? {}), force: key } });
+      };
+      if (params.get("demo") && config.scene) {
+        let i = 0;
+        const step = () => {
+          const key = SCENES[i % SCENES.length];
+          i++;
+          window.__eccoScene(key);
+          document.getElementById("note").textContent = `scene demo: ${key.replace(/_/g, " ")} (crossfade ${config.scene.crossfade_ms} ms)`;
+        };
+        step();
+        setInterval(step, Number(params.get("every") ?? 4000));
+      }
 
       function parseYaml(text) {
         const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "" && !l.trim().startsWith("#"));

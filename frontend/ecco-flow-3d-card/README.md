@@ -1,17 +1,48 @@
 # ECCO 3D Energy Flow card
 
-**Status: offline prototype (v1), not installed.** A read-only Home Assistant
-Lovelace card that draws the ECCO installation as an isometric night/day
-scene: a house with rooftop PV, the ECCO battery cabinet, the grid pylon and
-the inverter as the junction every power path meets, with glowing energy
-pulses whose speed, density and thickness follow the live watts. Below the
-scene sits a compact ECCO status grid (TOU slot, charge source, target SOC,
-FE-1 battery runtime, Free Power, Dump to Grid, health, solar forecast) and a
-collapsible diagnostics panel.
+**Status: offline prototype (v2, scene pack), not installed.** A read-only
+Home Assistant Lovelace card that shows the ECCO installation as a premium
+fixed-perspective house scene (the owner-approved V4 scene pack: ten
+weather and season variants of one house, battery cabinet, wall inverter,
+EV charger and pylon) with the live figures and the animated power routes
+drawn on top as SVG overlays. Four routes meet at the wall inverter: solar
+(yellow, one route per PV array), battery (green, reversing for charge and
+discharge), grid (blue, reversing for import and export) and home (cyan).
+Pulse speed, density and line thickness follow the live watts; idle,
+unknown and stale routes never move. Below the scene sits a compact ECCO
+status grid (TOU slot, charge source, target SOC, FE-1 battery runtime,
+Free Power, Dump to Grid, health, solar forecast) and a collapsible
+diagnostics panel.
 
-The visual direction follows the approved reference mockup
-(`design-reference/ECCO_3D_Energy_Flow_Mockup.png`, kept outside this
-repository). The power model is the installed Energy Flow card's, unchanged.
+The scene variant follows the date (Christmas plates from 1 December to
+3 January inclusive), `sun.sun` and the weather entity's condition, using
+the pack's own rules (`src/core/scenes.ts`), and changes with a crossfade.
+It is ambience only: no value on the card depends on the picture, and the
+plates carry no lines, labels or figures. Without a pack the card falls
+back to its built-in vector scene. The layout, typography and status panel
+follow the approved mockup; the power model is the installed Energy Flow
+card's, unchanged.
+
+## Scene pack
+
+```yaml
+scene:
+  pack: /local/ecco/scenes/     # the ten V4 PNGs (1448 x 1086), a local resource, never a CDN
+  crossfade_ms: 900             # optional
+  # force: clear_night          # optional: pin one scene (demos)
+  # scenes: { clear_night: night-alt.png }   # optional per-scene override
+ecco:
+  sun: sun.sun
+  weather: weather.forecast_home
+```
+
+Overlay geometry (`src/scene/iso.ts`, `v4Layout`) comes from the pack's
+anchor map: the hardware anchors (main array, garage array, wall inverter,
+battery cabinet, pylon, house energy centre) and the anchor waypoints of the
+five routes are honoured verbatim (tested), the pills sit in the pack's
+overlay safe zones, and the whole canvas is always shown (no crop, so the
+hardware never moves). Phones draw the overlays at a larger scale than
+desktops so the figures stay legible.
 
 ## What it reuses
 
@@ -87,10 +118,11 @@ features:
 
 ## Layout
 
-Mobile-first: the scene (400 x 470 viewBox) fills the card width; the status
-grid uses two columns below 460 px of card width and three above. From 760 px
-the status grid and the details panel move to a right-hand column beside the
-scene (container queries, so it follows the card's width, not the window's).
+Mobile-first: the scene fills the card width (the 1448 x 1086 plate, or the
+400 x 470 vector scene); the status grid uses two columns while its column is
+narrower than 460 px and three above. From 760 px the status grid and the
+details panel move to a right-hand column beside the scene (container
+queries, so it follows the card's width, not the window's).
 
 ## Build, test, preview
 
@@ -98,16 +130,19 @@ scene (container queries, so it follows the card's width, not the window's).
 npm ci
 npm run typecheck
 npm run build        # dist/ecco-flow-3d-card.js (deterministic; committed)
-npm test             # node:test, 51 tests
+npm test             # node:test, 64 tests
 npm run preview      # http://127.0.0.1:8765/preview/index.html?s=day-export
 ```
 
 Preview scenarios (`?s=`): `day-export`, `night-discharge`,
 `night-import-charge` (Free Power active), `dump-active`, `idle`, `unknown`,
 `stale`, `attention`. `?w=390|430|600|900|1200` sets the frame width;
-`&chrome=0` hides the scenario bar. `preview/capture.ps1` drives a headless
-Chrome/Edge through every scenario at phone and desktop sizes and writes PNGs
-(outside the repository by default).
+`&chrome=0` hides the scenario bar. With the scene pack mounted
+(`node preview/serve.mjs 8765 <pack folder>`, served at `/assets/`), `?scene=<key>`
+pins a scene and `?demo=1` cycles through all ten with the card's crossfade.
+`preview/capture.ps1 -Assets <pack folder> -Scenes <keys>` drives a headless
+Chrome/Edge through every scene (and `-Scenarios` through the telemetry
+scenarios) at phone and desktop sizes and writes PNGs outside the repository.
 
 The preview loads the real `dist/` bundle and parses `examples/ecco-example.yaml`
 itself, so it exercises the same file a user would paste. All mock values are
@@ -123,7 +158,9 @@ demonstration data.
 | `status.test.ts` | TOU slot (including the midnight wrap), sessions and end-time honesty, FE-1 wording, health roll-up, freshness, daylight |
 | `sensorMapping.test.ts` | every example entity exists in the repository; the preview mock covers them |
 | `safety.test.ts` | no service/websocket/API calls, no network resources, no action config, no fabricated defaults |
-| `geometry.test.ts` | pills inside the viewBox and non-overlapping; paths end exactly at their ports |
+| `geometry.test.ts` | vector scene: pills inside the viewBox and non-overlapping; paths end exactly at their ports |
+| `artworkLayout.test.ts` | V4 layout: pills in the safe zones and off every hardware anchor at every scale; routes through the anchor-map waypoints, ending at the wall inverter |
+| `scenes.test.ts` | scene rules in the pack's order, the Christmas window, golden hour, URLs under the local pack path |
 | `build.test.ts` | byte-identical rebuilds; committed `dist/` matches the sources |
 
 Rendering, animation and interaction are checked in a real browser through
@@ -133,9 +170,10 @@ the preview harness (headless capture plus a manual pass), not in node.
 
 The card is a standard single-file Lovelace resource. An eventual install
 would follow the same staged route as the other ECCO cards: copy
-`dist/ecco-flow-3d-card.js` to `/config/www/ecco/` under its content hash,
-add it as a JavaScript-module resource, and add a card from the example to a
-dashboard, each step under the owner's separate authorisation and the
+`dist/ecco-flow-3d-card.js` to `/config/www/ecco/` under its content hash and
+the ten scene PNGs to `/config/www/ecco/scenes/`, add the bundle as a
+JavaScript-module resource, and add a card from the example to a dashboard,
+each step under the owner's separate authorisation and the
 deploy-verify-resource read-back gate. Nothing in this directory touches a
 live system.
 

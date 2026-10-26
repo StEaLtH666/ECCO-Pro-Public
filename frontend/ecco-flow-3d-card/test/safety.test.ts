@@ -60,7 +60,7 @@ test("no value is fabricated: the card never renders a plausible number for an u
   assert.doesNotMatch(src, /(numberOf|toNumber)\([^)]*\)\s*\?\?\s*0\b/);
   // The only `?? 0` defaults are a precision and an array length, not readings.
   const zeroDefaults = [...src.matchAll(/[^\n]*\?\?\s*0\b[^\n]*/g)].map((m) => m[0].trim());
-  assert.deepEqual(zeroDefaults, ["return `${watts.toFixed(format?.precision ?? 0)} W`;", "(ecco.health?.sensors?.length ?? 0) > 0"]);
+  assert.deepEqual(zeroDefaults, ["return `${watts.toFixed(format?.precision ?? 0)} W`;", "const w = Math.round(entries[0]?.contentRect.width ?? 0);", "(ecco.health?.sensors?.length ?? 0) > 0"]);
 });
 
 test("the bundle registers the card's own tag and no other card's", () => {

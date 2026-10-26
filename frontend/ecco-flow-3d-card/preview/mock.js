@@ -42,6 +42,7 @@ const ENT = {
   tDc: "sensor.ecco_clock_dongle_ecco_temperature_dc_transformer",
   tBat: "sensor.ecco_clock_dongle_ecco_battery_temperature",
   attention: "binary_sensor.ecco_dump_limits_attention",
+  weather: "weather.forecast_home",
 };
 
 const HEALTH = [
@@ -78,7 +79,8 @@ export function buildStates(name) {
   const now = new Date();
   const s = {};
   const put = (id, state, attrs, ageS) => (s[id] = entity(state, attrs, ageS));
-  const sun = (above, elevation) => put(ENT.sun, above ? "above_horizon" : "below_horizon", { elevation });
+  const sun = (above, elevation, rising = elevation > 0 ? now.getHours() < 13 : false) => put(ENT.sun, above ? "above_horizon" : "below_horizon", { elevation, rising });
+  const weather = (condition) => put(ENT.weather, condition, { temperature: 14, humidity: 71 });
   const powers = ({ pv1, pv2, home, bat, grid, soc, inv }) => {
     put(ENT.pv1, pv1);
     put(ENT.pv2, pv2);
@@ -147,6 +149,7 @@ export function buildStates(name) {
   switch (name) {
     case "night-discharge": {
       sun(false, -24);
+      weather("clear-night");
       powers({ pv1: 0, pv2: 0, home: 920, bat: 930, grid: 4, soc: 54, inv: 925 });
       ttr("discharging", 384, { low: 330, high: 440 });
       put(ENT.fpSched, "ARMED", { scheduled_start: "02:00:00", duration_minutes: 120, requested_power_w: 3000 });
@@ -154,6 +157,7 @@ export function buildStates(name) {
     }
     case "night-import-charge": {
       sun(false, -30);
+      weather("lightning-rainy");
       powers({ pv1: 0, pv2: 0, home: 1180, bat: -2950, grid: 4180, soc: 35, inv: 0 });
       ttr("charging", "unknown");
       put(ENT.fpActive, "on");
@@ -163,7 +167,8 @@ export function buildStates(name) {
       break;
     }
     case "dump-active": {
-      sun(false, -4);
+      sun(true, 6, false);
+      weather("sunny");
       powers({ pv1: 140, pv2: 90, home: 760, bat: 3480, grid: -2910, soc: 61, inv: 3680 });
       ttr("discharging", 95, { low: 80, high: 120 });
       put(ENT.dActive, "on");
@@ -176,12 +181,14 @@ export function buildStates(name) {
     }
     case "idle": {
       sun(true, 42);
+      weather("partlycloudy");
       powers({ pv1: 2, pv2: 1, home: 3, bat: 0, grid: 1, soc: 100, inv: 0 });
       ttr("holding", "unknown");
       break;
     }
     case "unknown": {
       sun(true, 20);
+      put(ENT.weather, "unavailable");
       [ENT.pv1, ENT.pv2, ENT.pv, ENT.inv, ENT.home, ENT.bat, ENT.soc, ENT.grid, ENT.gridConn, ENT.tel, ENT.fcToday, ENT.fcRemaining].forEach((id) => put(id, "unavailable"));
       HEALTH.forEach((id) => put(id, "unavailable"));
       [1, 2, 3, 4, 5, 6].forEach((i) => put(`sensor.ecco_tou_slot_${i}_start_minute`, "unavailable"));
@@ -190,6 +197,7 @@ export function buildStates(name) {
     }
     case "stale": {
       sun(true, 30);
+      weather("fog");
       powers({ pv1: 1800, pv2: 1500, home: 900, bat: -2400, grid: 0, soc: 66, inv: 900 });
       Object.keys(s).forEach((id) => (s[id] = entity(s[id].state, s[id].attributes, 600)));
       put(ENT.tel, "off");
@@ -197,7 +205,8 @@ export function buildStates(name) {
       break;
     }
     case "attention": {
-      sun(true, 12);
+      sun(true, 12, true);
+      weather("rainy");
       powers({ pv1: 400, pv2: 350, home: 2100, bat: 1400, grid: 0, soc: 44, inv: 2100 });
       put(ENT.gridConn, "off");
       put("sensor.ecco_health_communications", "FAILED", { summary: "Configuration polling offline; telemetry polling online." });
@@ -210,6 +219,7 @@ export function buildStates(name) {
     case "day-export":
     default: {
       sun(true, 38);
+      weather("sunny");
       powers({ pv1: 3350, pv2: 3050, home: 2300, bat: -3100, grid: -1000, soc: 78, inv: 3300 });
       ttr("charging", "unknown");
       put(ENT.dSched, "ARMED", { scheduled_start: "17:00:00", duration_minutes: 60, requested_power_w: 3000, requested_stop_soc: 30 });
