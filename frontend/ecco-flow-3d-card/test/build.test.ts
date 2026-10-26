@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const card = fileURLToPath(new URL("..", import.meta.url));
-const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
+// Hashes are taken over LF-normalised content: the repository checks files
+// out with CRLF on Windows (core.autocrlf), while esbuild always writes LF.
+// The canonical bundle hash is therefore the hash of the LF content, which
+// is also what git stores as the blob.
+const sha = (p: string) => createHash("sha256").update(readFileSync(p, "utf-8").replace(/\r\n/g, "\n")).digest("hex");
 
 async function bundleTo(outfile: string): Promise<void> {
   await build({
