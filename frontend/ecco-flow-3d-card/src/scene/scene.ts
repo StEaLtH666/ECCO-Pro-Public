@@ -337,13 +337,13 @@ function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: b
     const glowW = (3.4 + t * 2.0) * k;
     const glowOp = motion.moving ? 0.1 + t * 0.16 : 0;
     const hiOp = motion.moving ? 0.3 + t * 0.3 : 0;
-    const riserOp = motion.moving ? 0.55 + t * 0.35 : 0.3;
+    const riserOp = motion.moving ? 0.45 + t * 0.3 : 0.25;
     return svg`
       <g class=${cls} style=${`--flow-colour:${colour}`}>
         <path d=${d} class="fine-base" style=${`stroke-width:${baseW.toFixed(2)}`}></path>
         <path d=${d} class="fine-glow" style=${`stroke-width:${glowW.toFixed(2)}; opacity:${glowOp.toFixed(2)}`}></path>
         <path id=${pathId} d=${d} class="fine-highlight" style=${`stroke-width:${(0.6 * k).toFixed(2)}; opacity:${hiOp.toFixed(2)}`}></path>
-        ${riserD ? svg`<path d=${riserD} class="fine-riser" style=${`stroke-width:${(1.3 * k).toFixed(2)}; opacity:${riserOp.toFixed(2)}`}></path>` : nothing}
+        ${riserD ? svg`<path d=${riserD} class="fine-riser" style=${`stroke-width:${(0.95 * k).toFixed(2)}; opacity:${riserOp.toFixed(2)}`}></path>` : nothing}
         ${particles}${chevrons}
       </g>`;
   }
@@ -570,8 +570,8 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
         ${power("solar", "solarMain", split.main)}
         ${split.garage ? power("solar", "solarGarage", split.garage) : nothing}
         ${power("home", "home", m.flows.home)}
-        ${nodeLight(A.main_pv_edge, FLOW_COLOUR.solar, lit(split.main), k)}
-        ${split.garage ? nodeLight(A.garage_pv_edge, FLOW_COLOUR.solar, lit(split.garage), k) : nothing}
+        ${nodeLight(A.main_pv_frame, FLOW_COLOUR.solar, lit(split.main), k)}
+        ${split.garage ? nodeLight(A.garage_pv_frame, FLOW_COLOUR.solar, lit(split.garage), k) : nothing}
         ${nodeLight(A.battery_cabinet, FLOW_COLOUR.battery, lit(m.flows.battery), k)}
         ${nodeLight(A.pylon, FLOW_COLOUR.grid, lit(m.flows.grid), k)}
         ${nodeLight(A.house, FLOW_COLOUR.home, lit(m.flows.home), k)}

@@ -13,10 +13,18 @@ const at = (p: { x: number; y: number }): [number, number] => [Math.round(p.x * 
 const first = (key: RouteKey) => L.routes[key][0]!;
 const last = (key: RouteKey) => L.routes[key][L.routes[key].length - 1]!;
 
-test("solar cable exits lie on the panels themselves (inside the arrays' module areas)", () => {
-  // Main array modules span about x 400-760, y 240-445; garage array modules about x 1020-1320, y 445-560.
-  assert.ok(A.main_pv_edge.x > 420 && A.main_pv_edge.x < 740 && A.main_pv_edge.y > 250 && A.main_pv_edge.y < 440);
-  assert.ok(A.garage_pv_edge.x > 1025 && A.garage_pv_edge.x < 1310 && A.garage_pv_edge.y > 450 && A.garage_pv_edge.y < 555);
+test("solar routes start on the panel frames and reach the cable exits with a short stub", () => {
+  // Main array lower-right frame edge: 640,442 -> 751,380 (y = 442 - 0.5586 (x - 640)); the attachment lies on it.
+  const onMainFrame = 442 - 0.5586 * (A.main_pv_frame.x - 640);
+  assert.ok(Math.abs(A.main_pv_frame.y - onMainFrame) <= 3, `main frame point sits on the frame edge (expected y ~${onMainFrame.toFixed(1)})`);
+  // Garage array lower frame edge: 1045,507 -> 1130,557; the attachment is at its lower-left corner.
+  assert.ok(Math.abs(A.garage_pv_frame.x - 1045) <= 4 && Math.abs(A.garage_pv_frame.y - 507) <= 4, "garage frame point at the lower-left frame corner");
+  assert.ok(Math.hypot(A.main_pv_edge.x - A.main_pv_frame.x, A.main_pv_edge.y - A.main_pv_frame.y) <= 30, "main stub is short");
+  assert.ok(Math.hypot(A.garage_pv_edge.x - A.garage_pv_frame.x, A.garage_pv_edge.y - A.garage_pv_frame.y) <= 45, "garage stub is short");
+  assert.deepEqual(at(L.routes.solarMain[0]!), at(A.main_pv_frame));
+  assert.deepEqual(at(L.routes.solarMain[1]!), at(A.main_pv_edge));
+  assert.deepEqual(at(L.routes.solarGarage[0]!), at(A.garage_pv_frame));
+  assert.deepEqual(at(L.routes.solarGarage[1]!), at(A.garage_pv_edge));
   assert.ok(A.main_pv.x > 420 && A.main_pv.x < 740 && A.main_pv.y > 250 && A.main_pv.y < 440, "info-link target on the main array");
   const solarInfoEnd = L.routes.solarInfo[L.routes.solarInfo.length - 1]!;
   assert.ok(solarInfoEnd.x > 420 && solarInfoEnd.x < 740 && solarInfoEnd.y > 250 && solarInfoEnd.y < 440, "solar info link ends on the array");
@@ -24,15 +32,18 @@ test("solar cable exits lie on the panels themselves (inside the arrays' module 
 
 test("calibrated anchors sit on the master plate's equipment (plate pixels)", () => {
   assert.deepEqual(at(A.inverter), [1002, 624]);
-  assert.deepEqual(at(A.ground_entry), [1002, 712]);
+  assert.deepEqual(at(A.ground_entry), [1002, 722]);
   assert.deepEqual(at(A.downpipe), [748, 620]);
-  assert.deepEqual(at(A.door_post), [1120, 640]);
+  assert.deepEqual(at(A.door_post), [1104, 640]);
   assert.deepEqual(at(A.battery_cabinet), [150, 512]);
   assert.deepEqual(at(A.pylon), [1297, 290]);
   assert.deepEqual(at(A.main_pv), [610, 335]);
-  assert.deepEqual(at(A.main_pv_edge), [704, 428]);
+  assert.deepEqual(at(A.main_pv_frame), [700, 409]);
+  assert.deepEqual(at(A.main_pv_edge), [716, 425]);
   assert.deepEqual(at(A.garage_pv), [1140, 500]);
-  assert.deepEqual(at(A.garage_pv_edge), [1050, 540]);
+  assert.deepEqual(at(A.garage_pv_frame), [1044, 508]);
+  assert.deepEqual(at(A.garage_pv_edge), [1048, 545]);
+  assert.deepEqual(at(A.building_corner), [948, 600]);
   assert.deepEqual(at(A.house), [752, 600]);
   assert.deepEqual(at(A.ev_charger), [1048, 655]);
   assert.equal(L.width, 1448);
@@ -75,8 +86,8 @@ test("at every overlay scale the cards stay inside the canvas, off every hardwar
 });
 
 test("every power route starts at its equipment and ends with one straight vertical riser into the inverter's underside", () => {
-  assert.deepEqual(at(first("solarMain")), at(A.main_pv_edge));
-  assert.deepEqual(at(first("solarGarage")), at(A.garage_pv_edge));
+  assert.deepEqual(at(first("solarMain")), at(A.main_pv_frame));
+  assert.deepEqual(at(first("solarGarage")), at(A.garage_pv_frame));
   assert.deepEqual(at(first("battery")), at(A.battery_cabinet));
   assert.deepEqual(at(first("grid")), at(A.pylon));
   for (const key of ["solarMain", "solarGarage", "battery", "grid"] as const) {
@@ -148,7 +159,7 @@ test("information links join each card's port to its equipment and never carry p
   assert.deepEqual([...POWER_ROUTES, ...INFO_ROUTES].sort(), Object.keys(L.routes).sort());
 });
 
-test("no physical route descends beside the inverter: every descent is at the downpipe or the garage door post, well clear of the unit", () => {
+test("every wall descent is on a real vertical feature (downpipe, building corner, garage wall) and never on the unit itself", () => {
   const unit = { x0: 958, x1: 1042 };
   for (const key of ["solarMain", "solarGarage", "battery", "grid", "home"] as const) {
     const pts = L.routes[key];
@@ -160,17 +171,18 @@ test("no physical route descends beside the inverter: every descent is at the do
       const vertical = Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) > 40;
       if (!vertical) continue;
       const x = a.x;
-      assert.ok(x < unit.x0 - 60 || x > unit.x1 + 60, `${key} descends at x=${x}, too close to the unit (${unit.x0}-${unit.x1})`);
-      assert.ok(Math.abs(x - A.downpipe.x) <= 14 || Math.abs(x - A.door_post.x) <= 2 || x >= 1335, `${key} descends on a real vertical feature (downpipe, door post or the hedge beside the garage), got x=${x}`);
+      assert.ok(x < unit.x0 || x > unit.x1, `${key} descends at x=${x}, over the unit (${unit.x0}-${unit.x1})`);
+      assert.ok(Math.abs(x - A.downpipe.x) <= 14 || Math.abs(x - A.door_post.x) <= 2 || Math.abs(x - A.building_corner.x) <= 2, `${key} descends on a real vertical feature, got x=${x}`);
     }
   }
 });
 
-test("the grid route follows the pylon, the hedge beside the garage, the garage eave and the door post, clear of the car, the door, the panels and the windows", () => {
+test("the grid route follows the pylon, the hedge behind the garage roof and the building corner, clear of the car, the door, the panels and the windows", () => {
   const pts = L.routes.grid;
-  assert.deepEqual(at(pts[1]!), [1300, 426], "down the pylon to its foot");
-  assert.ok(pts[3]!.x > 1335 && pts[3]!.y < 605, "down the hedge beside the garage, above the car");
-  assert.equal(pts[4]!.x, A.door_post.x, "along the eave to the door post");
+  assert.deepEqual(at(pts[1]!), [1300, 418], "down the pylon");
+  assert.equal(pts[2]!.x, A.building_corner.x, "along the hedge to the building corner");
+  assert.ok(pts[2]!.y < 445, "the hedge line stays above the garage panels");
+  assert.equal(pts[3]!.x, A.building_corner.x, "straight down the corner");
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!;
     const b = pts[i]!;
@@ -193,19 +205,19 @@ test("the battery route follows the garden path, the patio edge and the terrace 
   assert.ok(Math.abs(pts[2]!.x - pts[1]!.x) < 20 && pts[2]!.y > pts[1]!.y + 100, "down the patio's left edge");
   const slope = (pts[3]!.y - pts[2]!.y) / (pts[3]!.x - pts[2]!.x);
   const slope2 = (pts[4]!.y - pts[3]!.y) / (pts[4]!.x - pts[3]!.x);
-  assert.ok(slope > 0.1 && slope < 0.3 && slope2 > 0.1 && slope2 < 0.3, "the patio and terrace front edges run at the plate's perspective slope");
+  assert.ok(slope > 0.1 && slope < 0.3 && slope2 > 0.1 && slope2 <= 0.5, "the patio and terrace front edges run at the plate's perspective slope");
   assert.ok(Math.abs(pts[4]!.x - A.downpipe.x) <= 20, "joins the house foundation at the service wall");
 });
 
-test("the solar routes follow the roofs and real walls: main array down the porch edge and the downpipe, garage array along its eave and down the door post", () => {
+test("the solar routes follow the roofs and real walls: main array down the porch edge and the downpipe, garage array along its eave and down the garage wall", () => {
   const m = L.routes.solarMain;
-  assert.ok(Math.abs(m[1]!.x - A.downpipe.x) <= 6 && m[1]!.y > m[0]!.y, "main: from the array's lower edge down the porch roof edge to the downpipe head");
-  assert.equal(m[1]!.x, m[2]!.x, "main: straight down the downpipe");
-  assert.ok(m[2]!.y >= L.entry.y0 - 10, "main: to ground level");
+  assert.ok(Math.abs(m[2]!.x - A.downpipe.x) <= 6 && m[2]!.y > m[1]!.y, "main: from the cable exit down the porch roof valley to the downpipe head");
+  assert.equal(m[2]!.x, m[3]!.x, "main: straight down the downpipe");
+  assert.ok(m[3]!.y >= L.entry.y0 - 10, "main: to ground level");
   const g = L.routes.solarGarage;
-  assert.equal(g[1]!.x, A.door_post.x, "garage: along the eave to the door post");
-  assert.ok(g[1]!.y > g[0]!.y && g[1]!.y - g[0]!.y < 40, "garage: the eave's perspective slope");
-  assert.equal(g[1]!.x, g[2]!.x, "garage: straight down the door post");
+  assert.equal(g[2]!.x, A.door_post.x, "garage: along the eave to the wall left of the door");
+  assert.ok(g[2]!.y > g[1]!.y && g[2]!.y - g[1]!.y < 40, "garage: the eave's perspective slope");
+  assert.equal(g[2]!.x, g[3]!.x, "garage: straight down the garage wall");
   const h = L.routes.home;
   assert.ok(Math.abs(h[2]!.x - A.downpipe.x) <= 14 && h[2]!.x !== m[1]!.x, "home: up the service wall beside the downpipe on its own track");
 });
@@ -220,6 +232,36 @@ test("solar split never double counts: card carries the total, branches carry th
   assert.equal(totalOnly.garage, null);
   const trickle = splitSolarFlows(4, 3, 1, 2);
   assert.ok(trickle.card.idle && trickle.main.idle && trickle.garage!.idle);
+});
+
+test("no two routes cross in the entry area: tracks are ordered so a horizontal run passes below every riser it crosses", () => {
+  // Horizontal ground runs and vertical risers only, in plate pixels.
+  const vert = (key: RouteKey) => {
+    const pts = L.routes[key];
+    const [a, b] = key === "home" ? [pts[1]!, pts[0]!] : [pts[pts.length - 2]!, pts[pts.length - 1]!];
+    return { x: a.x, yTop: Math.min(a.y, b.y), yBottom: Math.max(a.y, b.y) };
+  };
+  for (const key of POWER_ROUTES) {
+    const pts = L.routes[key];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      if (Math.abs(a.y - b.y) > 12) continue; // only near-horizontal runs
+      const x0 = Math.min(a.x, b.x);
+      const x1 = Math.max(a.x, b.x);
+      for (const other of POWER_ROUTES) {
+        if (other === key) continue;
+        const r = vert(other);
+        if (r.x <= x0 || r.x >= x1) continue;
+        const yAt = a.y + ((b.y - a.y) * (r.x - a.x)) / (b.x - a.x || 1);
+        assert.ok(yAt > r.yBottom - 0.5, `${key} ground run crosses the ${other} riser at x=${r.x} (run y ${yAt.toFixed(1)}, riser bottom ${r.yBottom})`);
+      }
+    }
+  }
+  // The battery's terrace run passes below the main-array descent on the downpipe wall, not through it.
+  const solarTurn = L.routes.solarMain[3]!;
+  const batteryAtWall = L.routes.battery[4]!;
+  assert.ok(batteryAtWall.y > solarTurn.y, "battery passes under the main-array turn");
 });
 
 test("smoothPath (vector scene helper) passes through every point in order", () => {

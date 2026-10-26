@@ -188,22 +188,28 @@ export function smoothPath(points: Pt[], tension = 0.5): string {
 export const V4_ANCHORS = {
   /** Centre of the main rooftop array (info-link target). */
   main_pv: { x: 610, y: 335, label: "Main PV array" },
-  /** Where the main array's cable leaves the array: on its lower-right module, at the module's lower edge. */
-  main_pv_edge: { x: 704, y: 428, label: "Main PV cable exit" },
+  /** Main array: the attachment on the lower-right panel frame (the frame edge runs from 640,442 up to 751,380). */
+  main_pv_frame: { x: 700, y: 409, label: "Main PV frame connection" },
+  /** Main array: where the cable enters the roof, just below the frame at the porch-roof valley. */
+  main_pv_edge: { x: 716, y: 425, label: "Main PV cable exit" },
   /** Centre of the garage rooftop array (info-link target). */
   garage_pv: { x: 1140, y: 500, label: "Garage PV array" },
-  /** Where the garage array's cable leaves it: on its lower-left module, at the module's lower edge. */
-  garage_pv_edge: { x: 1050, y: 540, label: "Garage PV cable exit" },
+  /** Garage array: the attachment at its lower-left frame corner (the lower frame edge runs from 1045,507 to 1130,557). */
+  garage_pv_frame: { x: 1044, y: 508, label: "Garage PV frame connection" },
+  /** Garage array: where the cable enters the roof at the fascia below the corner. */
+  garage_pv_edge: { x: 1048, y: 545, label: "Garage PV cable exit" },
   /** Foot of the white battery cabinet (where its cable enters the ground). */
   battery_cabinet: { x: 150, y: 512, label: "Battery cabinet" },
   /** The wall inverter's underside: where the grouped riser enters the unit (unit body ≈ 958-1042 x 505-620). */
   inverter: { x: 1002, y: 624, label: "Inverter underside entry" },
   /** The common ground-level convergence point immediately below the inverter. */
-  ground_entry: { x: 1002, y: 712, label: "Ground convergence" },
+  ground_entry: { x: 1002, y: 722, label: "Ground convergence" },
+  /** The house / garage building corner: the grid supply's wall descent. */
+  building_corner: { x: 948, y: 600, label: "Building corner" },
   /** The downpipe on the front wall left of the entrance: the house's service wall (main-array descent, house connection). */
   downpipe: { x: 748, y: 620, label: "Downpipe / service wall" },
-  /** The garage door's left post: the garage-side descent (garage array, grid supply). */
-  door_post: { x: 1120, y: 640, label: "Garage door post" },
+  /** The garage wall between the EV charger and the door frame: the garage array's descent. */
+  door_post: { x: 1104, y: 640, label: "Garage wall (left of the door)" },
   /** The EV charger on the garage wall (reference only; no ECCO entity feeds it). */
   ev_charger: { x: 1048, y: 655, label: "EV charger" },
   /** The pylon's lattice at the height of the information card's connection. */
@@ -229,11 +235,11 @@ export const V4_SAFE_ZONES = {
  * takes the outermost riser.
  */
 export const RISERS = {
-  solarMain: { x: 990, ground: 700, side: "left" },
-  home: { x: 996, ground: 704, side: "left" },
-  battery: { x: 1002, ground: 708, side: "left" },
-  grid: { x: 1014, ground: 712, side: "right" },
-  solarGarage: { x: 1008, ground: 716, side: "right" },
+  home: { x: 990, ground: 704, side: "left" },
+  solarMain: { x: 996, ground: 708, side: "left" },
+  battery: { x: 1002, ground: 720, side: "left" },
+  grid: { x: 1008, ground: 728, side: "left" },
+  solarGarage: { x: 1014, ground: 732, side: "right" },
 } as const;
 export const RISER_TOP = 624;
 
@@ -276,12 +282,16 @@ export function v4Layout(k: number): ArtworkLayout {
   const riser = (key: keyof typeof R): Pt[] => [{ x: R[key].x, y: R[key].ground }, { x: R[key].x, y: RISER_TOP }];
   const routes: Record<RouteKey, Pt[]> = {
     solarInfo: [pills.solar.port, { x: 430, y: pills.solar.port.y }, { x: 545, y: 275 }],
-    solarMain: [A.main_pv_edge, { x: 744, y: 538 }, { x: 744, y: R.solarMain.ground }, ...riser("solarMain")],
-    solarGarage: [A.garage_pv_edge, { x: A.door_post.x, y: 560 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
+    // Frame attachment -> short stub to the cable exit -> down the porch-roof valley to the downpipe head -> down the downpipe -> foundation -> riser.
+    solarMain: [A.main_pv_frame, A.main_pv_edge, { x: 744, y: 538 }, { x: 744, y: R.solarMain.ground }, ...riser("solarMain")],
+    // Frame corner -> stub to the fascia -> along the garage eave -> down the wall left of the door -> foundation -> riser.
+    solarGarage: [A.garage_pv_frame, A.garage_pv_edge, { x: A.door_post.x, y: 566 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
     batteryInfo: [pills.battery.port, A.battery_cabinet],
-    battery: [A.battery_cabinet, { x: 330, y: 478 }, { x: 342, y: 598 }, { x: 620, y: 656 }, { x: 762, y: 696 }, ...riser("battery")],
+    // Cabinet -> garden path -> patio left edge -> patio / terrace front -> down to the foundation at the service wall -> riser.
+    battery: [A.battery_cabinet, { x: 330, y: 478 }, { x: 342, y: 598 }, { x: 620, y: 656 }, { x: 744, y: 716 }, ...riser("battery")],
     gridInfo: [pills.grid.port, A.pylon],
-    grid: [A.pylon, { x: 1300, y: 426 }, { x: 1350, y: 440 }, { x: 1350, y: 598 }, { x: A.door_post.x, y: 568 }, { x: A.door_post.x, y: R.grid.ground }, ...riser("grid")],
+    // Pylon lattice -> down the pylon -> along the hedge behind the garage roof -> down the building corner -> foundation -> riser.
+    grid: [A.pylon, { x: 1300, y: 418 }, { x: A.building_corner.x, y: 440 }, { x: A.building_corner.x, y: R.grid.ground }, ...riser("grid")],
     home: [{ x: R.home.x, y: RISER_TOP }, { x: R.home.x, y: R.home.ground }, { x: 760, y: R.home.ground }, { x: 760, y: A.house.y }],
     homeInfo: [{ x: 745, y: A.house.y + 6 }, pills.home.port],
   };
@@ -292,7 +302,7 @@ export function v4Layout(k: number): ArtworkLayout {
     pills,
     inverter: A.inverter,
     anchors: A,
-    entry: { x0: 984, x1: 1020, y0: 694, y1: 722 },
+    entry: { x0: 964, x1: 1022, y0: 698, y1: 740 },
     routes,
     paths: () => Object.fromEntries((Object.keys(routes) as RouteKey[]).map((key) => [key, routePath(routes[key])])) as Record<RouteKey, string>,
   };
