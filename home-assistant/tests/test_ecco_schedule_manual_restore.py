@@ -747,9 +747,10 @@ check("smr1 chain-pins exactly the manifest, edits no frozen file, adds exactly 
       and all((ROOT / p).is_file() for p in M.ADDED_FILES), str(sorted(E.added_files)))
 cur = _pex.read(M.MANIFEST_REL)   # PEX: today's manifest
 before = _pex.as_of(M.MANIFEST_REL, "fcc1", cur)   # PEX: the manifest as of fcc1 (smr1 undone exactly, sha256-checked)
+today = _pex.as_of(M.MANIFEST_REL, "smr1", cur)   # PEX: the manifest as of smr1 (acu1 adds a frontend_assets stanza after smr1)
 check("undone exactly, the manifest is its fcc1 state, and applying smr1's pair to it gives today's manifest; the checkpoint is "
-      "its sha256", M.pre_smr1_manifest(cur) == before and M.add_smr1_manifest(before) == cur
-      and E.checkpoints == {chain.HA_MANIFEST: M.sha(cur)})
+      "its sha256", M.pre_smr1_manifest(today) == before and M.add_smr1_manifest(before) == today
+      and E.checkpoints == {chain.HA_MANIFEST: M.sha(today)})
 check("smr1's fingerprint is sealed and linked to fcc1's", E.fingerprint == _pex.fingerprint(E)   # PEX: hash link
       and _pex.record(E)["parent"] == chain.CHAIN.entry("fcc1").fingerprint)
 

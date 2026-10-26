@@ -3,7 +3,7 @@
 
   [1] pure helpers: content-addressed bundle names, the destination allow-list (as tools/EccoDeploy.psm1), entity-id extraction
       (comments and dynamic JavaScript-template ids skipped), snapshot shapes
-  [2] the real tree for a synthetic site: the plan passes, stages exactly the three cards that changed (names carry their sha256),
+  [2] the real tree for a synthetic site: the plan passes, stages exactly the four cards that changed (names carry their sha256),
       the dashboard and bundles are rendered for the site, the preview configuration is valid JSON under the websocket limit,
       nothing in the repository changes
   [3] negative controls: a snapshot missing an entity fails; with a baseline only NEW missing ids fail; a wrong expected git sha fails;
@@ -127,13 +127,13 @@ before = F.sha(b"".join((ROOT / r).read_bytes() for r in [F.DASHBOARD_REL, "VERS
 code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out), "--allow-dirty"])
 check("the plan passes for the synthetic site with a complete snapshot", code == 0, log[-600:])
 plan = json.loads((out / "plan.json").read_text(encoding="utf-8"))
-check("it plans exactly the three cards that changed, each with a content-addressed name, an allowed destination and a /local URL",
-      [c["card"] for c in plan["cards"]] == ["energy-actions", "weather-solar", "advanced-config"]
+check("it plans exactly the four cards that changed, each with a content-addressed name, an allowed destination and a /local URL",
+      [c["card"] for c in plan["cards"]] == ["energy-actions", "weather-solar", "advanced-config", "tou-settings"]
       and all(c["name"] == f"{Path(c['source']).stem}.{c['sha256'][:8]}.js" and F.destination_allowed(c["destination"])
               and c["resource_url"] == "/local/ecco/" + c["name"] and c["resource_type"] == "module" for c in plan["cards"]))
 check("the staged files are the rendered bytes (sha256 equals the plan), and the cards that need the slug are rendered for the site",
       all(F.sha((out / "stage" / c["name"]).read_bytes()) == c["sha256"] for c in plan["cards"])
-      and {c["card"]: c["slug_substituted"] for c in plan["cards"]} == {"energy-actions": False, "weather-solar": True, "advanced-config": True}
+      and {c["card"]: c["slug_substituted"] for c in plan["cards"]} == {"energy-actions": False, "weather-solar": True, "advanced-config": True, "tou-settings": True}
       and SLUG.encode() in (out / "stage" / next(c["name"] for c in plan["cards"] if c["card"] == "weather-solar")).read_bytes())
 check("the staged dashboard is the rendered dashboard: the site slug everywhere, no default slug but the kept entity",
       F.sha((out / "stage" / "ecco_pro.yaml").read_bytes()) == plan["dashboard"]["sha256_as_rendered"]
@@ -144,7 +144,7 @@ check("the preview configuration is the dashboard as JSON (views kept), well und
       len(cfg["views"]) == len(plan["dashboard"]["views"]) and (out / "ecco_pro_preview.json").stat().st_size < F.MAX_PREVIEW_JSON)
 check("the plan names the unchanged cards it does not deploy, requires no restart and lists one deploy command per file",
       set(plan["unchanged_cards_not_deployed"]) == {"energy-flow", "fallback-recovery"} and plan["restart_required"] is False
-      and len(plan["deploy_commands"]) == 4 and plan["deploy_commands"][-1].endswith("-Destination " + F.DASHBOARD_DEST))
+      and len(plan["deploy_commands"]) == 5 and plan["deploy_commands"][-1].endswith("-Destination " + F.DASHBOARD_DEST))
 after = F.sha(b"".join((ROOT / r).read_bytes() for r in [F.DASHBOARD_REL, "VERSION.yaml"]))
 check("the repository's own files are unchanged by planning", before == after)
 (out2 := TMP / "out_res").mkdir()
@@ -211,7 +211,7 @@ url = f"http://127.0.0.1:{srv.server_address[1]}"
 for c in plan["cards"]:
     (out / "stage" / "local" / "ecco" / c["name"]).write_bytes((out / "stage" / c["name"]).read_bytes())
 code, log = run(["verify-served", "--plan", str(out / "plan.json"), "--base-url", url, "--timeout", "5"])
-check("verify-served passes when the server hands out the planned bytes", code == 0 and log.count("PASS") == 3, log[-400:])
+check("verify-served passes when the server hands out the planned bytes", code == 0 and log.count("PASS") == 4, log[-400:])
 (out / "stage" / "local" / "ecco" / card["name"]).write_bytes(good + b"\n//x")
 code, log = run(["verify-served", "--plan", str(out / "plan.json"), "--base-url", url, "--timeout", "5"])
 check("verify-served fails when a served bundle differs by a byte", code == 1 and "DIFFERS" in log, log[-400:])

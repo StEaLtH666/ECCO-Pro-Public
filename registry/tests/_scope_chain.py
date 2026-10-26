@@ -115,6 +115,7 @@ import _smr1_scope as _smr1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _acs1_scope as _acs1  # noqa: E402
+import _acu1_scope as _acu1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
@@ -1091,7 +1092,48 @@ ACS1 = Entry(
          "recorded by an invertible transform, not by a reverter (the package is neither chain-pinned nor frozen): ZERO firmware, "
          "registry, deployment, frozen-file or reserved-token-allowlist change, unchanged write surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1)
+# acu1 (ECCO TOU Settings card, frontend/ecco-tou-settings-card: the six live TOU slots and a guarded editor on the dashboard;
+# _acu1_scope.py): made on public main
+# a7235433 after acs1. OWNER-APPROVED 2026-10-25 (assignment A2 of the new Window A, decisions D1-D9 as recommended, D5 and D6 refined):
+# a SEPARATE card (the read-only Advanced / Experimental Configuration card of section 13 is byte-identical), which calls ONLY the
+# installed ACS1 editor scripts - script.ecco_cfg_review_tou_slot_setting, script.ecco_cfg_apply_tou_slot_setting and
+# script.ecco_cfg_acknowledge_edit_review - each through script.turn_on, and reads the editor's helpers back. It holds no safety logic
+# of its own (every gate stays in the scripts; the Review's refusal text is shown verbatim), reports success only on the editor's
+# APPLIED AND VERIFIED, binds Apply to the slot, setting and value reviewed in that card (the one-time code is read from the live plan
+# record), enforces a fixed 300 s spacing after every Apply that passed the editor's first gate, whatever its outcome (a REFUSED Apply adds
+# none; provisional, not a firmware rule, not configurable), offers Undo only when the result text, the owner-edit record and a current live read agree, keeps
+# start times display-only (the site's layout wraps midnight, L1) and explains the shadow latch only on the Review's own refusal (D3 as
+# approved, reading the two FB-C3 display decoders, is pinned out of frontend/ by the FB-C3 suite and was not implemented). FROZEN edits (PEX): the dashboard (the v7.22.0 header note; section 7 of the Inverter / Advanced view keeps its heading and
+# badge while its two read-only markdown cards become the card) and VERSION.yaml (dashboard 7.22.0, staged). CHAIN-PINNED edit: the
+# deployment manifest, one frontend_assets stanza (copy and resource registration stay manual). Added: the card folder, its CI wrapper
+# suite tools/tests/test_tou_settings_card.py and the scope module. Measured, not declared: ZERO firmware, Home Assistant package,
+# registry, Intelligence or ecco_core byte; ZERO Modbus operation; no reserved-token holder (the card spells none); the write surface
+# is unchanged.
+ACU1 = Entry(
+    id="acu1", pr="ACU1", commit="unmerged",
+    reverts=dict(_acu1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after acu1
+        HA_MANIFEST: "ca537531897fa73c3f61a7a5a151397643b1bb80764c8e8f689e0d3120a100cf",
+    },
+    added_files=_acu1.ADDED_FILES,
+    frozen_reverts=dict(_acu1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after acu1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _acu1.DASHBOARD_REL: "01e6c2d42f022de0661b1394b4c96ae7ad7265a2954c98a2e2f0b6283171cd10",
+        _acu1.VERSION_REL: "2c05d16b0fc8a63ccb119c4a1b382f2bcd155bc354984ac80062dcef43b560e6",
+    },
+    # _pex.fingerprint(ACU1): hashes its parent acs1's fingerprint and every declaration above
+    fingerprint="352c542819485963e3b30be6dbefca189c04b8b6fdc9491fa6edc901548405b7",
+    note="OWNER-APPROVED 2026-10-25 (A2; D1-D9, D5 and D6 refined): the ECCO TOU Settings card on section 7 of the Inverter / Advanced view "
+         "(the six live TOU slots and a guarded editor for the target SOC, the power and the charge source of one slot) which calls only the "
+         "three installed ACS1 editor scripts through script.turn_on and reads the editor's helpers back; no safety logic of its own, success "
+         "only on the editor's APPLIED AND VERIFIED, Apply bound to the slot, setting and value reviewed in the card, a fixed provisional 300 s "
+         "spacing after every Apply that passed the editor's first gate, Undo only with agreeing records and a current live read, start times display-only (L1), the shadow latch explained only on the Review's refusal (D3 "
+         "not implementable: the FB-C3 suite pins the decoders out of frontend/); "
+         "dashboard 7.22.0 staged (the section 7 heading kept, its two read-only markdown cards replaced), one manual frontend_assets stanza in "
+         "the manifest; the read-only catalogue card of section 13 is unchanged: ZERO firmware, Home Assistant package, registry, Intelligence "
+         "or ecco_core change, ZERO Modbus operation, no reserved-token holder, unchanged write surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

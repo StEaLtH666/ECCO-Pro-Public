@@ -1,0 +1,8 @@
+# Example Lovelace configuration for the ECCO TOU Settings card (the guarded TOU slot editor through the ACS1 scripts).
+# Add the bundle as a Lovelace resource first (/local/ecco/ecco-tou-settings-card.js, JavaScript module).
+# The device slug is quoted so tools/ecco_site_render.py renders it to your site's slug.
+type: custom:ecco-tou-settings-card
+title: Time of Use Schedule
+entity_prefix: "ecco_clock_dongle"
+# Optional: how old a slot value may be before it is shown as stale (seconds). The editor's own 150 s limit for an edit is fixed.
+max_age_configuration_s: 300

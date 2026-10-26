@@ -1,0 +1,25 @@
+{
+  "name": "ecco-tou-settings-card",
+  "version": "0.1.0",
+  "description": "A Home Assistant Lovelace card for the ECCO TOU slot settings: the six live slots and a guarded Review, typed confirmation, Apply editor that calls only the ACS1 scripts.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "inverter",
+    "time-of-use",
+    "guarded-edit"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  }
+}
