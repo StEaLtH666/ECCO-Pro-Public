@@ -1345,13 +1345,13 @@ export class EccoFlow3dCard extends LitElement {
       opacity: 0.16;
     }
     .pit-shadow {
-      fill: rgba(0, 0, 0, 0.45);
+      fill: rgba(0, 0, 0, 0.18);
       filter: url(#ef3d-blur);
     }
     .pit-face {
-      fill: rgba(20, 26, 38, 0.9);
-      stroke: rgba(255, 255, 255, 0.28);
-      stroke-width: calc(0.6px * var(--k, 1));
+      fill: rgba(20, 26, 38, 0.28);
+      stroke: rgba(255, 255, 255, 0.22);
+      stroke-width: calc(0.5px * var(--k, 1));
     }
     .junction-bar.led-ok {
       fill: #e7edf7;

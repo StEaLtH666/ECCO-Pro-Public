@@ -212,9 +212,10 @@ export const V4_ANCHORS = {
   /** The chimney's right face (stack 915-962 x 235-330): where the grid service drop lands on the house before following the corner down. */
   chimney: { x: 952, y: 300, label: "Chimney (service drop landing)" },
   /** The porch-roof apex where the main roof's fascia begins (758,452); the main-array cable reaches it from the frame. */
-  fascia_start: { x: 758, y: 448, label: "Roof junction / fascia start" },
+  /** Where the Array 1 drop (right of the skylight, 742-770 x 384-434) meets the main roof fascia. */
+  fascia_start: { x: 782, y: 455, label: "Fascia (right of the skylight)" },
   /** The rear garden path ends at x 310 and the patio's left corner is 68 px below it across the lawn edge: a buried transition, not visible paving. */
-  lawn_transition: { x: 230, y: 560, label: "Buried lawn crossing (cabinet to patio)" },
+  lawn_transition: { x: 230, y: 556, label: "Buried lawn crossing (level run)" },
   /** The downpipe on the front wall left of the entrance: the house's service wall (main-array descent, house connection). */
   downpipe: { x: 748, y: 620, label: "Downpipe / service wall" },
   /** The garage wall between the EV charger and the door frame: the garage array's descent. */
@@ -258,7 +259,8 @@ export const RISERS = {
  */
 export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
   { label: "rear garden path", points: [{ x: 110, y: 514 }, { x: 310, y: 502 }] },
-  { label: "lawn crossing (buried, parallel to the rear path)", points: [{ x: 150, y: 556 }, { x: 310, y: 570 }] },
+  { label: "lawn crossing (buried, level)", points: [{ x: 150, y: 556 }, { x: 310, y: 556 }] },
+  { label: "patio left corner drop", points: [{ x: 310, y: 556 }, { x: 310, y: 570 }] },
   { label: "patio front edge", points: [{ x: 310, y: 570 }, { x: 520, y: 647 }] },
   { label: "terrace front wall", points: [{ x: 520, y: 647 }, { x: 548, y: 682 }] },
   { label: "upper landing edge", points: [{ x: 548, y: 682 }, { x: 700, y: 692 }] },
@@ -272,7 +274,8 @@ export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
 export const BATTERY_WAYPOINTS: string[] = [
   "cabinet base",
   "out of the cabinet front onto the lawn",
-  "patio left corner (end of the buried lawn crossing)",
+  "end of the level buried crossing",
+  "patio left corner",
   "patio front edge, lawn border",
   "terrace front wall foot",
   "across the upper landing",
@@ -328,7 +331,9 @@ export function v4Layout(k: number): ArtworkLayout {
     // Array 1: frame attachment -> along the panel's lower frame edge to its corner -> straight down the roof valley to the
     // roof junction at the porch apex -> along the main roof fascia to the building corner -> straight down the corner
     // (track 946) -> floor -> riser.
-    solarMain: [A.main_pv_frame, A.main_pv_edge, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
+    // Array 1: frame attachment -> along the frame edge to its corner -> short level jog past the skylight -> straight down
+    // the roof beside the skylight to the fascia -> along the fascia to the building corner -> corner track 946 -> floor -> riser.
+    solarMain: [A.main_pv_frame, A.main_pv_edge, { x: A.fascia_start.x, y: A.main_pv_edge.y }, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
     // Frame corner -> straight down to the garage fascia -> along the fascia -> straight down the garage wall left of the
     // door -> deep floor run back to the convergence -> riser.
     // Array 2: frame corner -> straight down to the garage fascia (measured 960,512 -> 1140,565) -> along the fascia to the
@@ -338,9 +343,12 @@ export function v4Layout(k: number): ArtworkLayout {
     // Cabinet base -> along the rear garden path -> buried transition across the lawn edge -> the patio's left corner -> along the
     // patio front edge -> down the terrace front wall -> across the upper landing -> down step 1 -> along the tread -> down step 2
     // -> along the lower path to the drive -> drive paving to the ground convergence -> riser.
+    // Cabinet base -> out of the cabinet front onto the lawn -> 90 degrees -> level buried crossing -> 90 degrees down to the
+    // patio's left corner -> patio edge -> terrace wall -> landing -> step 1 -> tread -> step 2 -> lower path / drive -> riser.
     battery: [
       A.battery_cabinet,
       { x: 150, y: 556 },
+      { x: 310, y: 556 },
       { x: 310, y: 570 },
       { x: 520, y: 647 },
       { x: 548, y: 682 },
