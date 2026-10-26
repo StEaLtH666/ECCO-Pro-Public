@@ -5,8 +5,14 @@ project_version: "0.9.0"
 
 current:
   dashboard:
-    version: "7.21.1"
+    version: "7.22.0"
     path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.22.0 (ACU1) replaces the read-only TOU table of section 7 of the Inverter / Advanced view with the ECCO TOU
+    # Settings card: the six live slots and a guarded editor for the target SOC, the power and the charge source of one
+    # slot, through the installed ACS1 editor scripts only (Review, typed confirmation, Apply; Acknowledge after an
+    # UNCERTAIN outcome). The card holds no safety logic and no other write path; start times stay display-only. It is
+    # STAGED: tested_in_home_assistant stays false until the card is exercised on the reference installation. The 7.21.1
+    # record follows.
     # v7.21.1 (OVW2) is the Overview V2.1 polish and accuracy pass over 7.21.0 (FE1's time to reserve is kept): the SOC projections in ECCO Today and Smart Charge
     # Strategy credit only the solar that can arrive before their target time and show an unavailable state instead of an
     # unsupported number; the dead SOC Model chart series is removed and a chart data-status strip is added; Battery outlook,

@@ -10,6 +10,23 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **ECCO TOU Settings card** (post-export entry `acu1`; offline candidate, NOT installed, NOT exercised in Home Assistant, NOT
+  live-proven; `frontend/ecco-tou-settings-card/README.md`). Section 7 of the Inverter / Advanced view (dashboard 7.22.0, staged) keeps
+  its heading and replaces the read-only TOU table with the card: the six live slots (window, power, target SOC, charge source, mode,
+  freshness, the active slot) and a guarded editor for the target SOC, the power and the charge source of one slot through the
+  installed ACS1 editor scripts only - Review (writes nothing), the typed confirmation phrase, Apply, and Acknowledge after an
+  UNCERTAIN outcome - each as one `script.turn_on`. The card holds no safety logic of its own (every gate stays in the scripts and the
+  Review's refusal is shown verbatim), reports success only on the editor's `APPLIED AND VERIFIED`, binds Apply to the slot, setting and value reviewed
+  in that card (the one-time code is read from the live plan record), enforces a fixed provisional 300 s spacing after every Apply that passed the editor's first gate, whatever its outcome (a REFUSED Apply
+  adds none; not a firmware rule, not configurable), offers Undo only when
+  the result text, the owner-edit record and a current live read agree (a value reported recently, or unchanged under a
+  current configuration poll), keeps start times display-only (the site's layout wraps midnight,
+  L1) and explains the shadow latch only on the Review's own refusal (owner decision D3, reading the FB-C3 display decoders, could
+  not be implemented: the FB-C3 suite pins those decoders out of every frontend file). The dongle's `YYYY-MM-DD HH:MM:SS` Europe/London poll time is parsed explicitly as Europe/London (the same in every browser zone and
+  across GMT / BST), cross-checked with the entity's UTC `last_changed`, and fails closed when unparsable or in the future; the slot clock,
+  the clock-change nights and the scheduled starts are read on the same London clock. One manual `frontend_assets` stanza in the deployment
+  manifest; the read-only Advanced / Experimental Configuration card (section 13) is unchanged. Owner decisions D1-D9 of 2026-10-25
+  (D5 and D6 refined) are recorded in the chain entry's note. No firmware, Home Assistant package or registry change.
 - **Advanced Configuration Stage 1: the guarded TOU settings editor** (post-export entry `acs1`; offline, source only, NOT installed,
   NOT live-proven; [docs/dev/acs-stage1-integration.md](docs/dev/acs-stage1-integration.md)). It replaces the Stage 0 target-SOC editor
   at the same package path (`ecco_tou_target_soc_edit.yaml`, so the deployment manifest is unchanged): one setting of one TOU slot per

@@ -121,6 +121,15 @@ frontend_assets:
     restart_required: false
     resource_registration: manual
     resource_url: /local/ecco/ecco-advanced-config-card.js
+  # ECCO TOU Settings card - ACU1 (the six live TOU slots and a guarded editor that calls only the
+  # installed ACS1 editor scripts; no write path of its own). Copying the file and registering the
+  # resource stay deliberate manual steps.
+  - source: frontend/ecco-tou-settings-card/dist/ecco-tou-settings-card.js
+    destination: /config/www/ecco/ecco-tou-settings-card.js
+    method: ssh_file_copy
+    restart_required: false
+    resource_registration: manual
+    resource_url: /local/ecco/ecco-tou-settings-card.js
 
 firmware:
   source: firmware/ecco_clock_dongle_stage3_4_free_power.yaml

@@ -76,10 +76,11 @@ CARDS = {   # card directory -> (source file, custom element tag)
     "energy-actions": ("frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js", "ecco-energy-actions-card"),
     "weather-solar": ("frontend/ecco-weather-solar-card/dist/ecco-weather-solar-card.js", "ecco-weather-solar-card"),
     "advanced-config": ("frontend/ecco-advanced-config-card/dist/ecco-advanced-config-card.js", "ecco-advanced-config-card"),
+    "tou-settings": ("frontend/ecco-tou-settings-card/dist/ecco-tou-settings-card.js", "ecco-tou-settings-card"),
     "energy-flow": ("frontend/ecco-energy-flow-card/dist/ecco-energy-flow-card.js", "ecco-energy-flow-card"),
     "fallback-recovery": ("frontend/ecco-fallback-recovery-card/ecco-fallback-recovery-card.js", "ecco-fallback-recovery-card"),
 }
-DEFAULT_DEPLOY = ("energy-actions", "weather-solar", "advanced-config")
+DEFAULT_DEPLOY = ("energy-actions", "weather-solar", "advanced-config", "tou-settings")
 ALLOWED_DEST = ("/config/packages/", "/config/ecco/", "/config/www/ecco/")   # tools/EccoDeploy.psm1 Test-EccoDeploymentDestination
 THIRD_PARTY = {"button-card": "button-card", "apexcharts-card": "apexcharts-card", "flex-horseshoe-card": "flex-horseshoe-card",
                "sunsynk-power-flow-card": "sunsynk-power-flow-card"}
