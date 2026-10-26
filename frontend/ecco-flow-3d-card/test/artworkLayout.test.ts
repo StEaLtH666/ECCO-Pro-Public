@@ -13,15 +13,26 @@ const at = (p: { x: number; y: number }): [number, number] => [Math.round(p.x * 
 const first = (key: RouteKey) => L.routes[key][0]!;
 const last = (key: RouteKey) => L.routes[key][L.routes[key].length - 1]!;
 
+test("solar cable exits lie on the panels themselves (inside the arrays' module areas)", () => {
+  // Main array modules span about x 400-760, y 240-445; garage array modules about x 1020-1320, y 445-560.
+  assert.ok(A.main_pv_edge.x > 420 && A.main_pv_edge.x < 740 && A.main_pv_edge.y > 250 && A.main_pv_edge.y < 440);
+  assert.ok(A.garage_pv_edge.x > 1025 && A.garage_pv_edge.x < 1310 && A.garage_pv_edge.y > 450 && A.garage_pv_edge.y < 555);
+  assert.ok(A.main_pv.x > 420 && A.main_pv.x < 740 && A.main_pv.y > 250 && A.main_pv.y < 440, "info-link target on the main array");
+  const solarInfoEnd = L.routes.solarInfo[L.routes.solarInfo.length - 1]!;
+  assert.ok(solarInfoEnd.x > 420 && solarInfoEnd.x < 740 && solarInfoEnd.y > 250 && solarInfoEnd.y < 440, "solar info link ends on the array");
+});
+
 test("calibrated anchors sit on the master plate's equipment (plate pixels)", () => {
   assert.deepEqual(at(A.inverter), [1002, 624]);
   assert.deepEqual(at(A.ground_entry), [1002, 712]);
+  assert.deepEqual(at(A.downpipe), [748, 620]);
+  assert.deepEqual(at(A.door_post), [1120, 640]);
   assert.deepEqual(at(A.battery_cabinet), [150, 512]);
   assert.deepEqual(at(A.pylon), [1297, 290]);
   assert.deepEqual(at(A.main_pv), [610, 335]);
-  assert.deepEqual(at(A.main_pv_edge), [735, 440]);
+  assert.deepEqual(at(A.main_pv_edge), [704, 428]);
   assert.deepEqual(at(A.garage_pv), [1140, 500]);
-  assert.deepEqual(at(A.garage_pv_edge), [1000, 548]);
+  assert.deepEqual(at(A.garage_pv_edge), [1050, 540]);
   assert.deepEqual(at(A.house), [752, 600]);
   assert.deepEqual(at(A.ev_charger), [1048, 655]);
   assert.equal(L.width, 1448);
@@ -93,9 +104,12 @@ test("risers are distinct, closely spaced tracks and no route crosses another in
   assert.ok(Math.max(...xs) - Math.min(...xs) <= 28, "the bundle stays within 28 plate px (inside the unit's 958-1042 footprint)");
   const gaps = [...xs].sort((a, b) => a - b).map((x, i, arr) => (i ? x - arr[i - 1]! : 99));
   assert.ok(Math.min(...gaps) >= 6, "risers are at least 6 plate px apart so they read as distinct tracks");
-  // Shallower ground track -> riser further left, so no riser crosses a track that continues past it.
-  const sorted = Object.values(RISERS).sort((a, b) => a.ground - b.ground);
-  for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i]!.x > sorted[i - 1]!.x, "tracks nest without crossing");
+  // On each side the shallower ground track takes the outer riser, so no riser crosses a track that continues past it.
+  const left = Object.values(RISERS).filter((r) => r.side === "left").sort((a, b) => a.ground - b.ground);
+  const right = Object.values(RISERS).filter((r) => r.side === "right").sort((a, b) => a.ground - b.ground);
+  for (let i = 1; i < left.length; i++) assert.ok(left[i]!.x > left[i - 1]!.x, "left tracks nest without crossing");
+  for (let i = 1; i < right.length; i++) assert.ok(right[i]!.x < right[i - 1]!.x, "right tracks nest without crossing");
+  assert.ok(Math.max(...left.map((r) => r.x)) < Math.min(...right.map((r) => r.x)), "left and right groups do not interleave");
 });
 
 test("routes are structured: few vertices, axis-aligned or gently sloped segments, small fillets", () => {
@@ -134,10 +148,38 @@ test("information links join each card's port to its equipment and never carry p
   assert.deepEqual([...POWER_ROUTES, ...INFO_ROUTES].sort(), Object.keys(L.routes).sort());
 });
 
-test("the grid route follows the pylon and the hedge behind the garage and stays clear of the car, the garage door and the windows", () => {
+test("no physical route descends beside the inverter: every descent is at the downpipe or the garage door post, well clear of the unit", () => {
+  const unit = { x0: 958, x1: 1042 };
+  for (const key of ["solarMain", "solarGarage", "battery", "grid", "home"] as const) {
+    const pts = L.routes[key];
+    const riserStart = key === "home" ? 0 : pts.length - 2;
+    for (let i = 1; i < pts.length; i++) {
+      if (i === riserStart + 1) continue; // the riser itself
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const vertical = Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) > 40;
+      if (!vertical) continue;
+      const x = a.x;
+      assert.ok(x < unit.x0 - 60 || x > unit.x1 + 60, `${key} descends at x=${x}, too close to the unit (${unit.x0}-${unit.x1})`);
+      assert.ok(Math.abs(x - A.downpipe.x) <= 14 || Math.abs(x - A.door_post.x) <= 2 || x >= 1335, `${key} descends on a real vertical feature (downpipe, door post or the hedge beside the garage), got x=${x}`);
+    }
+  }
+});
+
+test("the grid route follows the pylon, the hedge beside the garage, the garage eave and the door post, clear of the car, the door, the panels and the windows", () => {
   const pts = L.routes.grid;
   assert.deepEqual(at(pts[1]!), [1300, 426], "down the pylon to its foot");
-  assert.ok(pts[2]!.y < 460 && pts[2]!.x < 960, "along the hedge above the garage roof to the house / garage corner");
+  assert.ok(pts[3]!.x > 1335 && pts[3]!.y < 605, "down the hedge beside the garage, above the car");
+  assert.equal(pts[4]!.x, A.door_post.x, "along the eave to the door post");
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    for (const f of [0.25, 0.5, 0.75]) {
+      const x = a.x + (b.x - a.x) * f;
+      const y = a.y + (b.y - a.y) * f;
+      assert.ok(!(x > 1010 && x < 1320 && y > 440 && y < 560), `grid segment ${i} crosses the garage panels at ${x.toFixed(0)},${y.toFixed(0)}`);
+    }
+  }
   for (const p of pts) {
     assert.ok(!(p.x > 1190 && p.y > 640), `grid vertex ${p.x},${p.y} over the car`);
     assert.ok(!(p.x > 1130 && p.x < 1330 && p.y > 560 && p.y < 690), `grid vertex ${p.x},${p.y} over the garage door`);
@@ -152,16 +194,20 @@ test("the battery route follows the garden path, the patio edge and the terrace 
   const slope = (pts[3]!.y - pts[2]!.y) / (pts[3]!.x - pts[2]!.x);
   const slope2 = (pts[4]!.y - pts[3]!.y) / (pts[4]!.x - pts[3]!.x);
   assert.ok(slope > 0.1 && slope < 0.3 && slope2 > 0.1 && slope2 < 0.3, "the patio and terrace front edges run at the plate's perspective slope");
+  assert.ok(Math.abs(pts[4]!.x - A.downpipe.x) <= 20, "joins the house foundation at the service wall");
 });
 
-test("the solar routes follow the roofs: eave to the house / garage corner, garage roof edge to the same corner, then straight down", () => {
+test("the solar routes follow the roofs and real walls: main array down the porch edge and the downpipe, garage array along its eave and down the door post", () => {
   const m = L.routes.solarMain;
-  assert.ok(m[1]!.y > m[0]!.y && m[2]!.y > m[1]!.y && m[2]!.x > m[1]!.x && m[1]!.x > m[0]!.x, "main: along the eave towards the corner (perspective slope)");
-  assert.equal(m[2]!.x, m[3]!.x, "main: straight down the corner");
+  assert.ok(Math.abs(m[1]!.x - A.downpipe.x) <= 6 && m[1]!.y > m[0]!.y, "main: from the array's lower edge down the porch roof edge to the downpipe head");
+  assert.equal(m[1]!.x, m[2]!.x, "main: straight down the downpipe");
+  assert.ok(m[2]!.y >= L.entry.y0 - 10, "main: to ground level");
   const g = L.routes.solarGarage;
-  assert.ok(g[1]!.x < g[0]!.x && Math.abs(g[1]!.y - g[0]!.y) < 40, "garage: along the roof edge to the corner");
-  assert.equal(g[1]!.x, g[2]!.x, "garage: straight down the corner");
-  assert.ok(Math.abs(m[2]!.x - g[1]!.x) <= 12 && Math.abs(g[1]!.x - L.routes.grid[3]!.x) <= 12, "the three descents share the corner as closely spaced tracks");
+  assert.equal(g[1]!.x, A.door_post.x, "garage: along the eave to the door post");
+  assert.ok(g[1]!.y > g[0]!.y && g[1]!.y - g[0]!.y < 40, "garage: the eave's perspective slope");
+  assert.equal(g[1]!.x, g[2]!.x, "garage: straight down the door post");
+  const h = L.routes.home;
+  assert.ok(Math.abs(h[2]!.x - A.downpipe.x) <= 14 && h[2]!.x !== m[1]!.x, "home: up the service wall beside the downpipe on its own track");
 });
 
 test("solar split never double counts: card carries the total, branches carry their own arrays, else the total once", () => {

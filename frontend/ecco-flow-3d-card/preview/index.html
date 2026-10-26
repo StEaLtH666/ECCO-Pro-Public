@@ -140,7 +140,7 @@
         if (head && head.ok) {
           config.scene = { pack: "/assets/scenes/", crossfade_ms: Number(params.get("fade") ?? 900) };
           if (params.get("scene")) config.scene.force = params.get("scene");
-          if (params.get("debug")) config.scene.debug_anchors = true;
+          if (params.get("debug") || params.get("routes")) config.scene.debug_anchors = true;
         }
       }
 
@@ -152,6 +152,14 @@
         document.getElementById("note").textContent = `more-info requested for ${e.detail.entityId} (Home Assistant would open its dialogue here)`;
       });
       document.getElementById("frame").appendChild(card);
+      // Route-only view (?routes=1): the plate is dimmed inside the card's shadow root so the paths,
+      // bends, anchors and the ground convergence can be inspected on their own. Harness only.
+      if (params.get("routes")) {
+        await card.updateComplete;
+        const st = document.createElement("style");
+        st.textContent = ".scene.artwork .plate { opacity: 0.14; } .scene.artwork { background: #0a1322; }";
+        card.shadowRoot.appendChild(st);
+      }
       window.__eccoCard = card;
       window.__eccoScenario = (name) => {
         card.hass = { states: buildStates(name) };

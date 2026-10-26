@@ -302,7 +302,7 @@ function pylon(gridMoving: boolean, gridUnknown: boolean): TemplateResult {
  * `key` must be unique per route (it names the path element the particles
  * follow). Idle, unknown and stale routes never move.
  */
-function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: boolean, k = 1, lengthUnits = 0): TemplateResult {
+function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: boolean, k = 1, lengthUnits = 0, riserD = ""): TemplateResult {
   const { edge, motion } = view;
   const colour = FLOW_COLOUR[id];
   const artwork = k > 1;
@@ -331,15 +331,19 @@ function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: b
     }
   }
   if (artwork) {
-    const baseW = (1.15 + t * 0.6) * k;
-    const glowW = (4.2 + t * 3.0) * k;
-    const glowOp = motion.moving ? 0.22 + t * 0.3 : 0;
-    const hiOp = motion.moving ? 0.5 + t * 0.4 : 0;
+    // Buried-cable look: a faint trace along the ground and the walls, the energy carried by the particles,
+    // and the short riser into the inverter drawn brighter.
+    const baseW = (0.95 + t * 0.35) * k;
+    const glowW = (3.4 + t * 2.0) * k;
+    const glowOp = motion.moving ? 0.1 + t * 0.16 : 0;
+    const hiOp = motion.moving ? 0.3 + t * 0.3 : 0;
+    const riserOp = motion.moving ? 0.55 + t * 0.35 : 0.3;
     return svg`
       <g class=${cls} style=${`--flow-colour:${colour}`}>
         <path d=${d} class="fine-base" style=${`stroke-width:${baseW.toFixed(2)}`}></path>
         <path d=${d} class="fine-glow" style=${`stroke-width:${glowW.toFixed(2)}; opacity:${glowOp.toFixed(2)}`}></path>
-        <path id=${pathId} d=${d} class="fine-highlight" style=${`stroke-width:${(0.7 * k).toFixed(2)}; opacity:${hiOp.toFixed(2)}`}></path>
+        <path id=${pathId} d=${d} class="fine-highlight" style=${`stroke-width:${(0.6 * k).toFixed(2)}; opacity:${hiOp.toFixed(2)}`}></path>
+        ${riserD ? svg`<path d=${riserD} class="fine-riser" style=${`stroke-width:${(1.3 * k).toFixed(2)}; opacity:${riserOp.toFixed(2)}`}></path>` : nothing}
         ${particles}${chevrons}
       </g>`;
   }
@@ -524,7 +528,12 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
   const k = L.scale;
   const A = L.anchors;
   const split = m.solarSplit ?? { card: m.flows.solar, main: m.flows.solar, garage: null };
-  const power = (id: FlowId, key: RouteKey, view: FlowView) => flowPath(id, key, P[key], view, m.animate, k, approxLength(P[key]));
+  const riserOf = (key: RouteKey): string => {
+    const pts = L.routes[key];
+    const [a, b] = key === "home" ? [pts[0]!, pts[1]!] : [pts[pts.length - 2]!, pts[pts.length - 1]!];
+    return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+  };
+  const power = (id: FlowId, key: RouteKey, view: FlowView) => flowPath(id, key, P[key], view, m.animate, k, approxLength(P[key]), riserOf(key));
   const lit = (v: FlowView | null) => !!v && v.motion.moving;
   const vertices = Object.entries(L.routes) as Array<[RouteKey, Array<{ x: number; y: number }>]>;
   const debug = art.debug
@@ -535,6 +544,10 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
         ${Object.values(A).map((a) => svg`<circle cx=${a.x} cy=${a.y} r=${4 * k} class="debug-dot"></circle><circle cx=${a.x} cy=${a.y} r=${9 * k} class="debug-ring"></circle><text x=${a.x + 11 * k} y=${a.y - 6 * k} class="debug-label">${a.label} ${a.x},${a.y}</text>`)}
         ${Object.entries(L.pills).map(([name, p]) => svg`<rect x=${p.x} y=${p.y} width=${p.w} height=${p.h} class="debug-zone"></rect><circle cx=${p.port.x} cy=${p.port.y} r=${3.5 * k} class="debug-port"></circle><text x=${p.port.x + 8 * k} y=${p.port.y + 4 * k} class="debug-label">${name} port</text>`)}
         <rect x=${L.entry.x0} y=${L.entry.y0} width=${L.entry.x1 - L.entry.x0} height=${L.entry.y1 - L.entry.y0} class="debug-zone"></rect>
+        <text x=${L.entry.x1 + 6 * k} y=${L.entry.y1 + 4 * k} class="debug-label">ground convergence ${A.ground_entry.x},${A.ground_entry.y}</text>
+        <rect x=${L.entry.x0 + 2} y=${L.inverter.y} width=${L.entry.x1 - L.entry.x0 - 4} height=${L.entry.y0 - L.inverter.y} class="debug-riser"></rect>
+        <text x=${L.entry.x1 + 6 * k} y=${(L.inverter.y + L.entry.y0) / 2} class="debug-label">grouped riser (5 tracks)</text>
+        <line x1=${L.inverter.x - 30} y1=${L.inverter.y} x2=${L.inverter.x + 30} y2=${L.inverter.y} class="debug-entry"></line>
       </g>`
     : nothing;
   return svg`

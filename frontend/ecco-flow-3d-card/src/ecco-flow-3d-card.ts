@@ -1270,8 +1270,32 @@ export class EccoFlow3dCard extends LitElement {
       stroke-linejoin: round;
       mix-blend-mode: screen;
     }
+    .fine-base {
+      opacity: 0.4;
+    }
+    .fine-riser {
+      fill: none;
+      stroke: var(--flow-colour);
+      stroke-linecap: round;
+      filter: drop-shadow(0 0 3px var(--flow-colour));
+    }
     .flow.fine.idle .fine-base {
-      opacity: 0.22;
+      opacity: 0.16;
+    }
+    .flow.fine.idle .fine-riser,
+    .flow.fine.unknown .fine-riser {
+      opacity: 0.2;
+      filter: none;
+    }
+    .debug-riser {
+      fill: rgba(255, 212, 0, 0.12);
+      stroke: #ffd400;
+      stroke-dasharray: 4 4;
+      stroke-width: 2;
+    }
+    .debug-entry {
+      stroke: #00e5ff;
+      stroke-width: 3;
     }
     .flow.fine.unknown .fine-base {
       stroke: #9aa6bd;
@@ -1291,7 +1315,7 @@ export class EccoFlow3dCard extends LitElement {
       opacity: 0.35;
     }
     .node-light.active .node-light-halo {
-      opacity: 0.38;
+      opacity: 0.5;
     }
     .node-light.active .node-light-core {
       fill: #ffffff;
@@ -1315,7 +1339,7 @@ export class EccoFlow3dCard extends LitElement {
       filter: url(#ef3d-blur);
     }
     .info-link.active .info-line {
-      opacity: 0.7;
+      opacity: 0.8;
     }
     .info-link.active .info-glow {
       opacity: 0.16;
