@@ -1,0 +1,32 @@
+{
+  "name": "ecco-flow-3d-card",
+  "version": "0.1.0",
+  "description": "ECCO 3D Energy Flow: a read-only Home Assistant Lovelace card drawing a live isometric house, battery and grid scene with animated power paths and a compact ECCO status panel.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "energy",
+    "solar",
+    "inverter",
+    "battery",
+    "read-only"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"test/*.test.ts\"",
+    "preview": "node preview/serve.mjs"
+  },
+  "dependencies": {
+    "lit": "^3.1.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.5.4"
+  }
+}
