@@ -22,9 +22,9 @@ test("solar routes start on the panel frames and reach the cable exits with a sh
   assert.ok(Math.hypot(A.main_pv_edge.x - A.main_pv_frame.x, A.main_pv_edge.y - A.main_pv_frame.y) <= 30, "main stub is short");
   assert.ok(Math.hypot(A.garage_pv_edge.x - A.garage_pv_frame.x, A.garage_pv_edge.y - A.garage_pv_frame.y) <= 45, "garage stub is short");
   assert.deepEqual(at(L.routes.solarMain[0]!), at(A.main_pv_frame));
-  assert.deepEqual(at(L.routes.solarMain[1]!), at(A.main_pv_edge));
+  assert.equal(L.routes.solarMain[1]!.x, A.main_pv_frame.x, "main: leaves the frame straight down");
   assert.deepEqual(at(L.routes.solarGarage[0]!), at(A.garage_pv_frame));
-  assert.deepEqual(at(L.routes.solarGarage[1]!), at(A.garage_pv_edge));
+  assert.equal(L.routes.solarGarage[1]!.x, A.garage_pv_frame.x, "garage: leaves the frame straight down");
   assert.ok(A.main_pv.x > 420 && A.main_pv.x < 740 && A.main_pv.y > 250 && A.main_pv.y < 440, "info-link target on the main array");
   const solarInfoEnd = L.routes.solarInfo[L.routes.solarInfo.length - 1]!;
   assert.ok(solarInfoEnd.x > 420 && solarInfoEnd.x < 740 && solarInfoEnd.y > 250 && solarInfoEnd.y < 440, "solar info link ends on the array");
@@ -44,6 +44,8 @@ test("calibrated anchors sit on the master plate's equipment (plate pixels)", ()
   assert.deepEqual(at(A.garage_pv_frame), [1044, 508]);
   assert.deepEqual(at(A.garage_pv_edge), [1048, 545]);
   assert.deepEqual(at(A.building_corner), [948, 600]);
+  assert.deepEqual(at(A.chimney), [952, 300]);
+  assert.deepEqual(at(A.fascia_start), [758, 448]);
   assert.deepEqual(at(A.house), [752, 600]);
   assert.deepEqual(at(A.ev_charger), [1048, 655]);
   assert.equal(L.width, 1448);
@@ -126,12 +128,14 @@ test("risers are distinct, closely spaced tracks and no route crosses another in
 test("routes are structured: few vertices, axis-aligned or gently sloped segments, small fillets", () => {
   for (const key of POWER_ROUTES) {
     const pts = L.routes[key];
-    assert.ok(pts.length <= (key === "battery" ? 12 : 8), `${key} has few vertices (${pts.length})`);
+    assert.ok(pts.length <= (key === "battery" ? 12 : 7), `${key} has few vertices (${pts.length})`);
     for (let i = 1; i < pts.length; i++) {
       const dx = Math.abs(pts[i]!.x - pts[i - 1]!.x);
       const dy = Math.abs(pts[i]!.y - pts[i - 1]!.y);
       const slope = Math.min(dx, dy) / Math.max(dx, dy, 1);
-      assert.ok(slope <= 0.5 || Math.abs(slope - 1) < 0.25, `${key} segment ${i} is horizontal, vertical, a perspective slope (<= 27 deg) or ~45 deg (slope ${slope.toFixed(2)})`);
+      // Screen-axis runs (right-angle routing) or a run that follows a real sloped edge (fascia, patio border, terrace wall, lower path).
+      const axisAligned = dx < 1 || dy < 1;
+      assert.ok(axisAligned || slope <= 0.4 || Math.abs(slope - 1) < 0.25, `${key} segment ${i} is axis-aligned or follows a real edge (slope ${slope.toFixed(2)})`);
     }
   }
   assert.ok(BEND_RADIUS <= 14);
@@ -145,6 +149,28 @@ test("routes are structured: few vertices, axis-aligned or gently sloped segment
   assert.equal(routePath([{ x: 1, y: 2 }]), "");
   // Short segments shrink the fillet rather than overshooting.
   assert.ok(routePath([{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 100 }]).includes("L 3.0 0.0 Q 6.0 0.0 6.0 3.0"));
+});
+
+test("routing is deliberate right-angle routing: most turns are 90 degrees and no two consecutive segments are both sloped", () => {
+  let turns = 0;
+  let right = 0;
+  for (const key of POWER_ROUTES) {
+    const pts = L.routes[key];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const c = pts[i + 1]!;
+      const v1 = { x: b.x - a.x, y: b.y - a.y };
+      const v2 = { x: c.x - b.x, y: c.y - b.y };
+      const dot = v1.x * v2.x + v1.y * v2.y;
+      const cos = dot / (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1);
+      turns++;
+      if (Math.abs(cos) < 0.35) right++;
+      const sloped = (v: { x: number; y: number }) => Math.abs(v.x) >= 1 && Math.abs(v.y) >= 1 && Math.min(Math.abs(v.x), Math.abs(v.y)) / Math.max(Math.abs(v.x), Math.abs(v.y)) > 0.05;
+      assert.ok(!(sloped(v1) && sloped(v2) && key !== "battery"), `${key} bend ${i} joins two sloped runs`);
+    }
+  }
+  assert.ok(right / turns >= 0.7, `at least 70% of turns are right angles (${right}/${turns})`);
 });
 
 test("information links join each card's port to its equipment and never carry power", () => {
@@ -173,19 +199,22 @@ test("every wall descent is on a real vertical feature (downpipe, building corne
       const x = a.x;
       assert.ok(x < unit.x0 || x > unit.x1, `${key} descends at x=${x}, over the unit (${unit.x0}-${unit.x1})`);
       assert.ok(
-        Math.abs(x - A.downpipe.x) <= 14 || Math.abs(x - A.door_post.x) <= 2 || Math.abs(x - A.building_corner.x) <= 2 || Math.abs(x - A.lawn_transition.x) <= 2,
+        Math.abs(x - A.downpipe.x) <= 14 || Math.abs(x - A.door_post.x) <= 2 || Math.abs(x - A.building_corner.x) <= 6 || Math.abs(x - A.lawn_transition.x) <= 2,
         `${key} descends on a real vertical feature or the marked buried transition, got x=${x}`
       );
     }
   }
 });
 
-test("the grid route follows the pylon, the hedge behind the garage roof and the building corner, clear of the car, the door, the panels and the windows", () => {
+test("the grid route lands on the chimney and follows the building corner straight down to the floor, clear of the car, the door and the panels", () => {
   const pts = L.routes.grid;
-  assert.deepEqual(at(pts[1]!), [1300, 418], "down the pylon");
-  assert.equal(pts[2]!.x, A.building_corner.x, "along the hedge to the building corner");
-  assert.ok(pts[2]!.y < 445, "the hedge line stays above the garage panels");
-  assert.equal(pts[3]!.x, A.building_corner.x, "straight down the corner");
+  assert.deepEqual(at(pts[0]!), at(A.pylon));
+  assert.equal(pts[1]!.y, A.pylon.y, "level service drop from the pylon");
+  assert.equal(pts[1]!.x, A.chimney.x, "lands on the chimney's right face");
+  assert.ok(A.chimney.x >= 915 && A.chimney.x <= 962, "the chimney stack spans 915-962");
+  assert.equal(pts[2]!.x, pts[1]!.x, "straight down the chimney, the gable and the building corner");
+  assert.ok(pts[2]!.y >= L.entry.y0 && pts[2]!.y <= L.entry.y1, "to the floor");
+  assert.ok(pts[2]!.x > 945, "the corner track passes right of the bush at the corner's foot (907-945)");
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!;
     const b = pts[i]!;
@@ -193,12 +222,9 @@ test("the grid route follows the pylon, the hedge behind the garage roof and the
       const x = a.x + (b.x - a.x) * f;
       const y = a.y + (b.y - a.y) * f;
       assert.ok(!(x > 1010 && x < 1320 && y > 440 && y < 560), `grid segment ${i} crosses the garage panels at ${x.toFixed(0)},${y.toFixed(0)}`);
+      assert.ok(!(x > 1190 && y > 640), `grid segment ${i} over the car`);
+      assert.ok(!(x > 1130 && x < 1330 && y > 560 && y < 690), `grid segment ${i} over the garage door`);
     }
-  }
-  for (const p of pts) {
-    assert.ok(!(p.x > 1190 && p.y > 640), `grid vertex ${p.x},${p.y} over the car`);
-    assert.ok(!(p.x > 1130 && p.x < 1330 && p.y > 560 && p.y < 690), `grid vertex ${p.x},${p.y} over the garage door`);
-    assert.ok(!(p.x > 800 && p.x < 925 && p.y > 510 && p.y < 690), `grid vertex ${p.x},${p.y} over the front window`);
   }
 });
 
@@ -213,8 +239,9 @@ test("the battery route follows the real paving: rear path, buried transition, p
   const slopePatio = (pts[3]!.y - pts[2]!.y) / (pts[3]!.x - pts[2]!.x);
   assert.ok(slopePatio > 0.3 && slopePatio < 0.45, "patio front edge at the plate's perspective slope");
   // Steps: two short vertical drops between the upper landing (y ~694) and the lower paving (y ~721), separated by a tread.
-  assert.ok(pts[5]!.y >= 690 && pts[5]!.y <= 698 && pts[6]!.x === pts[5]!.x && pts[6]!.y - pts[5]!.y >= 10 && pts[6]!.y - pts[5]!.y <= 16, "down step 1");
-  assert.ok(pts[7]!.y - pts[6]!.y <= 4 && pts[7]!.x > pts[6]!.x, "along the tread");
+  assert.equal(pts[5]!.y, pts[4]!.y, "across the upper landing on a level run");
+  assert.ok(pts[6]!.x === pts[5]!.x && pts[6]!.y - pts[5]!.y >= 20 && pts[6]!.y - pts[5]!.y <= 28, "down step 1 (landing lip and riser) in one vertical");
+  assert.ok(pts[7]!.y === pts[6]!.y && pts[7]!.x > pts[6]!.x, "along the tread on a level run");
   assert.ok(pts[8]!.x === pts[7]!.x && pts[8]!.y - pts[7]!.y >= 10 && pts[8]!.y - pts[7]!.y <= 16, "down step 2");
   assert.ok(pts[8]!.y >= 718 && pts[8]!.y <= 724, "onto the lower paving");
   const slopeLower = (pts[9]!.y - pts[8]!.y) / (pts[9]!.x - pts[8]!.x);
@@ -231,17 +258,26 @@ test("the battery route follows the real paving: rear path, buried transition, p
   for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) assert.ok(onPaving(pts[i]!), `battery waypoint ${i + 1} (${pts[i]!.x},${pts[i]!.y}) lies on traced paving`);
 });
 
-test("the solar routes follow the roofs and real walls: main array down the porch edge and the downpipe, garage array along its eave and down the garage wall", () => {
+test("the solar routes: main array frame -> roof junction -> fascia -> building corner -> floor; garage frame -> fascia -> garage wall -> floor", () => {
   const m = L.routes.solarMain;
-  assert.ok(Math.abs(m[2]!.x - A.downpipe.x) <= 6 && m[2]!.y > m[1]!.y, "main: from the cable exit down the porch roof valley to the downpipe head");
-  assert.equal(m[2]!.x, m[3]!.x, "main: straight down the downpipe");
-  assert.ok(m[3]!.y >= L.entry.y0 - 10, "main: to ground level");
+  assert.deepEqual(at(m[0]!), at(A.main_pv_frame), "main: starts on the panel frame");
+  assert.equal(m[1]!.x, m[0]!.x, "main: straight down from the frame to the roof junction");
+  assert.deepEqual(at(m[2]!), at(A.fascia_start), "main: along the porch ridge to the fascia start");
+  assert.ok(Math.abs(m[3]!.x - A.building_corner.x) <= 6 && m[3]!.y > m[2]!.y, "main: along the main roof fascia to the building corner");
+  assert.equal(m[3]!.x, m[4]!.x, "main: straight down the corner");
+  assert.ok(m[4]!.y >= L.entry.y0 && m[4]!.y <= L.entry.y1, "main: to the floor");
   const g = L.routes.solarGarage;
-  assert.equal(g[2]!.x, A.door_post.x, "garage: along the eave to the wall left of the door");
-  assert.ok(g[2]!.y > g[1]!.y && g[2]!.y - g[1]!.y < 40, "garage: the eave's perspective slope");
+  assert.deepEqual(at(g[0]!), at(A.garage_pv_frame), "garage: starts on the panel frame corner");
+  assert.equal(g[1]!.x, g[0]!.x, "garage: straight down from the frame to the fascia");
+  assert.equal(g[2]!.x, A.door_post.x, "garage: along the fascia to the garage wall");
+  assert.ok(g[2]!.y > g[1]!.y && g[2]!.y - g[1]!.y < 30, "garage: the fascia's perspective slope");
   assert.equal(g[2]!.x, g[3]!.x, "garage: straight down the garage wall");
+  assert.ok(g[3]!.y >= 740, "garage: a deep floor run before the convergence");
   const h = L.routes.home;
-  assert.ok(Math.abs(h[2]!.x - A.downpipe.x) <= 14 && h[2]!.x !== m[1]!.x, "home: up the service wall beside the downpipe on its own track");
+  assert.ok(Math.abs(h[2]!.x - A.downpipe.x) <= 14, "home: up the service wall beside the downpipe");
+  assert.equal(h[2]!.y, h[1]!.y, "home: level foundation run");
+  // The two corner descents are distinct adjacent tracks.
+  assert.ok(Math.abs(m[3]!.x - L.routes.grid[1]!.x) >= 4 && Math.abs(m[3]!.x - L.routes.grid[1]!.x) <= 10, "main-array and grid corner tracks are adjacent but distinct");
 });
 
 test("solar split never double counts: card carries the total, branches carry their own arrays, else the total once", () => {
@@ -268,7 +304,7 @@ test("no two routes cross in the entry area: tracks are ordered so a horizontal 
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1]!;
       const b = pts[i]!;
-      if (Math.abs(a.y - b.y) > 12) continue; // only near-horizontal runs
+      if (Math.abs(a.y - b.y) > 12 || Math.min(a.y, b.y) < 680) continue; // only near-horizontal ground-level runs
       const x0 = Math.min(a.x, b.x);
       const x1 = Math.max(a.x, b.x);
       for (const other of POWER_ROUTES) {
@@ -280,16 +316,16 @@ test("no two routes cross in the entry area: tracks are ordered so a horizontal 
       }
     }
   }
-  // The battery's lower path passes below the main-array descent and the home service-wall run, not through them.
-  const solarTurn = L.routes.solarMain[3]!;
+  // The battery's drive run is the deepest left track, below every other turn.
+  const solarTurn = L.routes.solarMain[4]!;
   const homeTurn = L.routes.home[1]!;
-  const lower = [L.routes.battery[8]!, L.routes.battery[9]!];
-  const yAt = (x: number) => lower[0]!.y + ((lower[1]!.y - lower[0]!.y) * (x - lower[0]!.x)) / (lower[1]!.x - lower[0]!.x);
-  assert.ok(yAt(solarTurn.x) > solarTurn.y, "battery passes under the main-array turn");
-  assert.ok(yAt(L.routes.home[2]!.x) > homeTurn.y, "battery passes under the home turn");
-  // The grid's corner descent ends above the home and main-array foundation runs, so those pass beneath it.
-  const gridTurn = L.routes.grid[3]!;
-  assert.ok(gridTurn.y < L.routes.home[1]!.y && gridTurn.y < L.routes.solarMain[3]!.y, "grid turns to its riser above the other foundation runs");
+  const gridTurn = L.routes.grid[2]!;
+  const batteryGround = L.routes.battery[10]!.y;
+  assert.ok(batteryGround > solarTurn.y && batteryGround > homeTurn.y && batteryGround > gridTurn.y, "battery passes under the other turns");
+  // The grid's corner track turns to its riser above the main-array track's turn, which turns above the home run.
+  assert.ok(gridTurn.y < solarTurn.y && solarTurn.y < homeTurn.y, "corner tracks nest: grid above main array above home");
+  // The main-array corner run passes under the grid's turn (grid track is 6 px to its right).
+  assert.ok(L.routes.solarMain[3]!.x < L.routes.grid[1]!.x, "main-array track is the left of the two corner tracks");
 });
 
 test("smoothPath (vector scene helper) passes through every point in order", () => {

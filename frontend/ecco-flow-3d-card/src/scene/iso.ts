@@ -131,6 +131,8 @@ export interface ArtworkLayout {
   entry: { x0: number; x1: number; y0: number; y1: number };
   /** Route vertices (straight segments between them; the renderer fillets the bends). */
   routes: Record<RouteKey, Pt[]>;
+  /** Fillet radius per route (plate px); routes not listed use the default. */
+  bend: Partial<Record<RouteKey, number>>;
   /** The same routes as SVG path strings. */
   paths: () => Record<RouteKey, string>;
 }
@@ -204,8 +206,12 @@ export const V4_ANCHORS = {
   inverter: { x: 1002, y: 624, label: "Inverter underside entry" },
   /** The common ground-level convergence point immediately below the inverter. */
   ground_entry: { x: 1002, y: 722, label: "Ground convergence" },
-  /** The house / garage building corner: the grid supply's wall descent. */
+  /** The house / garage building corner: the main-array and grid descents run down it as two adjacent tracks (946, 952), beside the bush at its foot (907-945 x 615-675). */
   building_corner: { x: 948, y: 600, label: "Building corner" },
+  /** The chimney's right face (stack 915-962 x 235-330): where the grid service drop lands on the house before following the corner down. */
+  chimney: { x: 952, y: 300, label: "Chimney (service drop landing)" },
+  /** The porch-roof apex where the main roof's fascia begins (758,452); the main-array cable reaches it from the frame. */
+  fascia_start: { x: 758, y: 448, label: "Main roof fascia start" },
   /** The rear garden path ends at x 310 and the patio's left corner is 68 px below it across the lawn edge: a buried transition, not visible paving. */
   lawn_transition: { x: 310, y: 536, label: "Buried transition (rear path to patio)" },
   /** The downpipe on the front wall left of the entrance: the house's service wall (main-array descent, house connection). */
@@ -238,10 +244,10 @@ export const V4_SAFE_ZONES = {
  */
 export const RISERS = {
   grid: { x: 990, ground: 700, side: "left" },
-  home: { x: 996, ground: 704, side: "left" },
-  solarMain: { x: 1002, ground: 708, side: "left" },
+  solarMain: { x: 996, ground: 704, side: "left" },
+  home: { x: 1002, ground: 708, side: "left" },
   battery: { x: 1008, ground: 742, side: "left" },
-  solarGarage: { x: 1014, ground: 732, side: "right" },
+  solarGarage: { x: 1014, ground: 746, side: "right" },
 } as const;
 
 /**
@@ -253,7 +259,7 @@ export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
   { label: "rear garden path", points: [{ x: 110, y: 514 }, { x: 310, y: 502 }] },
   { label: "patio front edge", points: [{ x: 310, y: 570 }, { x: 520, y: 647 }] },
   { label: "terrace front wall", points: [{ x: 520, y: 647 }, { x: 548, y: 682 }] },
-  { label: "upper landing edge", points: [{ x: 548, y: 682 }, { x: 700, y: 698 }] },
+  { label: "upper landing edge", points: [{ x: 548, y: 682 }, { x: 700, y: 692 }] },
   { label: "step 1 riser", points: [{ x: 560, y: 694 }, { x: 700, y: 699 }] },
   { label: "step 2 riser", points: [{ x: 575, y: 707 }, { x: 690, y: 711 }] },
   { label: "lower path", points: [{ x: 575, y: 721 }, { x: 790, y: 742 }] },
@@ -267,10 +273,10 @@ export const BATTERY_WAYPOINTS: string[] = [
   "patio left corner (after the buried transition)",
   "patio front edge, lawn border",
   "terrace front wall foot",
-  "upper landing, top of step 1",
-  "foot of step 1 (tread)",
-  "tread edge, top of step 2",
-  "foot of step 2, lower paving",
+  "across the upper landing",
+  "down step 1 onto the tread",
+  "along the tread",
+  "down step 2 onto the lower paving",
   "lower path meets the drive",
   "drive paving, ground convergence",
   "riser into the inverter",
@@ -316,10 +322,12 @@ export function v4Layout(k: number): ArtworkLayout {
   const riser = (key: keyof typeof R): Pt[] => [{ x: R[key].x, y: R[key].ground }, { x: R[key].x, y: RISER_TOP }];
   const routes: Record<RouteKey, Pt[]> = {
     solarInfo: [pills.solar.port, { x: 430, y: pills.solar.port.y }, { x: 545, y: 275 }],
-    // Frame attachment -> short stub to the cable exit -> down the porch-roof valley to the downpipe head -> down the downpipe -> foundation -> riser.
-    solarMain: [A.main_pv_frame, A.main_pv_edge, { x: 744, y: 538 }, { x: 744, y: R.solarMain.ground }, ...riser("solarMain")],
-    // Frame corner -> stub to the fascia -> along the garage eave -> down the wall left of the door -> foundation -> riser.
-    solarGarage: [A.garage_pv_frame, A.garage_pv_edge, { x: A.door_post.x, y: 566 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
+    // Panel frame -> straight down to the roof junction at the porch apex -> along the porch ridge to the fascia start
+    // -> along the main roof fascia to the building corner -> straight down the corner (track 946) -> floor -> riser.
+    solarMain: [A.main_pv_frame, { x: A.main_pv_frame.x, y: 448 }, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
+    // Frame corner -> straight down to the garage fascia -> along the fascia -> straight down the garage wall left of the
+    // door -> deep floor run back to the convergence -> riser.
+    solarGarage: [A.garage_pv_frame, { x: A.garage_pv_frame.x, y: 528 }, { x: A.door_post.x, y: 543 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
     batteryInfo: [pills.battery.port, A.battery_cabinet],
     // Cabinet base -> along the rear garden path -> buried transition across the lawn edge -> the patio's left corner -> along the
     // patio front edge -> down the terrace front wall -> across the upper landing -> down step 1 -> along the tread -> down step 2
@@ -330,16 +338,17 @@ export function v4Layout(k: number): ArtworkLayout {
       { x: 310, y: 570 },
       { x: 520, y: 647 },
       { x: 548, y: 682 },
-      { x: 620, y: 694 },
+      { x: 620, y: 682 },
       { x: 620, y: 707 },
-      { x: 640, y: 709 },
+      { x: 640, y: 707 },
       { x: 640, y: 723 },
       { x: 790, y: 742 },
       ...riser("battery"),
     ],
     gridInfo: [pills.grid.port, A.pylon],
-    // Pylon lattice -> down the pylon -> along the hedge behind the garage roof -> down the building corner -> foundation -> riser.
-    grid: [A.pylon, { x: 1300, y: 418 }, { x: A.building_corner.x, y: 440 }, { x: A.building_corner.x, y: R.grid.ground }, ...riser("grid")],
+    // Pylon lattice -> level service drop to the chimney's right face -> straight down the chimney, the gable and the
+    // building corner (track 952, beside the bush) -> floor -> riser.
+    grid: [A.pylon, { x: A.chimney.x, y: A.pylon.y }, { x: A.chimney.x, y: R.grid.ground }, ...riser("grid")],
     home: [{ x: R.home.x, y: RISER_TOP }, { x: R.home.x, y: R.home.ground }, { x: 760, y: R.home.ground }, { x: 760, y: A.house.y }],
     homeInfo: [{ x: 745, y: A.house.y + 6 }, pills.home.port],
   };
@@ -350,9 +359,10 @@ export function v4Layout(k: number): ArtworkLayout {
     pills,
     inverter: A.inverter,
     anchors: A,
-    entry: { x0: 964, x1: 1022, y0: 696, y1: 748 },
+    entry: { x0: 964, x1: 1022, y0: 696, y1: 752 },
     routes,
-    paths: () => Object.fromEntries((Object.keys(routes) as RouteKey[]).map((key) => [key, routePath(routes[key])])) as Record<RouteKey, string>,
+    bend: { battery: 5, home: 8, solarMain: 8, solarGarage: 8, grid: 8 },
+    paths: () => Object.fromEntries((Object.keys(routes) as RouteKey[]).map((key) => [key, routePath(routes[key], ({ battery: 5, home: 8, solarMain: 8, solarGarage: 8, grid: 8 } as Partial<Record<RouteKey, number>>)[key] ?? BEND_RADIUS)])) as Record<RouteKey, string>,
   };
 }
 
