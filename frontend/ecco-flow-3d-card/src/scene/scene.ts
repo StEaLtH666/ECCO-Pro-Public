@@ -49,28 +49,27 @@ export interface FlowView {
 export interface SceneModel {
   daylight: Daylight;
   flows: Record<FlowId, FlowView>;
+  /** Artwork plates only: the solar system split into card->array (total), main array->inverter, garage array->inverter. */
+  solarSplit?: { card: FlowView; main: FlowView; garage: FlowView | null };
   stale: boolean;
   /** False under prefers-reduced-motion or when animation is disabled: no movement, static direction chevrons instead. */
   animate: boolean;
   pills: Record<FlowId, PillData>;
   inverterLed: "ok" | "warn" | "off";
   onPill: (id: FlowId) => void;
-  /** Second PV array's own flow (the garage roof) when two arrays are configured and individually known. */
-  solar2?: FlowView;
   /**
    * Artwork plates: when set, the overlay layout is drawn over the scene
    * image instead of the vector scene. `layers` holds the current plate and,
    * during a crossfade, the previous one underneath it.
    */
-  artwork?: { layers: Array<{ url: string; key: string; entering: boolean }>; layout: ArtworkLayout; onError: (url: string) => void; onLoad: (url: string) => void };
+  artwork?: { layers: Array<{ url: string; key: string; entering: boolean }>; layout: ArtworkLayout; onError: (url: string) => void; onLoad: (url: string) => void; debug?: boolean };
 }
 
-/** The packet dash cycle in vector-scene units (motion.DASH_PERIOD); the keyframe travel is twice this, scaled per layout. */
+/** The packet dash cycle in vector-scene units (motion.DASH_PERIOD); the keyframe travel is twice this. */
 const DASH_PERIOD_UNITS = 15;
 
-const FLOW_COLOUR: Record<FlowId | "solar2", string> = {
+const FLOW_COLOUR: Record<FlowId, string> = {
   solar: "#f7c948",
-  solar2: "#f7c948",
   battery: "#35e08a",
   grid: "#3ea6ff",
   home: "#22d3ee",
@@ -294,42 +293,80 @@ function pylon(gridMoving: boolean, gridUnknown: boolean): TemplateResult {
 // ---------------------------------------------------------------------------
 // Flow paths
 
-function flowPath(id: FlowId | "solar2", d: string, view: FlowView, animate: boolean, k = 1): TemplateResult {
+/**
+ * One animated route. Vector scene (k = 1): the original dashed packet
+ * texture. Artwork scene (k > 1): premium electricity styling, a very thin
+ * low-opacity base line, a restrained soft glow, a crisp inner highlight and
+ * individual bright travelling particles, with a soft light at each end.
+ * `key` must be unique per route (it names the path element the particles
+ * follow). Idle, unknown and stale routes never move.
+ */
+function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: boolean, k = 1, lengthUnits = 0): TemplateResult {
   const { edge, motion } = view;
   const colour = FLOW_COLOUR[id];
-  const cls = `flow flow-${id} ${edge.unknown ? "unknown" : ""} ${edge.idle ? "idle" : ""} ${motion.moving && animate ? "moving" : ""} ${edge.reversed ? "reversed" : ""}`;
-  const pathId = `ef3d-path-${id}`;
-  const dashStyle = motion.moving
-    ? `stroke-dasharray:${(motion.dashLen * k).toFixed(1)} ${(motion.gapLen * k).toFixed(1)}; animation-duration:${motion.dashDurationS.toFixed(2)}s; stroke-width:${(motion.packetWidthPx * k).toFixed(2)}; opacity:${motion.packetOpacity.toFixed(2)}; --dash-travel:${(-2 * DASH_PERIOD_UNITS * k).toFixed(1)}`
-    : "";
-  const glowStyle = motion.moving ? `stroke-width:${(motion.packetWidthPx * 2.6 * k).toFixed(1)}; opacity:${(0.18 + motion.intensity * 0.3).toFixed(2)}` : "";
-  const balls: TemplateResult[] = [];
+  const artwork = k > 1;
+  const cls = `flow flow-${id} route-${key} ${artwork ? "fine" : ""} ${edge.unknown ? "unknown" : ""} ${edge.idle ? "idle" : ""} ${motion.moving && animate ? "moving" : ""} ${edge.reversed ? "reversed" : ""}`;
+  const pathId = `ef3d-path-${key}`;
+  // Particle count: the ECCO bands (1-4), repeated along long routes so the spacing stays similar.
+  const lengthFactor = artwork && lengthUnits > 0 ? Math.max(1, Math.round(lengthUnits / 520)) : 1;
+  const n = motion.ballCount * lengthFactor;
+  const t = motion.intensity;
+  const particles: TemplateResult[] = [];
   if (motion.moving && animate) {
-    const n = motion.ballCount;
+    const r = artwork ? (1.7 + t * 1.0) * k : motion.ballRadiusPx;
     for (let i = 0; i < n; i++) {
-      balls.push(svg`
-        <g class="pulse" data-path=${pathId} data-duration=${motion.ballDurationS.toFixed(3)} data-phase=${(i / n).toFixed(3)} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}>
-          <circle r=${(motion.ballRadiusPx * 1.9 * k).toFixed(2)} class="pulse-halo"></circle>
-          <circle r=${(motion.ballRadiusPx * k).toFixed(2)} class="pulse-glow"></circle>
-          <circle r=${(motion.ballRadiusPx * 0.42 * k).toFixed(2)} class="pulse-core"></circle>
+      particles.push(svg`
+        <g class="pulse" data-path=${pathId} data-duration=${(motion.ballDurationS * (artwork ? 1.6 : 1)).toFixed(3)} data-phase=${(i / n).toFixed(3)} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}>
+          <circle r=${(r * (artwork ? 2.6 : 1.9)).toFixed(2)} class="pulse-halo"></circle>
+          <circle r=${r.toFixed(2)} class="pulse-glow"></circle>
+          <circle r=${(r * 0.45).toFixed(2)} class="pulse-core"></circle>
         </g>`);
     }
   }
-  // Static direction chevrons for the no-motion rendering (reduced motion), positioned by the same loop once.
   const chevrons: TemplateResult[] = [];
   if (motion.moving && !animate) {
     for (const phase of [0.3, 0.55, 0.8]) {
       chevrons.push(svg`<g class="chevron" data-path=${pathId} data-phase=${phase} data-reversed=${edge.reversed ? "1" : "0"} style=${`--pulse-colour:${colour}`}><path d="M -4 -4 L 2 0 L -4 4" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform=${`scale(${k})`}></path></g>`);
     }
   }
+  if (artwork) {
+    const baseW = (1.15 + t * 0.6) * k;
+    const glowW = (4.2 + t * 3.0) * k;
+    const glowOp = motion.moving ? 0.22 + t * 0.3 : 0;
+    const hiOp = motion.moving ? 0.5 + t * 0.4 : 0;
+    return svg`
+      <g class=${cls} style=${`--flow-colour:${colour}`}>
+        <path d=${d} class="fine-base" style=${`stroke-width:${baseW.toFixed(2)}`}></path>
+        <path d=${d} class="fine-glow" style=${`stroke-width:${glowW.toFixed(2)}; opacity:${glowOp.toFixed(2)}`}></path>
+        <path id=${pathId} d=${d} class="fine-highlight" style=${`stroke-width:${(0.7 * k).toFixed(2)}; opacity:${hiOp.toFixed(2)}`}></path>
+        ${particles}${chevrons}
+      </g>`;
+  }
+  const dashStyle = motion.moving
+    ? `stroke-dasharray:${motion.dashLen.toFixed(1)} ${motion.gapLen.toFixed(1)}; animation-duration:${motion.dashDurationS.toFixed(2)}s; stroke-width:${motion.packetWidthPx.toFixed(2)}; opacity:${motion.packetOpacity.toFixed(2)}; --dash-travel:${(-2 * DASH_PERIOD_UNITS).toFixed(1)}`
+    : "";
+  const glowStyle = motion.moving ? `stroke-width:${(motion.packetWidthPx * 2.6).toFixed(1)}; opacity:${(0.18 + motion.intensity * 0.3).toFixed(2)}` : "";
   return svg`
     <g class=${cls} style=${`--flow-colour:${colour}`}>
-      <path d=${d} class="flow-base" style=${`stroke-width:${(motion.baseWidthPx * k).toFixed(2)}`}></path>
-      <path d=${d} class="flow-dots" style=${`stroke-width:${(2.4 * k).toFixed(1)}; stroke-dasharray:0.1 ${(7 * k).toFixed(1)}`}></path>
+      <path d=${d} class="flow-base" style=${`stroke-width:${motion.baseWidthPx.toFixed(2)}`}></path>
+      <path d=${d} class="flow-dots"></path>
       <path d=${d} class="flow-glow" style=${glowStyle}></path>
       <path id=${pathId} d=${d} class="flow-packets" style=${dashStyle}></path>
-      ${balls}${chevrons}
+      ${particles}${chevrons}
     </g>`;
+}
+
+/** Soft light at a physical connection point, in the route's colour; dim when the route is idle or unknown. */
+function nodeLight(p: { x: number; y: number }, colour: string, active: boolean, k: number): TemplateResult {
+  return svg`<g class=${`node-light ${active ? "active" : ""}`} style=${`--flow-colour:${colour}`}><circle cx=${p.x} cy=${p.y} r=${(5 * k).toFixed(1)} class="node-light-halo"></circle><circle cx=${p.x} cy=${p.y} r=${(1.6 * k).toFixed(1)} class="node-light-core"></circle></g>`;
+}
+
+/** Approximate length of a path string's control polygon (enough to scale particle counts). */
+function approxLength(d: string): number {
+  const nums = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+  let len = 0;
+  for (let i = 2; i + 1 < nums.length; i += 2) len += Math.hypot(nums[i]! - nums[i - 2]!, nums[i + 1]! - nums[i - 1]!);
+  return len / 1.9; // the control polygon of a cubic spline overshoots the curve
 }
 
 // ---------------------------------------------------------------------------
@@ -339,12 +376,12 @@ function pill(id: FlowId, boxDef: PillBox, data: PillData, onPill: (id: FlowId) 
   const colour = FLOW_COLOUR[id];
   const r = 14 * k;
   const withRing = id === "battery";
-  const ringR = 20 * k;
+  const ringR = 19 * k;
   const ringC = 2 * Math.PI * ringR;
   const soc = data.soc ?? null;
   const socDash = soc === null ? 0 : (Math.max(0, Math.min(100, soc)) / 100) * ringC;
   const valueX = boxDef.x + 52 * k;
-  const ringCx = boxDef.x + boxDef.w - 32 * k;
+  const ringCx = boxDef.x + boxDef.w - 30 * k;
   const ringCy = boxDef.y + boxDef.h / 2;
   const state = flow.edge.unknown ? "unknown" : flow.edge.idle ? "idle" : "active";
   return svg`
@@ -445,10 +482,10 @@ export function renderScene(m: SceneModel): TemplateResult {
       ${tree(-7.6, 8.6, 12, "front")}
       ${shrub(1.2, 8.8, 7)}
       <g class="flows">
-        ${flowPath("grid", paths.grid, m.flows.grid, m.animate)}
-        ${flowPath("solar", paths.solar, m.flows.solar, m.animate)}
-        ${flowPath("battery", paths.battery, m.flows.battery, m.animate)}
-        ${flowPath("home", paths.home, m.flows.home, m.animate)}
+        ${flowPath("grid", "grid", paths.grid, m.flows.grid, m.animate)}
+        ${flowPath("solar", "solar", paths.solar, m.flows.solar, m.animate)}
+        ${flowPath("battery", "battery", paths.battery, m.flows.battery, m.animate)}
+        ${flowPath("home", "home", paths.home, m.flows.home, m.animate)}
         <circle cx=${inv.x} cy=${inv.y} r="4.2" class=${`junction led-${m.inverterLed}`}></circle>
         <circle cx=${inv.x} cy=${inv.y} r="9" class=${`junction-halo led-${m.inverterLed}`}></circle>
       </g>
@@ -466,28 +503,43 @@ export function renderScene(m: SceneModel): TemplateResult {
  */
 function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"]>): TemplateResult {
   const L = art.layout;
-  const paths = L.paths();
+  const P = L.paths();
   const k = L.scale;
-  const inv = L.inverter;
-  const solar2 = m.solar2;
+  const A = L.anchors;
+  const split = m.solarSplit ?? { card: m.flows.solar, main: m.flows.solar, garage: null };
+  const route = (id: FlowId, key: keyof typeof P, view: FlowView) => flowPath(id, key, P[key], view, m.animate, k, approxLength(P[key]));
+  const lit = (v: FlowView | null) => !!v && v.motion.moving;
+  const debug = art.debug
+    ? svg`<g class="debug">
+        ${Object.values(A).map((a) => svg`<circle cx=${a.x} cy=${a.y} r=${4 * k} class="debug-dot"></circle><circle cx=${a.x} cy=${a.y} r=${9 * k} class="debug-ring"></circle><text x=${a.x + 11 * k} y=${a.y - 6 * k} class="debug-label">${a.label} ${a.x},${a.y}</text>`)}
+        ${Object.entries(L.pills).map(([name, p]) => svg`<rect x=${p.x} y=${p.y} width=${p.w} height=${p.h} class="debug-zone"></rect><circle cx=${p.port.x} cy=${p.port.y} r=${3.5 * k} class="debug-port"></circle><text x=${p.port.x + 8 * k} y=${p.port.y + 4 * k} class="debug-label">${name} port</text>`)}
+      </g>`
+    : nothing;
   return svg`
     <svg class=${`scene artwork ${m.daylight} ${m.stale ? "stale" : ""} ${m.animate ? "" : "still"}`} viewBox=${`0 0 ${L.width} ${L.height}`} preserveAspectRatio="xMidYMid meet" style=${`--k:${k}`} aria-label="Energy flow scene">
       <defs>
-        <filter id="ef3d-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=${(2.4 * k).toFixed(1)}></feGaussianBlur></filter>
-        <filter id="ef3d-blur-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=${(5 * k).toFixed(1)}></feGaussianBlur></filter>
+        <filter id="ef3d-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=${(1.6 * k).toFixed(1)}></feGaussianBlur></filter>
+        <filter id="ef3d-blur-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=${(3.5 * k).toFixed(1)}></feGaussianBlur></filter>
       </defs>
       ${art.layers.map(
         (layer) => svg`<image href=${layer.url} x="0" y="0" width=${L.width} height=${L.height} preserveAspectRatio="xMidYMid meet" class=${`plate ${layer.entering ? "entering" : ""}`} data-scene=${layer.key} @error=${() => art.onError(layer.url)} @load=${() => art.onLoad(layer.url)}></image>`
       )}
       <g class="flows">
-        ${flowPath("grid", paths.grid, m.flows.grid, m.animate, k)}
-        ${flowPath("solar", paths.solar, m.flows.solar, m.animate, k)}
-        ${solar2 ? flowPath("solar2", paths.solar2, solar2, m.animate, k) : nothing}
-        ${flowPath("battery", paths.battery, m.flows.battery, m.animate, k)}
-        ${flowPath("home", paths.home, m.flows.home, m.animate, k)}
-        <circle cx=${inv.x} cy=${inv.y} r=${(4.2 * k).toFixed(1)} class=${`junction led-${m.inverterLed}`}></circle>
-        <circle cx=${inv.x} cy=${inv.y} r=${(9 * k).toFixed(1)} class=${`junction-halo led-${m.inverterLed}`}></circle>
+        ${route("grid", "grid", m.flows.grid)}
+        ${route("battery", "battery", m.flows.battery)}
+        ${route("solar", "solarCard", split.card)}
+        ${route("solar", "solarMain", split.main)}
+        ${split.garage ? route("solar", "solarGarage", split.garage) : nothing}
+        ${route("home", "home", m.flows.home)}
+        ${nodeLight(A.main_pv, FLOW_COLOUR.solar, lit(split.main), k)}
+        ${split.garage ? nodeLight(A.garage_pv, FLOW_COLOUR.solar, lit(split.garage), k) : nothing}
+        ${nodeLight(A.battery_cabinet, FLOW_COLOUR.battery, lit(m.flows.battery), k)}
+        ${nodeLight(A.pylon, FLOW_COLOUR.grid, lit(m.flows.grid), k)}
+        ${nodeLight(A.house, FLOW_COLOUR.home, lit(m.flows.home), k)}
+        <circle cx=${L.inverter.x} cy=${L.inverter.y} r=${(2.6 * k).toFixed(1)} class=${`junction led-${m.inverterLed}`}></circle>
+        <circle cx=${L.inverter.x} cy=${L.inverter.y} r=${(7 * k).toFixed(1)} class=${`junction-halo led-${m.inverterLed}`}></circle>
       </g>
+      ${debug}
       ${pill("solar", L.pills.solar, m.pills.solar, m.onPill, m.flows.solar, k)}
       ${pill("grid", L.pills.grid, m.pills.grid, m.onPill, m.flows.grid, k)}
       ${pill("home", L.pills.home, m.pills.home, m.onPill, m.flows.home, k)}

@@ -216,6 +216,22 @@ export function buildStates(name) {
       put(ENT.fpSched, "FAILED", { last_result: "FAILED: lease refused (telemetry stale)" });
       break;
     }
+    case "uneven-arrays": {
+      // G: one array generating far more than the other (shading on the garage roof).
+      sun(true, 35, false);
+      weather("partlycloudy");
+      powers({ pv1: 4200, pv2: 900, home: 1500, bat: -2600, grid: -1000, soc: 62, inv: 2500 });
+      ttr("charging", "unknown");
+      break;
+    }
+    case "solar-trickle": {
+      // F: solar producing almost nothing: the yellow routes must be idle (below the 5 W threshold) while the house runs on the battery.
+      sun(true, 4, false);
+      weather("cloudy");
+      powers({ pv1: 3, pv2: 1, home: 640, bat: 650, grid: 2, soc: 71, inv: 645 });
+      ttr("discharging", 540, { low: 480, high: 610 });
+      break;
+    }
     case "day-export":
     default: {
       sun(true, 38);
@@ -229,4 +245,4 @@ export function buildStates(name) {
   return s;
 }
 
-export const SCENARIOS = ["day-export", "night-discharge", "night-import-charge", "dump-active", "idle", "unknown", "stale", "attention"];
+export const SCENARIOS = ["day-export", "night-discharge", "night-import-charge", "dump-active", "uneven-arrays", "solar-trickle", "idle", "unknown", "stale", "attention"];

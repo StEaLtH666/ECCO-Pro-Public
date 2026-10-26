@@ -109,6 +109,23 @@ export function buildFlowEdges(p: PowerInputs): FlowEdge[] {
   ];
 }
 
+/**
+ * The solar system on the artwork plates, as three edges that never double
+ * count: `card` (Solar card -> main array) carries the authoritative total;
+ * `main` (main array -> inverter) carries array 1 and `garage` (garage array
+ * -> inverter) array 2 when two arrays are configured and at least one of
+ * them has a reading. Otherwise `main` carries the total and `garage` is
+ * absent (one array, or only a combined reading).
+ */
+export function splitSolarFlows(totalW: number | null, pv1W: number | null, pv2W: number | null, arrayCount: number): { card: FlowEdge; main: FlowEdge; garage: FlowEdge | null } {
+  const solarEdge = (w: number | null) => edge("solar", w === null ? null : Math.max(0, w), false);
+  const card = solarEdge(totalW);
+  if (arrayCount >= 2 && (pv1W !== null || pv2W !== null)) {
+    return { card, main: solarEdge(pv1W), garage: solarEdge(pv2W) };
+  }
+  return { card, main: solarEdge(totalW), garage: null };
+}
+
 /** True when every known flow is idle and at least one flow is known. */
 export function siteIsIdle(edges: FlowEdge[]): boolean {
   const known = edges.filter((e) => !e.unknown);

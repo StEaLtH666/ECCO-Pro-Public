@@ -1,11 +1,13 @@
-// The V4 overlay layout: pills inside the canvas and in the pack's safe
-// zones, routes that pass through the pack's hardware anchors and end at the
-// wall inverter, and smooth curves that start and end exactly on their points.
+// The V4 overlay layout: calibrated hardware anchors, information cards in
+// the owner's zones that never cover equipment, and routes that touch their
+// card AND their equipment and meet at the wall inverter.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { V4_ANCHORS, V4_LAYOUT, V4_SAFE_ZONES, smoothPath, v4Layout, v4ScaleForWidth } from "../src/scene/iso.ts";
+import { V4_ANCHORS, V4_LAYOUT, smoothPath, v4Layout, v4ScaleForWidth } from "../src/scene/iso.ts";
+import { splitSolarFlows } from "../src/core/power.ts";
 
 const L = V4_LAYOUT;
+const A = V4_ANCHORS;
 
 function nums(d: string): number[] {
   return d.match(/-?\d+(\.\d+)?/g)!.map(Number);
@@ -15,97 +17,44 @@ function endpoints(d: string): { start: [number, number]; end: [number, number] 
   return { start: [n[0]!, n[1]!], end: [n[n.length - 2]!, n[n.length - 1]!] };
 }
 function passesThrough(d: string, p: { x: number; y: number }): boolean {
-  // Every anchor is an on-curve point of the Catmull-Rom spline, so it appears verbatim as a segment end.
   return d.includes(`${p.x.toFixed(1)} ${p.y.toFixed(1)}`);
 }
+const at = (p: { x: number; y: number }): [number, number] => [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10];
 
-test("canvas matches the pack and pills stay inside it without overlapping", () => {
+test("calibrated anchors sit on the master plate's equipment (plate pixels)", () => {
+  assert.deepEqual(at(A.inverter), [1000, 622]);
+  assert.deepEqual(at(A.battery_cabinet), [150, 512]);
+  assert.deepEqual(at(A.pylon), [1297, 290]);
+  assert.deepEqual(at(A.main_pv), [610, 335]);
+  assert.deepEqual(at(A.garage_pv), [1140, 500]);
+  assert.deepEqual(at(A.house), [752, 600]);
+  assert.deepEqual(at(A.ev_charger), [1048, 655]);
   assert.equal(L.width, 1448);
   assert.equal(L.height, 1086);
-  const list = Object.entries(L.pills);
-  for (const [name, p] of list) {
-    assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= L.width && p.y + p.h <= L.height, name);
-  }
-  for (let i = 0; i < list.length; i++) {
-    for (let j = i + 1; j < list.length; j++) {
-      const [na, a] = list[i]!;
-      const [nb, b] = list[j]!;
-      const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-      assert.equal(overlap, false, `${na} overlaps ${nb}`);
-    }
-  }
+  assert.deepEqual(at(L.inverter), at(A.inverter));
 });
 
-test("pills sit in the pack's overlay safe zones (top banner, left column, bottom strip), away from the house", () => {
-  const within = (p: { x: number; y: number; w: number; h: number }, z: { x: number; y: number; w: number; h: number }, slackX = 0, slackY = 0) =>
-    p.x >= z.x - slackX && p.y >= z.y - slackY && p.x + p.w <= z.x + z.w + slackX && p.y + p.h <= z.y + z.h + slackY;
-  // The banner is 122 units tall; a pill may hang 60 units below it into the sky.
-  assert.ok(within(L.pills.solar, V4_SAFE_ZONES.top_banner, 0, 60));
-  assert.ok(within(L.pills.grid, V4_SAFE_ZONES.top_banner, 0, 60));
-  assert.ok(within(L.pills.battery, V4_SAFE_ZONES.left_info_column, 300, 120), "battery pill may extend right of the column into the lawn and down into the hedge, never into the house");
-  assert.ok(L.pills.battery.y > V4_ANCHORS.battery_cabinet.y + 40, "battery pill sits below the cabinet anchor");
-  assert.ok(L.pills.battery.x + L.pills.battery.w < 600, "battery pill ends on the lawn, before the house");
-  assert.ok(within(L.pills.home, V4_SAFE_ZONES.bottom_strip, 0, 70));
-  // Nothing covers the hardware anchors.
-  for (const [name, a] of Object.entries(V4_ANCHORS)) {
-    for (const [pn, p] of Object.entries(L.pills)) {
-      const inside = a.x >= p.x && a.x <= p.x + p.w && a.y >= p.y && a.y <= p.y + p.h;
-      assert.equal(inside, false, `${pn} pill covers the ${name} anchor`);
-    }
-  }
+test("information cards sit in the owner's zones at desktop scale", () => {
+  const inZone = (p: { x: number; y: number; w: number; h: number }, z: [number, number, number, number], slack = 12) =>
+    p.x >= z[0] - slack && p.y >= z[1] - slack && p.x + p.w <= z[2] + slack && p.y + p.h <= z[3] + slack;
+  assert.ok(inZone(L.pills.solar, [35, 90, 330, 225]), "solar upper-left");
+  assert.ok(inZone(L.pills.grid, [1110, 90, 1410, 225]), "grid upper-right");
+  // The battery card is wider than its zone: it holds power, state, the FE-1 time and the SOC ring without collisions.
+  assert.ok(inZone(L.pills.battery, [35, 715, 400, 875], 12), "battery lower-left");
+  assert.ok(inZone(L.pills.home, [650, 875, 970, 1030]), "home lower centre-right");
 });
 
-test("every route ends at the wall inverter and passes through its hardware anchors from the anchor map", () => {
-  const p = L.paths();
-  assert.deepEqual(L.inverter, V4_ANCHORS.wall_inverter);
-  for (const id of ["solar", "solar2", "battery", "grid"] as const) {
-    const e = endpoints(p[id]);
-    assert.deepEqual(e.end, [V4_ANCHORS.wall_inverter.x, V4_ANCHORS.wall_inverter.y], `${id} ends at the inverter`);
-  }
-  assert.deepEqual(endpoints(p.home).start, [V4_ANCHORS.wall_inverter.x, V4_ANCHORS.wall_inverter.y]);
-  assert.ok(passesThrough(p.solar, V4_ANCHORS.main_solar_array));
-  assert.ok(passesThrough(p.solar2, V4_ANCHORS.garage_solar_array));
-  assert.ok(passesThrough(p.battery, V4_ANCHORS.battery_cabinet));
-  assert.ok(passesThrough(p.grid, V4_ANCHORS.grid_pylon));
-  assert.ok(passesThrough(p.home, V4_ANCHORS.house_energy_center));
-  // The anchor-map waypoints are honoured too.
-  for (const [x, y] of [
-    [758, 522],
-    [868, 610],
-    [975, 692],
-  ]) assert.ok(passesThrough(p.solar, { x, y }), `solar via ${x},${y}`);
-  for (const [x, y] of [
-    [1288, 550],
-    [1190, 626],
-    [1088, 682],
-  ]) assert.ok(passesThrough(p.grid, { x, y }), `grid via ${x},${y}`);
-  for (const [x, y] of [
-    [350, 622],
-    [560, 636],
-    [790, 670],
-  ]) assert.ok(passesThrough(p.battery, { x, y }), `battery via ${x},${y}`);
-});
-
-test("routes start at their pill ports (solar, grid) or the hardware (battery, garage array) and the home route ends at its pill", () => {
-  const p = L.paths();
-  assert.deepEqual(endpoints(p.solar).start, [L.pills.solar.port.x, L.pills.solar.port.y]);
-  assert.deepEqual(endpoints(p.grid).start, [L.pills.grid.port.x, L.pills.grid.port.y]);
-  assert.deepEqual(endpoints(p.battery).start, [V4_ANCHORS.battery_cabinet.x, V4_ANCHORS.battery_cabinet.y]);
-  assert.deepEqual(endpoints(p.solar2).start, [V4_ANCHORS.garage_solar_array.x, V4_ANCHORS.garage_solar_array.y]);
-  assert.deepEqual(endpoints(p.home).end, [L.pills.home.port.x, L.pills.home.port.y]);
-  assert.deepEqual(L.paths(), L.paths(), "static geometry");
-});
-
-test("at every overlay scale the pills stay inside the canvas, off the hardware anchors and off each other", () => {
-  for (const k of [3.0, 3.1, 3.2, 3.4]) {
+test("at every overlay scale the cards stay inside the canvas, off every hardware anchor and off each other", () => {
+  for (const k of [2.0, 2.3, 2.8, 3.2]) {
     const Lk = v4Layout(k);
     const list = Object.entries(Lk.pills);
     for (const [name, p] of list) {
-      assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= Lk.width && p.y + p.h <= Lk.height, `${name} at k=${k}`);
-      for (const [an, a] of Object.entries(V4_ANCHORS)) {
-        const inside = a.x >= p.x && a.x <= p.x + p.w && a.y >= p.y && a.y <= p.y + p.h;
+      assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= Lk.width && p.y + p.h <= Lk.height, `${name} inside at k=${k}`);
+      for (const [an, a] of Object.entries(A)) {
+        const inside = a.x >= p.x - 6 && a.x <= p.x + p.w + 6 && a.y >= p.y - 6 && a.y <= p.y + p.h + 6;
         assert.equal(inside, false, `${name} covers ${an} at k=${k}`);
       }
+      assert.ok(p.port.x >= p.x && p.port.x <= p.x + p.w && p.port.y >= p.y && p.port.y <= p.y + p.h, `${name} port on its own edge at k=${k}`);
     }
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -115,11 +64,63 @@ test("at every overlay scale the pills stay inside the canvas, off the hardware 
         assert.equal(overlap, false, `${na} overlaps ${nb} at k=${k}`);
       }
     }
-    assert.ok(Lk.pills.battery.x + Lk.pills.battery.w < 760, `battery pill ends before the house at k=${k}`);
   }
-  assert.equal(v4ScaleForWidth(390), 3.4);
-  assert.equal(v4ScaleForWidth(700), 3.2);
-  assert.equal(v4ScaleForWidth(1200), 3.0);
+  assert.equal(v4ScaleForWidth(390), 3.2);
+  assert.equal(v4ScaleForWidth(768), 2.3);
+  assert.equal(v4ScaleForWidth(1200), 2.0);
+});
+
+test("every system is card -> equipment -> inverter (or the reverse for home), touching both the card and the hardware", () => {
+  const P = L.paths();
+  assert.deepEqual(endpoints(P.solarCard).start, at(L.pills.solar.port));
+  assert.deepEqual(endpoints(P.solarCard).end, at(A.main_pv));
+  assert.deepEqual(endpoints(P.solarMain).start, at(A.main_pv));
+  assert.deepEqual(endpoints(P.solarMain).end, at(A.inverter));
+  assert.deepEqual(endpoints(P.solarGarage).start, at(A.garage_pv));
+  assert.deepEqual(endpoints(P.solarGarage).end, at(A.inverter));
+  assert.deepEqual(endpoints(P.battery).start, at(L.pills.battery.port));
+  assert.ok(passesThrough(P.battery, A.battery_cabinet));
+  assert.deepEqual(endpoints(P.battery).end, at(A.inverter));
+  assert.deepEqual(endpoints(P.grid).start, at(L.pills.grid.port));
+  assert.ok(passesThrough(P.grid, A.pylon));
+  assert.deepEqual(endpoints(P.grid).end, at(A.inverter));
+  assert.deepEqual(endpoints(P.home).start, at(A.inverter));
+  assert.ok(passesThrough(P.home, A.house));
+  assert.deepEqual(endpoints(P.home).end, at(L.pills.home.port));
+  assert.deepEqual(L.paths(), L.paths(), "static geometry");
+});
+
+test("the grid route behind the garage stays clear of the car and the garage door", () => {
+  const n = nums(L.paths().grid);
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i + 1 < n.length; i += 2) pts.push([n[i]!, n[i + 1]!]);
+  for (const [x, y] of pts) {
+    assert.ok(!(x > 1190 && y > 640), `grid route point ${x},${y} over the car`);
+    assert.ok(!(x > 1130 && x < 1330 && y > 560 && y < 690), `grid route point ${x},${y} over the garage door`);
+  }
+});
+
+test("solar split never double counts: card carries the total, branches carry their own arrays, else the total once", () => {
+  const two = splitSolarFlows(6400, 3400, 3000, 2);
+  assert.equal(two.card.magnitudeW, 6400);
+  assert.equal(two.main.magnitudeW, 3400);
+  assert.equal(two.garage?.magnitudeW, 3000);
+  const uneven = splitSolarFlows(5100, 4200, 900, 2);
+  assert.equal(uneven.main.magnitudeW, 4200);
+  assert.equal(uneven.garage?.magnitudeW, 900);
+  const oneArray = splitSolarFlows(2500, 2500, null, 1);
+  assert.equal(oneArray.main.magnitudeW, 2500);
+  assert.equal(oneArray.garage, null);
+  const totalOnly = splitSolarFlows(2500, null, null, 2);
+  assert.equal(totalOnly.main.magnitudeW, 2500, "no per-array readings: the main route carries the total once");
+  assert.equal(totalOnly.garage, null);
+  const partial = splitSolarFlows(3400, 3400, null, 2);
+  assert.equal(partial.main.magnitudeW, 3400);
+  assert.equal(partial.garage?.unknown, true, "a missing second array is unknown, not zero");
+  const trickle = splitSolarFlows(4, 3, 1, 2);
+  assert.ok(trickle.card.idle && trickle.main.idle && trickle.garage!.idle, "below the threshold every solar route is idle");
+  const none = splitSolarFlows(null, null, null, 2);
+  assert.ok(none.card.unknown && none.main.unknown && none.garage === null);
 });
 
 test("smoothPath passes through every point in order and degrades to a line for two points", () => {

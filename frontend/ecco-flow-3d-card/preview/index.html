@@ -99,6 +99,13 @@
       }
       {
         const a = document.createElement("a");
+        a.href = `?s=${scenario}${width ? `&w=${width}` : ""}${params.get("scene") ? `&scene=${params.get("scene")}` : ""}&debug=1`;
+        a.textContent = "anchor debug";
+        if (params.get("debug")) a.classList.add("on");
+        bar.appendChild(a);
+      }
+      {
+        const a = document.createElement("a");
         a.href = `?s=${scenario}${width ? `&w=${width}` : ""}&demo=1`;
         a.textContent = "demo cycle";
         if (params.get("demo")) a.classList.add("on");
@@ -133,6 +140,7 @@
         if (head && head.ok) {
           config.scene = { pack: "/assets/scenes/", crossfade_ms: Number(params.get("fade") ?? 900) };
           if (params.get("scene")) config.scene.force = params.get("scene");
+          if (params.get("debug")) config.scene.debug_anchors = true;
         }
       }
 

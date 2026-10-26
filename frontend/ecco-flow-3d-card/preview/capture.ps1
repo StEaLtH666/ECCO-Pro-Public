@@ -10,6 +10,8 @@ param(
     [string]$Assets = "",
     [string]$Img = "",
     [string[]]$Scenes = @(),
+    [string[]]$Only = @(),
+    [string]$Extra = "",
     [switch]$KeepServer
 )
 cls
@@ -34,8 +36,10 @@ try {
     # cropped to the frame afterwards (System.Drawing, no extra tooling).
     $sizes = @(
         @{ name = "mobile"; w = 520; h = 1320; frame = 390; crop = 414 },
+        @{ name = "tablet"; w = 800; h = 1500; frame = 768; crop = 792 },
         @{ name = "desktop"; w = 1280; h = 980; frame = 1200; crop = 0 }
     )
+    if ($Only.Count -gt 0) { $sizes = @($sizes | Where-Object { $Only -contains $_.name }) }
     # With -Scenes, one capture per scene (night scenes use the night-discharge telemetry, day scenes day-export).
     $jobs = @()
     if ($Scenes.Count -gt 0) {
@@ -49,7 +53,7 @@ try {
     foreach ($j in $jobs) {
         foreach ($z in $sizes) {
             $out = Join-Path $OutDir ("{0}-{1}.png" -f $j.name, $z.name)
-            $url = "http://127.0.0.1:$Port/preview/index.html?$($j.query)&w=$($z.frame)&chrome=0" + $(if ($Img) { "&img=$Img" } else { "" })
+            $url = "http://127.0.0.1:$Port/preview/index.html?$($j.query)&w=$($z.frame)&chrome=0" + $(if ($Img) { "&img=$Img" } else { "" }) + $(if ($Extra) { "&$Extra" } else { "" })
             $args = @(
                 "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
                 "--user-data-dir=$profile", "--window-size=$($z.w),$($z.h)", "--virtual-time-budget=2500",

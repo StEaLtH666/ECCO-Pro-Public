@@ -10,6 +10,7 @@ import {
   normaliseGridPower,
   resolveHomeW,
   siteIsIdle,
+  splitSolarFlows,
   type FlowEdge,
   type FlowId,
 } from "./core/power.ts";
@@ -231,11 +232,11 @@ export class EccoFlow3dCard extends LitElement {
     const soc = numberOf(states, nodes.battery?.soc);
     const edges = buildFlowEdges({ solarW, batteryW, gridW, homeW });
     const byId = Object.fromEntries(edges.map((e) => [e.id, e])) as Record<FlowId, FlowEdge>;
-    // Artwork plates draw one route per PV array (main roof, garage roof) when two arrays are individually known;
-    // the Solar pill always shows the authoritative total, so nothing is counted twice.
-    const twoArrays = arrays.length >= 2 && (arrayW[0] !== null || arrayW[1] !== null);
-    const solarMainEdge = twoArrays ? buildFlowEdges({ solarW: arrayW[0] ?? null, batteryW: null, gridW: null, homeW: null })[0]! : byId.solar;
-    const solar2Edge = twoArrays ? buildFlowEdges({ solarW: arrayW[1] ?? null, batteryW: null, gridW: null, homeW: null })[0]! : null;
+    // Artwork plates split the solar system: card -> main array carries the total; main array -> inverter carries
+    // array 1 and garage array -> inverter carries array 2 when both are individually known (the Solar pill always
+    // shows the authoritative total, so nothing is counted twice). With one array, or no per-array readings, the
+    // main route carries the total and the garage route is not drawn.
+    const split = splitSolarFlows(solarW, arrayW[0] ?? null, arrayW[1] ?? null, arrays.length);
 
     // --- freshness ---
     const telemetry = classifyOnOff(stateOf(states, ecco.telemetry_online));
@@ -307,11 +308,18 @@ export class EccoFlow3dCard extends LitElement {
             layout: v4Layout(v4ScaleForWidth(this._widthPx || this.getBoundingClientRect().width || 1200)),
             onError: (url) => this._plateFailed(url),
             onLoad: (url) => this._plateLoaded(url),
+            debug: !!config.scene?.debug_anchors,
           }
         : undefined,
-      solar2: artworkOn && solar2Edge ? { edge: solar2Edge, motion: motionFor(solar2Edge, stale) } : undefined,
+      solarSplit: artworkOn
+        ? {
+            card: { edge: split.card, motion: motionFor(split.card, stale) },
+            main: { edge: split.main, motion: motionFor(split.main, stale) },
+            garage: split.garage ? { edge: split.garage, motion: motionFor(split.garage, stale) } : null,
+          }
+        : undefined,
       flows: {
-        solar: artworkOn ? { edge: solarMainEdge, motion: motionFor(solarMainEdge, stale) } : { edge: byId.solar, motion: motionFor(byId.solar, stale) },
+        solar: { edge: byId.solar, motion: motionFor(byId.solar, stale) },
         battery: { edge: byId.battery, motion: motionFor(byId.battery, stale) },
         grid: { edge: byId.grid, motion: motionFor(byId.grid, stale) },
         home: { edge: byId.home, motion: motionFor(byId.home, stale) },
@@ -1240,6 +1248,83 @@ export class EccoFlow3dCard extends LitElement {
     .scene.stale .flow-dots {
       opacity: 0.12;
     }
+    /* Artwork routes: thin base, soft glow, crisp highlight, travelling particles. */
+    .fine-base {
+      fill: none;
+      stroke: var(--flow-colour);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.55;
+    }
+    .fine-glow {
+      fill: none;
+      stroke: var(--flow-colour);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: url(#ef3d-blur);
+    }
+    .fine-highlight {
+      fill: none;
+      stroke: #ffffff;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      mix-blend-mode: screen;
+    }
+    .flow.fine.idle .fine-base {
+      opacity: 0.22;
+    }
+    .flow.fine.unknown .fine-base {
+      stroke: #9aa6bd;
+      stroke-dasharray: 4 6;
+      opacity: 0.35;
+    }
+    .scene.stale .fine-base {
+      opacity: 0.18;
+    }
+    .node-light-halo {
+      fill: var(--flow-colour);
+      opacity: 0.1;
+      filter: url(#ef3d-blur-soft);
+    }
+    .node-light-core {
+      fill: var(--flow-colour);
+      opacity: 0.35;
+    }
+    .node-light.active .node-light-halo {
+      opacity: 0.38;
+    }
+    .node-light.active .node-light-core {
+      fill: #ffffff;
+      opacity: 0.95;
+      filter: drop-shadow(0 0 4px var(--flow-colour));
+    }
+    .debug-dot {
+      fill: #ff3b6b;
+    }
+    .debug-ring {
+      fill: none;
+      stroke: #ff3b6b;
+      stroke-width: 2;
+    }
+    .debug-port {
+      fill: #fff;
+      stroke: #ff3b6b;
+      stroke-width: 2;
+    }
+    .debug-zone {
+      fill: none;
+      stroke: #ff3b6b;
+      stroke-dasharray: 8 6;
+      stroke-width: 2;
+    }
+    .debug-label {
+      font-size: calc(10px * var(--k, 1));
+      font-weight: 700;
+      fill: #fff;
+      paint-order: stroke;
+      stroke: rgba(0, 0, 0, 0.8);
+      stroke-width: calc(2px * var(--k, 1));
+    }
     .pulse-halo {
       fill: var(--pulse-colour);
       opacity: 0.22;
@@ -1251,6 +1336,16 @@ export class EccoFlow3dCard extends LitElement {
     }
     .pulse-core {
       fill: #ffffff;
+    }
+    .flow.fine .pulse-halo {
+      opacity: 0.3;
+    }
+    .flow.fine .pulse-glow {
+      opacity: 0.95;
+      filter: drop-shadow(0 0 4px var(--pulse-colour));
+    }
+    .flow.fine .pulse-halo {
+      opacity: 0.38;
     }
     .chevron path {
       stroke: var(--pulse-colour);

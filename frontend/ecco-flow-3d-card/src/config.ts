@@ -201,6 +201,8 @@ export interface SceneConfig {
   force?: string;
   /** Crossfade duration in ms when the scene changes. Default 900. */
   crossfade_ms?: number;
+  /** Draw the hardware anchors, card zones and ports over the scene (calibration aid). Default false. */
+  debug_anchors?: boolean;
 }
 
 export interface EccoFlow3dCardConfig {
