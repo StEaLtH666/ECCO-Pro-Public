@@ -189,17 +189,18 @@ export function smoothPath(points: Pt[], tension = 0.5): string {
  */
 export const V4_ANCHORS = {
   /** Centre of the main rooftop array (info-link target). */
-  main_pv: { x: 610, y: 335, label: "Main PV array" },
+  main_pv: { x: 610, y: 335, label: "Array 1 (main roof)" },
   /** Main array: the attachment on the lower-right panel frame (the frame edge runs from 640,442 up to 751,380). */
-  main_pv_frame: { x: 700, y: 409, label: "Main PV frame connection" },
+  main_pv_frame: { x: 700, y: 409, label: "Array 1 frame connection" },
   /** Main array: where the cable enters the roof, just below the frame at the porch-roof valley. */
-  main_pv_edge: { x: 716, y: 425, label: "Main PV cable exit" },
+  /** Array 1: the frame's lower-right corner, where the cable leaves the array and drops down the roof valley to the junction. */
+  main_pv_edge: { x: 751, y: 380, label: "Array 1 frame corner / cable exit" },
   /** Centre of the garage rooftop array (info-link target). */
-  garage_pv: { x: 1140, y: 500, label: "Garage PV array" },
+  garage_pv: { x: 1140, y: 500, label: "Array 2 (garage roof)" },
   /** Garage array: the attachment at its lower-left frame corner (the lower frame edge runs from 1045,507 to 1130,557). */
-  garage_pv_frame: { x: 1044, y: 508, label: "Garage PV frame connection" },
+  garage_pv_frame: { x: 1044, y: 508, label: "Array 2 frame connection" },
   /** Garage array: where the cable enters the roof at the fascia below the corner. */
-  garage_pv_edge: { x: 1048, y: 545, label: "Garage PV cable exit" },
+  garage_pv_edge: { x: 1044, y: 537, label: "Array 2 cable exit (fascia)" },
   /** Foot of the white battery cabinet (where its cable enters the ground). */
   battery_cabinet: { x: 150, y: 512, label: "Battery cabinet" },
   /** The wall inverter's underside: where the grouped riser enters the unit (unit body ≈ 958-1042 x 505-620). */
@@ -211,13 +212,13 @@ export const V4_ANCHORS = {
   /** The chimney's right face (stack 915-962 x 235-330): where the grid service drop lands on the house before following the corner down. */
   chimney: { x: 952, y: 300, label: "Chimney (service drop landing)" },
   /** The porch-roof apex where the main roof's fascia begins (758,452); the main-array cable reaches it from the frame. */
-  fascia_start: { x: 758, y: 448, label: "Main roof fascia start" },
+  fascia_start: { x: 758, y: 448, label: "Roof junction / fascia start" },
   /** The rear garden path ends at x 310 and the patio's left corner is 68 px below it across the lawn edge: a buried transition, not visible paving. */
-  lawn_transition: { x: 310, y: 536, label: "Buried transition (rear path to patio)" },
+  lawn_transition: { x: 230, y: 560, label: "Buried lawn crossing (cabinet to patio)" },
   /** The downpipe on the front wall left of the entrance: the house's service wall (main-array descent, house connection). */
   downpipe: { x: 748, y: 620, label: "Downpipe / service wall" },
   /** The garage wall between the EV charger and the door frame: the garage array's descent. */
-  door_post: { x: 1104, y: 640, label: "Garage wall (left of the door)" },
+  door_post: { x: 1104, y: 640, label: "Garage wall line (left of the door)" },
   /** The EV charger on the garage wall (reference only; no ECCO entity feeds it). */
   ev_charger: { x: 1048, y: 655, label: "EV charger" },
   /** The pylon's lattice at the height of the information card's connection. */
@@ -257,6 +258,7 @@ export const RISERS = {
  */
 export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
   { label: "rear garden path", points: [{ x: 110, y: 514 }, { x: 310, y: 502 }] },
+  { label: "lawn crossing (buried, parallel to the rear path)", points: [{ x: 150, y: 556 }, { x: 310, y: 570 }] },
   { label: "patio front edge", points: [{ x: 310, y: 570 }, { x: 520, y: 647 }] },
   { label: "terrace front wall", points: [{ x: 520, y: 647 }, { x: 548, y: 682 }] },
   { label: "upper landing edge", points: [{ x: 548, y: 682 }, { x: 700, y: 692 }] },
@@ -269,16 +271,15 @@ export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
 /** The battery route's waypoints with the paving each one sits on (the debug overlay numbers them). */
 export const BATTERY_WAYPOINTS: string[] = [
   "cabinet base",
-  "end of the rear path",
-  "patio left corner (after the buried transition)",
+  "out of the cabinet front onto the lawn",
+  "patio left corner (end of the buried lawn crossing)",
   "patio front edge, lawn border",
   "terrace front wall foot",
   "across the upper landing",
   "down step 1 onto the tread",
   "along the tread",
   "down step 2 onto the lower paving",
-  "lower path meets the drive",
-  "drive paving, ground convergence",
+  "lower path and drive paving to the ground convergence",
   "riser into the inverter",
 ];
 export const RISER_TOP = 624;
@@ -324,17 +325,22 @@ export function v4Layout(k: number): ArtworkLayout {
     solarInfo: [pills.solar.port, { x: 430, y: pills.solar.port.y }, { x: 545, y: 275 }],
     // Panel frame -> straight down to the roof junction at the porch apex -> along the porch ridge to the fascia start
     // -> along the main roof fascia to the building corner -> straight down the corner (track 946) -> floor -> riser.
-    solarMain: [A.main_pv_frame, { x: A.main_pv_frame.x, y: 448 }, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
+    // Array 1: frame attachment -> along the panel's lower frame edge to its corner -> straight down the roof valley to the
+    // roof junction at the porch apex -> along the main roof fascia to the building corner -> straight down the corner
+    // (track 946) -> floor -> riser.
+    solarMain: [A.main_pv_frame, A.main_pv_edge, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
     // Frame corner -> straight down to the garage fascia -> along the fascia -> straight down the garage wall left of the
     // door -> deep floor run back to the convergence -> riser.
-    solarGarage: [A.garage_pv_frame, { x: A.garage_pv_frame.x, y: 528 }, { x: A.door_post.x, y: 543 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
+    // Array 2: frame corner -> straight down to the garage fascia (measured 960,512 -> 1140,565) -> along the fascia to the
+    // garage wall line -> straight down the wall -> deep floor run -> riser.
+    solarGarage: [A.garage_pv_frame, A.garage_pv_edge, { x: A.door_post.x, y: 554 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
     batteryInfo: [pills.battery.port, A.battery_cabinet],
     // Cabinet base -> along the rear garden path -> buried transition across the lawn edge -> the patio's left corner -> along the
     // patio front edge -> down the terrace front wall -> across the upper landing -> down step 1 -> along the tread -> down step 2
     // -> along the lower path to the drive -> drive paving to the ground convergence -> riser.
     battery: [
       A.battery_cabinet,
-      { x: 310, y: 502 },
+      { x: 150, y: 556 },
       { x: 310, y: 570 },
       { x: 520, y: 647 },
       { x: 548, y: 682 },
@@ -342,7 +348,6 @@ export function v4Layout(k: number): ArtworkLayout {
       { x: 620, y: 707 },
       { x: 640, y: 707 },
       { x: 640, y: 723 },
-      { x: 790, y: 742 },
       ...riser("battery"),
     ],
     gridInfo: [pills.grid.port, A.pylon],

@@ -542,7 +542,7 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
     ? svg`<g class="debug">
         ${V4_PAVING.map((e) => svg`<polyline points=${e.points.map((p) => `${p.x},${p.y}`).join(" ")} class="debug-paving"></polyline><text x=${e.points[0]!.x + 4 * k} y=${e.points[0]!.y - 4 * k} class="debug-paving-label">${e.label}</text>`)}
         ${L.routes.battery.map((p, i) => svg`<circle cx=${p.x} cy=${p.y} r=${5 * k} class="debug-waypoint"></circle><text x=${p.x + 7 * k} y=${p.y + 4 * k} class="debug-waypoint-label">${i + 1} ${BATTERY_WAYPOINTS[i] ?? ""}</text>`)}
-        <line x1=${A.lawn_transition.x} y1=${L.routes.battery[1]!.y} x2=${A.lawn_transition.x} y2=${L.routes.battery[2]!.y} class="debug-buried"></line>
+        <line x1=${L.routes.battery[1]!.x} y1=${L.routes.battery[1]!.y} x2=${L.routes.battery[2]!.x} y2=${L.routes.battery[2]!.y} class="debug-buried"></line>
         ${vertices.map(([key, pts]) =>
           pts.map((p, i) => (i === 0 || i === pts.length - 1 ? nothing : svg`<rect x=${p.x - 3 * k} y=${p.y - 3 * k} width=${6 * k} height=${6 * k} class="debug-bend" data-route=${key}></rect>`))
         )}
