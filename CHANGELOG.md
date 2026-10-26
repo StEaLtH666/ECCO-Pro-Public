@@ -10,6 +10,17 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Advanced Configuration Stage 1, cyclic TOU correction** (post-export entry `acs1c`; offline, source only, independently
+  reviewed offline on 2026-10-25/26, NOT installed, NOT live-proven; [docs/dev/acs1c-cyclic-tou.md](docs/dev/acs1c-cyclic-tou.md)). The editor's start-time
+  ordering rule becomes one 24-hour cycle in slot order (every start on the 5-minute grid, every slot at least 5 minutes, exactly one
+  wrap past midnight; the new start strictly between the previous and the next slot's start counted round the clock, slot 6 before
+  slot 1; the proposed layout itself one cycle; the active-slot-now guard in unwrapped minutes), instead of strictly ascending HH:MM
+  values, which refused every start-time Review of the owner's live layout (slot 5 running 22:00 -> 00:25). Every other guard, the
+  staged-equals-live proof, the one quiet-window press, the readback, F1 / F2 and the lock are unchanged; the written value is still
+  the typed HH:MM on the grid; every copy of the gate also re-checks that the review record's value is a well-formed HH:MM on the grid
+  (a hand-edited record is refused by the gate itself). Recorded as a second invertible transform on the Stage 1 text (21 exact pairs,
+  `home-assistant/prototypes/acs-stage1/acs1c_transform.py`); the acs1 transform, pins and chain entry are unchanged. No firmware
+  change, no new register or write path. Policy P3 ("strictly ascending") is superseded only on the owner's approval after review.
 - **ECCO TOU Settings card** (post-export entry `acu1`; offline candidate, NOT installed, NOT exercised in Home Assistant, NOT
   live-proven; `frontend/ecco-tou-settings-card/README.md`). Section 7 of the Inverter / Advanced view (dashboard 7.22.0, staged) keeps
   its heading and replaces the read-only TOU table with the card: the six live slots (window, power, target SOC, charge source, mode,

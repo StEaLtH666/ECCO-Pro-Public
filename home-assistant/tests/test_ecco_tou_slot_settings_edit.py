@@ -1,10 +1,12 @@
 """Offline suite for Advanced Configuration Stage 1 (post-export entry acs1): a guarded owner edit of ONE setting of ONE TOU slot (target
 SOC, power, start time or charge source), the INSTALLED package home-assistant/packages/ecco_tou_target_soc_edit.yaml.
 
-That file is, byte for byte, render_stage1() of the Stage 0 package (home-assistant/prototypes/acs-stage1/acs_stage1_transform.py, which
-now documents how the installed package was derived). Git history is not needed: unrender_stage1(<installed>) gives the Stage 0 text back
-(sha256 pinned here and in the transform), so the reuse proof, the SOC parity checks and the rollback file all derive from the installed
-file alone.
+That file is, byte for byte, render_cyclic(render_stage1(<the Stage 0 package>)): two invertible exact-replacement layers,
+home-assistant/prototypes/acs-stage1/acs_stage1_transform.py (acs1, the Stage 1 editor; its pins unchanged) and acs1c_transform.py
+(acs1c, 2026-10-25: the start-time ordering rule becomes one 24-hour cycle in slot order instead of strictly ascending HH:MM values).
+Git history is not needed: unrender_cyclic(<installed>) gives the Stage 1 text of 2026-10-25 back (sha256 pinned here and in both
+transforms; the rollback file of the acs1c correction) and unrender_stage1() of that gives the Stage 0 text (sha256 pinned), so the
+reuse proof, the SOC parity checks and both rollback files all derive from the installed file alone.
 
 The INSTALLED package runs, together with the REAL Manual Controls helper package (ecco_manual_controls_helpers.yaml, whose sync
 automations touch the same staging entities), under _ha_script_sim.py (a fail-loud HA script / automation interpreter) against a
@@ -13,15 +15,25 @@ firmware's EXACT verify of start / end / power / SOC / flags (+ register 232 bit
 gate and per-field clamp faults. In this process the sim also parses template results like Home Assistant does (static service data
 included) and aborts a run on service data that Home Assistant's schema would reject (see ha_native / InvalidServiceData below).
 
-  [0] provenance      the installed package IS render(Stage 0) and unrender(installed) IS the pinned Stage 0 text (sha256), both ways; every
-                      pair applies exactly its declared count; the result is YAML; the gate lines that carry a reserved token are inherited
-                      byte for byte; neither file spells a reserved token; deterministic; an altered anchor raises, both ways
+  [0] provenance      the installed package IS render_cyclic(render_stage1(Stage 0)); unrender_cyclic(installed) IS the pinned Stage 1 text and
+                      unrender_stage1 of that IS the pinned Stage 0 text (sha256), both ways and both layers; every pair applies exactly its
+                      declared count; the result is YAML; the gate lines that carry a reserved token are inherited byte for byte; none of the
+                      three files spells a reserved token; deterministic; an altered anchor raises, both ways; the acs1c layer touches only
+                      the gate's ordering lines, the header, the Review sentence and the per-slot map
   [1] static scope    which services and entities the installed package may touch; every firmware entity exists; Stage 0 untouched
   [2] happy path      every slot x every setting: Review -> typed phrase -> Apply; exactly the intended register changes; verified
   [3] SOC parity      the Stage 0 package (unrendered from the installed one) and the installed one (setting target_soc) on identical
                       worlds: same outcome class, same writes, same lock
-  [4] validation      per setting (power floor, start grid / ordering / wrap / 15-minute guard / active-slot-now guard / inverter clock /
+  [4] validation      per setting (power floor, start grid / cyclic ordering / wrap / 15-minute guard / active-slot-now guard / inverter clock /
                       malformed live starts, charge source, SOC bounds), raw flags and source / mode words, the UK clock change nights
+  [4c] cyclic (acs1c) the six starts as one 24-hour cycle in slot order: the owner's exact baseline (00:30, 05:30, 12:00, 16:35, 22:00, 00:25;
+                      slot 5 runs past midnight, slot 6 lasts 5 minutes) with named cases for every slot, its six rotations, layouts that
+                      are not one cycle (two wraps, equal starts, off-grid, a slot shorter than 5 minutes, unreadable), the active-slot
+                      guard on a window that crosses midnight, a seeded fuzz comparison of the template against a plain-Python reference
+                      model (and of that model against the fallback capture's ring rule), the equivalence of the neighbour rule and the
+                      proposed-layout rule, forward and undo Applies on the baseline with their write logs, the live-proven SOC / power /
+                      source edits of 25 Oct repeated on the baseline, a neighbour that moves between the Review and the Apply, and a
+                      hand-edited review record refused by the Apply's own gate
   [5] review          phrase per setting, code, expiry, single use, the edited value changed since the review
   [6] gate            every unsafe state and `unavailable` refuses at Review and at Apply, for each setting
   [7] staged == live  any other staged field changed between Load and press stops the edit; the helper mirror reaches its fixed point
@@ -32,7 +44,7 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [11b] follow-ups    F1 (Load slot N-1 after a start-time edit), F2 (re-Load slot N after a conclusively write-free FAILED run, never otherwise),
                       F3 (live power must be a multiple of 100), F4 (Review warnings; input_text values under 255 characters)
   [12] mutation       in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill)
-  [13] PEX            the acs1 declaration: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
+  [13] PEX            the acs1 and acs1c declarations: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
 
 PROVES: the control flow of the installed package against models of the firmware's manual TOU path and of Home Assistant, offline.
 DOES NOT PROVE: anything about a live Home Assistant, the dongle or the inverter; how a real interrupted multi-register write behaves
@@ -64,6 +76,7 @@ sys.path.insert(0, str(ROOT / "home-assistant" / "prototypes" / "acs-stage1"))
 import _ha_script_sim as S  # noqa: E402
 import _manual_tou_sim as M  # noqa: E402
 import acs_stage1_transform as X  # noqa: E402
+import acs1c_transform as C  # noqa: E402
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Home-Assistant-faithful template result parsing, installed in THIS test process only (the sim modules are not edited).
@@ -121,14 +134,18 @@ S.World.call = _ha_call
 
 T_START = time.time()
 TRANSFORM_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs_stage1_transform.py"
+CYCLIC_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs1c_transform.py"
 PKG_PATH = ROOT / X.ACS0_REL
-S1 = PKG_PATH.read_text(encoding="utf-8")                  # the INSTALLED package (Stage 1)
-PKG0 = X.unrender_stage1(S1)                               # the Stage 0 text it was derived from, reconstructed from the installed file alone
+S1 = PKG_PATH.read_text(encoding="utf-8")                  # the INSTALLED package (the Stage 1 editor with the acs1c cyclic correction)
+S1B = C.unrender_cyclic(S1)                                # the Stage 1 text of 2026-10-25 it was derived from (the acs1c rollback file)
+PKG0 = X.unrender_stage1(S1B)                              # the Stage 0 text, reconstructed from the installed file alone through both layers
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
-S1_SHA = "2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de"      # the installed Stage 1 package, LF line ends
+S1_SHA = "2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de"      # the Stage 1 package of 2026-10-25 (the acs1c rollback file), LF line ends
 PAIRS_SHA = "9924673e2c512edb4048b897aa073c779727d88aa453c345eac0934f29d75a37"   # the canonical serialisation of the 62 pairs (40 reviewed + 22 follow-up)
+S1C_SHA = "4ee898311a6abe7a7b0bc1874bff2cd10027d14f4122b341f5145833e3d90405"      # the INSTALLED package: the Stage 1 text with the acs1c cyclic correction, LF line ends
+CPAIRS_SHA = "6cb46976e90d4c7a7e24206d562ee532e4b4246c3595100e10de514075f4d761"   # the canonical serialisation of the 21 acs1c pairs
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -531,18 +548,25 @@ for i, (before, after, count) in enumerate(X.PAIRS):
         bad.append((i, text.count(before), count))
     text = text.replace(before, after)
 check(f"every one of the {len(X.PAIRS)} pairs applies exactly its declared count, in order, to the Stage 0 text (unrendered from the installed "
-      "package), and changes it, and the result is the installed package", not bad and text == S1, str(bad))
+      "package through both layers), and changes it, and the result is the Stage 1 text", not bad and text == S1B, str(bad))
 raw_pkg = PKG_PATH.read_bytes()
-check("PROVENANCE (forward): the installed package IS render_stage1(Stage 0) byte for byte and its sha256 is the pinned one; the file has "
-      "consistent line ends (LF in the repository)", X.render_stage1(PKG0) == S1 and hashlib.sha256(S1.encode()).hexdigest() == S1_SHA
-      and b"\r" not in raw_pkg.replace(b"\r\n", b""))
-check("PROVENANCE (backward): unrender_stage1(installed) hashes to the pinned Stage 0 sha256 (suite pin == the transform's constant) and "
-      "render_stage1(unrender_stage1(installed)) == installed, from the LF text and from a CRLF copy", hashlib.sha256(PKG0.encode()).hexdigest()
-      == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1)) == S1
-      and X.unrender_stage1(S1.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1.replace("\n", "\r\n"))) == S1)
-check("the pins are asserted, not printed: the installed package's sha256 == the suite's == the transform's STAGE1_SHA256; the 62 pairs hash "
-      "(canonical serialisation) to the pinned PAIRS_SHA256, so a silent edit of any pair is caught", hashlib.sha256(S1.encode()).hexdigest()
-      == S1_SHA == X.STAGE1_SHA256 and len(X.PAIRS) == 62 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256)
+check("PROVENANCE (forward): render_stage1(Stage 0) IS the Stage 1 text byte for byte (sha256 pinned) and render_cyclic of that IS the installed "
+      "package byte for byte (sha256 pinned); the file has consistent line ends (LF in the repository)",
+      X.render_stage1(PKG0) == S1B and hashlib.sha256(S1B.encode()).hexdigest() == S1_SHA
+      and C.render_cyclic(S1B) == S1 and hashlib.sha256(S1.encode()).hexdigest() == S1C_SHA and b"\r" not in raw_pkg.replace(b"\r\n", b""))
+check("PROVENANCE (backward): unrender_cyclic(installed) hashes to the pinned Stage 1 sha256 and unrender_stage1 of it to the pinned Stage 0 sha256 "
+      "(suite pins == the transforms' constants); render(unrender(text)) == text for both layers, from the LF text and from a CRLF copy",
+      hashlib.sha256(PKG0.encode()).hexdigest() == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1B)) == S1B
+      and X.unrender_stage1(S1B.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1B.replace("\n", "\r\n"))) == S1B
+      and C.render_cyclic(C.unrender_cyclic(S1)) == S1 and C.unrender_cyclic(S1.replace("\n", "\r\n")) == S1B
+      and C.render_cyclic(C.unrender_cyclic(S1.replace("\n", "\r\n"))) == S1)
+check("the pins are asserted, not printed: the Stage 1 text's sha256 == the suite's == the acs1 transform's STAGE1_SHA256 == the acs1c transform's "
+      "STAGE1_BASE_SHA256; the installed package's sha256 == the suite's == the acs1c transform's STAGE1C_SHA256; the 62 acs1 pairs and the 18 "
+      "acs1c pairs hash (canonical serialisation) to their pinned values, so a silent edit of any pair is caught",
+      hashlib.sha256(S1B.encode()).hexdigest() == S1_SHA == X.STAGE1_SHA256 == C.STAGE1_BASE_SHA256
+      and hashlib.sha256(S1.encode()).hexdigest() == S1C_SHA == C.STAGE1C_SHA256
+      and len(X.PAIRS) == 62 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256
+      and len(C.CYCLIC_PAIRS) == 21 and C.cyclic_pairs_sha256() == CPAIRS_SHA == C.CYCLIC_PAIRS_SHA256)
 SENT = "\x00"
 
 
@@ -572,8 +596,8 @@ def outside_pairs(installed):
     return a == base, sum(1 for ln in lines if SENT not in ln and not any(n in ln for n in ren)), len(PKG0.split("\n"))
 
 
-OUT = outside_pairs(S1)
-check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 22 follow-up) touches is byte-identical in the installed package, in the same place and the same number of "
+OUT = outside_pairs(S1B)
+check(f"EVERY part of the Stage 0 baseline that no pair (40 reviewed + 22 follow-up) touches is byte-identical in the Stage 1 text, in the same place and the same number of "
       f"times (the acs0r1 press timing, the fresh-evidence code, the gate, the verdict reads...): {OUT[1] if OUT else '?'} of the baseline's "
       f"{OUT[2] if OUT else '?'} lines are wholly outside the 40 reviewed pairs, and the follow-up pairs are undone exactly first", OUT is not None and OUT[0] is True and OUT[1] > 800, str(OUT))
 OUT_MUTANTS = [
@@ -585,15 +609,17 @@ OUT_MUTANTS = [
 ]
 bad = []
 for name, anchor, repl in OUT_MUTANTS:
-    n_anchor = S1.count(anchor)
-    mut = S1.replace(anchor, repl, 1)
+    n_anchor = S1B.count(anchor)
+    mut = S1B.replace(anchor, repl, 1)
     got = outside_pairs(mut)
-    if n_anchor < 1 or mut == S1 or got is None or got[0] is not False:
+    if n_anchor < 1 or mut == S1B or got is None or got[0] is not False:
         bad.append((name, n_anchor, got))
-check(f"the check kills {len(OUT_MUTANTS)} in-memory mutants that alter one untouched line of the installed package (the press delay, the telemetry "
+check(f"the check kills {len(OUT_MUTANTS)} in-memory mutants that alter one untouched line of the Stage 1 text (the press delay, the telemetry "
       "period bound, the gate-pass counter condition, the final disarm)", not bad, str(bad))
-check("the Stage 0 text is itself NOT a rendered package (unrender refuses it) and the installed package is NOT a Stage 0 text (render refuses it): "
-      "the two directions cannot be confused", all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1))))
+check("the Stage 0 text is itself NOT a rendered package (unrender refuses it), the installed package is NOT a Stage 0 text nor a Stage 1 text "
+      "(render refuses it, both layers) and the Stage 1 text is not an installed package (unrender_cyclic refuses it): no direction can be confused",
+      all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1), (X.render_stage1, S1B),
+                                                      (X.unrender_stage1, S1), (C.unrender_cyclic, S1B), (C.render_cyclic, S1), (C.render_cyclic, PKG0))))
 pkg = yaml.safe_load(S1)
 check("the result parses as YAML with Stage 0's shape plus the write-seen recorder: 3 text helpers, 3 booleans (Stage 0's two and ecco_cfg_edit_write_seen), "
       "3 scripts (review, apply, acknowledge), 2 automations (the watchdog and the write-seen recorder)",
@@ -616,15 +642,17 @@ c0, c1 = Counter(tok_lines0), Counter(tok_lines1)
 check(f"the gate lines that carry a reserved token ({len(tok_lines0)} lines, {len(c0)} distinct) appear in the result byte for byte, exactly "
       "as many times as in Stage 0, and the result has no other such line", c0 == c1 and len(tok_lines0) == len(tok_lines1) == 20,
       f"{len(tok_lines0)} {len(tok_lines1)}")
-check("no pair's `before` or `after` contains a line that carries a reserved token (so no pair can touch one)",
-      not [i for i, (b, a, _c) in enumerate(X.PAIRS) if any(t in b or t in a for t in RES_TOKENS)])
-own = {p.name: p.read_text(encoding="utf-8") for p in (Path(__file__).resolve(), TRANSFORM_PATH)}
-check("neither new file contains any reserved token or fragment (ecco + fallback / failback, FALLBACK + PROFILE, FAILBACK + STATE, "
-      "fallback + profile ids, fbc + raw)", all(not any(t in txt for t in RES_TOKENS) for txt in own.values()),
+check("no pair's `before` or `after`, in either layer, contains a line that carries a reserved token (so no pair can touch one)",
+      not [i for i, (b, a, _c) in enumerate(X.PAIRS + C.CYCLIC_PAIRS) if any(t in b or t in a for t in RES_TOKENS)])
+own = {p.name: p.read_text(encoding="utf-8") for p in (Path(__file__).resolve(), TRANSFORM_PATH, CYCLIC_PATH)}
+check("none of the three files (this suite, the acs1 transform, the acs1c transform) contains any reserved token or fragment (ecco + fallback / "
+      "failback, FALLBACK + PROFILE, FAILBACK + STATE, fallback + profile ids, fbc + raw)", all(not any(t in txt for t in RES_TOKENS) for txt in own.values()),
       str({k: [t for t in RES_TOKENS if t in v] for k, v in own.items()}))
-check("deterministic: rendering twice, and from a CRLF copy of Stage 0, gives identical text (sha256 pinned above)",
-      X.render_stage1(PKG0) == S1 == X.render_stage1(PKG0.replace("\n", "\r\n")) == X.render_stage1(X.unrender_stage1(S1)))
-print(f"        installed Stage 1 sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(X.PAIRS)} pairs)")
+check("deterministic: rendering twice, and from a CRLF copy, gives identical text in both layers (sha256 pinned above)",
+      X.render_stage1(PKG0) == S1B == X.render_stage1(PKG0.replace("\n", "\r\n")) == X.render_stage1(X.unrender_stage1(S1B))
+      and C.render_cyclic(S1B) == S1 == C.render_cyclic(S1B.replace("\n", "\r\n")) == C.render_cyclic(C.unrender_cyclic(S1)))
+print(f"        Stage 1 text sha256 {hashlib.sha256(S1B.encode()).hexdigest()}  ({len(S1B.splitlines())} lines, {len(X.PAIRS)} pairs)")
+print(f"        installed (acs1c) sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(C.CYCLIC_PAIRS)} more pairs)")
 check("the Stage 0 text reconstructed from the installed package is the pinned file (sha256 of its LF text)",
       hashlib.sha256(PKG0.replace("\r\n", "\n").encode()).hexdigest() == ACS0_SHA)
 fail_to_raise = []
@@ -655,7 +683,7 @@ for i, (before, after, count) in enumerate(X.PAIRS):
             if f"pair {i}:" not in str(exc):
                 fail_to_raise.append((i, label, str(exc)[:60]))
     state = state.replace(before, after)
-assert state == S1
+assert state == S1B
 altered = PKG0.replace("{% elif not e %}invalid slot (1-6)", "{% elif not e %}invalid slot (1-6) ")
 assert altered != PKG0
 try:
@@ -686,8 +714,8 @@ for _b, _a, _c in X.PAIRS:
 for i, (before, after, count) in enumerate(X.PAIRS):
     # a pair whose `after` text a LATER pair did not touch is tested on the installed text with the real unrender_stage1; a pair a later
     # pair modified (the follow-up pairs edit text of earlier pairs) is tested on the state right after it with the same loop
-    intact = S1.count(after) == count
-    base = S1 if intact else prefix_states[i]
+    intact = S1B.count(after) == count
+    base = S1B if intact else prefix_states[i]
     fn = X.unrender_stage1 if intact else (lambda v, i_=i: unrender_from(v, i_))
     n_real, n_state = n_real + intact, n_state + (not intact)
     fewer = base.replace(after, "", 1) if count == 1 else None
@@ -702,18 +730,136 @@ for i, (before, after, count) in enumerate(X.PAIRS):
             if "pair" not in str(exc) or (not intact and f"pair {i}:" not in str(exc)):
                 un_fail.append((i, label, str(exc)[:60]))
 try:
-    X.unrender_stage1(S1.replace("unknown setting (target_soc", "unknown setting  (target_soc", 1))
+    X.unrender_stage1(S1B.replace("unknown setting (target_soc", "unknown setting  (target_soc", 1))
     un_fail.append(("after text altered",))
 except ValueError as exc:
     if "pair" not in str(exc):
         un_fail.append(("altered message", str(exc)[:60]))
-check(f"an installed text with ANY pair's `after` text removed, duplicated or altered is refused with ValueError naming the pair (a rollback file can "
-      f"never be silently half-reconstructed): {n_real} pairs on the installed text with unrender_stage1 itself, {n_state} pairs that a later "
+check(f"a Stage 1 text with ANY pair's `after` text removed, duplicated or altered is refused with ValueError naming the pair (a rollback file can "
+      f"never be silently half-reconstructed): {n_real} pairs on the Stage 1 text with unrender_stage1 itself, {n_state} pairs that a later "
       "pair modified on the state right after them", not un_fail, str(un_fail[:5]))
 check("SETTINGS is exactly the four settings", X.SETTINGS == ("target_soc", "power", "start_time", "charge_source"))
-src_t = TRANSFORM_PATH.read_text(encoding="utf-8")
-check("the transform performs no I/O at all and uses no network (no read_text / open / write_text / socket / urllib / subprocess)",
+src_t = TRANSFORM_PATH.read_text(encoding="utf-8") + "\n" + CYCLIC_PATH.read_text(encoding="utf-8")
+check("neither transform performs any I/O or uses the network (no read_text / open / write_text / socket / urllib / subprocess)",
       not re.search(r"read_text|read_bytes|write_text|write_bytes|\bopen\(|socket|urllib|requests|subprocess|os\.system|import pathlib|from pathlib", src_t))
+
+# ---- [0c] the acs1c layer: the Stage 1 text -> the installed package --------------------------------------------------------------
+print("[0c] the acs1c layer (the cyclic start-time rule): the Stage 1 text -> the installed package")
+text, bad = S1B, []
+for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
+    if text.count(before) != count or count < 1 or before == after:
+        bad.append((i, text.count(before), count))
+    text = text.replace(before, after)
+check(f"every one of the {len(C.CYCLIC_PAIRS)} acs1c pairs applies exactly its declared count, in order, to the Stage 1 text, changes it, and the "
+      "result is the installed package", not bad and text == S1, str(bad))
+c_fail = []
+
+
+def render_cyclic_from(text, start):
+    for j in range(start, len(C.CYCLIC_PAIRS)):
+        b, a, c = C.CYCLIC_PAIRS[j]
+        if text.count(b) != c:
+            raise ValueError(f"acs1c pair {j}: expected {c} occurrence(s), found {text.count(b)}")
+        text = text.replace(b, a)
+    return text
+
+
+state = S1B
+for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
+    fewer = state.replace(before, "", 1) if count == 1 else None
+    more = state + "\n" + before
+    for label, variant in (("one occurrence removed", fewer), ("one occurrence added", more)):
+        if variant is None:
+            continue
+        try:
+            render_cyclic_from(variant, i)
+            c_fail.append((i, label))
+        except ValueError as exc:
+            if f"pair {i}:" not in str(exc):
+                c_fail.append((i, label, str(exc)[:60]))
+    state = state.replace(before, after)
+assert state == S1
+for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
+    fewer = S1.replace(after, "", 1) if count == 1 else None
+    more = S1 + "\n" + after
+    for label, variant in (("after removed", fewer), ("after added", more)):
+        if variant is None:
+            continue
+        try:
+            C.unrender_cyclic(variant)
+            c_fail.append((i, label))
+        except ValueError as exc:
+            if "pair" not in str(exc):
+                c_fail.append((i, label, str(exc)[:60]))
+for fn, t_, label in ((C.render_cyclic, S1B.replace("{% set asc = tt[0] >= 0 and", "{% set asc = tt[0] >= 0  and", 1), "a Stage 1 anchor altered"),
+                      (C.unrender_cyclic, S1.replace("{% set cyc = g.ok and g.s == 1440 %}", "{% set cyc = g.ok and g.s == 1440  %}", 1), "an installed line altered")):
+    try:
+        fn(t_)
+        c_fail.append((label,))
+    except ValueError as exc:
+        if "pair" not in str(exc):
+            c_fail.append((label, str(exc)[:60]))
+check("acs1c: a text with ANY pair's anchor removed, duplicated or altered (taken at the state right before that pair, or the installed text) is "
+      "refused with ValueError naming the pair, in both directions (no silent half-transformation, no half-reconstructed rollback file)",
+      not c_fail, str(c_fail[:5]))
+
+
+def outside_cyclic(installed):
+    """(identical, untouched): the installed package with every acs1c pair's `after` region replaced by a sentinel must EQUAL the Stage 1
+    text with every `before` region replaced by the same sentinel; `untouched` counts the Stage 1 lines no acs1c pair touches."""
+    a, b = installed, S1B
+    for bef, aft, c in reversed(C.CYCLIC_PAIRS):
+        if a.count(aft) != c or b.count(bef) != c:
+            return None
+        a, b = a.replace(aft, SENT), b.replace(bef, SENT)
+    return a == b, sum(1 for ln in b.split("\n") if SENT not in ln)
+
+
+OUTC = outside_cyclic(S1)
+check(f"EVERY part of the Stage 1 text that no acs1c pair touches is byte-identical in the installed package, in the same place and the same number "
+      f"of times: {OUTC[1] if OUTC else '?'} of its {len(S1B.splitlines())} lines are wholly outside the 21 pairs (only the gate's ordering lines, the "
+      "header's rule, the Review sentence and the per-slot map change)", OUTC is not None and OUTC[0] is True and OUTC[1] >= len(S1B.splitlines()) - 60, str(OUTC))
+bad = []
+for name, anchor, repl in OUT_MUTANTS + [("the 15-minute guard", "{% elif near %}", "{% elif false %}"), ("the clock-change-night guard", "{% elif cc %}", "{% elif false %}")]:
+    mut = S1.replace(anchor, repl, 1)
+    got = outside_cyclic(mut)
+    if mut == S1 or got is None or got[0] is not False:
+        bad.append((name, got))
+check("that check kills in-memory mutants that alter one line the acs1c layer does not touch (the press delay, the telemetry period bound, the gate-pass "
+      "counter condition, the final disarm, the 15-minute guard, the clock-change-night guard)", not bad, str(bad))
+check("the installed gate has the cyclic rule in all four copies and no trace of the linear one: `cyc`, `cyc2`, the neighbour window `uw > 0 and uw < arc` "
+      "and the unwrapped active-slot guard occur exactly 4 times each; `asc`, `lb`, `hb` and the linear `mid` form are gone",
+      S1.count("{% set cyc = g.ok and g.s == 1440 %}") == 4 and S1.count("{% set cyc2 = h.ok and h.s == 1440 %}") == 4
+      and S1.count("{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}") == 4 and S1.count("{% elif setting == 'start_time' and not cyc %}") == 4
+      and S1.count("{% elif setting == 'start_time' and not cyc2 %}") == 4
+      and S1.count("{% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}") == 4
+      and S1.count("{% elif setting == 'start_time' and want < 0 %}") == 0 and S1B.count("{% elif setting == 'start_time' and want < 0 %}") == 4
+      and S1.count("and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}") == 4 and S1.count("{% set pv = tt[(n + 4) % 6] if e else -1 %}") == 4
+      and "{% set asc" not in S1 and "lb < wmin" not in S1 and "{% set lb" not in S1 and "{% set hb" not in S1 and "(wmin - bo) | abs" not in S1
+      and "strictly ascending" not in S1 and S1B.count("{% set asc") == 4)
+REFUSALS, _blocks = set(), 0
+for marker in ("refusal: >-", "refusal2: >-", "refusal3: >-"):
+    pos = 0
+    while True:
+        i_ = S1.find(marker, pos)
+        if i_ < 0:
+            break
+        j_ = S1.index("{% endif %}", i_)
+        _blocks += 1
+        for ln in S1[i_:j_].split("\n"):
+            ln = ln.strip()
+            if (ln.startswith("{% elif") or ln.startswith("{% if")) and "%}" in ln and ln.split("%}", 1)[1].strip():
+                REFUSALS.add(ln.split("%}", 1)[1].strip())
+        pos = j_
+REFUSALS = sorted(REFUSALS)
+check(f"every literal refusal text of the gate's four copies ({len(REFUSALS)} distinct, {_blocks} blocks) fits the 255-character input_text with its "
+      "'REVIEW REFUSED - ' and '; nothing written' frame (at most 221 characters before template substitution); the three acs1c texts are among them",
+      _blocks == 4 and len(REFUSALS) >= 30 and all(len(re.sub(r"{{.*?}}", "", t)) <= 221 for t in REFUSALS)
+      and {C.REFUSE_CYC, C.REFUSE_ORDER, C.REFUSE_CYC2} <= set(REFUSALS) and max(len(C.REFUSE_CYC), len(C.REFUSE_ORDER), len(C.REFUSE_CYC2)) <= 221,
+      str([(len(re.sub(r"{{.*?}}", "", t)), t[:40]) for t in REFUSALS if len(re.sub(r"{{.*?}}", "", t)) > 221]))
+check("the acs1c transform's model constants are the firmware's TOU facts: 5-minute grid, 1440-minute day, slots of at least one grid step; its pins name "
+      "the package path and the gate copies acs1 renders (12 spaces twice, 16 once, 24 once)",
+      C.GRID_MINUTES == 5 and C.DAY_MINUTES == 1440 and C.MIN_SLOT_MINUTES == 5 and C.PACKAGE_REL == X.ACS0_REL and C.GATE_COPIES == ((12, 2), (16, 1), (24, 1)))
 
 # ======================================================================================================================
 print("\n[1] static scope of the installed package")
@@ -1100,7 +1246,7 @@ cases = [
     (3, "0930", False), (3, "", False), (3, "ab:cd", False), (3, "09-30", False), (3, "-9:30", False), (3, "09:30", True),
     (3, "09:30:00", True), (3, "05:05", True), (3, "15:55", False), (3, "05:00", False), (3, "16:00", False), (3, "04:55", False),
     (3, "16:05", False), (3, "09:00", False), (3, "04:00", False), (3, "17:00", False),
-    (1, "00:05", True), (1, "04:55", True), (1, "05:00", False), (1, "23:55", False), (1, "00:00", False), (1, "00:01", False),
+    (1, "00:05", True), (1, "04:55", True), (1, "05:00", False), (1, "23:55", True), (1, "00:00", False), (1, "00:01", False),   # acs1c: slot 1 may start before midnight, after slot 6's 23:00
     (6, "23:55", True), (6, "19:05", True), (6, "19:00", False), (6, "18:55", False), (6, "00:00", False), (6, "23:00", False),
     (2, "00:00", False), (2, "00:05", True), (2, "08:55", True), (2, "09:00", False),
     (5, "16:00", False), (5, "16:05", True), (5, "22:55", True), (5, "23:00", False),
@@ -1110,8 +1256,8 @@ for slot, v, ok in cases:
     if (accepts(r) if ok else rejects(r)) is not True:
         bad.append((slot, v, ok, r.res()[:80]))
 check(f"start time ({len(cases)} cases): off the 5-minute grid, 24:00, 23:60, seconds, malformed, equal to a neighbour, crossing a neighbour "
-      "and no change refused; strictly between the neighbours accepted - slot 1 (slot 6's end) and slot 6 (slot 1's start) included",
-      not bad, str(bad[:4]))
+      "and no change refused; strictly between the neighbours accepted - slot 1 (slot 6's end) and slot 6 (slot 1's start) included, and (acs1c) "
+      "slot 1 may move to 23:55, after slot 6's 23:00 and before slot 2's 05:00 round the clock", not bad, str(bad[:4]))
 r = Run().review(3, "start_time", "09:32")
 check("an off-grid start time is refused with the 5-minute grid named", "5-minute grid" in r.res(), r.res())
 r = Run().review(3, "start_time", "05:00")
@@ -1130,10 +1276,10 @@ for label, lay in LAYOUTS.items():
             r = Run(setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone5_time", "unavailable")).review(slot, "start_time", v)
         else:
             r = Run(layout=lay).review(slot, "start_time", v)
-        if not (rejects(r) and ("strictly ascending" in r.res() or "unavailable" in r.res())):
+        if not (rejects(r) and ("24-hour cycle" in r.res() or "unavailable" in r.res())):
             bad.append((label, slot, r.res()[:80]))
-check("an already non-ascending (or unreadable) live layout refuses every start-time edit: 'unexpected TOU layout', nothing written",
-      not bad, str(bad[:3]))
+check("a live layout that is not one 24-hour cycle in slot order (a slot before the one before it, two equal starts, slot 6 before slot 5 with slot 1 at 00:00, "
+      "descending) or has an unreadable start refuses every start-time edit: 'unexpected TOU layout', nothing written", not bad, str(bad[:3]))
 r = Run(layout=starts(0, 500, 400, 1600, 1900, 2300)).review(3, "power", 3000)
 check("...but a power edit does not care about the start layout", accepts(r), r.res())
 # the 15-minute guard around the old and the new boundary (circular, mod 24 h), and the "active slot right now" guard (the local time lies between
@@ -1214,7 +1360,7 @@ for label_n in range(1, 7):
     for mal in MALFORMED:
         r = Run(setup=lambda x, k=label_n, m_=mal: x.w.set(f"sensor.{D}ecco_timezone{k}_time", m_)).review(3, "start_time", "09:30")
         # (the slot's OWN value "9:30" etc. reads as 09:30 = no change: still a refusal, by the no-change rule)
-        if not (rejects(r) and ("strictly ascending" in r.res() or "unavailable" in r.res() or "no change" in r.res())):
+        if not (rejects(r) and ("24-hour cycle" in r.res() or "unavailable" in r.res() or "no change" in r.res())):
             bad.append((label_n, mal, r.res()[:70]))
     r = Run(setup=lambda x, k=label_n: x.w.set(f"sensor.{D}ecco_timezone{k}_time", "?2475")).review(3, "power", 3000)
     if not accepts(r):
@@ -1223,8 +1369,431 @@ check(f"a malformed live start (\"?2475\", a bare \"9:30\", 24:00, 09:60, padded
       f"next neighbour or a distant one - refuses a start-time edit (fail closed: 6 slots x {len(MALFORMED)} forms); a power edit is unaffected",
       not bad, str(bad[:4]))
 r = Run(setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone2_time", "?2475")).review(3, "start_time", "09:30")
-check("...the case that a naive parse would let through: \"?2475\" as slot 2's start (read as 15 minutes, 'ascending') is refused", rejects(r)
-      and "strictly ascending" in r.res(), r.res())
+check("...the case that a naive parse would let through: \"?2475\" as slot 2's start (read as 15 minutes, 'in order') is refused", rejects(r)
+      and "24-hour cycle" in r.res(), r.res())
+
+# ======================================================================================================================
+print("\n[4c] acs1c: the six starts as one 24-hour cycle in slot order (the owner's wrap layout and its kin)")
+# ======================================================================================================================
+sys.path.insert(0, str(ROOT / "registry"))
+import fallback_capture as FC  # noqa: E402  (the fallback capture's ring rule: the project's existing cyclic predicate for the six starts)
+import random  # noqa: E402
+
+OWNER_STARTS = (30, 530, 1200, 1635, 2200, 25)        # the owner's live layout by slot number (HHMM): slot 5 runs 22:00 -> 00:25, slot 6 00:25 -> 00:30
+OWNER_LAYOUT = starts(*OWNER_STARTS)
+NOON = S.parse_local("2026-10-26 12:00:00") - 70      # a Review at 12:00 local, slot 3's own boundary: fine for every slot but 3
+TWO_AM = S.parse_local("2026-10-26 02:00:00") - 70    # inside slot 1 (00:30 -> 05:30): fine for the slot 3 and 4 cases
+OWNER_ORDER_REFUSALS = ((6, "00:30"), (6, "00:35"), (1, "00:25"), (1, "00:20"), (5, "00:25"), (5, "16:35"), (2, "00:30"), (4, "22:00"))
+SEVEN_AM = S.parse_local("2026-10-26 07:00:00") - 70   # for the two-wrap layout cases: outside the window the (then meaningless) active-slot guard spans
+TWO_PM = S.parse_local("2026-10-26 14:00:00") - 70     # for the off-grid slot 3 cases: clear of 12:02 and 09:30
+
+
+def owner_full(d):
+    """The owner's full 25 Oct baseline: the six starts, 8000 W everywhere, slot 1 100 % / Grid, slots 2-6 0 % / None, mode General."""
+    for i, x in enumerate(OWNER_STARTS, 1):
+        d.regs["slots"][i].update(start=x, power=8000, soc=100 if i == 1 else 0, src="Grid" if i == 1 else "None", mode="General")
+
+
+def c_mins(hhmm_):
+    return (hhmm_ // 100) * 60 + hhmm_ % 100
+
+
+def c_hhmm(m):
+    return (m // 60) * 100 + m % 60
+
+
+def c_txt(m):
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def c_cls(r):
+    """The outcome class of a Review: the first refusal the gate named, or 'accept'."""
+    s = r.res()
+    if s.startswith("REVIEWED"):
+        return "accept"
+    for k, t in (("cycle2", "would not leave one valid 24-hour cycle"), ("cycle", "24-hour cycle"), ("order", "strictly after the previous slot"),
+                 ("near", "within 15 minutes"), ("mid", "between the old and the new boundary"), ("nochange", "no change"), ("unavailable", "unavailable")):
+        if t in s:
+            return k
+    return "other:" + s[:60]
+
+
+OWNER_MIN = [c_mins(x) for x in OWNER_STARTS]
+check("the owner's layout is one 24-hour cycle in slot order: gaps 300, 390, 275, 325, 145 and 5 minutes (slot 5 past midnight, slot 6 five minutes), "
+      "every start on the grid, and the fallback capture's ring rule agrees", C.is_cycle(OWNER_MIN) and C.gaps(OWNER_MIN) == [300, 390, 275, 325, 145, 5]
+      and FC.ring_valid([0] * 22 + list(OWNER_STARTS)) and all(FC.on_5min_grid(x) for x in OWNER_STARTS))
+r = Run(S1B, layout=OWNER_LAYOUT, t0=NOON).review(1, "start_time", "00:35")
+r2 = Run(S1B, layout=OWNER_LAYOUT, t0=NOON).review(2, "start_time", "05:35")
+check("L1 reproduced on the Stage 1 text of 2026-10-25 (the package installed that day): a start-time Review of the owner's layout was refused as "
+      "'not strictly ascending (unexpected TOU layout)', nothing written - the limitation the acs1c layer removes",
+      rejects(r) and rejects(r2) and "strictly ascending" in r.res() and "strictly ascending" in r2.res(), f"{r.res()[:80]} | {r2.res()[:80]}")
+# --- the owner's baseline, slot by slot: every neighbour relation, including slot 1 <-> 6 and 5 <-> 6
+OWNER_CASES = (
+    # slot 1 (00:30; previous slot 6 at 00:25, next slot 2 at 05:30)
+    (1, "00:35", "accept"), (1, "05:25", "accept"), (1, "00:25", "order"), (1, "00:20", "order"), (1, "05:30", "order"), (1, "05:35", "order"),
+    (1, "23:55", "order"), (1, "00:30", "nochange"),
+    # slot 2 (05:30; between 00:30 and 12:00)
+    (2, "05:35", "accept"), (2, "00:35", "accept"), (2, "11:00", "accept"), (2, "11:55", "near"), (2, "00:30", "order"), (2, "12:00", "order"),
+    (2, "05:30", "nochange"),
+    # slot 3 (12:00; between 05:30 and 16:35)
+    (3, "12:05", "accept"), (3, "05:35", "accept"), (3, "16:30", "accept"), (3, "05:30", "order"), (3, "16:35", "order"), (3, "00:30", "order"),
+    # slot 4 (16:35; between 12:00 and 22:00)
+    (4, "16:40", "accept"), (4, "21:55", "accept"), (4, "12:05", "accept"), (4, "22:00", "order"), (4, "12:00", "order"),
+    # slot 5 (22:00; between 16:35 and slot 6's 00:25 the next day: the slot that runs past midnight)
+    (5, "21:55", "accept"), (5, "23:55", "accept"), (5, "00:00", "accept"), (5, "00:05", "accept"), (5, "00:20", "accept"), (5, "16:40", "accept"),
+    (5, "00:25", "order"), (5, "00:30", "order"), (5, "16:35", "order"), (5, "16:30", "order"), (5, "22:00", "nochange"),
+    # slot 6 (00:25; between 22:00 the day before and slot 1's 00:30: the five-minute slot)
+    (6, "00:20", "accept"), (6, "00:00", "accept"), (6, "23:55", "accept"), (6, "22:05", "accept"), (6, "00:30", "order"), (6, "00:35", "order"),
+    (6, "22:00", "order"), (6, "21:55", "order"), (6, "00:25", "nochange"),
+)
+c_bad = []
+for slot, v, exp in OWNER_CASES:
+    t0_ = TWO_AM if slot in (3, 4) else NOON
+    r = Run(layout=OWNER_LAYOUT, t0=t0_).review(slot, "start_time", v)
+    now_min = 120 if slot in (3, 4) else 720
+    model = C.verdict(OWNER_MIN, slot, c_mins(hhmm_of(v)), now_min)
+    if c_cls(r) != exp or model != exp or (exp == "accept") != accepts(r) or (exp != "accept" and not rejects(r)) or len(r.res()) >= 255:
+        c_bad.append((slot, v, exp, c_cls(r), model, r.res()[:70]))
+check(f"the owner's baseline, every slot ({len(OWNER_CASES)} named cases): a new start strictly between the previous and the next slot's start, counted round "
+      "the clock, is accepted (slot 1 after slot 6's 00:25, slot 6 before slot 1's 00:30, slot 5 across midnight up to 00:20); equal to or beyond a "
+      "neighbour is refused with the neighbour rule named; no change refused; the reference model agrees; every result text fits the input_text",
+      not c_bad, str(c_bad[:4]))
+r = Run(layout=OWNER_LAYOUT, t0=NOON).review(5, "start_time", "23:55")
+r2 = Run(layout=OWNER_LAYOUT, t0=NOON).review(1, "start_time", "00:35")
+check("the Review notification names the two windows that result: slot 5 23:55-00:25 and slot 4 16:35-23:55; slot 1 00:35-05:30 and slot 6 00:25-00:35 - "
+      "and says that register 254 / 250 is also the previous slot's end",
+      "Slot 5 will then run 23:55-00:25 and slot 4 16:35-23:55" in r.note("ecco_cfg_edit_review") and "also the end of slot 4" in r.note("ecco_cfg_edit_review")
+      and "Slot 1 will then run 00:35-05:30 and slot 6 00:25-00:35" in r2.note("ecco_cfg_edit_review") and "also the end of slot 6" in r2.note("ecco_cfg_edit_review"),
+      r.note("ecco_cfg_edit_review")[:300])
+c_bad = []
+for n_ in range(1, 7):
+    pv_ = 6 if n_ == 1 else n_ - 1
+    want_prev = f"sensor.{D}ecco_timezone{pv_}_time"
+    maps = re.findall(r"\n\s+%d: \{'reg_soc'.*?\}" % n_, S1, flags=re.S)
+    if not (len(maps) == 2 and all(f"'live_t_prev': '{want_prev}'" in m_ for m_ in maps) and S1.count(f"'live_t_prev': '{want_prev}'") == 2):
+        c_bad.append((n_, "map", len(maps)))
+    new_ = (c_mins(OWNER_STARTS[n_ - 1]) + (-5 if n_ == 6 else 5)) % 1440      # slot 6 lasts five minutes: +5 would be slot 1's start
+    r = Run(layout=OWNER_LAYOUT, t0=TWO_AM if n_ in (3, 4) else NOON).review(n_, "start_time", c_txt(new_))
+    nxt, prv = OWNER_STARTS[n_ % 6], OWNER_STARTS[pv_ - 1]
+    want_text = f"Slot {n_} will then run {c_txt(new_)}-{nxt // 100:02d}:{nxt % 100:02d} and slot {pv_} {prv // 100:02d}:{prv % 100:02d}-{c_txt(new_)}"
+    if not (accepts(r) and want_text in r.note("ecco_cfg_edit_review") and f"also the end of slot {pv_}" in r.note("ecco_cfg_edit_review")):
+        c_bad.append((n_, c_txt(new_), r.res()[:40], r.note("ecco_cfg_edit_review")[:120]))
+check("every slot's map entry (Review and Apply copies) names the previous slot's live start sensor (slot 6's for slot 1), and a 5-minute Review of every "
+      "slot (later; earlier for the five-minute slot 6) names its two resulting windows with the previous slot's live start", not c_bad, str(c_bad[:3]))
+# --- the same schedule under every slot numbering (rotation): the verdicts do not depend on where the wrap sits
+c_bad = []
+ROT_CASES = ((5, "00:05", "accept"), (6, "00:20", "accept"), (1, "00:35", "accept"), (6, "00:30", "order"), (1, "00:25", "order"), (5, "00:25", "order"))
+for rot in range(6):
+    lay = OWNER_STARTS[rot:] + OWNER_STARTS[:rot]          # slot 1 is now the owner's slot rot+1
+    lay_min = [c_mins(x) for x in lay]
+    for slot, v, exp in ROT_CASES:
+        s_ = (slot - 1 - rot) % 6 + 1                       # the owner's slot `slot` under this numbering
+        r = Run(layout=starts(*lay), t0=NOON).review(s_, "start_time", v)
+        if c_cls(r) != exp or C.verdict(lay_min, s_, c_mins(hhmm_of(v)), 720) != exp:
+            c_bad.append((rot, s_, v, exp, c_cls(r)))
+check(f"slot rotation: the owner's schedule under all six slot numberings (the wrap between slots 5/6, 4/5, ... 6/1) gives the same verdicts for the same "
+      f"physical edits ({6 * len(ROT_CASES)} cases): accepted across the wrap, refused at a neighbour", not c_bad, str(c_bad[:4]))
+# --- layouts that are not one cycle: refused with the cycle rule named, for every slot; every other setting is unaffected
+BAD_LAYOUTS = {
+    "two wraps (slot 6 at 13:00: the slots go round the clock twice)": (30, 530, 1200, 1635, 2200, 1300),
+    "two equal starts (slots 2 and 3)": (30, 530, 530, 1635, 2200, 25),
+    "an off-grid start in a distant slot (slot 3 at 12:02)": (30, 530, 1202, 1635, 2200, 25),
+    "an off-grid start in the edited slot (slot 2 at 05:32: its undo could never be typed)": (30, 532, 1200, 1635, 2200, 25),
+    "a slot shorter than 5 minutes (slot 6 at 00:27)": (30, 530, 1200, 1635, 2200, 27),
+    "descending": (2300, 1900, 1600, 900, 500, 0),
+    "all six equal": (30, 30, 30, 30, 30, 30),
+    "a slot at 24:00 (the firmware would publish ?2400)": (30, 530, 1200, 1635, 2200, 2400),
+}
+c_bad = []
+for label, lay in BAD_LAYOUTS.items():
+    lay_min = [c_mins(x) if (x // 100 <= 23 and x % 100 <= 59) else -1 for x in lay]
+    for slot in range(1, 7):
+        v = "05:35" if slot == 2 else c_txt((((lay_min[slot - 1] + 5) // 5) * 5) % 1440 if lay_min[slot - 1] >= 0 else 0)
+        r = Run(layout=starts(*lay), t0=NOON).review(slot, "start_time", v)
+        model = C.verdict(lay_min, slot, c_mins(hhmm_of(v)), 720)
+        agree = c_cls(r) == model or (model == "unavailable" and c_cls(r) == "cycle")   # "24:00": numeric for the template, unreadable for the model
+        if not (rejects(r) and c_cls(r) in ("cycle", "unavailable", "nochange", "near") and agree):
+            c_bad.append((label, slot, v, c_cls(r), model, r.res()[:60]))
+    for setting in ("target_soc", "power", "charge_source"):
+        r = Run(layout=starts(*lay), t0=NOON).review(3, setting, value_for(3, setting))
+        if not accepts(r):
+            c_bad.append((label, setting, r.res()[:60]))
+check(f"a live layout that is not one 24-hour cycle ({len(BAD_LAYOUTS)} kinds: two wraps, equal starts, an off-grid start in a distant or in the edited slot, "
+      "a slot under 5 minutes, descending, all equal, a 24:00 word) refuses a start-time edit of EVERY slot with the cycle rule named (fail closed; the "
+      "reference model agrees), and a target SOC, power or charge-source edit on the same layout is unaffected", not c_bad, str(c_bad[:4]))
+# --- the active-slot-now guard on a window that crosses midnight: slot 5 22:00 -> 00:05 changes the owner of [22:00, 00:05)
+c_bad = []
+MID_WRAP = (("12:00:00", "accept"), ("21:44:00", "accept"), ("21:45:00", "near"), ("22:15:00", "near"), ("22:16:00", "mid"), ("23:00:00", "mid"),
+            ("23:49:00", "mid"), ("23:50:00", "near"), ("00:05:00", "near"), ("00:20:00", "near"), ("00:21:00", "accept"), ("03:00:00", "accept"))
+for hm, exp in MID_WRAP:
+    r = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(5, "start_time", "00:05")
+    now_min = int(hm[:2]) * 60 + int(hm[3:5])
+    if c_cls(r) != exp or C.verdict(OWNER_MIN, 5, 5, now_min) != exp:
+        c_bad.append((hm, exp, c_cls(r)))
+# and the move back across midnight: slot 5 00:05 -> 22:00 on the moved layout changes the owner of the same window
+MOVED = starts(30, 530, 1200, 1635, 5, 25)
+for hm, exp in (("12:00:00", "accept"), ("23:00:00", "mid"), ("00:21:00", "accept"), ("21:50:00", "near")):
+    r = at("2026-10-26 " + hm, layout=MOVED).review(5, "start_time", "22:00")
+    if c_cls(r) != exp:
+        c_bad.append(("back", hm, exp, c_cls(r)))
+check(f"the active-slot-now guard across midnight ({len(MID_WRAP) + 4} cases): moving slot 5's start from 22:00 to 00:05 (and back) is refused between "
+      "22:16 and 23:49 local ('between the old and the new boundary': the owner of that window changes), refused within 15 minutes of either boundary, "
+      "and accepted at 12:00, 21:44, 00:21 and 03:00 - a linear comparison of the two HH:MM values would have refused the daytime cases", not c_bad, str(c_bad[:4]))
+c_bad = []
+MID_SIX = (("12:00:00", "accept"), ("22:44:00", "accept"), ("22:45:00", "near"), ("23:15:00", "near"), ("23:16:00", "mid"), ("00:00:00", "mid"), ("00:09:00", "mid"),
+           ("00:10:00", "near"), ("00:25:00", "near"), ("00:40:00", "near"), ("00:41:00", "accept"), ("03:00:00", "accept"))
+for hm, exp in MID_SIX:
+    r = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(6, "start_time", "23:00")
+    now_min = int(hm[:2]) * 60 + int(hm[3:5])
+    if c_cls(r) != exp or C.verdict(OWNER_MIN, 6, 23 * 60, now_min) != exp:
+        c_bad.append((hm, exp, c_cls(r)))
+check(f"the five-minute slot 6 moved back across midnight (00:25 -> 23:00; {len(MID_SIX)} cases): refused between 23:16 and 00:09 local (the owner of that "
+      "window changes from slot 5 to slot 6), refused within 15 minutes of 23:00 or 00:25, accepted at 12:00, 22:44, 00:41 and 03:00", not c_bad, str(c_bad[:4]))
+# a review record that was not written by the Review (hand-edited input_text): the Apply's own copy of the gate re-checks the value's form
+c_bad = []
+for bad_want, why in ((2400, "24:00"), (2475, "24:75"), (1275, "12:75"), (1233, "off the grid"), (2360, "23:60"), (99999, "nonsense")):
+    r = Run(layout=OWNER_LAYOUT, t0=NOON).review(5, "start_time", "21:55")
+    rec = r.w.state(PLAN).split("|")
+    rec[2] = str(bad_want)
+    r.w.set(PLAN, "|".join(rec))
+    r.apply(phrase=f"SET SLOT 5 START {bad_want // 100:02d}:{bad_want % 100:02d} REVIEW {rec[3]}", run=120)
+    if not (r.res().startswith("REFUSED") and "5-minute grid" in r.res() and r.applies() == [] and r.loads() == [] and r.changed() == {} and not r.arm_on()):
+        c_bad.append((bad_want, why, r.res()[:70], r.loads()))
+check("a review record whose value is not a well-formed HH:MM on the grid (2400, 2475, 1275, 1233, 2360, 99999 written into the record by hand, with the "
+      "matching phrase): the Apply's own gate refuses it with the grid rule named before any Load, nothing pressed, nothing written (the cyclic window counts "
+      "modulo 24 h and would not have refused 2400 by itself; review finding, 2026-10-25)", not c_bad, str(c_bad[:3]))
+# --- the other start-time guards still hold on the wrap layout
+c_bad = []
+for label, kw in (("the inverter clock 400 s off", dict(setup=lambda x: x.w.set(M.CLOCK, S.local_str(x.w.t + 400)))),
+                  ("the inverter clock unreadable", dict(setup=lambda x: x.w.set(M.CLOCK, "unavailable"))),
+                  ("a fallback Save in progress", dict(setup=lambda x: x.w.set(FB_REVIEW, "st=SAVING;id=AB12"))),
+                  ("an RTC flag unavailable (fail closed)", dict(setup=lambda x: x.w.set(f"binary_sensor.{D}rtc_correction_in_progress", "unavailable"))),
+                  ("the UK clock change night", dict(t0=S.parse_local("2026-10-25 01:30:00") - 70))):
+    kw2 = dict(layout=OWNER_LAYOUT, t0=NOON)
+    kw2.update(kw)
+    r = Run(**kw2).review(2, "start_time", "05:35")
+    if not rejects(r):
+        c_bad.append((label, r.res()[:60]))
+check("on the wrap layout an otherwise valid start-time edit is still refused by the inverter-clock rule (off or unreadable), a fallback Save in progress, "
+      "an unavailable RTC flag and the clock-change night (the acs1c layer changed the ordering rule only)", not c_bad, str(c_bad))
+# --- seeded fuzz: the template against the reference model on random cycles (random wrap position), random edits and random local times
+rng = random.Random(20261025)
+
+
+def rand_cycle():
+    pts = sorted(rng.sample(range(0, 1440, 5), 6))
+    rot = rng.randrange(6)
+    return pts[rot:] + pts[:rot]
+
+
+FUZZ, fuzz_bad, fuzz_seen = [], [], Counter()
+while len(FUZZ) < 120:
+    lay = rand_cycle()
+    kind = rng.choice(["valid"] * 8 + ["dup", "twowrap", "offgrid", "unreadable"])
+    unread = None
+    if kind == "dup":
+        i, j = rng.sample(range(6), 2)
+        lay[i] = lay[j]
+    elif kind == "twowrap":
+        i, j = sorted(rng.sample(range(6), 2))
+        lay[i], lay[j] = lay[j], lay[i]
+    elif kind == "offgrid":
+        lay[rng.randrange(6)] += rng.choice((1, 2, 3, 4))
+    elif kind == "unreadable":
+        unread = rng.randrange(6)
+    n = rng.randrange(1, 7)
+    pv, nx = lay[(n + 4) % 6], lay[n % 6]
+    choice = rng.choice(["inside"] * 3 + ["neighbour", "beyond", "anywhere", "anywhere", "same"])
+    arc = (nx - pv) % 1440
+    if choice == "inside" and arc > 10:
+        new = (pv + rng.randrange(5, arc, 5)) % 1440
+    elif choice == "neighbour":
+        new = rng.choice((pv, nx))
+    elif choice == "beyond":
+        new = (nx + rng.randrange(5, 120, 5)) % 1440
+    elif choice == "same":
+        new = lay[n - 1]
+    else:
+        new = rng.randrange(0, 1440, 5)
+    dice = rng.random()
+    if dice < 0.3 and kind == "valid":                            # the local time inside the window the edit changes (the 'mid' cases)
+        lo_, hi_ = sorted(((lay[n - 1] - pv) % 1440, (new - pv) % 1440))
+        now_min = (pv + rng.randrange(lo_, hi_ + 1)) % 1440 if hi_ > lo_ else rng.randrange(0, 1440)
+    elif dice < 0.45 and kind == "valid":                         # within 15 minutes of the old or the new boundary (the 'near' cases)
+        now_min = (rng.choice((lay[n - 1], new)) + rng.randrange(-14, 15)) % 1440
+    else:
+        now_min = rng.randrange(0, 1440)
+    model_lay = [(-1 if unread == k else lay[k]) for k in range(6)]
+    if any(min((now_min - b) % 1440, (b - now_min) % 1440) == 15 for b in (lay[n - 1], new)):
+        continue                                                # exactly 15.0 minutes: both say near, but the clock has seconds
+    FUZZ.append((lay, unread, n, new, now_min, model_lay))
+for lay, unread, n, new, now_min, model_lay in FUZZ:
+    layout = starts(*[c_hhmm(v) for v in lay])
+    setup = (lambda x, k=unread: x.w.set(f"sensor.{D}ecco_timezone{k + 1}_time", "unavailable")) if unread is not None else None
+    r = at(f"2026-10-26 {c_txt(now_min)}:00", layout=layout, setup=setup).review(n, "start_time", c_txt(new))
+    exp = C.verdict(model_lay, n, new, now_min)
+    fuzz_seen[exp] += 1
+    if c_cls(r) != exp or (exp == "accept") != accepts(r) or (exp != "accept") != rejects(r):
+        fuzz_bad.append((lay, unread, n, c_txt(new), c_txt(now_min), exp, c_cls(r), r.res()[:60]))
+check(f"seeded fuzz ({len(FUZZ)} cases: random cycles with the wrap anywhere, random slot, a new start inside the window, at a neighbour, beyond it or anywhere, "
+      f"a random local time; plus duplicate, two-wrap, off-grid and unreadable layouts): the template's verdict is the reference model's in every case "
+      f"(classes seen: {dict(fuzz_seen)}); the wrap-aware window and the unwrapped active-slot guard are both reached", not fuzz_bad
+      and fuzz_seen["accept"] >= 10 and fuzz_seen["order"] >= 5 and fuzz_seen["cycle"] >= 5 and fuzz_seen["mid"] >= 3 and fuzz_seen["near"] >= 3
+      and fuzz_seen["nochange"] >= 1, str(fuzz_bad[:3]) + " " + str(dict(fuzz_seen)))
+# --- properties of the reference model (plain Python, many cases): the rules the template computes
+
+
+def active_slot(lay, now_min):
+    """The slot (1-6) that owns the minute `now_min` on the ring `lay`: the slot whose start is the latest at or before now, round the clock."""
+    return 1 + min(range(6), key=lambda k: (now_min - lay[k]) % 1440)
+
+
+PROP_N, prop_bad, unreachable = 20000, [], 0
+for _ in range(PROP_N):
+    lay = rand_cycle()
+    kind = rng.choice(["valid"] * 3 + ["dup", "twowrap", "offgrid"])
+    if kind == "dup":
+        i, j = rng.sample(range(6), 2)
+        lay[i] = lay[j]
+    elif kind == "twowrap":
+        i, j = sorted(rng.sample(range(6), 2))
+        lay[i], lay[j] = lay[j], lay[i]
+    elif kind == "offgrid":
+        lay[rng.randrange(6)] += rng.choice((1, 2, 3, 4))
+    words = [0] * 22 + [c_hhmm(v) for v in lay]
+    ring = FC.ring_valid(words) and all(FC.on_5min_grid(w) for w in words[22:28])
+    if C.is_cycle(lay) != ring:                                  # the editor's cycle rule == the fallback capture's ring rule + the grid
+        prop_bad.append(("ring", lay))
+    n = rng.randrange(1, 7)
+    new = rng.randrange(0, 1440, 5)
+    now_min = rng.randrange(0, 1440)
+    v = C.verdict(lay, n, new, now_min)
+    cyc = C.is_cycle(lay)
+    pv, nx = lay[(n + 4) % 6], lay[n % 6]
+    order = 0 < (new - pv) % 1440 < (nx - pv) % 1440
+    proposed = list(lay)
+    proposed[n - 1] = new
+    if cyc and new != lay[n - 1] and (order != C.is_cycle(proposed)):   # the neighbour rule == the proposed-layout rule (one slot changed)
+        prop_bad.append(("equivalence", lay, n, new))
+    if v == "cycle2":
+        unreachable += 1
+    if v in ("accept", "near", "mid"):
+        if not (C.is_cycle(proposed) and sum(C.gaps(proposed)) == 1440 and all(d >= 5 for d in C.gaps(proposed))
+                and [x for k, x in enumerate(proposed) if k != n - 1] == [x for k, x in enumerate(lay) if k != n - 1]
+                and C.gaps(proposed)[(n + 4) % 6] + C.gaps(proposed)[n - 1] == C.gaps(lay)[(n + 4) % 6] + C.gaps(lay)[n - 1]):
+            prop_bad.append(("partition", lay, n, new))
+        if v == "accept" and (min((now_min - lay[n - 1]) % 1440, (lay[n - 1] - now_min) % 1440) <= 15
+                              or min((now_min - new) % 1440, (new - now_min) % 1440) <= 15):
+            prop_bad.append(("near-missed", lay, n, new, now_min))
+    if cyc and new != lay[n - 1]:
+        if (v == "order") != (not FC.ring_valid([0] * 22 + [c_hhmm(x) for x in proposed])):   # 'order' iff the proposed layout breaks the ring rule
+            prop_bad.append(("order-oracle", lay, n, new))
+        if v in ("accept", "mid") and (v == "mid") != (active_slot(lay, now_min) != active_slot(proposed, now_min)):   # 'mid' iff the owner of now changes
+            prop_bad.append(("mid-oracle", lay, n, new, now_min))
+    rot = rng.randrange(6)
+    rl = lay[rot:] + lay[:rot]
+    if C.verdict(rl, (n - 1 - rot) % 6 + 1, new, now_min) != v:   # rotation invariance
+        prop_bad.append(("rotation", lay, n, new, rot))
+    if (v == "nochange") != (new == lay[n - 1]) and lay[n - 1] >= 0:
+        prop_bad.append(("nochange", lay, n, new))
+check(f"the reference model over {PROP_N} random cases: its cycle rule equals the fallback capture's ring rule plus the 5-minute grid; for a one-slot change the "
+      "neighbour rule and the proposed-layout rule are equivalent (so the proposed-layout branch is defence in depth: reached "
+      f"{unreachable} times); 'order' is refused exactly when the proposed layout breaks the ring rule and 'mid' exactly when the owner of the current "
+      "minute would change (two independent oracles); an accepted edit keeps the other five starts, the 1440-minute partition and the two gaps around "
+      "the moved boundary summing to the old window; nothing within 15 minutes of a boundary is accepted; verdicts are invariant under slot rotation",
+      not prop_bad and unreachable == 0, str(prop_bad[:3]))
+# --- defence in depth, shown on in-memory mutants (NOT kills: each rule alone still refuses every crossing case of the owner's baseline)
+S1_NO_ORDER = S1.replace("{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}", "{% elif false %}")
+S1_NO_CYC2 = S1.replace("{% elif setting == 'start_time' and not cyc2 %}", "{% elif false %}")
+assert S1_NO_ORDER != S1 and S1_NO_CYC2 != S1
+c_bad = []
+for label, text_, said in (("without the neighbour rule", S1_NO_ORDER, "would not leave one valid 24-hour cycle"),
+                           ("without the proposed-layout rule", S1_NO_CYC2, "strictly after the previous slot")):
+    for slot, v in OWNER_ORDER_REFUSALS:
+        r = Run(text_, layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", v)
+        if not (rejects(r) and said in r.res()):
+            c_bad.append((label, slot, v, r.res()[:50]))
+    for slot, v in ((1, "00:35"), (6, "00:20"), (5, "00:05")):
+        r = Run(text_, layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", v)
+        if not accepts(r):
+            c_bad.append((label, slot, v, r.res()[:50]))
+check("defence in depth: with the neighbour rule removed the proposed-layout rule alone still refuses every crossing case of the owner's baseline, with "
+      "its own text ('would not leave one valid 24-hour cycle'), and with the proposed-layout rule removed the neighbour rule alone still does, with its "
+      "text; the accepted edits stay accepted either way (the two rules are equivalent, checked above; [12] kills the mutant that drops both)",
+      not c_bad, str(c_bad[:3]))
+# --- forward and undo Applies on the owner's baseline: every slot, slot 5 across midnight; exactly one register, counter +1, F1 Load of slot N-1
+c_bad = []
+REVERSE = ((1, "00:35", NOON), (2, "05:25", NOON), (3, "12:05", TWO_AM), (4, "16:30", TWO_AM), (5, "00:05", NOON), (6, "00:20", NOON), (6, "23:55", NOON))
+
+
+def slot_writes(r, slot, start, end):
+    """The registers the firmware wrote for one Apply of `slot`, in order: 232, the start (249+N), the end (the next slot's start register; 250 for
+    slot 6), power, SOC, flags - the start at the request, the end at the next slot's unchanged start."""
+    soc, src = (100, "Grid") if slot == 1 else (0, "None")
+    return [(w[1], w[2]) for w in r.d.writes] == [(232, r.d.staged_gc), (249 + slot, start), (250 if slot == 6 else 250 + slot, end), (255 + slot, 8000),
+                                                   (267 + slot, soc), (273 + slot, 0)]
+
+
+for slot, v, t0_ in REVERSE:
+    pv = 6 if slot == 1 else slot - 1
+    old, new = OWNER_STARTS[slot - 1], hhmm_of(v)
+    r = Run(layout=owner_full, t0=t0_)
+    r.d._load(pv)                                        # slot N-1 was Loaded earlier: its staged end holds the old boundary (F1 refreshes it)
+    r.w.run_until(r.w.t + 1)
+    loads0 = len(r.loads())
+    r.edit(slot, "start_time", v, run=480)
+    fwd = (r.res().startswith("APPLIED AND VERIFIED") and r.changed() == {(slot, "start"): (old, new)} and len(r.applies()) == 1
+           and len(r.loads()) - loads0 == 2 and r.d.attempts == 1 and r.d.staging[pv]["end"] == new and not r.locked() and not r.arm_on()
+           and r.d.regs["slots"][slot % 6 + 1]["start"] == OWNER_STARTS[slot % 6] and "refreshed by the editor" in r.note()
+           and slot_writes(r, slot, new, OWNER_STARTS[slot % 6]))
+    moved = list(OWNER_STARTS)
+    moved[slot - 1] = new
+    r2 = Run(layout=lambda d, m=moved: (owner_full(d), [d.regs["slots"][i].update(start=x) for i, x in enumerate(m, 1)]), t0=t0_)
+    r2.edit(slot, "start_time", c_txt(c_mins(old)), run=480)
+    back = (r2.res().startswith("APPLIED AND VERIFIED") and r2.changed() == {(slot, "start"): (new, old)} and len(r2.applies()) == 1
+            and r2.d.attempts == 1 and [s["start"] for s in r2.d.regs["slots"].values()] == list(OWNER_STARTS)
+            and slot_writes(r2, slot, old, OWNER_STARTS[slot % 6]))
+    if not (fwd and back):
+        c_bad.append((slot, v, r.res()[:60], r.changed(), r2.res()[:60], r2.changed()))
+check("forward and undo on the owner's baseline, every slot (slot 5 22:00 -> 00:05 and slot 6 00:25 -> 23:55 across midnight, slot 6 the five-minute slot, "
+      "slot 1 after slot 6): each Apply is APPLIED AND VERIFIED with exactly that slot's start register changed, one Load, one press, the gate-pass counter "
+      "+1, the write log exactly 232, the start (249+N) at the request, the end register (the next slot's start; 250 for slot 6) at its unchanged value, "
+      "power, SOC, flags; slot N-1's staging refreshed (F1), and the undo restores the baseline exactly", not c_bad, str(c_bad[:2]))
+# --- the live-proven edits of 25 Oct (I3), repeated on the baseline: unchanged by acs1c
+c_bad = []
+for slot, setting, a, b in ((1, "target_soc", 99, 100), (5, "power", 7900, 8000), (5, "charge_source", "Grid", "None")):
+    r = Run(layout=owner_full, t0=NOON).edit(slot, setting, a)
+    key = key_of(setting)
+    if not (r.res().startswith("APPLIED AND VERIFIED") and r.changed() == {(slot, key): (b, a)} and len(r.applies()) == 1 and len(r.loads()) == 1
+            and r.d.attempts == 1 and not r.locked()):
+        c_bad.append((slot, setting, a, r.res()[:60], r.changed()))
+    r2 = Run(layout=lambda d, s_=slot, k_=key, v_=a: (owner_full(d), d.regs["slots"][s_].update({k_: v_})), t0=NOON).edit(slot, setting, b)
+    if not (r2.res().startswith("APPLIED AND VERIFIED") and r2.changed() == {(slot, key): (a, b)} and len(r2.applies()) == 1 and len(r2.loads()) == 1):
+        c_bad.append((slot, setting, b, r2.res()[:60], r2.changed()))
+check("the three edits live-proven on 25 Oct (slot 1 target SOC 100 -> 99 -> 100, slot 5 power 8000 -> 7900 -> 8000 W, slot 5 charge source None -> Grid -> "
+      "None) repeat on the wrap layout exactly as before: APPLIED AND VERIFIED, one Load, one press, one register, counter +1 - the acs1c layer touches "
+      "start-time edits only", not c_bad, str(c_bad[:2]))
+# --- a neighbour that moves between the Review and the Apply (someone else edited the inverter): the Apply re-gates on the fresh read
+r = Run(layout=owner_full, t0=NOON).review(1, "start_time", "00:35")
+r.d.regs["slots"][2]["start"] = 35                          # slot 2 moved to 00:35 on the inverter after the Review (still one cycle): slot 1's 00:35 would equal it
+r.apply(run=480)
+check("a neighbour moved on the inverter after the Review (slot 2 05:30 -> 00:35 while slot 1 00:30 -> 00:35 is pending; the live layout is still one "
+      "cycle): the Apply's fresh-read gate recomputes the window and refuses with the neighbour rule named, nothing pressed, nothing written, not locked",
+      r.res().startswith("FAILED") and "strictly after the previous slot" in r.res() and r.applies() == [] and r.changed() == {(2, "start"): (530, 35)}
+      and not r.locked() and not r.arm_on(), f"{r.res()[:90]} {r.changed()}")
+r = Run(layout=owner_full, t0=NOON).review(1, "start_time", "00:35")
+r.d.regs["slots"][6]["start"] = 40                          # slot 6 moved to 00:40, past slot 1's start: the live layout is no longer one cycle
+r.apply(run=480)
+check("a neighbour moved so that the live layout is no longer one cycle (slot 6 00:25 -> 00:40 past slot 1's 00:30 while slot 1 -> 00:35 is pending): the "
+      "Apply's fresh-read gate refuses with the cycle rule named (unexpected TOU layout), nothing pressed, nothing written, not locked",
+      r.res().startswith("FAILED") and "24-hour cycle" in r.res() and r.applies() == [] and r.changed() == {(6, "start"): (25, 40)}
+      and not r.locked() and not r.arm_on(), f"{r.res()[:90]} {r.changed()}")
+r = Run(layout=owner_full, t0=NOON).review(1, "start_time", "00:35")
+r.d.regs["slots"][2]["start"] = 520                          # slot 2 moved to 05:20: still a valid window for slot 1; the new end is written back as read
+r.apply(run=480)
+check("the next slot's start moved after the Review (slot 2 05:30 -> 05:20): the edit still applies, the fresh end (05:20) is Loaded and rewritten unchanged, "
+      "only slot 1's start changed", r.res().startswith("APPLIED AND VERIFIED") and r.changed() == {(1, "start"): (30, 35), (2, "start"): (530, 520)}
+      and r.d.regs["slots"][2]["start"] == 520 and len(r.applies()) == 1, f"{r.res()[:80]} {r.changed()}")
 
 # the raw flags are what the charge-source verdict (and every 'unchanged' proof) compares: unreadable flags stop the edit before the Load
 def flags_unavailable(r, n=3):
@@ -2551,6 +3120,15 @@ def rv(text, slot, setting, value, **kw):
     return Run(text, **kw).review(slot, setting, value)
 
 
+def tampered_apply(text, bad_want):
+    """A Review of slot 5 -> 21:55 on the owner's layout, its record's value replaced by hand, then the Apply with the matching phrase."""
+    r = Run(text, layout=OWNER_LAYOUT, t0=NOON).review(5, "start_time", "21:55")
+    rec = r.w.state(PLAN).split("|")
+    rec[2] = str(bad_want)
+    r.w.set(PLAN, "|".join(rec))
+    return r.apply(phrase=f"SET SLOT 5 START {bad_want // 100:02d}:{bad_want % 100:02d} REVIEW {rec[3]}", run=120)
+
+
 def poke_check(setting, field, **kw):
     def f(text):
         x = Run(text, setup=poke_after_load(field, **kw)).edit(3, setting, value_for(3, setting))
@@ -2721,9 +3299,19 @@ CHECKS = {
     **{f"happy_{s}": happy(s) for s in SETTINGS},
     "phrase": phrase_check,
     "floor": lambda t: all(rejects(rv(t, 3, "power", v)) for v in (499, 450, 100)) and accepts(rv(t, 3, "power", 500)),
-    "order": lambda t: all(rejects(rv(t, 3, "start_time", v)) for v in ("04:00", "05:00", "16:00", "17:00")),
+    "order": lambda t: (all(rejects(rv(t, 3, "start_time", v)) for v in ("04:00", "05:00", "16:00", "17:00"))
+                        and all(rejects(rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON)) for s, v in OWNER_ORDER_REFUSALS)),
     "grid5": lambda t: all(rejects(rv(t, 3, "start_time", v)) for v in ("09:32", "24:00", "23:60")),
-    "asc": lambda t: rejects(rv(t, 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300))),
+    "cyc": lambda t: (rejects(rv(t, 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300), t0=SEVEN_AM))
+                      and rejects(rv(t, 3, "start_time", "09:30", layout=starts(30, 530, 1202, 1635, 2200, 25), t0=TWO_PM))),
+    "one_wrap": lambda t: rejects(rv(t, 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300), t0=SEVEN_AM)),
+    "min_slot": lambda t: ("24-hour cycle" in rv(t, 2, "start_time", "05:35", layout=starts(30, 530, 530, 1635, 2200, 25), t0=NOON).res()
+                           and rejects(rv(t, 3, "start_time", "05:35", layout=starts(30, 530, 530, 1635, 2200, 25), t0=NOON))),
+    "want_record": lambda t: all(tampered_apply(t, w).res().startswith("REFUSED") and tampered_apply(t, w).loads() == [] for w in (2400, 1275)),
+    "grid_live": lambda t: rejects(rv(t, 2, "start_time", "05:35", layout=starts(30, 530, 1202, 1635, 2200, 25), t0=NOON)),
+    "wrap_edit": lambda t: all(accepts(rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON)) for s, v in ((1, "00:35"), (6, "00:20"), (5, "23:55"), (5, "00:05"))),
+    "mid_wrap": lambda t: (accepts(rv(t, 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=NOON))
+                           and rejects(rv(t, 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 23:00:00") - 70))),
     "gen": lambda t: all(rejects(rv(t, 3, "charge_source", v)) for v in ("Generator", "Grid + Generator", "grid")),
     "src_live": lambda t: rejects(rv(t, 3, "charge_source", "None", layout=slot_set(3, src="Generator"))),
     "near": lambda t: rejects(rv(t, 3, "start_time", "12:00", **{"t0": S.parse_local("2026-10-12 08:45:00") - 70})),
@@ -2800,9 +3388,24 @@ MUTANTS = [
         "and true")], "same_gc"),
     ("the edited field is not required to be at the request at the last check", [("== ((want | float(-2)) if setting == 'power' else", "== ((states(e.pw) | float(-2)) if setting == 'power' else")],
      "same_edited"),
-    ("the new start time is not checked against its neighbours (strictly ascending)", [("{% elif setting == 'start_time' and not (lb < wmin and wmin < hb) %}",
-                                                                                       "{% elif false %}")], "order"),
-    ("the live start layout is not required to be ascending", [("{% elif setting == 'start_time' and not asc %}", "{% elif false %}")], "asc"),
+    ("the new start time is not checked against its neighbours nor the proposed layout against the cycle rule (acs1c: both branches dropped)",
+     [("{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}", "{% elif false %}"), ("{% elif setting == 'start_time' and not cyc2 %}", "{% elif false %}")],
+     "order"),
+    ("the live start layout is not required to be one 24-hour cycle (acs1c)", [("{% elif setting == 'start_time' and not cyc %}", "{% elif false %}")], "cyc"),
+    ("acs1c: a live layout whose slots go round the clock twice passes (the gaps need only sum to a multiple of a day)",
+     [("{% set cyc = g.ok and g.s == 1440 %}", "{% set cyc = g.ok and g.s % 1440 == 0 %}")], "one_wrap"),
+    ("acs1c: a zero-length slot is allowed in the live layout", [("tt[k] % 5 == 0 and d >= 5 %}", "tt[k] % 5 == 0 and d >= 0 %}")], "min_slot"),
+    ("acs1c: the live starts need not be on the 5-minute grid", [("g.ok and tt[k] >= 0 and tt[k] % 5 == 0 and d >= 5", "g.ok and tt[k] >= 0 and d >= 5")], "grid_live"),
+    ("acs1c: slot 1's previous slot is not slot 6 (the linear sentinel again)", [("{% set pv = tt[(n + 4) % 6] if e else -1 %}", "{% set pv = (tt[n - 2] if n > 1 else -1) if e else -1 %}")],
+     "wrap_edit"),
+    ("acs1c: slot 6's next slot is not slot 1 (the linear sentinel again)", [("{% set nx = tt[n % 6] if e else -1 %}", "{% set nx = (tt[n] if n < 6 else -1) if e else -1 %}")],
+     "wrap_edit"),
+    ("acs1c: the Apply's gate re-checks only `want < 0` again (the Stage 1 form: a hand-edited record value such as 2400 reaches the cyclic window)",
+     [("{% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}", "{% elif setting == 'start_time' and want < 0 %}")],
+     "want_record"),
+    ("acs1c: the active-slot-now guard is evaluated on a line of HH:MM minutes again (the Stage 1 form, wrong across midnight)",
+     [("{% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}",
+       "{% set mid = setting == 'start_time' and bo >= 0 and wmin >= 0 and (((cm - (bo if wmin > bo else wmin)) % 1440) < ((wmin - bo) | abs)) %}")], "mid_wrap"),
     ("the Generator is allowed", [("(want | string) not in ['Grid', 'None']", "(want | string) not in ['Grid', 'None', 'Generator', 'Grid + Generator']")],
      "gen"),
     ("a live Generator source is allowed", [("cur not in ['None', 'Grid']", "cur not in ['None', 'Grid', 'Generator', 'Grid + Generator']")], "src_live"),
@@ -2997,15 +3600,18 @@ for name, pairs, key in MUTANTS:
     check(f"mutant '{name}' is KILLED by the failing check '{key}'", res.get(key) is False and "crash" not in res, str(res))
 
 # ======================================================================================================================
-print("\n[13] the post-export declaration (PEX entry acs1)")
+print("\n[13] the post-export declarations (PEX entries acs1 and acs1c)")
 # ======================================================================================================================
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 import _scope_chain as sc  # noqa: E402
 import _pex  # noqa: E402  (PEX: this suite pins acs1's declaration)
 import _acs0_scope as F0  # noqa: E402
 import _acs1_scope as F1  # noqa: E402
+import _acs1c_scope as F1C  # noqa: E402
 
 ACS1_FINGERPRINT = "e0bb9298dbcdb84041abd25633d3305d2338cba92a88fcefe826e6ad587bc318"
+ACU1_FINGERPRINT = "352c542819485963e3b30be6dbefca189c04b8b6fdc9491fa6edc901548405b7"
+ACS1C_FINGERPRINT = "9b4e5b349ef18de9c9ddf36bd61e98d85ac8da5443ce3240377cd370797aaffc"
 HD1_FINGERPRINT = "0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e"
 PKG_REL = X.ACS0_REL
 E1 = sc.CHAIN.entry("acs1")
@@ -3036,15 +3642,43 @@ man_txt = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
 check("the deployment manifest is unchanged by acs1 (no chain-pinned edit: its checkpoint is hd1's, and acs0's stanza names the same package path as "
       "source and destination)", _pex.checkpoint(sc.HA_MANIFEST, "acs1") == _pex.checkpoint(sc.HA_MANIFEST, "hd1")   # PEX: no manifest edit
       and man_txt.count("ecco_tou_target_soc_edit.yaml") == 2 and man_txt.count(PKG_REL) == 1 and f"source: {PKG_REL}\n    destination: /config/packages/ecco_tou_target_soc_edit.yaml\n" in man_txt)
-check("the scope module's pins are the suite's and the transform's: the Stage 0 package and the installed package hashes, the two renamed script ids "
+check("the scope module's pins are the suite's and the transform's: the Stage 0 package and the Stage 1 package hashes, the two renamed script ids "
       "and the four settings", F1.ACS0_PACKAGE_SHA256 == ACS0_SHA == X.ACS0_BASE_SHA256 and F1.STAGE1_PACKAGE_SHA256 == S1_SHA and F1.PAIRS_SHA256 == PAIRS_SHA
       and F1.SCRIPT_RENAMES == tuple((o, n) for o, n, _c in X.RENAMES) == ((REVIEW0, REVIEW), (APPLY0, APPLY)) and F1.SETTINGS == X.SETTINGS)
+# acs1c: the cyclic correction, appended after acu1 (its parent since the rebase onto main 07b37c14; acs1 before that): declares only the files it adds and its fingerprint; acs1's record is unchanged
+E2 = sc.CHAIN.entry("acs1c")
+check("acs1c is the twenty-third post-export entry, appended right after acu1 (its parent since the rebase onto main 07b37c14; acs1 before that) "
+      "and the last one", ids1.index("acs1c") == 22 and sc.CHAIN.prev_id("acs1c") == "acu1" and sc.CHAIN.prev_id("acu1") == "acs1"
+      and ids1[-1] == "acs1c", str(ids1[-3:]))
+check("acs1c declares NO reverter and NO checkpoint (chain-pinned or frozen), no reserved-token holder, no delta, op path, include, substitution, "
+      "firmware banned token or tag: like acs1, its exact record is the invertible acs1c transform proved in [0c]; acs1's own declaration and files "
+      "(scope module, transform, pins) are unchanged",
+      not E2.reverts and not E2.checkpoints and not E2.frozen_reverts and not E2.frozen_checkpoints and not E2.banned_files
+      and not E2.deltas and not E2.op_paths_changed and not E2.includes_added and not E2.subst_added and not E2.subst_changed
+      and not E2.subst_removed and not E2.banned_fw_added and not E2.fbh_includers and not E2.tags_declared and not E2.tags_promoted
+      and E1.added_files == F1.ADDED_FILES and E1.fingerprint == ACS1_FINGERPRINT and F1C.PACKAGE_REL == PKG_REL == C.PACKAGE_REL)
+check("acs1c declares the files it adds (the acs1c transform, its scope module and its design document), each exists, none is deny-listed, none is "
+      "an acs1 file, and its scope module spells no reserved token",
+      E2.added_files == F1C.ADDED_FILES and all((ROOT / f).is_file() for f in E2.added_files) and not (E2.added_files & _pex.DENY)
+      and not (E2.added_files & E1.added_files) and "registry/tests/_acs1c_scope.py" in E2.added_files
+      and "home-assistant/prototypes/acs-stage1/acs1c_transform.py" in E2.added_files and "docs/dev/acs1c-cyclic-tou.md" in E2.added_files
+      and not any(t in Path(F1C.__file__).read_text(encoding="utf-8") for t in RES_TOKENS))
+check("acs1c's fingerprint is the pinned value, the sha256 of its record, linked to acu1's (its parent; acu1's own link to acs1 is proven by "
+      "the PEX suite and the card suite)", E2.fingerprint == ACS1C_FINGERPRINT == F1C.FINGERPRINT == _pex.fingerprint(E2)   # PEX: acs1c's own fingerprint
+      and _pex.record(E2)["parent"] == ACU1_FINGERPRINT == sc.CHAIN.entry("acu1").fingerprint)   # PEX: hash link to acu1
+check("the deployment manifest is unchanged by acs1c (its checkpoint is its parent acu1's: same package path as source and destination)",
+      _pex.checkpoint(sc.HA_MANIFEST, "acs1c") == _pex.checkpoint(sc.HA_MANIFEST, "acu1"))   # PEX: no manifest edit by acs1c
+check("the acs1c scope module's pins are the suite's and the transforms': the Stage 1 text (the base and the rollback file), the installed package and "
+      "the 21 pairs; its base commit is public main at the acs1 merge",
+      F1C.STAGE1_PACKAGE_SHA256 == S1_SHA == X.STAGE1_SHA256 == C.STAGE1_BASE_SHA256 and F1C.STAGE1C_PACKAGE_SHA256 == S1C_SHA == C.STAGE1C_SHA256
+      and F1C.CYCLIC_PAIRS_SHA256 == CPAIRS_SHA == C.CYCLIC_PAIRS_SHA256 and F1C.BASE_COMMIT == "a7235433ce711e6a8fae5dab0fc8ca6c6f533de6"
+      and F1C.CYCLIC_PAIR_COUNT == len(C.CYCLIC_PAIRS) == 21)
 
 print("")
 dt = time.time() - T_START
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed in {dt:.0f}s")
     sys.exit(1)
-print(f"All {PASSES} Advanced Configuration Stage 1 checks passed in {dt:.0f}s.")
+print(f"All {PASSES} Advanced Configuration Stage 1 (with the acs1c cyclic correction) checks passed in {dt:.0f}s.")
 print("These prove the installed package's control flow against models of the firmware's manual TOU path and of Home Assistant offline; they prove "
       "nothing about a live Home Assistant, the dongle, the inverter, the Home Assistant time zone, or how a real interrupted write behaves.")

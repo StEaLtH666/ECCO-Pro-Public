@@ -4,13 +4,16 @@
 # the installed Stage 0 package (ecco_tou_target_soc_edit.yaml) by exact replacements. It is a drop-in SUPERSET of Stage 0 with the same
 # helpers, the same acknowledge script and the same watchdog automation, and it would REPLACE Stage 0 at integration: the two packages
 # can never be installed together (they declare the same helpers, the same acknowledge script and the same watchdog automation).
+# acs1c (2026-10-25): home-assistant/prototypes/acs-stage1/acs1c_transform.py then rewrites the start-time ordering rule of that text
+# as one 24-hour cycle in slot order (the same technique, its own pins): the installed text is render_cyclic(render_stage1(Stage 0)).
 #
 # Scope: exactly one value of one slot per request, and nothing else is staged. The settings:
 #   target_soc     TOU slot N target SOC (inverter register 267+N, %), bound max(inverter shutdown SOC, ECCO reserve)..100
 #   power          slot N power (register 255+N, W): a multiple of 100, 500..8000. The firmware accepts 0..8000; below 500 W the live
 #                  slot would leave the saved fallback profile's domain and every further edit, an undo included, would be refused
 #   start_time     slot N start (register 249+N, HH:MM on the 5-minute grid). It is ALSO slot N-1's end, and slot 1's start is slot 6's
-#                  end. The six starts (each in the firmware's HH:MM form) must be strictly ascending before and after; the edit is
+#                  end. The six starts (each in the firmware's HH:MM form) form one 24-hour cycle in slot order, slot 6 running into
+#                  slot 1 (exactly one wrap past midnight, every slot at least 5 minutes; acs1c) before and after; the edit is
 #                  refused within 15 minutes of the old or the new boundary, while the local time lies between the old and the new
 #                  boundary (it would change the active slot now), and when the inverter's own clock (Inverter Time) is more than 120 s
 #                  from Home Assistant's. Slot N-1's Manual Controls staging keeps the old end until it is Loaded again (see the notice)
@@ -122,7 +125,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone6_time'},
             2: {'reg_soc': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
@@ -134,7 +138,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone1_time'},
             3: {'reg_soc': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
@@ -146,7 +151,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone2_time'},
             4: {'reg_soc': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
@@ -158,7 +164,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone3_time'},
             5: {'reg_soc': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
@@ -170,7 +177,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone4_time'},
             6: {'reg_soc': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
@@ -182,7 +190,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm'}
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone5_time'}
             } %}
             {{ m.get(n, {}) }}
       - variables:
@@ -195,13 +204,20 @@ script:
                 states('sensor.ecco_clock_dongle_ecco_timezone4_time'), states('sensor.ecco_clock_dongle_ecco_timezone5_time'), states('sensor.ecco_clock_dongle_ecco_timezone6_time')] %}
             {% set tm = namespace(v=[]) %}{% for s in tz %}{% set ok = s | length == 5 and s[2] == ':' and s[:2].isdigit() and s[3:].isdigit() and (s[:2] | int(99)) <= 23 and (s[3:] | int(99)) <= 59 %}{% set tm.v = tm.v + [((s[:2] | int(99)) * 60 + (s[3:] | int(99))) if ok else -1] %}{% endfor %}
             {% set tt = tm.v %}
-            {% set asc = tt[0] >= 0 and tt[0] < tt[1] and tt[1] < tt[2] and tt[2] < tt[3] and tt[3] < tt[4] and tt[4] < tt[5] and tt[5] < 1440 %}
-            {% set lb = (tt[n - 2] if n > 1 else -1) if e else 0 %}
-            {% set hb = (tt[n] if n < 6 else 1440) if e else 0 %}
+            {% set g = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set d = (tt[(k + 1) % 6] - tt[k]) % 1440 %}{% set g.ok = g.ok and tt[k] >= 0 and tt[k] % 5 == 0 and d >= 5 %}{% set g.s = g.s + d %}{% endfor %}
+            {% set cyc = g.ok and g.s == 1440 %}
+            {% set pv = tt[(n + 4) % 6] if e else -1 %}
+            {% set nx = tt[n % 6] if e else -1 %}
+            {% set arc = ((nx - pv) % 1440) if (pv >= 0 and nx >= 0) else 0 %}
+            {% set uw = ((wmin - pv) % 1440) if (pv >= 0 and wmin >= 0) else -1 %}
             {% set cm = now().hour * 60 + now().minute + now().second / 60 %}
             {% set bo = ((cur // 100) * 60 + cur % 100) if (setting == 'start_time' and cur >= 0) else -9999 %}
             {% set near = setting == 'start_time' and bo >= 0 and (([(cm - bo) % 1440, (bo - cm) % 1440] | min) <= 15 or ([(cm - wmin) % 1440, (wmin - cm) % 1440] | min) <= 15) %}
-            {% set mid = setting == 'start_time' and bo >= 0 and wmin >= 0 and (((cm - (bo if wmin > bo else wmin)) % 1440) < ((wmin - bo) | abs)) %}
+            {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
+            {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
+            {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
+            {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
             {% set cc = now().month in [3, 10] and now().weekday() == 6 and now().day >= 25 and now().hour < 3 %}
             {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
@@ -217,14 +233,15 @@ script:
             {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
             {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
             {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
-            {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
+            {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
             {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-            {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
-            {% elif setting == 'start_time' and not (lb < wmin and wmin < hb) %}the new start time must stay strictly after the previous slot's start and strictly before the next one
+            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
+            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+            {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -299,7 +316,7 @@ script:
                 Change: register {{ reg }} (slot {{ n }} {{ label }}) {{ bdisp }} -> {{ wdisp }}.
                 {% if setting == 'target_soc' %}Allowed range {{ lo }}-100 % (inverter shutdown SOC and ECCO reserve, re-read before applying). The fallback profile will then differ (DRIFT) until you Review and Save it.
                 {% elif setting == 'power' %}Slot power is the per-slot battery charge/discharge power ceiling, 500-8000 W in steps of 100 W; its meaning depends on register 244 (load/export mode), and Dump to Grid and Free Power temporarily own it. The fallback profile will then differ (DRIFT) until you Review and Save it.
-                {% elif setting == 'start_time' %}Register {{ reg }} is also the end of slot {{ 6 if n == 1 else n - 1 }}, which now ends at {{ wdisp }} too (slot 1's start is slot 6's end). The six start times must stay strictly ascending. The fallback profile will show CONTEXT (slot times are context) until you Review and Save it. Slot {{ 6 if n == 1 else n - 1 }}'s Manual Controls staging keeps the old end until you Load it again.
+                {% elif setting == 'start_time' %}Register {{ reg }} is also the end of slot {{ 6 if n == 1 else n - 1 }}, which now ends at {{ wdisp }} too (slot 1's start is slot 6's end). Slot {{ n }} will then run {{ wdisp }}-{{ states(e.live_t_next) }} and slot {{ 6 if n == 1 else n - 1 }} {{ states(e.live_t_prev) }}-{{ wdisp }} (the six starts stay one 24-hour cycle in slot order; slot 6 runs into slot 1). The fallback profile will show CONTEXT (slot times are context) until you Review and Save it. Slot {{ 6 if n == 1 else n - 1 }}'s Manual Controls staging keeps the old end until you Load it again.
                 {% else %}Only None and Grid can be set (no generator is evidenced); the mode bits and the reserved bits are kept. The fallback profile will then differ (DRIFT) until you Review and Save it.
                 {% endif %}
                 Unchanged and rewritten with their current values: {% if setting != 'start_time' %}start {{ states(e.live_t) }}, {% endif %}end {{ states(e.live_t_next) }}, {% if setting != 'power' %}power {{ states(e.live_pw) }} W, {% endif %}{% if setting != 'target_soc' %}target SOC {{ states(e.live_soc) }} %, {% endif %}{% if setting != 'charge_source' %}charge source {{ states(e.live_src) }}, {% endif %}mode {{ states(e.live_mode) }},
@@ -355,7 +372,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone1_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_1_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_1_power_staged', 'h_soc': 'input_number.ecco_manual_slot_1_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone6_time'},
             2: {'reg_soc': 269, 'load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_2_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_2_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
@@ -367,7 +385,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone2_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_2_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_2_power_staged', 'h_soc': 'input_number.ecco_manual_slot_2_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_1_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_1_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone1_time'},
             3: {'reg_soc': 270, 'load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_3_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_3_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
@@ -379,7 +398,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone3_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_3_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_3_power_staged', 'h_soc': 'input_number.ecco_manual_slot_3_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_2_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_2_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone2_time'},
             4: {'reg_soc': 271, 'load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_4_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_4_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
@@ -391,7 +411,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone4_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_4_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_4_power_staged', 'h_soc': 'input_number.ecco_manual_slot_4_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_3_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_3_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone3_time'},
             5: {'reg_soc': 272, 'load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_5_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_5_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
@@ -403,7 +424,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone5_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_5_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_5_power_staged', 'h_soc': 'input_number.ecco_manual_slot_5_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm'},
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_4_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_4_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone4_time'},
             6: {'reg_soc': 273, 'load': 'button.ecco_clock_dongle_load_current_slot_6_to_manual_staging',
                 'apply': 'button.ecco_clock_dongle_apply_manual_slot_6_settings',
                 'st': 'number.ecco_clock_dongle_manual_slot_6_start_hhmm', 'en': 'number.ecco_clock_dongle_manual_slot_6_end_hhmm',
@@ -415,7 +437,8 @@ script:
                 'live_flags': 'sensor.ecco_clock_dongle_ecco_timezone6_raw_flags',
                 'h_start': 'input_datetime.ecco_manual_slot_6_start_time',
                 'h_pw': 'input_number.ecco_manual_slot_6_power_staged', 'h_soc': 'input_number.ecco_manual_slot_6_soc_staged',
-                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm'}
+                'p_load': 'button.ecco_clock_dongle_load_current_slot_5_to_manual_staging', 'p_en': 'number.ecco_clock_dongle_manual_slot_5_end_hhmm',
+                'live_t_prev': 'sensor.ecco_clock_dongle_ecco_timezone5_time'}
             } %}
             {{ m.get(n, {}) }}
       - variables:
@@ -428,13 +451,20 @@ script:
                 states('sensor.ecco_clock_dongle_ecco_timezone4_time'), states('sensor.ecco_clock_dongle_ecco_timezone5_time'), states('sensor.ecco_clock_dongle_ecco_timezone6_time')] %}
             {% set tm = namespace(v=[]) %}{% for s in tz %}{% set ok = s | length == 5 and s[2] == ':' and s[:2].isdigit() and s[3:].isdigit() and (s[:2] | int(99)) <= 23 and (s[3:] | int(99)) <= 59 %}{% set tm.v = tm.v + [((s[:2] | int(99)) * 60 + (s[3:] | int(99))) if ok else -1] %}{% endfor %}
             {% set tt = tm.v %}
-            {% set asc = tt[0] >= 0 and tt[0] < tt[1] and tt[1] < tt[2] and tt[2] < tt[3] and tt[3] < tt[4] and tt[4] < tt[5] and tt[5] < 1440 %}
-            {% set lb = (tt[n - 2] if n > 1 else -1) if e else 0 %}
-            {% set hb = (tt[n] if n < 6 else 1440) if e else 0 %}
+            {% set g = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set d = (tt[(k + 1) % 6] - tt[k]) % 1440 %}{% set g.ok = g.ok and tt[k] >= 0 and tt[k] % 5 == 0 and d >= 5 %}{% set g.s = g.s + d %}{% endfor %}
+            {% set cyc = g.ok and g.s == 1440 %}
+            {% set pv = tt[(n + 4) % 6] if e else -1 %}
+            {% set nx = tt[n % 6] if e else -1 %}
+            {% set arc = ((nx - pv) % 1440) if (pv >= 0 and nx >= 0) else 0 %}
+            {% set uw = ((wmin - pv) % 1440) if (pv >= 0 and wmin >= 0) else -1 %}
             {% set cm = now().hour * 60 + now().minute + now().second / 60 %}
             {% set bo = ((cur // 100) * 60 + cur % 100) if (setting == 'start_time' and cur >= 0) else -9999 %}
             {% set near = setting == 'start_time' and bo >= 0 and (([(cm - bo) % 1440, (bo - cm) % 1440] | min) <= 15 or ([(cm - wmin) % 1440, (wmin - cm) % 1440] | min) <= 15) %}
-            {% set mid = setting == 'start_time' and bo >= 0 and wmin >= 0 and (((cm - (bo if wmin > bo else wmin)) % 1440) < ((wmin - bo) | abs)) %}
+            {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
+            {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
+            {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
+            {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
             {% set cc = now().month in [3, 10] and now().weekday() == 6 and now().day >= 25 and now().hour < 3 %}
             {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
@@ -450,14 +480,15 @@ script:
             {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
             {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
             {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
-            {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
+            {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
             {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-            {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
-            {% elif setting == 'start_time' and not (lb < wmin and wmin < hb) %}the new start time must stay strictly after the previous slot's start and strictly before the next one
+            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
+            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+            {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -596,13 +627,20 @@ script:
                     states('sensor.ecco_clock_dongle_ecco_timezone4_time'), states('sensor.ecco_clock_dongle_ecco_timezone5_time'), states('sensor.ecco_clock_dongle_ecco_timezone6_time')] %}
                 {% set tm = namespace(v=[]) %}{% for s in tz %}{% set ok = s | length == 5 and s[2] == ':' and s[:2].isdigit() and s[3:].isdigit() and (s[:2] | int(99)) <= 23 and (s[3:] | int(99)) <= 59 %}{% set tm.v = tm.v + [((s[:2] | int(99)) * 60 + (s[3:] | int(99))) if ok else -1] %}{% endfor %}
                 {% set tt = tm.v %}
-                {% set asc = tt[0] >= 0 and tt[0] < tt[1] and tt[1] < tt[2] and tt[2] < tt[3] and tt[3] < tt[4] and tt[4] < tt[5] and tt[5] < 1440 %}
-                {% set lb = (tt[n - 2] if n > 1 else -1) if e else 0 %}
-                {% set hb = (tt[n] if n < 6 else 1440) if e else 0 %}
+                {% set g = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set d = (tt[(k + 1) % 6] - tt[k]) % 1440 %}{% set g.ok = g.ok and tt[k] >= 0 and tt[k] % 5 == 0 and d >= 5 %}{% set g.s = g.s + d %}{% endfor %}
+                {% set cyc = g.ok and g.s == 1440 %}
+                {% set pv = tt[(n + 4) % 6] if e else -1 %}
+                {% set nx = tt[n % 6] if e else -1 %}
+                {% set arc = ((nx - pv) % 1440) if (pv >= 0 and nx >= 0) else 0 %}
+                {% set uw = ((wmin - pv) % 1440) if (pv >= 0 and wmin >= 0) else -1 %}
                 {% set cm = now().hour * 60 + now().minute + now().second / 60 %}
                 {% set bo = ((cur // 100) * 60 + cur % 100) if (setting == 'start_time' and cur >= 0) else -9999 %}
                 {% set near = setting == 'start_time' and bo >= 0 and (([(cm - bo) % 1440, (bo - cm) % 1440] | min) <= 15 or ([(cm - wmin) % 1440, (wmin - cm) % 1440] | min) <= 15) %}
-                {% set mid = setting == 'start_time' and bo >= 0 and wmin >= 0 and (((cm - (bo if wmin > bo else wmin)) % 1440) < ((wmin - bo) | abs)) %}
+                {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
+                {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
+                {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
+                {% set cyc2 = h.ok and h.s == 1440 %}
                 {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
                 {% set cc = now().month in [3, 10] and now().weekday() == 6 and now().day >= 25 and now().hour < 3 %}
                 {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
@@ -618,14 +656,15 @@ script:
                 {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
                 {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
                 {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
-                {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
+                {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                 {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                 {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
                 {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                 {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                 {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-                {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
-                {% elif setting == 'start_time' and not (lb < wmin and wmin < hb) %}the new start time must stay strictly after the previous slot's start and strictly before the next one
+                {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
+                {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+                {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
                 {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                 {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                 {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -845,13 +884,20 @@ script:
                             states('sensor.ecco_clock_dongle_ecco_timezone4_time'), states('sensor.ecco_clock_dongle_ecco_timezone5_time'), states('sensor.ecco_clock_dongle_ecco_timezone6_time')] %}
                         {% set tm = namespace(v=[]) %}{% for s in tz %}{% set ok = s | length == 5 and s[2] == ':' and s[:2].isdigit() and s[3:].isdigit() and (s[:2] | int(99)) <= 23 and (s[3:] | int(99)) <= 59 %}{% set tm.v = tm.v + [((s[:2] | int(99)) * 60 + (s[3:] | int(99))) if ok else -1] %}{% endfor %}
                         {% set tt = tm.v %}
-                        {% set asc = tt[0] >= 0 and tt[0] < tt[1] and tt[1] < tt[2] and tt[2] < tt[3] and tt[3] < tt[4] and tt[4] < tt[5] and tt[5] < 1440 %}
-                        {% set lb = (tt[n - 2] if n > 1 else -1) if e else 0 %}
-                        {% set hb = (tt[n] if n < 6 else 1440) if e else 0 %}
+                        {% set g = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set d = (tt[(k + 1) % 6] - tt[k]) % 1440 %}{% set g.ok = g.ok and tt[k] >= 0 and tt[k] % 5 == 0 and d >= 5 %}{% set g.s = g.s + d %}{% endfor %}
+                        {% set cyc = g.ok and g.s == 1440 %}
+                        {% set pv = tt[(n + 4) % 6] if e else -1 %}
+                        {% set nx = tt[n % 6] if e else -1 %}
+                        {% set arc = ((nx - pv) % 1440) if (pv >= 0 and nx >= 0) else 0 %}
+                        {% set uw = ((wmin - pv) % 1440) if (pv >= 0 and wmin >= 0) else -1 %}
                         {% set cm = now().hour * 60 + now().minute + now().second / 60 %}
                         {% set bo = ((cur // 100) * 60 + cur % 100) if (setting == 'start_time' and cur >= 0) else -9999 %}
                         {% set near = setting == 'start_time' and bo >= 0 and (([(cm - bo) % 1440, (bo - cm) % 1440] | min) <= 15 or ([(cm - wmin) % 1440, (wmin - cm) % 1440] | min) <= 15) %}
-                        {% set mid = setting == 'start_time' and bo >= 0 and wmin >= 0 and (((cm - (bo if wmin > bo else wmin)) % 1440) < ((wmin - bo) | abs)) %}
+                        {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
+                        {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
+                        {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                        {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
+                        {% set cyc2 = h.ok and h.s == 1440 %}
                         {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
                         {% set cc = now().month in [3, 10] and now().weekday() == 6 and now().day >= 25 and now().hour < 3 %}
                         {% set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') %}
@@ -867,14 +913,15 @@ script:
                         {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
                         {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
                         {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
-                        {% elif setting == 'start_time' and want < 0 %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
+                        {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                         {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                         {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
                         {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                         {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                         {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-                        {% elif setting == 'start_time' and not asc %}the six live slot start times are not strictly ascending (unexpected TOU layout)
-                        {% elif setting == 'start_time' and not (lb < wmin and wmin < hb) %}the new start time must stay strictly after the previous slot's start and strictly before the next one
+                        {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
+                        {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+                        {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
                         {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                         {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                         {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
