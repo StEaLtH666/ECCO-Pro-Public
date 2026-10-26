@@ -1,5 +1,7 @@
 // Bundle determinism: building twice gives byte-identical output, and the
-// committed dist matches a fresh build of the committed sources.
+// committed dist matches a fresh build of the committed sources. The two
+// rebuild tests need esbuild (npm ci); where it is not installed (CI installs
+// no npm package) they are reported as skipped, never as passed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -7,17 +9,23 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
 
 const card = fileURLToPath(new URL("..", import.meta.url));
 // Hashes are taken over LF-normalised content: the repository checks files
 // out with CRLF on Windows (core.autocrlf), while esbuild always writes LF.
-// The canonical bundle hash is therefore the hash of the LF content, which
-// is also what git stores as the blob.
 const sha = (p: string) => createHash("sha256").update(readFileSync(p, "utf-8").replace(/\r\n/g, "\n")).digest("hex");
 
+type Build = (options: Record<string, unknown>) => Promise<unknown>;
+let esbuild: Build | null = null;
+try {
+  esbuild = ((await import("esbuild")) as { build: Build }).build;
+} catch {
+  esbuild = null;
+}
+const needsEsbuild = esbuild ? false : "esbuild is not installed (run `npm ci` in the card folder)";
+
 async function bundleTo(outfile: string): Promise<void> {
-  await build({
+  await esbuild!({
     entryPoints: [join(card, "src", "ecco-flow-3d-card.ts")],
     outfile,
     bundle: true,
@@ -31,7 +39,7 @@ async function bundleTo(outfile: string): Promise<void> {
   });
 }
 
-test("two builds of the same sources are byte-identical", async () => {
+test("two builds of the same sources are byte-identical", { skip: needsEsbuild }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ecco-flow-3d-build-"));
   try {
     const a = join(dir, "a.js");
@@ -44,7 +52,7 @@ test("two builds of the same sources are byte-identical", async () => {
   }
 });
 
-test("dist/ecco-flow-3d-card.js is the build of the current sources", async () => {
+test("dist/ecco-flow-3d-card.js is the build of the current sources", { skip: needsEsbuild }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ecco-flow-3d-dist-"));
   try {
     const fresh = join(dir, "fresh.js");
