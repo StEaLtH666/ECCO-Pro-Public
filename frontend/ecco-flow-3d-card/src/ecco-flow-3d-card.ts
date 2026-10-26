@@ -1368,6 +1368,38 @@ export class EccoFlow3dCard extends LitElement {
       stroke: #000;
       stroke-width: 1;
     }
+    .debug-paving {
+      fill: none;
+      stroke: #ffffff;
+      stroke-width: 2;
+      stroke-dasharray: 6 5;
+      opacity: 0.9;
+    }
+    .debug-paving-label {
+      font-size: calc(7px * var(--k, 1));
+      fill: #ffffff;
+      paint-order: stroke;
+      stroke: rgba(0, 0, 0, 0.8);
+      stroke-width: calc(1.6px * var(--k, 1));
+    }
+    .debug-waypoint {
+      fill: rgba(53, 224, 138, 0.9);
+      stroke: #000;
+      stroke-width: 1.5;
+    }
+    .debug-waypoint-label {
+      font-size: calc(7px * var(--k, 1));
+      font-weight: 700;
+      fill: #b7ffd9;
+      paint-order: stroke;
+      stroke: rgba(0, 0, 0, 0.85);
+      stroke-width: calc(1.6px * var(--k, 1));
+    }
+    .debug-buried {
+      stroke: #ff9f1a;
+      stroke-width: 4;
+      stroke-dasharray: 3 6;
+    }
     .debug-dot {
       fill: #ff3b6b;
     }
