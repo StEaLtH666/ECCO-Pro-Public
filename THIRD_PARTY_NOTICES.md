@@ -11,12 +11,12 @@ what is known about each licence. Only section 1 is redistributed by this reposi
 
 | Component | Where | Version | Licence | Verified from |
 |---|---|---|---|---|
-| Lit: `lit`, `lit-html`, `lit-element`, `@lit/reactive-element` | Inlined into the prebuilt card bundles `frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js` and `frontend/ecco-energy-flow-card/dist/ecco-energy-flow-card.js` | 3.3.3 / 3.3.3 / 4.2.2 / 2.1.2 (each card's `package-lock.json`) | BSD-3-Clause, "Copyright (c) 2017 Google LLC. All rights reserved." | Each package's `LICENSE` file and `package.json`. Both bundles were built with esbuild `legalComments: "eof"`, so Lit's `@license` comments are kept at the end of each bundle. The full licence text is in [frontend/LIT-LICENSE.txt](frontend/LIT-LICENSE.txt) (verbatim) |
+| Lit: `lit`, `lit-html`, `lit-element`, `@lit/reactive-element` | Inlined into the prebuilt card bundles `frontend/ecco-energy-actions-card/dist/ecco-energy-actions-card.js`, `frontend/ecco-energy-flow-card/dist/ecco-energy-flow-card.js` and `frontend/ecco-flow-3d-card/dist/ecco-flow-3d-card.js` | 3.3.3 / 3.3.3 / 4.2.2 / 2.1.2 (each card's `package-lock.json`) | BSD-3-Clause, "Copyright (c) 2017 Google LLC. All rights reserved." | Each package's `LICENSE` file and `package.json`. All three bundles were built with esbuild `legalComments: "eof"`, so Lit's `@license` comments are kept at the end of each bundle. The full licence text is in [frontend/LIT-LICENSE.txt](frontend/LIT-LICENSE.txt) (verbatim) |
 | Contributor Covenant 3.0 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 3.0 | CC BY-SA 4.0, as stated in its own attribution section | The official text, adapted only in its two designated places (the reporting route and the enforcement note). The attribution section is unchanged; ShareAlike applies to that text only |
 
 Nothing else third-party is bundled. In particular:
 
-- The two Lit-based esbuild bundles contain only the four Lit packages above (checked from the esbuild build graph); every other
+- The three Lit-based esbuild bundles contain only the four Lit packages above (checked from the esbuild build graph); every other
   import is ECCO's own source. The bundle of `frontend/ecco-advanced-config-card` contains only ECCO's own source (no runtime
   dependency; checked from its build graph). `@types/trusted-types` 2.0.7 (MIT) is a type-declaration dependency of Lit and
   contains no runtime code; `@lit-labs/ssr-dom-shim` 1.6.0 (BSD-3-Clause) is used only under Node and is not in the bundles.
@@ -30,8 +30,8 @@ These are used to build or test ECCO. They are installed by you or by CI and are
 
 | Component | Used for | Version | Licence | Verified from |
 |---|---|---|---|---|
-| esbuild | Bundling the four TypeScript cards (`ecco-energy-actions-card`, `ecco-energy-flow-card`, `ecco-advanced-config-card`, `ecco-weather-solar-card`) | 0.28.1 (each card's `package-lock.json`) | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
-| TypeScript | Type-checking the four TypeScript cards | 5.9.3 (each card's `package-lock.json`) | Apache-2.0 | `LICENSE.txt`, `package.json` |
+| esbuild | Bundling the five TypeScript cards (`ecco-energy-actions-card`, `ecco-energy-flow-card`, `ecco-advanced-config-card`, `ecco-weather-solar-card`, `ecco-flow-3d-card`) | 0.28.1 (each card's `package-lock.json`) | MIT | `LICENSE.md`, `package.json` (0.28.1 checked 2026-10-08) |
+| TypeScript | Type-checking the five TypeScript cards | 5.9.3 (each card's `package-lock.json`) | Apache-2.0 | `LICENSE.txt`, `package.json` |
 | Node.js | Running the card builds and tests | not pinned; tested with 24.x | MIT (plus the licences of its own bundled components) | Upstream `LICENSE` at the tested version |
 | PyYAML | Repository validation and tests | 6.0.3 (`requirements-ci.txt`) | MIT | Installed package `LICENSE` |
 | Jinja2 | Home Assistant template tests | 3.1.6 (`requirements-ci.txt`) | BSD-3-Clause | Installed package `LICENSE.txt` |
