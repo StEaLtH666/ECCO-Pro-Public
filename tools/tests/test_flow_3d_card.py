@@ -10,7 +10,8 @@
       sign conventions match the installed Energy Flow card's example
   [5] routing is isolated data: src/scene/routing-v4.ts imports nothing from the telemetry, motion or Lit layers
   [6] the site renderer renders the bundle and the example (and not the sources or tests)
-  [7] the card's Node suite (node --test, TAP), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped
+  [7] the card's Node suite (node --test, TAP), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped.
+      Only the two deterministic-rebuild tests may skip, and only where esbuild is not installed (CI installs no npm package)
   [8] scope: the card is in no manifest, package, version file or dashboard (an offline prototype; preview install is a
       separate owner-authorised step, see INSTALL_PREVIEW.md)
 
@@ -219,6 +220,11 @@ else:
           f"{counts.get('tests', '?')} card tests; none failed, cancelled or todo; at least 70 passed",
           r.returncode == 0 and counts.get("fail") == 0 and counts.get("cancelled") == 0 and counts.get("todo") == 0
           and counts.get("pass", 0) >= 70 and counts.get("pass", 0) + counts.get("skipped", -1) == counts.get("tests"), tail)
+    have_esbuild = (CARD / "node_modules" / "esbuild").is_dir()
+    skips = re.findall(r"^\s*ok \d+ - (.+?) # SKIP (.*)$", r.stdout, re.M)
+    allowed = [] if have_esbuild else ["dist/ecco-flow-3d-card.js is the build of the current sources", "two builds of the same sources are byte-identical"]
+    check(f"skipped tests are exactly the allowed ones ({'none: esbuild is installed' if have_esbuild else 'the two rebuild tests: esbuild is not installed'})",
+          sorted(n for n, _why in skips) == allowed and counts.get("skipped") == len(allowed) and all("esbuild is not installed" in why for _n, why in skips), str(skips))
 
 # ===========================================================================
 print("")
