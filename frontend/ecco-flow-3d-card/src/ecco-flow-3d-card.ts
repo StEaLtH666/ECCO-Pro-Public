@@ -305,7 +305,7 @@ export class EccoFlow3dCard extends LitElement {
       artwork: artworkOn
         ? {
             layers: this._layers,
-            layout: v4Layout(v4ScaleForWidth(this._widthPx || this.getBoundingClientRect().width || 1200)),
+            layout: v4Layout(v4ScaleForWidth(this._widthPx || this.getBoundingClientRect().width || 1200), config.scene?.routing),
             onError: (url) => this._plateFailed(url),
             onLoad: (url) => this._plateLoaded(url),
             debug: !!config.scene?.debug_anchors,

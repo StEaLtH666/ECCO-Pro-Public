@@ -109,10 +109,24 @@ export const PILLS = {
 // Artwork layout for the approved V4 scene pack (ten 1448 x 1086 variants of
 // one fixed-perspective house). The overlays (cards, routes, particles) are
 // drawn by the card on top of the plate, which carries no lines, labels or
-// values. Anchors were calibrated by eye on the master plate at native
-// resolution and audited identical in all ten plates.
+// values. Every anchor, route, riser and paving trace is DATA in
+// ./routing-v4.ts (overridable from the configuration); this file only turns
+// that data into pill boxes, SVG paths and the information links.
 
-export type RouteKey = "solarInfo" | "solarMain" | "solarGarage" | "batteryInfo" | "battery" | "gridInfo" | "grid" | "home" | "homeInfo";
+import {
+  BEND_RADIUS,
+  V4_ROUTING,
+  mergeRouting,
+  type AnchorPt,
+  type AnchorKey,
+  type PowerRouteKey,
+  type RouteKey,
+  type RoutingData,
+  type RoutingOverride,
+} from "./routing-v4.ts";
+
+export { BEND_RADIUS, V4_ROUTING, mergeRouting, type RouteKey, type PowerRouteKey, type RoutingData, type RoutingOverride };
+
 /** Power links carry particles; info links are fine static connectors from a card to its equipment. */
 export const POWER_ROUTES: RouteKey[] = ["solarMain", "solarGarage", "battery", "grid", "home"];
 export const INFO_ROUTES: RouteKey[] = ["solarInfo", "batteryInfo", "gridInfo", "homeInfo"];
@@ -126,7 +140,7 @@ export interface ArtworkLayout {
   /** The inverter: where the risers enter the unit's underside. */
   inverter: Pt;
   /** Hardware points every route touches; also the debug overlay's dots. */
-  anchors: typeof V4_ANCHORS;
+  anchors: Record<AnchorKey, AnchorPt>;
   /** The ground-level cable corridor under the inverter where every power route converges before its riser. */
   entry: { x0: number; x1: number; y0: number; y1: number };
   /** Route vertices (straight segments between them; the renderer fillets the bends). */
@@ -135,14 +149,13 @@ export interface ArtworkLayout {
   bend: Partial<Record<RouteKey, number>>;
   /** The same routes as SVG path strings. */
   paths: () => Record<RouteKey, string>;
+  /** The routing data this layout was built from (defaults merged with any override). */
+  routing: RoutingData;
 }
-
-/** Fillet radius at route bends (plate pixels). */
-export const BEND_RADIUS = 12;
 
 /**
  * Straight segments through the vertices with a small rounded corner at
- * every bend: "L" runs with a quadratic fillet of at most BEND_RADIUS (less
+ * every bend: "L" runs with a quadratic fillet of at most `radius` (less
  * when a segment is short). Start and end are hit exactly.
  */
 export function routePath(points: Pt[], radius = BEND_RADIUS): string {
@@ -182,51 +195,12 @@ export function smoothPath(points: Pt[], tension = 0.5): string {
   return d;
 }
 
-/**
- * Hardware anchors of the V4 plates, calibrated on the master plate (plate
- * pixels, 2026-10-26) and audited identical in all ten plates. `label` is
- * what the debug overlay prints.
- */
-export const V4_ANCHORS = {
-  /** Centre of the main rooftop array (info-link target). */
-  main_pv: { x: 610, y: 335, label: "Array 1 (main roof)" },
-  /** Main array: the attachment on the lower-right panel frame (the frame edge runs from 640,442 up to 751,380). */
-  main_pv_frame: { x: 700, y: 409, label: "Array 1 frame connection" },
-  /** Main array: where the cable enters the roof, just below the frame at the porch-roof valley. */
-  /** Array 1: the frame's lower-right corner, where the cable leaves the array and drops down the roof valley to the junction. */
-  main_pv_edge: { x: 751, y: 380, label: "Array 1 frame corner / cable exit" },
-  /** Centre of the garage rooftop array (info-link target). */
-  garage_pv: { x: 1140, y: 500, label: "Array 2 (garage roof)" },
-  /** Garage array: the attachment at its lower-left frame corner (the lower frame edge runs from 1045,507 to 1130,557). */
-  garage_pv_frame: { x: 1044, y: 508, label: "Array 2 frame connection" },
-  /** Garage array: where the cable enters the roof at the fascia below the corner. */
-  garage_pv_edge: { x: 1044, y: 537, label: "Array 2 cable exit (fascia)" },
-  /** Foot of the white battery cabinet (where its cable enters the ground). */
-  battery_cabinet: { x: 150, y: 512, label: "Battery cabinet" },
-  /** The wall inverter's underside: where the grouped riser enters the unit (unit body ≈ 958-1042 x 505-620). */
-  inverter: { x: 1002, y: 624, label: "Inverter underside entry" },
-  /** The common ground-level convergence point immediately below the inverter. */
-  ground_entry: { x: 1002, y: 722, label: "Ground convergence" },
-  /** The house / garage building corner: the main-array and grid descents run down it as two adjacent tracks (946, 952), beside the bush at its foot (907-945 x 615-675). */
-  building_corner: { x: 948, y: 600, label: "Building corner" },
-  /** The chimney's right face (stack 915-962 x 235-330): where the grid service drop lands on the house before following the corner down. */
-  chimney: { x: 952, y: 300, label: "Chimney (service drop landing)" },
-  /** The porch-roof apex where the main roof's fascia begins (758,452); the main-array cable reaches it from the frame. */
-  /** Where the Array 1 drop (right of the skylight, 742-770 x 384-434) meets the main roof fascia. */
-  fascia_start: { x: 782, y: 455, label: "Fascia (right of the skylight)" },
-  /** The rear garden path ends at x 310 and the patio's left corner is 68 px below it across the lawn edge: a buried transition, not visible paving. */
-  lawn_transition: { x: 230, y: 556, label: "Buried lawn crossing (level run)" },
-  /** The downpipe on the front wall left of the entrance: the house's service wall (main-array descent, house connection). */
-  downpipe: { x: 748, y: 620, label: "Downpipe / service wall" },
-  /** The garage wall between the EV charger and the door frame: the garage array's descent. */
-  door_post: { x: 1104, y: 640, label: "Garage wall line (left of the door)" },
-  /** The EV charger on the garage wall (reference only; no ECCO entity feeds it). */
-  ev_charger: { x: 1048, y: 655, label: "EV charger" },
-  /** The pylon's lattice at the height of the information card's connection. */
-  pylon: { x: 1297, y: 290, label: "Grid pylon" },
-  /** House electrical entry: the front wall beside the downpipe, left of the entrance. */
-  house: { x: 752, y: 600, label: "House connection" },
-} as const;
+/** Default routing data, re-exported under the names the tests and the debug overlay use. */
+export const V4_ANCHORS = V4_ROUTING.anchors;
+export const RISERS = V4_ROUTING.risers;
+export const RISER_TOP = V4_ROUTING.riserTop;
+export const V4_PAVING = V4_ROUTING.paving;
+export const BATTERY_WAYPOINTS = V4_ROUTING.batteryWaypoints;
 
 /** The pack's overlay safe zones (anchor-map.json), kept for reference and tests. */
 export const V4_SAFE_ZONES = {
@@ -237,80 +211,15 @@ export const V4_SAFE_ZONES = {
 } as const;
 
 /**
- * Riser tracks: every power route ends with a short straight vertical riser
- * into the inverter's underside from its own ground track. Routes arrive at
- * ground level from the left (main array via the downpipe, house connection,
- * battery) or from the right (garage array and grid via the door post), and
- * the tracks nest so none crosses another: on each side the shallowest track
- * takes the outermost riser.
+ * The V4 layout at overlay scale `k`, from the routing data (defaults merged
+ * with `override`, the configuration's `scene.routing`). Information cards sit
+ * in the owner's zones and grow with k on narrow cards without covering a
+ * hardware anchor (tested). The physical routes come from the data verbatim;
+ * the four information links are built here from the card ports.
  */
-export const RISERS = {
-  grid: { x: 990, ground: 700, side: "left" },
-  solarMain: { x: 996, ground: 704, side: "left" },
-  home: { x: 1002, ground: 708, side: "left" },
-  battery: { x: 1008, ground: 742, side: "left" },
-  solarGarage: { x: 1014, ground: 746, side: "right" },
-} as const;
-
-/**
- * Paving traced on the master plate (plate pixels), for the debug overlay:
- * the rear garden path, the patio and terrace edges, the three garden step
- * edges, the lower path and the drive. The battery route follows these.
- */
-export const V4_PAVING: Array<{ label: string; points: Pt[] }> = [
-  { label: "rear garden path", points: [{ x: 110, y: 514 }, { x: 310, y: 502 }] },
-  { label: "lawn crossing (buried, level)", points: [{ x: 150, y: 556 }, { x: 310, y: 556 }] },
-  { label: "patio left corner drop", points: [{ x: 310, y: 556 }, { x: 310, y: 570 }] },
-  { label: "patio front edge", points: [{ x: 310, y: 570 }, { x: 520, y: 647 }] },
-  { label: "terrace front wall", points: [{ x: 520, y: 647 }, { x: 548, y: 682 }] },
-  { label: "upper landing edge", points: [{ x: 548, y: 682 }, { x: 700, y: 692 }] },
-  { label: "step 1 riser", points: [{ x: 560, y: 694 }, { x: 700, y: 699 }] },
-  { label: "step 2 riser", points: [{ x: 575, y: 707 }, { x: 690, y: 711 }] },
-  { label: "lower path", points: [{ x: 575, y: 721 }, { x: 790, y: 742 }] },
-  { label: "drive paving", points: [{ x: 790, y: 742 }, { x: 1022, y: 742 }] },
-];
-
-/** The battery route's waypoints with the paving each one sits on (the debug overlay numbers them). */
-export const BATTERY_WAYPOINTS: string[] = [
-  "cabinet base",
-  "out of the cabinet front onto the lawn",
-  "end of the level buried crossing",
-  "patio left corner",
-  "patio front edge, lawn border",
-  "terrace front wall foot",
-  "across the upper landing",
-  "down step 1 onto the tread",
-  "along the tread",
-  "down step 2 onto the lower paving",
-  "lower path and drive paving to the ground convergence",
-  "riser into the inverter",
-];
-export const RISER_TOP = 624;
-
-/**
- * The V4 layout at overlay scale `k`. Information cards sit in the owner's
- * zones and grow with k on narrow cards without covering a hardware anchor
- * (tested). Routes are straight segments with small fillets, following the
- * building and the garden in the plate's perspective, and every physical
- * route reaches the ground before the inverter (no entry from the sides or
- * the top, no descent beside the unit):
- *   solarInfo    Solar card (right edge) -> the main array's upper-left modules          info link
- *   solarMain    main array lower edge -> down the porch roof edge to the downpipe -> down the downpipe
- *                -> along the house foundation -> riser                                   array 1
- *   solarGarage  garage array lower-left corner -> along the garage eave -> down the door post
- *                -> along the garage foundation -> riser                                  array 2
- *   batteryInfo  Battery card (top edge) -> the cabinet                                   info link
- *   battery      cabinet foot -> the garden path -> the patio's left edge -> the patio and terrace front edge
- *                -> the house foundation -> riser                                          reverses when charging
- *   gridInfo     Grid card (bottom edge) -> the pylon lattice                              info link
- *   grid         pylon lattice -> down the pylon -> down the hedge beside the garage -> along the garage eave
- *                -> down the door post -> along the garage foundation -> riser            reverses when exporting
- *   home         riser -> along the house foundation -> up the service wall to the house entry   consumption
- *   homeInfo     the house entry -> Home card (top edge)                                   info link
- */
-export function v4Layout(k: number): ArtworkLayout {
-  const A = V4_ANCHORS;
-  const R = RISERS;
+export function v4Layout(k: number, override?: RoutingOverride): ArtworkLayout {
+  const D = mergeRouting(V4_ROUTING, override);
+  const A = D.anchors;
   const solarW = 150 * k;
   const solarH = 58 * k;
   const battW = 178 * k;
@@ -323,59 +232,30 @@ export function v4Layout(k: number): ArtworkLayout {
     battery: { x: 35, y: 718, w: battW, h: battH, port: { x: A.battery_cabinet.x, y: 718 } },
     home: { x: 690, y: 884, w: homeW, h: homeH, port: { x: 745, y: 884 } },
   } satisfies Record<string, PillBox>;
-  const riser = (key: keyof typeof R): Pt[] => [{ x: R[key].x, y: R[key].ground }, { x: R[key].x, y: RISER_TOP }];
+  const solarInfo = [pills.solar.port, ...D.solarInfoWaypoints.map((p) => (p.y < 0 ? { x: p.x, y: pills.solar.port.y } : p))];
   const routes: Record<RouteKey, Pt[]> = {
-    solarInfo: [pills.solar.port, { x: 430, y: pills.solar.port.y }, { x: 545, y: 275 }],
-    // Panel frame -> straight down to the roof junction at the porch apex -> along the porch ridge to the fascia start
-    // -> along the main roof fascia to the building corner -> straight down the corner (track 946) -> floor -> riser.
-    // Array 1: frame attachment -> along the panel's lower frame edge to its corner -> straight down the roof valley to the
-    // roof junction at the porch apex -> along the main roof fascia to the building corner -> straight down the corner
-    // (track 946) -> floor -> riser.
-    // Array 1: frame attachment -> along the frame edge to its corner -> short level jog past the skylight -> straight down
-    // the roof beside the skylight to the fascia -> along the fascia to the building corner -> corner track 946 -> floor -> riser.
-    solarMain: [A.main_pv_frame, A.main_pv_edge, { x: A.fascia_start.x, y: A.main_pv_edge.y }, A.fascia_start, { x: 946, y: 505 }, { x: 946, y: R.solarMain.ground }, ...riser("solarMain")],
-    // Frame corner -> straight down to the garage fascia -> along the fascia -> straight down the garage wall left of the
-    // door -> deep floor run back to the convergence -> riser.
-    // Array 2: frame corner -> straight down to the garage fascia (measured 960,512 -> 1140,565) -> along the fascia to the
-    // garage wall line -> straight down the wall -> deep floor run -> riser.
-    solarGarage: [A.garage_pv_frame, A.garage_pv_edge, { x: A.door_post.x, y: 554 }, { x: A.door_post.x, y: R.solarGarage.ground }, ...riser("solarGarage")],
-    batteryInfo: [pills.battery.port, A.battery_cabinet],
-    // Cabinet base -> along the rear garden path -> buried transition across the lawn edge -> the patio's left corner -> along the
-    // patio front edge -> down the terrace front wall -> across the upper landing -> down step 1 -> along the tread -> down step 2
-    // -> along the lower path to the drive -> drive paving to the ground convergence -> riser.
-    // Cabinet base -> out of the cabinet front onto the lawn -> 90 degrees -> level buried crossing -> 90 degrees down to the
-    // patio's left corner -> patio edge -> terrace wall -> landing -> step 1 -> tread -> step 2 -> lower path / drive -> riser.
-    battery: [
-      A.battery_cabinet,
-      { x: 150, y: 556 },
-      { x: 310, y: 556 },
-      { x: 310, y: 570 },
-      { x: 520, y: 647 },
-      { x: 548, y: 682 },
-      { x: 620, y: 682 },
-      { x: 620, y: 707 },
-      { x: 640, y: 707 },
-      { x: 640, y: 723 },
-      ...riser("battery"),
-    ],
-    gridInfo: [pills.grid.port, A.pylon],
-    // Pylon lattice -> level service drop to the chimney's right face -> straight down the chimney, the gable and the
-    // building corner (track 952, beside the bush) -> floor -> riser.
-    grid: [A.pylon, { x: A.chimney.x, y: A.pylon.y }, { x: A.chimney.x, y: R.grid.ground }, ...riser("grid")],
-    home: [{ x: R.home.x, y: RISER_TOP }, { x: R.home.x, y: R.home.ground }, { x: 760, y: R.home.ground }, { x: 760, y: A.house.y }],
-    homeInfo: [{ x: 745, y: A.house.y + 6 }, pills.home.port],
+    solarInfo,
+    batteryInfo: [pills.battery.port, { x: A.battery_cabinet.x, y: A.battery_cabinet.y }],
+    gridInfo: [pills.grid.port, { x: A.pylon.x, y: A.pylon.y }],
+    homeInfo: [D.homeInfoStart, pills.home.port],
+    solarMain: D.power.solarMain,
+    solarGarage: D.power.solarGarage,
+    battery: D.power.battery,
+    grid: D.power.grid,
+    home: D.power.home,
   };
   return {
-    width: 1448,
-    height: 1086,
+    width: D.canvas.width,
+    height: D.canvas.height,
     scale: k,
     pills,
-    inverter: A.inverter,
+    inverter: { x: A.inverter.x, y: A.inverter.y },
     anchors: A,
-    entry: { x0: 964, x1: 1022, y0: 696, y1: 752 },
+    entry: D.entry,
     routes,
-    bend: { battery: 5, home: 8, solarMain: 8, solarGarage: 8, grid: 8 },
-    paths: () => Object.fromEntries((Object.keys(routes) as RouteKey[]).map((key) => [key, routePath(routes[key], ({ battery: 5, home: 8, solarMain: 8, solarGarage: 8, grid: 8 } as Partial<Record<RouteKey, number>>)[key] ?? BEND_RADIUS)])) as Record<RouteKey, string>,
+    bend: D.bend,
+    paths: () => Object.fromEntries((Object.keys(routes) as RouteKey[]).map((key) => [key, routePath(routes[key], D.bend[key] ?? BEND_RADIUS)])) as Record<RouteKey, string>,
+    routing: D,
   };
 }
 

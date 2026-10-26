@@ -63,6 +63,13 @@ test("no value is fabricated: the card never renders a plausible number for an u
   assert.deepEqual(zeroDefaults, ["return `${watts.toFixed(format?.precision ?? 0)} W`;", "const w = Math.round(entries[0]?.contentRect.width ?? 0);", "(ecco.health?.sensors?.length ?? 0) > 0"]);
 });
 
+test("the routing data module is numbers and labels only: no imports of telemetry, motion or Lit, no functions beyond the merge", () => {
+  const routing = readFileSync(join(card, "src", "scene", "routing-v4.ts"), "utf-8");
+  assert.doesNotMatch(routing, /from "\.\.\/core|from "lit|hass|callService|motionFor|resolveHomeW/);
+  const fns = [...routing.matchAll(/^export function (\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(fns, ["mergeRouting"]);
+});
+
 test("the bundle registers the card's own tag and no other card's", () => {
   const bundle = readFileSync(join(card, "dist", "ecco-flow-3d-card.js"), "utf-8");
   assert.ok(bundle.includes('"ecco-flow-3d-card"'), "custom element tag present");

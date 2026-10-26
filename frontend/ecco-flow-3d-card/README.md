@@ -1,6 +1,6 @@
 # ECCO 3D Energy Flow card
 
-**Status: offline prototype (v2, scene pack), not installed.** A read-only
+**Status: offline prototype, routing geometry FROZEN on 2026-10-26, not installed; next step is a preview-dashboard install (see [INSTALL_PREVIEW.md](INSTALL_PREVIEW.md)).** A read-only
 Home Assistant Lovelace card that shows the ECCO installation as a premium
 fixed-perspective house scene (the owner-approved V4 scene pack: ten
 weather and season variants of one house, battery cabinet, wall inverter,
@@ -36,17 +36,49 @@ ecco:
   weather: weather.forecast_home
 ```
 
-Overlay geometry (`src/scene/iso.ts`, `v4Layout`): hardware anchors calibrated
-on the master plate at native resolution and audited identical in all ten
-plates; information cards in four edge zones (never over equipment, tested at
-every scale); routes as straight segments with small fillets that follow the
-building and the garden in the plate's perspective. Each card has a fine
-information link to its equipment; the animated power routes run from the
-equipment along the roofs, walls and garden edges to a common ground-level
-cable entry below the inverter, from which each system rises on its own
-straight vertical track into the unit's underside. The whole canvas is always
-shown (no crop). `scene.debug_anchors: true` draws anchors, bends, zones and
-the entry corridor.
+Overlay geometry: every hardware anchor, physical power route (straight-segment
+vertex list), riser track, ground-entry box, bend radius, paving trace and debug
+label is **data** in [`src/scene/routing-v4.ts`](src/scene/routing-v4.ts).
+`src/scene/iso.ts` turns that data into pill boxes, SVG paths and the four
+information links; `src/scene/scene.ts` draws it; the telemetry, motion and
+status layers never read it. A Lovelace configuration may override any of it
+under `scene.routing` (lists replace, points merge per key; malformed routes are
+ignored), so the geometry can be revised without a rebuild and without touching
+telemetry, animation or control logic:
+
+```yaml
+scene:
+  pack: /local/ecco/scenes/
+  routing:
+    anchors:
+      pylon: { x: 1300 }              # move one anchor
+    power:
+      grid: [{ x: 1300, y: 290 }, { x: 952, y: 290 }, { x: 952, y: 700 }, { x: 990, y: 700 }, { x: 990, y: 624 }]
+    bend: { grid: 4 }
+```
+
+Routes follow the plate's real edges (roof frames, fascias, building corners,
+the downpipe, paving edges, step risers) as straight segments with small
+fillets; every physical route reaches floor level and rises into the
+inverter's underside through one grouped riser. `scene.debug_anchors: true`
+(preview `?debug=1`, `?routes=1` for a route-only view) draws anchors, bends,
+paving traces, the battery waypoints, the ground convergence and the riser.
+
+### Known visual follow-ups (non-blocking, frozen 2026-10-26)
+
+Recorded for a later dedicated visual pass; none affects a value, a direction
+or a service:
+
+1. **Battery route geometry and step alignment**: the buried lawn crossing and
+   the two step drops are deliberate but could sit tighter to the step risers.
+2. **Array 1 roof / fascia routing**: the frame-corner exit and the drop beside
+   the skylight could follow the roof valley more convincingly.
+3. **Information-card connections** to the physical equipment are fine dotted
+   links; their end points and visibility could be refined.
+4. **Grid route visibility** down the chimney and corner is subtle on the
+   night and storm plates.
+5. **Ground convergence appearance**: the flush floor plate and the five-track
+   riser could be styled further.
 
 ## What it reuses
 
@@ -134,7 +166,7 @@ queries, so it follows the card's width, not the window's).
 npm ci
 npm run typecheck
 npm run build        # dist/ecco-flow-3d-card.js (deterministic; committed)
-npm test             # node:test, 70 tests
+npm test             # node:test, 76 tests
 npm run preview      # http://127.0.0.1:8765/preview/index.html?s=day-export
 ```
 
@@ -163,12 +195,15 @@ demonstration data.
 | `sensorMapping.test.ts` | every example entity exists in the repository; the preview mock covers them |
 | `safety.test.ts` | no service/websocket/API calls, no network resources, no action config, no fabricated defaults |
 | `geometry.test.ts` | vector scene: pills inside the viewBox and non-overlapping; paths end exactly at their ports |
-| `artworkLayout.test.ts` | V4 layout: calibrated anchors; cards in their zones and off every anchor at every scale; every power route from its equipment to a distinct vertical riser into the inverter; info links card to equipment; routes structured (few vertices, axis-aligned or perspective slopes, small fillets); grid clear of car, door and windows |
+| `artworkLayout.test.ts` | V4 layout: calibrated anchors; cards in their zones and off every anchor at every scale; every power route from its equipment to a distinct vertical riser into the inverter; info links card to equipment; routes on perspective axes with real bends; battery on traced paving; grid clear of car, door, panels and windows; routing data isolated and overridable |
 | `scenes.test.ts` | scene rules in the pack's order, the Christmas window, golden hour, URLs under the local pack path |
 | `build.test.ts` | byte-identical rebuilds; committed `dist/` matches the sources |
 
 Rendering, animation and interaction are checked in a real browser through
-the preview harness (headless capture plus a manual pass), not in node.
+the preview harness (headless capture plus a manual pass), not in node. The
+repository's offline suite runs `tools/tests/test_flow_3d_card.py` (folder
+shape, read-only allowlist on source and bundle, repository-sourced entity
+ids, isolated routing data, site render, the Node suite, scope).
 
 ## Installing later (not part of this prototype)
 

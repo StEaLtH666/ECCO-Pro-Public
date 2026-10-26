@@ -10,6 +10,19 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **ECCO 3D Energy Flow card, offline prototype** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only, NOT
+  installed, routing geometry frozen 2026-10-26). An isometric house scene from the owner-approved V4 scene pack (ten
+  weather / season plates, chosen by date, `sun.sun` and the weather condition, with crossfades; the plates are deployed as a
+  local resource, never loaded from a CDN) with the live figures and the animated power routes as SVG overlays: solar per
+  array, battery (reversing for charge / discharge), grid (reversing for import / export) and home, every physical route
+  running along the plate's real edges to a ground-level convergence and one grouped riser into the inverter. Reuses the
+  installed Energy Flow card's power model unchanged (sign conventions, `resolveHomeW`, PV aggregation, idle threshold, motion
+  curve; pinned by a parity test), the FE-1 time to reserve, the Free Power / Dump to Grid session sensors, the TOU slot
+  table, the blended solar forecast and the health sensors. Unknown is `--` with a static dashed route; stale telemetry stops
+  every route. All routing is data in `src/scene/routing-v4.ts`, overridable from the configuration (`scene.routing`). Preview
+  harness, headless capture, 76 Node tests and `tools/tests/test_flow_3d_card.py` (folder shape, read-only allowlist,
+  repository-sourced entity ids, isolated routing, site render, scope). Preview-dashboard install steps:
+  `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md`.
 - **Advanced Configuration Stage 1: the guarded TOU settings editor** (post-export entry `acs1`; offline, source only, NOT installed,
   NOT live-proven; [docs/dev/acs-stage1-integration.md](docs/dev/acs-stage1-integration.md)). It replaces the Stage 0 target-SOC editor
   at the same package path (`ecco_tou_target_soc_edit.yaml`, so the deployment manifest is unchanged): one setting of one TOU slot per

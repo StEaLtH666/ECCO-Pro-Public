@@ -4,7 +4,7 @@
 // inverter, and fine information links from each card to its equipment.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BATTERY_WAYPOINTS, BEND_RADIUS, INFO_ROUTES, POWER_ROUTES, RISERS, RISER_TOP, V4_ANCHORS, V4_LAYOUT, V4_PAVING, routePath, smoothPath, v4Layout, v4ScaleForWidth, type RouteKey } from "../src/scene/iso.ts";
+import { BATTERY_WAYPOINTS, BEND_RADIUS, INFO_ROUTES, POWER_ROUTES, RISERS, RISER_TOP, V4_ANCHORS, V4_LAYOUT, V4_PAVING, V4_ROUTING, mergeRouting, routePath, smoothPath, v4Layout, v4ScaleForWidth, type RouteKey } from "../src/scene/iso.ts";
 import { splitSolarFlows } from "../src/core/power.ts";
 
 const L = V4_LAYOUT;
@@ -353,6 +353,33 @@ test("no two routes cross in the entry area: tracks are ordered so a horizontal 
   assert.ok(gridTurn.y < solarTurn.y && solarTurn.y < homeTurn.y, "corner tracks nest: grid above main array above home");
   // The main-array corner run passes under the grid's turn (grid track is 6 px to its right).
   assert.ok(L.routes.solarMain[4]!.x < L.routes.grid[1]!.x, "Array 1 track is the left of the two corner tracks");
+});
+
+test("routing is isolated data: every power route tail matches its riser track, and a configuration override changes geometry only", () => {
+  for (const key of ["solarMain", "solarGarage", "battery", "grid"] as const) {
+    const pts = V4_ROUTING.power[key];
+    assert.equal(pts[pts.length - 1]!.x, RISERS[key].x, `${key} riser x`);
+    assert.equal(pts[pts.length - 1]!.y, RISER_TOP, `${key} riser top`);
+    assert.equal(pts[pts.length - 2]!.y, RISERS[key].ground, `${key} ground`);
+  }
+  assert.equal(V4_ROUTING.power.home[0]!.x, RISERS.home.x);
+  assert.equal(V4_ROUTING.power.home[1]!.y, RISERS.home.ground);
+  // An override moves one anchor and replaces one route; everything else is untouched and the defaults are not mutated.
+  const before = JSON.stringify(V4_ROUTING);
+  const over = v4Layout(2.0, { anchors: { pylon: { x: 1300 } }, power: { grid: [{ x: 1300, y: 290 }, { x: 952, y: 290 }, { x: 952, y: 700 }, { x: 990, y: 700 }, { x: 990, y: 624 }] }, bend: { grid: 4 } });
+  assert.equal(over.anchors.pylon.x, 1300);
+  assert.equal(over.anchors.pylon.label, "Grid pylon", "label kept when only x is overridden");
+  assert.deepEqual(over.routes.grid[0], { x: 1300, y: 290 });
+  assert.deepEqual(over.routes.battery, V4_ROUTING.power.battery, "other routes unchanged");
+  assert.equal(over.bend.grid, 4);
+  assert.equal(over.bend.battery, 5);
+  assert.equal(JSON.stringify(V4_ROUTING), before, "defaults not mutated");
+  // Malformed route overrides are ignored.
+  const bad = mergeRouting(V4_ROUTING, { power: { grid: [{ x: 1, y: Number.NaN }] as never } });
+  assert.deepEqual(bad.power.grid, V4_ROUTING.power.grid);
+  // The debug overlay reads labels from the same data.
+  assert.equal(V4_LAYOUT.routing.batteryWaypoints.length, V4_LAYOUT.routes.battery.length);
+  assert.ok(V4_PAVING.length >= 8 && BATTERY_WAYPOINTS.length === 12);
 });
 
 test("smoothPath (vector scene helper) passes through every point in order", () => {

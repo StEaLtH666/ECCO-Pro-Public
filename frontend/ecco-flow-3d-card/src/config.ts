@@ -10,6 +10,8 @@
 // src/core/power.ts, which mirrors that card's pure helpers and is held to
 // behavioural parity by test/parity.test.ts).
 
+import type { RoutingOverride } from "./scene/routing-v4.ts";
+
 export type BatteryPowerSign = "charge_positive" | "discharge_positive";
 export type GridPowerSign = "import_positive" | "export_positive";
 
@@ -203,6 +205,13 @@ export interface SceneConfig {
   crossfade_ms?: number;
   /** Draw the hardware anchors, card zones and ports over the scene (calibration aid). Default false. */
   debug_anchors?: boolean;
+  /**
+   * Overrides for the routing data (anchors, physical power routes, riser
+   * tracks, ground entry, bend radii, paving traces, debug labels): see
+   * scene/routing-v4.ts. Lists replace, points merge per key. Visual only:
+   * nothing here can change a value, a direction or a service.
+   */
+  routing?: RoutingOverride;
 }
 
 export interface EccoFlow3dCardConfig {
