@@ -18,6 +18,7 @@ import {
   SCENE_H,
   SCENE_W,
   type ArtworkLayout,
+  type RouteKey,
   box,
   flowPaths,
   iso,
@@ -356,6 +357,22 @@ function flowPath(id: FlowId, key: string, d: string, view: FlowView, animate: b
     </g>`;
 }
 
+/** Fine information connector between a card and its equipment: no particles, a little brighter while the system is active. */
+function infoLink(key: string, d: string, colour: string, active: boolean, k: number): TemplateResult {
+  return svg`<g class=${`info-link info-${key} ${active ? "active" : ""}`} style=${`--flow-colour:${colour}`}>
+    <path d=${d} class="info-glow" style=${`stroke-width:${(2.4 * k).toFixed(2)}`}></path>
+    <path d=${d} class="info-line" style=${`stroke-width:${(0.7 * k).toFixed(2)}`}></path>
+  </g>`;
+}
+
+/** The common ground-level cable entry under the inverter: a small buried pit the risers leave from. */
+function cablePit(e: { x0: number; x1: number; y0: number; y1: number }, k: number): TemplateResult {
+  return svg`<g class="cable-pit">
+    <rect x=${e.x0} y=${e.y0} width=${e.x1 - e.x0} height=${e.y1 - e.y0} rx=${2 * k} class="pit-shadow"></rect>
+    <rect x=${e.x0} y=${e.y0} width=${e.x1 - e.x0} height=${e.y1 - e.y0} rx=${2 * k} class="pit-face"></rect>
+  </g>`;
+}
+
 /** Soft light at a physical connection point, in the route's colour; dim when the route is idle or unknown. */
 function nodeLight(p: { x: number; y: number }, colour: string, active: boolean, k: number): TemplateResult {
   return svg`<g class=${`node-light ${active ? "active" : ""}`} style=${`--flow-colour:${colour}`}><circle cx=${p.x} cy=${p.y} r=${(5 * k).toFixed(1)} class="node-light-halo"></circle><circle cx=${p.x} cy=${p.y} r=${(1.6 * k).toFixed(1)} class="node-light-core"></circle></g>`;
@@ -507,12 +524,17 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
   const k = L.scale;
   const A = L.anchors;
   const split = m.solarSplit ?? { card: m.flows.solar, main: m.flows.solar, garage: null };
-  const route = (id: FlowId, key: keyof typeof P, view: FlowView) => flowPath(id, key, P[key], view, m.animate, k, approxLength(P[key]));
+  const power = (id: FlowId, key: RouteKey, view: FlowView) => flowPath(id, key, P[key], view, m.animate, k, approxLength(P[key]));
   const lit = (v: FlowView | null) => !!v && v.motion.moving;
+  const vertices = Object.entries(L.routes) as Array<[RouteKey, Array<{ x: number; y: number }>]>;
   const debug = art.debug
     ? svg`<g class="debug">
+        ${vertices.map(([key, pts]) =>
+          pts.map((p, i) => (i === 0 || i === pts.length - 1 ? nothing : svg`<rect x=${p.x - 3 * k} y=${p.y - 3 * k} width=${6 * k} height=${6 * k} class="debug-bend" data-route=${key}></rect>`))
+        )}
         ${Object.values(A).map((a) => svg`<circle cx=${a.x} cy=${a.y} r=${4 * k} class="debug-dot"></circle><circle cx=${a.x} cy=${a.y} r=${9 * k} class="debug-ring"></circle><text x=${a.x + 11 * k} y=${a.y - 6 * k} class="debug-label">${a.label} ${a.x},${a.y}</text>`)}
         ${Object.entries(L.pills).map(([name, p]) => svg`<rect x=${p.x} y=${p.y} width=${p.w} height=${p.h} class="debug-zone"></rect><circle cx=${p.port.x} cy=${p.port.y} r=${3.5 * k} class="debug-port"></circle><text x=${p.port.x + 8 * k} y=${p.port.y + 4 * k} class="debug-label">${name} port</text>`)}
+        <rect x=${L.entry.x0} y=${L.entry.y0} width=${L.entry.x1 - L.entry.x0} height=${L.entry.y1 - L.entry.y0} class="debug-zone"></rect>
       </g>`
     : nothing;
   return svg`
@@ -524,19 +546,23 @@ function renderArtworkScene(m: SceneModel, art: NonNullable<SceneModel["artwork"
       ${art.layers.map(
         (layer) => svg`<image href=${layer.url} x="0" y="0" width=${L.width} height=${L.height} preserveAspectRatio="xMidYMid meet" class=${`plate ${layer.entering ? "entering" : ""}`} data-scene=${layer.key} @error=${() => art.onError(layer.url)} @load=${() => art.onLoad(layer.url)}></image>`
       )}
+      ${cablePit(L.entry, k)}
       <g class="flows">
-        ${route("grid", "grid", m.flows.grid)}
-        ${route("battery", "battery", m.flows.battery)}
-        ${route("solar", "solarCard", split.card)}
-        ${route("solar", "solarMain", split.main)}
-        ${split.garage ? route("solar", "solarGarage", split.garage) : nothing}
-        ${route("home", "home", m.flows.home)}
-        ${nodeLight(A.main_pv, FLOW_COLOUR.solar, lit(split.main), k)}
-        ${split.garage ? nodeLight(A.garage_pv, FLOW_COLOUR.solar, lit(split.garage), k) : nothing}
+        ${infoLink("solar", P.solarInfo, FLOW_COLOUR.solar, lit(split.card), k)}
+        ${infoLink("battery", P.batteryInfo, FLOW_COLOUR.battery, lit(m.flows.battery), k)}
+        ${infoLink("grid", P.gridInfo, FLOW_COLOUR.grid, lit(m.flows.grid), k)}
+        ${infoLink("home", P.homeInfo, FLOW_COLOUR.home, lit(m.flows.home), k)}
+        ${power("grid", "grid", m.flows.grid)}
+        ${power("battery", "battery", m.flows.battery)}
+        ${power("solar", "solarMain", split.main)}
+        ${split.garage ? power("solar", "solarGarage", split.garage) : nothing}
+        ${power("home", "home", m.flows.home)}
+        ${nodeLight(A.main_pv_edge, FLOW_COLOUR.solar, lit(split.main), k)}
+        ${split.garage ? nodeLight(A.garage_pv_edge, FLOW_COLOUR.solar, lit(split.garage), k) : nothing}
         ${nodeLight(A.battery_cabinet, FLOW_COLOUR.battery, lit(m.flows.battery), k)}
         ${nodeLight(A.pylon, FLOW_COLOUR.grid, lit(m.flows.grid), k)}
         ${nodeLight(A.house, FLOW_COLOUR.home, lit(m.flows.home), k)}
-        <circle cx=${L.inverter.x} cy=${L.inverter.y} r=${(2.6 * k).toFixed(1)} class=${`junction led-${m.inverterLed}`}></circle>
+        <rect x=${L.inverter.x - 12 * k} y=${L.inverter.y - 1.2 * k} width=${24 * k} height=${2.4 * k} rx=${1.2 * k} class=${`junction-bar led-${m.inverterLed}`}></rect>
         <circle cx=${L.inverter.x} cy=${L.inverter.y} r=${(7 * k).toFixed(1)} class=${`junction-halo led-${m.inverterLed}`}></circle>
       </g>
       ${debug}

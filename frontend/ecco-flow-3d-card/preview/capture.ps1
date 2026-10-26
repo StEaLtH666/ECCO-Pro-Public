@@ -37,7 +37,8 @@ try {
     $sizes = @(
         @{ name = "mobile"; w = 520; h = 1320; frame = 390; crop = 414 },
         @{ name = "tablet"; w = 800; h = 1500; frame = 768; crop = 792 },
-        @{ name = "desktop"; w = 1280; h = 980; frame = 1200; crop = 0 }
+        @{ name = "desktop"; w = 1280; h = 980; frame = 1200; crop = 0 },
+        @{ name = "wide"; w = 1920; h = 1300; frame = 1880; crop = 0 }
     )
     if ($Only.Count -gt 0) { $sizes = @($sizes | Where-Object { $Only -contains $_.name }) }
     # With -Scenes, one capture per scene (night scenes use the night-discharge telemetry, day scenes day-export).

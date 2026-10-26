@@ -1298,6 +1298,52 @@ export class EccoFlow3dCard extends LitElement {
       opacity: 0.95;
       filter: drop-shadow(0 0 4px var(--flow-colour));
     }
+    .info-line {
+      fill: none;
+      stroke: var(--flow-colour);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.38;
+      stroke-dasharray: 0.01 calc(5px * var(--k, 1));
+    }
+    .info-glow {
+      fill: none;
+      stroke: var(--flow-colour);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0;
+      filter: url(#ef3d-blur);
+    }
+    .info-link.active .info-line {
+      opacity: 0.7;
+    }
+    .info-link.active .info-glow {
+      opacity: 0.16;
+    }
+    .pit-shadow {
+      fill: rgba(0, 0, 0, 0.45);
+      filter: url(#ef3d-blur);
+    }
+    .pit-face {
+      fill: rgba(20, 26, 38, 0.9);
+      stroke: rgba(255, 255, 255, 0.28);
+      stroke-width: calc(0.6px * var(--k, 1));
+    }
+    .junction-bar.led-ok {
+      fill: #e7edf7;
+    }
+    .junction-bar.led-warn {
+      fill: var(--ef-warn);
+    }
+    .junction-bar.led-off {
+      fill: #6b778d;
+      opacity: 0.6;
+    }
+    .debug-bend {
+      fill: #ffd400;
+      stroke: #000;
+      stroke-width: 1;
+    }
     .debug-dot {
       fill: #ff3b6b;
     }

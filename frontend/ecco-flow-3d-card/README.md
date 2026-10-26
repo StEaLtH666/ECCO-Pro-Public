@@ -36,13 +36,17 @@ ecco:
   weather: weather.forecast_home
 ```
 
-Overlay geometry (`src/scene/iso.ts`, `v4Layout`) comes from the pack's
-anchor map: the hardware anchors (main array, garage array, wall inverter,
-battery cabinet, pylon, house energy centre) and the anchor waypoints of the
-five routes are honoured verbatim (tested), the pills sit in the pack's
-overlay safe zones, and the whole canvas is always shown (no crop, so the
-hardware never moves). Phones draw the overlays at a larger scale than
-desktops so the figures stay legible.
+Overlay geometry (`src/scene/iso.ts`, `v4Layout`): hardware anchors calibrated
+on the master plate at native resolution and audited identical in all ten
+plates; information cards in four edge zones (never over equipment, tested at
+every scale); routes as straight segments with small fillets that follow the
+building and the garden in the plate's perspective. Each card has a fine
+information link to its equipment; the animated power routes run from the
+equipment along the roofs, walls and garden edges to a common ground-level
+cable entry below the inverter, from which each system rises on its own
+straight vertical track into the unit's underside. The whole canvas is always
+shown (no crop). `scene.debug_anchors: true` draws anchors, bends, zones and
+the entry corridor.
 
 ## What it reuses
 
@@ -130,7 +134,7 @@ queries, so it follows the card's width, not the window's).
 npm ci
 npm run typecheck
 npm run build        # dist/ecco-flow-3d-card.js (deterministic; committed)
-npm test             # node:test, 64 tests
+npm test             # node:test, 70 tests
 npm run preview      # http://127.0.0.1:8765/preview/index.html?s=day-export
 ```
 
@@ -159,7 +163,7 @@ demonstration data.
 | `sensorMapping.test.ts` | every example entity exists in the repository; the preview mock covers them |
 | `safety.test.ts` | no service/websocket/API calls, no network resources, no action config, no fabricated defaults |
 | `geometry.test.ts` | vector scene: pills inside the viewBox and non-overlapping; paths end exactly at their ports |
-| `artworkLayout.test.ts` | V4 layout: pills in the safe zones and off every hardware anchor at every scale; routes through the anchor-map waypoints, ending at the wall inverter |
+| `artworkLayout.test.ts` | V4 layout: calibrated anchors; cards in their zones and off every anchor at every scale; every power route from its equipment to a distinct vertical riser into the inverter; info links card to equipment; routes structured (few vertices, axis-aligned or perspective slopes, small fillets); grid clear of car, door and windows |
 | `scenes.test.ts` | scene rules in the pack's order, the Christmas window, golden hour, URLs under the local pack path |
 | `build.test.ts` | byte-identical rebuilds; committed `dist/` matches the sources |
 
