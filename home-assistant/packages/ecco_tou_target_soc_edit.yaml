@@ -6,6 +6,8 @@
 # can never be installed together (they declare the same helpers, the same acknowledge script and the same watchdog automation).
 # acs1c (2026-10-25): home-assistant/prototypes/acs-stage1/acs1c_transform.py then rewrites the start-time ordering rule of that text
 # as one 24-hour cycle in slot order (the same technique, its own pins): the installed text is render_cyclic(render_stage1(Stage 0)).
+# acs1x (2026-10-27): home-assistant/prototypes/acs-stage1/acs1x_transform.py then adds the midnight-crossing hold to that text (the
+# same technique, its own pins): the installed text is render_crossing(render_cyclic(render_stage1(Stage 0))).
 #
 # Scope: exactly one value of one slot per request, and nothing else is staged. The settings:
 #   target_soc     TOU slot N target SOC (inverter register 267+N, %), bound max(inverter shutdown SOC, ECCO reserve)..100
@@ -17,6 +19,9 @@
 #                  refused within 15 minutes of the old or the new boundary, while the local time lies between the old and the new
 #                  boundary (it would change the active slot now), and when the inverter's own clock (Inverter Time) is more than 120 s
 #                  from Home Assistant's. Slot N-1's Manual Controls staging keeps the old end until it is Loaded again (see the notice)
+#                  acs1x (crossing hold): also refused if the edit would move the midnight crossing (the one slot pair whose next
+#                  start is earlier than its own, in HH:MM minutes) to another slot boundary, until a supervised relocated-crossing
+#                  proof is separately authorised; every copy of the gate checks it and fails closed on an unreadable start
 #   charge_source  slot N charge source (bits 0-1 of register 273+N): None or Grid only (no generator is evidenced). The mode bits and
 #                  the reserved bits are kept because the staged mode equals the live mode and the firmware keeps cache & 0xFFE0. None is
 #                  staged with select.select_first (None is the select's first option) and Grid with select.select_option, because
@@ -216,6 +221,8 @@ script:
             {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
             {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
             {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+            {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
             {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
             {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -242,6 +249,7 @@ script:
             {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
             {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
             {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+            {% elif setting == 'start_time' and not xw %}the edit would move the midnight crossing to another slot boundary (the owner's restriction R1 of policy P3c): refused until a supervised relocated-crossing proof is separately authorised
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -463,6 +471,8 @@ script:
             {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
             {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
             {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+            {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
             {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
             {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -489,6 +499,7 @@ script:
             {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
             {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
             {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+            {% elif setting == 'start_time' and not xw %}the edit would move the midnight crossing to another slot boundary (the owner's restriction R1 of policy P3c): refused until a supervised relocated-crossing proof is separately authorised
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -639,6 +650,8 @@ script:
                 {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
                 {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
                 {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+                {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
                 {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
                 {% set cyc2 = h.ok and h.s == 1440 %}
                 {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -665,6 +678,7 @@ script:
                 {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
                 {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
                 {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+                {% elif setting == 'start_time' and not xw %}the edit would move the midnight crossing to another slot boundary (the owner's restriction R1 of policy P3c): refused until a supervised relocated-crossing proof is separately authorised
                 {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                 {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                 {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -896,6 +910,8 @@ script:
                         {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
                         {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
                         {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                        {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+                        {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
                         {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
                         {% set cyc2 = h.ok and h.s == 1440 %}
                         {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -922,6 +938,7 @@ script:
                         {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
                         {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
                         {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+                        {% elif setting == 'start_time' and not xw %}the edit would move the midnight crossing to another slot boundary (the owner's restriction R1 of policy P3c): refused until a supervised relocated-crossing proof is separately authorised
                         {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                         {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                         {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)

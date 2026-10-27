@@ -236,7 +236,11 @@ rebased onto it, its chain entry re-sealed as `acu1`'s child (the three shared f
   registers hold the request, not which slot the inverter runs at a given minute. Recommendation: a supervised hardware proof of the
   scheduler's behaviour with a relocated crossing (section 7, step 4) before the dashboard enables unrestricted crossing-moving edits;
   until then the dashboard step should refuse or warn on such edits. The safeguards implemented here are unchanged by this note; no
-  new write policy is introduced.
+  new write policy is introduced. **Since acs1x (2026-10-27):** the owner approved this correction for source integration only, with
+  restriction R1 (no move of the midnight crossing to a different slot until a separately authorised supervised test), and then directed
+  that the scripts enforce it. The post-export entry `acs1x` ([acs1x-crossing-hold.md](acs1x-crossing-hold.md)) refuses every such edit
+  in all four copies of the gate, fail closed; the residual above is held by the backend until that proof and a separately reviewed
+  change lift it.
 - Slot 1's start is also ECCO's "charge start" (`sensor.ecco_config_charge_start_minute` in `ecco_runtime_config.yaml` reads slot 1's
   start as the next regular grid-charge TOU start, feeding the dashboard and the runtime-configuration readiness). This correction
   makes slot 1 editable on the owner's layout for the first time; a slot 1 edit therefore also moves that reading.
