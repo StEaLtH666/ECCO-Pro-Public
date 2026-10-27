@@ -187,3 +187,15 @@ Its frozen edits are:
 - `registry/system_health_checks.yaml`: the designed canonical-vs-raw check records the hd1 exception.
 
 `hd1` changed no firmware, inverter write path, write surface, FE-1 package or Energy Flow card.
+
+## What acs1 and acs1c changed
+
+`acs1` (the guarded TOU settings editor, `registry/tests/_acs1_scope.py`) and `acs1c` (its cyclic start-time correction,
+`registry/tests/_acs1c_scope.py`) edit no chain-pinned and no frozen file: the package they change
+(`home-assistant/packages/ecco_tou_target_soc_edit.yaml`) is an `added_files` entry of `acs0`, neither pinned nor frozen, so neither
+entry can hold a reverter for it. Each records its edit as an invertible exact-replacement transform instead, proven both ways by
+`home-assistant/tests/test_ecco_tou_slot_settings_edit.py`: `acs1` as `render_stage1(<Stage 0 text>)` (62 pairs,
+`home-assistant/prototypes/acs-stage1/acs_stage1_transform.py`) and `acs1c` as `render_cyclic(<Stage 1 text>)` (21 pairs,
+`acs1c_transform.py`), the acs1 record unchanged. Both declare only the files they add and their fingerprint. Details:
+[acs-stage1-integration.md](acs-stage1-integration.md) and [acs1c-cyclic-tou.md](acs1c-cyclic-tou.md). Neither changed any firmware,
+inverter write path, write surface, manifest stanza or reserved-token allowlist.

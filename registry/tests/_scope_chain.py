@@ -116,6 +116,7 @@ import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _acs1_scope as _acs1  # noqa: E402
 import _acu1_scope as _acu1  # noqa: E402
+import _acs1c_scope as _acs1c  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
@@ -1133,7 +1134,35 @@ ACU1 = Entry(
          "the manifest; the read-only catalogue card of section 13 is unchanged: ZERO firmware, Home Assistant package, registry, Intelligence "
          "or ecco_core change, ZERO Modbus operation, no reserved-token holder, unchanged write surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1)
+# acs1c (Advanced Configuration Stage 1, cyclic TOU correction; _acs1c_scope.py): made on public main a7235433 after acs1, rebased onto
+# 07b37c14 after acu1 on 2026-10-26. The acs1 editor
+# refused every start-time Review of the owner's live layout (starts 00:30, 05:30, 12:00, 16:35, 22:00, 00:25: slot 5 runs past midnight,
+# slot 6 lasts five minutes) as "not strictly ascending": a software limitation, not an invalid schedule (the inverter's six slots are a ring
+# and the fallback capture's ring_valid already says so). acs1c replaces the ordering rule in the four copies of the gate by a cyclic one (one
+# 24-hour cycle in slot order on the 5-minute grid, every slot at least 5 minutes, exactly one wrap; the new start strictly between its
+# neighbours counted round the clock; the proposed layout itself one cycle; the active-slot-now guard in the same unwrapped minutes) and
+# changes nothing else: every other guard, the staged-equals-live proof, the one quiet-window press, the readback, F1 / F2 and the lock are
+# byte for byte acs1's; the written value is still the typed HH:MM on the grid. The exact record is a SECOND invertible transform layered on
+# the Stage 1 text (home-assistant/prototypes/acs-stage1/acs1c_transform.py, 21 pairs; unrender_cyclic(installed) is the Stage 1 text of
+# 2026-10-25, sha256 pinned, the rollback file of this correction), proven both ways by the Stage 1 suite; the acs1 transform, its pins and
+# its declaration are unchanged. NO reverter and NO checkpoint (acs1's reasons); no frozen file, no reserved-token allowlist and no reserved
+# id is edited (the gate lines that carry the six ids are inherited untouched); banned_files is empty. Measured, not declared: ZERO firmware,
+# registry YAML, deployment, dashboard, Intelligence or ecco_core byte; the firmware write surface is unchanged. OWNER STATUS: offline
+# implementation at the owner's direction of 2026-10-25 (Window C); independently reviewed offline (2026-10-25/26); not installed, not live-proven; policy P3 ("strictly ascending") is superseded only on the owner's approval after review.
+ACS1C = Entry(
+    id="acs1c", pr="ACS1C", commit="unmerged",
+    added_files=_acs1c.ADDED_FILES,
+    # _pex.fingerprint(ACS1C): hashes its parent acu1's fingerprint (acs1c was re-sealed on acu1, main 07b37c14, on 2026-10-26) and every declaration above
+    fingerprint="9b4e5b349ef18de9c9ddf36bd61e98d85ac8da5443ce3240377cd370797aaffc",
+    note="Advanced Configuration Stage 1, cyclic TOU correction (offline, at the owner's direction of 2026-10-25; independently reviewed "
+         "offline on 2026-10-25/26; not installed, not live-proven): the start-time ordering rule of the guarded TOU editor becomes one 24-hour cycle in slot order (5-minute grid, every "
+         "slot at least 5 minutes, exactly one wrap past midnight; the new start strictly between its neighbours round the clock, slot 6 before "
+         "slot 1; the proposed layout itself one cycle; the active-slot-now guard in unwrapped minutes), so the owner's live layout can be edited; "
+         "every other guard, proof, press, readback and lock unchanged; the written value is still HH:MM on the grid; recorded by a second "
+         "invertible transform on the Stage 1 text (21 pairs), the acs1 record unchanged: ZERO firmware, registry, deployment, frozen-file or "
+         "reserved-token-allowlist change, unchanged write surface",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
