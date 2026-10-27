@@ -1,12 +1,25 @@
 // Card links on the artwork plates (scene.links): which style renders, which links and card borders breathe, and
-// how a configured value is read. The scene is rendered to its Lit template and flattened to markup text.
+// how a configured value is read. The scene is rendered to its Lit template and flattened to markup text. The three
+// rendering tests need Lit (npm ci); where it is not installed (CI installs no npm package) they are reported as skipped,
+// never as passed, as the rebuild tests in build.test.ts are. The other tests need no package and always run.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderScene, type FlowView, type PillData, type SceneModel } from "../src/scene/scene.ts";
+import type { FlowView, PillData, SceneModel } from "../src/scene/scene.ts";
 import { V4_LAYOUT } from "../src/scene/iso.ts";
 import { buildFlowEdges, splitSolarFlows, type FlowId } from "../src/core/power.ts";
 import { BORDER_ACTIVE_MIN, BORDER_IDLE_OPACITY, LINK_ACTIVE_MIN, LINK_IDLE_OPACITY, motionFor } from "../src/core/motion.ts";
 import { linkStyleOf, validateConfig, type LinkStyle } from "../src/config.ts";
+
+// Only the absence of Lit is tolerated: once Lit is present the scene module is imported unguarded, so any other failure
+// to load it still fails this file.
+let hasLit = true;
+try {
+  await import("lit");
+} catch {
+  hasLit = false;
+}
+const renderScene: ((m: SceneModel) => unknown) | null = hasLit ? (await import("../src/scene/scene.ts")).renderScene : null;
+const needsLit = renderScene ? false : "lit is not installed (run `npm ci` in the card folder)";
 
 /** Lit template -> markup text; attribute values are quoted so class lists can be matched. */
 function flatten(v: unknown): string {
@@ -57,14 +70,14 @@ function scene(p: Powers, opts: { links?: LinkStyle; stale?: boolean; animate?: 
         ? undefined
         : { layers: [{ url: "/p/00_bright_summer_day.png", key: "bright_summer_day", entering: false }], layout: V4_LAYOUT, onError: () => {}, onLoad: () => {}, links: opts.links },
   };
-  return flatten(renderScene(m));
+  return flatten(renderScene!(m));
 }
 
 const svgClass = (html: string) => /<svg class="([^"]*)"/.exec(html)?.[1] ?? "";
 const groups = (html: string, cls: string) => [...html.matchAll(/<g class="([^"]*)"/g)].map((x) => x[1]!.split(/\s+/)).filter((c) => c.includes(cls));
 const pillClasses = (html: string, id: string) => groups(html, `pill-${id}`)[0] ?? [];
 
-test("links default to the pulse style; particles and off render as before", () => {
+test("links default to the pulse style; particles and off render as before", { skip: needsLit }, () => {
   const pulse = scene(DAY);
   assert.ok(svgClass(pulse).split(" ").includes("links-pulse"));
   assert.equal(groups(pulse, "pulse-link").length, 5, "one dotted link per array, the battery, the grid and the house");
@@ -81,7 +94,7 @@ test("links default to the pulse style; particles and off render as before", () 
   assert.ok(/data-path="ef3d-path-/.test(off), "the power routes keep their particles in every mode");
 });
 
-test("a link breathes exactly while its flow moves, and a card border exactly while one of its own links does", () => {
+test("a link breathes exactly while its flow moves, and a card border exactly while one of its own links does", { skip: needsLit }, () => {
   const day = scene(DAY);
   for (const g of groups(day, "pulse-link")) assert.ok(g.includes("active"), `${g.join(" ")} breathes in daylight export`);
   for (const id of ["solar", "grid", "battery", "home"]) assert.ok(pillClasses(day, id).includes("breathing"), `${id} border breathes`);
@@ -101,7 +114,7 @@ test("a link breathes exactly while its flow moves, and a card border exactly wh
   for (const links of ["particles", "off"] as const) for (const id of ["solar", "grid", "battery", "home"]) assert.ok(!pillClasses(scene(DAY, { links }), id).includes("breathing"), `${links}: ${id}`);
 });
 
-test("still mode marks the scene still; one array draws one solar link; the vector scene has no links", () => {
+test("still mode marks the scene still; one array draws one solar link; the vector scene has no links", { skip: needsLit }, () => {
   assert.ok(svgClass(scene(DAY, { animate: false })).split(" ").includes("still"));
   const one = scene({ ...DAY, pv2: null, total: 3350 }, { arrays: 1 });
   assert.equal(groups(one, "info-solar-garage").length, 0);

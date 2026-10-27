@@ -11,7 +11,8 @@
   [5] routing is isolated data: src/scene/routing-v4.ts imports nothing from the telemetry, motion or Lit layers
   [6] the site renderer renders the bundle and the example (and not the sources or tests)
   [7] the card's Node suite (node --test, TAP), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped.
-      Only the two deterministic-rebuild tests may skip, and only where esbuild is not installed (CI installs no npm package)
+      Only the two deterministic-rebuild tests may skip, and only where esbuild is not installed, and the three card-link rendering
+      tests, and only where Lit is not installed (CI installs no npm package)
   [8] scope: the card is in no manifest, package, version file or dashboard (an offline prototype; preview install is a
       separate owner-authorised step, see INSTALL_PREVIEW.md)
 
@@ -221,10 +222,18 @@ else:
           r.returncode == 0 and counts.get("fail") == 0 and counts.get("cancelled") == 0 and counts.get("todo") == 0
           and counts.get("pass", 0) >= 70 and counts.get("pass", 0) + counts.get("skipped", -1) == counts.get("tests"), tail)
     have_esbuild = (CARD / "node_modules" / "esbuild").is_dir()
+    have_lit = (CARD / "node_modules" / "lit").is_dir()
     skips = re.findall(r"^\s*ok \d+ - (.+?) # SKIP (.*)$", r.stdout, re.M)
-    allowed = [] if have_esbuild else ["dist/ecco-flow-3d-card.js is the build of the current sources", "two builds of the same sources are byte-identical"]
-    check(f"skipped tests are exactly the allowed ones ({'none: esbuild is installed' if have_esbuild else 'the two rebuild tests: esbuild is not installed'})",
-          sorted(n for n, _why in skips) == allowed and counts.get("skipped") == len(allowed) and all("esbuild is not installed" in why for _n, why in skips), str(skips))
+    rebuild = ["dist/ecco-flow-3d-card.js is the build of the current sources", "two builds of the same sources are byte-identical"]
+    rendering = ["a link breathes exactly while its flow moves, and a card border exactly while one of its own links does",
+                 "links default to the pulse style; particles and off render as before",
+                 "still mode marks the scene still; one array draws one solar link; the vector scene has no links"]
+    reason = {**{n: "esbuild is not installed" for n in rebuild}, **{n: "lit is not installed" for n in rendering}}
+    allowed = sorted(([] if have_esbuild else rebuild) + ([] if have_lit else rendering))
+    check(f"skipped tests are exactly the allowed ones ({'none' if not allowed else len(allowed)}: esbuild "
+          f"{'installed' if have_esbuild else 'not installed'}, Lit {'installed' if have_lit else 'not installed'})",
+          sorted(n for n, _why in skips) == allowed and counts.get("skipped") == len(allowed)
+          and all(reason.get(n, "\0") in why for n, why in skips), str(skips))
 
 # ===========================================================================
 print("")
