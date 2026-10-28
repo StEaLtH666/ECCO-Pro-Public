@@ -203,8 +203,9 @@ inverter write path, write surface, manifest stanza or reserved-token allowlist.
 ## What acs1x changed
 
 `acs1x` (the midnight-crossing hold, `registry/tests/_acs1x_scope.py`) adds one refusal to the same package: a start-time edit that would
-move the midnight crossing to another slot boundary is refused in all four copies of the gate. Like `acs1c` it records its edit as a
-third invertible transform, `render_crossing(<acs1c text>)` (8 pairs, `home-assistant/prototypes/acs-stage1/acs1x_transform.py`), proven
+move the midnight crossing to another slot boundary is refused in all four copies of the gate, and four refusal texts are rewritten so that
+every value written to the result helper fits. Like `acs1c` it records its edit as a third invertible transform, `render_crossing(<acs1c
+text>)` (12 pairs, `home-assistant/prototypes/acs-stage1/acs1x_transform.py`), proven
 both ways by the Stage 1 suite, the acs1 and acs1c records unchanged; it declares only the files it adds and its fingerprint (sealed on
 `acs1c`). No firmware, inverter write path, write surface, manifest stanza or reserved-token allowlist changed. Details:
 [acs1x-crossing-hold.md](acs1x-crossing-hold.md).

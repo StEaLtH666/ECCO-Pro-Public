@@ -1166,28 +1166,31 @@ ACS1C = Entry(
 # acs1x (Advanced Configuration Stage 1, midnight-crossing hold; _acs1x_scope.py): made on public main e97ba36c (the acs1c merge, PR #45).
 # acs1c made every slot of the owner's layout start-time editable through the scripts, so a single edit could also move the midnight
 # crossing (the one slot pair whose next start is earlier in raw HH:MM minutes; slot 5 -> 6 in the owner's layout) to another slot: a
-# position the inverter's scheduler has not been observed with. The owner's restriction R1 of policy P3c forbids that until a separately
-# authorised supervised test, and on 2026-10-27 the owner directed that the scripts enforce it, fail closed. acs1x adds to the four copies
-# of the gate one check (`xw`: one raw decrease in the live and in the proposed layout, at the same index; anything unreadable refuses)
-# and its refusal, right after acs1c's proposed-layout refusal; nothing else changes. The exact record is a THIRD invertible transform
-# layered on the acs1c text (home-assistant/prototypes/acs-stage1/acs1x_transform.py, 8 pairs; unrender_crossing(installed) is the acs1c
-# text of e97ba36c, sha256 pinned, the rollback file of this layer), proven both ways by the Stage 1 suite; the acs1 and acs1c transforms,
+# position the inverter's scheduler has not been observed with. The owner restricted that until a separately authorised supervised test,
+# and on 2026-10-27 directed that the scripts enforce it, fail closed. acs1x adds to the four copies of the gate one check (`xw`: one raw
+# decrease in the live and in the proposed layout, at the same index; anything unreadable refuses) and its refusal, right after acs1c's
+# proposed-layout refusal, and rewrites four refusal texts, shorter and never truncated, so that every value written to the 255-character
+# result helper fits (acs1c's cycle and neighbour refusals and acs1's power and fallback live match refusals did not fit the last check's
+# frame); nothing else changes. The exact record is a THIRD invertible transform layered on the acs1c
+# text (home-assistant/prototypes/acs-stage1/acs1x_transform.py, 12 pairs; unrender_crossing(installed) is the acs1c text of e97ba36c,
+# sha256 pinned: provenance, not an installed rollback while the restriction stands), proven both ways by the Stage 1 suite; the acs1 and acs1c transforms,
 # pins and declarations are unchanged. NO reverter and NO checkpoint (acs1's reasons); no frozen file, no reserved-token allowlist and no
 # reserved id is edited; banned_files is empty. Measured, not declared: ZERO firmware, registry YAML, deployment, dashboard, frontend,
 # Intelligence or ecco_core byte; the firmware write surface is unchanged. OWNER STATUS: offline implementation at the owner's direction
-# of 2026-10-27; not independently reviewed yet, not installed; no relocated-crossing test is authorised.
+# of 2026-10-27, corrected for an independent review's findings; the correction awaits its own re-check; not installed; no relocated-crossing test is authorised.
 ACS1X = Entry(
     id="acs1x", pr="ACS1X", commit="unmerged",
     added_files=_acs1x.ADDED_FILES,
     # _pex.fingerprint(ACS1X): hashes its parent acs1c's fingerprint (public main e97ba36c) and every declaration above
     fingerprint="775ddcd098a21f4971c594abf383af696fe40785654197b5916bd62c1ce2014f",
-    note="Advanced Configuration Stage 1, midnight-crossing hold (offline, at the owner's direction of 2026-10-27; not yet independently "
-         "reviewed, not installed): the guarded TOU editor's scripts refuse any start-time edit that would move the midnight crossing (the one "
-         "slot pair whose next start is earlier in raw HH:MM minutes) to another slot boundary, in all four copies of the gate, fail closed on "
-         "anything unreadable (the owner's restriction R1 of policy P3c, until a separately authorised supervised relocated-crossing proof); "
-         "target SOC, power and charge-source edits and every other guard, proof, press, readback and lock unchanged; recorded by a third "
-         "invertible transform on the acs1c text (8 pairs), the acs1 and acs1c records unchanged: ZERO firmware, registry, deployment, "
-         "frontend, frozen-file or reserved-token-allowlist change, unchanged write surface",
+    note="Advanced Configuration Stage 1, midnight-crossing hold (offline, at the owner's direction of 2026-10-27, corrected for an "
+         "independent review's findings, the correction awaiting its re-check; not installed): the guarded TOU editor's scripts refuse any "
+         "start-time edit that would move the midnight crossing (the one slot pair whose next start is earlier in raw HH:MM minutes) to another "
+         "slot boundary, in all four copies of the gate, fail closed on anything unreadable, until a separately authorised supervised "
+         "relocated-crossing proof; four refusal texts rewritten, shorter and never truncated, so every value written to the result helper "
+         "fits; target SOC, power and charge-source edits and every other guard, proof, press, readback and lock unchanged; recorded by a "
+         "third invertible transform on the acs1c text (12 pairs), the acs1 and acs1c records unchanged: ZERO firmware, registry, deployment, frontend, frozen-file or "
+         "reserved-token-allowlist change, unchanged write surface",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X)
 
