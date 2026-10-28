@@ -14,8 +14,10 @@ raw decreases in the live layout and in the proposed one (built exactly as acs1c
 one in each, at the same index, else it refuses ("the new start time would change which slot runs past midnight ..."); anything
 unreadable refuses. It also rewrites four refusal texts (acs1c's cycle and neighbour texts, acs1's power and fallback live match texts),
 shorter and never truncated, so that every value written to the 255-character result helper fits at its longest and the designed FAILED path
-of the last check (its notice, the F2 re-Load) runs; those four did not fit that check's 90-character frame (review finding, 2026-10-27). Target SOC, power and charge-source edits are unaffected; every other guard, proof, press, readback and lock is byte
-for byte acs1c's. ZERO firmware byte, ZERO new register, write path, service call or entity, ZERO manifest change (same package path, same
+of the last check (its notice, the F2 re-Load) runs; those four did not fit that check's 90-character frame (review finding, 2026-10-27).
+Target SOC, power and charge-source edits keep the same rules and behaviour (the reworded power and fallback live match texts can also be
+their result, so those two refusals read differently); apart from the four reworded refusal texts, every other guard, proof, press,
+readback and lock is byte for byte acs1c's. ZERO firmware byte, ZERO new register, write path, service call or entity, ZERO manifest change (same package path, same
 stanza). The dashboard card keeps start times display-only (unchanged).
 
 WHY A THIRD LAYER. As acs1c did on acs1, acs1x keeps the acs1 and acs1c transforms, their pins and their declarations byte for byte and adds
@@ -23,7 +25,10 @@ a third invertible transform on top of the acs1c text (home-assistant/prototypes
 count) pairs; render_crossing(<the acs1c text>) is the installed package and unrender_crossing(<installed>) is the acs1c text again). The
 acs1c text (sha256 STAGE1C_PACKAGE_SHA256, public main e97ba36c) is recoverable from the installed file alone, as provenance: it is NOT an
 installed rollback while the restriction stands (installed alone it accepts crossing-moving edits); an installed rollback goes to the
-previous site render (the Stage 1 package of 2026-10-25) or to any render that keeps the hold. The Stage 1 text and the Stage 0 text are
+previous site render (the Stage 1 package of 2026-10-25) or to any render that keeps the hold. That Stage 1 package still has acs1's long
+fallback live match refusal at its last check (90 + 158 + 16 = 264 characters, over the result helper's 255: no FAILED result, notice or
+F2 re-Load if the live match changes between the fresh read and the press); while it is installed, after an edit left IN PROGRESS, Load
+that slot before any Manual Controls Apply. The Stage 1 text and the Stage 0 text are
 recoverable through the other two layers. The Stage 1 suite proves all three layers, both ways.
 
 THE DECISION ON REVERTERS is acs1's and acs1c's: the package is neither chain-pinned nor frozen, so acs1x declares NO reverter and NO
@@ -42,7 +47,8 @@ entry appended).
 OWNER STATUS. Offline implementation at the owner's direction of 2026-10-27 (backend enforcement of the crossing restriction), corrected
 for the findings of an independent review (2026-10-27); the corrected change awaits its own independent re-check. NOT installed, NOT
 live-proven. No relocated-crossing test is authorised. Push, PR, merge and any install each need the owner's separate approval. Lifting
-the restriction means a supervised relocated-crossing proof AND a separately reviewed change that removes this layer.
+the restriction means a supervised relocated-crossing proof AND a separately authorised, reviewed and installed change that removes this
+layer; approving the test does not lift it (the refusal's "until a supervised test ... has been approved" names a precondition only).
 
 MERGE ORDER. acs1x is sealed to acs1c (public main e97ba36c). If another post-export entry merges first, acs1x must be re-sealed on top of
 it: recompute the fingerprint with the sealed() helper of _pex (the chain up to the new parent, then ACS1X), then update, together, the

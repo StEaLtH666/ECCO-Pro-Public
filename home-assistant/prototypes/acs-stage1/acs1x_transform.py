@@ -36,7 +36,10 @@ declared number of times, otherwise ValueError names the pair. The result is the
 unrender_crossing() applies the pairs in reverse order as (after -> before) with the same exact counts and gives the acs1c text back: a
 provenance artefact, NOT an installable rollback while the restriction stands (installed alone, the acs1c text accepts crossing-moving
 edits). An installed rollback goes to the previous site render (the Stage 1 package installed on 2026-10-25) or to any render that keeps
-the hold. The acs1 and acs1c transforms, their pins and their chain entries are unchanged: the installed package is
+the hold. That Stage 1 package still has acs1's long fallback live match refusal at its last check (90 + 158 + 16 = 264 characters, over
+the result helper's 255: if the live match changes between the fresh read and the press, no FAILED result is stored, so no notice and no
+F2 re-Load); while it is installed, after an edit left IN PROGRESS, Load that slot before any Manual Controls Apply. The acs1 and acs1c
+transforms, their pins and their chain entries are unchanged: the installed package is
 render_crossing(render_cyclic(render_stage1(<Stage 0 text>))).
 
 WHAT IT TOUCHES. Only: the four copies of the gate (the Review, the Apply's gate, its fresh-read re-check and its last check before the
@@ -49,7 +52,8 @@ carry no reserved fallback / failback token, and this module spells none. No fir
 
 WHAT IT DOES NOT DO. No I/O (no file, no network, no Home Assistant, no hardware). It writes nothing and changes nothing that is written:
 it only adds a refusal (and shortens four refusal texts so that each fits its result helper whole). It does not lift the restriction: a relocated-crossing edit
-needs the supervised proof, a separately reviewed change that removes or relaxes this layer, and the owner's authorisation.
+needs the supervised proof, a separately reviewed change that removes or relaxes this layer, and the owner's authorisation, and that
+change installed; approving the test does not lift the hold by itself (REFUSE_XW names a precondition only).
 """
 
 from __future__ import annotations

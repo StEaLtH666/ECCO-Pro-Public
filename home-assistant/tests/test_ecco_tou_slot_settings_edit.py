@@ -29,7 +29,8 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [0x] crossing hold  the acs1x layer: its twelve pairs, both directions, the untouched-line proof, the check and its refusal in each of the four
                       copies of the gate at its own place (right after the proposed-layout refusal, its lines right before that test), and
                       every value written to the three input_text helpers within 255 characters at its longest (each substitution at a stated
-                      maximum, each refusal variable at the longest refusal of its copy; four refusals rewritten, none truncated)
+                      maximum, each refusal variable at the longest refusal of its copy; four refusals rewritten, none truncated; a
+                      refusal variable written in any form other than whole - a slice, a filter, any expression, however spelled - fails)
   [1] static scope    which services and entities the installed package may touch; every firmware entity exists; Stage 0 untouched
   [2] happy path      every slot x every setting: Review -> typed phrase -> Apply; exactly the intended register changes; verified
   [3] SOC parity      the Stage 0 package (unrendered from the installed one) and the installed one (setting target_soc) on identical
@@ -62,12 +63,15 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [11x] last check   (acs1x) the last copy of the gate alone refuses (a live start or the fallback live match changes after the Load): the hold
                       for slot 6 and its mirror for slot 5, acs1c's cycle and neighbour refusals and the fallback live match refusal each give
                       the FAILED result within 255 characters, the notice, the F2 re-Load (staging == live) and no press; on the package as
-                      first committed (rebuilt in memory) each case fails as the review reproduced it
-  [12] mutation       in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill);
+                      first committed (rebuilt in memory) each case fails as the review reproduced it; the fresh-read copy alone refuses (a
+                      live start changes between the Apply's gate and the fresh read): the exact 'FAILED - <the whole refusal>; nothing
+                      written', no Load, no press
+  [12] mutation      in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill);
                       acs1x: the hold dropped from all four copies and from each copy alone, its index comparison dropped, each conjunct of
                       the hold dropped, its proposed layout built without the new start, the hold moved after the 15-minute and active-slot
-                      guards, a rewritten refusal restored to its long form in the last check
-  [13] PEX            the acs1, acs1c and acs1x declarations: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
+                      guards, a rewritten refusal restored to its long form in the last check, a refusal sliced in the Review's, the
+                      Apply's gate's or the fresh read's result
+  [13] PEX           the acs1, acs1c and acs1x declarations: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
 
 PROVES: the control flow of the installed package against models of the firmware's manual TOU path and of Home Assistant, offline.
 DOES NOT PROVE: anything about a live Home Assistant, the dongle or the inverter; how a real interrupted multi-register write behaves
@@ -1027,7 +1031,16 @@ check("the hold's refusal is one of the gate's literal refusal texts, in plain w
 # A value longer than the helper's 255 characters is not stored (the helper keeps its old text): a refusal by the last copy of the gate then
 # leaves no FAILED result, so its notice and the F2 re-Load do not run. Each substitution below is bounded by the longest text it can produce
 # (with the reason); a sliced one by its slice; a conditional by its longest alternative; the refusal variables by the longest refusal of
-# their own copy of the gate. An expression not listed fails the check, so a new one must be bounded here. Nothing is truncated to fit.
+# their own copy of the gate. An expression not listed fails the check, so a new one must be bounded here. Nothing is truncated to fit:
+# a refusal variable is written whole or not at all (review finding FB-1: any other expression of one fails, however it is spelled).
+REFUSAL_VARS = ("refusal", "refusal2", "refusal3", "review_problem", "fresh_why")
+_REFUSAL_RE = re.compile(r"\b(?:" + "|".join(REFUSAL_VARS) + r")\b")
+
+
+class Shortened(KeyError):
+    """A substitution that writes a refusal variable in any form other than the bare variable (a slice, a filter, a method, any expression)."""
+
+
 SUB_MAX = {
     "n": (1, "the slot, 1-6: printed only once the slot is checked"),
     "label": (13, "one of the fixed setting labels ('charge source')"),
@@ -1087,13 +1100,16 @@ def _alts(expr):
 
 
 def sub_bound(expr, var):
-    """The longest text the substitution {{ expr }} can produce (KeyError for an expression that is not bounded here)."""
+    """The longest text the substitution {{ expr }} can produce (KeyError for an expression that is not bounded here; Shortened for a refusal
+    variable written in any form but whole)."""
     alts = _alts(expr)
     if len(alts) > 1:
         return max(sub_bound(a, var) for a in alts)
     e = alts[0]
-    if len(e) >= 2 and e[0] == e[-1] and e[0] in "'\"":
+    if re.fullmatch(r"'[^']*'|\"[^\"]*\"", e):
         return len(e) - 2
+    if _REFUSAL_RE.search(e) and e not in REFUSAL_VARS:
+        raise Shortened(e)
     m = re.fullmatch(r"(.+)\[:(\d+)\]", e)
     if m:
         return int(m.group(2))
@@ -1173,10 +1189,46 @@ check(f"EVERY value written to the three input_text helpers ({len(WR)} writers: 
       "and on the acs1c text (acs1c's cycle and neighbour texts, acs1's power and fallback live match texts) the last check's writer did not fit "
       f"({max(b for _o, _h, b, _v in WR_C)}) - review finding X1",
       len(WR) == 17 and sum(1 for _o, h_, _b, _v in WR if h_ == HELPERS3[0]) == 14 and all(b <= 255 for _o, _h, b, _v in WR)
-      and WR_RMAX[3] <= XW.REFUSAL_MAX and max(b for _o, _h, b, _v in WR_C) > 255 and "refusal3[:" not in S1 and "refusal2[:" not in S1
+      and WR_RMAX[3] <= XW.REFUSAL_MAX and max(b for _o, _h, b, _v in WR_C) > 255
       and all(len(re.sub(r"{{.*?}}", "", n_)) + 16 * n_.count("{{") <= XW.REFUSAL_MAX < len(re.sub(r"{{.*?}}", "", o_)) + 16 * o_.count("{{")
               for o_, n_ in XW.REWRITES),
       str([w for w in WR if w[2] > 255]) + " " + str(WR_RMAX))
+
+
+def writers_whole(text):
+    """None when every value written to the three helpers writes each refusal variable whole; else the first expression that does not."""
+    try:
+        writers_report(text)
+    except Shortened as exc:
+        return str(exc)
+    return None
+
+
+# Forms that shorten a refusal (each must be refused, however spelled) and forms that write it whole (each must be bounded).
+SHORT_FORMS = ("refusal2[:120]", "refusal2[0:120]", "refusal2 [ : 120 ]", "refusal2[:-10]", "(refusal2)[:120]", "refusal[:100]",
+               "(review_problem if review_problem else refusal)[:120]", "refusal3 | truncate(150)", "refusal3|truncate(150, true)",
+               "fresh_why[:80]", "refusal2.split(';')[0]", "(refusal2 | string)[:120]", "refusal ~ ''",
+               "fresh_why if not fresh else (refusal2[:120] if refusal2 else 'x')")
+WHOLE_FORMS = ("refusal", "(refusal2)", "( refusal3 )", "review_problem if review_problem else refusal",
+               "fresh_why if not fresh else (refusal2 if refusal2 else ('a' if pre.fl < 0 else 'b'))")
+_V5 = dict.fromkeys(REFUSAL_VARS, 10)
+
+
+def _raises_shortened(expr):
+    try:
+        sub_bound(expr, _V5)
+    except Shortened:
+        return True
+    return False
+
+
+check("no refusal is shortened to fit (review finding FB-1): every value written to the three helpers writes each refusal variable "
+      f"({', '.join(REFUSAL_VARS)}) whole; any other expression of one fails the bound however it is spelled ({len(SHORT_FORMS)} forms: slices "
+      "with and without a start, spaced, negative, of a parenthesised or conditional expression, the truncate filter, a method, a "
+      f"concatenation, inside a conditional), and the {len(WHOLE_FORMS)} whole forms (bare, parenthesised, conditional) are bounded",
+      writers_whole(S1) is None and all(_raises_shortened(f_) for f_ in SHORT_FORMS)
+      and all(sub_bound(f_, _V5) == 10 for f_ in WHOLE_FORMS),
+      str((writers_whole(S1), [f_ for f_ in SHORT_FORMS if not _raises_shortened(f_)])))
 check("the four rewritten refusals keep their meaning and the words the editor's other texts and suites rely on (the grid, the cycle, the "
       "neighbour rule, 500 to 8000 W, the fallback profile, the live match value), and each replaces its long form in all four copies",
       all(S1.count("%}" + n_ + "\n") == 4 and S1C.count("%}" + o_ + "\n") == 4 and S1.count(o_) == 0 for o_, n_ in XW.REWRITES)
@@ -3849,6 +3901,55 @@ check(f"...and the {len(LAST_CASES)} cases detect the defect: on the package as 
       "text; rebuilt in memory) each leaves the result 'IN PROGRESS', no notice, no F2 re-Load and the refused value staged (staging != live), as "
       "the review reproduced; with the rewritten texts (above) each takes the designed FAILED path", not x_bad, str(x_bad[:2]))
 
+
+def live_start_before_fresh_read(slot, hhmm, delay=1.0):
+    """Another tool changes slot `slot`'s live start to `hhmm` `delay` s after the Apply's gate passed (its 'waiting for a fresh configuration
+    read' result written), before the fresh read; the dongle polls it at once. Only the fresh-read copy of the gate sees it first."""
+    def setup(x):
+        orig, done = x.w.set, []
+
+        def set_(entity_id, state, attrs=None):
+            orig(entity_id, state, attrs)
+            if not done and entity_id == RESULT and str(state).startswith("IN PROGRESS") and "waiting for a fresh configuration read" in str(state):
+                done.append(entity_id)
+
+                def go():
+                    x.d.regs["slots"][slot]["start"] = hhmm
+                    x.d.poll()
+                x.w.after(delay, go)
+        x.w.set = set_
+    return setup
+
+
+FRESH_FRAME = "FAILED - {}; nothing written"
+
+
+def fresh_read_alone(t, edit_slot, v, setup, text_, changed):
+    """The edit is Reviewed and passes the Apply's gate; `setup`'s change happens before the fresh read, so the fresh-read copy alone refuses.
+    True when its result is exactly 'FAILED - <the whole refusal>; nothing written' (FB-1: pinned in full), the notice carries it, and no Load,
+    press or register write happened (the refusal is not the last check's, which follows the Load)."""
+    r = Run(t, layout=owner_full, t0=NOON, setup=setup).edit(edit_slot, "start_time", v, run=480)
+    return (r.res() == FRESH_FRAME.format(text_) and FRESH_FRAME.format(text_) in r.note() and r.loads() == [] and r.applies() == []
+            and r.d.attempts == 0 and r.d.writes == [] and not r.locked() and not r.arm_on() and r.w.state(FLIGHT) == "off"
+            and r.changed() == changed), r
+
+
+FRESH_CASES = (
+    ("the hold (156 characters), slot 6 00:25 -> 00:20 Reviewed, live slot 6 moved to 23:00 after the Apply's gate",
+     6, "00:20", live_start_before_fresh_read(6, 2300), XW.REFUSE_XW, {(6, "start"): (25, 2300)}),
+    ("acs1c's cycle refusal (rewritten, 163 characters, the longest), slot 6 -> 00:20 Reviewed, live slot 2 moved to 00:20 after the Apply's gate",
+     6, "00:20", live_start_before_fresh_read(2, 20), XW.REFUSE_CYC_NEW, {(2, "start"): (530, 20)}),
+)
+x_bad = []
+for label, es, v, setup, txt, chg in FRESH_CASES:
+    ok, r = fresh_read_alone(S1, es, v, setup, txt, chg)
+    if not ok:
+        x_bad.append((label[:50], r.res()[:200], r.loads(), r.changed(), r.d.writes, r.note()[:80]))
+check(f"the fresh-read copy of the gate alone refuses ({len(FRESH_CASES)} cases: the hold, acs1c's cycle refusal; a live start changes between the "
+      "Apply's gate and the fresh read): the result is exactly 'FAILED - <the whole refusal>; nothing written' (pinned in full, so a shortened "
+      "refusal fails), the notice carries it, no Load, no press, no register write, not locked or armed (review finding FB-1)",
+      not x_bad, str(x_bad[:2]))
+
 # ======================================================================================================================
 print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
 # ======================================================================================================================
@@ -3919,6 +4020,13 @@ def _drop_xw_copy(k):
             i = t.index(a, i + 1)
         return t[:i] + "{% elif false %}" + t[i + len(a):]
     return f
+
+
+# The three results that write a refusal outside the last check (the Review, the Apply's gate, the fresh read), for the FB-1 mutants
+SLICE_REVIEW = "REVIEW REFUSED - {{ refusal }}; nothing written"
+SLICE_GATE = "REFUSED - {{ review_problem if review_problem else refusal }}; nothing written"
+SLICE_FRESH = "FAILED - {{ fresh_why if not fresh else (refusal2 if refusal2 else"
+assert all(S1.count(a_) == 1 for a_ in (SLICE_REVIEW, SLICE_GATE, SLICE_FRESH))
 
 
 def _xw_after_mid(t):
@@ -4122,6 +4230,8 @@ CHECKS = {
     "xw_alone": hold_alone_refuses,
     "xw_last": lambda t: last_check_alone(t, *LAST_CASES[0][1:])[0],
     "frame_fit": lambda t: all(last_check_alone(t, *c_[1:])[0] for c_ in LAST_CASES[2:]),
+    "whole": lambda t: writers_whole(t) is None,
+    "fresh_exact": lambda t: all(fresh_read_alone(t, *c_[1:])[0] for c_ in FRESH_CASES),
     "gen": lambda t: all(rejects(rv(t, 3, "charge_source", v)) for v in ("Generator", "Grid + Generator", "grid")),
     "src_live": lambda t: rejects(rv(t, 3, "charge_source", "None", layout=slot_set(3, src="Generator"))),
     "near": lambda t: rejects(rv(t, 3, "start_time", "12:00", **{"t0": S.parse_local("2026-10-12 08:45:00") - 70})),
@@ -4400,6 +4510,16 @@ MUTANTS += [
     *[(f"acs1x: the conjunct {label.split(' (')[0]} is dropped from the hold", [cut], "xw_alone") for label, cut, _kw, _n, _v in HOLD_CONJUNCTS],
     *[(f"acs1x: the last check's {name} refusal is restored to its long form (it no longer fits the result helper there)", _restore_last(new_, old_),
        "frame_fit") for name, (old_, new_) in zip(("cycle", "neighbour", "power", "fallback live match"), XW.REWRITES) if name != "power"],
+    # FB-1: a refusal shortened in a frame the last check's cases do not reach (each survived the suite of d2a20c7d)
+    ("acs1x: the fresh read's FAILED result slices its refusal (refusal2[:120])",
+     [(SLICE_FRESH, SLICE_FRESH.replace("(refusal2 if refusal2", "(refusal2[:120] if refusal2"))], "whole"),
+    ("acs1x: the fresh read's FAILED result slices its refusal (refusal2[:120]), end to end",
+     [(SLICE_FRESH, SLICE_FRESH.replace("(refusal2 if refusal2", "(refusal2[:120] if refusal2"))], "fresh_exact"),
+    ("acs1x: the Review's REFUSED result slices its refusal (refusal[:100])", [(SLICE_REVIEW, SLICE_REVIEW.replace("{{ refusal }}", "{{ refusal[:100] }}"))],
+     "whole"),
+    ("acs1x: the Apply's gate's REFUSED result slices its refusal ((review_problem if review_problem else refusal)[:120])",
+     [(SLICE_GATE, SLICE_GATE.replace("{{ review_problem if review_problem else refusal }}",
+                                      "{{ (review_problem if review_problem else refusal)[:120] }}"))], "whole"),
 ]
 MUTANTS += [
     ("N2: the gate-pass counter check is removed from the success verdict", [("and diff | length == 0 and n2_ok }}", "and diff | length == 0 }}")], "n2_other"),

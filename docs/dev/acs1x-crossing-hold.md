@@ -21,7 +21,7 @@ normal operation until a separately authorised, supervised hardware test proves 
 have enforced it: a direct script call could still apply a crossing-moving layout. On 2026-10-27 the owner directed a fail-closed,
 **script-level** restriction that does not rely on the dashboard or on operating instructions, kept until the supervised relocated-crossing
 verification has been separately authorised and completed, with the existing TOU layout preserved and start-time editing still disabled in
-the dashboard. acs1x is that restriction. No relocated-crossing test is authorised by it or needed for it.
+the dashboard. acs1x is that restriction; only a later, separately authorised, reviewed and installed change lifts it (section 2). No relocated-crossing test is authorised by it or needed for it.
 
 ## 2. The rule (`xw`)
 
@@ -34,6 +34,11 @@ builds it) and requires **exactly one in each, at the same index**; otherwise th
 
 > the new start time would change which slot runs past midnight (the midnight crossing): not allowed until a supervised test on the
 > inverter has been approved
+
+**What lifts the hold.** The refusal names a precondition, not a switch. Approving a supervised test does not lift the hold, and neither
+does completing one: the scripts keep refusing every crossing-moving edit until a separately authorised, independently reviewed and
+installed code change removes or relaxes this layer (section 7). The refusal text and the package header ("until a supervised
+relocated-crossing proof is separately authorised") stay as accepted; this section states how the hold ends.
 
 It is false (refuse) on anything unreadable: a live start that is not HH:MM, an unreadable new start, or a slot outside 1-6.
 
@@ -102,13 +107,15 @@ meaning, in all four copies, and its own text is 156 characters; **nothing is tr
 
 The suite bounds every value written to the three `input_text` helpers (17 writers) at its longest: each substitution at a stated maximum
 with its reason (a slot, a label, a 16-bit register, a sensor state, a slice), each refusal variable at the longest refusal of its own copy,
-an unlisted expression failing the check. It runs five last-copy-only cases end to end (the hold for slot 6 and slot 5, the cycle, the
+an unlisted expression failing the check, and a refusal variable written in any form other than whole (a slice, a filter, any expression,
+however spelled) failing it too. It runs five last-copy-only cases end to end (the hold for slot 6 and slot 5, the cycle, the
 neighbour and the fallback live match refusals): each records the FAILED result, sends the notice, re-Loads the edited slot (staging equal
-to the live slot) and presses and writes nothing.
+to the live slot) and presses and writes nothing. Two fresh-read-only cases (the hold, the cycle refusal) pin that copy's result in full.
 
 ## 4. What does not change
 
-Target SOC, power and charge-source edits (same result text and notification as before). Every acs1c rule (`cyc`, `order`, `cyc2`, the
+Target SOC, power and charge-source edits keep the same rules and behaviour; of the four reworded refusal texts (section 3), the power and
+the fallback live match texts can also be their result, so those two refusals read differently. Every acs1c rule (`cyc`, `order`, `cyc2`, the
 unwrapped active-slot guard, the form re-check of the typed value), every other guard, the fresh evidence, the staged == live proof, the
 quiet-window single press, the firmware readback, the two later reads, the gate-pass counter, F1 / F2, the UNCERTAIN lock. Four refusal
 texts read shorter (section 3); what they refuse is unchanged. No firmware byte, register, write path, service call, entity or helper; no manifest stanza; no dashboard or card
@@ -131,9 +138,11 @@ copies each).
 The package is `render_crossing(render_cyclic(render_stage1(<Stage 0 text>)))`; each earlier text derives from the installed file alone.
 **`unrender_crossing` gives the acs1c text as provenance, not as an installable rollback:** installed alone, the acs1c text accepts and
 applies crossing-moving edits. While the restriction stands, an installed rollback goes to the previous site render (the Stage 1 package
-installed on 2026-10-25) or to any render that keeps the hold, never to the acs1c text alone. Every pair anchors on whole lines next to the
-change, none on, spelling or rewriting a line that carries a reserved fallback / failback token (the 20 such gate lines and the six
-reserved ids are inherited untouched). The anchors are chosen so that no direction can be confused: `render_crossing` refuses an
+installed on 2026-10-25) or to any render that keeps the hold, never to the acs1c text alone. That Stage 1 package still has acs1's long
+fallback live match refusal at its last check (90 + 158 + 16 = 264 characters, over the helper's 255; section 7). Every pair anchors on
+exact text next to the change: the header and hold pairs on the text of the neighbouring lines (which need not be whole lines), the four
+rewrite pairs on the `%}` that closes the refusal's tag plus the old text, in the middle of that line. None anchors on, spells or rewrites a
+line that carries a reserved fallback / failback token (the 20 such gate lines and the six reserved ids are inherited untouched). The anchors are chosen so that no direction can be confused: `render_crossing` refuses an
 already-rendered text, `unrender_crossing` refuses an acs1c text, and `unrender_cyclic` refuses the installed text (the `xc` / `xw` lines
 sit inside acs1c's block of ordering lines).
 
@@ -150,7 +159,8 @@ Stage 0 suite's loading lines (it runs, otherwise unchanged, on the Stage 0 text
 
 - `[0]` / `[0x]` provenance of all three layers, both ways, pins asserted; every acs1x pair removed, duplicated or altered is refused
   naming the pair; the untouched-line proof with mutants; the check and its refusal once in each of the four copies at its place; every
-  value written to the three result helpers within 255 characters at its longest (shown not to hold on the acs1c text); the four rewritten
+  value written to the three result helpers within 255 characters at its longest (shown not to hold on the acs1c text), each refusal
+  variable written whole (14 shortening forms each refused, five whole forms bounded); the four rewritten
   texts in all four copies, keeping their meaning; the hold's text in plain words, distinct from every other refusal class;
 - `[4]` / `[4c]` the acs1c tables, with the crossing-moving cases now expecting the hold (slot 5 past midnight, slot 6 before it, slot 1 at
   23:55 on a layout whose slot 1 starts at 00:00); the active-slot guard across midnight is exercised on the acs1c text, and the installed
@@ -167,12 +177,15 @@ Stage 0 suite's loading lines (it runs, otherwise unchanged, on the Stage 0 text
   and its mirror for slot 5, acs1c's cycle and neighbour refusals, the fallback live match refusal; each records the FAILED result within
   255 characters, sends the notice, re-Loads the edited slot (staging == live) and presses and writes nothing; on the acs1c text the slot 6
   race is pressed and written; on the package as first committed (the long texts, a 187-character hold text; rebuilt in memory) each
-  case fails as the review reproduced it (no result, no notice, no F2 re-Load, the value left staged);
+  case fails as the review reproduced it (no result, no notice, no F2 re-Load, the value left staged); the fresh-read copy refusing alone
+  (a live start changes between the Apply's gate and the fresh read; the hold and the cycle refusal): exactly "FAILED - <the whole
+  refusal>; nothing written", the notice, no Load, no press;
 - `[12]` mutants, each KILLED by a failing behavioural check: the hold dropped from all four copies, from the Review only, from the Apply's
   gate only, from the fresh-read re-check only and from the last check only (caught by rendering each copy alone, and the last one also end
   to end), each of the four conjuncts dropped, the index comparison dropped, the proposed layout built without the new start, the hold moved
   after the 15-minute and active-slot guards, a rewritten refusal restored to its long form in the last check (cycle, neighbour, fallback
-  live match). Two acs1c mutants (two wraps allowed; the
+  live match), a refusal sliced in the Review's, the Apply's gate's or the fresh read's result (the last also end to end). Two acs1c
+  mutants (two wraps allowed; the
   active-slot guard linear again) are now refused by the hold first, so their checks run with the hold turned off in memory;
 - `[13]` the acs1x declaration: position, hash link to acs1c, added files, no frozen or chain-pinned edit, pins equal across the suite,
   the transform and the scope module.
@@ -188,11 +201,19 @@ the old value; the rewrites make the case unreachable for every value the helper
 ## 7. Residuals and limits
 
 - The hold is a policy restriction, not a safety proof: it keeps the editor inside the one crossing position evidenced on the inverter.
-  Lifting the restriction needs the supervised relocated-crossing proof (acs1c section 7, step 4) and a separately reviewed change that
-  removes or relaxes this layer.
+  Lifting the restriction needs the supervised relocated-crossing proof (acs1c section 7, step 4) and a separately authorised, reviewed
+  and installed change that removes or relaxes this layer; approving the test, or passing it, does not lift the hold by itself.
 - Manual Controls (the firmware's manual TOU path, driven directly) is outside this package and unchanged; the restriction stays an
   operating rule there.
 - A layout whose crossing was moved elsewhere by another tool cannot be moved back through the editor (section 2).
+- The rollback named here, the Stage 1 package installed on 2026-10-25 (also the editor in use until acs1c and acs1x are installed), still
+  has acs1's long fallback live match refusal at the last check: 90 + 158 + 16 = 264 characters, over the result helper's 255. If the
+  fallback live match changes between the fresh read and the press, that FAILED result is not stored: the result stays IN PROGRESS, with no
+  notice and no F2 re-Load, and the reviewed value can stay staged in Manual Controls (nothing is pressed or written). Precaution while that
+  package is installed: after an edit left IN PROGRESS, press Load Current Slot N for that slot before any Manual Controls Apply.
+- After a last-check refusal, F2 waits up to one minute for a quiet state; if Free Power or Dump to Grid outlasts that wait, F2 does not
+  re-Load and the reviewed value stays staged in Manual Controls. The notice says so and asks for Load Current Slot N (or Load All) before
+  any Manual Controls Apply of that slot.
 - On every input the shipped gate can reach, the two count requirements and the readability flag are implied by acs1c's `cyc` / `cyc2`,
   which come first in all four copies; the suite pins each of them with its own case once those rules are turned off in memory (section 6).
 
@@ -203,4 +224,5 @@ the old value; the rewrites make the case unreachable for every value the helper
 3. Installation: acs1c and acs1x are installed together (public main then carries both); the acs1c install path (kit, gates, a fresh
    backup, install without restart or inverter write, read-only acceptance, the supervised start-time proof that never moves the crossing)
    applies unchanged, with the hold's refusals added to the read-only acceptance (for example a slot 6 Review to 23:55 refused, nothing
-   written); its rollback is the previous site render, never the acs1c text alone.
+   written); its rollback is the previous site render, never the acs1c text alone (that render keeps the fallback live match overflow
+   at its last check and the precaution of section 7).
