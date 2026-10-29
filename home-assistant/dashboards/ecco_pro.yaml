@@ -44,6 +44,12 @@
 # the target SOC, the power and the charge source of one slot, through the installed ACS1 editor scripts only (Review, typed
 # confirmation, Apply; Acknowledge after an UNCERTAIN outcome). The card holds no safety logic and no other write path; start times
 # stay display-only (the site's layout wraps midnight, L1). The heading of section 7 and every other section are unchanged.
+# v7.23.0 (OVW3, STAGED / NOT LIVE-PROVEN) puts the read-only ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, V2) on the
+# Overview: section S3 shows it in place of the 2D Energy Flow card, with the same nodes, today, format and layout settings (the
+# 2D card's grid voltage, connection and frequency move to nodes.grid, where the 3D card reads them) and the ECCO status, scene
+# and freshness settings of the owner-accepted ECCO 3D Preview. The card reads states only and opens Home Assistant's more-info
+# dialogue; it calls no service. It loads through the Lovelace resource the preview already registered (no new resource, no new
+# bundle copy). Every other section and view is unchanged. Display only: no control, firmware, package or automation change.
 # Built for Home Assistant Sections view + Flexible Horseshoe Card + Sunsynk Power Flow Card (secondary/detail views) + ApexCharts + card-mod
 # Entity IDs matched from the ECCO entity dump captured 2026-09-12.
 
@@ -375,8 +381,18 @@ views:
         column_span: 3
         cards:
           # ---- LIVE ENERGY FLOW — PRIMARY OVERVIEW ----
-          - type: custom:ecco-energy-flow-card
-            title: ECCO Energy Flow
+          # OVW3: the read-only ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, V2) in place of the 2D Energy Flow card. It
+          # reads states and opens Home Assistant's more-info dialogue only: no service call, no write. Its Lovelace resource is the
+          # one the ECCO 3D Preview dashboard already loads; the scene pack is the local /local/ecco/scenes/ folder. The 2D card's
+          # nodes, today, format and grid layout settings are kept (its card_mod style is not: this card styles its own ha-card); its
+          # grid voltage, connection and frequency are read from nodes.grid.
+          - type: custom:ecco-flow-3d-card
+            title: Energy Flow
+            subtitle: Live power overview
+
+            scene:
+              pack: /local/ecco/scenes/
+              crossfade_ms: 900
 
             nodes:
               solar:
@@ -402,6 +418,74 @@ views:
               grid:
                 power: sensor.ecco_grid_power
                 power_sign: import_positive
+                connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
+                voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
+                frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
+
+            ecco:
+              telemetry_online: binary_sensor.ecco_clock_dongle_telemetry_online
+              sun: sun.sun
+              weather: weather.forecast_home
+              free_power:
+                active: binary_sensor.ecco_clock_dongle_free_power_active
+                status: sensor.ecco_clock_dongle_free_power_status
+                ends_at: sensor.ecco_clock_dongle_free_power_ends_at
+                schedule_status: sensor.ecco_free_power_schedule_status
+              dump_to_grid:
+                active: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                status: sensor.ecco_clock_dongle_dump_to_grid_status
+                ends_at: sensor.ecco_clock_dongle_dump_to_grid_ends_at
+                schedule_status: sensor.ecco_dump_to_grid_schedule_status
+                export_power: sensor.ecco_clock_dongle_dump_to_grid_active_export_power
+                stop_soc: sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc
+              tou:
+                slot_start_minutes:
+                  - sensor.ecco_tou_slot_1_start_minute
+                  - sensor.ecco_tou_slot_2_start_minute
+                  - sensor.ecco_tou_slot_3_start_minute
+                  - sensor.ecco_tou_slot_4_start_minute
+                  - sensor.ecco_tou_slot_5_start_minute
+                  - sensor.ecco_tou_slot_6_start_minute
+                slot_target_soc:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone2_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone3_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone4_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone5_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone6_soc
+                slot_charge_source:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone2_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone3_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone4_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone5_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone6_charge
+                slot_power:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_power
+                  - sensor.ecco_clock_dongle_ecco_timezone2_power
+                  - sensor.ecco_clock_dongle_ecco_timezone3_power
+                  - sensor.ecco_clock_dongle_ecco_timezone4_power
+                  - sensor.ecco_clock_dongle_ecco_timezone5_power
+                  - sensor.ecco_clock_dongle_ecco_timezone6_power
+                valid: binary_sensor.ecco_tou_schedule_valid
+              forecast:
+                today: sensor.ecco_solar_forecast_today
+                remaining: sensor.ecco_solar_forecast_remaining
+                tomorrow: sensor.ecco_solar_forecast_tomorrow
+              health:
+                sensors:
+                  - sensor.ecco_health_communications
+                  - sensor.ecco_health_inverter_telemetry
+                  - sensor.ecco_health_runtime_configuration
+                  - sensor.ecco_health_configuration
+                  - sensor.ecco_health_manual_write_system
+                  - sensor.ecco_health_rtc
+                  - sensor.ecco_health_free_power
+                  - sensor.ecco_health_start_failures
+                  - sensor.ecco_health_supervision
+                  - sensor.ecco_health_fallback
+                attention:
+                  - binary_sensor.ecco_dump_limits_attention
 
             today:
               solar: sensor.ecco_clock_dongle_ecco_day_pv_energy
@@ -412,18 +496,15 @@ views:
               battery_discharge: sensor.ecco_clock_dongle_ecco_day_battery_discharge
 
             inverter_details:
-              grid_voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
               ac_temperature: sensor.ecco_clock_dongle_ecco_temperature_ac_transformer
               dc_temperature: sensor.ecco_clock_dongle_ecco_temperature_dc_transformer
-              grid_connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
-              frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
+              battery_temperature: sensor.ecco_clock_dongle_ecco_battery_temperature
 
             features:
-              self_sufficiency: false
-              solar_contribution: true
               animate_flow: true
-              compact_today: true
-              show_details_panel: false
+              show_status_panel: true
+              show_details_panel: true
+              stale_after_s: 180
 
             format:
               precision: 2
@@ -433,12 +514,6 @@ views:
             grid_options:
               columns: full
               rows: auto
-            card_mod:
-              style: |
-                ha-card {
-                  border: 1px solid rgba(255,255,255,0.08);
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                }
 
 
       # ================= S4 RIGHT COLUMN (span 1): grid status, current plan, next days, tariff =================

@@ -1,6 +1,6 @@
 # ECCO 3D Energy Flow card
 
-**Status: V2 candidate (perspective-aware routing and card layout, 2026-10-26; animated card connectors and the house feed to the wall light, 2026-10-27), not merged and not in production; see [INSTALL_PREVIEW.md](INSTALL_PREVIEW.md) section 6 for upgrading the ECCO 3D Preview dashboard.** A read-only
+**Status: V2 (perspective-aware routing and card layout, 2026-10-26; animated card connectors and the house feed to the wall light, 2026-10-27; pulsing card links), merged (bundle sha256 `9bf045c2…`) and owner-accepted on the ECCO 3D Preview dashboard. Dashboard 7.23.0 (post-export entry `ovw3`, staged, not live-proven) shows it on the production Overview in place of the 2D Energy Flow card; see [INSTALL_PREVIEW.md](INSTALL_PREVIEW.md) section 6 for upgrading the preview and section 7 for the production placement.** A read-only
 Home Assistant Lovelace card that shows the ECCO installation as a premium
 fixed-perspective house scene (the owner-approved V4 scene pack: ten
 weather and season variants of one house, battery cabinet, wall inverter,
@@ -268,16 +268,21 @@ repository's offline suite runs `tools/tests/test_flow_3d_card.py` (folder
 shape, read-only allowlist on source and bundle, repository-sourced entity
 ids, isolated routing data, site render, the Node suite, scope).
 
-## Installing later (not part of this prototype)
+## Installing
 
-The card is a standard single-file Lovelace resource. An eventual install
-would follow the same staged route as the other ECCO cards: copy
-`dist/ecco-flow-3d-card.js` to `/config/www/ecco/` under its content hash and
-the ten scene PNGs to `/config/www/ecco/scenes/`, add the bundle as a
-JavaScript-module resource, and add a card from the example to a dashboard,
-each step under the owner's separate authorisation and the
-deploy-verify-resource read-back gate. Nothing in this directory touches a
-live system.
+The card is a standard single-file Lovelace resource, installed by the same
+staged route as the other ECCO cards: copy `dist/ecco-flow-3d-card.js` to
+`/config/www/ecco/` under its content hash and the ten scene PNGs to
+`/config/www/ecco/scenes/`, add the bundle as a JavaScript-module resource,
+and add a card from the example to a dashboard, each step under the owner's
+separate authorisation and the deploy-verify-resource read-back gate. The
+steps are in [INSTALL_PREVIEW.md](INSTALL_PREVIEW.md), sections 2-7: 2-5 for
+the preview dashboard, 6 for upgrading the bundle, 7 for the production
+Overview (dashboard 7.23.0: it changes only the dashboard file and needs the
+bundle, resource and plates of sections 2-3 already installed, on a production
+running 7.22.0 with the other ECCO cards installed). Once 7.23.0 is
+installed the resource and plates serve both dashboards. Nothing in this
+directory touches a live system.
 
 ## Licence
 

@@ -1,8 +1,14 @@
 // Sensor mapping: every entity id in examples/ecco-example.yaml must already
 // exist in this repository (packages, dashboard, firmware sensor names or the
-// other cards' ECCO examples). Nothing in the example is invented. The preview
-// mock must also cover every one of them so the harness exercises the real
-// configuration.
+// other cards' ECCO examples). Nothing in the example is invented. The
+// production dashboard's own copy of this card's configuration (its Overview,
+// dashboard 7.23.0) does not count: it is left out of the corpus, and that
+// exclusion fails closed (exactly one block, from that file only, all of it;
+// the dashboard names the card exactly once, in any quoting, and none of the
+// card-only keys survives the exclusion). test_flow_3d_card.py [4] makes the
+// same proof with a YAML parser.
+// The preview mock must also cover every one of them so the harness exercises
+// the real configuration.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -22,6 +28,31 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+const DASHBOARD = join(repo, "home-assistant", "dashboards", "ecco_pro.yaml");
+
+/**
+ * The text without each block-style YAML list item whose first line is
+ * `- type: custom:ecco-flow-3d-card` (that line and every blank or
+ * deeper-indented line after it), and how many were removed. Line-ending safe.
+ */
+function withoutCardBlocks(text: string): { text: string; removed: number } {
+  const out: string[] = [];
+  let skip: number | null = null;
+  let removed = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const indent = line.length - line.replace(/^ +/, "").length;
+    if (skip !== null && (line.trim() === "" || indent > skip)) continue;
+    skip = null;
+    if (line.trim() === "- type: custom:ecco-flow-3d-card") {
+      skip = indent;
+      removed += 1;
+      continue;
+    }
+    out.push(line);
+  }
+  return { text: out.join("\n"), removed };
+}
+
 const example = readFileSync(join(card, "examples", "ecco-example.yaml"), "utf-8");
 const entityIds = [...new Set(example.match(/\b(?:sensor|binary_sensor|sun|input_[a-z]+|switch|number|select)\.[a-z0-9_]+/g) ?? [])];
 
@@ -30,10 +61,23 @@ test("the example references a meaningful number of entities", () => {
 });
 
 test("every entity id in the ECCO example exists elsewhere in the repository", () => {
+  const removed: Record<string, number> = {};
   const corpus = [join(repo, "home-assistant"), join(repo, "frontend"), join(repo, "registry"), join(repo, "docs")]
     .flatMap((d) => walk(d))
-    .map((p) => readFileSync(p, "utf-8"))
+    .map((p) => {
+      const stripped = withoutCardBlocks(readFileSync(p, "utf-8"));
+      if (stripped.removed > 0) removed[p] = stripped.removed;
+      return stripped.text;
+    })
     .join("\n");
+  assert.deepEqual(removed, { [DASHBOARD]: 1 }, "exactly the production dashboard's one copy of the card's configuration is left out");
+  const dashboardText = readFileSync(DASHBOARD, "utf-8");
+  assert.equal([...dashboardText.matchAll(/type:\s*["']?custom:ecco-flow-3d-card["']?/g)].length, 1, "the dashboard names the card exactly once, in any quoting");
+  const strippedDashboard = withoutCardBlocks(dashboardText).text;
+  assert.doesNotMatch(strippedDashboard, /custom:ecco-flow-3d-card/, "all of that copy is left out");
+  for (const marker of ["crossfade_ms:", "stale_after_s:", "pack: /local/ecco/scenes/", "show_status_panel:"]) {
+    assert.ok(!strippedDashboard.includes(marker), `no card-only key (${marker}) survives the exclusion`);
+  }
   const firmware = readdirSync(join(repo, "firmware"))
     .filter((f) => f.endsWith(".yaml"))
     .map((f) => readFileSync(join(repo, "firmware", f), "utf-8"))

@@ -5,7 +5,8 @@
       (comments and dynamic JavaScript-template ids skipped), snapshot shapes
   [2] the real tree for a synthetic site: the plan passes, stages exactly the four cards that changed (names carry their sha256),
       the dashboard and bundles are rendered for the site, the preview configuration is valid JSON under the websocket limit,
-      nothing in the repository changes
+      nothing in the repository changes; the 3D Energy Flow card the Overview uses is accepted but never deployed by default (its
+      bundle and resource are shared with the preview dashboard)
   [3] negative controls: a snapshot missing an entity fails; with a baseline only NEW missing ids fail; a wrong expected git sha fails;
       an unparseable dashboard, a leftover default slug and an undefined custom card are flagged; an unknown --deploy card is refused
   [4] verify-staged and verify-served: pass on matching bytes; fail on a tampered staged file, a tampered served file and a 404
@@ -143,8 +144,16 @@ cfg = json.loads((out / "ecco_pro_preview.json").read_text(encoding="utf-8"))
 check("the preview configuration is the dashboard as JSON (views kept), well under the websocket limit",
       len(cfg["views"]) == len(plan["dashboard"]["views"]) and (out / "ecco_pro_preview.json").stat().st_size < F.MAX_PREVIEW_JSON)
 check("the plan names the unchanged cards it does not deploy, requires no restart and lists one deploy command per file",
-      set(plan["unchanged_cards_not_deployed"]) == {"energy-flow", "fallback-recovery"} and plan["restart_required"] is False
+      set(plan["unchanged_cards_not_deployed"]) == {"energy-flow", "fallback-recovery", "flow-3d"} and plan["restart_required"] is False
       and len(plan["deploy_commands"]) == 5 and plan["deploy_commands"][-1].endswith("-Destination " + F.DASHBOARD_DEST))
+F3D_SRC, F3D_TAG = F.CARDS["flow-3d"]
+check("the ECCO 3D Energy Flow card the Overview uses is a bundle of this tree, accepted by the dashboard check, and never deployed by default "
+      "(its bundle and Lovelace resource are shared with the preview dashboard): no staged copy, no deploy command, no resource action",
+      F3D_SRC == f"frontend/{F3D_TAG}/dist/{F3D_TAG}.js" and (ROOT / F3D_SRC).is_file() and "flow-3d" not in F.DEFAULT_DEPLOY
+      and f"type: custom:{F3D_TAG}" in dash_text and re.search(r"PASS  every custom:ecco-\* card the dashboard uses is defined by a bundle[^\n]*" + F3D_TAG, log)
+      and "flow-3d" not in [c["card"] for c in plan["cards"]] and not [c for c in plan["deploy_commands"] if F3D_TAG in c]
+      and not [n for n in os.listdir(out / "stage") if n.startswith(F3D_TAG)]
+      and plan["unchanged_cards_not_deployed"]["flow-3d"]["source"] == F3D_SRC, log[-400:])
 after = F.sha(b"".join((ROOT / r).read_bytes() for r in [F.DASHBOARD_REL, "VERSION.yaml"]))
 check("the repository's own files are unchanged by planning", before == after)
 (out2 := TMP / "out_res").mkdir()

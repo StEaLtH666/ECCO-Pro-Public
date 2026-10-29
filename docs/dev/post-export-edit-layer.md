@@ -209,3 +209,26 @@ text>)` (12 pairs, `home-assistant/prototypes/acs-stage1/acs1x_transform.py`), p
 both ways by the Stage 1 suite, the acs1 and acs1c records unchanged; it declares only the files it adds and its fingerprint (sealed on
 `acs1c`). No firmware, inverter write path, write surface, manifest stanza or reserved-token allowlist changed. Details:
 [acs1x-crossing-hold.md](acs1x-crossing-hold.md).
+
+## What ovw3 changed
+
+`ovw3` puts the read-only ECCO 3D Energy Flow card (`frontend/ecco-flow-3d-card`, V2; sources and bundle unchanged) on the Overview
+(`registry/tests/_ovw3_scope.py`; its integration is pinned by `tools/tests/test_flow_3d_card.py` [8]). It edits no chain-pinned
+artifact: the card loads through the Lovelace resource the ECCO 3D Preview dashboard already registered, so the manifest gains no
+stanza. Its frozen edits are:
+
+- the dashboard: the v7.23.0 header note, and the card of Overview section S3, where the 3D card replaces the 2D Energy Flow card,
+  configured as the card's example (the preview's configuration, generic entity naming) plus the 2D card's grid layout (not its
+  `card_mod` style: the 3D card styles its own card). Every other section and view is byte-identical;
+- `VERSION.yaml`: dashboard 7.23.0, staged (`tested_in_home_assistant` stays false).
+
+One older pin is routed: the FE-1 suite's dashboard wiring pins (`home-assistant/tests/test_ecco_battery_runtime.py` [13]) read the
+2D card, so they read the dashboard as of `acs1x` (one `PEX`-commented `as_of`, in the ledger), and two new live checks require the
+Overview's one flow card, 2D or 3D, to read the time-to-reserve sensor and to understand the package's statuses. The Stage 1 suite
+(`home-assistant/tests/test_ecco_tou_slot_settings_edit.py`) pinned `acs1x` as the last chain entry; it now pins it as followed by
+`ovw3`, as it did for `acs1c` when `acs1x` arrived.
+
+`tools/ecco_deploy_preflight.py` knows the card (`flow-3d`) but leaves it out of its default card list, so a plan stages no copy of
+the shared bundle and plans no resource change for it. The dashboard-only plan and the read-only resource prerequisite (which the
+plan does not check) are in `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md` section 7. `ovw3` changed no firmware, Home Assistant
+package, deployment, registry, Intelligence or ecco_core file, and adds no service call.

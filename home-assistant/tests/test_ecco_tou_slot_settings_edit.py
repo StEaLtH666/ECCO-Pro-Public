@@ -4625,8 +4625,9 @@ check("the acs1c scope module's pins are the suite's and the transforms': the St
       and F1C.CYCLIC_PAIR_COUNT == len(C.CYCLIC_PAIRS) == 21)
 # acs1x: the midnight-crossing hold, appended after acs1c (public main e97ba36c): declares only the files it adds and its fingerprint; the acs1 and acs1c records are unchanged
 E3 = sc.CHAIN.entry("acs1x")
-check("acs1x is the twenty-fourth post-export entry, appended right after acs1c, and the last one",
-      ids1.index("acs1x") == 23 and sc.CHAIN.prev_id("acs1x") == "acs1c" and ids1[-1] == "acs1x", str(ids1[-3:]))
+# ovw3 (the 3D Energy Flow card on the Overview; it edits only the dashboard and VERSION.yaml) is appended after acs1x: acs1x is no longer the last
+check("acs1x is the twenty-fourth post-export entry, appended right after acs1c, and followed by ovw3",
+      ids1.index("acs1x") == 23 and sc.CHAIN.prev_id("acs1x") == "acs1c" and ids1[24] == "ovw3", str(ids1[-3:]))
 check("acs1x declares NO reverter and NO checkpoint (chain-pinned or frozen), no reserved-token holder, no delta, op path, include, substitution, "
       "firmware banned token or tag: like acs1 and acs1c, its exact record is its invertible transform, proved in [0x]; the acs1 and acs1c "
       "declarations and files (scope modules, transforms, pins) are unchanged",
