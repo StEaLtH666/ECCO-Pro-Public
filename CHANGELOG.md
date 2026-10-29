@@ -10,6 +10,24 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only, NOT part of the
+  production dashboard; supersedes the V1 prototype of PR #44). An isometric house scene from the owner-approved V4 scene pack (ten
+  weather / season plates, chosen by date, `sun.sun` and the weather condition, with crossfades; the plates are deployed as a local
+  resource, never loaded from a CDN and not stored in this repository) with the live figures and the animated power routes as SVG
+  overlays: solar per array, battery (reversing for charge / discharge), grid (reversing for import / export) and home. V2 routing is
+  perspective-aware: each building axis is a direction field fitted to the plate's measured edges (`src/scene/perspective.ts`), every
+  route segment follows one axis, so every bend is a real-world right angle; the routes follow the plate's own edges, avoid the
+  surveyed obstacles, rise into the inverter's underside along the five painted cables, and the house feed ends at the wall light; the
+  battery route is hidden only where it passes behind a surveyed obstacle, with its particle timing continuous. Information cards sit
+  clear of the equipment and link to it with fine dotted links that breathe slowly, with the card's border, while their flow carries
+  power (`scene.links`: `pulse` by default, `particles` or `off`). Reuses the installed Energy Flow card's power model unchanged (sign
+  conventions, `resolveHomeW`, PV aggregation, idle threshold, motion curve; pinned by a parity test), the FE-1 time to reserve, the
+  Free Power / Dump to Grid session sensors, the TOU slot table, the blended solar forecast and the health sensors. Unknown is `--`
+  with a static dashed route; stale telemetry stops every route. All routing is data in `src/scene/routing-v4.ts`, overridable from
+  the configuration (`scene.routing`; V1 override keys are not compatible). Preview harness, headless capture, 86 Node tests and
+  `tools/tests/test_flow_3d_card.py` (folder shape, read-only allowlist, repository-sourced entity ids, isolated routing, site render,
+  scope). Preview-dashboard install and upgrade steps: `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md`. No firmware, Home Assistant
+  package, dashboard or registry change.
 - **Advanced Configuration Stage 1, midnight-crossing hold** (post-export entry `acs1x`; offline, source only, corrected for an
   independent review's findings and awaiting its re-check, NOT installed; [docs/dev/acs1x-crossing-hold.md](docs/dev/acs1x-crossing-hold.md)).
   The guarded TOU editor's scripts refuse any start-time edit that would move the midnight crossing (the one slot pair whose next start is
