@@ -1,12 +1,17 @@
 """Offline suite for Advanced Configuration Stage 1 (post-export entry acs1): a guarded owner edit of ONE setting of ONE TOU slot (target
 SOC, power, start time or charge source), the INSTALLED package home-assistant/packages/ecco_tou_target_soc_edit.yaml.
 
-That file is, byte for byte, render_cyclic(render_stage1(<the Stage 0 package>)): two invertible exact-replacement layers,
-home-assistant/prototypes/acs-stage1/acs_stage1_transform.py (acs1, the Stage 1 editor; its pins unchanged) and acs1c_transform.py
-(acs1c, 2026-10-25: the start-time ordering rule becomes one 24-hour cycle in slot order instead of strictly ascending HH:MM values).
-Git history is not needed: unrender_cyclic(<installed>) gives the Stage 1 text of 2026-10-25 back (sha256 pinned here and in both
-transforms; the rollback file of the acs1c correction) and unrender_stage1() of that gives the Stage 0 text (sha256 pinned), so the
-reuse proof, the SOC parity checks and both rollback files all derive from the installed file alone.
+That file is, byte for byte, render_crossing(render_cyclic(render_stage1(<the Stage 0 package>))): three invertible exact-replacement
+layers, home-assistant/prototypes/acs-stage1/acs_stage1_transform.py (acs1, the Stage 1 editor; its pins unchanged), acs1c_transform.py
+(acs1c, 2026-10-25: the start-time ordering rule becomes one 24-hour cycle in slot order instead of strictly ascending HH:MM values; its
+pins unchanged) and acs1x_transform.py (acs1x, 2026-10-27: the midnight-crossing hold, a start-time edit that would move the midnight
+crossing to another slot boundary is refused by the scripts themselves, at the owner's direction; it also rewrites four refusal texts, shorter
+and never truncated, so that every value written to the result helper fits its 255 characters).
+Git history is not needed: unrender_crossing(<installed>) gives the acs1c text of public main e97ba36c back (sha256 pinned; a provenance
+artefact: installed alone it would accept crossing-moving edits, so while the hold stands an installed rollback goes to the Stage 1 site
+render of 2026-10-25 or to a render that keeps the hold), unrender_cyclic() of that gives the Stage 1 text of 2026-10-25 (sha256 pinned;
+the rollback file of the acs1c correction) and unrender_stage1() of that gives the Stage 0 text (sha256 pinned), so the reuse proof, the
+SOC parity checks and every earlier text derive from the installed file alone.
 
 The INSTALLED package runs, together with the REAL Manual Controls helper package (ecco_manual_controls_helpers.yaml, whose sync
 automations touch the same staging entities), under _ha_script_sim.py (a fail-loud HA script / automation interpreter) against a
@@ -15,11 +20,17 @@ firmware's EXACT verify of start / end / power / SOC / flags (+ register 232 bit
 gate and per-field clamp faults. In this process the sim also parses template results like Home Assistant does (static service data
 included) and aborts a run on service data that Home Assistant's schema would reject (see ha_native / InvalidServiceData below).
 
-  [0] provenance      the installed package IS render_cyclic(render_stage1(Stage 0)); unrender_cyclic(installed) IS the pinned Stage 1 text and
-                      unrender_stage1 of that IS the pinned Stage 0 text (sha256), both ways and both layers; every pair applies exactly its
+  [0] provenance      the installed package IS render_crossing(render_cyclic(render_stage1(Stage 0))); unrender_crossing(installed) IS the pinned
+                      acs1c text, unrender_cyclic of that IS the pinned Stage 1 text and unrender_stage1 of that IS the pinned Stage 0 text
+                      (sha256), both ways and all three layers; every pair applies exactly its
                       declared count; the result is YAML; the gate lines that carry a reserved token are inherited byte for byte; none of the
                       three files spells a reserved token; deterministic; an altered anchor raises, both ways; the acs1c layer touches only
                       the gate's ordering lines, the header, the Review sentence and the per-slot map
+  [0x] crossing hold  the acs1x layer: its twelve pairs, both directions, the untouched-line proof, the check and its refusal in each of the four
+                      copies of the gate at its own place (right after the proposed-layout refusal, its lines right before that test), and
+                      every value written to the three input_text helpers within 255 characters at its longest (each substitution at a stated
+                      maximum, each refusal variable at the longest refusal of its copy; four refusals rewritten, none truncated; a
+                      refusal variable written in any form other than whole - a slice, a filter, any expression, however spelled - fails)
   [1] static scope    which services and entities the installed package may touch; every firmware entity exists; Stage 0 untouched
   [2] happy path      every slot x every setting: Review -> typed phrase -> Apply; exactly the intended register changes; verified
   [3] SOC parity      the Stage 0 package (unrendered from the installed one) and the installed one (setting target_soc) on identical
@@ -34,6 +45,12 @@ included) and aborts a run on service data that Home Assistant's schema would re
                       proposed-layout rule, forward and undo Applies on the baseline with their write logs, the live-proven SOC / power /
                       source edits of 25 Oct repeated on the baseline, a neighbour that moves between the Review and the Apply, and a
                       hand-edited review record refused by the Apply's own gate
+  [4x] crossing hold  (acs1x) every single-slot start edit of the owner's layout (6 slots x 288 grid values) through each of the four gate copies
+                      rendered alone and against the reference model, the slot 5 / 6 edits around midnight and every slot at each full hour
+                      through the real Review, random cyclic layouts, two independent oracles (the slot that owns the last minute of the day;
+                      the moved boundary passing midnight), the Apply's own gate on a hand-edited record, the hold alone failing closed,
+                      the crossing held wherever the live layout has it, every other setting unaffected, and one case per conjunct of the
+                      hold (each refused only by that conjunct, through all four copies)
   [5] review          phrase per setting, code, expiry, single use, the edited value changed since the review
   [6] gate            every unsafe state and `unavailable` refuses at Review and at Apply, for each setting
   [7] staged == live  any other staged field changed between Load and press stops the edit; the helper mirror reaches its fixed point
@@ -43,8 +60,18 @@ included) and aborts a run on service data that Home Assistant's schema would re
   [11] acs0r1 timing  the quiet-gap press and a bus-busy refusal behave as in Stage 0
   [11b] follow-ups    F1 (Load slot N-1 after a start-time edit), F2 (re-Load slot N after a conclusively write-free FAILED run, never otherwise),
                       F3 (live power must be a multiple of 100), F4 (Review warnings; input_text values under 255 characters)
-  [12] mutation       in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill)
-  [13] PEX            the acs1 and acs1c declarations: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
+  [11x] last check   (acs1x) the last copy of the gate alone refuses (a live start or the fallback live match changes after the Load): the hold
+                      for slot 6 and its mirror for slot 5, acs1c's cycle and neighbour refusals and the fallback live match refusal each give
+                      the FAILED result within 255 characters, the notice, the F2 re-Load (staging == live) and no press; on the package as
+                      first committed (rebuilt in memory) each case fails as the review reproduced it; the fresh-read copy alone refuses (a
+                      live start changes between the Apply's gate and the fresh read): the exact 'FAILED - <the whole refusal>; nothing
+                      written', no Load, no press
+  [12] mutation      in-memory mutants of the installed package, each KILLED by a failing behavioural check (a harness crash is no kill);
+                      acs1x: the hold dropped from all four copies and from each copy alone, its index comparison dropped, each conjunct of
+                      the hold dropped, its proposed layout built without the new start, the hold moved after the 15-minute and active-slot
+                      guards, a rewritten refusal restored to its long form in the last check, a refusal sliced in the Review's, the
+                      Apply's gate's or the fresh read's result
+  [13] PEX           the acs1, acs1c and acs1x declarations: position, hash link, added files, no frozen or chain-pinned edit, no new token holder
 
 PROVES: the control flow of the installed package against models of the firmware's manual TOU path and of Home Assistant, offline.
 DOES NOT PROVE: anything about a live Home Assistant, the dongle or the inverter; how a real interrupted multi-register write behaves
@@ -77,6 +104,7 @@ import _ha_script_sim as S  # noqa: E402
 import _manual_tou_sim as M  # noqa: E402
 import acs_stage1_transform as X  # noqa: E402
 import acs1c_transform as C  # noqa: E402
+import acs1x_transform as XW  # noqa: E402
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Home-Assistant-faithful template result parsing, installed in THIS test process only (the sim modules are not edited).
@@ -135,17 +163,21 @@ S.World.call = _ha_call
 T_START = time.time()
 TRANSFORM_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs_stage1_transform.py"
 CYCLIC_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs1c_transform.py"
+CROSSING_PATH = ROOT / "home-assistant" / "prototypes" / "acs-stage1" / "acs1x_transform.py"
 PKG_PATH = ROOT / X.ACS0_REL
-S1 = PKG_PATH.read_text(encoding="utf-8")                  # the INSTALLED package (the Stage 1 editor with the acs1c cyclic correction)
-S1B = C.unrender_cyclic(S1)                                # the Stage 1 text of 2026-10-25 it was derived from (the acs1c rollback file)
-PKG0 = X.unrender_stage1(S1B)                              # the Stage 0 text, reconstructed from the installed file alone through both layers
+S1 = PKG_PATH.read_text(encoding="utf-8")                  # the INSTALLED package (the Stage 1 editor with the acs1c cyclic correction and the acs1x crossing hold)
+S1C = XW.unrender_crossing(S1)                             # the acs1c text of public main e97ba36c it was derived from (provenance; NOT an installed rollback while the hold stands)
+S1B = C.unrender_cyclic(S1C)                               # the Stage 1 text of 2026-10-25 (the acs1c rollback file)
+PKG0 = X.unrender_stage1(S1B)                              # the Stage 0 text, reconstructed from the installed file alone through all three layers
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 ACS0_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package that PAIRS apply to, LF line ends
 S1_SHA = "2e8813973d133b7bd25fe273af16403af4cea0b8e64b338a015f35412346e9de"      # the Stage 1 package of 2026-10-25 (the acs1c rollback file), LF line ends
 PAIRS_SHA = "9924673e2c512edb4048b897aa073c779727d88aa453c345eac0934f29d75a37"   # the canonical serialisation of the 62 pairs (40 reviewed + 22 follow-up)
-S1C_SHA = "4ee898311a6abe7a7b0bc1874bff2cd10027d14f4122b341f5145833e3d90405"      # the INSTALLED package: the Stage 1 text with the acs1c cyclic correction, LF line ends
+S1C_SHA = "4ee898311a6abe7a7b0bc1874bff2cd10027d14f4122b341f5145833e3d90405"      # the acs1c text (public main e97ba36c, the acs1x base): the Stage 1 text with the cyclic correction, LF line ends
 CPAIRS_SHA = "6cb46976e90d4c7a7e24206d562ee532e4b4246c3595100e10de514075f4d761"   # the canonical serialisation of the 21 acs1c pairs
+S1X_SHA = "850f10fda78071220521ab04d2ca46c43bbbed2649090502a0e9e82a02b71262"      # the INSTALLED package: the acs1c text with the acs1x crossing hold, LF line ends
+XPAIRS_SHA = "13e6b93c7336f786cad82bb0ba0fd1dd60c6dae02423299f26e185b5a4b5b719"   # the canonical serialisation of the 12 acs1x pairs
 
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_setting", "ecco_cfg_apply_tou_slot_setting", "ecco_cfg_acknowledge_edit_review"
 REVIEW0, APPLY0 = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc"
@@ -550,21 +582,29 @@ for i, (before, after, count) in enumerate(X.PAIRS):
 check(f"every one of the {len(X.PAIRS)} pairs applies exactly its declared count, in order, to the Stage 0 text (unrendered from the installed "
       "package through both layers), and changes it, and the result is the Stage 1 text", not bad and text == S1B, str(bad))
 raw_pkg = PKG_PATH.read_bytes()
-check("PROVENANCE (forward): render_stage1(Stage 0) IS the Stage 1 text byte for byte (sha256 pinned) and render_cyclic of that IS the installed "
-      "package byte for byte (sha256 pinned); the file has consistent line ends (LF in the repository)",
+check("PROVENANCE (forward): render_stage1(Stage 0) IS the Stage 1 text byte for byte (sha256 pinned), render_cyclic of that IS the acs1c text "
+      "byte for byte (sha256 pinned) and render_crossing of that IS the installed package byte for byte (sha256 pinned); the file has consistent "
+      "line ends (LF in the repository)",
       X.render_stage1(PKG0) == S1B and hashlib.sha256(S1B.encode()).hexdigest() == S1_SHA
-      and C.render_cyclic(S1B) == S1 and hashlib.sha256(S1.encode()).hexdigest() == S1C_SHA and b"\r" not in raw_pkg.replace(b"\r\n", b""))
-check("PROVENANCE (backward): unrender_cyclic(installed) hashes to the pinned Stage 1 sha256 and unrender_stage1 of it to the pinned Stage 0 sha256 "
-      "(suite pins == the transforms' constants); render(unrender(text)) == text for both layers, from the LF text and from a CRLF copy",
+      and C.render_cyclic(S1B) == S1C and hashlib.sha256(S1C.encode()).hexdigest() == S1C_SHA
+      and XW.render_crossing(S1C) == S1 and hashlib.sha256(S1.encode()).hexdigest() == S1X_SHA and b"\r" not in raw_pkg.replace(b"\r\n", b""))
+check("PROVENANCE (backward): unrender_crossing(installed) hashes to the pinned acs1c sha256, unrender_cyclic of it to the pinned Stage 1 sha256 and "
+      "unrender_stage1 of that to the pinned Stage 0 sha256 (suite pins == the transforms' constants); render(unrender(text)) == text for all three "
+      "layers, from the LF text and from a CRLF copy",
       hashlib.sha256(PKG0.encode()).hexdigest() == ACS0_SHA == X.ACS0_BASE_SHA256 and X.render_stage1(X.unrender_stage1(S1B)) == S1B
       and X.unrender_stage1(S1B.replace("\n", "\r\n")) == PKG0 and X.render_stage1(X.unrender_stage1(S1B.replace("\n", "\r\n"))) == S1B
-      and C.render_cyclic(C.unrender_cyclic(S1)) == S1 and C.unrender_cyclic(S1.replace("\n", "\r\n")) == S1B
-      and C.render_cyclic(C.unrender_cyclic(S1.replace("\n", "\r\n"))) == S1)
+      and C.render_cyclic(C.unrender_cyclic(S1C)) == S1C and C.unrender_cyclic(S1C.replace("\n", "\r\n")) == S1B
+      and C.render_cyclic(C.unrender_cyclic(S1C.replace("\n", "\r\n"))) == S1C
+      and XW.render_crossing(XW.unrender_crossing(S1)) == S1 and XW.unrender_crossing(S1.replace("\n", "\r\n")) == S1C
+      and XW.render_crossing(XW.unrender_crossing(S1.replace("\n", "\r\n"))) == S1)
 check("the pins are asserted, not printed: the Stage 1 text's sha256 == the suite's == the acs1 transform's STAGE1_SHA256 == the acs1c transform's "
-      "STAGE1_BASE_SHA256; the installed package's sha256 == the suite's == the acs1c transform's STAGE1C_SHA256; the 62 acs1 pairs and the 18 "
-      "acs1c pairs hash (canonical serialisation) to their pinned values, so a silent edit of any pair is caught",
+      "STAGE1_BASE_SHA256; the acs1c text's sha256 == the suite's == the acs1c transform's STAGE1C_SHA256 == the acs1x transform's STAGE1C_BASE_SHA256; "
+      "the installed package's sha256 == the suite's == the acs1x transform's STAGE1X_SHA256; the 62 acs1 pairs, the 21 acs1c pairs and the 12 acs1x "
+      "pairs hash (canonical serialisation) to their pinned values, so a silent edit of any pair is caught",
       hashlib.sha256(S1B.encode()).hexdigest() == S1_SHA == X.STAGE1_SHA256 == C.STAGE1_BASE_SHA256
-      and hashlib.sha256(S1.encode()).hexdigest() == S1C_SHA == C.STAGE1C_SHA256
+      and hashlib.sha256(S1C.encode()).hexdigest() == S1C_SHA == C.STAGE1C_SHA256 == XW.STAGE1C_BASE_SHA256
+      and hashlib.sha256(S1.encode()).hexdigest() == S1X_SHA == XW.STAGE1X_SHA256
+      and len(XW.CROSSING_PAIRS) == 12 and XW.crossing_pairs_sha256() == XPAIRS_SHA == XW.CROSSING_PAIRS_SHA256
       and len(X.PAIRS) == 62 and X.BASE_PAIR_COUNT == 40 and X.pairs_sha256() == PAIRS_SHA == X.PAIRS_SHA256
       and len(C.CYCLIC_PAIRS) == 21 and C.cyclic_pairs_sha256() == CPAIRS_SHA == C.CYCLIC_PAIRS_SHA256)
 SENT = "\x00"
@@ -616,10 +656,14 @@ for name, anchor, repl in OUT_MUTANTS:
         bad.append((name, n_anchor, got))
 check(f"the check kills {len(OUT_MUTANTS)} in-memory mutants that alter one untouched line of the Stage 1 text (the press delay, the telemetry "
       "period bound, the gate-pass counter condition, the final disarm)", not bad, str(bad))
-check("the Stage 0 text is itself NOT a rendered package (unrender refuses it), the installed package is NOT a Stage 0 text nor a Stage 1 text "
-      "(render refuses it, both layers) and the Stage 1 text is not an installed package (unrender_cyclic refuses it): no direction can be confused",
+check("the Stage 0 text is itself NOT a rendered package (unrender refuses it), the installed package is NOT a Stage 0, Stage 1 or acs1c text "
+      "(render refuses it, every layer; unrender_cyclic refuses it too: the acs1x lines sit inside acs1c's block), the acs1c text is not an installed "
+      "package (unrender_crossing refuses it, render_cyclic refuses it) and the Stage 1 text is not an acs1c text (unrender_cyclic and render_crossing "
+      "refuse it): no direction can be confused",
       all(_raises(lambda f=f, t=t: f(t)) for f, t in ((X.unrender_stage1, PKG0), (X.render_stage1, S1), (X.render_stage1, S1B),
-                                                      (X.unrender_stage1, S1), (C.unrender_cyclic, S1B), (C.render_cyclic, S1), (C.render_cyclic, PKG0))))
+                                                      (X.unrender_stage1, S1), (C.unrender_cyclic, S1B), (C.render_cyclic, S1), (C.render_cyclic, PKG0),
+                                                      (C.unrender_cyclic, S1), (C.render_cyclic, S1C), (XW.render_crossing, S1), (XW.unrender_crossing, S1C),
+                                                      (XW.render_crossing, S1B), (XW.unrender_crossing, S1B), (XW.render_crossing, PKG0))))
 pkg = yaml.safe_load(S1)
 check("the result parses as YAML with Stage 0's shape plus the write-seen recorder: 3 text helpers, 3 booleans (Stage 0's two and ecco_cfg_edit_write_seen), "
       "3 scripts (review, apply, acknowledge), 2 automations (the watchdog and the write-seen recorder)",
@@ -642,17 +686,19 @@ c0, c1 = Counter(tok_lines0), Counter(tok_lines1)
 check(f"the gate lines that carry a reserved token ({len(tok_lines0)} lines, {len(c0)} distinct) appear in the result byte for byte, exactly "
       "as many times as in Stage 0, and the result has no other such line", c0 == c1 and len(tok_lines0) == len(tok_lines1) == 20,
       f"{len(tok_lines0)} {len(tok_lines1)}")
-check("no pair's `before` or `after`, in either layer, contains a line that carries a reserved token (so no pair can touch one)",
-      not [i for i, (b, a, _c) in enumerate(X.PAIRS + C.CYCLIC_PAIRS) if any(t in b or t in a for t in RES_TOKENS)])
-own = {p.name: p.read_text(encoding="utf-8") for p in (Path(__file__).resolve(), TRANSFORM_PATH, CYCLIC_PATH)}
-check("none of the three files (this suite, the acs1 transform, the acs1c transform) contains any reserved token or fragment (ecco + fallback / "
+check("no pair's `before` or `after`, in any of the three layers, contains a line that carries a reserved token (so no pair can touch one)",
+      not [i for i, (b, a, _c) in enumerate(X.PAIRS + C.CYCLIC_PAIRS + XW.CROSSING_PAIRS) if any(t in b or t in a for t in RES_TOKENS)])
+own = {p.name: p.read_text(encoding="utf-8") for p in (Path(__file__).resolve(), TRANSFORM_PATH, CYCLIC_PATH, CROSSING_PATH)}
+check("none of the four files (this suite, the acs1, acs1c and acs1x transforms) contains any reserved token or fragment (ecco + fallback / "
       "failback, FALLBACK + PROFILE, FAILBACK + STATE, fallback + profile ids, fbc + raw)", all(not any(t in txt for t in RES_TOKENS) for txt in own.values()),
       str({k: [t for t in RES_TOKENS if t in v] for k, v in own.items()}))
-check("deterministic: rendering twice, and from a CRLF copy, gives identical text in both layers (sha256 pinned above)",
+check("deterministic: rendering twice, and from a CRLF copy, gives identical text in all three layers (sha256 pinned above)",
       X.render_stage1(PKG0) == S1B == X.render_stage1(PKG0.replace("\n", "\r\n")) == X.render_stage1(X.unrender_stage1(S1B))
-      and C.render_cyclic(S1B) == S1 == C.render_cyclic(S1B.replace("\n", "\r\n")) == C.render_cyclic(C.unrender_cyclic(S1)))
+      and C.render_cyclic(S1B) == S1C == C.render_cyclic(S1B.replace("\n", "\r\n")) == C.render_cyclic(C.unrender_cyclic(S1C))
+      and XW.render_crossing(S1C) == S1 == XW.render_crossing(S1C.replace("\n", "\r\n")) == XW.render_crossing(XW.unrender_crossing(S1)))
 print(f"        Stage 1 text sha256 {hashlib.sha256(S1B.encode()).hexdigest()}  ({len(S1B.splitlines())} lines, {len(X.PAIRS)} pairs)")
-print(f"        installed (acs1c) sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(C.CYCLIC_PAIRS)} more pairs)")
+print(f"        acs1c text sha256 {hashlib.sha256(S1C.encode()).hexdigest()}  ({len(S1C.splitlines())} lines, {len(C.CYCLIC_PAIRS)} more pairs)")
+print(f"        installed (acs1x) sha256 {hashlib.sha256(S1.encode()).hexdigest()}  ({len(S1.splitlines())} lines, {len(XW.CROSSING_PAIRS)} more pairs)")
 check("the Stage 0 text reconstructed from the installed package is the pinned file (sha256 of its LF text)",
       hashlib.sha256(PKG0.replace("\r\n", "\n").encode()).hexdigest() == ACS0_SHA)
 fail_to_raise = []
@@ -739,19 +785,19 @@ check(f"a Stage 1 text with ANY pair's `after` text removed, duplicated or alter
       f"never be silently half-reconstructed): {n_real} pairs on the Stage 1 text with unrender_stage1 itself, {n_state} pairs that a later "
       "pair modified on the state right after them", not un_fail, str(un_fail[:5]))
 check("SETTINGS is exactly the four settings", X.SETTINGS == ("target_soc", "power", "start_time", "charge_source"))
-src_t = TRANSFORM_PATH.read_text(encoding="utf-8") + "\n" + CYCLIC_PATH.read_text(encoding="utf-8")
-check("neither transform performs any I/O or uses the network (no read_text / open / write_text / socket / urllib / subprocess)",
+src_t = TRANSFORM_PATH.read_text(encoding="utf-8") + "\n" + CYCLIC_PATH.read_text(encoding="utf-8") + "\n" + CROSSING_PATH.read_text(encoding="utf-8")
+check("no transform performs any I/O or uses the network (no read_text / open / write_text / socket / urllib / subprocess)",
       not re.search(r"read_text|read_bytes|write_text|write_bytes|\bopen\(|socket|urllib|requests|subprocess|os\.system|import pathlib|from pathlib", src_t))
 
 # ---- [0c] the acs1c layer: the Stage 1 text -> the installed package --------------------------------------------------------------
-print("[0c] the acs1c layer (the cyclic start-time rule): the Stage 1 text -> the installed package")
+print("[0c] the acs1c layer (the cyclic start-time rule): the Stage 1 text -> the acs1c text (the acs1x layer's base, [0x])")
 text, bad = S1B, []
 for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
     if text.count(before) != count or count < 1 or before == after:
         bad.append((i, text.count(before), count))
     text = text.replace(before, after)
 check(f"every one of the {len(C.CYCLIC_PAIRS)} acs1c pairs applies exactly its declared count, in order, to the Stage 1 text, changes it, and the "
-      "result is the installed package", not bad and text == S1, str(bad))
+      "result is the acs1c text", not bad and text == S1C, str(bad))
 c_fail = []
 
 
@@ -778,10 +824,10 @@ for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
             if f"pair {i}:" not in str(exc):
                 c_fail.append((i, label, str(exc)[:60]))
     state = state.replace(before, after)
-assert state == S1
+assert state == S1C
 for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
-    fewer = S1.replace(after, "", 1) if count == 1 else None
-    more = S1 + "\n" + after
+    fewer = S1C.replace(after, "", 1) if count == 1 else None
+    more = S1C + "\n" + after
     for label, variant in (("after removed", fewer), ("after added", more)):
         if variant is None:
             continue
@@ -792,14 +838,14 @@ for i, (before, after, count) in enumerate(C.CYCLIC_PAIRS):
             if "pair" not in str(exc):
                 c_fail.append((i, label, str(exc)[:60]))
 for fn, t_, label in ((C.render_cyclic, S1B.replace("{% set asc = tt[0] >= 0 and", "{% set asc = tt[0] >= 0  and", 1), "a Stage 1 anchor altered"),
-                      (C.unrender_cyclic, S1.replace("{% set cyc = g.ok and g.s == 1440 %}", "{% set cyc = g.ok and g.s == 1440  %}", 1), "an installed line altered")):
+                      (C.unrender_cyclic, S1C.replace("{% set cyc = g.ok and g.s == 1440 %}", "{% set cyc = g.ok and g.s == 1440  %}", 1), "an acs1c line altered")):
     try:
         fn(t_)
         c_fail.append((label,))
     except ValueError as exc:
         if "pair" not in str(exc):
             c_fail.append((label, str(exc)[:60]))
-check("acs1c: a text with ANY pair's anchor removed, duplicated or altered (taken at the state right before that pair, or the installed text) is "
+check("acs1c: a text with ANY pair's anchor removed, duplicated or altered (taken at the state right before that pair, or the acs1c text) is "
       "refused with ValueError naming the pair, in both directions (no silent half-transformation, no half-reconstructed rollback file)",
       not c_fail, str(c_fail[:5]))
 
@@ -815,15 +861,15 @@ def outside_cyclic(installed):
     return a == b, sum(1 for ln in b.split("\n") if SENT not in ln)
 
 
-OUTC = outside_cyclic(S1)
-check(f"EVERY part of the Stage 1 text that no acs1c pair touches is byte-identical in the installed package, in the same place and the same number "
+OUTC = outside_cyclic(S1C)
+check(f"EVERY part of the Stage 1 text that no acs1c pair touches is byte-identical in the acs1c text, in the same place and the same number "
       f"of times: {OUTC[1] if OUTC else '?'} of its {len(S1B.splitlines())} lines are wholly outside the 21 pairs (only the gate's ordering lines, the "
       "header's rule, the Review sentence and the per-slot map change)", OUTC is not None and OUTC[0] is True and OUTC[1] >= len(S1B.splitlines()) - 60, str(OUTC))
 bad = []
 for name, anchor, repl in OUT_MUTANTS + [("the 15-minute guard", "{% elif near %}", "{% elif false %}"), ("the clock-change-night guard", "{% elif cc %}", "{% elif false %}")]:
-    mut = S1.replace(anchor, repl, 1)
+    mut = S1C.replace(anchor, repl, 1)
     got = outside_cyclic(mut)
-    if mut == S1 or got is None or got[0] is not False:
+    if mut == S1C or got is None or got[0] is not False:
         bad.append((name, got))
 check("that check kills in-memory mutants that alter one line the acs1c layer does not touch (the press delay, the telemetry period bound, the gate-pass "
       "counter condition, the final disarm, the 15-minute guard, the clock-change-night guard)", not bad, str(bad))
@@ -853,13 +899,352 @@ for marker in ("refusal: >-", "refusal2: >-", "refusal3: >-"):
         pos = j_
 REFUSALS = sorted(REFUSALS)
 check(f"every literal refusal text of the gate's four copies ({len(REFUSALS)} distinct, {_blocks} blocks) fits the 255-character input_text with its "
-      "'REVIEW REFUSED - ' and '; nothing written' frame (at most 221 characters before template substitution); the three acs1c texts are among them",
+      "'REVIEW REFUSED - ' and '; nothing written' frame (at most 221 characters before template substitution); the three acs1c texts are among them "
+      "(the cycle and neighbour texts as acs1x shortened them; acs1c's own wording is in the acs1c text, four times each)",
       _blocks == 4 and len(REFUSALS) >= 30 and all(len(re.sub(r"{{.*?}}", "", t)) <= 221 for t in REFUSALS)
-      and {C.REFUSE_CYC, C.REFUSE_ORDER, C.REFUSE_CYC2} <= set(REFUSALS) and max(len(C.REFUSE_CYC), len(C.REFUSE_ORDER), len(C.REFUSE_CYC2)) <= 221,
+      and {XW.REFUSE_CYC_NEW, XW.REFUSE_ORDER_NEW, C.REFUSE_CYC2} <= set(REFUSALS)   # acs1x shortened the cycle and neighbour texts ([0x])
+      and (C.REFUSE_CYC, C.REFUSE_ORDER) == (XW.REFUSE_CYC_OLD, XW.REFUSE_ORDER_OLD) and S1C.count("%}" + C.REFUSE_CYC + "\n") == 4
+      and S1C.count("%}" + C.REFUSE_ORDER + "\n") == 4 and max(len(C.REFUSE_CYC), len(C.REFUSE_ORDER), len(C.REFUSE_CYC2)) <= 221,
       str([(len(re.sub(r"{{.*?}}", "", t)), t[:40]) for t in REFUSALS if len(re.sub(r"{{.*?}}", "", t)) > 221]))
 check("the acs1c transform's model constants are the firmware's TOU facts: 5-minute grid, 1440-minute day, slots of at least one grid step; its pins name "
       "the package path and the gate copies acs1 renders (12 spaces twice, 16 once, 24 once)",
       C.GRID_MINUTES == 5 and C.DAY_MINUTES == 1440 and C.MIN_SLOT_MINUTES == 5 and C.PACKAGE_REL == X.ACS0_REL and C.GATE_COPIES == ((12, 2), (16, 1), (24, 1)))
+
+
+# ---- [0x] the acs1x layer: the acs1c text -> the installed package --------------------------------------------------------------
+print("[0x] the acs1x layer (the midnight-crossing hold): the acs1c text -> the installed package")
+text, bad = S1C, []
+for i, (before, after, count) in enumerate(XW.CROSSING_PAIRS):
+    if text.count(before) != count or count < 1 or before == after:
+        bad.append((i, text.count(before), count))
+    text = text.replace(before, after)
+check(f"every one of the {len(XW.CROSSING_PAIRS)} acs1x pairs applies exactly its declared count, in order, to the acs1c text, changes it, and the "
+      "result is the installed package", not bad and text == S1, str(bad))
+x_fail = []
+
+
+def render_crossing_from(text, start):
+    for j in range(start, len(XW.CROSSING_PAIRS)):
+        b, a, c = XW.CROSSING_PAIRS[j]
+        if text.count(b) != c:
+            raise ValueError(f"acs1x pair {j}: expected {c} occurrence(s), found {text.count(b)}")
+        text = text.replace(b, a)
+    return text
+
+
+state = S1C
+for i, (before, after, count) in enumerate(XW.CROSSING_PAIRS):
+    for label, variant in (("one occurrence removed", state.replace(before, "", 1)), ("one occurrence added", state + "\n" + before)):
+        try:
+            render_crossing_from(variant, i)
+            x_fail.append((i, label))
+        except ValueError as exc:
+            if f"pair {i}:" not in str(exc):
+                x_fail.append((i, label, str(exc)[:60]))
+    state = state.replace(before, after)
+assert state == S1
+for i, (before, after, count) in enumerate(XW.CROSSING_PAIRS):
+    for label, variant in (("after removed", S1.replace(after, "", 1)), ("after added", S1 + "\n" + after)):
+        try:
+            XW.unrender_crossing(variant)
+            x_fail.append((i, label))
+        except ValueError as exc:
+            if "pair" not in str(exc):
+                x_fail.append((i, label, str(exc)[:60]))
+for fn, t_, label in ((XW.render_crossing, S1C.replace("{% elif near %}", "{% elif  near %}", 1), "an acs1c anchor altered"),
+                      (XW.unrender_crossing, S1.replace("{% elif setting == 'start_time' and not xw %}", "{% elif setting == 'start_time' and not  xw %}", 1),
+                       "an installed line altered")):
+    try:
+        fn(t_)
+        x_fail.append((label,))
+    except ValueError as exc:
+        if "pair" not in str(exc):
+            x_fail.append((label, str(exc)[:60]))
+check("acs1x: a text with ANY pair's anchor removed, duplicated or altered (taken at the state right before that pair, or the installed text) is "
+      "refused with ValueError naming the pair, in both directions; every pair is tested for removal, those of the two 12-space copies included",
+      not x_fail, str(x_fail[:5]))
+
+
+def outside_crossing(installed):
+    """(identical, untouched): the installed package with every acs1x pair's `after` region replaced by a sentinel must EQUAL the acs1c text
+    with every `before` region replaced by the same sentinel; `untouched` counts the acs1c lines no acs1x pair touches."""
+    a, b = installed, S1C
+    for bef, aft, c in reversed(XW.CROSSING_PAIRS):
+        if a.count(aft) != c or b.count(bef) != c:
+            return None
+        a, b = a.replace(aft, SENT), b.replace(bef, SENT)
+    return a == b, sum(1 for ln in b.split("\n") if SENT not in ln)
+
+
+OUTX = outside_crossing(S1)
+check(f"EVERY part of the acs1c text that no acs1x pair touches is byte-identical in the installed package, in the same place and the same number "
+      f"of times: {OUTX[1] if OUTX else '?'} of its {len(S1C.splitlines())} lines are wholly outside the 12 pairs (only the header's two notes, the "
+      "proposed-layout test's first line, the proposed-layout refusal with the 15-minute guard's line start and the four rewritten refusals with "
+      "their next line's start, in each copy)", OUTX is not None and OUTX[0] is True and OUTX[1] == len(S1C.splitlines()) - 36, str(OUTX))
+bad = []
+for name, anchor, repl in OUT_MUTANTS + [("the clock-change-night guard", "{% elif cc %}", "{% elif false %}"),
+                                         ("the cycle rule", "{% elif setting == 'start_time' and not cyc %}", "{% elif false %}"),
+                                         ("the active-slot guard", "{% elif mid %}", "{% elif false %}"),
+                                         ("the neighbour rule", "{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}", "{% elif false %}")]:
+    mut = S1.replace(anchor, repl, 1)
+    got = outside_crossing(mut)
+    if mut == S1 or got is None or got[0] is not False:
+        bad.append((name, got))
+check("that check kills in-memory mutants that alter one line the acs1x layer does not touch (the press delay, the telemetry period bound, the gate-pass "
+      "counter condition, the final disarm, the clock-change-night guard, the cycle rule, the active-slot guard, the neighbour rule)", not bad, str(bad))
+XW_SET_LINE = "{% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}"
+XW_REFUSE_LINE = "{% elif setting == 'start_time' and not xw %}" + XW.REFUSE_XW
+x_blocks, x_bad = [], []
+for marker in ("refusal: >-", "refusal2: >-", "refusal3: >-"):
+    pos = 0
+    while True:
+        i_ = S1.find(marker, pos)
+        if i_ < 0:
+            break
+        j_ = S1.index("{% endif %}", i_)
+        blk = S1[i_:j_]
+        ind = len(blk.split("\n")[1]) - len(blk.split("\n")[1].lstrip(" "))
+        x_blocks.append((S1.count("\n", 0, i_) + 1, marker.split(":")[0], ind, blk))
+        pos = j_
+x_blocks.sort()
+for line_no, key, ind, blk in x_blocks:
+    sp = " " * ind
+    if not (blk.count("{% set xc = namespace(") == 1 and blk.count(XW_SET_LINE) == 1 and blk.count(XW_REFUSE_LINE) == 1
+            and XW._ind(XW.GATE_XW + XW.GATE_SET_BEFORE, ind) in blk and XW._ind(XW.GATE_REFUSE_AFTER, ind) in blk
+            and blk.index("{% set xw = ") < blk.index("{% set h = namespace(") < blk.index("{% set cyc2 = ")
+            and ("\n" + sp + XW_REFUSE_LINE + "\n" + sp + "{% elif near %}") in blk):
+        x_bad.append((line_no, key, ind))
+check("the hold is in all four copies of the gate (the Review, the Apply's gate, its fresh-read re-check, its last check before the press: indents "
+      "12 / 12 / 16 / 24, in document order), once each, at its place: the `xc` / `xw` lines right before acs1c's proposed-layout test (`h`, then "
+      "`cyc2`), the refusal right after the proposed-layout refusal and right before the 15-minute guard",
+      [(k, i) for _l, k, i, _b in x_blocks] == [("refusal", 12), ("refusal", 12), ("refusal2", 16), ("refusal3", 24)] and not x_bad
+      and S1.count(XW_SET_LINE) == 4 and S1.count(XW_REFUSE_LINE) == 4 and S1.count("{% set xc = namespace(") == 4
+      and S1.count("{% elif setting == 'start_time' and not xw %}") == 4 and " xw " not in S1C and "xc." not in S1C,
+      str(x_bad) + " " + str([(l_, k, i) for l_, k, i, _b in x_blocks]))
+check("the hold's refusal is one of the gate's literal refusal texts, in plain words (no policy identifier), short enough for every frame whole (at "
+      "most 165 characters: 255 less the last check's 90-character frame), and names none of the other refusal classes (a result is never ambiguous)",
+      XW.REFUSE_XW in REFUSALS and len(XW.REFUSE_XW) <= XW.REFUSAL_MAX == 165 and "midnight crossing" in XW.REFUSE_XW
+      and not re.search(r"\b(R1|R2|P3c?)\b", XW.REFUSE_XW)
+      and not any(t in XW.REFUSE_XW for t in ("24-hour cycle", "strictly after the previous slot", "within 15 minutes", "between the old and the new boundary",
+                                              "no change", "unavailable", "5-minute grid")))
+# --- every value written to the three input_text helpers (255 characters each) at its longest (review finding X1) ---------------------------
+# A value longer than the helper's 255 characters is not stored (the helper keeps its old text): a refusal by the last copy of the gate then
+# leaves no FAILED result, so its notice and the F2 re-Load do not run. Each substitution below is bounded by the longest text it can produce
+# (with the reason); a sliced one by its slice; a conditional by its longest alternative; the refusal variables by the longest refusal of
+# their own copy of the gate. An expression not listed fails the check, so a new one must be bounded here. Nothing is truncated to fit:
+# a refusal variable is written whole or not at all (review finding FB-1: any other expression of one fails, however it is spelled).
+REFUSAL_VARS = ("refusal", "refusal2", "refusal3", "review_problem", "fresh_why")
+_REFUSAL_RE = re.compile(r"\b(?:" + "|".join(REFUSAL_VARS) + r")\b")
+
+
+class Shortened(KeyError):
+    """A substitution that writes a refusal variable in any form other than the bare variable (a slice, a filter, a method, any expression)."""
+
+
+SUB_MAX = {
+    "n": (1, "the slot, 1-6: printed only once the slot is checked"),
+    "label": (13, "one of the fixed setting labels ('charge source')"),
+    "reg": (3, "a register number, 250-279"),
+    "bdisp": (7, "the value read live at the Review in display form: a 16-bit register with ' %' or ' W', HH:MM, Grid or None"),
+    "wdisp": (7, "the requested value in display form, already checked: 100 %, 8000 W, HH:MM, Grid or None"),
+    "phr": (18, "the typed-phrase core ('CHARGE SOURCE NONE')"),
+    "code": (4, "the four-digit review code"),
+    "setting": (13, "one of the four settings ('charge_source')"),
+    "want": (4, "the requested value, already checked: at most four digits, Grid or None"),
+    "before": (5, "the value read live at the Review: a 16-bit register, HHMM, Grid or None"),
+    "as_timestamp(now()) | int": (10, "Unix seconds (ten digits until 2286)"),
+    "now().strftime('%Y-%m-%d %H:%M:%S')": (19, "the local date and time, YYYY-MM-DD HH:MM:SS"),
+    "fw_result": (120, "sliced where it is defined: the firmware's last result [:120]"),
+    "att0": (13, "the firmware's int write counter as a float (ten digits, a sign and '.0')"),
+    "w_att": (13, "the same counter as a float"),
+    "att0 | int(-1)": (11, "the same counter as an int"),
+    "att_now | int(-1)": (11, "the same counter as an int"),
+    "lo": (5, "the greater of the inverter shutdown SOC (a 16-bit register) and the reserve (0-100)"),
+    "shutdown": (5, "the inverter shutdown SOC, a 16-bit register"),
+    "reserve": (5, "the ECCO reserve input_number, 0-100"),
+    "states(e.live_pw)": (11, "a numeric sensor of a 16-bit register ('65535.0'), or 'unavailable'"),
+    "cur": (16, "the live charge-source word: the firmware's None, Grid, Generator or 'Grid + Generator', or 'unavailable'"),
+}
+
+
+def _balanced(t):
+    d = 0
+    for ch in t:
+        d += (ch == "(") - (ch == ")")
+        if d < 0:
+            return False
+    return d == 0
+
+
+def _alts(expr):
+    """The value alternatives of a (nested) conditional expression `A if C else B`, outer parentheses removed."""
+    e = expr.strip()
+    while e.startswith("(") and e.endswith(")") and _balanced(e[1:-1]):
+        e = e[1:-1].strip()
+    depth, quote, at_if = 0, None, None
+    for i, ch in enumerate(e):
+        if quote:
+            quote = None if ch == quote else quote
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and at_if is None and e.startswith(" if ", i):
+            at_if = i
+        elif depth == 0 and at_if is not None and e.startswith(" else ", i):
+            return _alts(e[:at_if]) + _alts(e[i + 6:])
+    return [e]
+
+
+def sub_bound(expr, var):
+    """The longest text the substitution {{ expr }} can produce (KeyError for an expression that is not bounded here; Shortened for a refusal
+    variable written in any form but whole)."""
+    alts = _alts(expr)
+    if len(alts) > 1:
+        return max(sub_bound(a, var) for a in alts)
+    e = alts[0]
+    if re.fullmatch(r"'[^']*'|\"[^\"]*\"", e):
+        return len(e) - 2
+    if _REFUSAL_RE.search(e) and e not in REFUSAL_VARS:
+        raise Shortened(e)
+    m = re.fullmatch(r"(.+)\[:(\d+)\]", e)
+    if m:
+        return int(m.group(2))
+    if e in var:
+        return var[e]
+    if e in SUB_MAX:
+        return SUB_MAX[e][0]
+    raise KeyError(e)
+
+
+def text_bound(t, var=None):
+    """The longest a text with {{ }} substitutions (and {% %} tags, whose branches are all counted) can become."""
+    return len(re.sub(r"{{.*?}}|{%.*?%}", "", t, flags=re.S)) + sum(sub_bound(x, var or {}) for x in re.findall(r"{{(.*?)}}", t, flags=re.S))
+
+
+def _strings(node, pred, path=()):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(v, str) and pred(k, v, path):
+                yield path + (k,), v
+            else:
+                yield from _strings(v, pred, path + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _strings(v, pred, path + (i,))
+
+
+def _segments(tmpl):
+    """The texts a {% if %} / {% elif %} chain can return: what follows each tag up to the next tag, stripped, non-empty."""
+    return [x.strip() for x in re.findall(r"%}(.*?)(?={%|$)", tmpl, flags=re.S) if x.strip()]
+
+
+HELPERS3 = ("input_text.ecco_cfg_edit_last_result", "input_text.ecco_cfg_edit_review", "input_text.ecco_cfg_last_owner_edit")
+
+
+def writers_report(text):
+    """[(script or automation, helper, bound, value[:60])] for every input_text.set_value of the three helpers, and the refusal maxima per copy;
+    raises KeyError for an unbounded expression."""
+    doc = yaml.safe_load(text)
+    copies = [v for _p, v in _strings(doc, lambda k, v, p: "{% set cyc2 =" in v)]
+    rmax = [max(text_bound(t) for t in _segments(c)) for c in copies]
+    rp = [v for _p, v in _strings(doc, lambda k, v, p: k == "review_problem")]
+    fw = [v for _p, v in _strings(doc, lambda k, v, p: k == "fresh_why")]
+    assert len(copies) == 4 and len(rp) == 1 and len(fw) == 1
+    var = {"Review": {"refusal": rmax[0]},
+           "Apply": {"refusal": rmax[1], "review_problem": max(text_bound(t) for t in _segments(rp[0])), "refusal2": rmax[2],
+                     "fresh_why": max(len(x) for x in re.findall(r"'([^']*)'", fw[0])), "refusal3": rmax[3]}}
+    out = []
+
+    def walk(node, owner):
+        if isinstance(node, dict):
+            if node.get("action") == "input_text.set_value" and (node.get("target") or {}).get("entity_id") in HELPERS3:
+                v = str((node.get("data") or {}).get("value"))
+                out.append((owner, node["target"]["entity_id"], text_bound(v, var.get(owner, {})), v[:60]))
+            for v in node.values():
+                walk(v, owner)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, owner)
+    for sid, sc_ in doc["script"].items():
+        walk(sc_, {REVIEW: "Review", APPLY: "Apply"}.get(sid, sid))
+    for au in doc["automation"]:
+        walk(au, au.get("id"))
+    return out, rmax
+
+
+WR, WR_RMAX = writers_report(S1)
+WR_WORST = {h: max(b for _o, h_, b, _v in WR if h_ == h) for h in HELPERS3}
+try:
+    WR_C = writers_report(S1C)[0]
+except KeyError as exc:
+    WR_C = [("?", "?", 10 ** 6, f"unbounded {exc}")]
+check(f"EVERY value written to the three input_text helpers ({len(WR)} writers: the result, the review record, the owner-edit record) fits 255 "
+      f"characters at its longest, nothing truncated: worst {WR_WORST['input_text.ecco_cfg_edit_last_result']} / "
+      f"{WR_WORST['input_text.ecco_cfg_edit_review']} / {WR_WORST['input_text.ecco_cfg_last_owner_edit']}; the longest refusal per gate copy "
+      f"{WR_RMAX} (the last check's frame adds 90, so its refusals stay within 165); every substitution is bounded with its reason (SUB_MAX), "
+      "and on the acs1c text (acs1c's cycle and neighbour texts, acs1's power and fallback live match texts) the last check's writer did not fit "
+      f"({max(b for _o, _h, b, _v in WR_C)}) - review finding X1",
+      len(WR) == 17 and sum(1 for _o, h_, _b, _v in WR if h_ == HELPERS3[0]) == 14 and all(b <= 255 for _o, _h, b, _v in WR)
+      and WR_RMAX[3] <= XW.REFUSAL_MAX and max(b for _o, _h, b, _v in WR_C) > 255
+      and all(len(re.sub(r"{{.*?}}", "", n_)) + 16 * n_.count("{{") <= XW.REFUSAL_MAX < len(re.sub(r"{{.*?}}", "", o_)) + 16 * o_.count("{{")
+              for o_, n_ in XW.REWRITES),
+      str([w for w in WR if w[2] > 255]) + " " + str(WR_RMAX))
+
+
+def writers_whole(text):
+    """None when every value written to the three helpers writes each refusal variable whole; else the first expression that does not."""
+    try:
+        writers_report(text)
+    except Shortened as exc:
+        return str(exc)
+    return None
+
+
+# Forms that shorten a refusal (each must be refused, however spelled) and forms that write it whole (each must be bounded).
+SHORT_FORMS = ("refusal2[:120]", "refusal2[0:120]", "refusal2 [ : 120 ]", "refusal2[:-10]", "(refusal2)[:120]", "refusal[:100]",
+               "(review_problem if review_problem else refusal)[:120]", "refusal3 | truncate(150)", "refusal3|truncate(150, true)",
+               "fresh_why[:80]", "refusal2.split(';')[0]", "(refusal2 | string)[:120]", "refusal ~ ''",
+               "fresh_why if not fresh else (refusal2[:120] if refusal2 else 'x')")
+WHOLE_FORMS = ("refusal", "(refusal2)", "( refusal3 )", "review_problem if review_problem else refusal",
+               "fresh_why if not fresh else (refusal2 if refusal2 else ('a' if pre.fl < 0 else 'b'))")
+_V5 = dict.fromkeys(REFUSAL_VARS, 10)
+
+
+def _raises_shortened(expr):
+    try:
+        sub_bound(expr, _V5)
+    except Shortened:
+        return True
+    return False
+
+
+check("no refusal is shortened to fit (review finding FB-1): every value written to the three helpers writes each refusal variable "
+      f"({', '.join(REFUSAL_VARS)}) whole; any other expression of one fails the bound however it is spelled ({len(SHORT_FORMS)} forms: slices "
+      "with and without a start, spaced, negative, of a parenthesised or conditional expression, the truncate filter, a method, a "
+      f"concatenation, inside a conditional), and the {len(WHOLE_FORMS)} whole forms (bare, parenthesised, conditional) are bounded",
+      writers_whole(S1) is None and all(_raises_shortened(f_) for f_ in SHORT_FORMS)
+      and all(sub_bound(f_, _V5) == 10 for f_ in WHOLE_FORMS),
+      str((writers_whole(S1), [f_ for f_ in SHORT_FORMS if not _raises_shortened(f_)])))
+check("the four rewritten refusals keep their meaning and the words the editor's other texts and suites rely on (the grid, the cycle, the "
+      "neighbour rule, 500 to 8000 W, the fallback profile, the live match value), and each replaces its long form in all four copies",
+      all(S1.count("%}" + n_ + "\n") == 4 and S1C.count("%}" + o_ + "\n") == 4 and S1.count(o_) == 0 for o_, n_ in XW.REWRITES)
+      and "24-hour cycle" in XW.REFUSE_CYC_NEW and "unexpected TOU layout" in XW.REFUSE_CYC_NEW
+      and "strictly after the previous slot" in XW.REFUSE_ORDER_NEW and "slot 6 is followed by slot 1" in XW.REFUSE_ORDER_NEW
+      and "500 to 8000 W" in XW.REFUSE_POWER_NEW and "fallback profile" in XW.REFUSE_POWER_NEW
+      and XW.REFUSE_MATCH_NEW.startswith("the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: ")
+      and "(MATCH, DRIFT or CONTEXT)" in XW.REFUSE_MATCH_NEW)
+check("the acs1x transform's constants are acs1c's: the package path, the gate copies (12 spaces twice, 16 once, 24 once), the day, the proposed-layout "
+      "refusal it follows, and its base pin is acs1c's result pin",
+      XW.PACKAGE_REL == C.PACKAGE_REL == X.ACS0_REL and XW.GATE_COPIES == C.GATE_COPIES and XW.DAY_MINUTES == C.DAY_MINUTES
+      and XW.REFUSE_CYC2 == C.REFUSE_CYC2 and XW.STAGE1C_BASE_SHA256 == C.STAGE1C_SHA256)
+check("the hold's proposed layout is built exactly as acs1c's proposed-layout test builds it: the same two expressions for a slot's start and the next "
+      "slot's start, slot n's start replaced by the new value (wmin)",
+      XW.GATE_XW.count("{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}") == 1
+      and S1.count("{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}") == 4)
 
 # ======================================================================================================================
 print("\n[1] static scope of the installed package")
@@ -1246,7 +1631,7 @@ cases = [
     (3, "0930", False), (3, "", False), (3, "ab:cd", False), (3, "09-30", False), (3, "-9:30", False), (3, "09:30", True),
     (3, "09:30:00", True), (3, "05:05", True), (3, "15:55", False), (3, "05:00", False), (3, "16:00", False), (3, "04:55", False),
     (3, "16:05", False), (3, "09:00", False), (3, "04:00", False), (3, "17:00", False),
-    (1, "00:05", True), (1, "04:55", True), (1, "05:00", False), (1, "23:55", True), (1, "00:00", False), (1, "00:01", False),   # acs1c: slot 1 may start before midnight, after slot 6's 23:00
+    (1, "00:05", True), (1, "04:55", True), (1, "05:00", False), (1, "23:55", False), (1, "00:00", False), (1, "00:01", False),   # acs1c let slot 1 start at 23:55, after slot 6's 23:00; acs1x refuses it (the crossing would move from slot 6 -> 1 to slot 1 -> 2)
     (6, "23:55", True), (6, "19:05", True), (6, "19:00", False), (6, "18:55", False), (6, "00:00", False), (6, "23:00", False),
     (2, "00:00", False), (2, "00:05", True), (2, "08:55", True), (2, "09:00", False),
     (5, "16:00", False), (5, "16:05", True), (5, "22:55", True), (5, "23:00", False),
@@ -1256,8 +1641,11 @@ for slot, v, ok in cases:
     if (accepts(r) if ok else rejects(r)) is not True:
         bad.append((slot, v, ok, r.res()[:80]))
 check(f"start time ({len(cases)} cases): off the 5-minute grid, 24:00, 23:60, seconds, malformed, equal to a neighbour, crossing a neighbour "
-      "and no change refused; strictly between the neighbours accepted - slot 1 (slot 6's end) and slot 6 (slot 1's start) included, and (acs1c) "
-      "slot 1 may move to 23:55, after slot 6's 23:00 and before slot 2's 05:00 round the clock", not bad, str(bad[:4]))
+      "and no change refused; strictly between the neighbours accepted - slot 1 (slot 6's end) and slot 6 (slot 1's start) included; slot 1 to 23:55 "
+      "(after slot 6's 23:00 round the clock, which acs1c accepted) is refused since acs1x: it would move the midnight crossing", not bad, str(bad[:4]))
+r = Run().review(1, "start_time", "23:55")
+check("...and that refusal names the midnight-crossing hold (the default layout's crossing is slot 6 -> 1, slot 1 starting at 00:00)",
+      rejects(r) and XW.REFUSE_XW in r.res(), r.res())
 r = Run().review(3, "start_time", "09:32")
 check("an off-grid start time is refused with the 5-minute grid named", "5-minute grid" in r.res(), r.res())
 r = Run().review(3, "start_time", "05:00")
@@ -1411,7 +1799,7 @@ def c_cls(r):
     s = r.res()
     if s.startswith("REVIEWED"):
         return "accept"
-    for k, t in (("cycle2", "would not leave one valid 24-hour cycle"), ("cycle", "24-hour cycle"), ("order", "strictly after the previous slot"),
+    for k, t in (("crossing", "midnight crossing"), ("cycle2", "would not leave one valid 24-hour cycle"), ("cycle", "24-hour cycle"), ("order", "strictly after the previous slot"),
                  ("near", "within 15 minutes"), ("mid", "between the old and the new boundary"), ("nochange", "no change"), ("unavailable", "unavailable")):
         if t in s:
             return k
@@ -1439,11 +1827,13 @@ OWNER_CASES = (
     (3, "12:05", "accept"), (3, "05:35", "accept"), (3, "16:30", "accept"), (3, "05:30", "order"), (3, "16:35", "order"), (3, "00:30", "order"),
     # slot 4 (16:35; between 12:00 and 22:00)
     (4, "16:40", "accept"), (4, "21:55", "accept"), (4, "12:05", "accept"), (4, "22:00", "order"), (4, "12:00", "order"),
-    # slot 5 (22:00; between 16:35 and slot 6's 00:25 the next day: the slot that runs past midnight)
-    (5, "21:55", "accept"), (5, "23:55", "accept"), (5, "00:00", "accept"), (5, "00:05", "accept"), (5, "00:20", "accept"), (5, "16:40", "accept"),
+    # slot 5 (22:00; between 16:35 and slot 6's 00:25 the next day: the slot that runs past midnight). acs1c accepted 00:00 .. 00:20; acs1x
+    # refuses them (slot 4 would run past midnight: the crossing would move from slot 5 -> 6 to slot 4 -> 5)
+    (5, "21:55", "accept"), (5, "23:55", "accept"), (5, "00:00", "crossing"), (5, "00:05", "crossing"), (5, "00:20", "crossing"), (5, "16:40", "accept"),
     (5, "00:25", "order"), (5, "00:30", "order"), (5, "16:35", "order"), (5, "16:30", "order"), (5, "22:00", "nochange"),
-    # slot 6 (00:25; between 22:00 the day before and slot 1's 00:30: the five-minute slot)
-    (6, "00:20", "accept"), (6, "00:00", "accept"), (6, "23:55", "accept"), (6, "22:05", "accept"), (6, "00:30", "order"), (6, "00:35", "order"),
+    # slot 6 (00:25; between 22:00 the day before and slot 1's 00:30: the five-minute slot). acs1c accepted 22:05 .. 23:55; acs1x refuses them
+    # (slot 6 would run past midnight: the crossing would move from slot 5 -> 6 to slot 6 -> 1)
+    (6, "00:20", "accept"), (6, "00:00", "accept"), (6, "23:55", "crossing"), (6, "22:05", "crossing"), (6, "00:30", "order"), (6, "00:35", "order"),
     (6, "22:00", "order"), (6, "21:55", "order"), (6, "00:25", "nochange"),
 )
 c_bad = []
@@ -1451,12 +1841,13 @@ for slot, v, exp in OWNER_CASES:
     t0_ = TWO_AM if slot in (3, 4) else NOON
     r = Run(layout=OWNER_LAYOUT, t0=t0_).review(slot, "start_time", v)
     now_min = 120 if slot in (3, 4) else 720
-    model = C.verdict(OWNER_MIN, slot, c_mins(hhmm_of(v)), now_min)
+    model = XW.verdict(C.verdict(OWNER_MIN, slot, c_mins(hhmm_of(v)), now_min), OWNER_MIN, slot, c_mins(hhmm_of(v)))
     if c_cls(r) != exp or model != exp or (exp == "accept") != accepts(r) or (exp != "accept" and not rejects(r)) or len(r.res()) >= 255:
         c_bad.append((slot, v, exp, c_cls(r), model, r.res()[:70]))
 check(f"the owner's baseline, every slot ({len(OWNER_CASES)} named cases): a new start strictly between the previous and the next slot's start, counted round "
-      "the clock, is accepted (slot 1 after slot 6's 00:25, slot 6 before slot 1's 00:30, slot 5 across midnight up to 00:20); equal to or beyond a "
-      "neighbour is refused with the neighbour rule named; no change refused; the reference model agrees; every result text fits the input_text",
+      "the clock, is accepted (slot 1 after slot 6's 00:25, slot 6 before slot 1's 00:30 down to 00:00, slot 5 up to 23:55) unless it would move the "
+      "midnight crossing (acs1x: slot 5 past midnight, slot 6 before it); equal to or beyond a neighbour is refused with the neighbour rule named; no "
+      "change refused; the reference model agrees; every result text fits the input_text",
       not c_bad, str(c_bad[:4]))
 r = Run(layout=OWNER_LAYOUT, t0=NOON).review(5, "start_time", "23:55")
 r2 = Run(layout=OWNER_LAYOUT, t0=NOON).review(1, "start_time", "00:35")
@@ -1482,17 +1873,19 @@ check("every slot's map entry (Review and Apply copies) names the previous slot'
       "slot (later; earlier for the five-minute slot 6) names its two resulting windows with the previous slot's live start", not c_bad, str(c_bad[:3]))
 # --- the same schedule under every slot numbering (rotation): the verdicts do not depend on where the wrap sits
 c_bad = []
-ROT_CASES = ((5, "00:05", "accept"), (6, "00:20", "accept"), (1, "00:35", "accept"), (6, "00:30", "order"), (1, "00:25", "order"), (5, "00:25", "order"))
+ROT_CASES = ((5, "00:05", "crossing"), (6, "00:20", "accept"), (1, "00:35", "accept"), (6, "00:30", "order"), (1, "00:25", "order"), (5, "00:25", "order"),
+             (6, "23:55", "crossing"), (5, "23:55", "accept"))
 for rot in range(6):
     lay = OWNER_STARTS[rot:] + OWNER_STARTS[:rot]          # slot 1 is now the owner's slot rot+1
     lay_min = [c_mins(x) for x in lay]
     for slot, v, exp in ROT_CASES:
         s_ = (slot - 1 - rot) % 6 + 1                       # the owner's slot `slot` under this numbering
         r = Run(layout=starts(*lay), t0=NOON).review(s_, "start_time", v)
-        if c_cls(r) != exp or C.verdict(lay_min, s_, c_mins(hhmm_of(v)), 720) != exp:
+        if c_cls(r) != exp or XW.verdict(C.verdict(lay_min, s_, c_mins(hhmm_of(v)), 720), lay_min, s_, c_mins(hhmm_of(v))) != exp:
             c_bad.append((rot, s_, v, exp, c_cls(r)))
 check(f"slot rotation: the owner's schedule under all six slot numberings (the wrap between slots 5/6, 4/5, ... 6/1) gives the same verdicts for the same "
-      f"physical edits ({6 * len(ROT_CASES)} cases): accepted across the wrap, refused at a neighbour", not c_bad, str(c_bad[:4]))
+      f"physical edits ({6 * len(ROT_CASES)} cases): accepted up to the wrap, refused at a neighbour, refused where the edit would move the crossing "
+      "(acs1x: the hold follows the physical crossing, not a slot number)", not c_bad, str(c_bad[:4]))
 # --- layouts that are not one cycle: refused with the cycle rule named, for every slot; every other setting is unaffected
 BAD_LAYOUTS = {
     "two wraps (slot 6 at 13:00: the slots go round the clock twice)": (30, 530, 1200, 1635, 2200, 1300),
@@ -1510,7 +1903,7 @@ for label, lay in BAD_LAYOUTS.items():
     for slot in range(1, 7):
         v = "05:35" if slot == 2 else c_txt((((lay_min[slot - 1] + 5) // 5) * 5) % 1440 if lay_min[slot - 1] >= 0 else 0)
         r = Run(layout=starts(*lay), t0=NOON).review(slot, "start_time", v)
-        model = C.verdict(lay_min, slot, c_mins(hhmm_of(v)), 720)
+        model = XW.verdict(C.verdict(lay_min, slot, c_mins(hhmm_of(v)), 720), lay_min, slot, c_mins(hhmm_of(v)))
         agree = c_cls(r) == model or (model == "unavailable" and c_cls(r) == "cycle")   # "24:00": numeric for the template, unreadable for the model
         if not (rejects(r) and c_cls(r) in ("cycle", "unavailable", "nochange", "near") and agree):
             c_bad.append((label, slot, v, c_cls(r), model, r.res()[:60]))
@@ -1521,34 +1914,41 @@ for label, lay in BAD_LAYOUTS.items():
 check(f"a live layout that is not one 24-hour cycle ({len(BAD_LAYOUTS)} kinds: two wraps, equal starts, an off-grid start in a distant or in the edited slot, "
       "a slot under 5 minutes, descending, all equal, a 24:00 word) refuses a start-time edit of EVERY slot with the cycle rule named (fail closed; the "
       "reference model agrees), and a target SOC, power or charge-source edit on the same layout is unaffected", not c_bad, str(c_bad[:4]))
-# --- the active-slot-now guard on a window that crosses midnight: slot 5 22:00 -> 00:05 changes the owner of [22:00, 00:05)
+# --- the active-slot-now guard on a window that crosses midnight: slot 5 22:00 -> 00:05 changes the owner of [22:00, 00:05). Since acs1x the
+# installed package refuses every such edit first (it moves the midnight crossing); the guard's lines are inherited byte for byte ([0x]), so
+# they are exercised on the acs1c text (S1C, the acs1x base), and the installed package is shown to refuse every case with the hold.
 c_bad = []
 MID_WRAP = (("12:00:00", "accept"), ("21:44:00", "accept"), ("21:45:00", "near"), ("22:15:00", "near"), ("22:16:00", "mid"), ("23:00:00", "mid"),
             ("23:49:00", "mid"), ("23:50:00", "near"), ("00:05:00", "near"), ("00:20:00", "near"), ("00:21:00", "accept"), ("03:00:00", "accept"))
 for hm, exp in MID_WRAP:
-    r = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(5, "start_time", "00:05")
+    r = Run(S1C, layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 " + hm) - 70).review(5, "start_time", "00:05")
+    rx = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(5, "start_time", "00:05")
     now_min = int(hm[:2]) * 60 + int(hm[3:5])
-    if c_cls(r) != exp or C.verdict(OWNER_MIN, 5, 5, now_min) != exp:
-        c_bad.append((hm, exp, c_cls(r)))
+    if c_cls(r) != exp or C.verdict(OWNER_MIN, 5, 5, now_min) != exp or c_cls(rx) != "crossing" or not rejects(rx):
+        c_bad.append((hm, exp, c_cls(r), c_cls(rx)))
 # and the move back across midnight: slot 5 00:05 -> 22:00 on the moved layout changes the owner of the same window
 MOVED = starts(30, 530, 1200, 1635, 5, 25)
 for hm, exp in (("12:00:00", "accept"), ("23:00:00", "mid"), ("00:21:00", "accept"), ("21:50:00", "near")):
-    r = at("2026-10-26 " + hm, layout=MOVED).review(5, "start_time", "22:00")
-    if c_cls(r) != exp:
-        c_bad.append(("back", hm, exp, c_cls(r)))
-check(f"the active-slot-now guard across midnight ({len(MID_WRAP) + 4} cases): moving slot 5's start from 22:00 to 00:05 (and back) is refused between "
-      "22:16 and 23:49 local ('between the old and the new boundary': the owner of that window changes), refused within 15 minutes of either boundary, "
-      "and accepted at 12:00, 21:44, 00:21 and 03:00 - a linear comparison of the two HH:MM values would have refused the daytime cases", not c_bad, str(c_bad[:4]))
+    r = Run(S1C, layout=MOVED, t0=S.parse_local("2026-10-26 " + hm) - 70).review(5, "start_time", "22:00")
+    rx = at("2026-10-26 " + hm, layout=MOVED).review(5, "start_time", "22:00")
+    if c_cls(r) != exp or c_cls(rx) != "crossing":
+        c_bad.append(("back", hm, exp, c_cls(r), c_cls(rx)))
+check(f"the active-slot-now guard across midnight ({len(MID_WRAP) + 4} cases, on the acs1c text): moving slot 5's start from 22:00 to 00:05 (and back) is "
+      "refused between 22:16 and 23:49 local ('between the old and the new boundary': the owner of that window changes), refused within 15 minutes of "
+      "either boundary, and accepted at 12:00, 21:44, 00:21 and 03:00 - a linear comparison of the two HH:MM values would have refused the daytime "
+      "cases; the installed package refuses all of them with the crossing hold (acs1x), at every one of those times", not c_bad, str(c_bad[:4]))
 c_bad = []
 MID_SIX = (("12:00:00", "accept"), ("22:44:00", "accept"), ("22:45:00", "near"), ("23:15:00", "near"), ("23:16:00", "mid"), ("00:00:00", "mid"), ("00:09:00", "mid"),
            ("00:10:00", "near"), ("00:25:00", "near"), ("00:40:00", "near"), ("00:41:00", "accept"), ("03:00:00", "accept"))
 for hm, exp in MID_SIX:
-    r = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(6, "start_time", "23:00")
+    r = Run(S1C, layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 " + hm) - 70).review(6, "start_time", "23:00")
+    rx = at("2026-10-26 " + hm, layout=OWNER_LAYOUT).review(6, "start_time", "23:00")
     now_min = int(hm[:2]) * 60 + int(hm[3:5])
-    if c_cls(r) != exp or C.verdict(OWNER_MIN, 6, 23 * 60, now_min) != exp:
-        c_bad.append((hm, exp, c_cls(r)))
-check(f"the five-minute slot 6 moved back across midnight (00:25 -> 23:00; {len(MID_SIX)} cases): refused between 23:16 and 00:09 local (the owner of that "
-      "window changes from slot 5 to slot 6), refused within 15 minutes of 23:00 or 00:25, accepted at 12:00, 22:44, 00:41 and 03:00", not c_bad, str(c_bad[:4]))
+    if c_cls(r) != exp or C.verdict(OWNER_MIN, 6, 23 * 60, now_min) != exp or c_cls(rx) != "crossing":
+        c_bad.append((hm, exp, c_cls(r), c_cls(rx)))
+check(f"the five-minute slot 6 moved back across midnight (00:25 -> 23:00; {len(MID_SIX)} cases, on the acs1c text): refused between 23:16 and 00:09 local "
+      "(the owner of that window changes from slot 5 to slot 6), refused within 15 minutes of 23:00 or 00:25, accepted at 12:00, 22:44, 00:41 and 03:00; "
+      "the installed package refuses all of them with the crossing hold (acs1x)", not c_bad, str(c_bad[:4]))
 # a review record that was not written by the Review (hand-edited input_text): the Apply's own copy of the gate re-checks the value's form
 c_bad = []
 for bad_want, why in ((2400, "24:00"), (2475, "24:75"), (1275, "12:75"), (1233, "off the grid"), (2360, "23:60"), (99999, "nonsense")):
@@ -1631,15 +2031,15 @@ for lay, unread, n, new, now_min, model_lay in FUZZ:
     layout = starts(*[c_hhmm(v) for v in lay])
     setup = (lambda x, k=unread: x.w.set(f"sensor.{D}ecco_timezone{k + 1}_time", "unavailable")) if unread is not None else None
     r = at(f"2026-10-26 {c_txt(now_min)}:00", layout=layout, setup=setup).review(n, "start_time", c_txt(new))
-    exp = C.verdict(model_lay, n, new, now_min)
+    exp = XW.verdict(C.verdict(model_lay, n, new, now_min), model_lay, n, new)
     fuzz_seen[exp] += 1
     if c_cls(r) != exp or (exp == "accept") != accepts(r) or (exp != "accept") != rejects(r):
         fuzz_bad.append((lay, unread, n, c_txt(new), c_txt(now_min), exp, c_cls(r), r.res()[:60]))
 check(f"seeded fuzz ({len(FUZZ)} cases: random cycles with the wrap anywhere, random slot, a new start inside the window, at a neighbour, beyond it or anywhere, "
       f"a random local time; plus duplicate, two-wrap, off-grid and unreadable layouts): the template's verdict is the reference model's in every case "
-      f"(classes seen: {dict(fuzz_seen)}); the wrap-aware window and the unwrapped active-slot guard are both reached", not fuzz_bad
+      f"(classes seen: {dict(fuzz_seen)}); the wrap-aware window, the unwrapped active-slot guard and (acs1x) the crossing hold are all reached", not fuzz_bad
       and fuzz_seen["accept"] >= 10 and fuzz_seen["order"] >= 5 and fuzz_seen["cycle"] >= 5 and fuzz_seen["mid"] >= 3 and fuzz_seen["near"] >= 3
-      and fuzz_seen["nochange"] >= 1, str(fuzz_bad[:3]) + " " + str(dict(fuzz_seen)))
+      and fuzz_seen["nochange"] >= 1 and fuzz_seen["crossing"] >= 3, str(fuzz_bad[:3]) + " " + str(dict(fuzz_seen)))
 # --- properties of the reference model (plain Python, many cases): the rules the template computes
 
 
@@ -1713,7 +2113,7 @@ for label, text_, said in (("without the neighbour rule", S1_NO_ORDER, "would no
         r = Run(text_, layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", v)
         if not (rejects(r) and said in r.res()):
             c_bad.append((label, slot, v, r.res()[:50]))
-    for slot, v in ((1, "00:35"), (6, "00:20"), (5, "00:05")):
+    for slot, v in ((1, "00:35"), (6, "00:20"), (5, "23:55")):
         r = Run(text_, layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", v)
         if not accepts(r):
             c_bad.append((label, slot, v, r.res()[:50]))
@@ -1723,7 +2123,7 @@ check("defence in depth: with the neighbour rule removed the proposed-layout rul
       not c_bad, str(c_bad[:3]))
 # --- forward and undo Applies on the owner's baseline: every slot, slot 5 across midnight; exactly one register, counter +1, F1 Load of slot N-1
 c_bad = []
-REVERSE = ((1, "00:35", NOON), (2, "05:25", NOON), (3, "12:05", TWO_AM), (4, "16:30", TWO_AM), (5, "00:05", NOON), (6, "00:20", NOON), (6, "23:55", NOON))
+REVERSE = ((1, "00:35", NOON), (2, "05:25", NOON), (3, "12:05", TWO_AM), (4, "16:30", TWO_AM), (5, "23:55", NOON), (6, "00:20", NOON), (6, "00:00", NOON))
 
 
 def slot_writes(r, slot, start, end):
@@ -1755,8 +2155,8 @@ for slot, v, t0_ in REVERSE:
             and slot_writes(r2, slot, old, OWNER_STARTS[slot % 6]))
     if not (fwd and back):
         c_bad.append((slot, v, r.res()[:60], r.changed(), r2.res()[:60], r2.changed()))
-check("forward and undo on the owner's baseline, every slot (slot 5 22:00 -> 00:05 and slot 6 00:25 -> 23:55 across midnight, slot 6 the five-minute slot, "
-      "slot 1 after slot 6): each Apply is APPLIED AND VERIFIED with exactly that slot's start register changed, one Load, one press, the gate-pass counter "
+check("forward and undo on the owner's baseline, every slot (slot 5 22:00 -> 23:55 up to midnight and slot 6 00:25 -> 00:00 at it - acs1x: their moves "
+      "across midnight are refused, [4x] - slot 6 the five-minute slot, slot 1 after slot 6): each Apply is APPLIED AND VERIFIED with exactly that slot's start register changed, one Load, one press, the gate-pass counter "
       "+1, the write log exactly 232, the start (249+N) at the request, the end register (the next slot's start; 250 for slot 6) at its unchanged value, "
       "power, SOC, flags; slot N-1's staging refreshed (F1), and the undo restores the baseline exactly", not c_bad, str(c_bad[:2]))
 # --- the live-proven edits of 25 Oct (I3), repeated on the baseline: unchanged by acs1c
@@ -1794,6 +2194,302 @@ r.apply(run=480)
 check("the next slot's start moved after the Review (slot 2 05:30 -> 05:20): the edit still applies, the fresh end (05:20) is Loaded and rewritten unchanged, "
       "only slot 1's start changed", r.res().startswith("APPLIED AND VERIFIED") and r.changed() == {(1, "start"): (30, 35), (2, "start"): (530, 520)}
       and r.d.regs["slots"][2]["start"] == 520 and len(r.applies()) == 1, f"{r.res()[:80]} {r.changed()}")
+
+# ======================================================================================================================
+print("\n[4x] acs1x: the midnight-crossing hold (the owner's restriction on moving the crossing, enforced by the scripts)")
+# ======================================================================================================================
+
+
+def x_model(lay, n, new, now_min):
+    """The installed gate's start-time ordering verdict in plain Python: acs1c's reference model, then the crossing hold."""
+    return XW.verdict(C.verdict(lay, n, new, now_min), lay, n, new)
+
+
+def x_cls_text(s):
+    """The outcome class of one gate copy's own result ('' = no refusal = 'accept'); the classes and texts of c_cls."""
+    if not s:
+        return "accept"
+    for k, t in (("crossing", "midnight crossing"), ("cycle2", "would not leave one valid 24-hour cycle"), ("cycle", "24-hour cycle"),
+                 ("order", "strictly after the previous slot"), ("near", "within 15 minutes"), ("mid", "between the old and the new boundary"),
+                 ("nochange", "no change"), ("unavailable", "unavailable")):
+        if t in s:
+            return k
+    return "other:" + s[:60]
+
+
+def _yaml_strings(text, pred):
+    """(key, value) of every string value in the parsed package for which pred(key, value) holds, in document order."""
+    out = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(v, str) and pred(k, v):
+                    out.append((k, v))
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(yaml.safe_load(text))
+    return out
+
+
+def gate_copies(text):
+    """The four copies of the gate in `text` as Home Assistant reads them (parsed, folded), in document order: the Review's `refusal`, the
+    Apply's `refusal` (its gate), `refusal2` (its fresh-read re-check) and `refusal3` (its last check before the press)."""
+    return _yaml_strings(text, lambda k, v: "{% set cyc2 =" in v)
+
+
+class GateWorld:
+    """A Run (the owner's layout unless given) whose four gate copies are rendered ALONE in its world, with the variables the scripts give them
+    (slot, setting, the typed value, its minutes, the per-slot entity map, label, display value), so each copy is checked on its own. The
+    later copies are NOT redundant: the edited slot's own live start is re-checked against the review record only by the Apply's gate and at
+    the fresh read, so between the fresh read and the press the last copy is the only check that sees it change (another tool moving slot N's
+    start can turn an accepted edit into a crossing-moving one there: [11x]); and the fresh-read copy can differ from the Apply's gate when the
+    other five starts move. A copy without the hold is caught here and end to end ([11x], [12])."""
+
+    def __init__(self, text=None, layout=OWNER_LAYOUT, t0=NOON, setup=None):
+        text = S1 if text is None else text
+        self.r = Run(text, layout=layout, t0=t0, setup=setup)
+        self.copies = gate_copies(text)
+        maps = _yaml_strings(text, lambda k, v: k == "e" and "{% set m = {" in v)
+        assert len(maps) == 2 and maps[0] == maps[1] and [k for k, _v in self.copies] == ["refusal", "refusal", "refusal2", "refusal3"]
+        self.etmpl, self.e = maps[0][1], {}
+
+    def results(self, n, hhmm_txt):
+        if n not in self.e:
+            self.e[n] = self.r.w.render_native(self.etmpl, {"n": n})
+        want = hhmm_of(hhmm_txt)
+        v = dict(n=n, setting="start_time", want=want, wmin=c_mins(want), e=self.e[n], label="start time", wdisp=hhmm_txt)
+        return [self.r.w.render(t, v).strip() for _k, t in self.copies]
+
+
+check("the descent model: for every one of the owner's layout's rotations exactly one slot pair has a next start earlier than its own (the midnight "
+      "crossing: slot 5 -> 6, index 4, in the owner's numbering), and it runs from the latest start to the earliest",
+      XW.descents(OWNER_MIN) == [4] and all(XW.descents(OWNER_MIN[r_:] + OWNER_MIN[:r_]) == [(4 - r_) % 6] for r_ in range(6))
+      and max(range(6), key=lambda k: OWNER_MIN[k]) == 4 and min(range(6), key=lambda k: OWNER_MIN[k]) == 5)
+# --- exhaustive: every single-slot start edit of the owner's layout, through each of the four gate copies rendered alone
+GW_DAY = GateWorld(t0=S.parse_local("2026-10-26 12:02:30") - 70)      # 12:02:30: no grid value is exactly 15 minutes from the local time
+GW_NIGHT = GateWorld(t0=S.parse_local("2026-10-26 02:02:30") - 70)    # inside slot 1, clear of slots 3 and 4's boundaries
+x_bad, x_seen, x_cross = [], Counter(), set()
+for n in range(1, 7):
+    gw, now_min = (GW_NIGHT, 122.5) if n in (3, 4) else (GW_DAY, 722.5)
+    for new in range(0, 1440, 5):
+        exp = x_model(OWNER_MIN, n, new, now_min)
+        got = gw.results(n, c_txt(new))
+        cls_ = [x_cls_text(g) for g in got]
+        x_seen[exp] += 1
+        if exp == "crossing":
+            x_cross.add((n, new))
+        if cls_ != [exp] * 4 or (exp == "crossing" and got != [XW.REFUSE_XW] * 4):
+            x_bad.append((n, c_txt(new), exp, cls_))
+WANT_CROSS = {(5, m) for m in range(0, 25, 5)} | {(6, m) for m in range(22 * 60 + 5, 1440, 5)}
+check(f"EXHAUSTIVE on the owner's layout: every single-slot start edit (6 slots x 288 grid values = {6 * 288} cases) through each of the four gate "
+      f"copies rendered alone gives the reference model's verdict in all four (classes: {dict(x_seen)}); the hold refuses exactly slot 5 moved past "
+      "midnight (00:00 .. 00:20) and slot 6 moved before it (22:05 .. 23:55), 28 cases, with its own text in every copy, and never fires for slots 1-4",
+      not x_bad and x_cross == WANT_CROSS and len(WANT_CROSS) == 28
+      and dict(x_seen) == {"order": 1158, "nochange": 6, "accept": 534, "near": 2, "crossing": 28}, str(x_bad[:4]) + " " + str(dict(x_seen)))
+# --- the same through the real Review script: slots 5 and 6 at every grid value from 21:00 to 00:55, every slot at each full hour
+x_bad, x_seen = [], Counter()
+E2E = [(n, m) for n in (5, 6) for m in list(range(21 * 60, 1440, 5)) + list(range(0, 60, 5))] + [(n, h * 60) for n in range(1, 7) for h in range(24)]
+for n, new in E2E:
+    stamp, now_min = ("2026-10-26 02:02:30", 122.5) if n in (3, 4) else ("2026-10-26 12:02:30", 722.5)
+    r = at(stamp, layout=OWNER_LAYOUT).review(n, "start_time", c_txt(new))
+    exp = x_model(OWNER_MIN, n, new, now_min)
+    x_seen[exp] += 1
+    if (c_cls(r) != exp or (exp == "accept") != accepts(r) or (exp != "accept") != rejects(r) or len(r.res()) >= 255
+            or (exp == "crossing" and r.res() != "REVIEW REFUSED - " + XW.REFUSE_XW + "; nothing written")):
+        x_bad.append((n, c_txt(new), exp, c_cls(r), r.res()[:70]))
+check(f"the real Review script on the owner's layout ({len(E2E)} cases: slots 5 and 6 at every grid value 21:00 .. 00:55, every slot at each full hour): "
+      f"its verdict is the reference model's in every case (classes: {dict(x_seen)}); a crossing-moving edit is 'REVIEW REFUSED - <the hold's text>; "
+      "nothing written', with no press and no plan recorded", not x_bad and x_seen["crossing"] >= 20 and x_seen["accept"] >= 40, str(x_bad[:4]))
+# --- the owner's named cases: acs1c accepted the crossing-moving ones; the installed package refuses them, nothing written
+x_bad = []
+for (slot, v), exp in (((6, "23:55"), "crossing"), ((6, "23:00"), "crossing"), ((6, "22:05"), "crossing"), ((5, "00:00"), "crossing"),
+                       ((5, "00:05"), "crossing"), ((5, "00:20"), "crossing"), ((6, "00:20"), "accept"), ((6, "00:00"), "accept"),
+                       ((5, "23:55"), "accept"), ((5, "21:55"), "accept"), ((1, "05:25"), "accept"), ((4, "21:55"), "accept")):
+    t0_ = TWO_AM if slot in (3, 4) else NOON
+    r = Run(layout=OWNER_LAYOUT, t0=t0_).review(slot, "start_time", v)
+    r_c = Run(S1C, layout=OWNER_LAYOUT, t0=t0_).review(slot, "start_time", v)
+    if not (c_cls(r) == exp and (rejects(r) and r.w.state(PLAN) in ("", "unknown") and r.d.presses == [] if exp == "crossing" else accepts(r))
+            and accepts(r_c)):
+        x_bad.append((slot, v, exp, c_cls(r), c_cls(r_c)))
+check("the owner's named cases: slot 6 moved before midnight (23:55, 23:00, 22:05) and slot 5 moved past it (00:00, 00:05, 00:20) are refused by the "
+      "hold, nothing pressed, no plan recorded; slot 6 00:25 -> 00:20 and -> 00:00, slot 5 -> 23:55 and -> 21:55, slot 1 -> 05:25 and slot 4 -> 21:55 "
+      "are accepted; the acs1c text (the hold's base) accepts every one of them, so the hold is what refuses", not x_bad, str(x_bad))
+# --- the Apply's own gate refuses a hand-edited record that would move the crossing (the Review never saw that value)
+x_bad = []
+for slot, ok_v, bad_v in ((5, "21:55", 5), (6, "00:20", 2355), (5, "23:55", 20), (6, "00:00", 2205)):
+    r = Run(layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", ok_v)
+    rec = r.w.state(PLAN).split("|")
+    rec[2] = str(bad_v)
+    r.w.set(PLAN, "|".join(rec))
+    r.apply(phrase=f"SET SLOT {slot} START {bad_v // 100:02d}:{bad_v % 100:02d} REVIEW {rec[3]}", run=120)
+    if not (r.res() == "REFUSED - " + XW.REFUSE_XW + "; nothing written" and r.applies() == [] and r.loads() == [] and r.changed() == {}
+            and not r.arm_on() and not r.locked()):
+        x_bad.append((slot, ok_v, bad_v, r.res()[:80], r.loads()))
+check("a review record edited by hand to a crossing-moving value (slot 5 21:55 -> 00:05 and 23:55 -> 00:20; slot 6 00:20 -> 23:55 and 00:00 -> 22:05, "
+      "each with the matching phrase): the Apply's own gate refuses it with the hold's text before any Load - nothing pressed, nothing written, not "
+      "armed, not locked", not x_bad, str(x_bad[:2]))
+# --- the hold alone fails closed (in-memory: the cycle, neighbour and proposed-layout refusals turned off, so only the hold stands)
+S1_HOLD_ONLY = S1
+for _a in ("{% elif setting == 'start_time' and not cyc %}", "{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}",
+           "{% elif setting == 'start_time' and not cyc2 %}"):
+    assert S1_HOLD_ONLY.count(_a) == 4
+    S1_HOLD_ONLY = S1_HOLD_ONLY.replace(_a, "{% elif false %}")
+x_bad = []
+for label, kw, slot, v in (("an unreadable live start (slot 2)", dict(layout=OWNER_LAYOUT, setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone2_time", "unavailable")), 5, "23:55"),
+                           ("a live start that is not HH:MM (slot 3 '?2475')", dict(layout=OWNER_LAYOUT, setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone3_time", "?2475")), 6, "00:20"),
+                           ("a live layout that goes round the clock twice (two crossings)", dict(layout=starts(30, 530, 1200, 1635, 2200, 1300)), 2, "05:35"),
+                           ("a proposed layout with two crossings (slot 6 -> 00:35, past slot 1)", dict(layout=OWNER_LAYOUT), 6, "00:35")):
+    r = Run(S1_HOLD_ONLY, t0=NOON, **kw).review(slot, "start_time", v)
+    if not (rejects(r) and XW.REFUSE_XW in r.res()):
+        x_bad.append((label, r.res()[:70]))
+for slot, v in ((5, "23:55"), (6, "00:20"), (1, "00:35")):
+    r = Run(S1_HOLD_ONLY, layout=OWNER_LAYOUT, t0=NOON).review(slot, "start_time", v)
+    if not accepts(r):
+        x_bad.append(("accept", slot, v, r.res()[:70]))
+check("defence in depth: with the cycle, neighbour and proposed-layout refusals turned off in memory the hold alone still refuses an unreadable or "
+      "malformed live start, a live layout with two crossings and a proposed layout with two crossings (fail closed), and still accepts the edits that "
+      "keep the crossing", not x_bad, str(x_bad))
+# one case per conjunct of the hold: each is refused by the hold alone through all four copies, and not by the hold once that one conjunct is
+# removed in memory, so each conjunct is pinned by its own case (review finding X4)
+HOLD_CONJUNCTS = (
+    ("xc.ok (an unreadable start of another slot whose -1 keeps one decrease at the same place: slot 6 'unavailable', slot 2 -> 05:35)",
+     ("and wmin >= 0 and xc.ok and xc.c == 1", "and wmin >= 0 and xc.c == 1"),
+     dict(setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone6_time", "unavailable")), 2, "05:35"),
+    ("tt[k] >= 0 (the edited slot's own live start malformed but read as a number by the value parse: slot 6 '0:25', slot 6 -> 00:20)",
+     ("{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}", "{% set xc.ok = xc.ok and a >= 0 %}"),
+     dict(setup=lambda x: x.w.set(f"sensor.{D}ecco_timezone6_time", "0:25")), 6, "00:20"),
+    ("xc.c == 1 (a live layout with two crossings that the edit reduces to one at the same place: slot 6 at 21:40 -> 22:10)",
+     ("and xc.ok and xc.c == 1 and xc.c2 == 1", "and xc.ok and xc.c2 == 1"),
+     dict(layout=starts(30, 530, 1200, 1635, 2200, 2140)), 6, "22:10"),
+    ("xc.c2 == 1 (a proposed layout with two crossings, the last at the live crossing: slot 4 16:35 -> 06:00)",
+     ("and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2", "and xc.c == 1 and xc.i == xc.i2"),
+     dict(layout=OWNER_LAYOUT), 4, "06:00"),
+)
+
+
+def hold_only(t):
+    """`t` with the cycle, neighbour and proposed-layout refusals turned off in memory (all four copies): only the hold stands."""
+    for a_ in ("{% elif setting == 'start_time' and not cyc %}", "{% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}",
+               "{% elif setting == 'start_time' and not cyc2 %}"):
+        assert t.count(a_) == 4
+        t = t.replace(a_, "{% elif false %}")
+    return t
+
+
+def hold_alone_refuses(t):
+    """Every HOLD_CONJUNCTS case is refused with the hold's text by each of the four copies of hold_only(t), rendered alone."""
+    ho = hold_only(t)
+    return all(GateWorld(ho, t0=NOON, **{"layout": OWNER_LAYOUT, **kw}).results(n_, v_) == [XW.REFUSE_XW] * 4
+               for _label, _cut, kw, n_, v_ in HOLD_CONJUNCTS)
+
+
+x_bad = []
+for label, (cut_a, cut_b), kw, n_, v_ in HOLD_CONJUNCTS:
+    assert S1_HOLD_ONLY.count(cut_a) == 4
+    got = GateWorld(S1_HOLD_ONLY, t0=NOON, **{"layout": OWNER_LAYOUT, **kw}).results(n_, v_)
+    got_cut = GateWorld(S1_HOLD_ONLY.replace(cut_a, cut_b), t0=NOON, **{"layout": OWNER_LAYOUT, **kw}).results(n_, v_)
+    if got != [XW.REFUSE_XW] * 4 or any(XW.REFUSE_XW in g for g in got_cut):
+        x_bad.append((label[:40], got, got_cut))
+check("each conjunct of the hold is pinned by its own case (xc.ok, tt[k] >= 0, xc.c == 1, xc.c2 == 1): with only the hold standing, each case is "
+      "refused with the hold's text by all four copies rendered alone, and with that one conjunct removed in memory no copy refuses it with the hold",
+      not x_bad and hold_alone_refuses(S1), str(x_bad[:2]))
+# --- the hold keeps the crossing wherever the live layout has it (here slot 4 -> 5, after slot 5 was moved past midnight by another tool)
+MOVED_MIN = [c_mins(x) for x in (30, 530, 1200, 1635, 5, 25)]
+x_bad = []
+for slot, v, exp in ((5, "22:00", "crossing"), (5, "00:10", "accept"), (4, "23:55", "accept"), (4, "00:00", "crossing"), (6, "00:20", "accept"),
+                     (6, "23:55", "order"), (3, "12:05", "near")):
+    r = Run(layout=MOVED, t0=NOON).review(slot, "start_time", v)
+    if c_cls(r) != exp or x_model(MOVED_MIN, slot, c_mins(hhmm_of(v)), 720) != exp:
+        x_bad.append((slot, v, exp, c_cls(r)))
+check("the hold keeps the crossing where the live layout has it: on a layout whose crossing is slot 4 -> 5 (slot 5 at 00:05), moving slot 5 back to "
+      "22:00 is refused (the crossing would move; the editor cannot move it back while the hold stands), slot 4 -> 00:00 is refused, slot 4 -> 23:55, "
+      "slot 5 -> 00:10 and slot 6 -> 00:20 are accepted; the model agrees", not x_bad, str(x_bad))
+# --- every other setting is unaffected: the same Review result and notification as on the acs1c text
+x_bad = []
+for lay_name, lay, slots in (("owner", OWNER_LAYOUT, range(1, 7)), ("crossing at slot 4 -> 5", MOVED, (4, 5, 6))):
+    for n in slots:
+        for setting in ("target_soc", "power", "charge_source"):
+            r = Run(layout=lay, t0=NOON).review(n, setting, value_for(n, setting))
+            r_c = Run(S1C, layout=lay, t0=NOON).review(n, setting, value_for(n, setting))
+            if not (accepts(r) and r.res() == r_c.res() and r.note("ecco_cfg_edit_review") == r_c.note("ecco_cfg_edit_review")):
+                x_bad.append((lay_name, n, setting, r.res()[:60]))
+check("target SOC, power and charge-source Reviews are unaffected by the hold: on the owner's layout (every slot) and on a layout whose crossing sits "
+      "elsewhere, each is accepted with exactly the result text and notification of the acs1c text", not x_bad, str(x_bad[:3]))
+# --- random cyclic layouts: the four copies rendered alone against the model, edits around each slot and around midnight
+rng_x = random.Random(20261027)
+
+
+def x_rand_cycle():
+    pts = sorted(rng_x.sample(range(0, 1440, 5), 6))
+    rot = rng_x.randrange(6)
+    return pts[rot:] + pts[:rot]
+
+
+x_bad, x_seen, n_cases = [], Counter(), 0
+for _ in range(30):
+    lay = x_rand_cycle()
+    m_ = rng_x.randrange(0, 1440)
+    gw = GateWorld(layout=starts(*[c_hhmm(x) for x in lay]), t0=S.parse_local(f"2026-10-26 {c_txt(m_)}:30") - 70)
+    for n in range(1, 7):
+        pv, nx, cur = lay[(n + 4) % 6], lay[n % 6], lay[n - 1]
+        for new in sorted({(pv + 5) % 1440, (nx - 5) % 1440, 1435, 0, 5, (cur + 5) % 1440, (cur - 5) % 1440, rng_x.randrange(0, 1440, 5)}):
+            exp = x_model(lay, n, new, m_ + 0.5)
+            cls_ = [x_cls_text(g) for g in gw.results(n, c_txt(new))]
+            x_seen[exp] += 1
+            n_cases += 1
+            if cls_ != [exp] * 4:
+                x_bad.append((lay, n, c_txt(new), c_txt(m_), exp, cls_))
+check(f"random cyclic layouts (30 seeded layouts with the crossing anywhere, {n_cases} edits next to each neighbour, around the old start and around "
+      f"midnight, a random local time): each of the four gate copies rendered alone gives the reference model's verdict (classes: {dict(x_seen)})",
+      not x_bad and x_seen["crossing"] >= 30 and x_seen["accept"] >= 30, str(x_bad[:3]))
+# --- the model (plain Python, many cases): the crossing identity and two independent oracles
+xp_bad, xp_cross = [], 0
+for _ in range(20000):
+    lay = x_rand_cycle()
+    kind = rng_x.choice(["valid"] * 3 + ["dup", "twowrap", "offgrid"])
+    if kind == "dup":
+        i, j = rng_x.sample(range(6), 2)
+        lay[i] = lay[j]
+    elif kind == "twowrap":
+        i, j = sorted(rng_x.sample(range(6), 2))
+        lay[i], lay[j] = lay[j], lay[i]
+    elif kind == "offgrid":
+        lay[rng_x.randrange(6)] += rng_x.choice((1, 2, 3, 4))
+    if sum(C.gaps(lay)) != 1440 * len(XW.descents(lay)):          # each gap is the raw difference, plus 1440 when it is negative
+        xp_bad.append(("identity", lay))
+    if C.is_cycle(lay) and XW.descents(lay) != [max(range(6), key=lambda k: lay[k])]:   # one crossing, from the latest start
+        xp_bad.append(("one crossing", lay))
+    n, new, now_min = rng_x.randrange(1, 7), rng_x.randrange(0, 1440, 5), rng_x.randrange(0, 1440) + 0.5
+    base, v = C.verdict(lay, n, new, now_min), x_model(lay, n, new, now_min)
+    proposed = list(lay)
+    proposed[n - 1] = new
+    if base in ("accept", "near", "mid"):
+        owner_2359 = active_slot(lay, 1439.5) != active_slot(proposed, 1439.5)     # oracle 1: the slot that owns the day's last minute changes
+        pv = lay[(n + 4) % 6]
+        ub, uw, mn = (lay[n - 1] - pv) % 1440, (new - pv) % 1440, (0 - pv) % 1440
+        across = min(ub, uw) < mn <= max(ub, uw)                                    # oracle 2: the moved boundary passes 00:00
+        if (v == "crossing") != owner_2359 or (v == "crossing") != across:
+            xp_bad.append(("oracle", lay, n, new, v, owner_2359, across))
+        if v == "crossing":
+            xp_cross += 1
+            if (n - 1) not in (XW.descents(lay)[0], (XW.descents(lay)[0] + 1) % 6):  # only the two slots around the crossing can move it
+                xp_bad.append(("adjacent", lay, n, new))
+        elif v != base:
+            xp_bad.append(("kept", lay, n, new, base, v))
+    elif v != base:                                                                  # every earlier refusal stands
+        xp_bad.append(("earlier", lay, n, new, base, v))
+    rot = rng_x.randrange(6)
+    if x_model(lay[rot:] + lay[:rot], (n - 1 - rot) % 6 + 1, new, now_min) != v:      # rotation invariance
+        xp_bad.append(("rotation", lay, n, new, rot))
+check(f"the reference model over 20000 random cases (valid cycles, duplicates, two wraps, off-grid starts): the six gaps always sum to 1440 x the number "
+      "of raw decreases (so one 24-hour cycle has exactly one crossing, from its latest start); for an edit acs1c would accept (or refuse only by the "
+      "15-minute or active-slot guard) the hold refuses exactly when the slot that owns the day's last minute changes and exactly when the moved "
+      f"boundary passes 00:00 (two independent oracles; {xp_cross} crossing cases), only for the two slots around the crossing; every earlier refusal "
+      "stands; verdicts are invariant under slot rotation", not xp_bad and xp_cross >= 400, str(xp_bad[:3]) + f" {xp_cross}")
 
 # the raw flags are what the charge-source verdict (and every 'unchanged' proof) compares: unreadable flags stop the edit before the Load
 def flags_unavailable(r, n=3):
@@ -3112,6 +3808,149 @@ check("N2: the counter was reset (the dongle rebooted: a value below the one rec
       n2_uncertain(r), f"{r.res()} {r.note()[-120:]}")
 
 # ======================================================================================================================
+print("\n[11x] acs1x: the last copy of the gate refuses alone (something changes between the fresh read and the press)")
+# ======================================================================================================================
+
+
+def live_start_after_load(slot, hhmm, delay=8.0):
+    """Another tool changes slot `slot`'s live start to `hhmm` `delay` s after the editor's first Load (after the fresh read, before the last
+    check before the press); the dongle polls it at once."""
+    def setup(x):
+        orig, done = x.d._load, []
+
+        def ld(n):
+            orig(n)
+            if not done:
+                done.append(n)
+
+                def go():
+                    x.d.regs["slots"][slot]["start"] = hhmm
+                    x.d.poll()
+                x.w.after(delay, go)
+        x.d._load = ld
+    return setup
+
+
+LAST_FRAME = "FAILED - a safety check changed just before the Apply ({}); nothing pressed, nothing written"
+
+
+def last_check_alone(t, edit_slot, v, setup, text_, changed):
+    """The edit is Reviewed and passes the Apply's gate and the fresh read; then `setup`'s change happens after the Load, and only the last
+    check refuses. True when the designed path runs: the FAILED result (within the helper) is recorded, the ecco_cfg_edit notice is sent, the
+    F2 re-Load restores the edited slot's staging to the live slot, nothing is pressed or written by the editor (no Apply press, no gate
+    pass), not locked, not armed, out of flight, and only the other actor's change is on the inverter."""
+    r = Run(t, layout=owner_full, t0=NOON, setup=setup).edit(edit_slot, "start_time", v, run=480)
+    return (r.res() == LAST_FRAME.format(text_) and len(r.res()) <= 255 and r.applies() == [] and r.d.attempts == 0
+            and r.d.writes == [] and load_seq(r) == [f"load{edit_slot}", f"load{edit_slot}"] and staged_eq_live(r, edit_slot)
+            and LAST_FRAME.format(text_) in r.note() and F2_NOTE_OK in r.note() and F2_NOTE_BAD not in r.note() and not r.locked()
+            and not r.arm_on() and r.w.state(FLIGHT) == "off" and r.changed() == changed), r
+
+
+MATCH_VALUE = "OUT_OF_DOMAIN"
+LAST_CASES = (
+    ("the hold, slot 6 00:25 -> 00:20 Reviewed, live slot 6 moved to 23:00 after the Load (the crossing would move)",
+     6, "00:20", live_start_after_load(6, 2300), XW.REFUSE_XW, {(6, "start"): (25, 2300)}),
+    ("the hold, mirror: slot 5 22:00 -> 23:55 Reviewed, live slot 5 moved to 00:10 after the Load",
+     5, "23:55", live_start_after_load(5, 10), XW.REFUSE_XW, {(5, "start"): (2200, 10)}),
+    ("acs1c's cycle refusal (rewritten, 163 characters): slot 6 -> 00:20 Reviewed, live slot 2 moved to 00:20 (not one cycle)",
+     6, "00:20", live_start_after_load(2, 20), XW.REFUSE_CYC_NEW, {(2, "start"): (530, 20)}),
+    ("acs1c's neighbour refusal (rewritten, 157 characters): slot 6 -> 00:20 Reviewed, live slot 5 moved to 00:20 (the new start equals it)",
+     6, "00:20", live_start_after_load(5, 20), XW.REFUSE_ORDER_NEW, {(5, "start"): (2200, 20)}),
+    ("the fallback live match refusal (rewritten, 161 characters with its value): slot 6 -> 00:20 Reviewed, the live match turns "
+     f"{MATCH_VALUE} after the Load", 6, "00:20", late_flip(LIVE_MATCH, b10(m=MATCH_VALUE)),
+     XW.REFUSE_MATCH_NEW.replace("{{ L.split(';m=')[1].split(';')[0][:16] }}", MATCH_VALUE), {}),
+)
+x_bad = []
+for label, es, v, setup, txt, chg in LAST_CASES:
+    ok, r = last_check_alone(S1, es, v, setup, txt, chg)
+    if not ok:
+        x_bad.append((label[:50], r.res()[:120], load_seq(r), r.changed(), r.d.writes, r.note()[:80]))
+check(f"the last copy of the gate alone refuses ({len(LAST_CASES)} cases: the hold for slot 6 and its mirror for slot 5, acs1c's cycle and neighbour "
+      "refusals, the fallback live match refusal): each records 'FAILED - a safety check changed just before the Apply (<the whole refusal>); nothing "
+      "pressed, nothing written' within the 255-character helper, sends the ecco_cfg_edit notice, re-Loads the edited slot (F2: its staging equals "
+      "the live slot), presses no Apply and writes no register, passes no gate, is not locked or armed; only the other actor's change is on the "
+      "inverter (review findings X1 / X2)", not x_bad, str(x_bad[:2]))
+r_x = Run(S1C, layout=owner_full, t0=NOON, setup=live_start_after_load(6, 2300)).edit(6, "start_time", "00:20", run=480)
+check("...and on the acs1c text the slot 6 race is pressed and written (APPLIED AND VERIFIED, slot 6 at 00:20, the crossing moved): the last copy's "
+      "hold is what stops it", r_x.res().startswith("APPLIED AND VERIFIED") and r_x.d.regs["slots"][6]["start"] == 20, r_x.res()[:80])
+# The same cases on the defect itself (review finding X1): the package as first committed had the long refusal texts and a hold text of 187
+# characters. Rebuilt in memory (the four rewrites undone; the hold's text replaced by a neutral text of that length), every case above fails
+# there as the review reproduced it: the over-long FAILED text is not stored, the result stays IN PROGRESS, no notice, no F2 re-Load, and the
+# refused start stays staged in Manual Controls (staging != live), although nothing is pressed.
+FIRST_HOLD_LEN = 187
+S1_X1 = S1.replace(XW.REFUSE_XW, XW.REFUSE_XW.ljust(FIRST_HOLD_LEN, "."))
+for _old, _new in XW.REWRITES:
+    S1_X1 = S1_X1.replace("%}" + _new + "\n", "%}" + _old + "\n")
+assert S1_X1.count(XW.REFUSE_XW.ljust(FIRST_HOLD_LEN, ".")) == 4 and all(S1_X1.count("%}" + o_ + "\n") == 4 for o_, _n in XW.REWRITES)
+
+
+def stuck_in_progress(t, edit_slot, v, setup):
+    """The X1 failure mode: nothing pressed or written, but no FAILED result, no notice, no F2 re-Load, and the edited slot's staging differs
+    from the live slot."""
+    r = Run(t, layout=owner_full, t0=NOON, setup=setup).edit(edit_slot, "start_time", v, run=480)
+    return (r.res().startswith("IN PROGRESS") and r.applies() == [] and r.d.attempts == 0 and r.d.writes == []
+            and load_seq(r) == [f"load{edit_slot}"] and "FAILED" not in r.note() and not staged_eq_live(r, edit_slot)), r
+
+
+x_bad = []
+for label, es, v, setup, _txt, _chg in LAST_CASES:
+    ok, r = stuck_in_progress(S1_X1, es, v, setup)
+    if not ok:
+        x_bad.append((label[:50], r.res()[:80], load_seq(r), r.note()[:60]))
+check(f"...and the {len(LAST_CASES)} cases detect the defect: on the package as first committed (the long refusal texts, a 187-character hold "
+      "text; rebuilt in memory) each leaves the result 'IN PROGRESS', no notice, no F2 re-Load and the refused value staged (staging != live), as "
+      "the review reproduced; with the rewritten texts (above) each takes the designed FAILED path", not x_bad, str(x_bad[:2]))
+
+
+def live_start_before_fresh_read(slot, hhmm, delay=1.0):
+    """Another tool changes slot `slot`'s live start to `hhmm` `delay` s after the Apply's gate passed (its 'waiting for a fresh configuration
+    read' result written), before the fresh read; the dongle polls it at once. Only the fresh-read copy of the gate sees it first."""
+    def setup(x):
+        orig, done = x.w.set, []
+
+        def set_(entity_id, state, attrs=None):
+            orig(entity_id, state, attrs)
+            if not done and entity_id == RESULT and str(state).startswith("IN PROGRESS") and "waiting for a fresh configuration read" in str(state):
+                done.append(entity_id)
+
+                def go():
+                    x.d.regs["slots"][slot]["start"] = hhmm
+                    x.d.poll()
+                x.w.after(delay, go)
+        x.w.set = set_
+    return setup
+
+
+FRESH_FRAME = "FAILED - {}; nothing written"
+
+
+def fresh_read_alone(t, edit_slot, v, setup, text_, changed):
+    """The edit is Reviewed and passes the Apply's gate; `setup`'s change happens before the fresh read, so the fresh-read copy alone refuses.
+    True when its result is exactly 'FAILED - <the whole refusal>; nothing written' (FB-1: pinned in full), the notice carries it, and no Load,
+    press or register write happened (the refusal is not the last check's, which follows the Load)."""
+    r = Run(t, layout=owner_full, t0=NOON, setup=setup).edit(edit_slot, "start_time", v, run=480)
+    return (r.res() == FRESH_FRAME.format(text_) and FRESH_FRAME.format(text_) in r.note() and r.loads() == [] and r.applies() == []
+            and r.d.attempts == 0 and r.d.writes == [] and not r.locked() and not r.arm_on() and r.w.state(FLIGHT) == "off"
+            and r.changed() == changed), r
+
+
+FRESH_CASES = (
+    ("the hold (156 characters), slot 6 00:25 -> 00:20 Reviewed, live slot 6 moved to 23:00 after the Apply's gate",
+     6, "00:20", live_start_before_fresh_read(6, 2300), XW.REFUSE_XW, {(6, "start"): (25, 2300)}),
+    ("acs1c's cycle refusal (rewritten, 163 characters, the longest), slot 6 -> 00:20 Reviewed, live slot 2 moved to 00:20 after the Apply's gate",
+     6, "00:20", live_start_before_fresh_read(2, 20), XW.REFUSE_CYC_NEW, {(2, "start"): (530, 20)}),
+)
+x_bad = []
+for label, es, v, setup, txt, chg in FRESH_CASES:
+    ok, r = fresh_read_alone(S1, es, v, setup, txt, chg)
+    if not ok:
+        x_bad.append((label[:50], r.res()[:200], r.loads(), r.changed(), r.d.writes, r.note()[:80]))
+check(f"the fresh-read copy of the gate alone refuses ({len(FRESH_CASES)} cases: the hold, acs1c's cycle refusal; a live start changes between the "
+      "Apply's gate and the fresh read): the result is exactly 'FAILED - <the whole refusal>; nothing written' (pinned in full, so a shortened "
+      "refusal fails), the notice carries it, no Load, no press, no register write, not locked or armed (review finding FB-1)",
+      not x_bad, str(x_bad[:2]))
+
+# ======================================================================================================================
 print("\n[12] mutation: in-memory mutants of the installed package, each caught by the battery")
 # ======================================================================================================================
 
@@ -3127,6 +3966,79 @@ def tampered_apply(text, bad_want):
     rec[2] = str(bad_want)
     r.w.set(PLAN, "|".join(rec))
     return r.apply(phrase=f"SET SLOT 5 START {bad_want // 100:02d}:{bad_want % 100:02d} REVIEW {rec[3]}", run=120)
+
+
+def no_hold(t):
+    """`t` with the acs1x refusal turned off in memory (all four copies). acs1x refuses a two-wrap live layout and every move across midnight
+    before acs1c's own rules see them; the acs1c rules it pre-empts (the cycle rule's single wrap, the active-slot guard across midnight) are
+    killed on this text, so a mutant of those inherited lines is still caught ([0x] proves the lines byte-identical to acs1c's)."""
+    return t.replace("{% elif setting == 'start_time' and not xw %}", "{% elif false %}")
+
+
+def xw_review_check(t):
+    """The Review refuses the crossing-moving edits with the hold's text and accepts the edits that keep the crossing."""
+    return (all(XW.REFUSE_XW in rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON).res() for s, v in ((6, "23:55"), (5, "00:05")))
+            and all(accepts(rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON)) for s, v in ((6, "00:20"), (5, "23:55"))))
+
+
+def xw_apply_check(t):
+    """The Apply's OWN gate (its first copy, before the fresh read) refuses a hand-edited record that moves the crossing: REFUSED, no Load."""
+    x = tampered_apply(t, 5)
+    return x.res() == "REFUSED - " + XW.REFUSE_XW + "; nothing written" and x.loads() == [] and x.applies() == []
+
+
+def xw_copies_check(t):
+    """Each of the four gate copies, rendered alone (GateWorld), refuses the crossing-moving edits with the hold's text and passes the others."""
+    gw = GateWorld(t)
+    return (all(gw.results(s, v) == [XW.REFUSE_XW] * 4 for s, v in ((5, "00:05"), (6, "23:55"), (5, "00:00")))
+            and gw.results(6, "00:20") == [""] * 4 and gw.results(5, "23:55") == [""] * 4)
+
+
+def xw_first_check(t):
+    """The hold refuses before the 15-minute and active-slot guards: at 23:00 (between the old and the new boundary of slot 5 -> 00:05) the
+    refusal names the crossing."""
+    return XW.REFUSE_XW in rv(t, 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 23:00:00") - 70).res()
+
+
+def _restore_last(new, old):
+    """The rewritten refusal `new` put back to its long form `old` in the LAST copy of the gate only (its fourth occurrence)."""
+    def f(t):
+        a = "%}" + new + "\n"
+        assert t.count(a) == 4
+        i = t.rindex(a)
+        return t[:i] + "%}" + old + "\n" + t[i + len(a):]
+    return f
+
+
+def _drop_xw_copy(k):
+    """The hold's refusal turned off in ONE copy of the gate: k = 0 the Review, 1 the Apply's gate, 2 its fresh-read re-check, 3 its last check."""
+    def f(t):
+        a = "{% elif setting == 'start_time' and not xw %}"
+        assert t.count(a) == 4
+        i = -1
+        for _ in range(k + 1):
+            i = t.index(a, i + 1)
+        return t[:i] + "{% elif false %}" + t[i + len(a):]
+    return f
+
+
+# The three results that write a refusal outside the last check (the Review, the Apply's gate, the fresh read), for the FB-1 mutants
+SLICE_REVIEW = "REVIEW REFUSED - {{ refusal }}; nothing written"
+SLICE_GATE = "REFUSED - {{ review_problem if review_problem else refusal }}; nothing written"
+SLICE_FRESH = "FAILED - {{ fresh_why if not fresh else (refusal2 if refusal2 else"
+assert all(S1.count(a_) == 1 for a_ in (SLICE_REVIEW, SLICE_GATE, SLICE_FRESH))
+
+
+def _xw_after_mid(t):
+    """The hold's refusal moved from right after the proposed-layout refusal to right after the active-slot guard, in every copy."""
+    for ind, _c in XW.GATE_COPIES:
+        sp = "\n" + " " * ind
+        line = sp + "{% elif setting == 'start_time' and not xw %}" + XW.REFUSE_XW
+        mid_line = (sp + "{% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is "
+                    "active right now")
+        assert t.count(line) == t.count(mid_line) >= 1
+        t = t.replace(line, "").replace(mid_line, mid_line + line)
+    return t
 
 
 def poke_check(setting, field, **kw):
@@ -3304,14 +4216,22 @@ CHECKS = {
     "grid5": lambda t: all(rejects(rv(t, 3, "start_time", v)) for v in ("09:32", "24:00", "23:60")),
     "cyc": lambda t: (rejects(rv(t, 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300), t0=SEVEN_AM))
                       and rejects(rv(t, 3, "start_time", "09:30", layout=starts(30, 530, 1202, 1635, 2200, 25), t0=TWO_PM))),
-    "one_wrap": lambda t: rejects(rv(t, 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300), t0=SEVEN_AM)),
+    # acs1x refuses a two-wrap live layout too (two raw decreases): the inherited cycle rule is exercised with the hold turned off in memory
+    "one_wrap": lambda t: rejects(rv(no_hold(t), 3, "start_time", "09:30", layout=starts(0, 500, 400, 1600, 1900, 2300), t0=SEVEN_AM)),
     "min_slot": lambda t: ("24-hour cycle" in rv(t, 2, "start_time", "05:35", layout=starts(30, 530, 530, 1635, 2200, 25), t0=NOON).res()
                            and rejects(rv(t, 3, "start_time", "05:35", layout=starts(30, 530, 530, 1635, 2200, 25), t0=NOON))),
     "want_record": lambda t: all(tampered_apply(t, w).res().startswith("REFUSED") and tampered_apply(t, w).loads() == [] for w in (2400, 1275)),
     "grid_live": lambda t: rejects(rv(t, 2, "start_time", "05:35", layout=starts(30, 530, 1202, 1635, 2200, 25), t0=NOON)),
-    "wrap_edit": lambda t: all(accepts(rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON)) for s, v in ((1, "00:35"), (6, "00:20"), (5, "23:55"), (5, "00:05"))),
-    "mid_wrap": lambda t: (accepts(rv(t, 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=NOON))
-                           and rejects(rv(t, 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 23:00:00") - 70))),
+    "wrap_edit": lambda t: all(accepts(rv(t, s, "start_time", v, layout=OWNER_LAYOUT, t0=NOON)) for s, v in ((1, "00:35"), (6, "00:20"), (5, "23:55"), (6, "00:00"))),
+    # acs1x refuses every move across midnight first: the inherited active-slot guard is exercised with the hold turned off in memory
+    "mid_wrap": lambda t: (accepts(rv(no_hold(t), 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=NOON))
+                           and rejects(rv(no_hold(t), 5, "start_time", "00:05", layout=OWNER_LAYOUT, t0=S.parse_local("2026-10-26 23:00:00") - 70))),
+    "xw_review": xw_review_check, "xw_apply": xw_apply_check, "xw_copies": xw_copies_check, "xw_first": xw_first_check,
+    "xw_alone": hold_alone_refuses,
+    "xw_last": lambda t: last_check_alone(t, *LAST_CASES[0][1:])[0],
+    "frame_fit": lambda t: all(last_check_alone(t, *c_[1:])[0] for c_ in LAST_CASES[2:]),
+    "whole": lambda t: writers_whole(t) is None,
+    "fresh_exact": lambda t: all(fresh_read_alone(t, *c_[1:])[0] for c_ in FRESH_CASES),
     "gen": lambda t: all(rejects(rv(t, 3, "charge_source", v)) for v in ("Generator", "Grid + Generator", "grid")),
     "src_live": lambda t: rejects(rv(t, 3, "charge_source", "None", layout=slot_set(3, src="Generator"))),
     "near": lambda t: rejects(rv(t, 3, "start_time", "12:00", **{"t0": S.parse_local("2026-10-12 08:45:00") - 70})),
@@ -3574,6 +4494,34 @@ def _n2_read_before_wait(t):
 
 
 MUTANTS += [
+    ("acs1x: the crossing hold's refusal is dropped from all four copies of the gate", [("{% elif setting == 'start_time' and not xw %}", "{% elif false %}")],
+     "xw_review"),
+    ("acs1x: the hold is dropped from the Review's copy only", _drop_xw_copy(0), "xw_review"),
+    ("acs1x: the hold is dropped from the Apply's gate only", _drop_xw_copy(1), "xw_apply"),
+    ("acs1x: the hold is dropped from the Apply's fresh-read re-check only", _drop_xw_copy(2), "xw_copies"),
+    ("acs1x: the hold is dropped from the last check before the press only", _drop_xw_copy(3), "xw_copies"),
+    ("acs1x: the live and the proposed crossing are not compared (any layout with one crossing passes)",
+     [("and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}", "and xc.c == 1 and xc.c2 == 1 %}")], "xw_review"),
+    ("acs1x: the proposed layout is built without the new start (the hold compares the live layout with itself)",
+     [("{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok",
+       "{% set a = tt[k] %}{% set b = tt[(k + 1) % 6] %}{% set xc.ok")], "xw_review"),
+    ("acs1x: the hold sits after the 15-minute and active-slot guards instead of right after the proposed-layout rule", _xw_after_mid, "xw_first"),
+    ("acs1x: the hold is dropped from the last check only (end to end: the race of [11x] is pressed)", _drop_xw_copy(3), "xw_last"),
+    *[(f"acs1x: the conjunct {label.split(' (')[0]} is dropped from the hold", [cut], "xw_alone") for label, cut, _kw, _n, _v in HOLD_CONJUNCTS],
+    *[(f"acs1x: the last check's {name} refusal is restored to its long form (it no longer fits the result helper there)", _restore_last(new_, old_),
+       "frame_fit") for name, (old_, new_) in zip(("cycle", "neighbour", "power", "fallback live match"), XW.REWRITES) if name != "power"],
+    # FB-1: a refusal shortened in a frame the last check's cases do not reach (each survived the suite of d2a20c7d)
+    ("acs1x: the fresh read's FAILED result slices its refusal (refusal2[:120])",
+     [(SLICE_FRESH, SLICE_FRESH.replace("(refusal2 if refusal2", "(refusal2[:120] if refusal2"))], "whole"),
+    ("acs1x: the fresh read's FAILED result slices its refusal (refusal2[:120]), end to end",
+     [(SLICE_FRESH, SLICE_FRESH.replace("(refusal2 if refusal2", "(refusal2[:120] if refusal2"))], "fresh_exact"),
+    ("acs1x: the Review's REFUSED result slices its refusal (refusal[:100])", [(SLICE_REVIEW, SLICE_REVIEW.replace("{{ refusal }}", "{{ refusal[:100] }}"))],
+     "whole"),
+    ("acs1x: the Apply's gate's REFUSED result slices its refusal ((review_problem if review_problem else refusal)[:120])",
+     [(SLICE_GATE, SLICE_GATE.replace("{{ review_problem if review_problem else refusal }}",
+                                      "{{ (review_problem if review_problem else refusal)[:120] }}"))], "whole"),
+]
+MUTANTS += [
     ("N2: the gate-pass counter check is removed from the success verdict", [("and diff | length == 0 and n2_ok }}", "and diff | length == 0 }}")], "n2_other"),
     ("N2: the delta may be 1 or more (>= 1 instead of == 1)", [("(att_now - att0) == 1 }}", "(att_now - att0) >= 1 }}")], "n2_double"),
     ("N2: the delta may be 1 or less (<= 1 instead of == 1)", [("(att_now - att0) == 1 }}", "(att_now - att0) <= 1 }}")], "n2_zero"),
@@ -3600,7 +4548,7 @@ for name, pairs, key in MUTANTS:
     check(f"mutant '{name}' is KILLED by the failing check '{key}'", res.get(key) is False and "crash" not in res, str(res))
 
 # ======================================================================================================================
-print("\n[13] the post-export declarations (PEX entries acs1 and acs1c)")
+print("\n[13] the post-export declarations (PEX entries acs1, acs1c and acs1x)")
 # ======================================================================================================================
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 import _scope_chain as sc  # noqa: E402
@@ -3608,10 +4556,12 @@ import _pex  # noqa: E402  (PEX: this suite pins acs1's declaration)
 import _acs0_scope as F0  # noqa: E402
 import _acs1_scope as F1  # noqa: E402
 import _acs1c_scope as F1C  # noqa: E402
+import _acs1x_scope as F1X  # noqa: E402
 
 ACS1_FINGERPRINT = "e0bb9298dbcdb84041abd25633d3305d2338cba92a88fcefe826e6ad587bc318"
 ACU1_FINGERPRINT = "352c542819485963e3b30be6dbefca189c04b8b6fdc9491fa6edc901548405b7"
 ACS1C_FINGERPRINT = "9b4e5b349ef18de9c9ddf36bd61e98d85ac8da5443ce3240377cd370797aaffc"
+ACS1X_FINGERPRINT = "775ddcd098a21f4971c594abf383af696fe40785654197b5916bd62c1ce2014f"
 HD1_FINGERPRINT = "0986be0342fad759b6b500b2759233491ca3c52901120f00dfda17709029838e"
 PKG_REL = X.ACS0_REL
 E1 = sc.CHAIN.entry("acs1")
@@ -3648,8 +4598,8 @@ check("the scope module's pins are the suite's and the transform's: the Stage 0 
 # acs1c: the cyclic correction, appended after acu1 (its parent since the rebase onto main 07b37c14; acs1 before that): declares only the files it adds and its fingerprint; acs1's record is unchanged
 E2 = sc.CHAIN.entry("acs1c")
 check("acs1c is the twenty-third post-export entry, appended right after acu1 (its parent since the rebase onto main 07b37c14; acs1 before that) "
-      "and the last one", ids1.index("acs1c") == 22 and sc.CHAIN.prev_id("acs1c") == "acu1" and sc.CHAIN.prev_id("acu1") == "acs1"
-      and ids1[-1] == "acs1c", str(ids1[-3:]))
+      "and followed by acs1x", ids1.index("acs1c") == 22 and sc.CHAIN.prev_id("acs1c") == "acu1" and sc.CHAIN.prev_id("acu1") == "acs1"
+      and ids1[23] == "acs1x", str(ids1[-3:]))
 check("acs1c declares NO reverter and NO checkpoint (chain-pinned or frozen), no reserved-token holder, no delta, op path, include, substitution, "
       "firmware banned token or tag: like acs1, its exact record is the invertible acs1c transform proved in [0c]; acs1's own declaration and files "
       "(scope module, transform, pins) are unchanged",
@@ -3673,12 +4623,39 @@ check("the acs1c scope module's pins are the suite's and the transforms': the St
       F1C.STAGE1_PACKAGE_SHA256 == S1_SHA == X.STAGE1_SHA256 == C.STAGE1_BASE_SHA256 and F1C.STAGE1C_PACKAGE_SHA256 == S1C_SHA == C.STAGE1C_SHA256
       and F1C.CYCLIC_PAIRS_SHA256 == CPAIRS_SHA == C.CYCLIC_PAIRS_SHA256 and F1C.BASE_COMMIT == "a7235433ce711e6a8fae5dab0fc8ca6c6f533de6"
       and F1C.CYCLIC_PAIR_COUNT == len(C.CYCLIC_PAIRS) == 21)
+# acs1x: the midnight-crossing hold, appended after acs1c (public main e97ba36c): declares only the files it adds and its fingerprint; the acs1 and acs1c records are unchanged
+E3 = sc.CHAIN.entry("acs1x")
+check("acs1x is the twenty-fourth post-export entry, appended right after acs1c, and the last one",
+      ids1.index("acs1x") == 23 and sc.CHAIN.prev_id("acs1x") == "acs1c" and ids1[-1] == "acs1x", str(ids1[-3:]))
+check("acs1x declares NO reverter and NO checkpoint (chain-pinned or frozen), no reserved-token holder, no delta, op path, include, substitution, "
+      "firmware banned token or tag: like acs1 and acs1c, its exact record is its invertible transform, proved in [0x]; the acs1 and acs1c "
+      "declarations and files (scope modules, transforms, pins) are unchanged",
+      not E3.reverts and not E3.checkpoints and not E3.frozen_reverts and not E3.frozen_checkpoints and not E3.banned_files
+      and not E3.deltas and not E3.op_paths_changed and not E3.includes_added and not E3.subst_added and not E3.subst_changed
+      and not E3.subst_removed and not E3.banned_fw_added and not E3.fbh_includers and not E3.tags_declared and not E3.tags_promoted
+      and E2.added_files == F1C.ADDED_FILES and E2.fingerprint == ACS1C_FINGERPRINT and F1X.PACKAGE_REL == PKG_REL == XW.PACKAGE_REL)
+check("acs1x declares the files it adds (the acs1x transform, its scope module and its design document), each exists, none is deny-listed, none is "
+      "an acs1 or acs1c file, and its scope module spells no reserved token",
+      E3.added_files == F1X.ADDED_FILES and all((ROOT / f).is_file() for f in E3.added_files) and not (E3.added_files & _pex.DENY)
+      and not (E3.added_files & (E1.added_files | E2.added_files)) and "registry/tests/_acs1x_scope.py" in E3.added_files
+      and "home-assistant/prototypes/acs-stage1/acs1x_transform.py" in E3.added_files and "docs/dev/acs1x-crossing-hold.md" in E3.added_files
+      and not any(t in Path(F1X.__file__).read_text(encoding="utf-8") for t in RES_TOKENS))
+check("acs1x's fingerprint is the pinned value, the sha256 of its record, linked to acs1c's (its parent)",
+      E3.fingerprint == ACS1X_FINGERPRINT == F1X.FINGERPRINT == _pex.fingerprint(E3)   # PEX: acs1x's own fingerprint
+      and _pex.record(E3)["parent"] == ACS1C_FINGERPRINT == sc.CHAIN.entry("acs1c").fingerprint)   # PEX: hash link to acs1c
+check("the deployment manifest is unchanged by acs1x (its checkpoint is its parent acs1c's: same package path as source and destination)",
+      _pex.checkpoint(sc.HA_MANIFEST, "acs1x") == _pex.checkpoint(sc.HA_MANIFEST, "acs1c"))   # PEX: no manifest edit by acs1x
+check("the acs1x scope module's pins are the suite's and the transforms': the acs1c text (the base), the installed package and "
+      "the 12 pairs; its base commit is public main at the acs1c merge",
+      F1X.STAGE1C_PACKAGE_SHA256 == S1C_SHA == C.STAGE1C_SHA256 == XW.STAGE1C_BASE_SHA256 and F1X.STAGE1X_PACKAGE_SHA256 == S1X_SHA == XW.STAGE1X_SHA256
+      and F1X.CROSSING_PAIRS_SHA256 == XPAIRS_SHA == XW.CROSSING_PAIRS_SHA256 and F1X.BASE_COMMIT == "e97ba36cdc19796d0d1b136b6da27c0212dd6bef"
+      and F1X.CROSSING_PAIR_COUNT == len(XW.CROSSING_PAIRS) == 12)
 
 print("")
 dt = time.time() - T_START
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed in {dt:.0f}s")
     sys.exit(1)
-print(f"All {PASSES} Advanced Configuration Stage 1 (with the acs1c cyclic correction) checks passed in {dt:.0f}s.")
+print(f"All {PASSES} Advanced Configuration Stage 1 (with the acs1c cyclic correction and the acs1x crossing hold) checks passed in {dt:.0f}s.")
 print("These prove the installed package's control flow against models of the firmware's manual TOU path and of Home Assistant offline; they prove "
       "nothing about a live Home Assistant, the dongle, the inverter, the Home Assistant time zone, or how a real interrupted write behaves.")

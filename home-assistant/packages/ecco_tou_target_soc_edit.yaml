@@ -6,6 +6,8 @@
 # can never be installed together (they declare the same helpers, the same acknowledge script and the same watchdog automation).
 # acs1c (2026-10-25): home-assistant/prototypes/acs-stage1/acs1c_transform.py then rewrites the start-time ordering rule of that text
 # as one 24-hour cycle in slot order (the same technique, its own pins): the installed text is render_cyclic(render_stage1(Stage 0)).
+# acs1x (2026-10-27): home-assistant/prototypes/acs-stage1/acs1x_transform.py then adds the midnight-crossing hold to that text (the
+# same technique, its own pins): the installed text is render_crossing(render_cyclic(render_stage1(Stage 0))).
 #
 # Scope: exactly one value of one slot per request, and nothing else is staged. The settings:
 #   target_soc     TOU slot N target SOC (inverter register 267+N, %), bound max(inverter shutdown SOC, ECCO reserve)..100
@@ -17,6 +19,9 @@
 #                  refused within 15 minutes of the old or the new boundary, while the local time lies between the old and the new
 #                  boundary (it would change the active slot now), and when the inverter's own clock (Inverter Time) is more than 120 s
 #                  from Home Assistant's. Slot N-1's Manual Controls staging keeps the old end until it is Loaded again (see the notice)
+#                  acs1x (crossing hold): also refused if the edit would move the midnight crossing (the one slot pair whose next
+#                  start is earlier than its own, in HH:MM minutes) to another slot boundary, until a supervised relocated-crossing
+#                  proof is separately authorised; every copy of the gate checks it and fails closed on an unreadable start
 #   charge_source  slot N charge source (bits 0-1 of register 273+N): None or Grid only (no generator is evidenced). The mode bits and
 #                  the reserved bits are kept because the staged mode equals the live mode and the firmware keeps cache & 0xFFE0. None is
 #                  staged with select.select_first (None is the select's first option) and Grid with select.select_option, because
@@ -216,6 +221,8 @@ script:
             {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
             {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
             {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+            {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
             {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
             {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -232,16 +239,17 @@ script:
             {% elif setting == 'target_soc' and shutdown < 0 %}inverter shutdown SOC unavailable
             {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
             {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
-            {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
+            {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a multiple of 100 W, 500 to 8000 W (below 500 W the slot leaves the saved fallback profile's domain and later edits, the undo included, are refused)
             {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
             {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
-            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, one wrap past midnight): unexpected TOU layout
+            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must lie strictly after the previous slot's start and before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
             {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+            {% elif setting == 'start_time' and not xw %}the new start time would change which slot runs past midnight (the midnight crossing): not allowed until a supervised test on the inverter has been approved
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -262,7 +270,7 @@ script:
             {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
             {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
             {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings in its domain and export as saved (MATCH, DRIFT or CONTEXT)
             {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -463,6 +471,8 @@ script:
             {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
             {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
             {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+            {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+            {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
             {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
             {% set cyc2 = h.ok and h.s == 1440 %}
             {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -479,16 +489,17 @@ script:
             {% elif setting == 'target_soc' and shutdown < 0 %}inverter shutdown SOC unavailable
             {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
             {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
-            {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
+            {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a multiple of 100 W, 500 to 8000 W (below 500 W the slot leaves the saved fallback profile's domain and later edits, the undo included, are refused)
             {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
             {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
             {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
             {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
             {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
             {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
-            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+            {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, one wrap past midnight): unexpected TOU layout
+            {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must lie strictly after the previous slot's start and before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
             {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+            {% elif setting == 'start_time' and not xw %}the new start time would change which slot runs past midnight (the midnight crossing): not allowed until a supervised test on the inverter has been approved
             {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
             {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
             {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -509,7 +520,7 @@ script:
             {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
             {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
             {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
+            {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings in its domain and export as saved (MATCH, DRIFT or CONTEXT)
             {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
             {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                   or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -639,6 +650,8 @@ script:
                 {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
                 {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
                 {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+                {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
                 {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
                 {% set cyc2 = h.ok and h.s == 1440 %}
                 {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -655,16 +668,17 @@ script:
                 {% elif setting == 'target_soc' and shutdown < 0 %}inverter shutdown SOC unavailable
                 {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
                 {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
-                {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
+                {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a multiple of 100 W, 500 to 8000 W (below 500 W the slot leaves the saved fallback profile's domain and later edits, the undo included, are refused)
                 {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                 {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                 {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
                 {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                 {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                 {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-                {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
-                {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+                {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, one wrap past midnight): unexpected TOU layout
+                {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must lie strictly after the previous slot's start and before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
                 {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+                {% elif setting == 'start_time' and not xw %}the new start time would change which slot runs past midnight (the midnight crossing): not allowed until a supervised test on the inverter has been approved
                 {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                 {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                 {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -685,7 +699,7 @@ script:
                 {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
                 {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
                 {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-                {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
+                {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings in its domain and export as saved (MATCH, DRIFT or CONTEXT)
                 {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                 {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                       or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation
@@ -896,6 +910,8 @@ script:
                         {% set ub = ((bo - pv) % 1440) if (pv >= 0 and bo >= 0) else -1 %}
                         {% set uc = ((cm - pv) % 1440) if pv >= 0 else -1 %}
                         {% set mid = setting == 'start_time' and ub >= 0 and uw >= 0 and uc >= 0 and ([ub, uw] | min) <= uc and uc < ([ub, uw] | max) %}
+                        {% set xc = namespace(ok=true, c=0, i=-1, c2=0, i2=-1) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set xc.ok = xc.ok and tt[k] >= 0 and a >= 0 %}{% set xc.i = k if tt[(k + 1) % 6] < tt[k] else xc.i %}{% set xc.c = xc.c + (1 if tt[(k + 1) % 6] < tt[k] else 0) %}{% set xc.i2 = k if b < a else xc.i2 %}{% set xc.c2 = xc.c2 + (1 if b < a else 0) %}{% endfor %}
+                        {% set xw = n >= 1 and n <= 6 and wmin >= 0 and xc.ok and xc.c == 1 and xc.c2 == 1 and xc.i == xc.i2 %}
                         {% set h = namespace(s=0, ok=true) %}{% for k in range(6) %}{% set a = wmin if k == n - 1 else tt[k] %}{% set b = wmin if (k + 1) % 6 == n - 1 else tt[(k + 1) % 6] %}{% set d = (b - a) % 1440 %}{% set h.ok = h.ok and a >= 0 and d >= 5 %}{% set h.s = h.s + d %}{% endfor %}
                         {% set cyc2 = h.ok and h.s == 1440 %}
                         {% set invd = ((as_timestamp(states('sensor.ecco_clock_dongle_inverter_time'), 0) - as_timestamp(now())) | abs) %}
@@ -912,16 +928,17 @@ script:
                         {% elif setting == 'target_soc' and shutdown < 0 %}inverter shutdown SOC unavailable
                         {% elif setting == 'target_soc' and reserve < 0 %}ECCO minimum battery reserve unavailable
                         {% elif setting == 'target_soc' and (want < lo or want > 100) %}target SOC must be {{ lo }}-100 % (the greater of the inverter shutdown SOC {{ shutdown }} % and the ECCO reserve {{ reserve }} %)
-                        {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a whole number of watts, a multiple of 100, from 500 to 8000 W (below 500 W the live settings would leave the saved fallback profile's domain, and every further edit, an undo included, would be refused)
+                        {% elif setting == 'power' and (want < 500 or want > 8000 or want % 100 != 0) %}power must be a multiple of 100 W, 500 to 8000 W (below 500 W the slot leaves the saved fallback profile's domain and later edits, the undo included, are refused)
                         {% elif setting == 'start_time' and (want < 0 or want >= 2400 or want % 100 >= 60 or want % 5 != 0) %}start time must be HH:MM on the 5-minute grid, 00:00-23:55
                         {% elif setting == 'charge_source' and (want | string) not in ['Grid', 'None'] %}charge source must be exactly Grid or None (no generator is evidenced and the fallback domain is None or Grid)
                         {% elif setting != 'charge_source' and cur < 0 %}live slot {{ label }} unavailable
                         {% elif setting == 'power' and (states(e.live_pw) | float(-1)) % 100 != 0 %}the live slot power {{ states(e.live_pw) }} W is not a multiple of 100 W; the undo would be refused - align it first in Manual Controls
                         {% elif setting == 'charge_source' and cur not in ['None', 'Grid'] %}the live charge source of slot {{ n }} is {{ cur }}: only None and Grid can be edited
                         {% elif (cur | string) == (want | string) %}no change (slot {{ n }} is already {{ wdisp }})
-                        {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one valid 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight): unexpected TOU layout
-                        {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must stay strictly after the previous slot's start and strictly before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
+                        {% elif setting == 'start_time' and not cyc %}the six live slot start times are not one 24-hour cycle in slot order (5-minute grid, every slot at least 5 minutes, one wrap past midnight): unexpected TOU layout
+                        {% elif setting == 'start_time' and not (uw > 0 and uw < arc) %}the new start time must lie strictly after the previous slot's start and before the next slot's start, counted round the clock (slot 6 is followed by slot 1)
                         {% elif setting == 'start_time' and not cyc2 %}the edit would not leave one valid 24-hour cycle in slot order (every slot at least 5 minutes, exactly one wrap past midnight)
+                        {% elif setting == 'start_time' and not xw %}the new start time would change which slot runs past midnight (the midnight crossing): not allowed until a supervised test on the inverter has been approved
                         {% elif near %}the local time is within 15 minutes of the old or the new slot boundary
                         {% elif mid %}the current local time lies between the old and the new boundary: the edit would change which slot is active right now
                         {% elif setting == 'start_time' and invd > 120 %}the inverter clock is more than 120 s from Home Assistant's clock, or unreadable (the inverter runs its TOU slots on its own clock)
@@ -942,7 +959,7 @@ script:
                         {% elif L.count(';m=') != 1 or L.count(';obl=') != 1 or L.count(';ca=') != 1 or L.count(';eh=') != 1 %}the fallback live match is unavailable or malformed ({{ lm[:60] }})
                         {% elif ';obl=FP:CR,DP:CR,R4:CR,BUS:OK;' not in L %}a lease, restore, lockout or register 244 transaction is not clear ({{ lm[:60] }})
                         {% elif ';ca=F;' not in L or ';eh=0;' not in L %}the fallback live data is not current or an export hazard is not ruled out ({{ lm[:60] }})
-                        {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings inside its domain and export as in the profile (MATCH, DRIFT or CONTEXT)
+                        {% elif ';m=MATCH;' not in L and ';m=DRIFT;' not in L and ';m=CONTEXT;' not in L %}the fallback live match is {{ L.split(';m=')[1].split(';')[0][:16] }}: edits need a valid saved fallback profile, live settings in its domain and export as saved (MATCH, DRIFT or CONTEXT)
                         {% elif R.count(';st=') != 1 or ';st=IDLE;' not in R %}a fallback profile Review or Save is in progress (or its state is unknown)
                         {% elif not is_state('binary_sensor.ecco_fallback_save_available', 'off') or not is_state('binary_sensor.ecco_fallback_replace_corrupt_available', 'off')
                               or not is_state('binary_sensor.ecco_fallback_invalidate_available', 'off') %}the fallback system is armed for an operation

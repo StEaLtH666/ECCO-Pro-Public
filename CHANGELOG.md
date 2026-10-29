@@ -10,6 +10,19 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Advanced Configuration Stage 1, midnight-crossing hold** (post-export entry `acs1x`; offline, source only, corrected for an
+  independent review's findings and awaiting its re-check, NOT installed; [docs/dev/acs1x-crossing-hold.md](docs/dev/acs1x-crossing-hold.md)).
+  The guarded TOU editor's scripts refuse any start-time edit that would move the midnight crossing (the one slot pair whose next start is
+  earlier in HH:MM than its own; slot 5 -> 6 in the owner's layout) to another slot boundary (the owner's restriction, enforced in the
+  scripts rather than only by the dashboard or by operating instructions). Approving a supervised relocated-crossing test does not lift
+  the hold: only a separately authorised, reviewed and installed code change does. Checked in all four copies of the gate, right after the proposed-layout rule, failing closed on anything unreadable, with
+  a plain-language refusal. On the owner's layout it refuses slot 5 moved past midnight and slot 6 moved before it, and changes nothing
+  else: target SOC, power and charge-source edits, every other start-time edit, every guard, proof, press, readback and lock keep the
+  rules and behaviour acs1c left them, apart from four refusal texts that are reworded (two of them, power and fallback live match, can
+  also be the result of target SOC, power and charge-source edits). **Fixed:** four refusal texts that did not fit the last check's 255-character result (acs1c's cycle and neighbour
+  refusals, the power and the fallback live match refusals) are rewritten, shorter and never truncated: a refusal there had left no
+  result, no notice and no F2 re-Load. Recorded as a third invertible transform on the acs1c text (12 exact pairs, `home-assistant/prototypes/acs-stage1/acs1x_transform.py`); the acs1 and acs1c records are
+  unchanged. No firmware, register, write path, dashboard or card change; start times stay display-only in the TOU Settings card.
 - **Advanced Configuration Stage 1, cyclic TOU correction** (post-export entry `acs1c`; offline, source only, independently
   reviewed offline on 2026-10-25/26, NOT installed, NOT live-proven; [docs/dev/acs1c-cyclic-tou.md](docs/dev/acs1c-cyclic-tou.md)). The editor's start-time
   ordering rule becomes one 24-hour cycle in slot order (every start on the 5-minute grid, every slot at least 5 minutes, exactly one
