@@ -2,7 +2,8 @@
 target SOC, home-assistant/packages/ecco_tou_target_soc_edit.yaml.
 
 ACS1 NOTE. The post-export entry acs1 replaced that package, at the same path, with the Stage 1 editor (one setting of one slot). This
-suite now proves the STAGE 0 BASELINE from which the installed editor is derived: PKG_TEXT is unrender_stage1(<the installed package>),
+suite now proves the STAGE 0 BASELINE from which the installed editor is derived: PKG_TEXT is unrender_stage1(<the installed package>)
+(since acs1c and acs1x: unrender_stage1(unrender_cyclic(unrender_crossing(<the installed package>))), through all three layers),
 asserted to be the pinned Stage 0 text (sha256 9fa32b9b..., the file as of public main e7a265b8), and sections [1]-[13] run on it
 unchanged. The behaviour of the INSTALLED editor, target SOC parity with this baseline included, is proven by
 test_ecco_tou_slot_settings_edit.py. This file keeps its path and name: it is one of the three declared reserved-token holders (the same
@@ -60,15 +61,16 @@ sys.path.insert(0, str(ROOT / "home-assistant" / "prototypes" / "acs-stage1"))
 import _ha_script_sim as S  # noqa: E402
 import _manual_tou_sim as M  # noqa: E402
 import acs_stage1_transform as X  # noqa: E402  (acs1: unrender_stage1 recovers the Stage 0 text from the Stage 1 text)
-import acs1c_transform as C  # noqa: E402  (acs1c: unrender_cyclic recovers the Stage 1 text from the installed package)
+import acs1c_transform as C  # noqa: E402  (acs1c: unrender_cyclic recovers the Stage 1 text from the acs1c text)
+import acs1x_transform as XW  # noqa: E402  (acs1x: unrender_crossing recovers the acs1c text from the installed package)
 import hashlib as _hl  # noqa: E402
 
 PKG_REL = "home-assistant/packages/ecco_tou_target_soc_edit.yaml"
-INSTALLED_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")        # the installed (Stage 1 + acs1c) package, read by the live-file scans in [12]
-PKG_TEXT = X.unrender_stage1(C.unrender_cyclic(INSTALLED_TEXT))      # acs1 / acs1c: the Stage 0 package this suite proves, through both layers
+INSTALLED_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")        # the installed (Stage 1 + acs1c + acs1x) package, read by the live-file scans in [12]
+PKG_TEXT = X.unrender_stage1(C.unrender_cyclic(XW.unrender_crossing(INSTALLED_TEXT)))   # acs1 / acs1c / acs1x: the Stage 0 package this suite proves, through all three layers
 ACS0_PKG_SHA = "9fa32b9bb843cfc7b42bae9ed7c06a50f461e564d7f0609e2536c28968d6affe"   # the Stage 0 package at public main e7a265b8 (LF)
 assert _hl.sha256(PKG_TEXT.encode("utf-8")).hexdigest() == ACS0_PKG_SHA == X.ACS0_BASE_SHA256, "the unrendered package is not the Stage 0 text"
-assert C.render_cyclic(X.render_stage1(PKG_TEXT)) == INSTALLED_TEXT
+assert XW.render_crossing(C.render_cyclic(X.render_stage1(PKG_TEXT))) == INSTALLED_TEXT
 HELPERS_TEXT = (ROOT / "home-assistant/packages/ecco_manual_controls_helpers.yaml").read_text(encoding="utf-8")
 FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").read_text(encoding="utf-8")
 REVIEW, APPLY, ACK = "ecco_cfg_review_tou_slot_soc", "ecco_cfg_apply_tou_slot_soc", "ecco_cfg_acknowledge_edit_review"
