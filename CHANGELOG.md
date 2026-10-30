@@ -10,8 +10,9 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
-- **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only, NOT part of the
-  production dashboard; supersedes the V1 prototype of PR #44). An isometric house scene from the owner-approved V4 scene pack (ten
+- **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
+  production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
+  owner-approved V4 scene pack (ten
   weather / season plates, chosen by date, `sun.sun` and the weather condition, with crossfades; the plates are deployed as a local
   resource, never loaded from a CDN and not stored in this repository) with the live figures and the animated power routes as SVG
   overlays: solar per array, battery (reversing for charge / discharge), grid (reversing for import / export) and home. V2 routing is
@@ -26,8 +27,8 @@ Development before the first public release happened in a private repository; se
   with a static dashed route; stale telemetry stops every route. All routing is data in `src/scene/routing-v4.ts`, overridable from
   the configuration (`scene.routing`; V1 override keys are not compatible). Preview harness, headless capture, 86 Node tests and
   `tools/tests/test_flow_3d_card.py` (folder shape, read-only allowlist, repository-sourced entity ids, isolated routing, site render,
-  scope). Preview-dashboard install and upgrade steps: `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md`. No firmware, Home Assistant
-  package, dashboard or registry change.
+  scope). Preview-dashboard install and upgrade steps: `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md`. The V2 merge itself changed no
+  firmware, Home Assistant package, dashboard or registry file.
 - **Advanced Configuration Stage 1, midnight-crossing hold** (post-export entry `acs1x`; offline, source only, corrected for an
   independent review's findings and awaiting its re-check, NOT installed; [docs/dev/acs1x-crossing-hold.md](docs/dev/acs1x-crossing-hold.md)).
   The guarded TOU editor's scripts refuse any start-time edit that would move the midnight crossing (the one slot pair whose next start is
@@ -348,6 +349,27 @@ Development before the first public release happened in a private repository; se
     for the method and its limitations.
 
 ### Changed
+
+- **The Overview shows the ECCO 3D Energy Flow card** (post-export entry `ovw3`; dashboard 7.23.0, staged, NOT installed, NOT
+  live-proven). Section S3 of the Overview view shows the read-only 3D card (V2, sources and bundle unchanged) in place of the 2D
+  Energy Flow card, configured as the card's example, which is the owner-accepted ECCO 3D Preview's configuration: the 2D card's
+  nodes, today, format and grid layout settings are kept (not its `card_mod` style; the 3D card styles its own card), its grid
+  voltage, connection and frequency are read from `nodes.grid`, and the ECCO status block (Free Power, Dump to Grid, TOU slot,
+  forecast, health), the scene pack and the freshness settings are added, in the dashboard's generic entity naming. The inverter's
+  output power and state, which the 2D card showed on its face, move into the 3D card's details panel; the status banner (S1) and
+  the electrical detail list (S8) keep them at a glance. The card loads through the Lovelace resource the preview already
+  registered, so the deployment is the dashboard file alone: `tools/ecco_deploy_preflight.py` now knows the card (`flow-3d`) for its
+  dashboard check but leaves it out of its default card list, so a plan stages no copy of its bundle and plans no resource change
+  for it. **Prerequisite:** the card's bundle, its JavaScript-module resource and the ten plates under `/config/www/ecco/scenes/`
+  must already be installed (`INSTALL_PREVIEW.md` sections 2-3), and production must run dashboard 7.22.0 with this tree's
+  other ECCO card bundles and resources installed; check read-only that exactly one resource loads the card, at
+  `/local/ecco/ecco-flow-3d-card.<sha256-8 of this tree's bundle>.js` (the plan does not check it; a known limitation). Plan it
+  dashboard-only with `python -I -B tools/ecco_deploy_preflight.py plan --root . --site <site> --snapshot <states> --baseline-dashboard
+  <live ecco_pro.yaml> --resources <lovelace_resources> --expect-sha <merged sha> --deploy= --out <dir>` (write `--deploy=`: Windows
+  PowerShell 5.1 drops the empty argument of `--deploy ""`, and the tool then refuses the command); the plan must stage only `ecco_pro.yaml`, with no card copy, no resource action and no
+  restart. Every other section and view is byte-identical; the FE-1 suite's 2D-card wiring pins read the dashboard as of `acs1x`
+  (PEX) and new live checks follow the Overview's flow card. No firmware, Home Assistant package, deployment manifest, registry or
+  card source change; no service call.
 
 - **The Overview's daily weather forecast opens a day's hourly forecast in the same card** (Weather & Solar card,
   `daily_compact` layout; source only, not installed). Each day row of the Overview's "Next days" block is now a button.

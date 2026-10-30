@@ -125,6 +125,7 @@ import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
+import _ovw3_scope as _ovw3  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
@@ -1192,7 +1193,34 @@ ACS1X = Entry(
          "third invertible transform on the acs1c text (12 pairs), the acs1 and acs1c records unchanged: ZERO firmware, registry, deployment, frontend, frozen-file or "
          "reserved-token-allowlist change, unchanged write surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X)
+# ovw3 (the ECCO 3D Energy Flow card on the Overview; _ovw3_scope.py): made on public main 24506e36 (the 3D card V2 merge, PR #46) after
+# acs1x. Section S3 of the Overview shows the read-only 3D card (frontend/ecco-flow-3d-card, V2; its sources and bundle unchanged) in place
+# of the 2D Energy Flow card, configured as the ECCO 3D Preview dashboard serves it, in the dashboard's generic entity naming: the 2D card's
+# nodes, today, format and grid layout settings kept (not its card_mod style), its grid voltage, connection and frequency moved to
+# nodes.grid, and the 3D card's ECCO status block, scene pack and freshness settings added. FROZEN edits (PEX): the dashboard (the v7.23.0 header note and the S3 card) and
+# VERSION.yaml (dashboard 7.23.0, staged), both already frozen (_ovw3_scope.FROZEN_REVERTERS); as of acs1x each is the 24506e36 blob byte
+# for byte. Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware,
+# Home Assistant package, deployment manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no new service call (the
+# card only opens more-info); no manifest stanza (the card's Lovelace resource and bundle file are the ones the preview already loads);
+# every other section and view is byte-identical. The FE-1 suite's dashboard wiring pin reads the dashboard as of acs1x (a commented PEX
+# read) and keeps a live check on the Overview's flow card; the Stage 1 suite pins acs1x as followed by ovw3 (it pinned acs1x as the last).
+OVW3 = Entry(
+    id="ovw3", pr="OVW3", commit="unmerged",
+    added_files=_ovw3.ADDED_FILES,
+    frozen_reverts=dict(_ovw3.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ovw3; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ovw3.DASHBOARD_REL: "3786335fbbf7bfa4906d11b9b128101e87cd0b781cdc72076e4fbe890f840546",
+        _ovw3.VERSION_REL: "0dddce0c82eee252f28b3a02a13782c69e9fc6a03b5874e8f9ddfc286db7cfb0",
+    },
+    # _pex.fingerprint(OVW3): hashes its parent acs1x's fingerprint and every declaration above
+    fingerprint="42a7ad40caa587d7d2b8c5da732bd177d90a7259a865dc347cfcc94394b91a89",
+    note="the read-only ECCO 3D Energy Flow card (V2, sources and bundle unchanged) on the Overview: section S3 shows it in place of the 2D "
+         "Energy Flow card, configured as the ECCO 3D Preview serves it in generic entity naming (the 2D card's nodes, today, format and "
+         "grid layout kept, grid voltage / connection / frequency read from nodes.grid, the ECCO status block, scene pack and freshness settings "
+         "added); it loads through the Lovelace resource the preview already registered; dashboard 7.23.0 staged: ZERO firmware, Home "
+         "Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no manifest stanza",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -46,11 +46,17 @@ test("solar sources normalise the same way (object or array, unset entries dropp
 
 test("Solar Share is the production Overview's definition: today's solar over today's load, clamped, rounded", () => {
   // The Overview (ecco-energy-flow-card, features.solar_contribution: true on ecco_pro) shows
-  // formatPercent(solar / load) and hides it when the load is unknown or not positive.
+  // formatPercent(solar / load) and hides it when the load is unknown or not positive. From
+  // dashboard 7.23.0 (ovw3) this card stands in its place on the Overview, and its Today strip
+  // carries the same Solar Share.
   const src = readFileSync(new URL("../../ecco-energy-flow-card/src/ecco-energy-flow-card.ts", import.meta.url), "utf-8");
   assert.match(src, /private _solarShareText\(\)[\s\S]*?if \(!load \|\| load <= 0\) return null;\s*const solar = this\._numeric\(today\.solar\) \?\? 0;\s*return formatPercent\(solar \/ load\);/);
   const dash = readFileSync(new URL("../../../home-assistant/dashboards/ecco_pro.yaml", import.meta.url), "utf-8");
-  assert.match(dash, /solar_contribution: true/, "the production Overview enables it");
+  // The Overview view only: from its `- title: Overview` line to the next view's title line (line-ending safe).
+  const overview = /^ {2}- title: Overview\s*$[\s\S]*?(?=^ {2}- title: |(?![\s\S]))/m.exec(dash)?.[0] ?? "";
+  assert.ok(overview.length > 0 && overview.length < dash.length, "the production dashboard has an Overview view followed by others");
+  assert.match(overview, /^\s*solar_contribution: true\s*$|^\s*- type: custom:ecco-flow-3d-card\s*$/m, "the production Overview shows it (the 2D card's solar_contribution, or this card's Today strip)");
+  assert.doesNotMatch(overview, /^\s*show_today_strip: false\s*$/m, "this card's Today strip is not turned off on the production Overview");
   const samples: Array<[number, number]> = [[0, 10], [3.2, 14.2], [10.8, 14.2], [14.2, 14.2], [20, 14.2], [0.04, 0.5], [7.5, 0.1]];
   for (const [solar, load] of samples) {
     const share = myFormat.solarShareFraction(solar, load);

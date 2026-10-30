@@ -5,8 +5,14 @@ project_version: "0.9.0"
 
 current:
   dashboard:
-    version: "7.22.0"
+    version: "7.23.0"
     path: home-assistant/dashboards/ecco_pro.yaml
+    # v7.23.0 (OVW3) puts the read-only ECCO 3D Energy Flow card (V2) on the Overview in place of the 2D Energy Flow card,
+    # with the same nodes, today, format and layout settings and the ECCO status, scene and freshness settings of the
+    # owner-accepted ECCO 3D Preview. The card reads states only and calls no service; it loads through the Lovelace
+    # resource the preview already registered (no new resource, no new bundle copy). It is STAGED:
+    # tested_in_home_assistant stays false until the card is exercised on the production dashboard. The 7.22.0 record
+    # follows.
     # v7.22.0 (ACU1) replaces the read-only TOU table of section 7 of the Inverter / Advanced view with the ECCO TOU
     # Settings card: the six live slots and a guarded editor for the target SOC, the power and the charge source of one
     # slot, through the installed ACS1 editor scripts only (Review, typed confirmation, Apply; Acknowledge after an

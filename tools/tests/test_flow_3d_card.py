@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Regression suite: the ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, read-only; not yet installed anywhere).
+"""Regression suite: the ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, read-only; on the production dashboard's Overview since
+post-export entry ovw3, dashboard 7.23.0, staged).
 
   [1] the card folder: the expected files only, package / lock / hacs metadata, text files only, LF
   [2] read-only allowlist over the source and the committed bundle: no service / action / websocket / network / storage /
       dynamic-code API; the only dispatched event is Home Assistant's own hass-more-info; the two timers it does use are the
       15 s clock refresh and the particle and link-pulse animation frame; no fetch, no import() of anything
   [3] no reserved fallback / shadow token in any card file
-  [4] the example's entity ids are the repository's own (packages, dashboard, canonical aliases, firmware sensor names); the
-      sign conventions match the installed Energy Flow card's example
+  [4] the example's entity ids are the repository's own (packages, dashboard, canonical aliases, firmware sensor names; the dashboard's
+      own copy of the card's configuration does not count, and that exclusion fails closed: exactly one block, from the dashboard,
+      parsing back to the dashboard's own card); the sign conventions match the installed Energy Flow card's example
   [5] routing is isolated data: src/scene/routing-v4.ts imports nothing from the telemetry, motion or Lit layers
   [6] the site renderer renders the bundle and the example (and not the sources or tests)
   [7] the card's Node suite (node --test, TAP), when the host Node can run TypeScript tests (22.18+); otherwise reported as skipped.
       Only the two deterministic-rebuild tests may skip, and only where esbuild is not installed, and the three card-link rendering
       tests, and only where Lit is not installed (CI installs no npm package)
-  [8] scope: the card is in no manifest, package, version file or dashboard (an offline prototype; preview install is a
-      separate owner-authorised step, see INSTALL_PREVIEW.md)
+  [8] scope and integration (ovw3): the card is in no manifest, package, version-file line or other dashboard; the production
+      dashboard uses it exactly once, as the one card of Overview section S3 in place of the 2D Energy Flow card, configured as its
+      example (the ECCO 3D Preview's configuration) plus the dashboard's grid layout (no card_mod); the ovw3 chain entry declares
+      exactly the dashboard and VERSION.yaml; INSTALL_PREVIEW.md names the rollback and the production placement
 
 The card's behaviour (power model parity with the Energy Flow card, directions, idle / unknown / stale, motion curve, FE-1,
 sessions, TOU, health, scenes, layout geometry, build determinism) is tested by its Node suite: frontend/ecco-flow-3d-card/test.
@@ -29,7 +33,10 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -140,12 +147,37 @@ example = EXAMPLE.read_text(encoding="utf-8")
 ids = sorted(set(re.findall(r"\b(?:sensor|binary_sensor|sun|weather|input_[a-z]+|switch|number|select)\.[a-z0-9_]+", example)))
 
 
+def without_card_blocks(text: str) -> tuple[str, list[str]]:
+    """The text without each block-style YAML list item whose first line is `- type: custom:<TAG>` (that line and every blank or
+    deeper-indented line after it), and the removed blocks: the production dashboard's copy of the card's configuration (ovw3) must not
+    prove the example's own ids. Line-ending safe. The check after the corpus makes this fail closed."""
+    out, blocks, skip = [], [], None
+    for line in text.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        if skip is not None and (not line.strip() or indent > skip):
+            blocks[-1].append(line)
+            continue
+        skip = None
+        if line.strip() == f"- type: custom:{TAG}":
+            skip = indent
+            blocks.append([line])
+            continue
+        out.append(line)
+    return "\n".join(out), ["\n".join(b) + "\n" for b in blocks]
+
+
+REMOVED: dict[str, list[str]] = {}   # repo-relative file -> the card blocks left out of the corpus
+
+
 def corpus_text() -> str:
     parts = []
     for d in ("home-assistant", "registry", "docs"):
-        for p in (ROOT / d).rglob("*"):
+        for p in sorted((ROOT / d).rglob("*")):
             if p.is_file() and p.suffix in {".yaml", ".yml", ".md", ".json"}:
-                parts.append(p.read_text(encoding="utf-8", errors="replace"))
+                text, blocks = without_card_blocks(p.read_text(encoding="utf-8", errors="replace"))
+                if blocks:
+                    REMOVED[p.relative_to(ROOT).as_posix()] = blocks
+                parts.append(text)
     for p in (ROOT / "frontend").rglob("*"):
         if p.is_file() and p.suffix in {".yaml", ".ts", ".md"} and "node_modules" not in p.parts and not str(p).startswith(str(CARD)):
             parts.append(p.read_text(encoding="utf-8", errors="replace"))
@@ -153,6 +185,18 @@ def corpus_text() -> str:
 
 
 corpus = corpus_text()
+DASH_REL = "home-assistant/dashboards/ecco_pro.yaml"
+dash_text = (ROOT / DASH_REL).read_text(encoding="utf-8")
+dash = yaml.safe_load(dash_text)
+dash_cards = [c for v in dash.get("views", []) for s in (v.get("sections", []) or []) for c in (s.get("cards", []) or [])
+              if isinstance(c, dict) and c.get("type") == f"custom:{TAG}"]
+dash_stripped, dash_blocks = without_card_blocks(dash_text)
+check("the corpus leaves out exactly the dashboard's one copy of the card's configuration, and all of it (fails closed): one block, from "
+      "the dashboard only, parsing back to exactly the dashboard's own card, and no `type: custom:` use of the card left in the stripped "
+      "dashboard",
+      set(REMOVED) == {DASH_REL} and len(REMOVED[DASH_REL]) == 1 and dash_blocks == REMOVED[DASH_REL] and len(dash_cards) == 1
+      and yaml.safe_load(textwrap.dedent(dash_blocks[0])) == dash_cards and f"type: custom:{TAG}" not in dash_stripped
+      and f"type: custom:{TAG}" in dash_text, str({k: len(v) for k, v in REMOVED.items()}))
 firmware = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "firmware").glob("*.yaml"))
 slugs = {"ecco_clock_dongle_" + re.sub(r"_+$", "", re.sub(r"^_+", "", re.sub(r"[^a-z0-9]+", "_", m.lower())))
          for m in re.findall(r"^\s+name:\s*\"?([^\"\n]+?)\"?\s*$", firmware, re.M)}
@@ -237,14 +281,51 @@ else:
 
 # ===========================================================================
 print("")
-print("[8] scope: an offline prototype, installed nowhere")
+print("[8] scope and integration (ovw3): the Overview of the production dashboard, nowhere else")
 # ===========================================================================
-places = ["deployment/ha-manifest.yaml", "VERSION.yaml", "home-assistant/dashboards/ecco_pro.yaml", "home-assistant/dashboards/ecco_full_capability.yaml",
+places =["deployment/ha-manifest.yaml", "VERSION.yaml", "home-assistant/dashboards/ecco_full_capability.yaml",
           *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "home-assistant" / "packages").glob("*.yaml"))]
 found = [rel for rel in places if (ROOT / rel).is_file() and TAG in (ROOT / rel).read_text(encoding="utf-8", errors="replace")]
-check("the card is in no manifest, package, version file or dashboard (preview install is a separate owner-authorised step)", not found, str(found))
-check("INSTALL_PREVIEW.md targets the preview dashboard and names the rollback",
-      "PREVIEW" in raw["INSTALL_PREVIEW.md"].decode() and "Rollback" in raw["INSTALL_PREVIEW.md"].decode() and "ecco_pro" in raw["INSTALL_PREVIEW.md"].decode())
+check("the card is in no manifest (its bundle and resource are the preview's, copied by hand), package, version-file line or other "
+      "dashboard", not found, str(found))
+uses =[(v.get("title"), i, s, c) for v in dash.get("views", []) for i, s in enumerate(v.get("sections", []) or [])
+        for c in (s.get("cards", []) or []) if isinstance(c, dict) and c.get("type") == f"custom:{TAG}"]
+title, sec_i, sec, card = uses[0] if len(uses) == 1 else (None, None, {}, {})
+check("the production dashboard uses the card exactly once: the one card of Overview section S3 (column span 3), in place of the 2D "
+      "Energy Flow card, which the dashboard no longer uses",
+      len(uses) == 1 and dash_text.count(f"type: custom:{TAG}") == 1 and title == "Overview" and sec_i == 2 and sec.get("type") == "grid"
+      and sec.get("column_span") == 3 and sec.get("cards") == [card] and "custom:ecco-energy-flow-card" not in dash_text
+      and "# ================= S3 ENERGY FLOW (span 3) =================\n" in dash_text, str([(t, i) for t, i, _s, _c in uses]))
+ex_cfg = yaml.safe_load(example)
+check("its configuration is the card's example (the ECCO 3D Preview's configuration, generic entity naming) plus the dashboard's grid "
+      "layout only (no card_mod: the card styles its own ha-card); no action, service or routing override",
+      {k: v for k, v in card.items() if k != "grid_options"} == ex_cfg and set(card) - set(ex_cfg) == {"grid_options"}
+      and card.get("grid_options") == {"columns": "full", "rows": "auto"} and "card_mod" not in card
+      and not re.search(r"\b(tap_action|hold_action|double_tap_action|service|action|perform_action):", yaml.safe_dump(card))
+      and "routing" not in (card.get("scene") or {}) and "force" not in (card.get("scene") or {}) and not (card.get("scene") or {}).get("debug_anchors"))
+check("dashboard 7.23.0 carries it, STAGED: the header note and VERSION.yaml at 7.23.0 or later with the 7.23.0 note, tested_in_home_assistant "
+      "false", "# v7.23.0 (OVW3" in dash_text.split("views:")[0] and "# v7.23.0 (OVW3)" in (ROOT / "VERSION.yaml").read_text(encoding="utf-8")
+      and tuple(int(x) for x in str(yaml.safe_load((ROOT / "VERSION.yaml").read_text(encoding="utf-8"))["current"]["dashboard"]["version"]).split(".")) >= (7, 23, 0)
+      and yaml.safe_load((ROOT / "VERSION.yaml").read_text(encoding="utf-8"))["current"]["dashboard"].get("tested_in_home_assistant") is False)
+sys.path.insert(0, str(ROOT / "registry" / "tests"))
+import _scope_chain as _sc  # noqa: E402
+
+_e = _sc.CHAIN.entry("ovw3")
+_ids = [e.id for e in _sc.POST_EXPORT_ENTRIES]
+check("the ovw3 entry is a post-export entry after acs1x (its order, not its position: a later entry may follow); it declares the dashboard "
+      "and VERSION.yaml as its only frozen edits, no chain-pinned edit (no manifest stanza), its scope module as its one added file, and "
+      "nothing else",
+      "ovw3" in _ids and "acs1x" in _ids and _ids.index("ovw3") > _ids.index("acs1x") and not _e.reverts and not _e.checkpoints
+      and set(_e.frozen_reverts) == set(_e.frozen_checkpoints) == {DASH_REL, "VERSION.yaml"}
+      and _e.added_files == frozenset({"registry/tests/_ovw3_scope.py"}) and (ROOT / "registry" / "tests" / "_ovw3_scope.py").is_file()
+      and not _e.deltas and not _e.banned_files and not _e.op_paths_changed and len(_e.fingerprint) == 64)
+chain_mods = sorted(p.name for p in (ROOT / "registry" / "tests").glob("_*.py"))
+named = [m for m in chain_mods if TAG in (ROOT / "registry" / "tests" / m).read_text(encoding="utf-8")]
+check("exactly the ovw3 scope module and the chain (its entry) name the card among the scope / chain modules",
+      len(chain_mods) > 10 and named == ["_ovw3_scope.py", "_scope_chain.py"], str(named))
+install = raw["INSTALL_PREVIEW.md"].decode()
+check("INSTALL_PREVIEW.md targets the preview dashboard, names the rollback and records the production placement (ovw3)",
+      "PREVIEW" in install and "Rollback" in install and "ecco_pro" in install and "ovw3" in install)
 
 print("")
 if FAILURES:

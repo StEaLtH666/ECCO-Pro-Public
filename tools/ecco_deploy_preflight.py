@@ -79,7 +79,10 @@ CARDS = {   # card directory -> (source file, custom element tag)
     "tou-settings": ("frontend/ecco-tou-settings-card/dist/ecco-tou-settings-card.js", "ecco-tou-settings-card"),
     "energy-flow": ("frontend/ecco-energy-flow-card/dist/ecco-energy-flow-card.js", "ecco-energy-flow-card"),
     "fallback-recovery": ("frontend/ecco-fallback-recovery-card/ecco-fallback-recovery-card.js", "ecco-fallback-recovery-card"),
+    "flow-3d": ("frontend/ecco-flow-3d-card/dist/ecco-flow-3d-card.js", "ecco-flow-3d-card"),
 }
+# flow-3d is known (so the dashboard check accepts custom:ecco-flow-3d-card) but never deployed by default: its bundle and Lovelace resource
+# are shared with the ECCO 3D Preview dashboard, so a plan must not copy or re-point them unless `--deploy flow-3d` is asked for.
 DEFAULT_DEPLOY = ("energy-actions", "weather-solar", "advanced-config", "tou-settings")
 ALLOWED_DEST = ("/config/packages/", "/config/ecco/", "/config/www/ecco/")   # tools/EccoDeploy.psm1 Test-EccoDeploymentDestination
 THIRD_PARTY = {"button-card": "button-card", "apexcharts-card": "apexcharts-card", "flex-horseshoe-card": "flex-horseshoe-card",
