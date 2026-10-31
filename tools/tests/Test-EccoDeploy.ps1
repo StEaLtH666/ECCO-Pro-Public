@@ -12,10 +12,28 @@
 
     Windows PowerShell 5.1 compatible. No external module dependencies
     (no Pester) - this is a small self-contained pass/fail runner.
+
+    Sections 10-14 exercise the dashboard preservation gate offline: a
+    fictional host (local files behind an injected reader, no SSH) and
+    the real tools/ecco_dashboard_guard.py; section 13 runs the host
+    probe under a local POSIX sh (Git for Windows) on a fictional temp
+    tree; section 14 runs deploy-ha.ps1 itself with ssh and scp replaced
+    in-process by stubs (no network). They need a Python with PyYAML,
+    the same requirement deploy-ha.ps1 has; pass -Python <path to
+    python.exe> when the python on PATH has no PyYAML.
+
+    Run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\tests\Test-EccoDeploy.ps1 [-Python <python.exe>] [-Sh <sh.exe>]
+    (CI only parses tools/*.ps1; this runner is a required local
+    pre-push step for changes to the deploy tooling or the guard.)
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [string]$Python = 'python',
+
+    # A POSIX sh for section 13 (default: Git for Windows' sh.exe when present).
+    [string]$Sh = ''
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -315,6 +333,440 @@ Assert-True -Name 'deploy-ha.ps1 gates the reminder on the destination, not on a
     $deployText -notmatch '(?<!else)if \(\$isFrontendAsset\)')
 
 # ---------------------------------------------------------------------
+# 10. The site-local area holds the dashboard protection policy: no
+#     destination under it is ever accepted, in any spelling the
+#     validator normalises; a sibling that merely shares the prefix text
+#     is still an ordinary /config/ecco/ destination.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[10] /config/ecco/site-local/ is never a deployment destination'
+foreach ($d in @('/config/ecco/site-local/dashboard-protection.json', '/config/ecco/site-local/x.yaml', '/config/ecco/site-local',
+                 '\config\ecco\site-local\dashboard-protection.json', '/config/ecco/site-local/sub/x.yaml')) {
+    Assert-True -Name "reject site-local: $d" -Condition (-not (Test-DestinationAccepted $d))
+}
+$siteLocalMessage = ''
+try { Test-EccoDeploymentDestination -Destination '/config/ecco/site-local/dashboard-protection.json' | Out-Null } catch { $siteLocalMessage = $_.Exception.Message }
+Assert-True -Name 'the refusal names the site-local policy' -Condition ($siteLocalMessage -match 'site-local dashboard protection policy')
+Assert-True -Name 'a sibling sharing the prefix text is still accepted: /config/ecco/site-localx/a.yaml' -Condition (Test-DestinationAccepted '/config/ecco/site-localx/a.yaml')
+
+# ---------------------------------------------------------------------
+# 11. Which destinations are dashboard destinations by their path.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[11] Dashboard destinations by path'
+foreach ($d in @('/config/ecco/dashboards/ecco_pro.yaml', '/config/ecco/dashboards/a.yml', '/config/ecco/dashboards/sub/b.YAML')) {
+    Assert-True -Name "dashboard path: $d" -Condition (Test-EccoDashboardDestinationPath -Destination $d)
+}
+foreach ($d in @('/config/packages/ecco_pro.yaml', '/config/ecco/dashboards/', '/config/ecco/dashboards/x.json', '/config/www/ecco/a.js',
+                 '/config/ecco/dashboards-x/a.yaml', '/config/ecco/other.yaml')) {
+    Assert-True -Name "not a dashboard path: $d" -Condition (-not (Test-EccoDashboardDestinationPath -Destination $d))
+}
+
+# ---------------------------------------------------------------------
+# 12. The gate itself against a fictional host: local files behind an
+#     injected reader (no SSH) and the real guard. Fictional data only.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host "[12] Dashboard preservation gate on a fictional host (guard run with '$Python')"
+$guard = Join-Path $toolsDir 'ecco_dashboard_guard.py'
+$hasYaml = $false
+try {
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Python -I -c 'import yaml' 2>&1 | Out-Null
+    $hasYaml = ($LASTEXITCODE -eq 0)
+} catch {
+    $hasYaml = $false
+} finally {
+    $ErrorActionPreference = $previousEap
+}
+Assert-True -Name "the test Python has PyYAML (deploy-ha.ps1 needs it too; pass -Python <python.exe> otherwise)" -Condition $hasYaml
+
+$destination = '/config/ecco/dashboards/ecco_pro.yaml'
+$policyRemote = '/config/ecco/site-local/dashboard-protection.json'
+$resourcesRemote = '/config/.storage/lovelace_resources'
+$tempRoot = [System.IO.Path]::GetTempPath()
+# The gate's own temp folders: ecco-dashboard-guard-<32 hex> / ecco-dashboard-verify-<32 hex> (a GUID in 'N' format).
+$gateFolderPattern = '^ecco-dashboard-(guard|verify)-[0-9a-f]{32}$'
+$gateFoldersBefore = @(Get-ChildItem -LiteralPath $tempRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $gateFolderPattern }).Count
+$fixtures = Join-Path $tempRoot "ecco-gate-test-$([guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $fixtures | Out-Null
+$script:fakeHost = @{}
+$fakeReader = {
+    param($RemotePath, $LocalPath)
+    $entry = $script:fakeHost[$RemotePath]
+    if ($null -eq $entry) { return 'absent' }
+    if ($entry -eq 'UNREADABLE') { throw "fictional host: $RemotePath is not readable" }
+    Copy-Item -LiteralPath $entry -Destination $LocalPath
+    return 'present'
+}
+
+function Invoke-TestGate {
+    param([string]$Candidate, [string[]]$Accept = @(), [string]$Dest = $destination, [string]$UsePython = $Python, [string]$GuardFile = $guard)
+    try {
+        $r = Invoke-EccoDashboardPreservationGate -SshHost 'fictional-host' -Destination $Dest -CandidatePath $Candidate -GuardPath $GuardFile -ResourcesPath $resourcesRemote -AcceptRemovedCardType $Accept -Python $UsePython -RemoteFileReader $fakeReader 6>$null
+        return [pscustomobject]@{ Threw = $false; Message = ''; Result = $r }
+    } catch {
+        return [pscustomobject]@{ Threw = $true; Message = $_.Exception.Message; Result = $null }
+    }
+}
+
+try {
+    $live = Join-Path $fixtures 'live.yaml'
+    $generic = Join-Path $fixtures 'generic.yaml'
+    $resources = Join-Path $fixtures 'lovelace_resources'
+    $badPolicy = Join-Path $fixtures 'bad-policy.json'
+    $policy = Join-Path $fixtures 'policy.json'
+    $liveText = @(
+        'title: Example',
+        'views:',
+        '  - title: Overview',
+        '    sections:',
+        '      - type: grid',
+        '        cards:',
+        '          - type: custom:example-site-card',
+        '            title: Flow',
+        '            scene:',
+        '              pack: media-source://media_source/local/example/scene',
+        '              crossfade_ms: 900',
+        '              variant: example-variant',
+        '          - type: custom:example-other-card',
+        '')
+    $genericText = @(
+        'title: Example',
+        'views:',
+        '  - title: Overview',
+        '    sections:',
+        '      - type: grid',
+        '        cards:',
+        '          - type: custom:example-flow-card',
+        '            title: Flow',
+        '            scene:',
+        '              pack: /local/example/scenes/',
+        '              crossfade_ms: 900',
+        '          - type: custom:example-other-card',
+        '')
+    [System.IO.File]::WriteAllText($live, ($liveText -join "`n"))
+    [System.IO.File]::WriteAllText($generic, ($genericText -join "`n"))
+    [System.IO.File]::WriteAllText($resources, '{"version": 1, "key": "lovelace_resources", "data": {"items": [{"id": "1", "type": "module", "url": "/local/example/example-site-card.js"}]}}')
+    [System.IO.File]::WriteAllText($badPolicy, '{"schema": "ecco-dashboard-protection/1", "gate": "EXAMPLE_PRESERVE_GATE", "dashboards": [')
+
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $destination --base $generic --live $live --pointer /views/0/sections/0/cards/0 --require-resource /local/example/example-site-card.js --out $policy 2>&1 | Out-Null
+    $makeCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousEap
+    Assert-True -Name 'make-policy builds the fictional policy from the generic render and the customised live file' -Condition ($makeCode -eq 0 -and (Test-Path -LiteralPath $policy))
+
+    # No site policy: the generic layer only.
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources }
+    $r = Invoke-TestGate -Candidate $generic
+    Assert-True -Name 'no policy: a candidate that drops a custom card type the live dashboard uses is BLOCKED before any write' -Condition (
+        $r.Threw -and $r.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'R4' -and $r.Message -match 'Nothing was written to the host') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Accept @('custom:example-site-card')
+    Assert-True -Name 'no policy: -AcceptRemovedCardType waives that generic-layer block' -Condition (
+        -not $r.Threw -and $r.Result.Applies -and $r.Result.GateLine -eq 'DASHBOARD_PRESERVE_GATE: PASS' -and -not $r.Result.PolicyNamesDestination) -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'no policy: the live file itself passes, with the live and resource sha256 recorded' -Condition (
+        -not $r.Threw -and $r.Result.GateLine -eq 'DASHBOARD_PRESERVE_GATE: PASS' -and $r.Result.LiveSha256 -match '^[0-9a-f]{64}$' -and $r.Result.ResourcesSha256 -match '^[0-9a-f]{64}$') -Detail $r.Message
+    $script:fakeHost = @{ $resourcesRemote = $resources }
+    $r = Invoke-TestGate -Candidate $generic
+    Assert-True -Name 'no policy, no live file: a new file has nothing to protect (PASS)' -Condition (
+        -not $r.Threw -and $r.Result.Applies -and $r.Result.LiveState -eq 'absent' -and $r.Result.GateLine -match 'PASS \(new file') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Dest '/config/packages/example.yaml'
+    Assert-True -Name 'no policy: a package destination is not a dashboard destination (the gate does not apply)' -Condition (-not $r.Threw -and -not $r.Result.Applies) -Detail $r.Message
+
+    # The site policy names the destination.
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $generic
+    Assert-True -Name 'policy: the generic render over the customised live file is BLOCKED under the policy gate name (R2 and R4)' -Condition (
+        $r.Threw -and $r.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED - the dashboard preservation gate refused this deployment \(guard exit code 3\)' -and $r.Message -match 'R2: candidate removes or replaces a protected layer' -and $r.Message -match 'R4') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Accept @('custom:example-site-card')
+    Assert-True -Name 'policy: -AcceptRemovedCardType never waives the protected layer (still BLOCKED by R2)' -Condition (
+        $r.Threw -and $r.Message -match 'EXAMPLE_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'R2') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'policy: the live file passes, and the gate reports that the policy names the destination' -Condition (
+        -not $r.Threw -and $r.Result.GateLine -eq 'EXAMPLE_PRESERVE_GATE: PASS' -and $r.Result.PolicyNamesDestination) -Detail $r.Message
+    $script:fakeHost = @{ $destination = $live; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'policy: a required resource with no resource list on the host is BLOCKED (R3)' -Condition ($r.Threw -and $r.Message -match 'R3') -Detail $r.Message
+    $script:fakeHost = @{ $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'policy: a protected destination that is missing on the host is BLOCKED' -Condition (
+        $r.Threw -and $r.Message -match 'EXAMPLE_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'does not exist on the host') -Detail $r.Message
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = 'UNREADABLE' }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'a policy that exists but cannot be read is BLOCKED, never "no policy"' -Condition ($r.Threw -and $r.Message -match 'BLOCKED' -and $r.Message -match 'could not be read') -Detail $r.Message
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $badPolicy }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'a malformed policy is BLOCKED, never "no policy" (also for a non-dashboard destination)' -Condition (
+        $r.Threw -and $r.Message -match 'BLOCKED' -and $r.Message -match 'not valid') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $live -Dest '/config/packages/example.yaml'
+    Assert-True -Name 'a malformed policy also blocks a package deployment (the policy is read for every destination)' -Condition ($r.Threw -and $r.Message -match 'BLOCKED') -Detail $r.Message
+    $script:fakeHost = @{ $destination = 'UNREADABLE'; $resourcesRemote = $resources }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'a live dashboard that cannot be read is BLOCKED' -Condition ($r.Threw -and $r.Message -match 'could not be read') -Detail $r.Message
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources }
+    $r = Invoke-TestGate -Candidate $live -UsePython 'ecco-no-such-python-for-tests'
+    Assert-True -Name 'a guard that cannot be started (no python) is BLOCKED, never a pass' -Condition ($r.Threw -and $r.Message -match 'BLOCKED') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $live -Accept @('not-a-custom-type')
+    Assert-True -Name '-AcceptRemovedCardType refuses a value that is not custom:<name>' -Condition ($r.Threw -and $r.Message -match 'BLOCKED') -Detail $r.Message
+
+    # Review fixes. F1: a crafted -AcceptRemovedCardType value never reaches the guard.
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $crafted = 'custom:example-site-card" --destination /config/ecco/dashboards/other.yaml --accept-removed-type custom:example-site-card'
+    $r = Invoke-TestGate -Candidate $generic -Accept @($crafted)
+    Assert-True -Name 'a crafted -AcceptRemovedCardType value (a double quote and spaces, which 5.1 would split into guard options) is BLOCKED before the guard runs' -Condition (
+        $r.Threw -and $r.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'takes custom card types only') -Detail $r.Message
+    foreach ($bad in @('custom:example-site-card --destination', 'custom:', 'custom:a/b', "custom:example-site-card`n")) {
+        $r = Invoke-TestGate -Candidate $generic -Accept @($bad)
+        Assert-True -Name "-AcceptRemovedCardType refuses '$($bad.Replace("`n", '<LF>'))' (strict custom:<name>)" -Condition ($r.Threw -and $r.Message -match 'takes custom card types only') -Detail $r.Message
+    }
+    $direct = Invoke-EccoDashboardGuard -Python $Python -GuardPath $guard -Arguments @('classify', '--destination', '/config/ecco/dashboards/a"b.yaml')
+    Assert-True -Name 'the guard runner refuses an argument with a double quote (exit 2, BLOCKED) whatever its source' -Condition (
+        $direct.ExitCode -eq 2 -and $direct.Output[0] -eq 'DASHBOARD_PRESERVE_GATE: BLOCKED' -and ($direct.Output -join ' ') -match 'double quote') -Detail ($direct.Output -join ' | ')
+    $direct = Invoke-EccoDashboardGuard -Python $Python -GuardPath $guard -Arguments @('check', '--candidate', 'C:\folder with space\')
+    Assert-True -Name 'the guard runner refuses an argument with a trailing backslash (exit 2)' -Condition ($direct.ExitCode -eq 2) -Detail ($direct.Output -join ' | ')
+
+    # F1: the PASS line must name the gate classify determined.
+    $wrapper = Join-Path $fixtures 'wrong-gate-guard.py'
+    [System.IO.File]::WriteAllText($wrapper, (@(
+        'import runpy, sys',
+        ('GUARD = r''' + $guard + ''''),
+        'if sys.argv[1:2] == ["check"]:',
+        '    print("DASHBOARD_PRESERVE_GATE: PASS")',
+        '    sys.exit(0)',
+        'sys.argv = [GUARD] + sys.argv[1:]',
+        'runpy.run_path(GUARD, run_name="__main__")',
+        '') -join "`n"))
+    $r = Invoke-TestGate -Candidate $generic -Guard $wrapper
+    Assert-True -Name 'a guard that passes under another gate than the policy''s (DASHBOARD_PRESERVE_GATE for a policy-named destination) is BLOCKED' -Condition (
+        $r.Threw -and $r.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $r.Message -match "without the expected line 'EXAMPLE_PRESERVE_GATE: PASS'") -Detail $r.Message
+
+    # F2 / C1: classify must answer completely; a guard that crashes (Python exits 1) or answers half is BLOCKED.
+    $viewsDestination = '/config/ecco/views/overview.yaml'
+    $viewsPolicy = Join-Path $fixtures 'views-policy.json'
+    $ErrorActionPreference = 'Continue'
+    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $viewsDestination --base $generic --live $live --pointer /views/0/sections/0/cards/0 --out $viewsPolicy 2>&1 | Out-Null
+    $ErrorActionPreference = $previousEap
+    $crashPython = Join-Path $fixtures 'crash-python.cmd'
+    [System.IO.File]::WriteAllText($crashPython, "@echo Traceback (most recent call last):`r`n@exit /b 1`r`n")
+    $halfPython = Join-Path $fixtures 'half-python.cmd'
+    [System.IO.File]::WriteAllText($halfPython, "@echo gate: DASHBOARD_PRESERVE_GATE`r`n@exit /b 4`r`n")
+    $script:fakeHost = @{ $viewsDestination = $live; $resourcesRemote = $resources; $policyRemote = $viewsPolicy }
+    $r = Invoke-TestGate -Candidate $generic -Dest $viewsDestination
+    Assert-True -Name 'a policy-named destination outside /config/ecco/dashboards/ is gated (the generic render is BLOCKED by R2)' -Condition (
+        $r.Threw -and $r.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'R2') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Dest $viewsDestination -UsePython $crashPython
+    Assert-True -Name 'a guard that crashes during classify (Python exit 1) is BLOCKED, never "not a dashboard destination"' -Condition (
+        $r.Threw -and $r.Message -match 'BLOCKED' -and $r.Message -match 'could not run') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Dest '/config/packages/example.yaml' -UsePython $crashPython
+    Assert-True -Name '... also for a package destination while a site policy is present' -Condition ($r.Threw -and $r.Message -match 'could not run') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Dest '/config/packages/example.yaml' -UsePython $halfPython
+    Assert-True -Name 'a classify answer with exit 4 but without the "dashboard destination: no" line and the policy list is BLOCKED' -Condition ($r.Threw -and $r.Message -match 'BLOCKED') -Detail $r.Message
+
+    # F3: every destination the policy names must exist on the host.
+    $typoPolicy = Join-Path $fixtures 'typo-policy.json'
+    $ErrorActionPreference = 'Continue'
+    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination /config/ecco/dashboards/ecco_pro.yml --base $generic --live $live --pointer /views/0/sections/0/cards/0 --out $typoPolicy 2>&1 | Out-Null
+    $ErrorActionPreference = $previousEap
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $typoPolicy }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'a policy whose destination is mistyped (.yml for .yaml) is BLOCKED: the named file does not exist on the host' -Condition (
+        $r.Threw -and $r.Message -match 'ecco_pro\.yml, but that file does not exist on the host') -Detail $r.Message
+    $otherDestination = '/config/ecco/dashboards/other.yaml'
+    $script:fakeHost = @{ $otherDestination = $live; $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live -Dest $otherDestination
+    Assert-True -Name 'another dashboard while the policy''s destination exists: generic layer, default gate, the policy list read' -Condition (
+        -not $r.Threw -and $r.Result.GateLine -eq 'DASHBOARD_PRESERVE_GATE: PASS' -and -not $r.Result.PolicyNamesDestination -and @($r.Result.PolicyDestinations) -contains $destination) -Detail $r.Message
+    $script:fakeHost = @{ $otherDestination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live -Dest $otherDestination
+    Assert-True -Name '... and BLOCKED when the policy''s own destination is missing on the host' -Condition ($r.Threw -and $r.Message -match 'does not exist on the host') -Detail $r.Message
+
+    # F4: the guard checks a private copy and the gate returns its sha256.
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live
+    $liveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $live).Hash.ToLowerInvariant()
+    Assert-True -Name 'the gate returns the sha256 of the candidate bytes it checked (deploy-ha.ps1 installs only that hash)' -Condition (
+        -not $r.Threw -and $r.Result.CandidateSha256 -eq $liveHash -and ($r.Result.Output -join ' ') -match ('candidate \(sha256 ' + $liveHash.Substring(0, 12) + '\)')) -Detail $r.Message
+
+    # TQ-1: the waiver covers the named type only.
+    $genericNoOther = Join-Path $fixtures 'generic-no-other.yaml'
+    [System.IO.File]::WriteAllText($genericNoOther, (($genericText -join "`n").Replace('custom:example-other-card', 'entities')))
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources }
+    $r = Invoke-TestGate -Candidate $genericNoOther -Accept @('custom:example-site-card')
+    Assert-True -Name 'no policy: accepting one dropped custom type leaves a second dropped type BLOCKED by R4' -Condition (
+        $r.Threw -and $r.Message -match 'R4: the candidate drops' -and $r.Message -match '/views/0/sections/0/cards/1/type') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Accept @('custom:example-unrelated-card')
+    Assert-True -Name 'no policy: accepting a type the candidate does not drop waives nothing (still BLOCKED by R4)' -Condition ($r.Threw -and $r.Message -match 'R4') -Detail $r.Message
+
+    # Post-install verify-live.
+    $script:fakeHost = @{ $destination = $live; $policyRemote = $policy }
+    $v = Invoke-EccoDashboardLiveVerification -SshHost 'fictional-host' -Destination $destination -GuardPath $guard -Python $Python -RemoteFileReader $fakeReader
+    Assert-True -Name 'verify-live passes when the installed file carries the protected layer' -Condition ($v.Passed -and $v.GateLine -eq 'EXAMPLE_PRESERVE_GATE: PASS') -Detail ($v.Output -join ' | ')
+    $script:fakeHost = @{ $destination = $generic; $policyRemote = $policy }
+    $v = Invoke-EccoDashboardLiveVerification -SshHost 'fictional-host' -Destination $destination -GuardPath $guard -Python $Python -RemoteFileReader $fakeReader
+    Assert-True -Name 'verify-live fails when the installed file lost the protected layer' -Condition (-not $v.Passed) -Detail ($v.Output -join ' | ')
+    $script:fakeHost = @{ $destination = $live }
+    $v = Invoke-EccoDashboardLiveVerification -SshHost 'fictional-host' -Destination $destination -GuardPath $guard -Python $Python -RemoteFileReader $fakeReader
+    Assert-True -Name 'verify-live fails when the policy is no longer on the host' -Condition (-not $v.Passed) -Detail ($v.Output -join ' | ')
+
+    $gateFoldersAfter = @(Get-ChildItem -LiteralPath $tempRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $gateFolderPattern }).Count
+    Assert-True -Name 'every gate run deleted its temporary folder (the copies may hold site values)' -Condition ($gateFoldersAfter -eq $gateFoldersBefore) -Detail "before $gateFoldersBefore, after $gateFoldersAfter"
+}
+finally {
+    Remove-Item -LiteralPath $fixtures -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$deployHaText = Get-Content -Raw -Path (Join-Path $toolsDir 'deploy-ha.ps1')
+$gateAt = $deployHaText.IndexOf('Invoke-EccoDashboardPreservationGate')
+$firstWrite = @($deployHaText.IndexOf("mkdir -p '"), $deployHaText.IndexOf("cp -p '`$Destination'"), $deployHaText.IndexOf('& scp -q $sourceFull')) | Where-Object { $_ -ge 0 } | Sort-Object | Select-Object -First 1
+Assert-True -Name 'deploy-ha.ps1 runs the gate before its first remote write (mkdir, backup, upload)' -Condition ($gateAt -gt 0 -and $null -ne $firstWrite -and $gateAt -lt $firstWrite)
+
+# ---------------------------------------------------------------------
+# 13. The read-only host probe (Get-EccoGateProbeCommand): only a path
+#     proven absent is "absent"; a directory, a file used as a folder or
+#     a symlink is "unreadable". Run under a local POSIX sh (Git for
+#     Windows) on a fictional tree in the temp folder; no host involved.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[13] The read-only host probe of the gate'
+$probeCommand = Get-EccoGateProbeCommand -RemotePath '/config/ecco/site-local/dashboard-protection.json'
+Assert-True -Name 'the probe is built from single-quoted words only: no double quote (5.1 would split it on the ssh command line)' -Condition (-not $probeCommand.Contains('"'))
+Assert-True -Name 'the probe tests the path for a symlink first and spells out every ancestor up to /' -Condition (
+    $probeCommand.StartsWith("if [ -L '/config/ecco/site-local/dashboard-protection.json' ]; then printf unreadable;") -and
+    $probeCommand.Contains("[ -x '/config/ecco/site-local' ]") -and $probeCommand.Contains("[ -x '/config/ecco' ]") -and
+    $probeCommand.Contains("[ -x '/config' ]") -and $probeCommand.Contains("[ -x '/' ]"))
+$probeRefused = $false
+try { Get-EccoGateProbeCommand -RemotePath "/config/ecco/a'b.yaml" | Out-Null } catch { $probeRefused = $true }
+Assert-True -Name 'the probe refuses a path with a single quote' -Condition $probeRefused
+if (-not $Sh) {
+    $gitSh = 'C:\Program Files\Git\bin\sh.exe'
+    if (Test-Path -LiteralPath $gitSh) { $Sh = $gitSh }
+}
+if ($Sh -and (Test-Path -LiteralPath $Sh)) {
+    $probeRoot = '/tmp/ecco-probe-test-' + [guid]::NewGuid().ToString('N')
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Sh -c "mkdir -p '$probeRoot/dir/sub' && printf x > '$probeRoot/dir/file'" 2>&1 | Out-Null
+        $probeCases = @(
+            @("$probeRoot/dir/file", 'present', 'a readable regular file'),
+            @("$probeRoot/dir/missing.json", 'absent', 'nothing there, the folder is searchable'),
+            @("$probeRoot/nodir/deeper/missing.json", 'absent', 'nothing there, the nearest existing ancestor is searchable'),
+            @("$probeRoot/dir/sub", 'unreadable', 'a directory'),
+            @("$probeRoot/dir/file/below.json", 'unreadable', 'a file used as a folder'))
+        foreach ($case in $probeCases) {
+            $got = (@(& $Sh -c (Get-EccoGateProbeCommand -RemotePath $case[0]) 2>&1) -join '').Trim()
+            Assert-True -Name "probe: $($case[2]) -> $($case[1])" -Condition ($got -ceq $case[1]) -Detail $got
+        }
+        & $Sh -c "MSYS=winsymlinks:nativestrict ln -s '$probeRoot/nowhere' '$probeRoot/dir/dangling'" 2>&1 | Out-Null
+        $isLink = (@(& $Sh -c "if [ -L '$probeRoot/dir/dangling' ]; then printf yes; else printf no; fi" 2>&1) -join '').Trim()
+        if ($isLink -eq 'yes') {
+            $got = (@(& $Sh -c (Get-EccoGateProbeCommand -RemotePath "$probeRoot/dir/dangling") 2>&1) -join '').Trim()
+            Assert-True -Name 'probe: a dangling symlink -> unreadable (never absent)' -Condition ($got -ceq 'unreadable') -Detail $got
+        } else {
+            Write-Host '  SKIP  probe: a dangling symlink (this sh cannot create symlinks here; the case rests on the [ -L ] test checked above)'
+        }
+    }
+    finally {
+        & $Sh -c "rm -rf '$probeRoot'" 2>&1 | Out-Null
+        $ErrorActionPreference = 'Stop'
+    }
+} else {
+    Write-Host '  SKIP  probe runs under a POSIX sh (no Git for Windows sh found; pass -Sh <sh.exe>)'
+}
+
+# ---------------------------------------------------------------------
+# 14. deploy-ha.ps1 itself against a stubbed host: ssh and scp are
+#     replaced in-process by functions that serve fictional files to the
+#     gate's reads and refuse every other command. A BLOCKED gate must
+#     stop the script with nothing but those reads sent; a PASS lets it
+#     reach its next host command (which the stub refuses), proving the
+#     harness would see a write.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[14] deploy-ha.ps1 against a stubbed host: a BLOCKED gate sends nothing but its reads'
+$distDir = Join-Path $repoRoot 'dist'
+$distExisted = Test-Path -LiteralPath $distDir
+$stubName = 'ecco-gate-test-' + [guid]::NewGuid().ToString('N')
+$stubRepoDir = Join-Path $distDir $stubName
+$stubHostDir = Join-Path ([System.IO.Path]::GetTempPath()) $stubName
+New-Item -ItemType Directory -Path $stubRepoDir -Force | Out-Null
+New-Item -ItemType Directory -Path $stubHostDir | Out-Null
+$global:EccoTestRemoteLog = New-Object System.Collections.Generic.List[string]
+try {
+    $stubLive = Join-Path $stubHostDir 'live.yaml'
+    $stubResources = Join-Path $stubHostDir 'lovelace_resources'
+    [System.IO.File]::WriteAllText($stubLive, ($liveText -join "`n"))
+    [System.IO.File]::WriteAllText($stubResources, '{"version": 1, "key": "lovelace_resources", "data": {"items": []}}')
+    [System.IO.File]::WriteAllText((Join-Path $stubRepoDir 'generic.yaml'), ($genericText -join "`n"))
+    [System.IO.File]::WriteAllText((Join-Path $stubRepoDir 'same.yaml'), ($liveText -join "`n"))
+    $global:EccoTestHost = @{ $destination = $stubLive; $resourcesRemote = $stubResources }
+
+    function global:ssh {
+        $command = [string]$args[$args.Count - 1]
+        $global:EccoTestRemoteLog.Add('ssh ' + $command)
+        $global:LASTEXITCODE = 0
+        if ($command -ceq 'true') { return }
+        if ($command -cmatch "^if \[ -L '([^']+)' \]; then printf unreadable;") {
+            if ($global:EccoTestHost.ContainsKey($Matches[1])) { return 'present' }
+            return 'absent'
+        }
+        $global:LASTEXITCODE = 1
+        return 'stubbed host: command refused'
+    }
+    function global:scp {
+        $global:EccoTestRemoteLog.Add('scp ' + ($args -join ' '))
+        $from = [string]$args[$args.Count - 2]
+        $to = [string]$args[$args.Count - 1]
+        if ($from -cmatch '^fictional-host:(/.+)$' -and $global:EccoTestHost.ContainsKey($Matches[1])) {
+            Copy-Item -LiteralPath $global:EccoTestHost[$Matches[1]] -Destination $to
+            $global:LASTEXITCODE = 0
+            return
+        }
+        $global:LASTEXITCODE = 1
+    }
+
+    $deployHa = Join-Path $toolsDir 'deploy-ha.ps1'
+    $gateReads = { param($entry) ($entry -ceq 'ssh true') -or $entry.StartsWith("ssh if [ -L '") -or ($entry -cmatch '^scp -q fictional-host:/') }
+
+    $global:EccoTestRemoteLog.Clear()
+    $blockedMessage = ''
+    try {
+        & $deployHa -Source "dist/$stubName/generic.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
+    } catch {
+        $blockedMessage = $_.Exception.Message
+    }
+    $sent = @($global:EccoTestRemoteLog)
+    $notReads = @($sent | Where-Object { -not (& $gateReads $_) })
+    Assert-True -Name 'deploy-ha.ps1 with a generic render over a customised live file stops with the gate''s BLOCKED message' -Condition (
+        $blockedMessage -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $blockedMessage -match 'R4') -Detail $blockedMessage
+    Assert-True -Name '... having sent the host only the SSH probe and the gate''s read-only probes and copies (no mkdir, backup, upload or move)' -Condition (
+        $sent.Count -ge 3 -and $notReads.Count -eq 0) -Detail ($notReads -join ' | ')
+
+    $global:EccoTestRemoteLog.Clear()
+    $passMessage = ''
+    try {
+        & $deployHa -Source "dist/$stubName/same.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
+    } catch {
+        $passMessage = $_.Exception.Message
+    }
+    $sent = @($global:EccoTestRemoteLog)
+    Assert-True -Name 'control: a candidate the gate passes reaches deploy-ha.ps1''s next host command (refused by the stub), so the harness sees writes' -Condition (
+        $passMessage -match 'Unable to inspect existing remote file' -and @($sent | Where-Object { $_.StartsWith("ssh if [ -f '") }).Count -eq 1) -Detail ($passMessage + ' | ' + ($sent -join ' | '))
+}
+finally {
+    Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath function:global:scp -ErrorAction SilentlyContinue
+    Remove-Variable -Name EccoTestRemoteLog, EccoTestHost -Scope Global -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stubRepoDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stubHostDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not $distExisted -and (Test-Path -LiteralPath $distDir) -and @(Get-ChildItem -LiteralPath $distDir -Force).Count -eq 0) {
+        Remove-Item -LiteralPath $distDir -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------
 Write-Host ''
 Write-Host "Results: $script:pass passed, $script:fail failed"
 Write-Host ''
@@ -326,6 +778,7 @@ Write-Host '  - test-ha-rollback.ps1 end-to-end against live Home Assistant'
 Write-Host '  - deploy-dashboard.ps1 end-to-end against live Home Assistant'
 Write-Host '  - Behaviour under an actual dropped SSH connection mid-deployment'
 Write-Host '  - The ambiguous mv-failure rollback path (deploy-ha.ps1) triggered by a real SSH/transport failure during the move into place'
+Write-Host '  - The dashboard preservation gate''s real ssh/scp reads (site policy, live dashboard, lovelace_resources) and verify-live on a real host'
 Write-Host ''
 
 if ($script:fail -gt 0) {

@@ -10,6 +10,7 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with
   provenance and acceptance, periods and the DST rules, the advisory contract `ecco-intel-entities/1` with its null rule, the
   authority vocabulary, and S0 reconciled onto them ([docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md](docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md)).
