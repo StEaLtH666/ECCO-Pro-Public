@@ -57,6 +57,8 @@ def raises(fn) -> bool:
 
 from ecco_core.freshness import ADVISORY, CATALOGUE  # noqa: E402  (tests may read ecco_core freely)
 from intelligence import battery  # noqa: E402
+from intelligence import periods as SD_P  # noqa: E402
+from intelligence import site_decisions as SD  # noqa: E402
 from intelligence.advisor import STALE_SOC_SECONDS  # noqa: E402
 from intelligence.config import SiteConfig  # noqa: E402
 from intelligence.overnight import OvernightSettings, learn_overnight, nightly_totals  # noqa: E402
@@ -97,9 +99,22 @@ def clean() -> s0.Declaration:
         readings=tuple(rd),
         history=(s0.HistoryPeriod(s0.LOAD_POWER_MEAN, datetime(2030, 3, 11, tzinfo=UTC), datetime(2030, 3, 20, tzinfo=UTC)),),
         nights=s0.NightSpec(date(2026, 10, 10), date(2026, 10, 12), 30, 330),
-        decisions=s0.OwnerDecisions("SiteConfig.user_reserve_soc_pct", "CONFIGURED_HELPER", 8.0, s0.ROUND_TRIP, {"house.power": 120.0},
-                                    ("battery.soc",), cutover, "NORMALISE_PER_HOUR"),
+        decisions=typed(D1=SD.PlanningFloor(SD.INTELLIGENCE_USER_RESERVE, 40.0, True),
+                        D2=SD.Protection(SD.OWNER_STATEMENT, 10.0, cutover),
+                        D3=SD.CapacityAuthority("CONFIGURED_HELPER", cfg.battery_capacity_kwh), D4=SD.CapacityBand(8.0),
+                        D5=SD.Efficiency(90.0, SD.PERCENT, s0.ROUND_TRIP), D6=SD.FreshnessOverrides({"house.power": 120.0}),
+                        D7=SD.RequiredInputsOverride({"charge_target": ("battery.soc",)}),
+                        D8=SD.HD1Cutover(cutover, SD.EXCLUDE, SD.EXCLUDE_PRE_CUTOVER),
+                        D9=SD.DSTPolicy(SD.NORMALISE_TO_NOMINAL, SD.SCALE_UP_ONLY)),
     )
+
+
+def typed(base_set: s0.DecisionSet | None = None, **values) -> s0.DecisionSet:
+    """A typed decision set (CALLER_DECLARATION_UNVERIFIED provenance) from D<n>=value; None leaves / makes it OPEN."""
+    ds = base_set if base_set is not None else s0.DecisionSet(source="declaration")
+    for did, v in values.items():
+        ds = ds.without(did) if v is None else ds.with_decision(did, v, s0.PROV_CALLER)
+    return ds
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -200,7 +215,7 @@ TH = s0.ProposedThresholds()
 
 
 def cap_run(*caps: s0.CapacityDecl, c=cfg, band=None) -> s0.Report:
-    return s0.run(replace(base, cfg=c, capacities=caps, decisions=replace(base.decisions, capacity_warn_band_pct=band)))
+    return s0.run(replace(base, cfg=c, capacities=caps, decisions=typed(base.decisions, D4=None if band is None else SD.CapacityBand(band))))
 
 
 a = 30.0
@@ -279,8 +294,13 @@ section("[6] signal readings")
 RD = s0.ReadingDecl
 
 
-def rd_run(*rs: s0.ReadingDecl, **dec) -> s0.Report:
-    return s0.run(replace(base, readings=rs, decisions=replace(base.decisions, **dec)))
+def rd_run(*rs: s0.ReadingDecl, advisory_limits_s="keep", required_signals="keep") -> s0.Report:
+    over = {}
+    if advisory_limits_s != "keep":
+        over["D6"] = None if advisory_limits_s is None else SD.FreshnessOverrides(advisory_limits_s)
+    if required_signals != "keep":
+        over["D7"] = None if required_signals is None else SD.RequiredInputsOverride({"charge_target": tuple(required_signals)})
+    return s0.run(replace(base, readings=rs, decisions=typed(base.decisions, **over)))
 
 
 soc_raw = RD("battery.soc", "raw", s0.RAW, 62.0, "62", "%", None, 20.0)
@@ -345,7 +365,8 @@ P = s0.HistoryPeriod
 
 
 def hist(*ps: s0.HistoryPeriod, cutover=cut) -> list[str]:
-    rep_ = s0.run(replace(base, history=ps, decisions=replace(base.decisions, hd1_effective_from=cutover)))
+    rep_ = s0.run(replace(base, history=ps, decisions=typed(base.decisions, D8=None if cutover is None else
+                                                            SD.HD1Cutover(cutover, SD.EXCLUDE, SD.EXCLUDE_PRE_CUTOVER))))
     return [c for c in codes(rep_) if c.startswith(("LOAD_", "HD1_", "HISTORY_"))]
 
 
@@ -361,7 +382,10 @@ check("the load energy counter is UNKNOWN whatever the cut-over (cannot be settl
 check("an unknown series BLOCKS", hist(P("pv_power_mean", cut, cut + timedelta(days=1))) == ["HISTORY_SERIES_UNKNOWN"])
 naive = datetime(2030, 1, 1)
 check("a naive period start is refused loudly (ValueError)", raises(lambda: s0.run(replace(base, history=(P(s0.LOAD_POWER_MEAN, naive, cut),)))))
-check("a naive cut-over is refused loudly (ValueError)", raises(lambda: hist(P(s0.LOAD_POWER_MEAN, cut - timedelta(days=1), cut), cutover=naive)))
+_nv = s0.run(replace(base, history=(P(s0.LOAD_POWER_MEAN, cut - timedelta(days=1), cut),),
+                     decisions=typed(base.decisions, D8=SD.HD1Cutover(naive, SD.EXCLUDE, SD.EXCLUDE_PRE_CUTOVER))))
+check("a naive cut-over is refused: the typed I-D8 record is INVALID and BLOCKs, and no period is classed against it",
+      "DECISION_D8_INVALID" in codes(_nv, s0.BLOCK) and "HD1_CUTOVER_UNKNOWN" in codes(_nv, s0.BLOCK), str(codes(_nv)))
 check("an inverted period is refused loudly (ValueError)", raises(lambda: hist(P(s0.LOAD_POWER_MEAN, cut, cut - timedelta(days=1)))))
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -434,12 +458,13 @@ check("a fully decided, fully consistent declaration is CONSISTENT", cl.verdict 
       f"{cl.verdict} {[ (x.id,x.status) for x in cl.decisions if x.status != 'RECORDED']}")
 nodec = s0.run(replace(clean(), decisions=s0.OwnerDecisions(), history=()))
 check("with no decisions recorded the verdict is OPEN_DECISIONS and every owner-input decision is OPEN",
-      nodec.verdict == "OPEN_DECISIONS" and [x.id for x in nodec.decisions if x.status == s0.OPEN] == ["D1", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
+      nodec.verdict == "OPEN_DECISIONS" and [x.id for x in nodec.decisions if x.status == s0.OPEN] == ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
       str([(x.id, x.status) for x in nodec.decisions]))
-check("D2 is RECORDED only by a supplied, valid protection level", [x for x in nodec.decisions if x.id == "D2"][0].status == s0.RECORDED
+check("D2 is RECORDED only by an explicit, valid I-D2 record (a declared protection reserve alone does not record it)",
+      [x for x in nodec.decisions if x.id == "D2"][0].status == s0.OPEN and [x for x in cl.decisions if x.id == "D2"][0].status == s0.RECORDED
       and [x for x in ex.decisions if x.id == "D2"][0].status == s0.OPEN)
 check("a recorded decision is echoed exactly as given and nothing is filled in",
-      [x for x in cl.decisions if x.id == "D4"][0].recorded == 8.0 and [x for x in nodec.decisions if x.id == "D4"][0].recorded is None)
+      [x for x in cl.decisions if x.id == "D4"][0].recorded == {"pct": 8.0} and [x for x in nodec.decisions if x.id == "D4"][0].recorded is None)
 warn_only = s0.run(replace(clean(), capacities=(s0.CapacityDecl("h", "CONFIGURED_HELPER", 20.0),)))
 check("decided + a WARN gives CONSISTENT_WITH_WARNINGS", warn_only.verdict == "CONSISTENT_WITH_WARNINGS", warn_only.verdict)
 check("a BLOCK outranks open decisions", s0.run(replace(clean(), decisions=s0.OwnerDecisions(),
@@ -461,7 +486,11 @@ with tempfile.TemporaryDirectory() as td:
         "capacities": [{"name": "h", "kind": "CONFIGURED_HELPER", "value": 31.7}],
         "efficiencies": [{"name": "e", "value": 90.0, "unit": "percent", "basis": "ROUND_TRIP"}],
         "readings": [{"signal": "battery.soc", "source_id": "r", "kind": "RAW", "value": 50.0, "raw_state": "50", "unit": "%", "age_s": 5.0}],
-        "decisions": {"hd1_effective_from": "2030-03-10T12:00:00+00:00", "required_signals": ["battery.soc"]},
+        "decisions": {"I-D8": {"status": "RECORDED", "provenance": "CALLER_DECLARATION_UNVERIFIED",
+                               "value": {"cutover": "2030-03-10T12:00:00+00:00", "load_power_policy": "EXCLUDE",
+                                         "load_counter_policy": "EXCLUDE_PRE_CUTOVER"}},
+                      "I-D7": {"status": "RECORDED", "provenance": "CALLER_DECLARATION_UNVERIFIED",
+                               "value": {"add_signals": {"charge_target": ["battery.soc"]}}}},
         "nights": {"first_night": "2026-10-24", "last_night": "2026-10-26", "start_min": 30, "end_min": 330}}), encoding="utf-8")
     loaded = s0.declaration_from_dict(json.loads(p.read_text(encoding="utf-8")))
     lr = s0.run(loaded)
@@ -560,6 +589,52 @@ if DOC.is_file():
     check("all nine decisions in the register are still OPEN",
           len(rows) == 9 and all(ln.rstrip().rstrip("|").rstrip().endswith(("OPEN", "OPEN (proposal only)")) for ln in rows), str(len(rows)))
 
+section("[11] typed decisions, I-D labels and DST refusals (foundation reconciliation)")
+PC = s0.PROV_CALLER
+ft = s0.declaration_from_dict({"decisions": {"I-D1": {"provenance": PC, "value": "SiteConfig.user_reserve_soc_pct"},
+                                             "D9": {"provenance": PC, "value": "NORMALISE_PER_HOUR"}}})
+ft_rep = s0.run(replace(clean(), decisions=ft.decisions))
+check("free-text decisions are INVALID, never RECORDED, and BLOCK the verdict",
+      ft.decisions.status("D1") == s0.INVALID and ft.decisions.status("D9") == s0.INVALID
+      and {"DECISION_D1_INVALID", "DECISION_D9_INVALID"} <= set(codes(ft_rep, s0.BLOCK)) and ft_rep.verdict == "BLOCKED", str(codes(ft_rep)))
+for junk in ("garbage", 42):
+    dj = s0.declaration_from_dict({"decisions": {"I-D9": {"provenance": PC, "value": junk}}})
+    rj = s0.run(replace(clean(), decisions=dj.decisions))
+    check(f"I-D9 {junk!r} is INVALID and BLOCKs", dj.decisions.status("D9") == s0.INVALID and "DECISION_D9_INVALID" in codes(rj, s0.BLOCK))
+for hr in SD.DST_HISTORY_RULES:
+    for tr in SD.DST_TARGET_RULES:
+        check(f"I-D9 history rule {hr} + target rule {tr} is a valid split record",
+              typed(D9=SD.DSTPolicy(hr, tr)).status("D9") == s0.RECORDED)
+check("I-D9 with an unknown half is INVALID (each half is validated)",
+      typed(D9=SD.DSTPolicy("NORMALISE_PER_HOUR", SD.SCALE_UP_ONLY)).status("D9") == s0.INVALID
+      and typed(D9=SD.DSTPolicy(SD.NORMALISE_TO_NOMINAL, "PLAN_OWN_LENGTH")).status("D9") == s0.INVALID)
+hh = s0.run(replace(clean(), decisions=typed(clean().decisions, D1=SD.PlanningFloor(SD.HA_RESERVE_HELPER, None, True))))
+check("HA_RESERVE_HELPER is accepted as the I-D1 source", [x for x in hh.decisions if x.id == "D1"][0].status == s0.RECORDED
+      and hh.verdict == "CONSISTENT", hh.verdict)
+check("an OWNER_RECORD in a caller declaration is refused (INVALID: only the site-local file carries one)",
+      s0.declaration_from_dict({"decisions": {"I-D4": {"provenance": "OWNER_RECORD", "record_ref": "REC-20300101-band-test",
+                                                       "value": {"pct": 8.0}}}}).decisions.status("D4") == s0.INVALID)
+check("an explicit I-D2 owner statement that disagrees with the declared protection level BLOCKs",
+      "PROTECTION_RECORD_MISMATCH" in codes(s0.run(replace(clean(), decisions=typed(clean().decisions, D2=SD.Protection(SD.OWNER_STATEMENT, 20.0, cut)))), s0.BLOCK))
+check("the spring-gap window (01:00-02:00 on 28 Mar 2027, factor 0) is refused by night_profile",
+      raises(lambda: s0.night_profile(date(2027, 3, 28), 60, 120, LON)))
+gap = s0.check_nights(s0.NightSpec(date(2027, 3, 26), date(2027, 3, 30), 60, 120, LON))
+check("... and a night range over it BLOCKs exactly that night instead of raising (no factor-0 figure)",
+      [(f.code, f.subject) for f in gap if f.severity == s0.BLOCK] == [("NIGHT_WINDOW_HAS_NO_LENGTH", "2027-03-28")], str(gap))
+amb_n = s0.check_nights(s0.NightSpec(date(2026, 10, 24), date(2026, 10, 26), 90, 330, LON))
+check("a window boundary in the repeated hour BLOCKs (the fixed I-D9 rule)",
+      [(f.code, f.subject) for f in amb_n if f.severity == s0.BLOCK] == [("NIGHT_BOUNDARY_IN_CHANGED_HOUR", "2026-10-25")], str(amb_n))
+check("the night profile's numbers come from intelligence.periods",
+      s0.night_profile(date(2026, 10, 25), 30, 330, LON)["length_factor"] == SD_P.period_profile(date(2026, 10, 25), 30, 330).factor)
+check("every decision's blocks are the items site_decisions.ITEM_GATES says it gates",
+      all(x.blocks == SD.items_gated_by(x.id) for x in cl.decisions))
+txt_cl = s0.render_text(cl)
+check("decision lines show the internal id and the I-D display label", "  D1 I-D1 [RECORDED" in txt_cl and "  D9 I-D9 [" in txt_cl
+      and all(x.to_dict()["label"] == f"I-{x.id}" for x in cl.decisions))
+check("the retired I-D7 never holds the verdict open", s0.run(replace(clean(), decisions=typed(clean().decisions, D7=None))).verdict == "CONSISTENT")
+check("I-D7 is add-only: a declaration cannot drop battery.soc from the required set",
+      "battery.soc" in s0.required_signals(typed(D7=SD.RequiredInputsOverride({"charge_target": ("house.power",)}))))
+
 section("document and tool agree")
 if DOC.is_file():
     doc = DOC.read_text(encoding="utf-8")
@@ -569,6 +644,11 @@ if DOC.is_file():
     check(f"the document lists all {len(emitted)} finding codes", not missing, str(missing))
     check("the document states the proposal status of the 8 % band", "PROPOSED" in doc and "8 %" in doc)
     check("the document lists the open decisions D1..D9", all(f"D{i}" in doc for i in range(1, 10)))
+    check("the document's reserve rows are current: the ACS1 guarded TOU slot settings editor (not ACS0), the read-only "
+          "battery-shutdown sensor written with <slug>, the helper as ACS1's lower bound, 'card JS' not 'script'",
+          "ACS0" not in doc and "ACS1 guarded TOU slot settings editor" in doc and "sensor.<slug>_ecco_battery_shutdown" in doc
+          and "lower bound" in doc and "Dashboard recommendation card JS" in doc and "Dashboard recommendation script" not in doc)
+    check("the document uses the I-D display labels for the register", all(f"| D{i} | I-D{i} |" in doc for i in range(1, 10)))
 else:
     check("the input-contract document exists", False, str(DOC))
 

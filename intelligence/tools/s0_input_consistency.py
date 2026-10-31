@@ -17,9 +17,16 @@ other than an optional declaration JSON that the caller names. It calls nothing,
   * history periods are classified against the (owner-supplied) instant the derived house-load sensor took effect;
   * overnight windows are measured in elapsed hours so the 25-hour autumn and 23-hour spring local days are visible.
 
+Decisions are the typed register of intelligence/site_decisions.py (internal ids D1..D9, display labels I-D1..I-D9): a
+declaration's decisions block is a strict DecisionSet mapping, free text is never RECORDED (it is INVALID and BLOCKs), I-D2
+is its own explicit record, I-D7 is retired to code constants (a declaration may only add required signals), and the
+reserve roles, proposed thresholds, efficiency normalisation, freshness mirror and gate table come from that module. Night
+lengths come from intelligence/periods.py. The check functions below stay in this tool.
+
 Authority: like every Intelligence module this has no write path (tests/test_s0_input_contract.py checks the imports and
 the vocabulary). Existing SiteConfig, ecco_core and the V1 / V1.1 outputs are only READ. A report always says
-mode SHADOW and applies_nothing true. Design and open questions: docs/intelligence/INTELLIGENCE_S0_INPUT_CONTRACT.md.
+mode SHADOW and applies_nothing true. Design and open questions: docs/intelligence/INTELLIGENCE_S0_INPUT_CONTRACT.md and
+docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md.
 
     python intelligence/tools/s0_input_consistency.py --example            # synthetic, mostly consistent, decisions open
     python intelligence/tools/s0_input_consistency.py --example-faulty     # synthetic, seeded faults
@@ -39,10 +46,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ecco_core.state import spec_for  # noqa: E402
-from intelligence.advisor import STALE_SOC_SECONDS  # noqa: E402
 from intelligence.config import SiteConfig  # noqa: E402
 from intelligence.explain import FRESH, STALE, UNKNOWN, InputAge, finite_number  # noqa: E402
-from intelligence.timeutil import UTC, local_wall, zone  # noqa: E402
+from intelligence.periods import OK as BOUNDARY_OK, period_profile  # noqa: E402
+from intelligence.site_decisions import (  # noqa: E402
+    ADVISORY_LIMITS_S, ALL_PROVENANCE, BLOCK, CAPACITY_KINDS, DECISION_IDS, DECISION_QUESTIONS, DECISION_TITLES,
+    EXCLUDE, EXCLUDE_PRE_CUTOVER, INFO, ONE_WAY, OWNER_STATEMENT, ROUND_TRIP, WARN, DecisionSet, DecisionStatus, Finding,
+    HD1Cutover, ProposedThresholds, Provenance, ReserveRole, display_label, efficiency_round_trip, finding,
+    freshness_limits, items_gated_by)
+from intelligence.timeutil import UTC  # noqa: E402
 
 MODEL_VERSION = "intel-s0-input-consistency-0.1.0-draft"
 MODE = "SHADOW"
@@ -51,23 +63,21 @@ DRAFT_NOTICE = ("DRAFT S0: offline, SHADOW-only, NOT configured runtime policy. 
                 "declaration records them (this repository records none). Every threshold is PROPOSED, not accepted.")
 ORIGIN_SYNTHETIC = "SYNTHETIC_EXAMPLE_NOT_SITE_EVIDENCE"
 ORIGIN_CALLER = "CALLER_DECLARATION_NOT_VERIFIED_AGAINST_THE_SITE"
-PROV_SYNTHETIC, PROV_CALLER = "SYNTHETIC_EXAMPLE", "CALLER_DECLARATION"
+PROV_SYNTHETIC, PROV_CALLER = Provenance.SYNTHETIC_EXAMPLE, Provenance.CALLER_DECLARATION_UNVERIFIED
 SYNTHETIC_LABEL = "SYNTHETIC EXAMPLE, NOT AN OWNER DECISION"
 SYNTHETIC_PREFIX = "[SYNTHETIC] "
 
-INFO, WARN, BLOCK = "INFO", "WARN", "BLOCK"
-OPEN, RECORDED = "OPEN", "RECORDED"
+OPEN, RECORDED, INVALID = DecisionStatus.OPEN, DecisionStatus.RECORDED, DecisionStatus.INVALID
+# the typed register (intelligence.site_decisions.DecisionSet); the S0 name is kept. OwnerDecisions() is all OPEN.
+OwnerDecisions = DecisionSet
+DECLARATION_SOURCE = "declaration"
 
-# ---- reserve roles ---------------------------------------------------------------------------------------------------
-SOFT_PLANNING_FLOOR = "SOFT_PLANNING_FLOOR"      # a preference every recommendation stays above (Intelligence user reserve)
-HA_RESERVE_HELPER = "HA_RESERVE_HELPER"          # a Home Assistant helper; an input that can only RAISE the planning floor
-FEATURE_STOP_LEVEL = "FEATURE_STOP_LEVEL"        # where one feature stops (for example the Dump to Grid stop SOC)
-PHYSICAL_PROTECTION = "PHYSICAL_PROTECTION"      # the inverter's own battery protection; ECCO cannot write it
+# ---- reserve roles (intelligence.site_decisions.ReserveRole; a declaration uses these four) ---------------------------
+SOFT_PLANNING_FLOOR = ReserveRole.SOFT_PLANNING_FLOOR    # a preference every recommendation stays above
+HA_RESERVE_HELPER = ReserveRole.HA_RESERVE_HELPER        # a Home Assistant helper; an input that can only RAISE the floor
+FEATURE_STOP_LEVEL = ReserveRole.FEATURE_STOP_LEVEL      # where one feature stops (for example the Dump to Grid stop SOC)
+PHYSICAL_PROTECTION = ReserveRole.PHYSICAL_PROTECTION    # the inverter's own battery protection; ECCO cannot write it
 RESERVE_ROLES = (SOFT_PLANNING_FLOOR, HA_RESERVE_HELPER, FEATURE_STOP_LEVEL, PHYSICAL_PROTECTION)
-
-# ---- capacity / efficiency source kinds --------------------------------------------------------------------------------
-CAPACITY_KINDS = ("CONFIGURED_HELPER", "SITECONFIG_VALUE", "LEARNED_FROM_DISCHARGE", "REGISTER_AH", "EXAMPLE_DEFAULT")
-ROUND_TRIP, ONE_WAY = "ROUND_TRIP", "ONE_WAY"
 
 # ---- signal reading kinds ----------------------------------------------------------------------------------------------
 RAW, CANONICAL, DERIVED, LEGACY = "RAW", "CANONICAL", "DERIVED", "LEGACY"
@@ -77,28 +87,15 @@ NON_NUMERIC_STATES = frozenset({"unavailable", "unknown", "none", "", "nan", "nu
 # Sign conventions the repository already uses (ecco_core.state.SIGNALS): the token a reading must declare.
 SIGN_TOKEN = {"battery.power": "discharge_positive", "grid.power": "import_positive"}
 
-# Advisory age limits the project ALREADY defines, with where. Anything absent is unresolved and can never be fresh.
-# (tests/test_s0_input_contract.py reads these back from ecco_core.freshness so they cannot drift.)
-DEFINED_ADVISORY_LIMITS_S: dict[str, float] = {"battery.soc": float(STALE_SOC_SECONDS), "history.hourly": 6 * 3600.0}
+# Advisory age limits the project ALREADY defines: the defined entries of site_decisions.ADVISORY_LIMITS_S (the mirror of
+# ecco_core.freshness). Anything absent is unresolved and can never be fresh.
+DEFINED_ADVISORY_LIMITS_S: dict[str, float] = {k: v for k, v in ADVISORY_LIMITS_S.items() if v is not None}
 
 # History period vocabulary (what a stored series IS, not an entity id).
 LOAD_POWER_MEAN, LOAD_ENERGY_COUNTER = "load_power_mean", "load_energy_counter"
 HISTORY_SIGNALS = (LOAD_POWER_MEAN, LOAD_ENERGY_COUNTER)
-
-
-@dataclass(frozen=True)
-class ProposedThresholds:
-    """Every number below is a PROPOSAL made by this draft. None is an owner decision."""
-    status: str = "PROPOSED_PENDING_OWNER"
-    capacity_warn_band_pct: float = 8.0          # symmetric: |a-b| / mean(a,b); 8 % is the stated capacity uncertainty
-    capacity_plausible_kwh: tuple[float, float] = (0.5, 500.0)
-    efficiency_round_trip_max_plausible: float = 0.97   # a "round-trip" figure above this is probably one-way
-    efficiency_one_way_min_plausible: float = 0.88      # a "one-way" figure below this is probably round-trip
-    efficiency_agree_tolerance: float = 0.01
-    soc_agree_points: float = 2.0                # SOC is an integer percentage; allow one step either way
-    power_agree_w: float = 100.0
-    power_agree_fraction: float = 0.05
-    other_agree_fraction: float = 0.05
+# S0's own required set for a declaration (I-D7 is retired: a declaration may only ADD to it)
+BASE_REQUIRED_SIGNALS = ("battery.soc",)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -166,19 +163,6 @@ class NightSpec:
 
 
 @dataclass(frozen=True)
-class OwnerDecisions:
-    """Everything the owner has NOT yet decided is None. The diagnostic never fills these in."""
-    canonical_planning_floor_source: str | None = None
-    capacity_authority: str | None = None
-    capacity_warn_band_pct: float | None = None
-    efficiency_canonical_basis: str | None = None
-    advisory_limits_s: dict[str, float] | None = None
-    required_signals: tuple[str, ...] | None = None
-    hd1_effective_from: datetime | None = None
-    dst_night_policy: str | None = None
-
-
-@dataclass(frozen=True)
 class Declaration:
     cfg: SiteConfig = field(default_factory=SiteConfig)
     reserves: tuple[ReserveDecl, ...] = ()
@@ -187,22 +171,15 @@ class Declaration:
     readings: tuple[ReadingDecl, ...] = ()
     history: tuple[HistoryPeriod, ...] = ()
     nights: NightSpec | None = None
-    decisions: OwnerDecisions = field(default_factory=OwnerDecisions)
+    decisions: DecisionSet = field(default_factory=lambda: DecisionSet(source=DECLARATION_SOURCE))
     thresholds: ProposedThresholds = field(default_factory=ProposedThresholds)
     synthetic: bool = False                # True only for the built-in examples: every value is fictional, none is site evidence
 
 
-@dataclass(frozen=True)
-class Finding:
-    code: str
-    severity: str
-    subject: str
-    message: str
-    evidence: tuple[tuple[str, object], ...] = ()
-
-    def to_dict(self) -> dict:
-        return {"code": self.code, "severity": self.severity, "subject": self.subject, "message": self.message,
-                "evidence": {k: v for k, v in self.evidence}}
+def _finding_dict(f: Finding) -> dict:
+    """S0's JSON form of the shared Finding (the text is called 'message' here, as before)."""
+    return {"code": f.code, "severity": f.severity, "subject": f.subject, "message": f.text,
+            "evidence": {k: v for k, v in f.evidence}}
 
 
 @dataclass(frozen=True)
@@ -211,13 +188,19 @@ class DecisionState:
     title: str
     status: str
     question: str
-    blocks: tuple[str, ...]
+    blocks: tuple[str, ...]                # the items this decision gates (site_decisions.ITEM_GATES, conditional ones too)
     recorded: object = None
-    provenance: str = ""                   # who supplied a RECORDED value: SYNTHETIC_EXAMPLE or CALLER_DECLARATION (empty when OPEN)
+    provenance: str = ""                   # who supplied a RECORDED value: SYNTHETIC_EXAMPLE or CALLER_DECLARATION_UNVERIFIED (empty otherwise)
+    problems: tuple[str, ...] = ()         # why an INVALID decision is invalid
+
+    @property
+    def label(self) -> str:
+        return display_label(self.id)
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "title": self.title, "status": self.status, "question": self.question,
-                "blocks": list(self.blocks), "recorded": self.recorded, "provenance": self.provenance}
+        return {"id": self.id, "label": self.label, "title": self.title, "status": self.status, "question": self.question,
+                "blocks": list(self.blocks), "recorded": self.recorded, "provenance": self.provenance,
+                "problems": list(self.problems)}
 
 
 @dataclass(frozen=True)
@@ -240,7 +223,7 @@ class Report:
         counts = {s: sum(1 for f in self.findings if f.severity == s) for s in (BLOCK, WARN, INFO)}
         return {"model_version": self.model_version, "status": self.status, "notice": self.notice,
                 "declaration_origin": self.origin, "mode": self.mode, "applies_nothing": self.applies_nothing,
-                "verdict": self.verdict, "counts": counts, "findings": [f.to_dict() for f in self.findings],
+                "verdict": self.verdict, "counts": counts, "findings": [_finding_dict(f) for f in self.findings],
                 "decisions": [d.to_dict() for d in self.decisions],
                 "proposed_thresholds": {k.name: _jsonable(getattr(self.thresholds, k.name)) for k in fields(self.thresholds)}}
 
@@ -250,7 +233,7 @@ def _jsonable(v: object) -> object:
 
 
 def _f(code: str, sev: str, subject: str, message: str, **evidence: object) -> Finding:
-    return Finding(code, sev, subject, message, tuple(sorted((k, _jsonable(v)) for k, v in evidence.items())))
+    return finding(code, sev, subject, message, **evidence)
 
 
 def _num(x: object) -> float | None:
@@ -417,26 +400,7 @@ def check_capacity(decls: tuple[CapacityDecl, ...], cfg: SiteConfig, th: Propose
 # 3. efficiency
 # ---------------------------------------------------------------------------------------------------------------------
 
-def efficiency_round_trip(d: EfficiencyDecl) -> tuple[float | None, float | None, Finding | None]:
-    """(round-trip fraction, one-way fraction, finding when unusable)."""
-    v = _num(d.value)
-    if v is None:
-        return None, None, _f("EFFICIENCY_VALUE_MISSING", BLOCK, d.name, "no finite value declared")
-    if d.unit not in ("fraction", "percent"):
-        return None, None, _f("EFFICIENCY_UNIT_UNSTATED", BLOCK, d.name, "unit must be stated as fraction or percent")
-    frac = v / 100.0 if d.unit == "percent" else v
-    if (d.unit == "fraction" and v > 1.0) or (d.unit == "percent" and v <= 1.0):
-        return None, None, _f("EFFICIENCY_UNIT_MISMATCH", BLOCK, d.name,
-                              "the number does not fit the stated unit (a fraction above 1, or a percentage of 1 or less)",
-                              value=v, unit=d.unit)
-    if not 0.5 <= frac <= 1.0:
-        return None, None, _f("EFFICIENCY_OUT_OF_RANGE", BLOCK, d.name, "outside 0.5..1.0", fraction=round(frac, 4))
-    if d.basis not in (ROUND_TRIP, ONE_WAY):
-        return None, None, _f("EFFICIENCY_BASIS_UNSTATED", BLOCK, d.name,
-                              "the basis (ROUND_TRIP or ONE_WAY) must be stated; the engine applies sqrt(round-trip) each way")
-    if d.basis == ROUND_TRIP:
-        return frac, math.sqrt(frac), None
-    return frac * frac, frac, None
+# efficiency_round_trip (round-trip fraction, one-way fraction, finding when unusable) is site_decisions' (I-D5 uses it too).
 
 
 def check_efficiency(decls: tuple[EfficiencyDecl, ...], cfg: SiteConfig, th: ProposedThresholds) -> list[Finding]:
@@ -489,20 +453,24 @@ def check_efficiency(decls: tuple[EfficiencyDecl, ...], cfg: SiteConfig, th: Pro
 # 4. signal readings
 # ---------------------------------------------------------------------------------------------------------------------
 
-def effective_limits(owner: dict[str, float] | None) -> tuple[dict[str, float], list[Finding]]:
-    """Defined project limits, tightened (never loosened) by an owner override. Mirrors ecco_core.freshness."""
-    limits = dict(DEFINED_ADVISORY_LIMITS_S)
-    notes: list[Finding] = []
-    for sig, v in sorted((owner or {}).items()):
-        n = _num(v)
-        if n is None or n <= 0.0:
-            notes.append(_f("FRESHNESS_OVERRIDE_INVALID", BLOCK, sig, "an override must be a positive finite number of seconds"))
-        elif sig in limits and n > limits[sig]:
-            notes.append(_f("FRESHNESS_OVERRIDE_REFUSED", WARN, sig, "an override may tighten a defined limit, never loosen it",
-                            defined_s=limits[sig], requested_s=n))
-        else:
-            limits[sig] = n
-    return limits, notes
+def effective_limits(decisions: DecisionSet) -> tuple[dict[str, float], list[Finding]]:
+    """Defined project limits, tightened (never loosened) by the declaration's I-D6 (site_decisions.freshness_limits, the
+    FreshnessPolicy semantics with the 900 s ceiling). An INVALID I-D6 applies nothing; its entries are reported here and the
+    decision itself BLOCKs (DECISION_D6_INVALID, reported with the other decisions). The diagnostic judges what the
+    declaration says, so every provenance is accepted here; publishing advice never does that."""
+    limits, notes = freshness_limits(decisions, ALL_PROVENANCE)
+    return ({k: v for k, v in limits.items() if v is not None},
+            [n for n in notes if n.code != "DECISION_D6_INVALID"])
+
+
+def required_signals(decisions: DecisionSet) -> set[str]:
+    """S0's base required set plus any signals a RECORDED I-D7 adds (add-only)."""
+    out = set(BASE_REQUIRED_SIGNALS)
+    d7 = decisions.get("D7")
+    if d7.status == RECORDED:
+        for sigs in d7.value.add_signals.values():
+            out |= set(sigs)
+    return out
 
 
 def _agree(signal: str, a: float, b: float, th: ProposedThresholds) -> bool:
@@ -513,11 +481,11 @@ def _agree(signal: str, a: float, b: float, th: ProposedThresholds) -> bool:
     return abs(a - b) <= th.other_agree_fraction * max(abs(a), abs(b), 1e-9)
 
 
-def check_readings(readings: tuple[ReadingDecl, ...], owner: OwnerDecisions, th: ProposedThresholds) -> list[Finding]:
+def check_readings(readings: tuple[ReadingDecl, ...], owner: DecisionSet, th: ProposedThresholds) -> list[Finding]:
     out: list[Finding] = []
-    limits, notes = effective_limits(owner.advisory_limits_s)
+    limits, notes = effective_limits(owner)
     out += notes
-    required = set(owner.required_signals if owner.required_signals is not None else ("battery.soc",))
+    required = required_signals(owner)
     groups: dict[str, list[ReadingDecl]] = {}
     for r in readings:
         groups.setdefault(r.signal, []).append(r)
@@ -641,26 +609,16 @@ def classify_history(periods: tuple[HistoryPeriod, ...], hd1_effective_from: dat
 
 
 def night_profile(night: date, start_min: int, end_min: int, tz_name: str) -> dict:
-    """Elapsed hours of one local wall-clock window, and of the local day it starts in."""
-    if not end_min > start_min:
-        raise ValueError("the window must end after it starts (end_min may exceed 1440)")
-    tz = zone(tz_name)
-    t0, t1 = local_wall(night, start_min, tz), local_wall(night, end_min, tz)
-    d0, d1 = local_wall(night, 0, tz), local_wall(night, 1440, tz)
-    nominal = (end_min - start_min) / 60.0
-    actual = (t1 - t0).total_seconds() / 3600.0
-    day_h = (d1 - d0).total_seconds() / 3600.0
+    """Elapsed hours of one local wall-clock window, and of the local day it starts in (intelligence.periods measures
+    both). Raises ValueError for a malformed window and for one with no real length (the spring gap: factor 0)."""
+    p = period_profile(night, start_min, end_min, tz_name)
+    day_h = period_profile(night, 0, 1440, tz_name).actual_h
     # the window may cross midnight into the next local day, which can be the short/long one
-    nd0, nd1 = local_wall(night + timedelta(days=1), 0, tz), local_wall(night + timedelta(days=1), 1440, tz)
-    next_day_h = (nd1 - nd0).total_seconds() / 3600.0
-    change = "NONE"
-    if actual > nominal + 1e-9:
-        change = "AUTUMN_BACK"
-    elif actual < nominal - 1e-9:
-        change = "SPRING_FORWARD"
-    return {"night": night.isoformat(), "nominal_hours": nominal, "actual_hours": actual, "delta_hours": actual - nominal,
-            "length_factor": actual / nominal, "clock_change": change, "local_day_hours": day_h,
-            "next_local_day_hours": next_day_h}
+    next_day_h = period_profile(night + timedelta(days=1), 0, 1440, tz_name).actual_h
+    return {"night": night.isoformat(), "nominal_hours": p.nominal_h, "actual_hours": p.actual_h,
+            "delta_hours": p.actual_h - p.nominal_h, "length_factor": p.factor, "clock_change": p.change_kind,
+            "local_day_hours": day_h, "next_local_day_hours": next_day_h,
+            "start_boundary": p.start_boundary, "end_boundary": p.end_boundary}
 
 
 def check_nights(spec: NightSpec | None) -> list[Finding]:
@@ -669,7 +627,18 @@ def check_nights(spec: NightSpec | None) -> list[Finding]:
     out: list[Finding] = []
     d = spec.first_night
     while d <= spec.last_night:
-        p = night_profile(d, spec.start_min, spec.end_min, spec.tz)
+        try:
+            p = night_profile(d, spec.start_min, spec.end_min, spec.tz)
+        except ValueError as exc:
+            out.append(_f("NIGHT_WINDOW_HAS_NO_LENGTH", BLOCK, d.isoformat(),
+                          "the window has no real length on this night (it lies in the hour skipped when the clocks go "
+                          "forward), so no figure for it can be learned or planned", error=str(exc)))
+            d += timedelta(days=1)
+            continue
+        if p["start_boundary"] != BOUNDARY_OK or p["end_boundary"] != BOUNDARY_OK:
+            out.append(_f("NIGHT_BOUNDARY_IN_CHANGED_HOUR", BLOCK, p["night"],
+                          "a window boundary falls in a repeated or missing local hour (the fixed I-D9 rule)",
+                          start_boundary=p["start_boundary"], end_boundary=p["end_boundary"]))
         if p["clock_change"] != "NONE":
             out.append(_f("NIGHT_LENGTH_DIFFERS", WARN, p["night"],
                           f"the {p['nominal_hours']:g} h nominal window lasts {p['actual_hours']:g} h ({p['clock_change']}); a "
@@ -684,63 +653,63 @@ def check_nights(spec: NightSpec | None) -> list[Finding]:
 # ---------------------------------------------------------------------------------------------------------------------
 
 def decision_states(decl: Declaration) -> tuple[DecisionState, ...]:
-    states = _decision_states(decl)
-    prov = PROV_SYNTHETIC if decl.synthetic else PROV_CALLER
-    return tuple(replace(d, provenance=prov) if d.status == RECORDED else d for d in states)
+    """One state per decision, read from the typed register. A decision's `blocks` are the items site_decisions.ITEM_GATES
+    (with the conditional I-D4 / I-D9 items) says it gates. A RECORDED decision of a synthetic declaration is always shown
+    as SYNTHETIC_EXAMPLE."""
+    out = []
+    for did in DECISION_IDS:
+        d = decl.decisions.get(did)
+        prov = ""
+        if d.status == RECORDED:
+            prov = PROV_SYNTHETIC if decl.synthetic else (d.provenance or "")
+        out.append(DecisionState(did, DECISION_TITLES[did], d.status, DECISION_QUESTIONS[did], items_gated_by(did),
+                                 d.recorded_json(), prov, d.problems))
+    return tuple(out)
 
 
-def _decision_states(decl: Declaration) -> tuple[DecisionState, ...]:
-    o = decl.decisions
-    prot_known = any(r.role == PHYSICAL_PROTECTION and _num(r.value_pct) is not None for r in decl.reserves)
+def check_decisions(decl: Declaration) -> list[Finding]:
+    """An INVALID decision BLOCKs (free text, an incomplete record or a refused provenance is never RECORDED); an explicit
+    I-D2 owner statement must agree with a declared PHYSICAL_PROTECTION level."""
+    out: list[Finding] = []
+    for did in DECISION_IDS:
+        d = decl.decisions.get(did)
+        if d.status == INVALID:
+            out.append(finding(f"DECISION_{did}_INVALID", BLOCK, display_label(did),
+                               f"{display_label(did)} ({DECISION_TITLES[did]}) is INVALID: " + "; ".join(d.problems)))
+    d2 = decl.decisions.get("D2")
+    if d2.status == RECORDED and d2.value.supplied_by == OWNER_STATEMENT:
+        for r in decl.reserves:
+            v = _num(r.value_pct)
+            if r.role == PHYSICAL_PROTECTION and v is not None and abs(v - float(d2.value.value_pct)) > 1e-9:
+                out.append(_f("PROTECTION_RECORD_MISMATCH", BLOCK, r.name,
+                              "the declared protection level differs from the I-D2 owner statement",
+                              declared_pct=v, recorded_pct=float(d2.value.value_pct)))
+    return out
 
-    def st(rec: object) -> str:
-        return RECORDED if rec not in (None, "", ()) else OPEN
 
-    return (
-        DecisionState("D1", "Canonical soft planning floor", st(o.canonical_planning_floor_source),
-                      "Which of the helper, the Intelligence user reserve, a feature stop level or a new single setting is THE "
-                      "planning floor, and must precharge and Dump advice honour it or only display it?",
-                      ("RESERVE_*", "S3", "S5a", "S6b"), o.canonical_planning_floor_source),
-        DecisionState("D2", "Inverter physical protection level", RECORDED if prot_known else OPEN,
-                      "What is the inverter's own protection (shutdown) level, and how is it to be supplied without a write?",
-                      ("PHYSICAL_PROTECTION_UNKNOWN", "technical_min_soc_pct"), None),
-        DecisionState("D3", "Battery capacity authority", st(o.capacity_authority),
-                      "Which source is canonical (owner helper, learned from discharge, or an Ah register with a stated "
-                      "voltage), and what is each other source for?", ("CAPACITY_*", "S3", "S5a"), o.capacity_authority),
-        DecisionState("D4", "Capacity mismatch band", st(o.capacity_warn_band_pct),
-                      "Is 8 % (|a-b| / mean) the right warning band?", ("CAPACITY_MISMATCH",), o.capacity_warn_band_pct),
-        DecisionState("D5", "Efficiency basis", st(o.efficiency_canonical_basis),
-                      "Is the single canonical value round-trip (the engine applies sqrt each way) and in what unit?",
-                      ("EFFICIENCY_*",), o.efficiency_canonical_basis),
-        DecisionState("D6", "Advisory freshness limits", st(o.advisory_limits_s),
-                      "What limit applies to house / PV / battery / grid power, inverter status and the reserve helper "
-                      "(only SOC and hourly history have one today)?", ("READING_AGE_UNKNOWN", "S2", "S3"),
-                      o.advisory_limits_s),
-        DecisionState("D7", "Required signals per advisor", st(o.required_signals),
-                      "Which signals must be fresh for the overnight, charge-target and export advisors?",
-                      ("REQUIRED_SIGNAL_MISSING", "SIGNAL_NO_USABLE_SOURCE"), o.required_signals),
-        DecisionState("D8", "Derived house-load cut-over and pre-fix history", st(o.hd1_effective_from),
-                      "At what instant did the derived load sensor take effect, and is earlier load history excluded, "
-                      "replaced, or kept only where not exporting?", ("HD1_CUTOVER_UNKNOWN", "S1"),
-                      o.hd1_effective_from.isoformat() if o.hd1_effective_from else None),
-        DecisionState("D9", "Clock-change night policy", st(o.dst_night_policy),
-                      "Should a 25 h or 23 h night be excluded from learning, normalised per hour, or planned as its own length?",
-                      ("NIGHT_LENGTH_DIFFERS", "S1"), o.dst_night_policy),
-    )
+def _band_pct(decisions: DecisionSet) -> float | None:
+    d4 = decisions.get("D4")
+    return float(d4.value.pct) if d4.status == RECORDED else None
+
+
+def _cutover(decisions: DecisionSet) -> datetime | None:
+    d8 = decisions.get("D8")
+    return d8.value.cutover if d8.status == RECORDED else None
 
 
 def run(decl: Declaration) -> Report:
     findings: list[Finding] = []
     findings += check_reserves(decl.reserves, decl.cfg)
-    findings += check_capacity(decl.capacities, decl.cfg, decl.thresholds, decl.decisions.capacity_warn_band_pct)
+    findings += check_capacity(decl.capacities, decl.cfg, decl.thresholds, _band_pct(decl.decisions))
     findings += check_efficiency(decl.efficiencies, decl.cfg, decl.thresholds)
     findings += check_readings(decl.readings, decl.decisions, decl.thresholds)
-    findings += classify_history(decl.history, decl.decisions.hd1_effective_from)
+    findings += classify_history(decl.history, _cutover(decl.decisions))
     findings += check_nights(decl.nights)
+    findings += check_decisions(decl)
     decisions = decision_states(decl)
     if any(f.severity == BLOCK for f in findings):
         verdict = "BLOCKED"
-    elif any(d.status == OPEN for d in decisions):
+    elif any(d.status == OPEN and d.id != "D7" for d in decisions):      # I-D7 is retired: OPEN means "no additions"
         verdict = "OPEN_DECISIONS"
     elif any(f.severity == WARN for f in findings):
         verdict = "CONSISTENT_WITH_WARNINGS"
@@ -812,10 +781,19 @@ def example_declaration(faulty: bool = False) -> Declaration:
         cfg=cfg, reserves=reserves, capacities=capacities, efficiencies=efficiencies,
         readings=_example_readings(faulty=faulty), history=history,
         nights=NightSpec(date(2026, 10, 23), date(2026, 10, 27), cfg.cheap_window_start_min, cfg.cheap_window_end_min, tz),
-        decisions=OwnerDecisions(hd1_effective_from=None if faulty else cutover),
+        decisions=_example_decisions(None if faulty else cutover),
         synthetic=True,
     )
     return _label_synthetic(decl)
+
+
+def _example_decisions(cutover: datetime | None) -> DecisionSet:
+    """The built-in example records only a fictional I-D8 (a 2030 cut-over with the conservative EXCLUDE policies),
+    labelled SYNTHETIC_EXAMPLE; everything else stays OPEN."""
+    ds = DecisionSet(source=DECLARATION_SOURCE)
+    if cutover is None:
+        return ds
+    return ds.with_decision("D8", HD1Cutover(cutover, EXCLUDE, EXCLUDE_PRE_CUTOVER), Provenance.SYNTHETIC_EXAMPLE)
 
 
 def _label_synthetic(decl: Declaration) -> Declaration:
@@ -838,7 +816,8 @@ def _dt(s: str | None) -> datetime | None:
 
 
 def declaration_from_dict(d: dict) -> Declaration:
-    """Strict loader: unknown keys are an error. Only values written in the file are used."""
+    """Strict loader: unknown keys are an error. Only values written in the file are used. The `decisions` block is a
+    site_decisions DecisionSet mapping (keys D<n> or I-D<n>; typed values; free text is INVALID)."""
     def only(obj: dict, allowed: set[str], what: str) -> dict:
         extra = set(obj) - allowed
         if extra:
@@ -848,11 +827,7 @@ def declaration_from_dict(d: dict) -> Declaration:
     only(d, {"cfg", "reserves", "capacities", "efficiencies", "readings", "history", "nights", "decisions", "synthetic_example"},
          "declaration")
     cfg = SiteConfig(**d["cfg"]) if "cfg" in d else SiteConfig()
-    o = dict(d.get("decisions", {}))
-    if "hd1_effective_from" in o:
-        o["hd1_effective_from"] = _dt(o["hd1_effective_from"])
-    if o.get("required_signals") is not None:
-        o["required_signals"] = tuple(o["required_signals"])
+    decisions = DecisionSet.from_mapping(d.get("decisions", {}), source=DECLARATION_SOURCE)
     nights = None
     if d.get("nights"):
         n = dict(d["nights"])
@@ -865,7 +840,7 @@ def declaration_from_dict(d: dict) -> Declaration:
         efficiencies=tuple(EfficiencyDecl(**e) for e in d.get("efficiencies", [])),
         readings=tuple(ReadingDecl(**r) for r in d.get("readings", [])),
         history=tuple(HistoryPeriod(**{**p, "start": _dt(p["start"]), "end": _dt(p["end"])}) for p in d.get("history", [])),
-        nights=nights, decisions=OwnerDecisions(**o), synthetic=bool(d.get("synthetic_example", False)))
+        nights=nights, decisions=decisions, synthetic=bool(d.get("synthetic_example", False)))
 
 
 def render_text(rep: Report) -> str:
@@ -881,7 +856,7 @@ def render_text(rep: Report) -> str:
     lines += ["", "Owner decisions:"]
     for d in rep.decisions:
         tag = d.status if not (d.status == RECORDED and d.provenance == PROV_SYNTHETIC) else f"{d.status} - {SYNTHETIC_LABEL}"
-        lines.append(f"  {d.id} [{tag:8}] {d.title}: {d.question}")
+        lines.append(f"  {d.id} {d.label} [{tag:8}] {d.title}: {d.question}")
     lines += ["", f"Thresholds are {rep.thresholds.status}; nothing above is a recommendation."]
     return "\n".join(lines)
 

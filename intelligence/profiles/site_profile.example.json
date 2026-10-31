@@ -6,6 +6,36 @@
     "technical_min_soc_pct": 10,
     "_note": "optional hints; the CLI flags override them. pv_array_kwp feeds only the PV plausibility ceiling. user_reserve_soc_pct is the minimum battery reserve you want (default 40); technical_min_soc_pct is the hardware floor the reserve can never go below (set it from the inverter's battery shutdown SOC)"
   },
+  "decisions": {
+    "_comment": "TEMPLATE: every Intelligence decision I-D1..I-D9 is OPEN and none is recorded here. A site records typed decisions (see docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md) only in its own site-local file, with provenance OWNER_RECORD and an opaque record_ref REC-YYYYMMDD-<slug>. The SHADOW path ignores site.user_reserve_soc_pct and site.technical_min_soc_pct (INFO SITE_HINT_IGNORED); reserves come only from I-D1 / I-D2.",
+    "I-D1": {
+      "status": "OPEN"
+    },
+    "I-D2": {
+      "status": "OPEN"
+    },
+    "I-D3": {
+      "status": "OPEN"
+    },
+    "I-D4": {
+      "status": "OPEN"
+    },
+    "I-D5": {
+      "status": "OPEN"
+    },
+    "I-D6": {
+      "status": "OPEN"
+    },
+    "I-D7": {
+      "status": "OPEN"
+    },
+    "I-D8": {
+      "status": "OPEN"
+    },
+    "I-D9": {
+      "status": "OPEN"
+    }
+  },
   "sources": [
     {
       "name": "dongle",

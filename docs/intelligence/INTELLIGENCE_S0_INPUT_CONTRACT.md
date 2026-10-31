@@ -14,6 +14,11 @@ freshness limit. Every number marked **PROPOSED** is a suggestion for the owner 
 - Tool: [`intelligence/tools/s0_input_consistency.py`](../../intelligence/tools/s0_input_consistency.py) (pure functions, standard library
   plus `ecco_core.state`; reads only a declaration file the caller names; calls nothing, writes nothing, contacts nothing).
 - Tests: [`intelligence/tests/test_s0_input_contract.py`](../../intelligence/tests/test_s0_input_contract.py) (synthetic data, offline).
+- Shared contract: the decisions, provenance, gates, freshness mirror, reserve roles, proposed thresholds and efficiency
+  normalisation now live in [`intelligence/site_decisions.py`](../../intelligence/site_decisions.py), and night lengths in
+  [`intelligence/periods.py`](../../intelligence/periods.py); see
+  [`INTELLIGENCE_FOUNDATION_CONTRACT.md`](INTELLIGENCE_FOUNDATION_CONTRACT.md). Decisions keep their internal ids D1..D9 (and
+  finding codes such as `DECISION_D8_INVALID`); every display uses the labels **I-D1..I-D9**.
 - Context: [`INTELLIGENCE_V1_1_FOUNDATION.md`](INTELLIGENCE_V1_1_FOUNDATION.md), [`DATA_INVENTORY.md`](DATA_INVENTORY.md),
   [`../architecture/MODULAR_ARCHITECTURE.md`](../architecture/MODULAR_ARCHITECTURE.md), [`../../SAFETY.md`](../../SAFETY.md) section 9.
 
@@ -28,9 +33,9 @@ what reads them and whether anything enforces them. The diagnostic keeps them as
 | Role | Example (illustration only; sites differ) | Set by | Read by today | Enforced by | Writable by ECCO |
 |---|---|---|---|---|---|
 | `SOFT_PLANNING_FLOOR` | `SiteConfig.user_reserve_soc_pct`, default 40 | the installation's Intelligence configuration | every Intelligence advisor (plus a 5-point margin) | nothing; it only limits what Intelligence *recommends* | not applicable (a setting of the offline model) |
-| `HA_RESERVE_HELPER` | `input_number.ecco_minimum_reserve_soc` (0-80 %), first-run default 40 since RSV1, older installs keep their own value (a value of 15 is the historical first-run default) | the owner in Home Assistant | the time-to-reserve estimate, the TOU target-SOC edit bound, and Intelligence as an input that can only **raise** the floor | nothing (SAFETY.md section 9) | a Home Assistant helper |
+| `HA_RESERVE_HELPER` | `input_number.ecco_minimum_reserve_soc` (0-80 %), first-run default 40 since RSV1, older installs keep their own value (a value of 15 is the historical first-run default) | the owner in Home Assistant | the time-to-reserve estimate, the ACS1 guarded TOU slot settings editor (it is that editor's lower bound), and Intelligence as an input that can only **raise** the floor | nothing (SAFETY.md section 9) | a Home Assistant helper |
 | `FEATURE_STOP_LEVEL` | the Dump to Grid **Stop SOC** (firmware minimum 10 %, Home Assistant bound 10-90 %) | the owner, per run | the Dump to Grid firmware and its scripts; **not** the planning floor or the helper | the dongle firmware, for that feature only | yes, through the feature's own guarded controls |
-| `PHYSICAL_PROTECTION` | the inverter's own battery shutdown / low-battery levels (registers 217-219, read-only here) | the inverter / battery configuration | nobody in ECCO (Intelligence does **not** read it) | the inverter | **no**: no write path exists and the levels are owner-locked |
+| `PHYSICAL_PROTECTION` | the inverter's own battery shutdown / low-battery levels (registers 217-219, read-only here) | the inverter / battery configuration | the ACS1 guarded TOU slot settings editor, through the read-only battery-shutdown sensor (`sensor.<slug>_ecco_battery_shutdown`); Intelligence only through I-D2 | the inverter | **no**: no write path exists and the levels are owner-locked |
 
 **Soft planning floor versus physical protection.** The planning floor is a promise the *advice* makes: "I will not recommend a
 plan that takes the battery below this". It protects nothing by itself. The protection is what the inverter does regardless of any
@@ -41,13 +46,14 @@ level below it asks for something the inverter will refuse or override.
 
 | Consumer | Reads the floor | Reads the helper | Reads the stop level | Reads the protection |
 |---|---|---|---|---|
-| V1 engine and V1.1 advisors (offline) | yes | as a raise-only input | no | no (`technical_min_soc_pct` is a placeholder default of 10 that the installation must set) |
+| V1 engine and V1.1 advisors (offline) | yes | as a raise-only input | no | no (`technical_min_soc_pct` is a placeholder default of 10 that the installation must set); the SHADOW path takes it only from a recorded I-D2, raise-only |
 | Dump to Grid (firmware) | no | no | yes | no |
-| TOU target-SOC edit (ACS0) | no | yes (bound: the larger of shutdown SOC and helper) | no | yes (as the shutdown SOC) |
+| ACS1 guarded TOU slot settings editor | no | yes (its lower bound: the larger of the shutdown SOC and the helper) | no | yes (the read-only battery-shutdown sensor, `sensor.<slug>_ecco_battery_shutdown`) |
 | Battery time-to-reserve (FE-1) | no | yes | no | no |
-| Dashboard recommendation script | no | no (hard-codes 10 %) | no | no |
+| Dashboard recommendation card JS | no | no (hard-codes 10 %) | no | no |
 
-**Owner choices (not made here): D1 and D2 in section 8.**
+**Owner choices (not made here): I-D1 and I-D2 in section 8.** Firmware features (Dump to Grid) do not honour any planning
+floor, whatever I-D1 says: the floor limits what the advice recommends.
 
 ## 2. Input inventory: unit, sign, provenance, age
 
@@ -141,13 +147,18 @@ comparisons and reported, never guessed.
 | `ADVISORY_LIMIT_UNRESOLVED` | INFO | no limit exists for a non-required signal; it can never be shown fresh |
 | `REQUIRED_SIGNAL_MISSING` / `SIGNAL_NO_USABLE_SOURCE` | BLOCK | a required signal has no usable fresh reading |
 | `SOURCE_DISAGREEMENT` | WARN | usable sources disagree beyond the tolerance (SOC 2 points; power max(100 W, 5 %); PROPOSED) |
-| `FRESHNESS_OVERRIDE_REFUSED` / `FRESHNESS_OVERRIDE_INVALID` | WARN / BLOCK | an owner limit may tighten a defined one, never loosen it |
+| `FRESHNESS_OVERRIDE_REFUSED` / `FRESHNESS_OVERRIDE_INVALID` | WARN / BLOCK | an owner limit may tighten a defined one, never loosen it; either makes I-D6 INVALID (`DECISION_D6_INVALID`, BLOCK) and no override is applied |
 | `HD1_CUTOVER_UNKNOWN` | BLOCK | the instant the derived load sensor took effect is not recorded |
 | `LOAD_HISTORY_PRE_HD1_UNRELIABLE` / `LOAD_HISTORY_STRADDLES_HD1` | WARN | load-power history before / across that instant |
 | `LOAD_HISTORY_POST_HD1` | INFO | after it (still subject to the quality gate) |
 | `LOAD_COUNTER_RELIABILITY_UNKNOWN` | WARN | the load energy counter cannot be classified offline |
 | `HISTORY_SERIES_UNKNOWN` | BLOCK | unknown series |
 | `NIGHT_LENGTH_DIFFERS` | WARN | an overnight window lasts a different number of hours because of a clock change |
+| `NIGHT_WINDOW_HAS_NO_LENGTH` | BLOCK | the window lies in the hour skipped when the clocks go forward (factor 0); refused, never divided by |
+| `NIGHT_BOUNDARY_IN_CHANGED_HOUR` | BLOCK | a window boundary falls in a repeated or missing local hour (the fixed I-D9 rule) |
+| `DECISION_D<n>_INVALID` | BLOCK | a decision in the declaration is not a valid typed record (free text, a bare number, an incomplete record, a refused provenance); it is never RECORDED |
+| `PROTECTION_RECORD_MISMATCH` | BLOCK | an explicit I-D2 owner statement differs from the declared `PHYSICAL_PROTECTION` level |
+| `FRESHNESS_OVERRIDE_UNKNOWN_KEY` / `FRESHNESS_OVERRIDE_ABOVE_CEILING` | BLOCK | an I-D6 override names an unknown signal or reading, or exceeds the 900 s ceiling for a signal with no defined limit (I-D6 is then INVALID and applies nothing) |
 
 ## 4. History reliability: what offline code cannot know
 
@@ -204,24 +215,28 @@ treated is **D9**. This is advisory arithmetic only; it does not touch the 25 Oc
 
 ## 8. Decision register and blocker matrix
 
-Status is computed by the tool from what the owner has supplied; `OPEN` means the tool will not fill it in.
+Status is computed from the declaration's typed decisions block (`intelligence/site_decisions.py`): `OPEN` means nothing is
+recorded and the tool will not fill it in; `RECORDED` needs a valid typed record; free text, a bare number or an incomplete
+record is `INVALID` and BLOCKs. The `blocks` of each decision in the report are the items `site_decisions.ITEM_GATES` says it
+gates. The internal id (first column) stays in finding codes; displays use the label.
 
-| ID | Decision (owner) | Options the tool can express | Blocks (findings / later stages) | Status now |
-|---|---|---|---|---|
-| D1 | Which setting is **the** soft planning floor, and must precharge / Dump advice honour it or only display it | helper; Intelligence user reserve; a feature stop level; one new single setting | reserve consistency; S3 display, S5a, S6b | OPEN |
-| D2 | The inverter's own protection level, and how it is supplied without a write | owner reads it from the inverter display; later an authorised read-only capture | `PHYSICAL_PROTECTION_UNKNOWN`; the `technical_min_soc_pct` placeholder | OPEN |
-| D3 | The capacity authority | owner helper; learned from discharge; Ah x stated voltage | capacity findings; S3, S5a | OPEN |
-| D4 | The capacity mismatch band | 8 % proposed; any other | `CAPACITY_MISMATCH` | OPEN (proposal only) |
-| D5 | The canonical efficiency basis and unit | round-trip fraction (engine) or percent (helper) | efficiency findings | OPEN |
-| D6 | Advisory freshness limits for house / PV / battery / grid power, inverter status, reserve helper | per-signal seconds (tighten only for defined ones) | `READING_AGE_UNKNOWN`; S2, S3 | OPEN |
-| D7 | Which signals are required for the overnight, charge-target and export advisors | a list per advisor | `REQUIRED_SIGNAL_MISSING` | OPEN |
-| D8 | The derived-load cut-over instant and the treatment of earlier history | exclude; replace; keep only non-exporting hours after a counter check | `HD1_CUTOVER_UNKNOWN`; S1 | OPEN |
-| D9 | Clock-change night policy | exclude from learning; normalise per hour; plan as its own length | `NIGHT_LENGTH_DIFFERS`; S1 | OPEN |
+| ID | Label | Decision (owner) | Typed record the tool accepts | Blocks (items / findings) | Status now |
+|---|---|---|---|---|---|
+| D1 | I-D1 | Which setting is **the** soft planning floor, and must precharge / Dump advice honour it or only display it | `PlanningFloor{source: INTELLIGENCE_USER_RESERVE / HA_RESERVE_HELPER / FEATURE_STOP_LEVEL / NEW_SINGLE_SETTING, value_pct (the first and last only), advice_honours}` | charge_target, export_event, dump_to_grid, v1_summary, predicted_morning_soc | OPEN |
+| D2 | I-D2 | The inverter's own protection level, and how it is supplied without a write (an explicit record; a declared protection reserve alone does not record it) | `Protection{supplied_by: OWNER_STATEMENT (value_pct, observed_at) / READ_ONLY_SENSOR_SNAPSHOT}`; raise-only on the technical minimum | as I-D1; `PHYSICAL_PROTECTION_UNKNOWN` | OPEN |
+| D3 | I-D3 | The capacity authority | `CapacityAuthority{kind (not EXAMPLE_DEFAULT), value_kwh or resolve_at_run, nominal_voltage_v for Ah}` | as I-D1; capacity findings | OPEN |
+| D4 | I-D4 | The capacity mismatch band | `CapacityBand{pct}`; 8 % proposed | as I-D1 when two or more capacity sources exist; `CAPACITY_MISMATCH` | OPEN (proposal only) |
+| D5 | I-D5 | The canonical efficiency basis and unit | `Efficiency{value, unit: fraction / percent, basis: ROUND_TRIP / ONE_WAY}` | as I-D1; efficiency findings | OPEN |
+| D6 | I-D6 | Advisory freshness limits for house / PV / battery / grid power, inverter status, reserve helper and gate readings | `FreshnessOverrides{key: seconds}`: tighten-only for defined limits, at most 900 s otherwise, unknown keys refused | export_event, dump_to_grid; `READING_AGE_UNKNOWN` | OPEN |
+| D7 | I-D7 | Retired: the required signals and readings are code constants | `RequiredInputsOverride{add_signals, add_readings}` per item, add-only | nothing (an INVALID record blocks every item) | OPEN |
+| D8 | I-D8 | The derived-load cut-over instant and the treatment of earlier history | `HD1Cutover{cutover, load_power_policy: EXCLUDE / KEEP_NON_EXPORTING_ONLY, load_counter_policy: EXCLUDE_PRE_CUTOVER / KEEP_AFTER_COUNTER_CHECK, counter_check_evidence_ref}`; a KEEP option needs the evidence reference | every item except pv_tomorrow; `HD1_CUTOVER_UNKNOWN` | OPEN |
+| D9 | I-D9 | Clock-change night policy, split into a history rule and a target rule | `DSTPolicy{history_rule: EXCLUDE_CHANGED_PERIODS / NORMALISE_TO_NOMINAL, target_rule: SCALE_TO_ACTUAL / SCALE_UP_ONLY}`; a boundary in a changed hour BLOCKs whatever it says | overnight_demand, charge_target, predicted_morning_soc when a clock change is in scope; `NIGHT_LENGTH_DIFFERS` | OPEN |
 
-**Smallest later owner-approved action:** record D2 (read the protection level from the inverter display and tell me) and D1
-(which setting is the floor and whether features must honour it). Those two unblock the reserve checks without any data access or
-software change. D4/D5/D9 are one-line answers. D3, D6, D7 and D8 need the owner's knowledge of the installation. Nothing needs a
-live read until the later S1 data-quality step, which is a separate authorisation.
+**Smallest later owner-approved action:** record I-D2 (read the protection level from the inverter display, or choose the
+read-only battery-shutdown sensor) and I-D1 (which setting is the floor and whether advice must honour it). Those two unblock the
+reserve checks without any data access or software change. I-D4/I-D5/I-D9 are one-line answers. I-D3, I-D6 and I-D8 need the
+owner's knowledge of the installation; I-D7 is retired. Nothing needs a live read until the later S1 data-quality step, which is
+a separate authorisation.
 
 ## 9. Expected outputs and local-environment notes
 
@@ -243,8 +258,8 @@ pre-check, not CI proof and not hardware proof.
 
 ## 10. Wording the later pull request must use
 
-The pull request (not opened by this work) must say the same thing as the header of this document, in the same words, in its
-title, its description and any release note:
+The pull request that publishes S0 (since 31 Oct 2026, together with the SHADOW v0.1 contracts) must say the same thing as
+the header of this document, in the same words, in its title, its description and any release note:
 
 - **DRAFT S0** and **decisions D1-D9 OPEN**;
 - thresholds (the 8 % capacity band, the efficiency plausibility levels, the agreement tolerances) are **PROPOSED**;
