@@ -11,6 +11,7 @@ Development before the first public release happened in a private repository; se
 
 ### Added
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
+- **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently; `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment and checks in memory that it will succeed ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with
   provenance and acceptance, periods and the DST rules, the advisory contract `ecco-intel-entities/1` with its null rule, the
   authority vocabulary, and S0 reconciled onto them ([docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md](docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md)).
@@ -449,6 +450,7 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   card now resolves esbuild 0.28.1. No firmware, Home Assistant, dashboard or Modbus change.
 
 ### Fixed
+- **Deployment rollback restores a fresh modification time**: `Invoke-EccoDeploymentRollback` restored the backup with `cp -p`, bringing back the file's old modification time, and Home Assistant keeps serving its cached YAML dashboard while the file is not newer than that cache. It now restores with a plain `cp` and `touch`, and a dashboard rollback ends with a reminder to read back `lovelace/config`.
 - **`tools/deploy-ha.ps1` prints the manual-resource reminder for every file it copies to `/config/www/ecco/`**, not only for
   `frontend/<card>/dist/<file>` sources.
   - Before: the documented content-addressed deploy (`dist/deploy/stage/<card>.<sha8>.js`) printed only

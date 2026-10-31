@@ -22,6 +22,10 @@ Set-StrictMode -Version Latest
 $script:EccoSiteLocalPrefix = '/config/ecco/site-local/'
 $script:EccoDashboardPolicyPath = '/config/ecco/site-local/dashboard-protection.json'
 $script:EccoDashboardsPrefix = '/config/ecco/dashboards/'
+$script:EccoDefaultDashboardGate = 'DASHBOARD_PRESERVE_GATE'
+# The optional local pin of the site's gate name, at the repository root
+# (git-ignored): see Get-EccoDashboardGatePin.
+$script:EccoDashboardGatePinFile = 'ecco_dashboard_gate.local.txt'
 
 function Invoke-EccoRemoteCommand {
     <#
@@ -260,7 +264,11 @@ function Format-EccoRollbackResultMessage {
         [bool]$RollbackCheckRan,
 
         [AllowNull()]
-        [object]$RollbackCheckExitCode
+        [object]$RollbackCheckExitCode,
+
+        # The destination is a dashboard file: add the reminder to read
+        # back what Home Assistant serves (it caches YAML dashboards).
+        [bool]$Dashboard = $false
     )
 
     $lines = New-Object System.Collections.Generic.List[string]
@@ -290,6 +298,10 @@ function Format-EccoRollbackResultMessage {
 
     if ((-not $RestoreVerified) -and $checkFailedOrUnknown) {
         $lines.Add('NOTE: both the rollback step and the post-rollback check failed to complete cleanly. This combination often means SSH or the remote host itself is unavailable, not that Home Assistant configuration is broken. Verify SSH connectivity independently before assuming otherwise, and do not treat this as a confirmed successful rollback.')
+    }
+
+    if ($Dashboard) {
+        $lines.Add('DASHBOARD READ-BACK REQUIRED: Home Assistant serves a cached copy of a YAML dashboard until the file is newer than its cache. A restored backup is copied without cp -p and touched, but only a read-back proves what is served: read the served dashboard (websocket lovelace/config for this dashboard) and compare it with the file now on the host before reporting the rollback as complete.')
     }
 
     return ($lines -join "`n")
@@ -414,6 +426,14 @@ function Invoke-EccoDeploymentRollback {
         from the failure output - even if a step of the rollback itself
         fails. Never claims a confirmed successful rollback when it
         cannot actually confirm one - see Format-EccoRollbackResultMessage.
+
+        The restore is a plain `cp` followed by `touch`, never `cp -p`:
+        Home Assistant keeps serving its cached copy of a YAML dashboard
+        while the file is not newer than that cache, so a restore that
+        brought back the backup's old modification time would leave the
+        failed deployment on screen. For a dashboard destination (by its
+        path, or -Dashboard when the preservation gate applied) the final
+        message also asks for a lovelace/config read-back.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -429,18 +449,21 @@ function Invoke-EccoDeploymentRollback {
         [bool]$HadOriginal,
 
         [Parameter(Mandatory = $true)]
-        [string]$Reason
+        [string]$Reason,
+
+        [switch]$Dashboard
     )
 
     Write-Warning "Rolling back deployment: $Reason"
 
+    $isDashboard = $Dashboard -or (Test-EccoDashboardDestinationPath -Destination $Destination)
     $backupDescription = if ($HadOriginal) { $BackupPath } else { 'none (new file)' }
     $restoreProblem = $null
     $restoreVerified = $false
 
     try {
         if ($HadOriginal) {
-            Invoke-EccoRemoteCommand -SshHost $SshHost -Command "cp -p '$BackupPath' '$Destination'"
+            Invoke-EccoRemoteCommand -SshHost $SshHost -Command "cp '$BackupPath' '$Destination' && touch '$Destination'"
 
             $backupHashResult = Invoke-EccoRemoteCommand -SshHost $SshHost -Command "sha256sum '$BackupPath' | cut -d ' ' -f 1" -Capture
             $destHashResult = Invoke-EccoRemoteCommand -SshHost $SshHost -Command "sha256sum '$Destination' | cut -d ' ' -f 1" -Capture
@@ -489,7 +512,8 @@ function Invoke-EccoDeploymentRollback {
         -RestoreVerified $restoreVerified `
         -RestoreProblem $restoreProblem `
         -RollbackCheckRan $rollbackCheckRan `
-        -RollbackCheckExitCode $rollbackCheckExitCode
+        -RollbackCheckExitCode $rollbackCheckExitCode `
+        -Dashboard $isDashboard
 
     throw $message
 }
@@ -735,6 +759,10 @@ function Invoke-EccoDashboardPreservationGate {
           returned (CandidateSha256) and deploy-ha.ps1 installs only a file
           with that hash.
         - The guard's PASS line must name the gate classify determined.
+        - -AllowDriftRecovery passes the guard's --allow-drift-recovery:
+          live differing from the policy no longer blocks a candidate that
+          carries the policy's protected layer exactly. The guard's WARNING
+          lines are returned (Warnings) for the caller to print loudly.
 
         Returns the gate line, whether the gate applied, whether the policy
         names the destination (deploy-ha.ps1 then runs
@@ -761,6 +789,8 @@ function Invoke-EccoDashboardPreservationGate {
         [string]$ResourcesPath,
 
         [string[]]$AcceptRemovedCardType = @(),
+
+        [switch]$AllowDriftRecovery,
 
         [string]$PolicyPath = $script:EccoDashboardPolicyPath,
 
@@ -791,6 +821,7 @@ function Invoke-EccoDashboardPreservationGate {
         LiveSha256             = $null
         ResourcesSha256        = $null
         CandidateSha256        = $null
+        Warnings               = @()
         Output                 = @()
     }
 
@@ -927,6 +958,9 @@ function Invoke-EccoDashboardPreservationGate {
         foreach ($t in @($AcceptRemovedCardType)) {
             $arguments += @('--accept-removed-type', $t)
         }
+        if ($AllowDriftRecovery) {
+            $arguments += '--allow-drift-recovery'
+        }
         $check = Invoke-EccoDashboardGuard -Python $Python -GuardPath $GuardPath -Arguments $arguments
         $result.Output = $check.Output
         $check.Output | ForEach-Object { Write-Host $_ }
@@ -942,6 +976,7 @@ function Invoke-EccoDashboardPreservationGate {
             throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the guard exited 0 without the expected line '$expectedPass'." -Detail $check.Output)
         }
         $result.GateLine = $first
+        $result.Warnings = @($check.Output | Where-Object { ([string]$_) -cmatch '^\s+WARNING ' } | ForEach-Object { ([string]$_).Trim() })
         return $result
     }
     finally {
@@ -1025,6 +1060,96 @@ function Invoke-EccoDashboardLiveVerification {
     }
 }
 
+function Get-EccoDashboardGatePinPath {
+    # The optional local gate pin file of a checkout (git-ignored).
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    return (Join-Path $RepoRoot $script:EccoDashboardGatePinFile)
+}
+
+function Get-EccoDashboardGatePin {
+    <#
+        Reads the optional local gate pin: one gate name (the site policy's
+        "gate"), blank lines and # comment lines ignored. Returns $null when
+        the file does not exist. Throws when it exists but is not a plain
+        file holding exactly one name [A-Z][A-Z0-9_]{2,63}: a pin that
+        cannot be read must never silently mean "no pin". Local file only;
+        nothing is read from the host.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "The local dashboard gate pin $Path is not a file."
+    }
+    try {
+        $raw = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
+    }
+    catch {
+        throw "The local dashboard gate pin $Path could not be read: $($_.Exception.Message)"
+    }
+    $names = @($raw | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    if ($names.Count -ne 1 -or $names[0] -cnotmatch '^[A-Z][A-Z0-9_]{2,63}\z') {
+        throw "The local dashboard gate pin $Path must hold exactly one gate name ([A-Z][A-Z0-9_]{2,63}; blank and # comment lines are ignored)."
+    }
+    return $names[0]
+}
+
+function Assert-EccoDashboardGatePin {
+    <#
+        The optional gate pin, checked right after
+        Invoke-EccoDashboardPreservationGate and before the first remote
+        write. With a pin (-ExpectedGate):
+          - a dashboard destination (the gate applied) must have run and
+            passed under exactly that gate, so a host policy that was moved
+            aside, replaced, or no longer names the destination cannot fall
+            back to DASHBOARD_PRESERVE_GATE without a word;
+          - any other destination needs the site policy present on the host
+            unless the pin is DASHBOARD_PRESERVE_GATE itself.
+        DASHBOARD_PRESERVE_GATE as the pin states that this deployment
+        deliberately targets a dashboard the site policy does not protect.
+        No pin: nothing to check ($null). Throws the gate's BLOCKED message;
+        returns the line to print otherwise. Pure logic on the gate result.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$GateResult,
+
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$ExpectedGate,
+
+        [string]$PinSource = 'the gate pin'
+    )
+
+    if ([string]::IsNullOrEmpty($ExpectedGate)) {
+        return $null
+    }
+    $gate = [string]$GateResult.Gate
+    if ($ExpectedGate -cnotmatch '^[A-Z][A-Z0-9_]{2,63}\z') {
+        throw (Format-EccoGateBlockedMessage -Gate $gate -Reason "$PinSource is not a gate name ([A-Z][A-Z0-9_]{2,63}).")
+    }
+    if ($GateResult.Applies) {
+        $line = [string]$GateResult.GateLine
+        if (($gate -cne $ExpectedGate) -or -not ($line -ceq "${ExpectedGate}: PASS" -or $line.StartsWith("${ExpectedGate}: PASS (", [System.StringComparison]::Ordinal))) {
+            throw (Format-EccoGateBlockedMessage -Gate $gate -Reason "$PinSource expects this dashboard destination to pass under $ExpectedGate, but the gate ran under $gate ('$line'). The host's site policy ($script:EccoDashboardPolicyPath) may have been moved aside or replaced, or it no longer names this destination: restore it. For a dashboard the site deliberately does not protect, pass -ExpectedSiteGate $($script:EccoDefaultDashboardGate) for this deployment.")
+        }
+        return "Gate pin    : $ExpectedGate ($PinSource) - matched"
+    }
+    if ($ExpectedGate -cne $script:EccoDefaultDashboardGate -and $GateResult.PolicyState -ne 'present') {
+        throw (Format-EccoGateBlockedMessage -Gate $gate -Reason "$PinSource expects the site gate $ExpectedGate, but there is no site policy on the host ($script:EccoDashboardPolicyPath): it was moved aside or removed. Restore it, or remove the pin to deploy without it.")
+    }
+    return "Gate pin    : $ExpectedGate ($PinSource) - not a dashboard destination; site policy present: $($GateResult.PolicyState -eq 'present')"
+}
+
 Export-ModuleMember -Function `
     Invoke-EccoRemoteCommand, `
     Invoke-EccoRemoteCommandBestEffort, `
@@ -1041,4 +1166,7 @@ Export-ModuleMember -Function `
     Invoke-EccoDashboardGuard, `
     Format-EccoGateBlockedMessage, `
     Invoke-EccoDashboardPreservationGate, `
-    Invoke-EccoDashboardLiveVerification
+    Invoke-EccoDashboardLiveVerification, `
+    Get-EccoDashboardGatePinPath, `
+    Get-EccoDashboardGatePin, `
+    Assert-EccoDashboardGatePin

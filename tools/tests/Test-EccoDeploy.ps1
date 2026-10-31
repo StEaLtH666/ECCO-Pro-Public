@@ -18,7 +18,11 @@
     the real tools/ecco_dashboard_guard.py; section 13 runs the host
     probe under a local POSIX sh (Git for Windows) on a fictional temp
     tree; section 14 runs deploy-ha.ps1 itself with ssh and scp replaced
-    in-process by stubs (no network). They need a Python with PyYAML,
+    in-process by stubs (no network), including the gate pin
+    (-ExpectedSiteGate and the local pin file) and drift recovery;
+    section 15 runs the rollback against a stubbed ssh that executes its
+    commands under the local POSIX sh on a fictional /config tree, to
+    prove the restored file gets a new modification time. They need a Python with PyYAML,
     the same requirement deploy-ha.ps1 has; pass -Python <path to
     python.exe> when the python on PATH has no PyYAML.
 
@@ -253,6 +257,18 @@ Assert-True -Name 'verified restore + failed recheck still says "was rolled back
 Assert-True -Name 'verified restore + failed recheck does not claim the check passed' -Condition ($verifiedRestoreButCheckFailedMsg -notmatch 'check: passed')
 Assert-True -Name 'verified restore + failed recheck does not warn about SSH (only restore failure triggers that note)' -Condition ($verifiedRestoreButCheckFailedMsg -notmatch 'may be unavailable')
 
+$dashboardRollbackMsg = Format-EccoRollbackResultMessage `
+    -Reason 'ha core check failed' `
+    -BackupDescription '/config/ecco-backups/x/y' `
+    -RestoreVerified $true `
+    -RestoreProblem $null `
+    -RollbackCheckRan $true `
+    -RollbackCheckExitCode 0 `
+    -Dashboard $true
+Assert-True -Name 'a dashboard rollback message asks for a lovelace/config read-back of what Home Assistant serves' -Condition (
+    $dashboardRollbackMsg -match 'DASHBOARD READ-BACK REQUIRED' -and $dashboardRollbackMsg -match 'websocket lovelace/config' -and $dashboardRollbackMsg -match 'was rolled back')
+Assert-True -Name 'a rollback message for any other file has no dashboard read-back line' -Condition ($confirmedMsg -notmatch 'READ-BACK' -and $verifiedRestoreButCheckFailedMsg -notmatch 'lovelace/config')
+
 # ---------------------------------------------------------------------
 # 8. PowerShell syntax for every deployment-tooling script, including
 #    the new shared module and this test script's own directory.
@@ -402,9 +418,9 @@ $fakeReader = {
 }
 
 function Invoke-TestGate {
-    param([string]$Candidate, [string[]]$Accept = @(), [string]$Dest = $destination, [string]$UsePython = $Python, [string]$GuardFile = $guard)
+    param([string]$Candidate, [string[]]$Accept = @(), [string]$Dest = $destination, [string]$UsePython = $Python, [string]$GuardFile = $guard, [switch]$Drift)
     try {
-        $r = Invoke-EccoDashboardPreservationGate -SshHost 'fictional-host' -Destination $Dest -CandidatePath $Candidate -GuardPath $GuardFile -ResourcesPath $resourcesRemote -AcceptRemovedCardType $Accept -Python $UsePython -RemoteFileReader $fakeReader 6>$null
+        $r = Invoke-EccoDashboardPreservationGate -SshHost 'fictional-host' -Destination $Dest -CandidatePath $Candidate -GuardPath $GuardFile -ResourcesPath $resourcesRemote -AcceptRemovedCardType $Accept -Python $UsePython -AllowDriftRecovery:$Drift -RemoteFileReader $fakeReader 6>$null
         return [pscustomobject]@{ Threw = $false; Message = ''; Result = $r }
     } catch {
         return [pscustomobject]@{ Threw = $true; Message = $_.Exception.Message; Result = $null }
@@ -600,6 +616,81 @@ try {
     $r = Invoke-TestGate -Candidate $generic -Accept @('custom:example-unrelated-card')
     Assert-True -Name 'no policy: accepting a type the candidate does not drop waives nothing (still BLOCKED by R4)' -Condition ($r.Threw -and $r.Message -match 'R4') -Detail $r.Message
 
+    # Drift recovery: live drifted from the policy; the candidate (the policy's layer) restores it only with -AllowDriftRecovery.
+    $drifted = Join-Path $fixtures 'live-drifted.yaml'
+    [System.IO.File]::WriteAllText($drifted, (($liveText -join "`n").Replace('crossfade_ms: 900', 'crossfade_ms: 1200')))
+    $script:fakeHost = @{ $destination = $drifted; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live
+    Assert-True -Name 'drift: live differs from the policy, the candidate restores the policy''s layer, no -AllowDriftRecovery: BLOCKED, naming the switch' -Condition (
+        $r.Threw -and $r.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $r.Message -match 'R2: live protected layer differs from the site policy' -and $r.Message -match '-AllowDriftRecovery') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $live -Drift
+    Assert-True -Name 'drift recovery: with -AllowDriftRecovery the same candidate passes under the policy gate and the gate returns the WARNING lines' -Condition (
+        -not $r.Threw -and $r.Result.GateLine -eq 'EXAMPLE_PRESERVE_GATE: PASS' -and @($r.Result.Warnings).Count -eq 2 -and
+        @($r.Result.Warnings)[0] -match '^WARNING R2 drift: live protected layer differs from the site policy' -and @($r.Result.Warnings)[1] -match '^WARNING drift recovery') -Detail ($r.Message + ' | ' + (@($r.Result.Output) -join ' | '))
+    $r = Invoke-TestGate -Candidate $drifted -Drift
+    Assert-True -Name 'drift recovery never passes a candidate without the protected layer (the drifted live file itself is BLOCKED)' -Condition (
+        $r.Threw -and $r.Message -match 'R2: candidate removes or replaces a protected layer') -Detail $r.Message
+    $r = Invoke-TestGate -Candidate $generic -Drift -Accept @('custom:example-site-card')
+    Assert-True -Name 'drift recovery with every waiver still BLOCKS the generic render (R2)' -Condition ($r.Threw -and $r.Message -match 'R2: candidate removes') -Detail $r.Message
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $r = Invoke-TestGate -Candidate $live -Drift
+    Assert-True -Name '-AllowDriftRecovery without drift: PASS with no warning' -Condition (-not $r.Threw -and @($r.Result.Warnings).Count -eq 0) -Detail $r.Message
+
+    # Gate pin: Get-EccoDashboardGatePin reads the local pin file strictly.
+    $pinFile = Join-Path $fixtures 'pin.txt'
+    Assert-True -Name 'gate pin: no pin file means no pin ($null)' -Condition ($null -eq (Get-EccoDashboardGatePin -Path $pinFile))
+    [System.IO.File]::WriteAllText($pinFile, "# fictional site gate`r`n`r`nEXAMPLE_PRESERVE_GATE`r`n")
+    Assert-True -Name 'gate pin: one gate name, comment and blank lines ignored' -Condition ((Get-EccoDashboardGatePin -Path $pinFile) -ceq 'EXAMPLE_PRESERVE_GATE')
+    foreach ($badPin in @("EXAMPLE_PRESERVE_GATE`nOTHER_GATE`n", "example_preserve_gate`n", "# only a comment`n", '', "EXAMPLE PRESERVE GATE`n")) {
+        [System.IO.File]::WriteAllText($pinFile, $badPin)
+        $threw = $false
+        try { Get-EccoDashboardGatePin -Path $pinFile | Out-Null } catch { $threw = $true }
+        Assert-True -Name "gate pin: a pin file that is not exactly one gate name is refused, never 'no pin': [$($badPin.Replace("`n", '<LF>'))]" -Condition $threw
+    }
+    $threw = $false
+    try { Get-EccoDashboardGatePin -Path $fixtures | Out-Null } catch { $threw = $true }
+    Assert-True -Name 'gate pin: a folder at the pin path is refused' -Condition $threw
+
+    # Gate pin: Assert-EccoDashboardGatePin on real gate results (fictional host).
+    function Test-PinRefused {
+        param([object]$GateResult, [string]$Pin)
+        try {
+            Assert-EccoDashboardGatePin -GateResult $GateResult -ExpectedGate $Pin -PinSource 'the test pin' | Out-Null
+            return ''
+        } catch {
+            return $_.Exception.Message
+        }
+    }
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $protected = (Invoke-TestGate -Candidate $live).Result
+    Assert-True -Name 'gate pin: the policy-protected destination passes under the pinned gate' -Condition (
+        (Test-PinRefused $protected 'EXAMPLE_PRESERVE_GATE') -eq '' -and (Assert-EccoDashboardGatePin -GateResult $protected -ExpectedGate 'EXAMPLE_PRESERVE_GATE') -match 'matched')
+    $m = Test-PinRefused $protected 'OTHER_PRESERVE_GATE'
+    Assert-True -Name 'gate pin: a different pinned gate is BLOCKED' -Condition ($m -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $m -match 'OTHER_PRESERVE_GATE') -Detail $m
+    Assert-True -Name 'gate pin: no pin checks nothing' -Condition ($null -eq (Assert-EccoDashboardGatePin -GateResult $protected -ExpectedGate ''))
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources }
+    $movedAside = (Invoke-TestGate -Candidate $live).Result
+    $m = Test-PinRefused $movedAside 'EXAMPLE_PRESERVE_GATE'
+    Assert-True -Name 'gate pin: the host policy moved aside - the dashboard passes only under DASHBOARD_PRESERVE_GATE, and the pin BLOCKS it' -Condition (
+        $movedAside.GateLine -eq 'DASHBOARD_PRESERVE_GATE: PASS' -and $m -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $m -match 'expects this dashboard destination to pass under EXAMPLE_PRESERVE_GATE' -and $m -match 'Nothing was written') -Detail $m
+    $script:fakeHost = @{ $resourcesRemote = $resources }
+    $newFile = (Invoke-TestGate -Candidate $live).Result
+    Assert-True -Name 'gate pin: ... also for a new file (PASS (new file ...) under the default gate)' -Condition ((Test-PinRefused $newFile 'EXAMPLE_PRESERVE_GATE') -match 'BLOCKED')
+    $script:fakeHost = @{ $otherDestination = $live; $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $unprotected = (Invoke-TestGate -Candidate $live -Dest $otherDestination).Result
+    Assert-True -Name 'gate pin: a dashboard the policy does not protect is BLOCKED by the site pin, and passes with the pin DASHBOARD_PRESERVE_GATE' -Condition (
+        (Test-PinRefused $unprotected 'EXAMPLE_PRESERVE_GATE') -match 'BLOCKED' -and (Test-PinRefused $unprotected 'DASHBOARD_PRESERVE_GATE') -eq '')
+    Assert-True -Name 'gate pin: DASHBOARD_PRESERVE_GATE as the pin BLOCKS the policy-protected destination' -Condition ((Test-PinRefused $protected 'DASHBOARD_PRESERVE_GATE') -match 'BLOCKED')
+    $script:fakeHost = @{ $resourcesRemote = $resources }
+    $packageNoPolicy = (Invoke-TestGate -Candidate $live -Dest '/config/packages/example.yaml').Result
+    $m = Test-PinRefused $packageNoPolicy 'EXAMPLE_PRESERVE_GATE'
+    Assert-True -Name 'gate pin: any other destination needs the site policy on the host while a site gate is pinned' -Condition (
+        -not $packageNoPolicy.Applies -and $m -match 'no site policy on the host' -and (Test-PinRefused $packageNoPolicy 'DASHBOARD_PRESERVE_GATE') -eq '') -Detail $m
+    $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
+    $packageWithPolicy = (Invoke-TestGate -Candidate $live -Dest '/config/packages/example.yaml').Result
+    Assert-True -Name 'gate pin: ... and passes when the policy is present' -Condition ((Test-PinRefused $packageWithPolicy 'EXAMPLE_PRESERVE_GATE') -eq '')
+    Assert-True -Name 'gate pin: a malformed pin value is BLOCKED' -Condition ((Test-PinRefused $protected 'example_preserve_gate') -match 'not a gate name')
+
     # Post-install verify-live.
     $script:fakeHost = @{ $destination = $live; $policyRemote = $policy }
     $v = Invoke-EccoDashboardLiveVerification -SshHost 'fictional-host' -Destination $destination -GuardPath $guard -Python $Python -RemoteFileReader $fakeReader
@@ -754,6 +845,80 @@ try {
     $sent = @($global:EccoTestRemoteLog)
     Assert-True -Name 'control: a candidate the gate passes reaches deploy-ha.ps1''s next host command (refused by the stub), so the harness sees writes' -Condition (
         $passMessage -match 'Unable to inspect existing remote file' -and @($sent | Where-Object { $_.StartsWith("ssh if [ -f '") }).Count -eq 1) -Detail ($passMessage + ' | ' + ($sent -join ' | '))
+
+    # One deploy-ha.ps1 run: the terminating message and every host command sent (the warning stream is collected too).
+    function Invoke-StubDeploy {
+        param([string]$File, [hashtable]$Extra = @{})
+        $global:EccoTestRemoteLog.Clear()
+        $global:EccoTestWarnings = New-Object System.Collections.Generic.List[string]
+        $message = ''
+        try {
+            & $deployHa -Source "dist/$stubName/$File" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python @Extra 3>&1 6>$null |
+                ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $global:EccoTestWarnings.Add($_.Message) } }
+        } catch {
+            $message = $_.Exception.Message
+        }
+        $sent = @($global:EccoTestRemoteLog)
+        return [pscustomobject]@{ Message = $message; Sent = $sent; NotReads = @($sent | Where-Object { -not (& $gateReads $_) }); Warnings = @($global:EccoTestWarnings) }
+    }
+
+    # Gate pin: the host has no site policy (moved aside), so the dashboard passes only under DASHBOARD_PRESERVE_GATE.
+    $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'EXAMPLE_PRESERVE_GATE' }
+    Assert-True -Name 'deploy-ha.ps1 -ExpectedSiteGate: a dashboard that passes only under DASHBOARD_PRESERVE_GATE (host policy moved aside) is BLOCKED by the pin' -Condition (
+        $run.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $run.Message -match '-ExpectedSiteGate expects this dashboard destination to pass under EXAMPLE_PRESERVE_GATE') -Detail $run.Message
+    Assert-True -Name '... having sent the host nothing but the gate''s reads (no mkdir, backup, upload or move)' -Condition ($run.Sent.Count -ge 3 -and $run.NotReads.Count -eq 0) -Detail ($run.NotReads -join ' | ')
+    $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'DASHBOARD_PRESERVE_GATE' }
+    Assert-True -Name 'control: -ExpectedSiteGate DASHBOARD_PRESERVE_GATE (a deliberately unprotected dashboard) reaches the next host command' -Condition (
+        $run.Message -match 'Unable to inspect existing remote file') -Detail $run.Message
+    $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'example_preserve_gate' }
+    Assert-True -Name 'deploy-ha.ps1 -ExpectedSiteGate takes an upper-case gate name only (case-sensitive validation), before anything is sent' -Condition (
+        $run.Message -match 'ExpectedSiteGate' -and $run.Sent.Count -eq 0) -Detail $run.Message
+    $pinPath = Get-EccoDashboardGatePinPath -RepoRoot $repoRoot
+    if (-not (Test-Path -LiteralPath $pinPath)) {
+        try {
+            [System.IO.File]::WriteAllText($pinPath, "EXAMPLE_PRESERVE_GATE`n")
+            $ErrorActionPreference = 'Continue'
+            & git -C $repoRoot check-ignore -q -- $pinPath 2>&1 | Out-Null
+            $pinIgnored = ($LASTEXITCODE -eq 0)
+            $ErrorActionPreference = 'Stop'
+            Assert-True -Name 'the local pin file is git-ignored' -Condition $pinIgnored
+            $run = Invoke-StubDeploy -File 'same.yaml'
+            Assert-True -Name 'deploy-ha.ps1 reads the local pin file when -ExpectedSiteGate is not given: the same deployment is BLOCKED, naming the pin file' -Condition (
+                $run.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $run.Message -match 'the local pin file ecco_dashboard_gate\.local\.txt expects' -and $run.NotReads.Count -eq 0) -Detail $run.Message
+            $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'DASHBOARD_PRESERVE_GATE' }
+            Assert-True -Name '... and -ExpectedSiteGate takes precedence over the pin file' -Condition ($run.Message -match 'Unable to inspect existing remote file') -Detail $run.Message
+            [System.IO.File]::WriteAllText($pinPath, "not a gate`n")
+            $run = Invoke-StubDeploy -File 'same.yaml'
+            Assert-True -Name 'a malformed local pin file stops deploy-ha.ps1 before it contacts the host' -Condition (
+                $run.Message -match 'must hold exactly one gate name' -and $run.Sent.Count -eq 0) -Detail ($run.Message + ' | ' + ($run.Sent -join ' | '))
+        }
+        finally {
+            Remove-Item -LiteralPath $pinPath -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Host '  SKIP  the local pin file runs (this checkout has its own ecco_dashboard_gate.local.txt; it was left untouched)'
+    }
+
+    # Drift recovery through deploy-ha.ps1: the host's live file drifted from its policy; the candidate is the policy's layer.
+    $stubPolicy = Join-Path $stubHostDir 'policy.json'
+    $stubDrifted = Join-Path $stubHostDir 'drifted.yaml'
+    $ErrorActionPreference = 'Continue'
+    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $destination --base (Join-Path $stubRepoDir 'generic.yaml') --live $stubLive --pointer /views/0/sections/0/cards/0 --out $stubPolicy 2>&1 | Out-Null
+    $ErrorActionPreference = 'Stop'
+    [System.IO.File]::WriteAllText($stubDrifted, (($liveText -join "`n").Replace('crossfade_ms: 900', 'crossfade_ms: 1200')))
+    $global:EccoTestHost = @{ $destination = $stubDrifted; $resourcesRemote = $stubResources; $policyRemote = $stubPolicy }
+    $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'EXAMPLE_PRESERVE_GATE' }
+    Assert-True -Name 'deploy-ha.ps1, live drifted from the policy: the candidate that restores the policy''s layer is BLOCKED without -AllowDriftRecovery (nothing but reads sent)' -Condition (
+        $run.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $run.Message -match 'live protected layer differs' -and $run.NotReads.Count -eq 0) -Detail $run.Message
+    $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'EXAMPLE_PRESERVE_GATE'; AllowDriftRecovery = $true }
+    Assert-True -Name 'deploy-ha.ps1 -AllowDriftRecovery: the gate passes (the pinned gate matches) and the run goes on to its next host command' -Condition (
+        $run.Message -match 'Unable to inspect existing remote file') -Detail $run.Message
+    Assert-True -Name '... printing the drift as PowerShell warnings' -Condition (
+        @($run.Warnings | Where-Object { $_ -match '^Dashboard preservation gate: WARNING R2 drift' }).Count -eq 1 -and
+        @($run.Warnings | Where-Object { $_ -match '^Dashboard preservation gate: WARNING drift recovery' }).Count -eq 1) -Detail ($run.Warnings -join ' | ')
+    $run = Invoke-StubDeploy -File 'generic.yaml' -Extra @{ AllowDriftRecovery = $true; AcceptRemovedCardType = @('custom:example-site-card') }
+    Assert-True -Name 'deploy-ha.ps1 -AllowDriftRecovery never passes the generic render over the drifted live file (R2, nothing but reads sent)' -Condition (
+        $run.Message -match '^EXAMPLE_PRESERVE_GATE: BLOCKED' -and $run.Message -match 'candidate removes or replaces a protected layer' -and $run.NotReads.Count -eq 0) -Detail $run.Message
 }
 finally {
     Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
@@ -765,6 +930,108 @@ finally {
         Remove-Item -LiteralPath $distDir -Force -ErrorAction SilentlyContinue
     }
 }
+
+# ---------------------------------------------------------------------
+# 15. Invoke-EccoDeploymentRollback against a stubbed host: every
+#     command is recorded, and (with a local POSIX sh) run on a fictional
+#     /config tree in the temp folder. Home Assistant keeps serving its
+#     cached YAML dashboard while the file is not newer than that cache, so
+#     the restored file must get a new modification time (no cp -p), and a
+#     dashboard rollback must ask for a lovelace/config read-back.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[15] Rollback: the restored file is newer than the cache, and a dashboard rollback asks for a read-back'
+$global:EccoTestRemoteLog = New-Object System.Collections.Generic.List[string]
+$global:EccoTestSh = $Sh
+$global:EccoTestShRoot = $null
+if ($Sh -and (Test-Path -LiteralPath $Sh)) {
+    $global:EccoTestShRoot = '/tmp/ecco-rollback-test-' + [guid]::NewGuid().ToString('N')
+}
+try {
+    function global:ssh {
+        $command = [string]$args[$args.Count - 1]
+        $global:EccoTestRemoteLog.Add($command)
+        $global:LASTEXITCODE = 0
+        if ($command -ceq 'ha core check') { return 'Command completed successfully.' }
+        if (-not $global:EccoTestShRoot) { return }
+        # Every path the rollback names is absolute under /config: run it on the fictional tree.
+        $local = $command.Replace("'/config/", "'" + $global:EccoTestShRoot + '/config/')
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $out = @(& $global:EccoTestSh -c $local 2>&1 | ForEach-Object { [string]$_ })
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+        return $out
+    }
+
+    $rbDest = '/config/ecco/dashboards/example.yaml'
+    $rbBackup = '/config/ecco-backups/20010101-000000/config__ecco__dashboards__example.yaml'
+    $rbRoot = $global:EccoTestShRoot
+    $cacheTime = $null
+    if ($rbRoot) {
+        $ErrorActionPreference = 'Continue'
+        & $Sh -c "mkdir -p '$rbRoot/config/ecco/dashboards' '$rbRoot/config/ecco-backups/20010101-000000' && printf 'title: before\n' > '$rbRoot$rbBackup' && touch -d '2001-01-01 00:00:00' '$rbRoot$rbBackup' && printf 'title: failed deployment\n' > '$rbRoot$rbDest'" 2>&1 | Out-Null
+        # The moment Home Assistant cached the failed deployment's dashboard (after the install, before the rollback).
+        $cacheTime = [long]((@(& $Sh -c 'date +%s' 2>&1) -join '').Trim())
+        $ErrorActionPreference = 'Stop'
+    }
+
+    $rbMessage = ''
+    try {
+        Invoke-EccoDeploymentRollback -SshHost 'fictional-host' -Destination $rbDest -BackupPath $rbBackup -HadOriginal $true -Reason 'test: ha core check failed' 3>$null 6>$null | Out-Null
+    } catch {
+        $rbMessage = $_.Exception.Message
+    }
+    $restore = @($global:EccoTestRemoteLog | Where-Object { $_.StartsWith('cp ') })
+    Assert-True -Name 'the rollback restores with a plain cp followed by touch, never cp -p (which would bring back the backup''s old modification time)' -Condition (
+        $restore.Count -eq 1 -and $restore[0] -ceq "cp '$rbBackup' '$rbDest' && touch '$rbDest'" -and
+        @($global:EccoTestRemoteLog | Where-Object { $_ -match 'cp -p|cp -a|--preserve' }).Count -eq 0) -Detail ($global:EccoTestRemoteLog -join ' | ')
+    Assert-True -Name 'a dashboard rollback (by its path) ends with the lovelace/config read-back reminder' -Condition (
+        $rbMessage -match 'DASHBOARD READ-BACK REQUIRED' -and $rbMessage -match 'websocket lovelace/config') -Detail $rbMessage
+    if ($rbRoot) {
+        $ErrorActionPreference = 'Continue'
+        $restoredText = (@(& $Sh -c "cat '$rbRoot$rbDest'" 2>&1) -join '').Trim()
+        $restoredTime = [long]((@(& $Sh -c "stat -c %Y '$rbRoot$rbDest'" 2>&1) -join '').Trim())
+        $ErrorActionPreference = 'Stop'
+        Assert-True -Name 'on a fictional tree (POSIX sh): the rollback restored the backup''s bytes and confirmed it ("was rolled back")' -Condition (
+            $restoredText -ceq 'title: before' -and $rbMessage -match 'was rolled back') -Detail "$restoredText | $rbMessage"
+        Assert-True -Name '... and the restored dashboard is not older than Home Assistant''s cache of the failed deployment, so it is served again (not the 2001 time of the backup)' -Condition (
+            $restoredTime -ge $cacheTime) -Detail "restored mtime $restoredTime, cache time $cacheTime"
+    } else {
+        Write-Host '  SKIP  the rollback on a fictional tree runs under a POSIX sh (no Git for Windows sh found; pass -Sh <sh.exe>)'
+    }
+
+    $global:EccoTestRemoteLog.Clear()
+    $rbMessage = ''
+    try {
+        Invoke-EccoDeploymentRollback -SshHost 'fictional-host' -Destination '/config/packages/example.yaml' -BackupPath '' -HadOriginal $false -Reason 'test: new package file' 3>$null 6>$null | Out-Null
+    } catch {
+        $rbMessage = $_.Exception.Message
+    }
+    Assert-True -Name 'a package rollback has no dashboard read-back line' -Condition ($rbMessage -match 'Deployment failed' -and $rbMessage -notmatch 'READ-BACK') -Detail $rbMessage
+    $rbMessage = ''
+    try {
+        Invoke-EccoDeploymentRollback -SshHost 'fictional-host' -Destination '/config/ecco/views/overview.yaml' -BackupPath '' -HadOriginal $false -Dashboard -Reason 'test: policy-named dashboard' 3>$null 6>$null | Out-Null
+    } catch {
+        $rbMessage = $_.Exception.Message
+    }
+    Assert-True -Name 'a dashboard outside /config/ecco/dashboards/ (-Dashboard, as deploy-ha.ps1 passes when the gate applied) gets the read-back line' -Condition ($rbMessage -match 'DASHBOARD READ-BACK REQUIRED') -Detail $rbMessage
+}
+finally {
+    Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
+    if ($global:EccoTestShRoot) {
+        $ErrorActionPreference = 'Continue'
+        & $Sh -c "rm -rf '$($global:EccoTestShRoot)'" 2>&1 | Out-Null
+        $ErrorActionPreference = 'Stop'
+    }
+    Remove-Variable -Name EccoTestRemoteLog, EccoTestSh, EccoTestShRoot -Scope Global -ErrorAction SilentlyContinue
+}
+$deployHaText = Get-Content -Raw -Path (Join-Path $toolsDir 'deploy-ha.ps1')
+Assert-True -Name 'deploy-ha.ps1 passes -Dashboard (the gate applied) to every rollback' -Condition (
+    ([regex]::Matches($deployHaText, 'Invoke-EccoDeploymentRollback ')).Count -eq 4 -and
+    ([regex]::Matches($deployHaText, [regex]::Escape('-HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason '))).Count -eq 4)
 
 # ---------------------------------------------------------------------
 Write-Host ''

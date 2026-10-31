@@ -17,7 +17,17 @@ param(
 
     # Passed straight through to deploy-ha.ps1: the Python (with PyYAML)
     # that runs the dashboard preservation gate.
-    [string]$Python
+    [string]$Python,
+
+    # Passed straight through to deploy-ha.ps1: restore the site policy's
+    # protected layer over a live file that drifted from it (the candidate
+    # must carry that layer exactly; a loud warning is printed).
+    [switch]$AllowDriftRecovery,
+
+    # Passed straight through to deploy-ha.ps1: the gate name this
+    # deployment must pass under (default there: the local pin file).
+    [ValidatePattern('(?-i)^[A-Z][A-Z0-9_]{2,63}\z')]
+    [string]$ExpectedSiteGate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +48,12 @@ if ($AcceptRemovedCardType.Count -gt 0) {
 }
 if ($Python) {
     $deployParams.Python = $Python
+}
+if ($AllowDriftRecovery) {
+    $deployParams.AllowDriftRecovery = $true
+}
+if ($ExpectedSiteGate) {
+    $deployParams.ExpectedSiteGate = $ExpectedSiteGate
 }
 
 & (Join-Path $PSScriptRoot 'deploy-ha.ps1') @deployParams
