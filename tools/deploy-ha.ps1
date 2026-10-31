@@ -14,13 +14,31 @@ param(
     # Deliberately named so an uncommitted deployment can never happen by
     # accident. Normal deployments must come from a clean git working tree
     # so the file on Home Assistant always matches a committed revision.
-    [switch]$AllowDirtyWorkingTree
+    [switch]$AllowDirtyWorkingTree,
+
+    # Dashboard preservation gate, generic layer only: custom card types
+    # (custom:<name>) the live dashboard uses that this deployment may
+    # deliberately drop. It never waives the site policy's protected
+    # layers or required resources.
+    [ValidatePattern('^custom:[A-Za-z0-9][A-Za-z0-9._-]*\z')]
+    [string[]]$AcceptRemovedCardType = @(),
+
+    # The Python that runs tools/ecco_dashboard_guard.py (with -I, so
+    # PyYAML must be installed in that interpreter itself, not only in a
+    # user site-packages folder). Default: the python on PATH.
+    [string]$Python = 'python'
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 Import-Module (Join-Path $PSScriptRoot 'EccoDeploy.psm1') -Force
+
+# Home Assistant's persisted Lovelace resource list. This script only ever
+# READS it: the preservation gate copies it from the host, the backup copies
+# it into the backup folder, and the reminder below cats it.
+$lovelaceResourcesPath = '/config/.storage/lovelace_resources'
+$guardPath = Join-Path $PSScriptRoot 'ecco_dashboard_guard.py'
 
 $sourceCandidate = if ([System.IO.Path]::IsPathRooted($Source)) {
     $Source
@@ -83,6 +101,18 @@ if ($sshProbeCode -ne 0) {
     throw "SSH connection to '$SshHost' failed."
 }
 
+# Dashboard preservation gate: BEFORE the first remote write (mkdir, backup,
+# upload). Read-only on the host. A dashboard destination (under
+# /config/ecco/dashboards/, .yaml/.yml, or named by the site policy at
+# /config/ecco/site-local/dashboard-protection.json) is checked by
+# tools/ecco_dashboard_guard.py: the candidate may not drop a protected
+# site layer, a required resource or (unless -AcceptRemovedCardType) a
+# custom card type the live dashboard uses. Anything but PASS throws here,
+# so nothing on the host has changed.
+Write-Host 'Running the dashboard preservation gate (read-only)...'
+$dashboardGate = Invoke-EccoDashboardPreservationGate -SshHost $SshHost -Destination $Destination -CandidatePath $sourceFull -GuardPath $guardPath -ResourcesPath $lovelaceResourcesPath -AcceptRemovedCardType $AcceptRemovedCardType -Python $Python
+Write-Host $dashboardGate.GateLine
+
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $lastSlash = $Destination.LastIndexOf('/')
 if ($lastSlash -lt 1) {
@@ -100,6 +130,20 @@ if ($probe.ExitCode -ne 0) {
 }
 $probeText = ($probe.Output -join '').Trim()
 $hadOriginal = $probeText.EndsWith('yes')
+if ($dashboardGate.Applies -and (($dashboardGate.LiveState -eq 'present') -ne $hadOriginal)) {
+    throw 'The destination appeared or disappeared on the host after the dashboard preservation gate read it. Nothing was written; re-run the deployment.'
+}
+
+# The source must still be the file the gate checked (the documented
+# sources under dist/ are git-ignored, so the clean-tree check does not
+# cover them): a re-render in between stops the deployment here, before
+# anything is written. The uploaded copy is tied to the same hash below.
+if ($dashboardGate.Applies) {
+    $checkedSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFull).Hash.ToLowerInvariant()
+    if (-not $dashboardGate.CandidateSha256 -or $checkedSourceHash -ne $dashboardGate.CandidateSha256) {
+        throw "The source changed after the dashboard preservation gate checked it (gate $($dashboardGate.CandidateSha256), now $checkedSourceHash). Nothing was written; re-run the deployment."
+    }
+}
 
 Invoke-EccoRemoteCommand -SshHost $SshHost -Command "mkdir -p '$remoteDir' '$backupDir'"
 if ($hadOriginal) {
@@ -107,6 +151,24 @@ if ($hadOriginal) {
     Invoke-EccoRemoteCommand -SshHost $SshHost -Command "cp -p '$Destination' '$backupPath'"
 } else {
     Write-Host 'No existing remote file; rollback will remove the new file if validation fails.'
+}
+
+# The persisted Lovelace resource list goes into the same backup folder (a
+# read of .storage; the copy is written only under $backupDir).
+$resourcesBackupPath = "$backupDir/" + ($lovelaceResourcesPath.TrimStart('/') -replace '/', '__')
+Invoke-EccoRemoteCommand -SshHost $SshHost -Command "if [ -f '$lovelaceResourcesPath' ]; then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath'; fi"
+
+# The file that was backed up must be the file the gate checked: a change on
+# the host in between stops the deployment before the upload.
+if ($dashboardGate.Applies -and $hadOriginal -and $dashboardGate.LiveSha256) {
+    $backupHashResult = Invoke-EccoRemoteCommand -SshHost $SshHost -Command "sha256sum '$backupPath' | cut -d ' ' -f 1" -Capture
+    $backupHash = $null
+    if ($backupHashResult.ExitCode -eq 0 -and $backupHashResult.Output.Count -gt 0) {
+        $backupHash = ($backupHashResult.Output[-1]).Trim().ToLowerInvariant()
+    }
+    if ($backupHash -ne $dashboardGate.LiveSha256) {
+        throw "The live dashboard changed on the host after the dashboard preservation gate checked it (gate $($dashboardGate.LiveSha256), backup $backupHash). Nothing was uploaded; backup folder: $backupDir."
+    }
 }
 
 Write-Host "Uploading $relative -> $Destination"
@@ -136,6 +198,12 @@ $remoteHash = ($hashResult.Output[-1]).Trim().ToLowerInvariant()
 if ($localHash -ne $remoteHash) {
     Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
     throw "SHA256 mismatch. Local=$localHash Remote=$remoteHash"
+}
+# The uploaded bytes must be the bytes the preservation gate checked, not
+# merely the local file as it is now.
+if ($dashboardGate.Applies -and $remoteHash -ne $dashboardGate.CandidateSha256) {
+    Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
+    throw "The uploaded file is not the file the dashboard preservation gate checked (gate $($dashboardGate.CandidateSha256), uploaded $remoteHash). Nothing was installed; the backup folder is $backupDir."
 }
 Write-Host "Upload SHA256 verified: $localHash"
 
@@ -175,6 +243,21 @@ if (-not $postInstallHash -or $postInstallHash -ne $localHash) {
 }
 Write-Host "Post-install SHA256 verified: $postInstallHash"
 
+# Post-install preservation check: when the site policy protects this
+# destination, re-read the installed file and prove it still carries every
+# protected layer (guard verify-live). A failure goes through the same
+# rollback path as a failed hash or `ha core check`.
+$liveVerificationLine = $null
+if ($dashboardGate.PolicyNamesDestination) {
+    Write-Host 'Re-reading the installed dashboard for the post-install preservation check...'
+    $liveVerification = Invoke-EccoDashboardLiveVerification -SshHost $SshHost -Destination $Destination -GuardPath $guardPath -Python $Python -ExpectedGate $dashboardGate.Gate
+    $liveVerification.Output | ForEach-Object { Write-Host $_ }
+    if (-not $liveVerification.Passed) {
+        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
+    }
+    $liveVerificationLine = $liveVerification.GateLine
+}
+
 Write-Host 'Running Home Assistant configuration check...'
 $check = Invoke-EccoRemoteCommand -SshHost $SshHost -Command 'ha core check' -Capture
 $check.Output | ForEach-Object { Write-Host $_ }
@@ -196,6 +279,10 @@ Write-Host "Source      : $relative"
 Write-Host "Destination : $Destination"
 Write-Host "Backup      : $(if ($hadOriginal) { $backupPath } else { 'none (new file)' })"
 Write-Host "Restart     : $(if ($Restart) { 'requested' } else { 'no' })"
+Write-Host "Dashboard   : $($dashboardGate.GateLine)"
+if ($liveVerificationLine) {
+    Write-Host "Post-install: $liveVerificationLine (verify-live)"
+}
 
 # Every file under /config/www/ecco/ is a Lovelace resource candidate,
 # whatever the source path (the documented content-addressed deploy copies

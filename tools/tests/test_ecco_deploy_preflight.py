@@ -20,7 +20,8 @@
       changed / was added / was removed, the id or type changed, a card has two resources, the served bytes differ or are missing,
       or the read-back is stale; prints a VERIFIED line only when the whole run passes; refuses unusable inputs
   [8] deploy-ha.ps1 (static): the manual-resource reminder is printed for every /config/www/ecco/ destination, not only for
-      frontend/<card>/dist sources, and the script only ever reads the persisted resource list
+      frontend/<card>/dist sources, and the script only ever reads the persisted resource list (the reminder's `cat`, the dashboard
+      preservation gate's read-only copy and the backup copy)
 
 Synthetic values only. Test-only; the only network use is 127.0.0.1. I/O: reads the repo, writes only under a temp dir.
 """
@@ -87,6 +88,9 @@ check("the destination allow-list is the deploy tooling's: packages, ecco and ww
       F.destination_allowed("/config/www/ecco/a.js") and F.destination_allowed("/config/ecco/dashboards/ecco_pro.yaml")
       and not F.destination_allowed("/config/www/a.js") and not F.destination_allowed("/config/www/ecco-evil/a.js")
       and not F.destination_allowed("/config/www/ecco/../secrets.yaml") and not F.destination_allowed("/etc/passwd"))
+check("the site-local dashboard protection policy area is never a destination (as tools/EccoDeploy.psm1); a sibling sharing its prefix is",
+      not F.destination_allowed("/config/ecco/site-local/dashboard-protection.json") and not F.destination_allowed("/config/ecco/site-local")
+      and F.destination_allowed("/config/ecco/site-localx/a.yaml"))
 text = ("# sensor.in_a_comment\n"
         "x: sensor.alpha_one\n"
         "y: \"states['binary_sensor.beta_two']\"\n"
@@ -565,8 +569,15 @@ check("it is printed for every /config/www/ecco/ destination: gated on Get-EccoL
       "if (Get-EccoLovelaceResourceUrl -Destination $Destination)" in dha and "Format-EccoResourceReminder -Destination $Destination" in dha
       and "$prefix = '/config/www/ecco/'" in mod and "'/local/ecco/' + $Destination.Substring($prefix.Length)" in mod)
 storage = [ln.strip() for ln in dha.splitlines() if ".storage" in ln]
-check("deploy-ha.ps1 only READS the persisted resource list: its one .storage command is a captured `cat` of lovelace_resources",
-      len(storage) == 1 and "-Command 'cat /config/.storage/lovelace_resources' -Capture" in storage[0], str(storage))
+res_uses = [ln.strip() for ln in dha.splitlines() if "$lovelaceResourcesPath" in ln]
+check("deploy-ha.ps1 only READS the persisted resource list: .storage is spelled in the reminder's captured `cat` and in one path variable, "
+      "which is only ever a read source (the preservation gate's read-only copy, and `cp -p` into the backup folder)",
+      len(storage) == 2 and any("-Command 'cat /config/.storage/lovelace_resources' -Capture" in ln for ln in storage)
+      and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in storage
+      and len(res_uses) == 4 and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in res_uses
+      and any("-ResourcesPath $lovelaceResourcesPath" in ln and "Invoke-EccoDashboardPreservationGate" in ln for ln in res_uses)
+      and "$resourcesBackupPath = \"$backupDir/\" + ($lovelaceResourcesPath.TrimStart('/') -replace '/', '__')" in res_uses
+      and any("then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath'; fi" in ln for ln in res_uses), str(storage + res_uses))
 check("the deployment module names no .storage path in code: it parses the text it is given and never reads or writes Home Assistant storage",
       "/config/.storage" not in mod)
 check("the reminder says when the copy is not live, names the persisted resource or why it is unknown, and points at verify-resource",
