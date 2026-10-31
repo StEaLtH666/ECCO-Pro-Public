@@ -10,6 +10,11 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with
+  provenance and acceptance, periods and the DST rules, the advisory contract `ecco-intel-entities/1` with its null rule, the
+  authority vocabulary, and S0 reconciled onto them ([docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md](docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md)).
+  S0 stays a DRAFT: decisions D1-D9 OPEN, thresholds PROPOSED, offline, SHADOW-only, NOT configured runtime policy; its
+  examples are synthetic, with fictional values.
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten
