@@ -141,12 +141,22 @@ a missing or stale resource for it is not reported. Make the check above by hand
 **Plan (dashboard only).** From the repository root of the clean merged tree:
 
 ```
-python -I -B tools/ecco_deploy_preflight.py plan --root . --site <site file> --snapshot <fresh /api/states dump> --baseline-dashboard <live ecco_pro.yaml> --resources <persisted lovelace_resources> --expect-sha <merged sha> --deploy= --out <directory outside the repository>
+python -I -B tools/ecco_deploy_preflight.py plan --root . --site <site file> --snapshot <fresh /api/states dump> --baseline-dashboard <live ecco_pro.yaml> --resources <persisted lovelace_resources> --expect-sha <merged sha> --deploy= --out dist/deploy
 ```
+
+`--out` must be inside the checkout, under the git-ignored `dist/` (here `dist/deploy`): `tools/deploy-ha.ps1` refuses a
+`-Source` outside the repository, so a plan written anywhere else cannot be deployed. The plan's files hold site values; `dist/`
+is never committed.
 
 Write `--deploy=` exactly: Windows PowerShell 5.1 drops the empty argument of `--deploy ""`, so the tool refuses that command
 (`expected one argument`), and leaving `--deploy` out would plan the default card list. The plan must stage only `ecco_pro.yaml` (no card copy), plan no resource action and require no restart,
 and show 0 FAIL; its one deploy command copies the staged dashboard to `/config/ecco/dashboards/ecco_pro.yaml`.
+
+The 7.23.0 dashboard replaces `custom:ecco-energy-flow-card` with `custom:ecco-flow-3d-card`, so the dashboard preservation
+gate of `tools/deploy-ha.ps1` (generic layer, R4) blocks that deploy command over a 7.22.0 live file whether or not the site
+has a protection policy. Dropping the old card is the point of this release: add `-AcceptRemovedCardType
+custom:ecco-energy-flow-card` to the plan's deploy command, deliberately. It waives only that type (see
+`docs/user/site-render.md`, Dashboard preservation gate).
 
 Once the 7.23.0 dashboard is installed:
 
@@ -154,4 +164,11 @@ Once the 7.23.0 dashboard is installed:
   must not run (roll production back to 7.22.0 first), and a section 6 upgrade changes the production Overview and is gated
   as a production change;
 - rolling back the production placement is the dashboard file alone: put back the site render of the 7.22.0 `ecco_pro.yaml`
-  (its sha256 is recorded with the deployment); the resource, the bundle and the plates stay as they are.
+  (its sha256 is recorded with the deployment); the resource, the bundle and the plates stay as they are. Through
+  `deploy-ha.ps1` that rollback drops `custom:ecco-flow-3d-card`, so it needs `-AcceptRemovedCardType custom:ecco-flow-3d-card`
+  whether or not the site has a protection policy (generic layer, R4).
+- when the site's dashboard preservation policy also protects this card (a site-local policy on the host; see
+  `docs/user/site-render.md`, Dashboard preservation gate), `deploy-ha.ps1` blocks a dashboard deployment that drops the
+  protected layer, including a manual rollback to a file without it, and `-AcceptRemovedCardType` never waives that: deploy
+  `apply`'s output instead, or retire the protection deliberately first (an owner decision), then roll back with the waiver
+  above.

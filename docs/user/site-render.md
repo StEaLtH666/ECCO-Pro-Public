@@ -92,3 +92,120 @@ The tool is read-only: it writes nothing, and its only network use is the option
 Report a card install as done only after `verify-resource` exits 0, and quote its `RESOURCE VERIFIED` line. Until then, report
 the copy as staged and not live, naming the resource the dashboards still load. Checking the card in a browser is a separate,
 later step.
+
+### Dashboard preservation gate
+
+A site may customise its live dashboard file, for example by replacing one card with a private card or by pointing a card at
+private media. A new render of this repository would silently put the generic version back. `tools/deploy-ha.ps1` (and
+`tools/deploy-dashboard.ps1`, which calls it) therefore refuses to put a repository dashboard over a site's protected layer.
+
+**What it refuses, and why.** Before its first write to the host (the backup folder, the backup copies, the upload),
+`deploy-ha.ps1` copies, read-only, the site policy, the live destination file and `/config/.storage/lovelace_resources` into a
+fresh temporary folder (deleted again afterwards), copies the candidate there too, prints the sha256 of the candidate, the live
+file and the resource list, and runs `tools/ecco_dashboard_guard.py check` on those copies. It gates every dashboard
+destination: a file under `/config/ecco/dashboards/` ending `.yaml` or `.yml`, or any destination the site policy names. The
+deployment stops, with nothing written to the host, when:
+
+- **site layer (R2):** the live file no longer matches the policy at a protected pointer (`live protected layer differs from the
+  site policy`), or the candidate removes or changes a protected subtree (`candidate removes or replaces a protected layer`);
+- **site layer (R3):** a Lovelace resource the policy requires is not registered;
+- **generic layer (R4, also without a policy):** the candidate drops a `custom:` card type that the live dashboard uses (named by
+  the pointer of its first use in live and a use count, never by its name);
+- **refused input (R1, R5):** a file does not parse, the policy is present but unreadable (also a symlink, or a folder that
+  cannot be searched) or malformed, the interpreter or PyYAML is missing, the policy protects a destination that does not exist
+  on the host (every destination it names is checked, so a mistyped one is caught), or the policy names the deployed path only
+  with a different letter case.
+
+The backup folder also receives a copy of `lovelace_resources`, and the backed-up file must be the file the gate checked. The
+source must still have the candidate's sha256 before anything is written, and the uploaded copy must have it before the move into
+place, so the installed bytes are the checked bytes. After the post-install sha256 check, a destination the policy names is read
+again and checked with `verify-live`; a failure rolls back like a failed `ha core check` (the backup is the checked live file, so
+the automatic rollback keeps the protected layer). Nothing can be deployed under `/config/ecco/site-local/`.
+
+The deploy output and the `ECCO DEPLOYMENT PASSED` block print the gate line. **For a site with a policy, accept a dashboard
+deployment only when that line names the site's gate**, `<SITE_GATE_NAME>: PASS`, not `DASHBOARD_PRESERVE_GATE: PASS`: the
+default gate name means the policy did not apply to that destination. The guard prints JSON pointers, counts, 12-hex prefixes of
+subtree hashes and full sha256 values of whole files only, never a dashboard, overlay, resource or card type value, and a usage
+error never echoes an argument. Exit codes: 0 PASS, 3 BLOCKED by a rule, 2 refused input (the first line says BLOCKED for both);
+`classify` exits 4 for "not a dashboard destination".
+
+**The interpreter.** The guard runs as `python -I -B -X utf8`, with the `python` on PATH or the interpreter named by `-Python
+<python.exe>` on `deploy-ha.ps1` and `deploy-dashboard.ps1`. `-I` (isolated mode) ignores the user site-packages folder, so PyYAML
+must be installed in that interpreter itself; a PyYAML installed with `pip install --user` does not count. Without it every
+dashboard deployment is BLOCKED (fail closed). While a site policy is present, every deployment, packages and cards included,
+needs that interpreter, because the policy is classified for every destination.
+
+**The site-local policy.** It lives on the host at `/config/ecco/site-local/dashboard-protection.json`, schema
+`ecco-dashboard-protection/1`:
+
+| Key | Meaning |
+|---|---|
+| `gate` | The gate name printed for the destinations the policy names (upper case, e.g. `EXAMPLE_SITE_PRESERVE_GATE`); other destinations print `DASHBOARD_PRESERVE_GATE` |
+| `dashboards[].destination` | The protected file on the host, spelled exactly as deployed (each destination once; it must exist on the host) |
+| `dashboards[].protect[]` | `{pointer, sha256}`: an RFC 6901 pointer into the parsed YAML and the canonical sha256 of that subtree |
+| `dashboards[].overlay[]` | `{pointer, value}`: the scalar values that make up the site layer, inside a protected pointer (used by `apply`) |
+| `dashboards[].require_resources[]` | `{url}`: Lovelace resources that must be registered |
+
+`deployment/dashboard-protection.example.json` shows the shape with fictional values. A real policy holds the site's values: it
+stays on the host and in the site's own offline records, never in a repository, an issue or a pull request. A policy that is
+present must be valid; there is no "empty" policy (to retire protection, see below).
+
+**Making a policy.** From the base render the site deployed and a copy of the live file:
+
+```powershell
+cls
+python tools\ecco_dashboard_guard.py make-policy --gate <SITE_GATE_NAME> --destination /config/ecco/dashboards/ecco_pro.yaml --base <rendered ecco_pro.yaml> --live <copy of the live ecco_pro.yaml> --pointer <JSON pointer of the customised subtree> --require-resource <resource URL> --out <local policy file>
+```
+
+`--require-resource` is optional and repeatable. `make-policy` refuses when live and the base differ anywhere outside
+`--pointer` (it prints those pointers, never the values), when a differing leaf is not a scalar or sits in a list, or when live
+removed a key, and it proves the policy (applied to the base, it gives live) before writing it. Copying the policy to
+`/config/ecco/site-local/` on the host is a deliberate owner step; no ECCO tool writes there.
+
+**Deploying a new render over a protected dashboard.** A fresh render (and `deploy-dashboard.ps1`, which copies the repository
+file as it is) carries the generic layer, so the gate blocks it. `apply` writes the policy's overlay into the render's text:
+
+```powershell
+cls
+python tools\ecco_dashboard_guard.py apply --policy <local copy of the host policy> --destination /config/ecco/dashboards/ecco_pro.yaml --candidate dist\deploy\stage\ecco_pro.yaml --out dist\protected\ecco_pro.yaml
+.\tools\deploy-ha.ps1 -Source dist\protected\ecco_pro.yaml -Destination /config/ecco/dashboards/ecco_pro.yaml
+```
+
+`apply` replaces single-line scalars in place, inserts missing keys at their mapping's indentation and leaves every other line as
+it was; the result does not depend on the order of the overlay operations. It writes only when the result parses to the render
+with exactly the overlay values set and matches every protect hash; otherwise it writes nothing (exit 3). It refuses a missing
+parent, a flow mapping, a list, an anchor or alias, a merge key and a target that is not a plain scalar. `--out` must not exist
+yet and its folder must exist (`dist/` is git-ignored).
+
+**A release that changes the protected card.** The policy freezes the whole subtree at its pointer. When a release changes a
+generic attribute of that card (or moves it to another index), `apply` refuses (`post-condition: ... still differs from the
+protected layer`), and `make-policy` cannot simply be re-run against the new render while live still holds the old card. The
+owner procedure, one deliberate step at a time:
+
+1. Hand-merge the site values into the new render (start from `apply`'s refusal: the overlay pointers name every site value),
+   giving a merged candidate under `dist/`.
+2. Move the host policy aside, out of `/config/ecco/site-local/` (an owner decision; the site is unprotected until step 5).
+3. Deploy the merged candidate with `deploy-ha.ps1`. The generic layer still runs: R4 passes because the merged candidate keeps
+   the site's custom card type.
+4. Make the new policy: `make-policy --base <new render> --live <copy of the new live file> --pointer <the card's pointer in the
+   new render>`.
+5. Install the new policy on the host (owner step), then prove it: `ecco_dashboard_guard.py verify-live --policy <the new policy>
+   --destination <destination> --live <a fresh copy of the live file>` must print `<SITE_GATE_NAME>: PASS`.
+
+**Replacing a custom card, and rolling back across it (`-AcceptRemovedCardType`).** The generic layer applies to every site, with
+or without a policy: a release that replaces one custom card with another (for example a new card type on the Overview) drops a
+`custom:` type the live dashboard uses, and so does a rollback to the file from before such a release. Each of those deployments
+needs `-AcceptRemovedCardType custom:<the dropped card>`, given deliberately for that deployment. It waives R4 for exactly the
+named types (`custom:<name>`, name `[A-Za-z0-9][A-Za-z0-9._-]*`); every other dropped type still blocks, and it never waives a
+protected layer or a required resource.
+
+**Retiring protection (an owner decision).** To retire protection, move the host policy aside (out of
+`/config/ecco/site-local/`), then deploy with `-AcceptRemovedCardType custom:<card>` for each custom card type the live
+dashboard uses that the render drops. A manual rollback to a file without the protected layer (for example the previous generic
+render) is blocked in the same way and needs the same deliberate step.
+
+**Tests.** The guard is covered by `tools/tests/test_ecco_dashboard_guard.py` (run in CI). The PowerShell side, including a
+deploy-ha.ps1 run against a stubbed host that proves a BLOCKED gate writes nothing, is covered by `tools/tests/Test-EccoDeploy.ps1`,
+which CI does not run (CI only parses `tools/*.ps1`): run `powershell -NoProfile -ExecutionPolicy Bypass -File
+tools\tests\Test-EccoDeploy.ps1 -Python <python.exe with PyYAML>` with Windows PowerShell 5.1 as a required local pre-push step
+for every change to the deploy tooling or the guard.

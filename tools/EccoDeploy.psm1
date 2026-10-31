@@ -8,12 +8,20 @@
     .storage state - it only ever moves files under an explicit allowlist
     on the remote /config tree and inspects/reverts them. The Lovelace
     resource helpers only parse and describe a resource list that
-    deploy-ha.ps1 has read back; they never change it.
+    deploy-ha.ps1 has read back; they never change it. The dashboard
+    preservation gate only copies files FROM the host (read-only) into a
+    local temp folder it deletes again.
 
     Windows PowerShell 5.1 compatible. No external module dependencies.
 #>
 
 Set-StrictMode -Version Latest
+
+# The site-local area on the host: the dashboard protection policy lives
+# here and nothing is ever deployed into it (Test-EccoDeploymentDestination).
+$script:EccoSiteLocalPrefix = '/config/ecco/site-local/'
+$script:EccoDashboardPolicyPath = '/config/ecco/site-local/dashboard-protection.json'
+$script:EccoDashboardsPrefix = '/config/ecco/dashboards/'
 
 function Invoke-EccoRemoteCommand {
     <#
@@ -107,6 +115,9 @@ function Test-EccoDeploymentDestination {
         arbitrary file under /config/www/ is served to every browser that
         loads the Lovelace UI, so only the ecco/ subdirectory is allowed,
         never /config/www/ itself.
+
+        One subtree inside the allowlist is refused: /config/ecco/site-local/,
+        which holds the site's dashboard protection policy.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -167,6 +178,15 @@ function Test-EccoDeploymentDestination {
 
     if (-not $allowedDestination) {
         throw 'Remote destination must be under /config/packages/, /config/ecco/, or /config/www/ecco/.'
+    }
+
+    # /config/ecco/site-local/ holds the site's own dashboard protection
+    # policy (see Invoke-EccoDashboardPreservationGate). Nothing ECCO
+    # renders belongs there, so no deployment may ever write over it - the
+    # gate's policy cannot be replaced or removed by the tool it gates.
+    if ($normalised.StartsWith($script:EccoSiteLocalPrefix, [System.StringComparison]::Ordinal) -or
+        $normalised -eq $script:EccoSiteLocalPrefix.TrimEnd('/')) {
+        throw "Remote destination may not be under $($script:EccoSiteLocalPrefix): it holds the site-local dashboard protection policy, which no deployment overwrites."
     }
 
     return $normalised
@@ -474,6 +494,537 @@ function Invoke-EccoDeploymentRollback {
     throw $message
 }
 
+function Test-EccoDashboardDestinationPath {
+    <#
+        True when a (validated) destination is a dashboard file by its path:
+        under /config/ecco/dashboards/ and ending .yaml or .yml. A
+        destination the site policy names is a dashboard destination too;
+        that half of the rule needs the policy and is decided by the guard's
+        `classify` command inside Invoke-EccoDashboardPreservationGate. The
+        same path rule is is_dashboard_path() in
+        tools/ecco_dashboard_guard.py. Pure string logic, tested offline.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $prefix = $script:EccoDashboardsPrefix
+    return ($Destination.StartsWith($prefix, [System.StringComparison]::Ordinal) -and
+        $Destination.Length -gt $prefix.Length -and
+        ($Destination.EndsWith('.yaml', [System.StringComparison]::OrdinalIgnoreCase) -or
+         $Destination.EndsWith('.yml', [System.StringComparison]::OrdinalIgnoreCase)))
+}
+
+function Get-EccoGateProbeCommand {
+    <#
+        The read-only shell probe Copy-EccoRemoteFileForGate runs on the
+        host for one absolute path. It prints exactly one word:
+          present    - a regular file the SSH user can read;
+          absent     - no file and no symlink at the path, PROVEN by its
+                       nearest existing ancestor being a searchable
+                       directory;
+          unreadable - everything else: a symlink at the path (dangling
+                       or not), a directory, an unreadable file, or an
+                       ancestor that is not a searchable directory. A
+                       failed stat (EACCES) makes [ -e ] false for a file
+                       that exists, so "not there" alone is never absent.
+        Only single-quoted words, no variables and no double quotes (an
+        embedded double quote would be split by the native command line
+        of Windows PowerShell 5.1): every ancestor is spelled out. The
+        path must not contain a single quote. Pure string logic.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RemotePath
+    )
+
+    if ($RemotePath.Contains("'") -or $RemotePath.Contains('"') -or -not $RemotePath.StartsWith('/') -or $RemotePath.EndsWith('/') -or $RemotePath.Contains('//')) {
+        throw "Refusing to probe '$RemotePath': an absolute file path without quotes or empty segments is required."
+    }
+    $q = "'$RemotePath'"
+    $command = "if [ -L $q ]; then printf unreadable; elif [ -e $q ]; then if [ -f $q ] && [ -r $q ]; then printf present; else printf unreadable; fi;"
+    $cut = $RemotePath.LastIndexOf('/')
+    while ($cut -gt 0) {
+        $ancestor = "'" + $RemotePath.Substring(0, $cut) + "'"
+        $command += " elif [ -e $ancestor ] || [ -L $ancestor ]; then if [ -d $ancestor ] && [ -x $ancestor ]; then printf absent; else printf unreadable; fi;"
+        $cut = $RemotePath.LastIndexOf('/', $cut - 1)
+    }
+    $command += " elif [ -d '/' ] && [ -x '/' ]; then printf absent; else printf unreadable; fi"
+    return $command
+}
+
+function Copy-EccoRemoteFileForGate {
+    <#
+        Read-only: copies one file from the host to a local path for the
+        dashboard preservation gate. Returns 'present' (copied) or 'absent'
+        (proven absent: see Get-EccoGateProbeCommand). Throws when the path
+        is a symlink, a directory or an unreadable file, when an ancestor
+        cannot be searched, or when ssh/scp fails - the gate turns every
+        throw into BLOCKED, so an unusable file is never mistaken for an
+        absent one. scp copies the exact bytes (a captured ssh `cat`
+        would be re-decoded by the console code page).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SshHost,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RemotePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LocalPath
+    )
+
+    $probe = Invoke-EccoRemoteCommand -SshHost $SshHost -Command (Get-EccoGateProbeCommand -RemotePath $RemotePath) -Capture
+    if ($probe.ExitCode -ne 0) {
+        throw "Unable to inspect $RemotePath on the host (ssh exit code $($probe.ExitCode))."
+    }
+    $state = ($probe.Output -join '').Trim()
+    if ($state.EndsWith('absent')) {
+        return 'absent'
+    }
+    if (-not $state.EndsWith('present')) {
+        throw "$RemotePath is not a readable regular file on the host, or its folder cannot be searched (a symlink, a directory, an unreadable file or folder)."
+    }
+
+    $remoteSpec = '{0}:{1}' -f $SshHost, $RemotePath
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & scp -q $remoteSpec $LocalPath
+        $scpCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($scpCode -ne 0 -or -not (Test-Path -LiteralPath $LocalPath -PathType Leaf)) {
+        throw "Unable to copy $RemotePath from the host (scp exit code $scpCode)."
+    }
+    return 'present'
+}
+
+function Read-EccoGateRemoteFile {
+    # One read for the gate: the injected reader (offline tests) or the
+    # ssh/scp copy. Anything but 'present' or 'absent' is an error.
+    param(
+        [string]$SshHost,
+        [string]$RemotePath,
+        [string]$LocalPath,
+        [scriptblock]$RemoteFileReader
+    )
+
+    if ($RemoteFileReader) {
+        $state = @(& $RemoteFileReader $RemotePath $LocalPath)
+    } else {
+        $state = @(Copy-EccoRemoteFileForGate -SshHost $SshHost -RemotePath $RemotePath -LocalPath $LocalPath)
+    }
+    $last = if ($state.Count -gt 0) { [string]$state[-1] } else { '' }
+    if ($last -eq 'present') {
+        if (-not (Test-Path -LiteralPath $LocalPath -PathType Leaf)) {
+            throw "The read of $RemotePath reported a copy but no local copy exists."
+        }
+        return 'present'
+    }
+    if ($last -eq 'absent') {
+        return 'absent'
+    }
+    throw "The read of $RemotePath returned an unexpected state."
+}
+
+function Invoke-EccoDashboardGuard {
+    <#
+        Runs tools/ecco_dashboard_guard.py with the given arguments and
+        captures its output and exit code. A guard that cannot be started
+        (no python on PATH) is exit code 2 with a BLOCKED first line, never
+        a pass: $LASTEXITCODE is not trusted after a failed start.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Python,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GuardPath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    foreach ($a in $Arguments) {
+        if ([string]::IsNullOrEmpty($a)) {
+            # Windows PowerShell 5.1 drops an empty native argument, which
+            # would shift every argument after it.
+            return [pscustomobject]@{ ExitCode = 2; Output = @('DASHBOARD_PRESERVE_GATE: BLOCKED', '  BLOCKED refused: an empty argument was passed to the guard') }
+        }
+        if ($a.Contains('"') -or $a.EndsWith('\')) {
+            # Windows PowerShell 5.1 passes an embedded double quote (or a
+            # trailing backslash before its own closing quote) verbatim, and
+            # the C runtime then splits the argument into several: a crafted
+            # value could add or override guard options.
+            return [pscustomobject]@{ ExitCode = 2; Output = @('DASHBOARD_PRESERVE_GATE: BLOCKED', '  BLOCKED refused: an argument with a double quote or a trailing backslash cannot be passed to the guard safely') }
+        }
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $output = @()
+    $code = 2
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Python -I -B -X utf8 $GuardPath @Arguments 2>&1)
+        $code = $LASTEXITCODE
+    }
+    catch {
+        return [pscustomobject]@{ ExitCode = 2; Output = @('DASHBOARD_PRESERVE_GATE: BLOCKED', "  BLOCKED refused: the guard could not be started with '$Python' ($($_.Exception.Message))") }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($null -eq $code) {
+        $code = 2
+    }
+    $text = @($output | ForEach-Object { $_.ToString() })
+    return [pscustomobject]@{ ExitCode = [int]$code; Output = $text }
+}
+
+function Format-EccoGateBlockedMessage {
+    # The single terminating error of a BLOCKED gate: its first line names
+    # the gate and BLOCKED, the guard's own lines follow.
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Gate,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Reason,
+
+        [string[]]$Detail = @()
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("${Gate}: BLOCKED - $Reason")
+    foreach ($d in $Detail) {
+        $lines.Add([string]$d)
+    }
+    $lines.Add('Nothing was written to the host: no backup, no upload, no change.')
+    return ($lines -join "`n")
+}
+
+function Invoke-EccoDashboardPreservationGate {
+    <#
+        The fail-closed dashboard preservation gate deploy-ha.ps1 runs
+        BEFORE its first remote write (mkdir, backup, upload). Read-only on
+        the host: it copies the site policy
+        (/config/ecco/site-local/dashboard-protection.json), the live
+        destination file and the persisted Lovelace resource list into a
+        fresh local temp folder, runs tools/ecco_dashboard_guard.py
+        `check`, and deletes the folder in a finally block (the copies may
+        hold site values).
+
+        - Policy absent: the generic layer only. Present but unreadable or
+          malformed: BLOCKED.
+        - A destination is gated when it is a dashboard path
+          (Test-EccoDashboardDestinationPath) or the policy names it.
+        - Live file absent: a new file has nothing to protect (PASS), unless
+          the policy names it (BLOCKED).
+        - Anything but guard exit 0 throws, with the guard's output, before
+          the caller writes anything.
+
+        - With a policy, every other destination it names must exist on the
+          host (a mistyped destination protects nothing): BLOCKED otherwise.
+        - The guard checks a private copy of the candidate; its sha256 is
+          returned (CandidateSha256) and deploy-ha.ps1 installs only a file
+          with that hash.
+        - The guard's PASS line must name the gate classify determined.
+
+        Returns the gate line, whether the gate applied, whether the policy
+        names the destination (deploy-ha.ps1 then runs
+        Invoke-EccoDashboardLiveVerification after the install) and the
+        sha256 of the candidate, the live file and the resource list.
+        -RemoteFileReader replaces the ssh/scp reads for offline tests:
+        & $reader <remote path> <local path> -> 'present' | 'absent'.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SshHost,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CandidatePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GuardPath,
+
+        # The host's persisted Lovelace resource list, named by the caller.
+        [Parameter(Mandatory = $true)]
+        [string]$ResourcesPath,
+
+        [string[]]$AcceptRemovedCardType = @(),
+
+        [string]$PolicyPath = $script:EccoDashboardPolicyPath,
+
+        [string]$Python = 'python',
+
+        [scriptblock]$RemoteFileReader
+    )
+
+    $defaultGate = 'DASHBOARD_PRESERVE_GATE'
+    foreach ($t in @($AcceptRemovedCardType)) {
+        # Strictly custom:<name>. A value with a double quote and spaces
+        # would be split into several guard options by the native command
+        # line of Windows PowerShell 5.1 (it could override --destination);
+        # the guard and Invoke-EccoDashboardGuard refuse such values too.
+        if ($null -eq $t -or $t -cnotmatch '^custom:[A-Za-z0-9][A-Za-z0-9._-]*\z') {
+            throw (Format-EccoGateBlockedMessage -Gate $defaultGate -Reason '-AcceptRemovedCardType takes custom card types only: custom:<name>, name [A-Za-z0-9][A-Za-z0-9._-]*.')
+        }
+    }
+
+    $result = [pscustomobject]@{
+        Applies                = $false
+        GateLine               = 'not a dashboard destination: the dashboard preservation gate does not apply'
+        Gate                   = $defaultGate
+        PolicyState            = 'absent'
+        PolicyNamesDestination = $false
+        PolicyDestinations     = @()
+        LiveState              = 'not read'
+        LiveSha256             = $null
+        ResourcesSha256        = $null
+        CandidateSha256        = $null
+        Output                 = @()
+    }
+
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ('ecco-dashboard-guard-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $localPolicy = Join-Path $work 'dashboard-protection.json'
+        try {
+            $result.PolicyState = Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $PolicyPath -LocalPath $localPolicy -RemoteFileReader $RemoteFileReader
+        }
+        catch {
+            throw (Format-EccoGateBlockedMessage -Gate $defaultGate -Reason "the site policy $PolicyPath could not be read: $($_.Exception.Message)")
+        }
+
+        if ($result.PolicyState -eq 'present') {
+            # classify must give a complete, well-formed answer: exit 0 with
+            # one "yes" line, or exit 4 (never Python's crash code 1) with
+            # the "no" line, and the list of every destination the policy
+            # names. Anything else - a crash, a missing interpreter, a
+            # refused policy - is BLOCKED, never "not a dashboard".
+            $classify = Invoke-EccoDashboardGuard -Python $Python -GuardPath $GuardPath -Arguments @('classify', '--destination', $Destination, '--policy', $localPolicy)
+            $out = @($classify.Output)
+            $classifiedGate = $null
+            if ($out.Count -gt 0 -and ([string]$out[0]) -cmatch '^gate: ([A-Z][A-Z0-9_]{2,63})$') {
+                $classifiedGate = $Matches[1]
+            }
+            $yesEntry = @($out | Where-Object { $_ -ceq 'dashboard destination: yes (site policy entry)' }).Count -eq 1
+            $yesPath = @($out | Where-Object { $_ -ceq 'dashboard destination: yes (under /config/ecco/dashboards/, .yaml / .yml)' }).Count -eq 1
+            $no = @($out | Where-Object { $_ -ceq 'dashboard destination: no' }).Count -eq 1
+            $countLines = @($out | Where-Object { $_ -cmatch '^policy destinations: [0-9]{1,6}$' })
+            $listedDestinations = @($out | Where-Object { $_ -cmatch '^policy destination: /config/' } | ForEach-Object { $_.Substring('policy destination: '.Length) })
+            $listed = ($countLines.Count -eq 1) -and ($listedDestinations.Count -gt 0) -and ([int]($countLines[0].Substring('policy destinations: '.Length)) -eq $listedDestinations.Count)
+            $answeredYes = ($classify.ExitCode -eq 0) -and ($yesEntry -xor $yesPath) -and (-not $no)
+            $answeredNo = ($classify.ExitCode -eq 4) -and $no -and (-not $yesEntry) -and (-not $yesPath)
+            if (-not ($classifiedGate -and $listed -and ($answeredYes -or $answeredNo))) {
+                $refusalGate = $defaultGate
+                if ($out.Count -gt 0 -and ([string]$out[0]) -cmatch '^([A-Z][A-Z0-9_]{2,63}): BLOCKED$') {
+                    $refusalGate = $Matches[1]
+                }
+                $policyRefused = ($classify.ExitCode -eq 2) -and (@($out | Where-Object { $_ -cmatch '^\s+BLOCKED refused: policy' }).Count -gt 0)
+                if ($policyRefused) {
+                    $reason = "the site policy $PolicyPath is not valid."
+                } else {
+                    $reason = "the dashboard guard could not run, or its answer was not understood, while classifying $Destination against the site policy (guard exit code $($classify.ExitCode))."
+                }
+                throw (Format-EccoGateBlockedMessage -Gate $refusalGate -Reason $reason -Detail $out)
+            }
+            $result.Gate = $classifiedGate
+            $result.PolicyNamesDestination = $yesEntry
+            $result.PolicyDestinations = $listedDestinations
+
+            # Every other destination the policy names must exist on the
+            # host: a mistyped destination (letter case, extension, folder)
+            # would protect nothing, and the deployed file would fall to the
+            # generic layer without a word.
+            $probeIndex = 0
+            foreach ($policyDestination in $listedDestinations) {
+                if ($policyDestination -ceq $Destination) {
+                    continue
+                }
+                $probeIndex++
+                $probeLocal = Join-Path $work ('policy-destination-' + $probeIndex)
+                try {
+                    $policyDestinationState = Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $policyDestination -LocalPath $probeLocal -RemoteFileReader $RemoteFileReader
+                }
+                catch {
+                    throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the site policy protects $policyDestination, which could not be read on the host: $($_.Exception.Message)")
+                }
+                if ($policyDestinationState -ne 'present') {
+                    throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the site policy protects $policyDestination, but that file does not exist on the host (a mistyped destination protects nothing: correct the host policy).")
+                }
+            }
+        }
+
+        if (-not ((Test-EccoDashboardDestinationPath -Destination $Destination) -or $result.PolicyNamesDestination)) {
+            return $result
+        }
+        $result.Applies = $true
+        if (-not $result.PolicyNamesDestination) {
+            $result.Gate = $defaultGate
+        }
+
+        # The guard checks a private copy of the candidate, and its sha256 is
+        # returned: deploy-ha.ps1 uploads and installs only a file with this
+        # hash, so the bytes installed are the bytes checked.
+        $localCandidate = Join-Path $work 'candidate.yaml'
+        try {
+            Copy-Item -LiteralPath $CandidatePath -Destination $localCandidate -ErrorAction Stop
+        }
+        catch {
+            throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the candidate $CandidatePath could not be read: $($_.Exception.Message)")
+        }
+        $result.CandidateSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $localCandidate).Hash.ToLowerInvariant()
+        Write-Host "Candidate SHA256          : $($result.CandidateSha256)"
+
+        $localLive = Join-Path $work 'live.yaml'
+        try {
+            $result.LiveState = Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $Destination -LocalPath $localLive -RemoteFileReader $RemoteFileReader
+        }
+        catch {
+            throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the live dashboard $Destination could not be read: $($_.Exception.Message)")
+        }
+        if ($result.LiveState -eq 'absent') {
+            if ($result.PolicyNamesDestination) {
+                throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the site policy protects $Destination, but that file does not exist on the host.")
+            }
+            $result.GateLine = "${defaultGate}: PASS (new file: nothing on the host to protect)"
+            return $result
+        }
+        $result.LiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $localLive).Hash.ToLowerInvariant()
+        Write-Host "Live dashboard SHA256     : $($result.LiveSha256)"
+
+        $localResources = Join-Path $work 'lovelace_resources'
+        try {
+            $resourcesState = Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $ResourcesPath -LocalPath $localResources -RemoteFileReader $RemoteFileReader
+        }
+        catch {
+            throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the Lovelace resource list could not be read: $($_.Exception.Message)")
+        }
+        if ($resourcesState -eq 'present') {
+            $result.ResourcesSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $localResources).Hash.ToLowerInvariant()
+            Write-Host "Lovelace resources SHA256 : $($result.ResourcesSha256)"
+        } else {
+            Write-Host 'Lovelace resources SHA256 : none (no persisted resource list on the host)'
+        }
+
+        $arguments = @('check', '--destination', $Destination, '--live', $localLive, '--candidate', $localCandidate)
+        if ($result.PolicyState -eq 'present') {
+            $arguments += @('--policy', $localPolicy)
+        }
+        if ($resourcesState -eq 'present') {
+            $arguments += @('--resources', $localResources)
+        }
+        foreach ($t in @($AcceptRemovedCardType)) {
+            $arguments += @('--accept-removed-type', $t)
+        }
+        $check = Invoke-EccoDashboardGuard -Python $Python -GuardPath $GuardPath -Arguments $arguments
+        $result.Output = $check.Output
+        $check.Output | ForEach-Object { Write-Host $_ }
+        if ($check.ExitCode -ne 0) {
+            throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the dashboard preservation gate refused this deployment (guard exit code $($check.ExitCode))." -Detail $check.Output)
+        }
+        # The PASS line must name the gate classify determined: the site's
+        # gate when the policy names the destination, the default otherwise.
+        # A guard that passed under another gate checked something else.
+        $expectedPass = "$($result.Gate): PASS"
+        $first = if ($check.Output.Count -gt 0) { [string]$check.Output[0] } else { '' }
+        if ($first -cne $expectedPass) {
+            throw (Format-EccoGateBlockedMessage -Gate $result.Gate -Reason "the guard exited 0 without the expected line '$expectedPass'." -Detail $check.Output)
+        }
+        $result.GateLine = $first
+        return $result
+    }
+    finally {
+        try {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not delete the gate's temporary folder $work (it may hold site values): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Invoke-EccoDashboardLiveVerification {
+    <#
+        The post-install half of the gate: re-reads the site policy and the
+        installed destination (read-only, into a fresh temp folder deleted
+        in a finally block) and runs the guard's `verify-live`. Never
+        throws: returns Passed = $false with the reason, and deploy-ha.ps1
+        sends a failure through Invoke-EccoDeploymentRollback.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SshHost,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GuardPath,
+
+        [string]$PolicyPath = $script:EccoDashboardPolicyPath,
+
+        [string]$Python = 'python',
+
+        # The gate the pre-install check ran under (deploy-ha.ps1 passes
+        # it): the PASS line must name it.
+        [string]$ExpectedGate,
+
+        [scriptblock]$RemoteFileReader
+    )
+
+    $result = [pscustomobject]@{ Passed = $false; GateLine = ''; Output = @() }
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ('ecco-dashboard-verify-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $work | Out-Null
+        $localPolicy = Join-Path $work 'dashboard-protection.json'
+        $localLive = Join-Path $work 'live.yaml'
+        if ((Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $PolicyPath -LocalPath $localPolicy -RemoteFileReader $RemoteFileReader) -ne 'present') {
+            $result.Output = @("the site policy $PolicyPath is no longer on the host")
+            return $result
+        }
+        if ((Read-EccoGateRemoteFile -SshHost $SshHost -RemotePath $Destination -LocalPath $localLive -RemoteFileReader $RemoteFileReader) -ne 'present') {
+            $result.Output = @("the installed file $Destination is not on the host")
+            return $result
+        }
+        $verify = Invoke-EccoDashboardGuard -Python $Python -GuardPath $GuardPath -Arguments @('verify-live', '--policy', $localPolicy, '--destination', $Destination, '--live', $localLive)
+        $result.Output = $verify.Output
+        $first = if ($verify.Output.Count -gt 0) { [string]$verify.Output[0] } else { '' }
+        $result.GateLine = $first
+        if ($ExpectedGate) {
+            $result.Passed = ($verify.ExitCode -eq 0) -and ($first -ceq "${ExpectedGate}: PASS")
+        } else {
+            $result.Passed = ($verify.ExitCode -eq 0) -and ($first -cmatch '^[A-Z][A-Z0-9_]+: PASS$')
+        }
+        return $result
+    }
+    catch {
+        $result.Passed = $false
+        $result.Output = @($result.Output) + @("the post-install read failed: $($_.Exception.Message)")
+        return $result
+    }
+    finally {
+        if (Test-Path -LiteralPath $work) {
+            try {
+                Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Could not delete the gate's temporary folder $work (it may hold site values): $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 Export-ModuleMember -Function `
     Invoke-EccoRemoteCommand, `
     Invoke-EccoRemoteCommandBestEffort, `
@@ -483,4 +1034,11 @@ Export-ModuleMember -Function `
     Get-EccoLovelaceResourceUrl, `
     ConvertFrom-EccoLovelaceResources, `
     Format-EccoResourceReminder, `
-    Invoke-EccoDeploymentRollback
+    Invoke-EccoDeploymentRollback, `
+    Test-EccoDashboardDestinationPath, `
+    Get-EccoGateProbeCommand, `
+    Copy-EccoRemoteFileForGate, `
+    Invoke-EccoDashboardGuard, `
+    Format-EccoGateBlockedMessage, `
+    Invoke-EccoDashboardPreservationGate, `
+    Invoke-EccoDashboardLiveVerification
