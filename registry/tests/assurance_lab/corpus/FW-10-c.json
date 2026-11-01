@@ -1,0 +1,163 @@
+{
+  "actions": [
+    {
+      "args": {
+        "minutes": 10,
+        "power_w": 3000
+      },
+      "at_s": 60,
+      "do": "fp_start"
+    },
+    {
+      "args": {},
+      "at_s": 90,
+      "do": "fp_end"
+    },
+    {
+      "args": {
+        "nvs_fault": [
+          "read_error",
+          "fp.valid"
+        ]
+      },
+      "at_s": 120,
+      "do": "reboot"
+    },
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 240,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 240,
+      "do": "dump_start"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status",
+      "op": "==",
+      "value": "REJECTED - Free Power override/recovery owns inverter settings"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "ABSENT"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "corrupt",
+      "op": "==",
+      "value": true
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "addrs": [
+          230,
+          232,
+          244,
+          256,
+          261,
+          268,
+          274,
+          275
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "230": 120,
+        "232": 0,
+        "244": 2,
+        "256": 8000,
+        "261": 5000,
+        "268": 20,
+        "274": 1,
+        "275": 0
+      }
+    },
+    {
+      "args": {},
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    }
+  ],
+  "failure_outcome": "the Dump lease starts and writes 244 / 256-261 while Free Power's obligation is UNKNOWN and its domain locked (the M7 mutant and the single-term variant without '!free_power_snapshot_valid')",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "FW-10-c",
+  "invariant": "INV-LOCKOUT-QUIET",
+  "notes": "Derived from FW:510-518 and FW:532-538 (read error: snapshot_valid + metadata_corrupt, 'cross-domain START gates see snapshot_valid'), FW:18061 and FW:18890. active_persisted is clear (restore_value no, not loaded), so only the snapshot_valid term refuses: this document kills the M7b variant.",
+  "ownership": "ECCO-owned Free Power lease completed (marker CLEAR); a power cut and a boot whose read of the used fp.valid key fails (synthetic NVS boot fault); the owner then presses Dump to Grid Start",
+  "scenario_priority": "P2",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (PASS): key guard decision - the UNKNOWN lockout sets snapshot_valid and the Dump START gate's snapshot_valid term refuses",
+  "source_anchors": [
+    {
+      "line_at_record": 18063,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "// Register 244 standalone proof transaction: Dump also"
+    },
+    {
+      "line_at_record": 525,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "free_power_marker_unreadable = marker_load == ecco_durable::LOAD_READ_ERROR;"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Dump START during the Free Power UNKNOWN lockout (NVS read error on the used fp.valid key at boot)",
+  "trace_digest": "d4621eaa0261353e50e2dd12b65ab213af58484ee5a17d729a88674b9d85f319",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {}
+}

@@ -1,0 +1,188 @@
+{
+  "actions": [
+    {
+      "args": {
+        "seconds": 405
+      },
+      "at_s": 0,
+      "do": "run_for"
+    },
+    {
+      "args": {
+        "write": [
+          "timeout_lost",
+          "ok"
+        ]
+      },
+      "at_s": 405,
+      "do": "set_outcomes"
+    },
+    {
+      "args": {
+        "offset_s": -400
+      },
+      "at_s": 405,
+      "do": "rtc_offset"
+    },
+    {
+      "args": {
+        "seconds": 780
+      },
+      "at_s": 405,
+      "do": "run_for"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {},
+      "observe": "lock_windows",
+      "op": "==",
+      "value": [
+        [
+          1792889925.12,
+          1792890016.0
+        ],
+        [
+          1792890345.12,
+          1792890357.12
+        ]
+      ]
+    },
+    {
+      "args": {
+        "after_change": true,
+        "reason": "large",
+        "verified": true
+      },
+      "observe": "n_corrections",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "args": {
+        "name": "failed_corrections"
+      },
+      "observe": "global_value",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "args": {},
+      "observe": "fp_status",
+      "op": "==",
+      "value": "RESTORED OK - original inverter settings verified"
+    },
+    {
+      "args": {},
+      "observe": "fp_leases",
+      "op": "==",
+      "value": [
+        {
+          "active_utc": 1792889416.2,
+          "end_epoch": 1792890015,
+          "final_status": "RESTORED OK - original inverter settings verified",
+          "restore_start_utc": 1792890030.0,
+          "restored_text": "RESTORED OK - original inverter settings verified",
+          "restored_utc": 1792890031.32,
+          "start_utc": 1792889415.0,
+          "statuses": [
+            [
+              1792889415.0,
+              "STARTING - taking fresh inverter snapshot"
+            ],
+            [
+              1792889415.36,
+              "SNAPSHOT DURABLY COMMITTED - 6000W at 52.0V -> 115A grid charge target"
+            ],
+            [
+              1792889416.2,
+              "ACTIVE - VERIFIED OK; 115A grid charge; automatic restore armed"
+            ],
+            [
+              1792890030.0,
+              "RESTORING - confirming live inverter state before writing"
+            ],
+            [
+              1792890031.32,
+              "RESTORED OK - original inverter settings verified"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "args": {},
+      "observe": "invariants",
+      "op": "==",
+      "value": {
+        "audit": 0,
+        "i1": 0,
+        "i2": 0,
+        "i3": 0,
+        "i6": 0,
+        "nvs": 0,
+        "oracle": 0,
+        "state": 0,
+        "wire": 0
+      }
+    }
+  ],
+  "failure_outcome": "a restore started inside the RTC lock, or a DST correction never verified",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "RT-01-a",
+  "invariant": "INV-RTC-NO-RESTORE-IN-LOCK",
+  "notes": "the 10-min lease ends at +15 s inside the breaker lock (-74.88..+16.0 s); restore at the +30 s watchdog slot",
+  "ownership": "Free Power lease (real START button) owns 230/232/256-261/268-279; the RTC path owns 22-24; synthetic inverter offset -400 s and a lost write callback",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (documented design: cooldown holds even a large error; the watchdog skips while the lock is held)",
+  "source_anchors": [
+    {
+      "line_at_record": 24610,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "ABORTED - correction exceeded its deadline"
+    },
+    {
+      "line_at_record": 253,
+      "path": "firmware/include/ecco_rtc_policy.h",
+      "text": "if (in.cooldown_active) {"
+    },
+    {
+      "line_at_record": 24120,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "if (id(free_power_operation_in_progress) || id(manual_write_in_progress) || id(correction_in_progress)) return false;"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_rtc_policy.h": "464ac9cd243db51c94dc4ae8175c3eb2aa520458620cb464df5d3fb049234766",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b"
+  },
+  "synthetic": true,
+  "tier": "rtc",
+  "title": "Fall: lost RTC write callback 75 s before 01:00 UTC under an active Free Power lease: breaker, cooldown, delayed DST correction, restore deferred out of the lock",
+  "trace_digest": "182a48db0b494671feaf7a7dd2e9ca3c907f80fe4a6ba767d085429b7089f9f5",
+  "utc_start": "2026-10-25T00:50:15Z",
+  "world": {
+    "fp_lease": true,
+    "fp_minutes": 10,
+    "kind": "fall"
+  }
+}
