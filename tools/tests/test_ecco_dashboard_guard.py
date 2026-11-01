@@ -6,7 +6,9 @@
       decoded ~1 before ~0, list indices, a format / parse round trip over keys with / and ~); emit_scalar's read-back check
   [2] check: every rule positively and negatively. The generic render over a privately overridden live file is BLOCKED (R2 and R4);
       live itself passes; a live file that drifted from the policy, a protected pointer missing in the candidate or in live, a
-      missing required resource or resource list (R3) and a dropped custom card type (R4, nested too) block; --accept-removed-type
+      missing required resource or resource list (R3) and a dropped custom card type (R4, nested too) block; --allow-drift-recovery
+      passes a drifted live file only for a candidate that carries the policy's layer exactly (WARNING lines), never a candidate
+      without it, and waives nothing else; --accept-removed-type
       waives R4 for the named type only, never another dropped type, R2 or R3, and takes only a strict custom:<name>; a policy
       without an entry for the destination is the generic layer under the default gate; a policy whose destination differs only
       in letter case is refused; a character YAML does not allow is a parse refusal, not an internal error
@@ -26,8 +28,10 @@
   [7] privacy: no overlay value (a fictional secret-looking value among them), no card type name and no hash of one appears in any
       stdout, stderr or --json report, not even when the YAML error is on its line or the value is a stray argument
   [8] static: the guard imports no network or subprocess module and writes only through its two writers; deploy-ha.ps1 runs the gate
-      as a bare top-level statement before its first remote write, ties the uploaded bytes to the checked bytes, and runs verify-live
-      after the post-install hash (rolling back on failure); EccoDeploy.psm1 refuses /config/ecco/site-local/ destinations, throws
+      as a bare top-level statement before its first remote write, checks the gate pin right after it (read before the host is
+      contacted), passes -AllowDriftRecovery, ties the uploaded bytes to the checked bytes, and runs verify-live after the
+      post-install hash (rolling back on failure); the rollback restores with a plain cp and touch (never cp -p) and asks for a
+      lovelace/config read-back for a dashboard; the pin file is git-ignored; EccoDeploy.psm1 refuses /config/ecco/site-local/ destinations, throws
       on every guard answer but PASS under the expected gate, refuses arguments the 5.1 command line would split, probes symlinks
       and unsearchable folders as unreadable; no PowerShell 7-only operators; the example policy is valid and fictional; the docs
       describe the gate, the plan --out location and the owner procedures
@@ -245,11 +249,53 @@ try:
     check("a policy without an entry for the destination: generic layer only, default gate, still BLOCKED by R4",
           code == 3 and first(out) == "DASHBOARD_PRESERVE_GATE: BLOCKED" and "R2" not in out and "without an entry" in out, out)
     drift_f = w("live-drift.yaml", LIVE.replace("crossfade_ms: 900", "crossfade_ms: 1200"))
+    nocard = BASE.split("      - type: grid\n        cards:\n          - type: custom:example-flow-card")[0]
+    nocard_f = w("cand-nocard.yaml", nocard)
     code, out = chk(drift_f, "--policy", pol_f, live=drift_f)
     check("live changed against the policy is BLOCKED ('live protected layer differs from the site policy'), even with candidate = live",
           code == 3 and "BLOCKED R2: live protected layer differs from the site policy: " + PTR in out, out)
-    nocard = BASE.split("      - type: grid\n        cards:\n          - type: custom:example-flow-card")[0]
-    nocard_f = w("cand-nocard.yaml", nocard)
+    code, out = chk(live_f, "--policy", pol_f, live=drift_f)
+    check("drift without --allow-drift-recovery: a candidate that restores the policy's layer exactly is still BLOCKED (live may hold newer "
+          "site values), with an info line naming the option", code == 3 and "BLOCKED R2: live protected layer differs from the site policy: "
+          + PTR in out and "BLOCKED R2: candidate" not in out and "--allow-drift-recovery (deploy-ha.ps1 -AllowDriftRecovery) restores it" in out, out)
+    code, out = chk(live_f, "--policy", pol_f, "--allow-drift-recovery", live=drift_f)
+    lines = out.splitlines()
+    check("drift recovery: with --allow-drift-recovery that candidate passes (exit 0) under the policy gate, the drift a loud WARNING "
+          "right after the PASS line (the drifted pointer and both hashes), never an ok line for live",
+          code == 0 and first(out) == f"{GATE}: PASS" and "BLOCKED" not in out and len(lines) > 2
+          and lines[1].startswith(f"  WARNING R2 drift: live protected layer differs from the site policy: {PTR} (policy ")
+          and lines[2].startswith("  WARNING drift recovery: 1 drifted protected pointer(s)")
+          and f"ok R2: candidate keeps the protected layer at {PTR}" in out and "ok R2: live matches" not in out, out)
+    code, out = chk(drift_f, "--policy", pol_f, "--allow-drift-recovery", live=drift_f)
+    check("drift recovery never passes a candidate without the protected layer: the drifted live file itself is BLOCKED (live and "
+          "candidate R2), with no WARNING", code == 3 and "BLOCKED R2: live protected layer differs" in out
+          and "BLOCKED R2: candidate removes or replaces a protected layer" in out and "WARNING" not in out, out)
+    code, out = chk(base_f, "--policy", pol_f, "--allow-drift-recovery", "--accept-removed-type", SITE_TYPE, live=drift_f)
+    check("... nor the generic render, with every waiver given", code == 3 and "BLOCKED R2: candidate removes" in out, out)
+    code, out = chk(live_f, "--policy", pol_f, "--allow-drift-recovery", live=nocard_f)
+    check("drift recovery: a live file that lost the protected subtree is restored by a candidate that carries it (PASS, WARNING)",
+          code == 0 and f"WARNING R2 drift: live protected layer differs from the site policy: {PTR} is missing in live" in out, out)
+    code, out = chk(live_f, "--policy", pol_f, "--allow-drift-recovery", live=base_f)
+    code2, out2 = chk(live_f, "--policy", pol_f, "--allow-drift-recovery", "--accept-removed-type", "custom:example-flow-card", live=base_f)
+    check("drift recovery waives nothing else: a live file that fell back to the generic card still needs --accept-removed-type for the "
+          "generic type the candidate drops (R4 BLOCKED), then passes", code == 3 and "BLOCKED R4" in out and "WARNING R2 drift" in out
+          and "BLOCKED R2" not in out and code2 == 0 and "WARNING drift recovery" in out2, out + out2)
+    code, out = chk(live_f, "--policy", pol_res_f, "--resources", res_missing_f, "--allow-drift-recovery", live=drift_f)
+    check("drift recovery never waives R3", code == 3 and "BLOCKED R3" in out, out)
+    code, out = chk(live_f, "--policy", pol_f, "--allow-drift-recovery")
+    check("--allow-drift-recovery without drift changes nothing: PASS, 'nothing to recover', no WARNING",
+          code == 0 and "live matches the site policy (nothing to recover)" in out and "WARNING" not in out, out)
+    code, out = chk(base_f, "--allow-drift-recovery")
+    check("--allow-drift-recovery without a site policy waives nothing: the generic render is still BLOCKED by R4",
+          code == 3 and "BLOCKED R4" in out and "no site policy entry for this destination (nothing to recover)" in out, out)
+    drift_rep = TMP / "report-drift.json"
+    code, out = chk(live_f, "--policy", pol_f, "--allow-drift-recovery", "--json", str(drift_rep), live=drift_f)
+    drift_data = json.loads(drift_rep.read_text(encoding="utf-8")) if drift_rep.exists() else {}
+    OUTPUTS.append(json.dumps(drift_data))
+    check("--json reports a drift recovery: PASS, the two warnings, nothing blocked", drift_data.get("result") == "PASS"
+          and len(drift_data.get("warnings", [])) == 2 and drift_data.get("blocked") == [], str(drift_data)[:300])
+    code, out = run(["verify-live", "--policy", pol_f, "--destination", DEST, "--live", drift_f])
+    check("verify-live has no drift recovery: a drifted live file is BLOCKED", code == 3 and "live protected layer differs" in out, out)
     code, out = chk(nocard_f, "--policy", pol_f)
     check("a protected pointer missing in the candidate is BLOCKED", code == 3 and f"{PTR} is missing in the candidate" in out, out)
     code, out = chk(live_f, "--policy", pol_f, live=nocard_f)
@@ -684,6 +730,35 @@ try:
           "gate), passed through by deploy-dashboard.ps1",
           "[string]$Python = 'python'" in dha and "-AcceptRemovedCardType $AcceptRemovedCardType -Python $Python" in dha
           and "-GuardPath $guardPath -Python $Python -ExpectedGate $dashboardGate.Gate" in dha and "$deployParams.Python = $Python" in dd)
+    pin_at = dha.find("$gatePinLine = Assert-EccoDashboardGatePin -GateResult $dashboardGate -ExpectedGate $gatePin -PinSource $gatePinSource")
+    pin_read = dha.find("$gatePin = Get-EccoDashboardGatePin -Path $gatePinFile")
+    check("deploy-ha.ps1 reads the gate pin (-ExpectedSiteGate, else the local pin file) before it contacts the host, and checks it as a bare "
+          "top-level statement right after the gate and before the first remote write",
+          0 < pin_read < dha.find("& ssh -o BatchMode=yes $SshHost 'true'") and 0 < gate_at < pin_at < first_write
+          and depth_at(dha, pin_at) == 0 and not re.search(r"(?i)\bcatch\b", dha[gate_at:first_write])
+          and "if ($ExpectedSiteGate) {\n    $gatePin = $ExpectedSiteGate" in dha
+          and "[ValidatePattern('(?-i)^[A-Z][A-Z0-9_]{2,63}\\z')]\n    [string]$ExpectedSiteGate" in dha, str((pin_read, gate_at, pin_at, first_write)))
+    check("-AllowDriftRecovery is a deploy-ha.ps1 switch passed to the gate; deploy-dashboard.ps1 passes it and -ExpectedSiteGate through",
+          "[switch]$AllowDriftRecovery" in dha and "-Python $Python -AllowDriftRecovery:$AllowDriftRecovery" in gate_line
+          and "$deployParams.AllowDriftRecovery = $true" in dd and "$deployParams.ExpectedSiteGate = $ExpectedSiteGate" in dd
+          and "if ($AllowDriftRecovery) {\n            $arguments += '--allow-drift-recovery'" in mod)
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    check("the local pin file is git-ignored under the name the module reads",
+          "$script:EccoDashboardGatePinFile = 'ecco_dashboard_gate.local.txt'" in mod and "ecco_dashboard_gate.local.txt" in gitignore
+          and "**/ecco_dashboard_gate.local.txt" in gitignore)
+    rb = re.search(r"function Invoke-EccoDeploymentRollback \{(.*?)\n\}\n", mod, re.S)
+    rbody = rb.group(1) if rb else ""
+    check("the rollback restores with a plain cp then touch (never cp -p: Home Assistant keeps serving a cached YAML dashboard that is not "
+          "newer than its cache) and asks for a lovelace/config read-back for a dashboard",
+          "-Command \"cp '$BackupPath' '$Destination' && touch '$Destination'\"" in rbody and "cp -p" not in rbody
+          and "-Dashboard $isDashboard" in rbody and "DASHBOARD READ-BACK REQUIRED" in mod and "websocket lovelace/config" in mod
+          and dha.count("-Dashboard:($dashboardGate.Applies)") == 4)
+    drift_line = re.search(r'\nif \(\$driftRecovery\) \{\n    Write-Host "(Drift       : RECOVERED - [^"]*)"\n\}\n', dha)
+    check("a drift recovery is one flag in deploy-ha.ps1, set from the gate's WARNING lines: every rollback gets it (DRIFT RECOVERY ROLLED "
+          "BACK), and the PASSED block prints the Drift line only under it",
+          "\n$driftRecovery = @($dashboardGate.Warnings).Count -gt 0\n" in dha and dha.count("-DriftRecovery:$driftRecovery -Reason ") == 4
+          and "-DriftRecovery ([bool]$DriftRecovery)" in rbody and "DRIFT RECOVERY ROLLED BACK" in mod and drift_line is not None
+          and dha.find("$driftRecovery = ") < dha.find("Invoke-EccoDeploymentRollback "))
     m = re.search(r"function Test-EccoDeploymentDestination \{(.*?)\n\}", mod, re.S)
     body = m.group(1) if m else ""
     site_local_refusal = re.search(
@@ -757,6 +832,29 @@ try:
                                                  "not `DASHBOARD_PRESERVE_GATE: PASS`", "replaces one custom card with another",
                                                  "A release that changes the protected card", "make-policy --base <new render>",
                                                  "Move the host policy aside", "Test-EccoDeploy.ps1 -Python", "required local pre-push step")))
+    check("the docs describe the hardening: the rollback's plain cp and touch with the lovelace/config read-back, the gate pin (parameter, "
+          "git-ignored file, the deliberate DASHBOARD_PRESERVE_GATE pin, the pinned owner procedure and retirement), drift recovery "
+          "(exact layer only, warnings, waives nothing else) and plan --site-policy",
+          all(phrase in site_flat for phrase in ("never `cp -p`", "websocket `lovelace/config`", "DASHBOARD READ-BACK REQUIRED",
+                                                 "-ExpectedSiteGate <SITE_GATE_NAME>", "`ecco_dashboard_gate.local.txt`",
+                                                 "`-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`", "remove the local gate pin",
+                                                 "**Drift recovery (`-AllowDriftRecovery`).**", "A candidate that does not carry the protected "
+                                                 "layer exactly stays BLOCKED", "`verify-live` never accepts drift",
+                                                 "plan --site-policy <local copy of the host policy>")))
+    check("the docs quote deploy-ha.ps1's Drift line as it prints it (column-aligned), and say that a drift recovery's rollback restores the "
+          "drifted file (DRIFT RECOVERY ROLLED BACK), never that the rollback keeps the protected layer",
+          drift_line is not None and f"`{drift_line.group(1).split(' from the site policy')[0]} from the site policy ...`" in site
+          and "the automatic rollback keeps the protected layer" not in site_flat
+          and all(phrase in site_flat for phrase in ("except after a drift recovery, whose backup is the drifted file",
+                                                     "`DRIFT RECOVERY ROLLED BACK`", "Do not report the site layer as intact")))
+    check("the docs give -ExpectedSiteGate DASHBOARD_PRESERVE_GATE as the one-run override while the policy is aside (bundles and packages "
+          "too) and say to keep the pin; only retiring protection removes it",
+          all(phrase in site_flat for phrase in ("the one-run override while the policy is deliberately aside", "Keep the pin: removing it",
+                                                 "every deployment made while the policy is aside (this one, and the release's card bundle or "
+                                                 "a package deployed before step 5) needs `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`",
+                                                 "Never remove it for this procedure"))
+          and site_flat.count("remove the local gate pin") == 1 and "remove the pin" not in site_flat
+          and "remove the pin" not in mod and "-ExpectedSiteGate $($script:EccoDefaultDashboardGate) for this deployment only, and keep the pin" in mod)
     inst = (ROOT / "frontend" / "ecco-flow-3d-card" / "INSTALL_PREVIEW.md").read_text(encoding="utf-8")
     inst_flat = " ".join(inst.split())
     check("INSTALL_PREVIEW.md section 7: the plan --out is inside the checkout (dist/deploy), never outside the repository",

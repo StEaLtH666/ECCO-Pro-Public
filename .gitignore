@@ -23,6 +23,9 @@ home-assistant_v2.db*
 # Local configuration containing private values
 ecco_site.local.yaml
 **/ecco_site.local.yaml
+# the optional local pin of the site's dashboard gate name (tools/deploy-ha.ps1 -ExpectedSiteGate)
+ecco_dashboard_gate.local.txt
+**/ecco_dashboard_gate.local.txt
 config.local.yaml
 **/config.local.yaml
 *_private.yaml

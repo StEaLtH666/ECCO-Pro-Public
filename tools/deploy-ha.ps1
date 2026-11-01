@@ -23,6 +23,24 @@ param(
     [ValidatePattern('^custom:[A-Za-z0-9][A-Za-z0-9._-]*\z')]
     [string[]]$AcceptRemovedCardType = @(),
 
+    # Dashboard preservation gate, drift recovery: the live file differs
+    # from the site policy at a protected pointer, and this candidate
+    # restores the policy's protected layer exactly. Without this switch
+    # that is BLOCKED (live may hold newer site values than the policy);
+    # with it the gate passes with a loud warning. A candidate that does
+    # not carry the protected layer is never passed.
+    [switch]$AllowDriftRecovery,
+
+    # Optional pin of the site's gate name (the site policy's "gate"): a
+    # dashboard destination must then pass under exactly this gate, so a
+    # host policy that was moved aside or no longer names the destination
+    # cannot fall back to DASHBOARD_PRESERVE_GATE without a word. Default:
+    # the git-ignored file ecco_dashboard_gate.local.txt at the repository
+    # root, when it exists. DASHBOARD_PRESERVE_GATE states that this
+    # deployment deliberately targets a dashboard the policy does not protect.
+    [ValidatePattern('(?-i)^[A-Z][A-Z0-9_]{2,63}\z')]
+    [string]$ExpectedSiteGate,
+
     # The Python that runs tools/ecco_dashboard_guard.py (with -I, so
     # PyYAML must be installed in that interpreter itself, not only in a
     # user site-packages folder). Default: the python on PATH.
@@ -76,6 +94,20 @@ if (-not $Destination) {
 
 $Destination = Test-EccoDeploymentDestination -Destination $Destination
 
+# The optional gate pin: the parameter, else the local pin file. A pin file
+# that exists but cannot be read stops the deployment here (never "no pin").
+if ($ExpectedSiteGate) {
+    $gatePin = $ExpectedSiteGate
+    $gatePinSource = '-ExpectedSiteGate'
+} else {
+    $gatePinFile = Get-EccoDashboardGatePinPath -RepoRoot $repoRoot
+    $gatePin = Get-EccoDashboardGatePin -Path $gatePinFile
+    $gatePinSource = 'the local pin file ' + [System.IO.Path]::GetFileName($gatePinFile)
+}
+if ($gatePin) {
+    Write-Host "Expected site gate: $gatePin (from $gatePinSource)"
+}
+
 if ($AllowDirtyWorkingTree) {
     Write-Warning 'Deploying with -AllowDirtyWorkingTree: the working tree may not match any committed revision.'
 } else {
@@ -108,10 +140,21 @@ if ($sshProbeCode -ne 0) {
 # tools/ecco_dashboard_guard.py: the candidate may not drop a protected
 # site layer, a required resource or (unless -AcceptRemovedCardType) a
 # custom card type the live dashboard uses. Anything but PASS throws here,
-# so nothing on the host has changed.
+# so nothing on the host has changed. With a gate pin, a dashboard
+# destination must have passed under the pinned gate (also a throw here).
 Write-Host 'Running the dashboard preservation gate (read-only)...'
-$dashboardGate = Invoke-EccoDashboardPreservationGate -SshHost $SshHost -Destination $Destination -CandidatePath $sourceFull -GuardPath $guardPath -ResourcesPath $lovelaceResourcesPath -AcceptRemovedCardType $AcceptRemovedCardType -Python $Python
+$dashboardGate = Invoke-EccoDashboardPreservationGate -SshHost $SshHost -Destination $Destination -CandidatePath $sourceFull -GuardPath $guardPath -ResourcesPath $lovelaceResourcesPath -AcceptRemovedCardType $AcceptRemovedCardType -Python $Python -AllowDriftRecovery:$AllowDriftRecovery
 Write-Host $dashboardGate.GateLine
+$gatePinLine = Assert-EccoDashboardGatePin -GateResult $dashboardGate -ExpectedGate $gatePin -PinSource $gatePinSource
+if ($gatePinLine) {
+    Write-Host $gatePinLine
+}
+foreach ($gateWarning in @($dashboardGate.Warnings)) {
+    Write-Warning "Dashboard preservation gate: $gateWarning"
+}
+# The gate's only WARNING lines are a drift recovery's: the live file (and so
+# the backup below) differs from the site policy at a protected pointer.
+$driftRecovery = @($dashboardGate.Warnings).Count -gt 0
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $lastSlash = $Destination.LastIndexOf('/')
@@ -220,7 +263,7 @@ try {
 catch {
     $moveFailureMessage = $_.Exception.Message
     Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
 }
 
 # Post-install verification: hash the file that actually landed at
@@ -239,7 +282,7 @@ if (-not $postInstallHash -or $postInstallHash -ne $localHash) {
     } else {
         "Post-install SHA256 mismatch. Local=$localHash Installed=$postInstallHash"
     }
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason $reason
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason $reason
 }
 Write-Host "Post-install SHA256 verified: $postInstallHash"
 
@@ -253,7 +296,7 @@ if ($dashboardGate.PolicyNamesDestination) {
     $liveVerification = Invoke-EccoDashboardLiveVerification -SshHost $SshHost -Destination $Destination -GuardPath $guardPath -Python $Python -ExpectedGate $dashboardGate.Gate
     $liveVerification.Output | ForEach-Object { Write-Host $_ }
     if (-not $liveVerification.Passed) {
-        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
+        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
     }
     $liveVerificationLine = $liveVerification.GateLine
 }
@@ -263,7 +306,7 @@ $check = Invoke-EccoRemoteCommand -SshHost $SshHost -Command 'ha core check' -Ca
 $check.Output | ForEach-Object { Write-Host $_ }
 
 if ($check.ExitCode -ne 0) {
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason 'Home Assistant configuration check failed after deployment.'
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'Home Assistant configuration check failed after deployment.'
 }
 
 if ($Restart) {
@@ -280,6 +323,12 @@ Write-Host "Destination : $Destination"
 Write-Host "Backup      : $(if ($hadOriginal) { $backupPath } else { 'none (new file)' })"
 Write-Host "Restart     : $(if ($Restart) { 'requested' } else { 'no' })"
 Write-Host "Dashboard   : $($dashboardGate.GateLine)"
+if ($gatePinLine) {
+    Write-Host $gatePinLine
+}
+if ($driftRecovery) {
+    Write-Host "Drift       : RECOVERED - live differed from the site policy at a protected pointer and now carries the policy's layer; the drifted file is the backup $backupPath"
+}
 if ($liveVerificationLine) {
     Write-Host "Post-install: $liveVerificationLine (verify-live)"
 }

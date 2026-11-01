@@ -8,6 +8,7 @@ never restarts anything, never edits Lovelace resources or dashboards and never 
 
     python tools/ecco_deploy_preflight.py plan --site ecco_site.local.yaml [--snapshot states.json] [--baseline-dashboard live.yaml]
                                                [--resources resources.json] [--expect-sha <git sha>] [--out dist/deploy]
+                                               [--site-policy <local copy of the host's dashboard protection policy>]
     python tools/ecco_deploy_preflight.py verify-staged --plan dist/deploy/plan.json
     python tools/ecco_deploy_preflight.py verify-served --plan dist/deploy/plan.json --base-url http://homeassistant.local:8123
     python tools/ecco_deploy_preflight.py verify-resource --plan dist/deploy/plan.json --resources now.json [--before before.json]
@@ -28,7 +29,13 @@ never restarts anything, never edits Lovelace resources or dashboards and never 
     unavailable/unknown are warnings;
   - checks that every card bundle it must deploy is present in the tree;
   - writes, under --out, the staged files (cards under content-addressed names `<card>.<sha8>.js`, so a deployed file is never
-    overwritten and rollback is a resource-URL change), a storage-mode preview-dashboard configuration (YAML and JSON) and plan.json.
+    overwritten and rollback is a resource-URL change), a storage-mode preview-dashboard configuration (YAML and JSON) and plan.json;
+  - with --site-policy (a local copy of the host's /config/ecco/site-local/dashboard-protection.json, validated by the guard's rules)
+    that protects the dashboard destination, the dashboard's deploy command is preceded by the guard's `apply` step (its --out under
+    stage/, named by the render and the policy), and `apply` is run in memory to report whether it will succeed on this render (FAIL
+    when it would refuse). When that file already exists (a re-run into the same --out), it is deployed as it is if it holds exactly
+    `apply`'s output, else FAIL (remove it first: `apply` refuses an existing --out and the plan never deletes). Without --site-policy
+    an INFO line says that the dashboard command deploys the render as it is.
 `--out` must be outside the repository or under dist/ (git-ignored), and must be empty or a previous preflight output.
 plan.json and the staged files contain the site's entity ids and device slug: keep them local, never commit or publish them.
 `verify-staged` re-hashes the staged files against plan.json. `verify-served` fetches each planned bundle over HTTP (GET only) and
@@ -69,6 +76,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE))
 import ecco_site_render as R  # noqa: E402
+import ecco_dashboard_guard as G  # noqa: E402
 
 DASHBOARD_REL = "home-assistant/dashboards/ecco_pro.yaml"
 DASHBOARD_DEST = "/config/ecco/dashboards/ecco_pro.yaml"
@@ -130,6 +138,59 @@ def artefact_name(source_rel: str, data: bytes) -> str:
     """`<stem>.<sha8>.js`: the file name carries the content, so a deployed bundle is never overwritten."""
     stem = Path(source_rel).stem
     return f"{stem}.{sha(data)[:8]}.js"
+
+
+def load_site_policy(path: Path) -> tuple[bytes, dict | None]:
+    """A local copy of the host's dashboard protection policy: (its bytes, its entry for DASHBOARD_DEST or None). Refused (exit 2) when
+    unreadable or invalid, by the guard's own rules (tools/ecco_dashboard_guard.py)."""
+    try:
+        raw = path.read_bytes()
+        entry = G.load_policy(str(path)).entry(DASHBOARD_DEST)
+    except OSError as ex:
+        raise InputError(f"--site-policy: cannot be read ({type(ex).__name__})") from None
+    except G.GuardError as ex:
+        raise InputError(f"--site-policy: {ex}") from None
+    return raw, entry
+
+
+def site_policy_commands(rep: Report, dash: bytes, entry: dict, policy_arg: str, staged: str, applied: str,
+                         applied_path: Path) -> list[str]:
+    """The dashboard's deploy commands when the site policy protects it: the guard's `apply` first (deploy-ha.ps1 blocks a plain render
+    over a protected layer), then deploy-ha.ps1 on the applied file. `apply` is also run here, in memory only, to report whether it
+    will succeed on this render. `apply` refuses an existing --out, and the plan never deletes: when a previous run of the printed step
+    left the applied file (same render and policy, so the same name), it is deployed as it is if it holds exactly `apply`'s output;
+    anything else there is a FAIL (remove it first)."""
+    counts = f"{len(entry['overlay'])} overlay operation(s), {len(entry['protect'])} protected pointer(s)"
+    out = None
+    try:
+        text = dash.decode("utf-8")
+        cand = G.parse_yaml(text, "staged dashboard")
+        out, _changed = G.apply_overlay(text, entry["overlay"], cand)
+        reasons = G.overlay_postcondition(cand, out, entry)
+    except G.Refusal as ex:
+        reasons = [f"apply {ex}"]
+    except (G.GuardError, UnicodeDecodeError) as ex:
+        reasons = [str(ex)]
+    hint = " - a release that changes the protected card needs the owner procedure in docs/user/site-render.md" if reasons else ""
+    deploy = f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {DASHBOARD_DEST}"
+    if not reasons and (applied_path.exists() or applied_path.is_symlink()):
+        try:
+            same = (applied_path.is_file() and not applied_path.is_symlink()
+                    and applied_path.read_bytes() == out.encode("utf-8", "surrogatepass"))
+        except OSError:
+            same = False
+        if same:
+            rep.add("PASS", f"site policy: {applied} already holds `apply`'s output for this render and policy ({counts}); the dashboard "
+                    "command deploys it (no `apply` step: `apply` refuses an existing --out)")
+            return [deploy]
+        reasons = [f"{applied} already exists and is not `apply`'s output for this render and policy: remove it first (`apply` refuses "
+                   "an existing --out, and the plan never deletes)"]
+    rep.add("PASS" if not reasons else "FAIL",
+            f"site policy: `apply` writes the site layer into the staged dashboard ({counts}); the dashboard command runs it first",
+            "; ".join(reasons) + hint)
+    pol = f'"{policy_arg}"' if " " in policy_arg else policy_arg
+    return [f"python tools\\ecco_dashboard_guard.py apply --policy {pol} --destination {DASHBOARD_DEST} --candidate {staged} --out {applied}",
+            deploy]
 
 
 def destination_allowed(dest: str) -> bool:
@@ -358,6 +419,7 @@ def plan(args: argparse.Namespace) -> int:
     now = _ts(args.now) if args.now else datetime.now(timezone.utc)
     if now is None:
         raise InputError("--now must be an ISO timestamp")
+    policy_raw, policy_entry = load_site_policy(Path(args.site_policy)) if args.site_policy else (None, None)
     try:
         site = R.load_site(Path(args.site))
         results, _reports = R.render_tree(root, site)
@@ -445,16 +507,31 @@ def plan(args: argparse.Namespace) -> int:
             return p.resolve().relative_to(root.resolve()).as_posix()
         except ValueError:
             return str(p)
+    dash_commands = [f".\\tools\\deploy-ha.ps1 -Source {rel(stage / 'ecco_pro.yaml')} -Destination {DASHBOARD_DEST}"]
+    site_policy = None
+    if policy_raw is None:
+        rep.add("INFO", "the dashboard command deploys the render as it is (no --site-policy)",
+                f"if the host has {G.SITE_LOCAL_PREFIX}dashboard-protection.json, re-run with --site-policy <local copy of it>: the plan then "
+                "prints the guard's `apply` step first (deploy-ha.ps1 blocks a plain render over a protected layer)")
+    elif policy_entry is None:
+        rep.add("INFO", f"the site policy does not name {DASHBOARD_DEST}: the dashboard command deploys the render as it is (generic layer)")
+        site_policy = {"sha256": sha(policy_raw), "names_dashboard": False}
+    else:
+        inputs8 = sha(sha(dash).encode() + sha(policy_raw).encode())[:8]   # the applied file is named by the render and the policy
+        applied_path = stage / f"ecco_pro.site-{inputs8}.yaml"
+        applied = rel(applied_path)
+        dash_commands = site_policy_commands(rep, dash, policy_entry, args.site_policy, rel(stage / "ecco_pro.yaml"), applied, applied_path)
+        site_policy = {"sha256": sha(policy_raw), "names_dashboard": True, "apply_out": applied}
     data = {
         "schema": "ecco-deploy-plan/1", "local_only": LOCAL_ONLY_NOTE, "git_head": head, "site_device_slug": site.device_slug,
         "dashboard_version": version,
         "dashboard": {"source": DASHBOARD_REL, "bytes": len(dash), "sha256_as_rendered": sha(dash), "sha256_lf": sha(lf(dash)),
                       "sha256_crlf": sha(lf(dash).replace(b"\n", b"\r\n")), "line_ending_as_rendered": "CRLF" if b"\r\n" in dash else "LF",
                       "destination": DASHBOARD_DEST, "staged": rel(stage / "ecco_pro.yaml"), "views": (info or {}).get("views"),
-                      "preview_yaml": rel(out / "ecco_pro_preview.yaml")},
+                      "preview_yaml": rel(out / "ecco_pro_preview.yaml"), "site_policy": site_policy},
         "cards": plan_cards, "unchanged_cards_not_deployed": unchanged,
         "deploy_commands": [f".\\tools\\deploy-ha.ps1 -Source {rel(stage / c['name'])} -Destination {c['destination']}" for c in plan_cards]
-                           + [f".\\tools\\deploy-ha.ps1 -Source {rel(stage / 'ecco_pro.yaml')} -Destination {DASHBOARD_DEST}"],
+                           + dash_commands,
         "note_commands": "text only: this tool never runs them; resources are registered by hand, and a resource URL change is shared by every dashboard",
         "restart_required": False,
         "checks": [{"status": s, "name": n, "detail": d} for s, n, d in rep.rows],
@@ -616,6 +693,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--deploy", default=",".join(DEFAULT_DEPLOY), help="card directories to deploy (default: %(default)s)")
     p.add_argument("--expect-sha")
     p.add_argument("--allow-dirty", action="store_true")
+    p.add_argument("--site-policy", help="a local copy of the host's dashboard protection policy: when it protects the dashboard, the "
+                                         "dashboard command runs the guard's `apply` first")
     q = sub.add_parser("verify-staged", help="re-hash the staged files against plan.json")
     q.add_argument("--plan", required=True)
     s = sub.add_parser("verify-served", help="GET each planned bundle from Home Assistant and compare its sha256")

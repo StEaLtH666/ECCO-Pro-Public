@@ -7,7 +7,7 @@ tools/deploy-ha.ps1 runs before it backs up or uploads a dashboard file, and aga
 lives in a site-local policy file on the host (/config/ecco/site-local/dashboard-protection.json), never in this repository.
 
     python tools/ecco_dashboard_guard.py check --destination D --live L --candidate C [--policy P] [--resources R]
-                                               [--accept-removed-type custom:T ...] [--json OUT]
+                                               [--accept-removed-type custom:T ...] [--allow-drift-recovery] [--json OUT]
     python tools/ecco_dashboard_guard.py apply --policy P --destination D --candidate C --out O
     python tools/ecco_dashboard_guard.py make-policy --gate NAME --destination D --base B --live L --pointer /json/pointer
                                                      [--require-resource URL ...] --out O
@@ -15,7 +15,8 @@ lives in a site-local policy file on the host (/config/ecco/site-local/dashboard
     python tools/ecco_dashboard_guard.py classify --destination D [--policy P]
 
 OUTPUT. The first line is always "<GATE>: PASS" or "<GATE>: BLOCKED" (classify: "gate: <GATE>"), then one line per finding:
-"  BLOCKED <rule>: ..." for each reason, "  ok <rule>: ..." and "  info: ...". GATE is the policy's "gate" when the policy has an
+"  BLOCKED <rule>: ..." for each reason, "  WARNING <rule>: ..." (a drift recovery, below), "  ok <rule>: ..." and
+"  info: ...". GATE is the policy's "gate" when the policy has an
 entry for the destination, otherwise DASHBOARD_PRESERVE_GATE. Lines name JSON pointers, counts, sha256 prefixes (12 hex) of
 subtrees and full sha256 values of whole files only: never a value of a dashboard, an overlay, a resource or a card type, which
 may be private. A usage error names option names only, never an argument value.
@@ -34,6 +35,11 @@ RULES of `check` (all evaluated; any failure blocks):
      json.dumps(subtree, sort_keys=True, separators=(",", ":"), ensure_ascii=False), UTF-8, with tagged values, non-string keys and
      other non-JSON YAML values encoded deterministically under NUL-prefixed marker keys (a plain dashboard needs none of them).
      Pointers are RFC 6901 over the parsed YAML, list indices as decimal integers.
+     Drift recovery: with --allow-drift-recovery, live differing from the policy is a WARNING instead of BLOCKED, but only when the
+     candidate carries every protected subtree with exactly the policy's hash (it restores the site layer); a candidate that does not
+     carry the protected layer stays BLOCKED. Without the option such a candidate is BLOCKED with a line naming the option, because
+     a live file that differs may hold newer site values than the policy (then make a new policy instead). The option waives
+     nothing else (R3, R4 and the candidate half of R2 still apply).
   R3 (site layer) every `require_resources` {url} is the url of an item of the resources file (the Home Assistant
      .storage/lovelace_resources format, data.items[].url). Required but --resources missing: BLOCKED.
   R4 (generic layer: always) every Lovelace card type that starts with "custom:" and occurs in live occurs in the candidate, unless
@@ -528,27 +534,36 @@ class Result:
     def __init__(self, gate: str) -> None:
         self.gate = gate
         self.blocked: list[str] = []
+        self.warnings: list[str] = []
         self.ok: list[str] = []
         self.info: list[str] = []
         self.policy_state = "none"
 
     def lines(self) -> list[str]:
         head = f"{self.gate}: {'BLOCKED' if self.blocked else 'PASS'}"
-        return ([head] + [f"  BLOCKED {safe(b)}" for b in self.blocked] + [f"  ok {safe(o)}" for o in self.ok]
-                + [f"  info: {safe(i)}" for i in self.info])
+        return ([head] + [f"  BLOCKED {safe(b)}" for b in self.blocked] + [f"  WARNING {safe(w)}" for w in self.warnings]
+                + [f"  ok {safe(o)}" for o in self.ok] + [f"  info: {safe(i)}" for i in self.info])
 
 
-def site_layer_live(res: Result, entry: dict, live) -> None:
+def live_drift(res: Result, entry: dict, live) -> list[str]:
+    """The R2 live findings: an ok line per protected pointer that matches the policy (added to res), and the drift of the others
+    ("live protected layer differs from the site policy: ..."), returned for the caller to block or, in a drift recovery, warn."""
+    drift = []
     for ptr, toks, sha in entry["protect"]:
         got = resolve(live, toks)
         if got is _MISSING:
-            res.blocked.append(f"R2: live protected layer differs from the site policy: {ptr} is missing in live")
+            drift.append(f"live protected layer differs from the site policy: {ptr} is missing in live")
             continue
         h = canon_hash(got)
         if h != sha:
-            res.blocked.append(f"R2: live protected layer differs from the site policy: {ptr} (policy {short(sha)}, live {short(h)})")
+            drift.append(f"live protected layer differs from the site policy: {ptr} (policy {short(sha)}, live {short(h)})")
         else:
             res.ok.append(f"R2: live matches the site policy at {ptr} (sha256 {short(sha)})")
+    return drift
+
+
+def site_layer_live(res: Result, entry: dict, live) -> None:
+    res.blocked += [f"R2: {d}" for d in live_drift(res, entry, live)]
 
 
 def site_layer_candidate(res: Result, entry: dict, cand) -> None:
@@ -610,17 +625,43 @@ def run_check(args) -> tuple[Result, int]:
     live, cand = parse_yaml(live_text, "live"), parse_yaml(cand_text, "candidate")
     res.ok.append(f"R1: live (sha256 {short(file_sha(live_text))}) and candidate (sha256 {short(file_sha(cand_text))}) parse as YAML mappings")
     urls = load_resources(args.resources) if args.resources else None   # a resources file that is given must be readable
+    recover = bool(getattr(args, "allow_drift_recovery", False))
     if entry:
         res.info.append(f"site policy: {len(entry['protect'])} protected pointer(s), {len(entry['require_resources'])} required resource(s)")
-        site_layer_live(res, entry, live)
+        drift = live_drift(res, entry, live)
+        at = len(res.blocked)
         site_layer_candidate(res, entry, cand)
+        carries = len(res.blocked) == at   # every protected subtree of the candidate has exactly the policy's hash
+        drift_rule(res, drift, carries, recover, at)
         resources_rule(res, entry, urls)
     elif policy:
         res.info.append("site policy present without an entry for this destination: generic layer only")
     else:
         res.info.append("no site policy: generic layer only")
+    if recover and not entry:
+        res.info.append("--allow-drift-recovery: no site policy entry for this destination (nothing to recover)")
     generic_layer(res, live, cand, accepted)
     return res, (EXIT_BLOCKED if res.blocked else EXIT_PASS)
+
+
+def drift_rule(res: Result, drift: list[str], carries: bool, recover: bool, at: int) -> None:
+    """R2's live half. Drift blocks (inserted before the candidate's R2 lines), unless --allow-drift-recovery was given AND the
+    candidate carries the policy's protected layer exactly: then the deployment restores the site layer, and every drifted pointer
+    is a WARNING. A candidate without the protected layer is never passed: its own R2 lines block it whatever the option says."""
+    if not drift:
+        if recover:
+            res.info.append("--allow-drift-recovery: live matches the site policy (nothing to recover)")
+        return
+    if recover and carries:
+        res.warnings += [f"R2 drift: {d}" for d in drift]
+        res.warnings.append(f"drift recovery: {len(drift)} drifted protected pointer(s); the candidate restores the site policy's layer "
+                            "exactly and replaces what live holds there (the live file is kept only in the deployment's backup)")
+        return
+    res.blocked[at:at] = [f"R2: {d}" for d in drift]
+    if carries:
+        res.info.append("the candidate carries the site policy's protected layer exactly: if live drifted and the policy is right, "
+                        "--allow-drift-recovery (deploy-ha.ps1 -AllowDriftRecovery) restores it; if live holds newer site values, "
+                        "make a new policy instead")
 
 
 def run_verify_live(args) -> tuple[Result, int]:
@@ -1011,6 +1052,7 @@ def build_parser() -> Parser:
     c.add_argument("--policy")
     c.add_argument("--resources")
     c.add_argument("--accept-removed-type", action="append", default=[])
+    c.add_argument("--allow-drift-recovery", action="store_true")
     c.add_argument("--json")
     a = command("apply")
     a.add_argument("--policy", required=True)
@@ -1058,7 +1100,8 @@ def _gate_for_error(args) -> str:
 def write_report(path: str, command: str, gate: str, code: int, res: Result | None, error: str | None, dest: str | None) -> None:
     report = {"schema": REPORT_SCHEMA, "command": command, "gate": gate, "result": "PASS" if code == EXIT_PASS else "BLOCKED",
               "exit_code": code, "destination": dest, "policy": res.policy_state if res else None,
-              "blocked": [safe(b) for b in res.blocked] if res else [], "ok": [safe(o) for o in res.ok] if res else [],
+              "blocked": [safe(b) for b in res.blocked] if res else [], "warnings": [safe(w) for w in res.warnings] if res else [],
+              "ok": [safe(o) for o in res.ok] if res else [],
               "info": [safe(i) for i in res.info] if res else [], "error": safe(error) if error else None}
     try:
         Path(path).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
