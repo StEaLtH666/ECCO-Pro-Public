@@ -753,6 +753,12 @@ try:
           "-Command \"cp '$BackupPath' '$Destination' && touch '$Destination'\"" in rbody and "cp -p" not in rbody
           and "-Dashboard $isDashboard" in rbody and "DASHBOARD READ-BACK REQUIRED" in mod and "websocket lovelace/config" in mod
           and dha.count("-Dashboard:($dashboardGate.Applies)") == 4)
+    drift_line = re.search(r'\nif \(\$driftRecovery\) \{\n    Write-Host "(Drift       : RECOVERED - [^"]*)"\n\}\n', dha)
+    check("a drift recovery is one flag in deploy-ha.ps1, set from the gate's WARNING lines: every rollback gets it (DRIFT RECOVERY ROLLED "
+          "BACK), and the PASSED block prints the Drift line only under it",
+          "\n$driftRecovery = @($dashboardGate.Warnings).Count -gt 0\n" in dha and dha.count("-DriftRecovery:$driftRecovery -Reason ") == 4
+          and "-DriftRecovery ([bool]$DriftRecovery)" in rbody and "DRIFT RECOVERY ROLLED BACK" in mod and drift_line is not None
+          and dha.find("$driftRecovery = ") < dha.find("Invoke-EccoDeploymentRollback "))
     m = re.search(r"function Test-EccoDeploymentDestination \{(.*?)\n\}", mod, re.S)
     body = m.group(1) if m else ""
     site_local_refusal = re.search(
@@ -835,6 +841,20 @@ try:
                                                  "**Drift recovery (`-AllowDriftRecovery`).**", "A candidate that does not carry the protected "
                                                  "layer exactly stays BLOCKED", "`verify-live` never accepts drift",
                                                  "plan --site-policy <local copy of the host policy>")))
+    check("the docs quote deploy-ha.ps1's Drift line as it prints it (column-aligned), and say that a drift recovery's rollback restores the "
+          "drifted file (DRIFT RECOVERY ROLLED BACK), never that the rollback keeps the protected layer",
+          drift_line is not None and f"`{drift_line.group(1).split(' from the site policy')[0]} from the site policy ...`" in site
+          and "the automatic rollback keeps the protected layer" not in site_flat
+          and all(phrase in site_flat for phrase in ("except after a drift recovery, whose backup is the drifted file",
+                                                     "`DRIFT RECOVERY ROLLED BACK`", "Do not report the site layer as intact")))
+    check("the docs give -ExpectedSiteGate DASHBOARD_PRESERVE_GATE as the one-run override while the policy is aside (bundles and packages "
+          "too) and say to keep the pin; only retiring protection removes it",
+          all(phrase in site_flat for phrase in ("the one-run override while the policy is deliberately aside", "Keep the pin: removing it",
+                                                 "every deployment made while the policy is aside (this one, and the release's card bundle or "
+                                                 "a package deployed before step 5) needs `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`",
+                                                 "Never remove it for this procedure"))
+          and site_flat.count("remove the local gate pin") == 1 and "remove the pin" not in site_flat
+          and "remove the pin" not in mod and "-ExpectedSiteGate $($script:EccoDefaultDashboardGate) for this deployment only, and keep the pin" in mod)
     inst = (ROOT / "frontend" / "ecco-flow-3d-card" / "INSTALL_PREVIEW.md").read_text(encoding="utf-8")
     inst_flat = " ".join(inst.split())
     check("INSTALL_PREVIEW.md section 7: the plan --out is inside the checkout (dist/deploy), never outside the repository",

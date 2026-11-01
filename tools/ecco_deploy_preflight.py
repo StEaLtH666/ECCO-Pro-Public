@@ -33,7 +33,9 @@ never restarts anything, never edits Lovelace resources or dashboards and never 
   - with --site-policy (a local copy of the host's /config/ecco/site-local/dashboard-protection.json, validated by the guard's rules)
     that protects the dashboard destination, the dashboard's deploy command is preceded by the guard's `apply` step (its --out under
     stage/, named by the render and the policy), and `apply` is run in memory to report whether it will succeed on this render (FAIL
-    when it would refuse). Without --site-policy an INFO line says that the dashboard command deploys the render as it is.
+    when it would refuse). When that file already exists (a re-run into the same --out), it is deployed as it is if it holds exactly
+    `apply`'s output, else FAIL (remove it first: `apply` refuses an existing --out and the plan never deletes). Without --site-policy
+    an INFO line says that the dashboard command deploys the render as it is.
 `--out` must be outside the repository or under dist/ (git-ignored), and must be empty or a previous preflight output.
 plan.json and the staged files contain the site's entity ids and device slug: keep them local, never commit or publish them.
 `verify-staged` re-hashes the staged files against plan.json. `verify-served` fetches each planned bundle over HTTP (GET only) and
@@ -151,10 +153,15 @@ def load_site_policy(path: Path) -> tuple[bytes, dict | None]:
     return raw, entry
 
 
-def site_policy_commands(rep: Report, dash: bytes, entry: dict, policy_arg: str, staged: str, applied: str) -> list[str]:
+def site_policy_commands(rep: Report, dash: bytes, entry: dict, policy_arg: str, staged: str, applied: str,
+                         applied_path: Path) -> list[str]:
     """The dashboard's deploy commands when the site policy protects it: the guard's `apply` first (deploy-ha.ps1 blocks a plain render
     over a protected layer), then deploy-ha.ps1 on the applied file. `apply` is also run here, in memory only, to report whether it
-    will succeed on this render."""
+    will succeed on this render. `apply` refuses an existing --out, and the plan never deletes: when a previous run of the printed step
+    left the applied file (same render and policy, so the same name), it is deployed as it is if it holds exactly `apply`'s output;
+    anything else there is a FAIL (remove it first)."""
+    counts = f"{len(entry['overlay'])} overlay operation(s), {len(entry['protect'])} protected pointer(s)"
+    out = None
     try:
         text = dash.decode("utf-8")
         cand = G.parse_yaml(text, "staged dashboard")
@@ -164,14 +171,26 @@ def site_policy_commands(rep: Report, dash: bytes, entry: dict, policy_arg: str,
         reasons = [f"apply {ex}"]
     except (G.GuardError, UnicodeDecodeError) as ex:
         reasons = [str(ex)]
+    hint = " - a release that changes the protected card needs the owner procedure in docs/user/site-render.md" if reasons else ""
+    deploy = f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {DASHBOARD_DEST}"
+    if not reasons and (applied_path.exists() or applied_path.is_symlink()):
+        try:
+            same = (applied_path.is_file() and not applied_path.is_symlink()
+                    and applied_path.read_bytes() == out.encode("utf-8", "surrogatepass"))
+        except OSError:
+            same = False
+        if same:
+            rep.add("PASS", f"site policy: {applied} already holds `apply`'s output for this render and policy ({counts}); the dashboard "
+                    "command deploys it (no `apply` step: `apply` refuses an existing --out)")
+            return [deploy]
+        reasons = [f"{applied} already exists and is not `apply`'s output for this render and policy: remove it first (`apply` refuses "
+                   "an existing --out, and the plan never deletes)"]
     rep.add("PASS" if not reasons else "FAIL",
-            f"site policy: `apply` writes the site layer into the staged dashboard ({len(entry['overlay'])} overlay operation(s), "
-            f"{len(entry['protect'])} protected pointer(s)); the dashboard command runs it first",
-            "; ".join(reasons) + (" - a release that changes the protected card needs the owner procedure in docs/user/site-render.md"
-                                  if reasons else ""))
+            f"site policy: `apply` writes the site layer into the staged dashboard ({counts}); the dashboard command runs it first",
+            "; ".join(reasons) + hint)
     pol = f'"{policy_arg}"' if " " in policy_arg else policy_arg
     return [f"python tools\\ecco_dashboard_guard.py apply --policy {pol} --destination {DASHBOARD_DEST} --candidate {staged} --out {applied}",
-            f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {DASHBOARD_DEST}"]
+            deploy]
 
 
 def destination_allowed(dest: str) -> bool:
@@ -499,8 +518,9 @@ def plan(args: argparse.Namespace) -> int:
         site_policy = {"sha256": sha(policy_raw), "names_dashboard": False}
     else:
         inputs8 = sha(sha(dash).encode() + sha(policy_raw).encode())[:8]   # the applied file is named by the render and the policy
-        applied = rel(stage / f"ecco_pro.site-{inputs8}.yaml")
-        dash_commands = site_policy_commands(rep, dash, policy_entry, args.site_policy, rel(stage / "ecco_pro.yaml"), applied)
+        applied_path = stage / f"ecco_pro.site-{inputs8}.yaml"
+        applied = rel(applied_path)
+        dash_commands = site_policy_commands(rep, dash, policy_entry, args.site_policy, rel(stage / "ecco_pro.yaml"), applied, applied_path)
         site_policy = {"sha256": sha(policy_raw), "names_dashboard": True, "apply_out": applied}
     data = {
         "schema": "ecco-deploy-plan/1", "local_only": LOCAL_ONLY_NOTE, "git_head": head, "site_device_slug": site.device_slug,

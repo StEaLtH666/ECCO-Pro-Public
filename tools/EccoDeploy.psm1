@@ -268,7 +268,12 @@ function Format-EccoRollbackResultMessage {
 
         # The destination is a dashboard file: add the reminder to read
         # back what Home Assistant serves (it caches YAML dashboards).
-        [bool]$Dashboard = $false
+        [bool]$Dashboard = $false,
+
+        # The deployment was a drift recovery (-AllowDriftRecovery): its
+        # backup is the drifted live file, so say that a restored backup
+        # lacks the site policy's protected layer.
+        [bool]$DriftRecovery = $false
     )
 
     $lines = New-Object System.Collections.Generic.List[string]
@@ -298,6 +303,10 @@ function Format-EccoRollbackResultMessage {
 
     if ((-not $RestoreVerified) -and $checkFailedOrUnknown) {
         $lines.Add('NOTE: both the rollback step and the post-rollback check failed to complete cleanly. This combination often means SSH or the remote host itself is unavailable, not that Home Assistant configuration is broken. Verify SSH connectivity independently before assuming otherwise, and do not treat this as a confirmed successful rollback.')
+    }
+
+    if ($DriftRecovery) {
+        $lines.Add('DRIFT RECOVERY ROLLED BACK: this deployment was a drift recovery (-AllowDriftRecovery), so its backup is the drifted live file. A restored backup differs from the site policy at a protected pointer and does not carry the policy''s protected layer: do not report the site layer as intact. Deployments to this dashboard stay BLOCKED by the drift until a drift recovery completes.')
     }
 
     if ($Dashboard) {
@@ -433,7 +442,9 @@ function Invoke-EccoDeploymentRollback {
         brought back the backup's old modification time would leave the
         failed deployment on screen. For a dashboard destination (by its
         path, or -Dashboard when the preservation gate applied) the final
-        message also asks for a lovelace/config read-back.
+        message also asks for a lovelace/config read-back. -DriftRecovery
+        (the gate passed a drift recovery) adds that the restored backup is
+        the drifted live file, without the site policy's protected layer.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -451,7 +462,9 @@ function Invoke-EccoDeploymentRollback {
         [Parameter(Mandatory = $true)]
         [string]$Reason,
 
-        [switch]$Dashboard
+        [switch]$Dashboard,
+
+        [switch]$DriftRecovery
     )
 
     Write-Warning "Rolling back deployment: $Reason"
@@ -513,7 +526,8 @@ function Invoke-EccoDeploymentRollback {
         -RestoreProblem $restoreProblem `
         -RollbackCheckRan $rollbackCheckRan `
         -RollbackCheckExitCode $rollbackCheckExitCode `
-        -Dashboard $isDashboard
+        -Dashboard $isDashboard `
+        -DriftRecovery ([bool]$DriftRecovery)
 
     throw $message
 }
@@ -1145,7 +1159,7 @@ function Assert-EccoDashboardGatePin {
         return "Gate pin    : $ExpectedGate ($PinSource) - matched"
     }
     if ($ExpectedGate -cne $script:EccoDefaultDashboardGate -and $GateResult.PolicyState -ne 'present') {
-        throw (Format-EccoGateBlockedMessage -Gate $gate -Reason "$PinSource expects the site gate $ExpectedGate, but there is no site policy on the host ($script:EccoDashboardPolicyPath): it was moved aside or removed. Restore it, or remove the pin to deploy without it.")
+        throw (Format-EccoGateBlockedMessage -Gate $gate -Reason "$PinSource expects the site gate $ExpectedGate, but there is no site policy on the host ($script:EccoDashboardPolicyPath): it was moved aside or removed. Restore it. While the policy is deliberately aside (the owner procedure for a release that changes the protected card), pass -ExpectedSiteGate $($script:EccoDefaultDashboardGate) for this deployment only, and keep the pin: it protects again once the policy is back.")
     }
     return "Gate pin    : $ExpectedGate ($PinSource) - not a dashboard destination; site policy present: $($GateResult.PolicyState -eq 'present')"
 }

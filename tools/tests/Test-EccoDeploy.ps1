@@ -22,7 +22,12 @@
     (-ExpectedSiteGate and the local pin file) and drift recovery;
     section 15 runs the rollback against a stubbed ssh that executes its
     commands under the local POSIX sh on a fictional /config tree, to
-    prove the restored file gets a new modification time. They need a Python with PyYAML,
+    prove the restored file gets a new modification time; section 16 runs
+    deploy-ha.ps1 end to end on such a tree (a drift recovery, its PASSED
+    block and its rollback). Sections 14 and 16 run deploy-ha.ps1 from a
+    copy of the tooling under a temporary repository root, so a pin file in
+    this checkout never changes a run and nothing is written into the
+    checkout. They need a Python with PyYAML,
     the same requirement deploy-ha.ps1 has; pass -Python <path to
     python.exe> when the python on PATH has no PyYAML.
 
@@ -268,6 +273,19 @@ $dashboardRollbackMsg = Format-EccoRollbackResultMessage `
 Assert-True -Name 'a dashboard rollback message asks for a lovelace/config read-back of what Home Assistant serves' -Condition (
     $dashboardRollbackMsg -match 'DASHBOARD READ-BACK REQUIRED' -and $dashboardRollbackMsg -match 'websocket lovelace/config' -and $dashboardRollbackMsg -match 'was rolled back')
 Assert-True -Name 'a rollback message for any other file has no dashboard read-back line' -Condition ($confirmedMsg -notmatch 'READ-BACK' -and $verifiedRestoreButCheckFailedMsg -notmatch 'lovelace/config')
+$driftRollbackMsg = Format-EccoRollbackResultMessage `
+    -Reason 'ha core check failed' `
+    -BackupDescription '/config/ecco-backups/x/y' `
+    -RestoreVerified $true `
+    -RestoreProblem $null `
+    -RollbackCheckRan $true `
+    -RollbackCheckExitCode 0 `
+    -Dashboard $true `
+    -DriftRecovery $true
+Assert-True -Name 'the rollback of a drift recovery says that the restored backup is the drifted file, without the site policy''s protected layer' -Condition (
+    $driftRollbackMsg -match 'DRIFT RECOVERY ROLLED BACK' -and $driftRollbackMsg -match 'backup is the drifted live file' -and
+    $driftRollbackMsg -match 'does not carry the policy''s protected layer' -and $driftRollbackMsg -match 'DASHBOARD READ-BACK REQUIRED') -Detail $driftRollbackMsg
+Assert-True -Name 'any other rollback has no drift line' -Condition ($dashboardRollbackMsg -notmatch 'DRIFT' -and $confirmedMsg -notmatch 'DRIFT')
 
 # ---------------------------------------------------------------------
 # 8. PowerShell syntax for every deployment-tooling script, including
@@ -686,6 +704,8 @@ try {
     $m = Test-PinRefused $packageNoPolicy 'EXAMPLE_PRESERVE_GATE'
     Assert-True -Name 'gate pin: any other destination needs the site policy on the host while a site gate is pinned' -Condition (
         -not $packageNoPolicy.Applies -and $m -match 'no site policy on the host' -and (Test-PinRefused $packageNoPolicy 'DASHBOARD_PRESERVE_GATE') -eq '') -Detail $m
+    Assert-True -Name '... and the refusal names the one-run override (-ExpectedSiteGate DASHBOARD_PRESERVE_GATE for this deployment) and says to keep the pin, never to remove it' -Condition (
+        $m -match '-ExpectedSiteGate DASHBOARD_PRESERVE_GATE for this deployment only' -and $m -match 'keep the pin' -and $m -notmatch 'remove the pin') -Detail $m
     $script:fakeHost = @{ $destination = $live; $resourcesRemote = $resources; $policyRemote = $policy }
     $packageWithPolicy = (Invoke-TestGate -Candidate $live -Dest '/config/packages/example.yaml').Result
     Assert-True -Name 'gate pin: ... and passes when the policy is present' -Condition ((Test-PinRefused $packageWithPolicy 'EXAMPLE_PRESERVE_GATE') -eq '')
@@ -773,26 +793,61 @@ if ($Sh -and (Test-Path -LiteralPath $Sh)) {
 #     gate's reads and refuse every other command. A BLOCKED gate must
 #     stop the script with nothing but those reads sent; a PASS lets it
 #     reach its next host command (which the stub refuses), proving the
-#     harness would see a write.
+#     harness would see a write. deploy-ha.ps1 runs from a copy of the
+#     tooling under its own temporary repository root (New-StubRepo), so
+#     an owner's pin file in this checkout never changes a run and no run
+#     writes into the checkout.
 # ---------------------------------------------------------------------
 Write-Host ''
 Write-Host '[14] deploy-ha.ps1 against a stubbed host: a BLOCKED gate sends nothing but its reads'
-$distDir = Join-Path $repoRoot 'dist'
-$distExisted = Test-Path -LiteralPath $distDir
-$stubName = 'ecco-gate-test-' + [guid]::NewGuid().ToString('N')
-$stubRepoDir = Join-Path $distDir $stubName
-$stubHostDir = Join-Path ([System.IO.Path]::GetTempPath()) $stubName
-New-Item -ItemType Directory -Path $stubRepoDir -Force | Out-Null
+
+# A copy of deploy-ha.ps1, EccoDeploy.psm1 and the guard (this checkout's
+# bytes) under a temporary repository root with an empty dist\stub folder for
+# the sources. deploy-ha.ps1 finds its repository root, and so the local pin
+# file ecco_dashboard_gate.local.txt, from its own folder.
+function New-StubRepo {
+    param([string]$Root)
+    New-Item -ItemType Directory -Path (Join-Path $Root 'tools') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Root 'dist\stub') -Force | Out-Null
+    foreach ($file in @('deploy-ha.ps1', 'EccoDeploy.psm1', 'ecco_dashboard_guard.py')) {
+        Copy-Item -LiteralPath (Join-Path $toolsDir $file) -Destination (Join-Path $Root 'tools')
+    }
+    return (Resolve-Path -LiteralPath $Root).Path
+}
+
+# The copy runs this checkout's code, from outside the checkout.
+function Test-StubRepo {
+    param([string]$Root)
+    $same = $true
+    foreach ($file in @('deploy-ha.ps1', 'EccoDeploy.psm1', 'ecco_dashboard_guard.py')) {
+        $a = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $toolsDir $file)).Hash
+        $b = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path (Join-Path $Root 'tools') $file)).Hash
+        $same = $same -and ($a -eq $b)
+    }
+    $inside = ($Root.TrimEnd('\') + '\').StartsWith($repoRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    return ($same -and -not $inside)
+}
+
+$stubBase = Join-Path ([System.IO.Path]::GetTempPath()) ('ecco-gate-test-' + [guid]::NewGuid().ToString('N'))
+$stubHostDir = Join-Path $stubBase 'host'
+$stubRepo = New-StubRepo -Root (Join-Path $stubBase 'repo')
 New-Item -ItemType Directory -Path $stubHostDir | Out-Null
 $global:EccoTestRemoteLog = New-Object System.Collections.Generic.List[string]
 try {
     $stubLive = Join-Path $stubHostDir 'live.yaml'
     $stubResources = Join-Path $stubHostDir 'lovelace_resources'
+    $stubSources = Join-Path $stubRepo 'dist\stub'
     [System.IO.File]::WriteAllText($stubLive, ($liveText -join "`n"))
     [System.IO.File]::WriteAllText($stubResources, '{"version": 1, "key": "lovelace_resources", "data": {"items": []}}')
-    [System.IO.File]::WriteAllText((Join-Path $stubRepoDir 'generic.yaml'), ($genericText -join "`n"))
-    [System.IO.File]::WriteAllText((Join-Path $stubRepoDir 'same.yaml'), ($liveText -join "`n"))
+    [System.IO.File]::WriteAllText((Join-Path $stubSources 'generic.yaml'), ($genericText -join "`n"))
+    [System.IO.File]::WriteAllText((Join-Path $stubSources 'same.yaml'), ($liveText -join "`n"))
     $global:EccoTestHost = @{ $destination = $stubLive; $resourcesRemote = $stubResources }
+    $realPinPath = Get-EccoDashboardGatePinPath -RepoRoot $repoRoot
+    Assert-True -Name 'the stub runs use a copy of deploy-ha.ps1, EccoDeploy.psm1 and the guard (this checkout''s bytes) under their own repository root outside the checkout, so this checkout''s pin file is never read' -Condition (
+        Test-StubRepo -Root $stubRepo)
+    if (Test-Path -LiteralPath $realPinPath) {
+        Write-Host '  info  this checkout has its own ecco_dashboard_gate.local.txt: the stub runs never read it, and it is left untouched'
+    }
 
     function global:ssh {
         $command = [string]$args[$args.Count - 1]
@@ -818,13 +873,13 @@ try {
         $global:LASTEXITCODE = 1
     }
 
-    $deployHa = Join-Path $toolsDir 'deploy-ha.ps1'
-    $gateReads = { param($entry) ($entry -ceq 'ssh true') -or $entry.StartsWith("ssh if [ -L '") -or ($entry -cmatch '^scp -q fictional-host:/') }
+    $deployHa = Join-Path $stubRepo 'tools\deploy-ha.ps1'
+    $gateReads ={ param($entry) ($entry -ceq 'ssh true') -or $entry.StartsWith("ssh if [ -L '") -or ($entry -cmatch '^scp -q fictional-host:/') }
 
     $global:EccoTestRemoteLog.Clear()
     $blockedMessage = ''
     try {
-        & $deployHa -Source "dist/$stubName/generic.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
+        & $deployHa -Source "dist/stub/generic.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
     } catch {
         $blockedMessage = $_.Exception.Message
     }
@@ -838,7 +893,7 @@ try {
     $global:EccoTestRemoteLog.Clear()
     $passMessage = ''
     try {
-        & $deployHa -Source "dist/$stubName/same.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
+        & $deployHa -Source "dist/stub/same.yaml" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python 6>$null 3>$null | Out-Null
     } catch {
         $passMessage = $_.Exception.Message
     }
@@ -853,7 +908,7 @@ try {
         $global:EccoTestWarnings = New-Object System.Collections.Generic.List[string]
         $message = ''
         try {
-            & $deployHa -Source "dist/$stubName/$File" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python @Extra 3>&1 6>$null |
+            & $deployHa -Source "dist/stub/$File" -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python @Extra 3>&1 6>$null |
                 ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $global:EccoTestWarnings.Add($_.Message) } }
         } catch {
             $message = $_.Exception.Message
@@ -873,37 +928,35 @@ try {
     $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'example_preserve_gate' }
     Assert-True -Name 'deploy-ha.ps1 -ExpectedSiteGate takes an upper-case gate name only (case-sensitive validation), before anything is sent' -Condition (
         $run.Message -match 'ExpectedSiteGate' -and $run.Sent.Count -eq 0) -Detail $run.Message
-    $pinPath = Get-EccoDashboardGatePinPath -RepoRoot $repoRoot
-    if (-not (Test-Path -LiteralPath $pinPath)) {
-        try {
-            [System.IO.File]::WriteAllText($pinPath, "EXAMPLE_PRESERVE_GATE`n")
-            $ErrorActionPreference = 'Continue'
-            & git -C $repoRoot check-ignore -q -- $pinPath 2>&1 | Out-Null
-            $pinIgnored = ($LASTEXITCODE -eq 0)
-            $ErrorActionPreference = 'Stop'
-            Assert-True -Name 'the local pin file is git-ignored' -Condition $pinIgnored
-            $run = Invoke-StubDeploy -File 'same.yaml'
-            Assert-True -Name 'deploy-ha.ps1 reads the local pin file when -ExpectedSiteGate is not given: the same deployment is BLOCKED, naming the pin file' -Condition (
-                $run.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $run.Message -match 'the local pin file ecco_dashboard_gate\.local\.txt expects' -and $run.NotReads.Count -eq 0) -Detail $run.Message
-            $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'DASHBOARD_PRESERVE_GATE' }
-            Assert-True -Name '... and -ExpectedSiteGate takes precedence over the pin file' -Condition ($run.Message -match 'Unable to inspect existing remote file') -Detail $run.Message
-            [System.IO.File]::WriteAllText($pinPath, "not a gate`n")
-            $run = Invoke-StubDeploy -File 'same.yaml'
-            Assert-True -Name 'a malformed local pin file stops deploy-ha.ps1 before it contacts the host' -Condition (
-                $run.Message -match 'must hold exactly one gate name' -and $run.Sent.Count -eq 0) -Detail ($run.Message + ' | ' + ($run.Sent -join ' | '))
-        }
-        finally {
-            Remove-Item -LiteralPath $pinPath -Force -ErrorAction SilentlyContinue
-        }
-    } else {
-        Write-Host '  SKIP  the local pin file runs (this checkout has its own ecco_dashboard_gate.local.txt; it was left untouched)'
+    # The local pin file: checked by name against this checkout's .gitignore (nothing is written here), and run at the copied
+    # tree's root, which is the root deploy-ha.ps1 reads it from.
+    $ErrorActionPreference = 'Continue'
+    & git -C $repoRoot check-ignore -q -- ([System.IO.Path]::GetFileName($realPinPath)) 2>&1 | Out-Null
+    $pinIgnored = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = 'Stop'
+    Assert-True -Name 'the local pin file is git-ignored in this checkout (checked by name)' -Condition $pinIgnored
+    $pinPath = Get-EccoDashboardGatePinPath -RepoRoot $stubRepo
+    try {
+        [System.IO.File]::WriteAllText($pinPath, "EXAMPLE_PRESERVE_GATE`n")
+        $run = Invoke-StubDeploy -File 'same.yaml'
+        Assert-True -Name 'deploy-ha.ps1 reads the local pin file at its repository root when -ExpectedSiteGate is not given: the same deployment is BLOCKED, naming the pin file' -Condition (
+            $run.Message -match '^DASHBOARD_PRESERVE_GATE: BLOCKED' -and $run.Message -match 'the local pin file ecco_dashboard_gate\.local\.txt expects' -and $run.NotReads.Count -eq 0) -Detail $run.Message
+        $run = Invoke-StubDeploy -File 'same.yaml' -Extra @{ ExpectedSiteGate = 'DASHBOARD_PRESERVE_GATE' }
+        Assert-True -Name '... and -ExpectedSiteGate takes precedence over the pin file' -Condition ($run.Message -match 'Unable to inspect existing remote file') -Detail $run.Message
+        [System.IO.File]::WriteAllText($pinPath, "not a gate`n")
+        $run = Invoke-StubDeploy -File 'same.yaml'
+        Assert-True -Name 'a malformed local pin file stops deploy-ha.ps1 before it contacts the host' -Condition (
+            $run.Message -match 'must hold exactly one gate name' -and $run.Sent.Count -eq 0) -Detail ($run.Message + ' | ' + ($run.Sent -join ' | '))
+    }
+    finally {
+        Remove-Item -LiteralPath $pinPath -Force -ErrorAction SilentlyContinue
     }
 
     # Drift recovery through deploy-ha.ps1: the host's live file drifted from its policy; the candidate is the policy's layer.
     $stubPolicy = Join-Path $stubHostDir 'policy.json'
     $stubDrifted = Join-Path $stubHostDir 'drifted.yaml'
     $ErrorActionPreference = 'Continue'
-    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $destination --base (Join-Path $stubRepoDir 'generic.yaml') --live $stubLive --pointer /views/0/sections/0/cards/0 --out $stubPolicy 2>&1 | Out-Null
+    & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $destination --base (Join-Path $stubSources 'generic.yaml') --live $stubLive --pointer /views/0/sections/0/cards/0 --out $stubPolicy 2>&1 | Out-Null
     $ErrorActionPreference = 'Stop'
     [System.IO.File]::WriteAllText($stubDrifted, (($liveText -join "`n").Replace('crossfade_ms: 900', 'crossfade_ms: 1200')))
     $global:EccoTestHost = @{ $destination = $stubDrifted; $resourcesRemote = $stubResources; $policyRemote = $stubPolicy }
@@ -924,11 +977,9 @@ finally {
     Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath function:global:scp -ErrorAction SilentlyContinue
     Remove-Variable -Name EccoTestRemoteLog, EccoTestHost -Scope Global -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stubRepoDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stubHostDir -Recurse -Force -ErrorAction SilentlyContinue
-    if (-not $distExisted -and (Test-Path -LiteralPath $distDir) -and @(Get-ChildItem -LiteralPath $distDir -Force).Count -eq 0) {
-        Remove-Item -LiteralPath $distDir -Force -ErrorAction SilentlyContinue
-    }
+    Remove-Item -LiteralPath $stubBase -Recurse -Force -ErrorAction SilentlyContinue
+    # deploy-ha.ps1 re-imported the module from the copy: use the checkout's own again.
+    Import-Module (Join-Path $toolsDir 'EccoDeploy.psm1') -Force
 }
 
 # ---------------------------------------------------------------------
@@ -1018,6 +1069,14 @@ try {
         $rbMessage = $_.Exception.Message
     }
     Assert-True -Name 'a dashboard outside /config/ecco/dashboards/ (-Dashboard, as deploy-ha.ps1 passes when the gate applied) gets the read-back line' -Condition ($rbMessage -match 'DASHBOARD READ-BACK REQUIRED') -Detail $rbMessage
+    $rbMessage = ''
+    try {
+        Invoke-EccoDeploymentRollback -SshHost 'fictional-host' -Destination $rbDest -BackupPath $rbBackup -HadOriginal $true -DriftRecovery -Reason 'test: drift recovery' 3>$null 6>$null | Out-Null
+    } catch {
+        $rbMessage = $_.Exception.Message
+    }
+    Assert-True -Name 'Invoke-EccoDeploymentRollback -DriftRecovery adds the DRIFT RECOVERY ROLLED BACK line (the restored backup is the drifted file)' -Condition (
+        $rbMessage -match 'DRIFT RECOVERY ROLLED BACK' -and $rbMessage -match 'DASHBOARD READ-BACK REQUIRED') -Detail $rbMessage
 }
 finally {
     Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
@@ -1029,9 +1088,163 @@ finally {
     Remove-Variable -Name EccoTestRemoteLog, EccoTestSh, EccoTestShRoot -Scope Global -ErrorAction SilentlyContinue
 }
 $deployHaText = Get-Content -Raw -Path (Join-Path $toolsDir 'deploy-ha.ps1')
-Assert-True -Name 'deploy-ha.ps1 passes -Dashboard (the gate applied) to every rollback' -Condition (
+Assert-True -Name 'deploy-ha.ps1 passes -Dashboard (the gate applied) and -DriftRecovery (the gate passed a drift recovery) to every rollback' -Condition (
     ([regex]::Matches($deployHaText, 'Invoke-EccoDeploymentRollback ')).Count -eq 4 -and
-    ([regex]::Matches($deployHaText, [regex]::Escape('-HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason '))).Count -eq 4)
+    ([regex]::Matches($deployHaText, [regex]::Escape('-HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason '))).Count -eq 4)
+
+# ---------------------------------------------------------------------
+# 16. deploy-ha.ps1 end to end on a fictional /config tree: the stubbed
+#     ssh runs each command under the local POSIX sh with /config mapped
+#     to a temp folder, the stubbed scp copies to and from that folder,
+#     and `ha core check` is stubbed (pass, or fail once). deploy-ha.ps1
+#     runs from a copied tools tree (New-StubRepo). A drift recovery
+#     reaches the ECCO DEPLOYMENT PASSED block with its Drift line; when
+#     the check fails, the rollback restores the drifted file and says so.
+# ---------------------------------------------------------------------
+Write-Host ''
+Write-Host '[16] deploy-ha.ps1 end to end on a fictional /config tree: drift recovery, its PASSED block and its rollback'
+$e2eBase = Join-Path ([System.IO.Path]::GetTempPath()) ('ecco-deploy-e2e-' + [guid]::NewGuid().ToString('N'))
+$e2eTreeSh = $null
+if ($Sh -and (Test-Path -LiteralPath $Sh)) {
+    New-Item -ItemType Directory -Path $e2eBase | Out-Null
+    $e2eBase = (Resolve-Path -LiteralPath $e2eBase).Path
+    $ErrorActionPreference = 'Continue'
+    $e2eTreeSh = (@(& $Sh -c "cygpath -u '$e2eBase\host'" 2>&1) -join '').Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $e2eTreeSh.StartsWith('/') -or $e2eTreeSh.Contains("'")) { $e2eTreeSh = $null }
+    $ErrorActionPreference = 'Stop'
+}
+if ($e2eTreeSh) {
+    $global:EccoTestSh = $Sh
+    $global:EccoTestTreeWin = Join-Path $e2eBase 'host'
+    $global:EccoTestTreeSh = $e2eTreeSh
+    $global:EccoTestCheckFailures = 0
+    try {
+        function global:ssh {
+            $command = [string]$args[$args.Count - 1]
+            if ($command -ceq 'ha core check') {
+                if ($global:EccoTestCheckFailures -gt 0) {
+                    $global:EccoTestCheckFailures--
+                    $global:LASTEXITCODE = 1
+                    return 'fictional host: configuration check failed'
+                }
+                $global:LASTEXITCODE = 0
+                return 'Command completed successfully.'
+            }
+            # Every path deploy-ha.ps1 and the gate name is absolute under /config (the probe also names /config itself).
+            $local = [regex]::Replace($command, "'/config(?=[/'])", "'" + $global:EccoTestTreeSh + '/config')
+            $previousEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $out = @(& $global:EccoTestSh -c $local 2>&1 | ForEach-Object { [string]$_ })
+                $code = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousEap
+            }
+            $global:LASTEXITCODE = $code
+            return $out
+        }
+        function global:scp {
+            $from = [string]$args[$args.Count - 2]
+            $to = [string]$args[$args.Count - 1]
+            $global:LASTEXITCODE = 1
+            try {
+                if ($from -cmatch '^fictional-host:/(config/.+)$') {
+                    Copy-Item -LiteralPath (Join-Path $global:EccoTestTreeWin $Matches[1].Replace('/', '\')) -Destination $to -ErrorAction Stop
+                    $global:LASTEXITCODE = 0
+                } elseif ($to -cmatch '^fictional-host:/(config/.+)$') {
+                    Copy-Item -LiteralPath $from -Destination (Join-Path $global:EccoTestTreeWin $Matches[1].Replace('/', '\')) -ErrorAction Stop
+                    $global:LASTEXITCODE = 0
+                }
+            } catch {
+                $global:LASTEXITCODE = 1
+            }
+        }
+
+        $e2eRepo = New-StubRepo -Root (Join-Path $e2eBase 'repo')
+        $e2eDeployHa = Join-Path $e2eRepo 'tools\deploy-ha.ps1'
+        $layerText = $liveText -join "`n"
+        $driftedText = $layerText.Replace('crossfade_ms: 900', 'crossfade_ms: 1200')
+        [System.IO.File]::WriteAllText((Join-Path $e2eRepo 'dist\stub\same.yaml'), $layerText)
+        $e2eGeneric = Join-Path $e2eBase 'generic.yaml'
+        $e2eLayer = Join-Path $e2eBase 'layer.yaml'
+        $e2ePolicy = Join-Path $e2eBase 'policy.json'
+        [System.IO.File]::WriteAllText($e2eGeneric, ($genericText -join "`n"))
+        [System.IO.File]::WriteAllText($e2eLayer, $layerText)
+        $ErrorActionPreference = 'Continue'
+        & $Python -I -B -X utf8 $guard make-policy --gate EXAMPLE_PRESERVE_GATE --destination $destination --base $e2eGeneric --live $e2eLayer --pointer /views/0/sections/0/cards/0 --out $e2ePolicy 2>&1 | Out-Null
+        $ErrorActionPreference = 'Stop'
+        $e2eLive = Join-Path $global:EccoTestTreeWin ($destination.Substring(1).Replace('/', '\'))
+
+        # A fresh fictional host: the live dashboard, the site policy and an empty resource list.
+        function Reset-E2eHost {
+            param([string]$LiveText)
+            Remove-Item -LiteralPath $global:EccoTestTreeWin -Recurse -Force -ErrorAction SilentlyContinue
+            foreach ($dir in @('config\ecco\dashboards', 'config\ecco\site-local', 'config\.storage')) {
+                New-Item -ItemType Directory -Path (Join-Path $global:EccoTestTreeWin $dir) -Force | Out-Null
+            }
+            [System.IO.File]::WriteAllText($e2eLive, $LiveText)
+            Copy-Item -LiteralPath $e2ePolicy -Destination (Join-Path $global:EccoTestTreeWin 'config\ecco\site-local\dashboard-protection.json')
+            [System.IO.File]::WriteAllText((Join-Path $global:EccoTestTreeWin 'config\.storage\lovelace_resources'), '{"version": 1, "key": "lovelace_resources", "data": {"items": []}}')
+        }
+        # One deploy-ha.ps1 run of the policy's layer under the pinned site gate: every output line, the terminating message, the installed bytes.
+        function Invoke-E2eDeploy {
+            param([string]$LiveText, [int]$CheckFailures = 0, [hashtable]$Extra = @{})
+            Reset-E2eHost -LiveText $LiveText
+            $global:EccoTestCheckFailures = $CheckFailures
+            $lines = New-Object System.Collections.Generic.List[string]
+            $message = ''
+            try {
+                & $e2eDeployHa -Source 'dist/stub/same.yaml' -Destination $destination -SshHost 'fictional-host' -SkipValidation -AllowDirtyWorkingTree -Python $Python -ExpectedSiteGate EXAMPLE_PRESERVE_GATE @Extra *>&1 |
+                    ForEach-Object { $lines.Add([string]$_) }
+            } catch {
+                $message = $_.Exception.Message
+            }
+            return [pscustomobject]@{ Message = $message; Lines = @($lines); Installed = [System.IO.File]::ReadAllText($e2eLive) }
+        }
+
+        Assert-True -Name 'the end-to-end runs use a copy of the tooling outside this checkout, and the fictional policy was made' -Condition (
+            (Test-StubRepo -Root $e2eRepo) -and (Test-Path -LiteralPath $e2ePolicy))
+
+        $run = Invoke-E2eDeploy -LiveText $driftedText -Extra @{ AllowDriftRecovery = $true }
+        $driftLines = @($run.Lines | Where-Object { $_.StartsWith('Drift       : RECOVERED - ') })
+        $backupText = $null
+        if ($driftLines.Count -eq 1 -and $driftLines[0] -cmatch 'the drifted file is the backup /(config/ecco-backups/\S+)$') {
+            $backupFile = Join-Path $global:EccoTestTreeWin $Matches[1].Replace('/', '\')
+            if (Test-Path -LiteralPath $backupFile) { $backupText = [System.IO.File]::ReadAllText($backupFile) }
+        }
+        Assert-True -Name 'deploy-ha.ps1 -AllowDriftRecovery over a drifted live file: ECCO DEPLOYMENT PASSED, the policy''s layer installed, verify-live and the pin matched' -Condition (
+            $run.Message -eq '' -and @($run.Lines | Where-Object { $_ -ceq 'ECCO DEPLOYMENT PASSED' }).Count -eq 1 -and $run.Installed -ceq $layerText -and
+            @($run.Lines | Where-Object { $_ -ceq 'Post-install: EXAMPLE_PRESERVE_GATE: PASS (verify-live)' }).Count -eq 1 -and
+            @($run.Lines | Where-Object { $_ -ceq 'Gate pin    : EXAMPLE_PRESERVE_GATE (-ExpectedSiteGate) - matched' }).Count -eq 2) -Detail ($run.Message + ' | ' + ($run.Lines -join ' | '))
+        Assert-True -Name '... and its PASSED block has the line "Drift       : RECOVERED - ...", naming the backup that holds the drifted file' -Condition (
+            $driftLines.Count -eq 1 -and $backupText -ceq $driftedText) -Detail ($driftLines -join ' | ')
+
+        $run = Invoke-E2eDeploy -LiveText $layerText -Extra @{ AllowDriftRecovery = $true }
+        Assert-True -Name 'deploy-ha.ps1 -AllowDriftRecovery without drift: PASSED, and no Drift line (the switch alone recovers nothing)' -Condition (
+            $run.Message -eq '' -and @($run.Lines | Where-Object { $_ -ceq 'ECCO DEPLOYMENT PASSED' }).Count -eq 1 -and
+            @($run.Lines | Where-Object { $_.StartsWith('Drift') }).Count -eq 0) -Detail ($run.Message + ' | ' + ($run.Lines -join ' | '))
+
+        $run = Invoke-E2eDeploy -LiveText $driftedText -CheckFailures 1 -Extra @{ AllowDriftRecovery = $true }
+        Assert-True -Name 'a drift recovery whose ha core check fails is rolled back to the drifted file, and the message says it lacks the policy''s layer (DRIFT RECOVERY ROLLED BACK)' -Condition (
+            $run.Message -match 'was rolled back' -and $run.Message -match 'DRIFT RECOVERY ROLLED BACK' -and $run.Message -match 'DASHBOARD READ-BACK REQUIRED' -and
+            $run.Installed -ceq $driftedText -and @($run.Lines | Where-Object { $_ -ceq 'ECCO DEPLOYMENT PASSED' }).Count -eq 0) -Detail $run.Message
+
+        $run = Invoke-E2eDeploy -LiveText $layerText -CheckFailures 1
+        Assert-True -Name 'any other dashboard deployment whose ha core check fails is rolled back without the drift line' -Condition (
+            $run.Message -match 'was rolled back' -and $run.Message -match 'DASHBOARD READ-BACK REQUIRED' -and $run.Message -notmatch 'DRIFT' -and
+            $run.Installed -ceq $layerText) -Detail $run.Message
+    }
+    finally {
+        Remove-Item -LiteralPath function:global:ssh -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath function:global:scp -ErrorAction SilentlyContinue
+        Remove-Variable -Name EccoTestSh, EccoTestTreeWin, EccoTestTreeSh, EccoTestCheckFailures -Scope Global -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $e2eBase -Recurse -Force -ErrorAction SilentlyContinue
+        Import-Module (Join-Path $toolsDir 'EccoDeploy.psm1') -Force
+    }
+} else {
+    Remove-Item -LiteralPath $e2eBase -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host '  SKIP  the end-to-end runs need a POSIX sh with cygpath (Git for Windows; pass -Sh <sh.exe>)'
+}
 
 # ---------------------------------------------------------------------
 Write-Host ''

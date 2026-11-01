@@ -7,8 +7,10 @@
       the dashboard and bundles are rendered for the site, the preview configuration is valid JSON under the websocket limit,
       nothing in the repository changes; the 3D Energy Flow card the Overview uses is accepted but never deployed by default (its
       bundle and resource are shared with the preview dashboard); with --site-policy (fictional) that protects the dashboard, its
-      deploy command is preceded by the guard's `apply` step (run in memory: PASS, or FAIL when it would refuse), and a malformed,
-      missing or letter-case policy is refused before anything is written
+      deploy command is preceded by the guard's `apply` step (run in memory: PASS, or FAIL when it would refuse, by a missing parent
+      or by the post-condition after a release that changes the protected card); a re-run into the same --out deploys the applied
+      file a previous `apply` step left there, or FAILs when that file is not apply's output; a malformed, missing or letter-case
+      policy is refused before anything is written
   [3] negative controls: a snapshot missing an entity fails; with a baseline only NEW missing ids fail; a wrong expected git sha fails;
       an unparseable dashboard, a leftover default slug and an undefined custom card are flagged; an unknown --deploy card is refused
   [4] verify-staged and verify-served: pass on matching bytes; fail on a tampered staged file, a tampered served file and a 404
@@ -170,9 +172,10 @@ site_doc = G.parse_yaml(dash_text, "fixture")
 site_doc["views"][1]["title"] = "Example Site View"
 
 
-def site_policy(dest: str = F.DASHBOARD_DEST, overlay: list | None = None) -> Path:
+def site_policy(dest: str = F.DASHBOARD_DEST, overlay: list | None = None, protected: dict | None = None) -> Path:
     obj = {"schema": G.SCHEMA, "gate": "EXAMPLE_PRESERVE_GATE", "dashboards": [{
-        "destination": dest, "protect": [{"pointer": "/views/1", "sha256": G.canon_hash(site_doc["views"][1])}],
+        "destination": dest,
+        "protect": [{"pointer": "/views/1", "sha256": G.canon_hash(protected if protected is not None else site_doc["views"][1])}],
         "overlay": overlay if overlay is not None else [{"pointer": "/views/1/title", "value": "Example Site View"}]}]}
     p = TMP / f"site-policy-{len(list(TMP.glob('site-policy-*')))}.json"
     p.write_text(json.dumps(obj), encoding="utf-8")
@@ -204,10 +207,44 @@ if Path(applied).is_file():
         gcode2 = G.main(["check", "--destination", F.DASHBOARD_DEST, "--live", applied, "--candidate", applied, "--policy", str(pol)])
 check("the printed `apply` step works on the staged render, and its output passes the guard's check under the site policy",
       gcode == 0 and gcode2 == 0, gbuf.getvalue())
+# Re-running the plan into the same --out: the applied file has the same name (same render, same policy), and `apply` refuses it.
+applied_bytes = Path(applied).read_bytes() if Path(applied).is_file() else b""
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_pol), "--allow-dirty", "--site-policy", str(pol)])
+cmds_again = json.loads((out_pol / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code in (0, 1) else []
+check("re-running the plan into the same --out after the printed `apply` step: PASS, the applied file is already staged, and the plan "
+      "prints only deploy-ha.ps1 for it (the `apply` step would refuse its existing --out)",
+      code == 0 and applied_bytes != b"" and re.search(r"PASS  site policy: [^\n]*ecco_pro\.site-[0-9a-f]{8}\.yaml already holds `apply`'s "
+                                                       r"output for this render and policy \(1 overlay operation\(s\), 1 protected", log)
+      is not None and len(cmds_again) == 5 and cmds_again[-1] == f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {F.DASHBOARD_DEST}"
+      and not [c for c in cmds_again if "ecco_dashboard_guard.py apply" in c] and Path(applied).read_bytes() == applied_bytes,
+      log[-800:] + str(cmds_again[-2:]))
+Path(applied).write_bytes(applied_bytes + b"# edited by hand\n")
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_pol), "--allow-dirty", "--site-policy", str(pol)])
+cmds_again = json.loads((out_pol / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code in (0, 1) else []
+check("... and when that file is not `apply`'s output (edited, or from another run), the plan FAILs with 'remove it first', keeps the "
+      "`apply` step and leaves the file as it is (it never deletes or overwrites)",
+      code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*already exists and is not `apply`'s output for this "
+                              r"render and policy: remove it first", log) is not None
+      and len(cmds_again) == 6 and "ecco_dashboard_guard.py apply" in cmds_again[-2]
+      and Path(applied).read_bytes() == applied_bytes + b"# edited by hand\n", log[-800:])
 code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(TMP / "out-policy-bad"), "--allow-dirty",
                  "--site-policy", str(site_policy(overlay=[{"pointer": "/views/1/no_such_parent/title", "value": "x"}]))])
 check("a site policy whose `apply` would refuse this render is a FAIL row (the printed dashboard step could not succeed)",
       code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*parent is missing", log) is not None, log[-800:])
+# A release that changes the protected card: the policy froze /views/1 as an older release had it (one more key), so `apply` sets the
+# overlay but the result no longer matches the protect hash (the post-condition).
+older_view = dict(site_doc["views"][1], subtitle="Example older release")
+release_pol = site_policy(protected=older_view)
+out_release = TMP / "out-policy-release"
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_release), "--allow-dirty",
+                 "--site-policy", str(release_pol)])
+with contextlib.redirect_stdout(io.StringIO()) as gbuf:
+    gcode = G.main(["apply", "--policy", str(release_pol), "--destination", F.DASHBOARD_DEST,
+                    "--candidate", str(out_release / "stage" / "ecco_pro.yaml"), "--out", str(TMP / "release-applied.yaml")])
+check("a release that changes the protected card (apply sets the overlay, but the protect hash no longer matches) is a FAIL row naming "
+      "the post-condition and the owner procedure, as the printed `apply` step refuses (exit 3, nothing written)",
+      code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*post-condition[^\n]*owner procedure", log) is not None
+      and gcode == 3 and not (TMP / "release-applied.yaml").exists(), log[-800:] + gbuf.getvalue()[-300:])
 code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(TMP / "out-policy-other"), "--allow-dirty",
                  "--site-policy", str(site_policy(dest="/config/ecco/dashboards/other.yaml"))])
 other_cmds = json.loads((TMP / "out-policy-other" / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code == 0 else []

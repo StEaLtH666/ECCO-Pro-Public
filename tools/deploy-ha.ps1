@@ -152,6 +152,9 @@ if ($gatePinLine) {
 foreach ($gateWarning in @($dashboardGate.Warnings)) {
     Write-Warning "Dashboard preservation gate: $gateWarning"
 }
+# The gate's only WARNING lines are a drift recovery's: the live file (and so
+# the backup below) differs from the site policy at a protected pointer.
+$driftRecovery = @($dashboardGate.Warnings).Count -gt 0
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $lastSlash = $Destination.LastIndexOf('/')
@@ -260,7 +263,7 @@ try {
 catch {
     $moveFailureMessage = $_.Exception.Message
     Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
 }
 
 # Post-install verification: hash the file that actually landed at
@@ -279,7 +282,7 @@ if (-not $postInstallHash -or $postInstallHash -ne $localHash) {
     } else {
         "Post-install SHA256 mismatch. Local=$localHash Installed=$postInstallHash"
     }
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason $reason
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason $reason
 }
 Write-Host "Post-install SHA256 verified: $postInstallHash"
 
@@ -293,7 +296,7 @@ if ($dashboardGate.PolicyNamesDestination) {
     $liveVerification = Invoke-EccoDashboardLiveVerification -SshHost $SshHost -Destination $Destination -GuardPath $guardPath -Python $Python -ExpectedGate $dashboardGate.Gate
     $liveVerification.Output | ForEach-Object { Write-Host $_ }
     if (-not $liveVerification.Passed) {
-        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
+        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
     }
     $liveVerificationLine = $liveVerification.GateLine
 }
@@ -303,7 +306,7 @@ $check = Invoke-EccoRemoteCommand -SshHost $SshHost -Command 'ha core check' -Ca
 $check.Output | ForEach-Object { Write-Host $_ }
 
 if ($check.ExitCode -ne 0) {
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -Reason 'Home Assistant configuration check failed after deployment.'
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'Home Assistant configuration check failed after deployment.'
 }
 
 if ($Restart) {
@@ -323,7 +326,7 @@ Write-Host "Dashboard   : $($dashboardGate.GateLine)"
 if ($gatePinLine) {
     Write-Host $gatePinLine
 }
-if (@($dashboardGate.Warnings).Count -gt 0) {
+if ($driftRecovery) {
     Write-Host "Drift       : RECOVERED - live differed from the site policy at a protected pointer and now carries the policy's layer; the drifted file is the backup $backupPath"
 }
 if ($liveVerificationLine) {

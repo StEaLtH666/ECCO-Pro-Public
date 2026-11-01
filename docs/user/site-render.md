@@ -120,8 +120,9 @@ deployment stops, with nothing written to the host, when:
 The backup folder also receives a copy of `lovelace_resources`, and the backed-up file must be the file the gate checked. The
 source must still have the candidate's sha256 before anything is written, and the uploaded copy must have it before the move into
 place, so the installed bytes are the checked bytes. After the post-install sha256 check, a destination the policy names is read
-again and checked with `verify-live`; a failure rolls back like a failed `ha core check` (the backup is the checked live file, so
-the automatic rollback keeps the protected layer). Nothing can be deployed under `/config/ecco/site-local/`.
+again and checked with `verify-live`; a failure rolls back like a failed `ha core check`. The backup is the checked live file, so
+the automatic rollback restores the live file as the gate found it: the protected layer intact, except after a drift recovery,
+whose backup is the drifted file (see drift recovery below). Nothing can be deployed under `/config/ecco/site-local/`.
 
 **Rollback and Home Assistant's dashboard cache.** Home Assistant keeps serving its cached copy of a YAML dashboard while the
 file is not newer than that cache. The automatic rollback therefore restores the backup with a plain `cp` followed by `touch`,
@@ -148,7 +149,9 @@ before the host is contacted, and a pin file that is not exactly one gate name s
 - a dashboard destination must pass under exactly the pinned gate, otherwise the deployment stops before its first write;
 - any other destination (a package, a card bundle) needs the site policy present on the host;
 - `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the deliberate way to deploy a dashboard the policy does not protect (it blocks a
-  destination the policy does protect).
+  destination the policy does protect), and the one-run override while the policy is deliberately aside (**A release that
+  changes the protected card**, below). Keep the pin: removing it to get one deployment through leaves every later deployment
+  without the check.
 
 The pin covers the dashboard destinations. A destination the policy names outside `/config/ecco/dashboards/` is gated only while
 the policy names it.
@@ -159,10 +162,14 @@ new policy instead (**Making a policy**, below). When the policy is right and li
 over it outside `deploy-ha.ps1`), deploy a candidate that carries the policy's layer (the output of `apply`, below) with
 `-AllowDriftRecovery`. The gate
 then passes and prints `WARNING R2 drift: ...` for each drifted pointer and a `WARNING drift recovery: ...` line. `deploy-ha.ps1`
-repeats them as PowerShell warnings, and its `ECCO DEPLOYMENT PASSED` block adds `Drift : RECOVERED` with the backup that holds
-the drifted file. A candidate that does not carry the protected layer exactly stays BLOCKED with or without the switch. The
-switch waives nothing else (R3, R4). If live fell back to a generic card, the recovery also needs `-AcceptRemovedCardType` for
-the generic card type the candidate drops. `verify-live` never accepts drift.
+repeats them as PowerShell warnings, and its `ECCO DEPLOYMENT PASSED` block adds the line
+`Drift       : RECOVERED - live differed from the site policy ...`, which names the backup that holds the drifted file. If
+the deployment fails after the move (a failed `ha core check`, for example), the automatic rollback restores that backup, so the
+dashboard is the drifted file again, without the policy's layer: the rollback message then adds `DRIFT RECOVERY ROLLED BACK`.
+Do not report the site layer as intact; deploy the recovery again once the failure is fixed. A candidate that does not carry the
+protected layer exactly stays BLOCKED with or without the switch. The switch waives nothing else (R3, R4). If live fell back to a
+generic card, the recovery also needs `-AcceptRemovedCardType` for the generic card type the candidate drops. `verify-live` never
+accepts drift.
 
 **The interpreter.** The guard runs as `python -I -B -X utf8`, with the `python` on PATH or the interpreter named by `-Python
 <python.exe>` on `deploy-ha.ps1` and `deploy-dashboard.ps1`. `-I` (isolated mode) ignores the user site-packages folder, so PyYAML
@@ -209,7 +216,10 @@ python tools\ecco_dashboard_guard.py apply --policy <local copy of the host poli
 `ecco_deploy_preflight.py plan --site-policy <local copy of the host policy>` prints these two steps in the plan's deploy
 commands, with `apply`'s `--out` under the plan's `stage/` (named by the render and the policy). It also runs `apply` in memory and
 reports whether it will succeed on this render (FAIL when it would refuse, for example after a release that changes the protected
-card). Without `--site-policy`, the plan says that its dashboard command deploys the render as it is.
+card). A plan re-run into the same `--out` finds the file a previous `apply` step wrote there: when it holds exactly `apply`'s
+output for this render and policy, the plan says it is already applied and prints only its deploy command; anything else there is
+a FAIL (`remove it first`; `apply` refuses an existing `--out`, and the plan never deletes). Without `--site-policy`, the plan says
+that its dashboard command deploys the render as it is.
 
 `apply` replaces single-line scalars in place, inserts missing keys at their mapping's indentation and leaves every other line as
 it was; the result does not depend on the order of the overlay operations. It writes only when the result parses to the render
@@ -226,8 +236,9 @@ owner procedure, one deliberate step at a time:
    giving a merged candidate under `dist/`.
 2. Move the host policy aside, out of `/config/ecco/site-local/` (an owner decision; the site is unprotected until step 5).
 3. Deploy the merged candidate with `deploy-ha.ps1`. The generic layer still runs: R4 passes because the merged candidate keeps
-   the site's custom card type. With a gate pin, this one deployment needs `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`, given
-   deliberately.
+   the site's custom card type. With a gate pin, every deployment made while the policy is aside (this one, and the release's
+   card bundle or a package deployed before step 5) needs `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`, given deliberately for
+   that deployment. Keep the pin: it protects again once the new policy is installed. Never remove it for this procedure.
 4. Make the new policy: `make-policy --base <new render> --live <copy of the new live file> --pointer <the card's pointer in the
    new render>`.
 5. Install the new policy on the host (owner step), then prove it: `ecco_dashboard_guard.py verify-live --policy <the new policy>
@@ -247,8 +258,9 @@ rollback to a file without the protected layer (for example the previous generic
 the same deliberate step.
 
 **Tests.** The guard is covered by `tools/tests/test_ecco_dashboard_guard.py` (run in CI). The PowerShell side, including a
-deploy-ha.ps1 run against a stubbed host that proves a BLOCKED gate (or a gate pin that does not match) writes nothing, and a
-rollback on a fictional tree under a local POSIX sh that proves the restored file is newer than the cache, is covered by
+deploy-ha.ps1 run against a stubbed host that proves a BLOCKED gate (or a gate pin that does not match) writes nothing, a
+rollback on a fictional tree under a local POSIX sh that proves the restored file is newer than the cache, and deploy-ha.ps1 end to
+end on a fictional `/config` tree (a drift recovery, its `Drift` line and its rollback), is covered by
 `tools/tests/Test-EccoDeploy.ps1`, which CI does not run (CI only parses `tools/*.ps1`): run `powershell -NoProfile -ExecutionPolicy Bypass -File
 tools\tests\Test-EccoDeploy.ps1 -Python <python.exe with PyYAML>` with Windows PowerShell 5.1 as a required local pre-push step
 for every change to the deploy tooling or the guard.
