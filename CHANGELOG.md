@@ -17,6 +17,15 @@ Development before the first public release happened in a private repository; se
   authority vocabulary, and S0 reconciled onto them ([docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md](docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md)).
   S0 stays a DRAFT: decisions D1-D9 OPEN, thresholds PROPOSED, offline, SHADOW-only, NOT configured runtime policy; its
   examples are synthetic, with fictional values.
+- **Intelligence SHADOW v0.1, engine** (offline, synthetic data only): the S1 advice prototype reconciled onto the register, the
+  data-quality layer (fault injectors, a seeded fuzz suite, a capture validator that writes an aggregate summary only) and the
+  planning layer (tariff adapter, daily plan, baselines, value, advice backtest) behind the frozen `run_cycle`. The charge window
+  comes from a read-only grid-charge classification of the inverter's TOU slot table (fail closed: an unknown, stale or
+  conflicting slot, enable or overlay blocks the charge advice, no charging period is invented, and a grid-sourced slot is never
+  taken as proof that charging will happen) and is cross-checked against a verified import tariff's rate slots (A30, A35, A38:
+  a conflicting priced slot blocks; INFO `CHARGE_WINDOW_NOT_PRICED` marks a window that no price check covered whole). Input
+  expiry: configuration-poll freshness, `INPUT_EXPIRING` for an item valid for less than the 125 s refresh margin, and the
+  inverter clock offset in the charge-window items' validity. V1 example outputs unchanged.
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten

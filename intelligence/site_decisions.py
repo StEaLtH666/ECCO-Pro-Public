@@ -259,10 +259,25 @@ PROPOSED_FRESHNESS_CEILING_S = 900.0      # equal to the defined SOC advisory li
 
 LIVENESS_KEY = "liveness.dongle_poll_changed_at"
 # The dongle firmware publishes a value only when it changes, so a dongle-sourced input's age is taken from the time the
-# poll text last changed (LIVENESS_KEY), never from the value's own last change.
+# poll text last changed (LIVENESS_KEY), never from the value's own last change. The TOU enables and the overlay state
+# (CCR-TOU-1) and the supervision state and stable flag are dongle readings too: the supervision pair is published only
+# when it changes, so it is aged by the telemetry poll text (the quality layer keeps its own 90 s bound on that age, and
+# the heartbeat age, re-published every 20 s, keeps its own observation time).
 DONGLE_SIGNALS = ("battery.soc", "battery.power", "grid.power", "house.power", "pv.power", "inverter.healthy")
 DONGLE_READINGS = ("battery.soc_raw_pct", "capacity.reg204_ah", "protection.shutdown_soc_pct", "stop.dump_soc_pct",
-                   "tou.slot_table", "tou.current_target_soc_pct", "inverter.clock_offset_s")
+                   "tou.slot_table", "tou.current_target_soc_pct", "inverter.clock_offset_s", "tou.enabled",
+                   "tou.grid_charge_enabled", "tou.overlay_state", "supervision.state", "supervision.stable")
+# The dongle's configuration poll (about every 60 s: Block A battery and grid-charge settings, Block B TOU) has its own
+# poll text; CONFIG_LIVENESS_KEY is the time it last changed, and CONFIG_POLL_READINGS are the readings that poll
+# publishes. stop.dump_soc_pct is a dongle setting, not read from the inverter by that poll. Every configuration-poll
+# reading is also a dongle reading, so the telemetry liveness rule still applies to it; the quality layer ages it by the
+# larger of the two liveness ages and requires both liveness readings fresh (INTELLIGENCE_FOUNDATION_CONTRACT.md 13.3).
+CONFIG_LIVENESS_KEY = "liveness.config_poll_changed_at"
+CONFIG_POLL_READINGS = ("tou.slot_table", "tou.current_target_soc_pct", "tou.enabled", "tou.grid_charge_enabled",
+                        "protection.shutdown_soc_pct", "capacity.reg204_ah")
+# The two liveness readings: each has a fixed bound in the quality layer, neither is ever an I-D6 key (A5), and
+# freshness_limits gives neither a limit entry.
+LIVENESS_KEYS = (LIVENESS_KEY, CONFIG_LIVENESS_KEY)
 # A day-ahead forecast is judged by its local issue date, not by an age limit: fresh only when observed on the same local
 # date as `now` (and not in the future). This is a structural rule, not an owner threshold.
 DATE_SCOPED_READINGS = ("pv.forecast_today_kwh", "pv.forecast_tomorrow_kwh")
@@ -313,7 +328,8 @@ REQUIRED_READINGS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "pv_tomorrow": ("pv.forecast_tomorrow_kwh",),
 })
 REQUIRED_SITE_FACTS: Mapping[str, tuple[str, ...]] = MappingProxyType({"pv_tomorrow": ("pv_array_kwp",)})
-# The charge window: a VERIFIED tariff (judged by the planning layer), else the read-only TOU slot table with a WARN,
+# The charge window: the read-only TOU slot table's grid-charge run, cross-checked against a VERIFIED tariff (judged by the
+# planning layer; a tariff alone is never a window: FOUNDATION CONTRACT 13.5, A30), with a WARN unless a named run checks it,
 # else BLOCK. Never the SiteConfig example window. Export and Dump advice rest on the refill window too (add-only).
 CHARGE_WINDOW_ITEMS = ("charge_target", "export_event", "dump_to_grid", "predicted_morning_soc", "v1_summary")
 CHARGE_WINDOW_SOURCES = ("tariff.import_rates", "tou.slot_table")
@@ -328,15 +344,21 @@ CAPACITY_READING_BY_KIND = MappingProxyType({"CONFIGURED_HELPER": "capacity.help
 # readings the quality layer needs to judge a required input (each gets its own I-D6 key; UNRESOLVED until recorded;
 # CCR-DQ-1, add-only)
 QUALIFYING_READING_KEYS = ("battery.soc_raw_pct", "inverter.clock_offset_s", "tariff.events")
-GATE_READING_KEYS = tuple(sorted({LIVENESS_KEY, "protection.shutdown_soc_pct", "stop.dump_soc_pct",
+# the TOU enables and the overlay state: the planning layer's grid-charge classification of the TOU table gates every
+# charge-window item on them (INTELLIGENCE_FOUNDATION_CONTRACT.md 13.5), so each is a gate reading with its own I-D6 key,
+# UNRESOLVED until recorded (CCR-TOU-1, add-only)
+TOU_GATE_READING_KEYS = ("tou.enabled", "tou.grid_charge_enabled", "tou.overlay_state")
+GATE_READING_KEYS = tuple(sorted({*LIVENESS_KEYS, "protection.shutdown_soc_pct", "stop.dump_soc_pct",
                                   *CAPACITY_READING_BY_KIND.values(), *CHARGE_WINDOW_SOURCES,
-                                  *QUALIFYING_READING_KEYS,
+                                  *QUALIFYING_READING_KEYS, *TOU_GATE_READING_KEYS,
                                   *(r for rs in REQUIRED_READINGS.values() for r in rs)}))
 # readings the planning layer judges although no item requires them (each gets its own I-D6 key; UNRESOLVED until
 # recorded; CCR-PLAN-1, add-only; tariff.events comes through QUALIFYING_READING_KEYS)
 PLANNING_READING_KEYS = ("tou.current_target_soc_pct",)
+# every key an I-D6 entry may name: never a liveness reading (each has a fixed bound no site can loosen; A5) and never a
+# date-scoped forecast (judged by its issue date)
 FRESHNESS_OVERRIDE_KEYS = tuple(sorted(set(ADVISORY_LIMITS_S) | (set(GATE_READING_KEYS) | set(PLANNING_READING_KEYS))
-                                       - set(DATE_SCOPED_READINGS) - {LIVENESS_KEY}))
+                                       - set(DATE_SCOPED_READINGS) - set(LIVENESS_KEYS)))
 
 
 def items_gated_by(did: str) -> tuple[str, ...]:
@@ -915,10 +937,34 @@ class DecisionSet:
 # ---------------------------------------------------------------------------------------------------------------------
 
 PROPOSED_ANSWERS_STATUS = "PROPOSED_PENDING_OWNER"
+
+# The I-D6 proposal by key class (an engineering suggestion: PROPOSED_ANSWERS["I-D6"] is written from these and nothing
+# here is ever applied or loadable). Every key an I-D6 entry may name is in exactly one class or in
+# PROPOSED_D6_NO_PROPOSAL (test_intel_site_decisions [8] checks the partition and that the proposal re-validates).
+#   dongle   the dongle signals and readings, the configuration-poll readings included: judged by the poll-text liveness
+#            times, whose fixed bounds (180 s telemetry, 300 s configuration poll) decide first
+#   bridged  the Home Assistant configuration bridge sensors (re-rendered every 5 min): a gap-free result needs at least
+#            the 300 s render period plus the 125 s refresh margin (425 s); 600 s also tolerates one late render
+#   tariff   the tariff integration's tables: re-reported at an unobserved cadence, so the ceiling
+PROPOSED_D6_CLASS_LIMITS_S: Mapping[str, float] = MappingProxyType({"dongle": 300.0, "bridged": 600.0, "tariff": 900.0})
+PROPOSED_D6_KEY_CLASSES: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "dongle": tuple(k for k in FRESHNESS_OVERRIDE_KEYS if k in DONGLE_SIGNALS or k in DONGLE_READINGS),
+    "bridged": ("capacity.helper_kwh", "limits.max_grid_charge_w", "reserve.ha_minimum_soc"),
+    "tariff": ("tariff.events", "tariff.export_rates", "tariff.import_rates"),
+})
+# no proposal: the battery model's learned capacity re-renders at a cadence not yet observed (it stays UNRESOLVED; only
+# an I-D3 LEARNED_FROM_DISCHARGE source would require it), and the hourly history keeps its defined 6 h limit
+PROPOSED_D6_NO_PROPOSAL = ("capacity.fe1_wh_per_pct", "history.hourly")
+
 PROPOSED_ANSWERS: Mapping[str, str] = MappingProxyType({
     "I-D4": "PROPOSED_PENDING_OWNER (not an owner decision): capacity mismatch band 8.0 % of the mean of the two sources.",
-    "I-D6": "PROPOSED_PENDING_OWNER (not an owner decision): 300 s for every dongle signal and gate reading, judged by "
-            "the poll-text liveness time, within the 900 s ceiling.",
+    "I-D6": "PROPOSED_PENDING_OWNER (not an owner decision): by key class, within the unchanged 900 s ceiling. 300 s for "
+            "the dongle keys (every dongle signal and dongle reading, the configuration-poll readings included), judged "
+            "by the poll-text liveness times, whose fixed bounds decide first; 600 s for the keys fed by the Home "
+            "Assistant configuration bridge, which re-renders every 5 min (" + ", ".join(PROPOSED_D6_KEY_CLASSES["bridged"])
+            + "); 900 s for the tariff tables (" + ", ".join(PROPOSED_D6_KEY_CLASSES["tariff"]) + "). No limit is "
+            "proposed for the learned capacity (capacity.fe1_wh_per_pct) until its cadence is observed; the hourly "
+            "history keeps its defined limit.",
     "I-D8": "PROPOSED_PENDING_OWNER (not an owner decision): load power policy EXCLUDE and load counter policy "
             "EXCLUDE_PRE_CUTOVER (drop pre-cut-over load history until a counter check exists).",
     "I-D9": "PROPOSED_PENDING_OWNER (not an owner decision): history rule NORMALISE_TO_NOMINAL and target rule "
@@ -939,7 +985,7 @@ def freshness_limits(decisions: DecisionSet, accept_provenance: Iterable[str] = 
     applies nothing and BLOCKs. Date-scoped readings (forecasts) carry no age limit (see DATE_SCOPED_READINGS)."""
     limits: dict[str, float | None] = dict(ADVISORY_LIMITS_S)
     for k in GATE_READING_KEYS:
-        if k not in DATE_SCOPED_READINGS and k != LIVENESS_KEY:
+        if k not in DATE_SCOPED_READINGS and k not in LIVENESS_KEYS:
             limits.setdefault(k, None)
     for k in PLANNING_READING_KEYS:
         limits.setdefault(k, None)
@@ -1044,8 +1090,10 @@ def gate(item: str, decisions: DecisionSet, context: GateContext = GateContext()
 def required_inputs(item: str, decisions: DecisionSet,
                     accept_provenance: Iterable[str] = DEFAULT_ACCEPT_PROVENANCE) -> RequiredInputs:
     """The inputs that must be present and fresh for `item`: the code constants, the readings the chosen I-D1 / I-D2 /
-    I-D3 sources bring, the dongle liveness reading whenever a dongle-sourced input is needed, and any recorded I-D7
-    additions (add-only, so applied whatever their provenance)."""
+    I-D3 sources bring, the dongle liveness reading whenever a dongle-sourced input is needed, the configuration-poll
+    liveness reading for every charge-window item (its window rests on the TOU table, a configuration-poll reading) and
+    whenever a configuration-poll reading is needed (A6), and any recorded I-D7 additions (add-only, so applied whatever
+    their provenance). Every addition is tighten-only; REQUIRED_SIGNALS / REQUIRED_READINGS stay as they are."""
     if item not in ITEM_GATES:
         raise ValueError(f"unknown item {item!r}")
     acc = frozenset(accept_provenance)
@@ -1068,6 +1116,8 @@ def required_inputs(item: str, decisions: DecisionSet,
         rd += list(d7.value.add_readings.get(item, ()))
     if any(s in DONGLE_SIGNALS for s in sig) or any(r in DONGLE_READINGS for r in rd):
         rd.append(LIVENESS_KEY)
+    if item in CHARGE_WINDOW_ITEMS or any(r in CONFIG_POLL_READINGS for r in rd):
+        rd.append(CONFIG_LIVENESS_KEY)
     cw = CHARGE_WINDOW_SOURCES if item in CHARGE_WINDOW_ITEMS else ()
     return RequiredInputs(tuple(dict.fromkeys(sig)), tuple(dict.fromkeys(rd)), REQUIRED_SITE_FACTS.get(item, ()), cw)
 
@@ -1135,8 +1185,8 @@ def apply_to_siteconfig(base_cfg: SiteConfig, decisions: DecisionSet, readings: 
     every one of those fields is replaced (dataclasses.replace) or the result is None. I-D2 only raises the technical
     minimum above the placeholder; with a sensor snapshot a missing / stale / non-numeric reading BLOCKs
     (PHYSICAL_PROTECTION_UNKNOWN), never falls back. The cheap window comes from `readings[CHARGE_WINDOW_KEY]`, the window
-    the planning layer derived from a charge-window source (a VERIFIED tariff, else the read-only TOU slot table); without
-    a fresh one the result is None (CHARGE_WINDOW_UNKNOWN)."""
+    the planning layer derived from the read-only TOU slot table, cross-checked against a VERIFIED tariff when there is
+    one; without a fresh one the result is None (CHARGE_WINDOW_UNKNOWN)."""
     acc = frozenset(accept_provenance)
     out: list[Finding] = []
     for did in ("D1", "D2", "D3", "D5"):
@@ -1224,8 +1274,8 @@ def apply_to_siteconfig(base_cfg: SiteConfig, decisions: DecisionSet, readings: 
     window = _charge_window(readings)
     if window is None:
         out.append(finding("CHARGE_WINDOW_UNKNOWN", BLOCK, CHARGE_WINDOW_KEY,
-                           "no fresh charge window derived from a charge-window source (a verified tariff, else the "
-                           "read-only TOU slot table); the example window is never kept"))
+                           "no fresh charge window derived from the read-only TOU slot table (a verified "
+                           "tariff only cross-checks it); the example window is never kept"))
 
     if blocking(out) or None in (technical_min, user_reserve, capacity, rt, gw, window):
         return None, out

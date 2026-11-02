@@ -54,6 +54,7 @@ class EventInputs:
     max_export_kw: float | None = None
     ha_reserve_pct: float | None = None
     min_export_kwh: float = 0.1          # the advice resolution (exports are floored to 0.1 kWh, as in V1); raise to taste
+    reserve_raise_pct: float | None = None  # the raise-only advisory reserve preference (SHADOW), never the helper
 
 
 def advise_event(cfg: SiteConfig, inp: EventInputs) -> Advice:
@@ -88,7 +89,7 @@ def advise_event(cfg: SiteConfig, inp: EventInputs) -> Advice:
     if bl:
         return blocked(KIND, bl, inputs, assumptions=_ASSUMPTIONS)
 
-    reserve = cfg.effective_reserve(inp.ha_reserve_pct)
+    reserve = cfg.effective_reserve(inp.ha_reserve_pct, inp.reserve_raise_pct)
     floor = reserve.effective_pct
     desired = floor + cfg.soc_safety_margin_pct
     cap = cfg.battery_capacity_kwh

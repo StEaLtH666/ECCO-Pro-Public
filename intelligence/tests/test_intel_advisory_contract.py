@@ -10,7 +10,11 @@
   [6] golden fixtures regenerate byte-identical; fictional 2030 timestamps; no 13-digit numbers
   [7] byte budget: every entity <= 16 KiB, also for a maximal envelope; recorded / unrecorded name sets
   [8] attribute names drift-checked against ecco_core.bridge.AdvisoryRecord.display_attributes
-  [9] CycleInputs, SITE_READING_KEYS and SiteReading; import rules
+  [9] CycleInputs, SITE_READING_KEYS and SiteReading; import rules; the section 13 readings (configuration-poll liveness,
+      the two TOU enables, the overlay, the raise-only reserve preference), their units and OPTIONAL membership, the
+      tou.slot_table schema v2 data, and the shared cycle fixture's values for them; the contract text that section 3's
+      charge-window source is the TOU table's grid-charge run (a tariff only cross-checks it), the 13.8 rows of
+      CHARGE_WINDOW_NOT_PRICED and CHARGE_WINDOW_FROM_TARIFF, and 13.5's count of the residual (OK charge_target only)
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _cycle_fixtures as cf  # noqa: E402
 import _gen_contract_fixtures as gen  # noqa: E402
 from ecco_core.bridge import record  # noqa: E402  (tests may read ecco_core freely)
 from intelligence import advisory_contract as ac  # noqa: E402
@@ -39,6 +44,26 @@ FAILURES: list[str] = []
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "intelligence" / "advisory_contract.py"
 UTC = timezone.utc
+# INTELLIGENCE_FOUNDATION_CONTRACT.md section 13.1: the readings added for the grid-charge TOU classification, the
+# configuration-poll freshness and the raise-only reserve preference, with their units
+NEW_READING_UNITS = {"liveness.config_poll_changed_at": "datetime", "tou.enabled": "bool", "tou.grid_charge_enabled": "bool",
+                     "tou.overlay_state": "enum", "pref.advisory_reserve_raise_pct": "%"}
+# ... and the reason codes the later work packages emit (section 13.8; each one is documented there before it is emitted)
+SECTION13_CODES = ("CONFIG_LIVENESS_MISSING", "CONFIG_LIVENESS_IN_FUTURE", "CONFIG_LIVENESS_STALE", "INPUT_EXPIRING",
+                   "TOU_TABLE_LEGACY_SCHEMA", "TOU_TABLE_MALFORMED", "TOU_RING_INVALID", "TOU_SLOT_SOURCE_UNKNOWN",
+                   "TOU_SOURCE_DECODE_CONFLICT", "TOU_FLAGS_UNDECODED_BITS", "TOU_SLOT_TARGET_UNKNOWN",
+                   "TOU_SLOT_POWER_UNKNOWN", "TOU_ENABLE_UNKNOWN",
+                   "TOU_DISABLED", "TOU_GRID_CHARGE_ENABLE_UNKNOWN", "TOU_GRID_CHARGE_DISABLED", "TOU_OVERLAY_STATE_UNKNOWN",
+                   "TOU_OVERLAY_ACTIVE", "TOU_NO_GRID_SLOT", "TOU_MULTIPLE_GRID_WINDOWS", "TOU_SLOT_POWER_ZERO",
+                   "CHARGE_WINDOW_CROSSES_MIDNIGHT", "CHARGE_WINDOW_NOT_REPRESENTABLE", "CHARGE_WINDOW_TOU_UNCHECKED",
+                   "CHARGE_WINDOW_SOURCES_DISAGREE", "CHARGE_WINDOW_TOU_INSIDE_TARIFF", "CHARGE_WINDOW_NOT_PRICED",
+                   "GRID_CHARGE_CURRENT_LIMIT_NOT_MODELLED",
+                   "TOU_CLAIM_CONFIGURED", "TOU_CLAIM_NOT_EXPECTED", "TOU_CLAIM_UNCERTAIN", "MORNING_SOC_ASSUMES_CHARGE",
+                   "PREF_RESERVE_RAISE", "PREF_RESERVE_RAISE_UNKNOWN", "DECISION_VALUE_FROM_HELPER",
+                   "TOU_TABLE_NOT_FRESH")
+# ... and the public site_decisions constants WP-1 added (section 13.3; named there by the integration)
+SECTION13_WP1_CONSTANTS = ("LIVENESS_KEYS", "TOU_GATE_READING_KEYS", "PROPOSED_D6_CLASS_LIMITS_S", "PROPOSED_D6_KEY_CLASSES",
+                           "PROPOSED_D6_NO_PROPOSAL")
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -403,13 +428,104 @@ check("CycleInputs freezes lists and sets", ac.CycleInputs(now=NOW, site_reading
       and isinstance(ac.CycleInputs(now=NOW, accept_provenance={"X"}).accept_provenance, frozenset))
 check("SITE_READING_KEYS covers every gate reading of site_decisions", set(sd.GATE_READING_KEYS) <= set(ac.SITE_READING_KEYS),
       str(set(sd.GATE_READING_KEYS) - set(ac.SITE_READING_KEYS)))
+_want_keys = {"liveness.dongle_poll_changed_at", "supervision.state", "supervision.stable", "supervision.heartbeat_age_s",
+              "battery.soc_raw_pct", "capacity.helper_kwh", "capacity.fe1_wh_per_pct", "capacity.fe1_basis", "capacity.reg204_ah",
+              "efficiency.helper_pct", "protection.shutdown_soc_pct", "stop.dump_soc_pct", "tou.slot_table",
+              "tou.current_target_soc_pct", "limits.max_grid_charge_w", "tariff.import_rates", "tariff.export_rates", "tariff.events",
+              "pv.forecast_today_kwh", "pv.forecast_tomorrow_kwh", "inverter.clock_offset_s", "pref.wear_cost_p_per_kwh",
+              "pref.normal_max_charge_target_pct"} | set(NEW_READING_UNITS)
 check("SITE_READING_KEYS has the contract's keys and units",
-      {"liveness.dongle_poll_changed_at", "supervision.state", "supervision.stable", "supervision.heartbeat_age_s", "battery.soc_raw_pct",
-       "capacity.helper_kwh", "capacity.fe1_wh_per_pct", "capacity.fe1_basis", "capacity.reg204_ah", "efficiency.helper_pct",
-       "protection.shutdown_soc_pct", "stop.dump_soc_pct", "tou.slot_table", "tou.current_target_soc_pct", "limits.max_grid_charge_w",
-       "tariff.import_rates", "tariff.export_rates", "tariff.events", "pv.forecast_today_kwh", "pv.forecast_tomorrow_kwh",
-       "inverter.clock_offset_s", "pref.wear_cost_p_per_kwh", "pref.normal_max_charge_target_pct"} == set(ac.SITE_READING_KEYS)
-      and ac.SITE_READING_KEYS["limits.max_grid_charge_w"] == "W" and ac.SITE_READING_KEYS["protection.shutdown_soc_pct"] == "%")
+      _want_keys == set(ac.SITE_READING_KEYS)
+      and ac.SITE_READING_KEYS["limits.max_grid_charge_w"] == "W" and ac.SITE_READING_KEYS["protection.shutdown_soc_pct"] == "%",
+      str(sorted(_want_keys ^ set(ac.SITE_READING_KEYS))))
+check("the section 13 readings (CCR-CFG-1, CCR-TOU-1, CCR-PREF-1) carry exactly their contract units",
+      all(ac.SITE_READING_KEYS.get(k) == u for k, u in NEW_READING_UNITS.items()),
+      str({k: ac.SITE_READING_KEYS.get(k) for k in NEW_READING_UNITS}))
+check("OPTIONAL_READING_KEYS: the two preferences plus the raise-only reserve preference, nothing that gates the TOU window",
+      ac.OPTIONAL_READING_KEYS == ("pref.wear_cost_p_per_kwh", "pref.normal_max_charge_target_pct", "pref.advisory_reserve_raise_pct")
+      and set(ac.OPTIONAL_READING_KEYS) <= set(ac.SITE_READING_KEYS)
+      and not {"liveness.config_poll_changed_at", "tou.enabled", "tou.grid_charge_enabled", "tou.overlay_state"} & set(ac.OPTIONAL_READING_KEYS),
+      str(ac.OPTIONAL_READING_KEYS))
+check("the configuration-poll constants name contract readings: CONFIG_LIVENESS_KEY is a datetime reading like the dongle liveness, "
+      "and every CONFIG_POLL_READINGS key is a reading",
+      sd.CONFIG_LIVENESS_KEY == "liveness.config_poll_changed_at" and ac.SITE_READING_KEYS[sd.CONFIG_LIVENESS_KEY] == "datetime"
+      and set(sd.CONFIG_POLL_READINGS) <= set(ac.SITE_READING_KEYS))
+check("tou.slot_table schema v2 is documented data: 6 rows of exactly the eight row keys, the dongle's source and mode texts with their "
+      "flags_raw encodings, and the overlay enum",
+      ac.TOU_SLOT_TABLE_SCHEMA == 2 and ac.TOU_SLOT_TABLE_ROWS == 6
+      and ac.TOU_SLOT_ROW_KEYS == ("slot", "start", "end", "target_soc_pct", "charge_source", "flags_raw", "mode", "power_w")
+      and dict(ac.TOU_CHARGE_SOURCE_BITS) == {"None": 0, "Grid": 1, "Generator": 2, "Grid + Generator": 3}
+      and dict(ac.TOU_MODE_BITS) == {"None": 0x00, "General": 0x04, "Backup": 0x08, "Charge": 0x10}
+      and all(v & ~0x03 == 0 for v in ac.TOU_CHARGE_SOURCE_BITS.values()) and all(v & ~0x1C == 0 for v in ac.TOU_MODE_BITS.values())
+      and ac.TOU_OVERLAY_STATES == ("NONE", "ACTIVE"))
+check("... and it is not an envelope field: no status attribute or block named tou (A1)",
+      "tou" not in {f.name for f in fields(ac.AdvisoryEnvelope)} and "tou" not in ac.RECORDED_ATTRIBUTES | ac.UNRECORDED_ATTRIBUTES
+      and "tou" not in ac.BLOCK_KEYS)
+_fx = cf.cycle_inputs(synthetic_recorded=True)
+_fx_by = {r.key: r for r in _fx.site_readings}
+check("the shared cycle fixture carries a well-formed reading for every section 13 key (unit, aware time, source)",
+      all(k in _fx_by and not _fx_by[k].problems() for k in NEW_READING_UNITS), str(sorted(set(NEW_READING_UNITS) - set(_fx_by))))
+_cl = _fx_by["liveness.config_poll_changed_at"]
+check("... the configuration-poll liveness is fresh: its value is its own change time, and under the 300 s bound it leaves at "
+      "least the 125 s refresh margin (so wiring the bound and INPUT_EXPIRING blocks nothing built on the fixture)",
+      _cl.value == _cl.observed_at and 0 <= (_fx.now - _cl.value).total_seconds() <= 300.0 - 125.0)
+check("... both TOU enables on, no overlay, and a reserve raise of 0 % (present, usable, never above any floor)",
+      _fx_by["tou.enabled"].value is True and _fx_by["tou.grid_charge_enabled"].value is True
+      and _fx_by["tou.overlay_state"].value == "NONE" and _fx_by["pref.advisory_reserve_raise_pct"].value == 0.0)
+_tt = _fx_by["tou.slot_table"].value
+_grid = [r for r in _tt if r.get("charge_source") in ("Grid", "Grid + Generator")]
+check("... the TOU table is schema v2: 6 rows in slot order, exactly the row keys, one ring (each end is the next start), flags_raw "
+      "agreeing with the source and mode texts, no null field",
+      len(_tt) == ac.TOU_SLOT_TABLE_ROWS and [r["slot"] for r in _tt] == list(range(1, 7))
+      and all(tuple(r) == ac.TOU_SLOT_ROW_KEYS for r in _tt)
+      and all(_tt[i]["end"] == _tt[(i + 1) % 6]["start"] for i in range(6))
+      and all(r["flags_raw"] & 0x03 == ac.TOU_CHARGE_SOURCE_BITS[r["charge_source"]]
+              and r["flags_raw"] & 0x1C == ac.TOU_MODE_BITS[r["mode"]] for r in _tt)
+      and all(v is not None for r in _tt for v in r.values()), str(_tt))
+check("... with exactly one grid-charge slot, 01:00-04:30 (not the example window), its power equal to the grid-charge limit",
+      [(r["start"], r["end"]) for r in _grid] == [("01:00", "04:30")]
+      and _grid[0]["power_w"] == _fx_by["limits.max_grid_charge_w"].value and 0 < _grid[0]["target_soc_pct"] <= 100)
+_doc = (ROOT / "docs" / "intelligence" / "INTELLIGENCE_FOUNDATION_CONTRACT.md").read_text(encoding="utf-8")
+_s13 = _doc.split("\n## 13.", 1)[1] if "\n## 13." in _doc else ""
+_s13_names = set(re.findall(r"`([A-Za-z0-9_.]+)`", _s13))
+_s13_want = set(NEW_READING_UNITS) | {"CONFIG_LIVENESS_KEY", "CONFIG_POLL_READINGS", "OPTIONAL_READING_KEYS", "TOU_SLOT_TABLE_SCHEMA",
+                                      "TOU_SLOT_TABLE_ROWS", "TOU_SLOT_ROW_KEYS", "TOU_CHARGE_SOURCE_BITS", "TOU_MODE_BITS",
+                                      "TOU_OVERLAY_STATES", "REFRESH_MARGIN_S", "VALIDITY_GATE_READINGS"}
+check("the foundation contract's section 13 documents every new reading key and the WP-0 constants",
+      _s13_want <= _s13_names, str(sorted(_s13_want - _s13_names)))
+check("... and the public site_decisions constants WP-1 added (each one exists)",
+      set(SECTION13_WP1_CONSTANTS) <= _s13_names and all(hasattr(sd, c) for c in SECTION13_WP1_CONSTANTS),
+      str(sorted(set(SECTION13_WP1_CONSTANTS) - _s13_names)))
+check("... and names every reason code the later work packages emit (each a valid code within MAX_CODE_CHARS)",
+      all(c in _s13_names and re.fullmatch(r"[A-Z][A-Z0-9_]*", c) and len(c) <= ac.MAX_CODE_CHARS for c in SECTION13_CODES),
+      str(sorted(c for c in SECTION13_CODES if c not in _s13_names)))
+_s13_8 = _s13.split("\n### 13.8", 1)[1].split("\n### ", 1)[0] if "\n### 13.8" in _s13 else ""
+check("... 13.8 has its own INFO row for CHARGE_WINDOW_NOT_PRICED on the charge-window items (A41, R7-E3)",
+      re.search(r"^\| `CHARGE_WINDOW_NOT_PRICED` \| INFO \| the charge-window items \|", _s13_8, re.M) is not None)
+check("... and an INFO row for CHARGE_WINDOW_FROM_TARIFF: a named cheap run checked the TOU window, which stays the TOU "
+      "window (A30, R8D-3)",
+      re.search(r"^\| `CHARGE_WINDOW_FROM_TARIFF` \(existing\) \| INFO \|[^\n]*the window is still the TOU window",
+                _s13_8, re.M) is not None)
+_s13_5 = " ".join((_s13.split("\n### 13.5", 1)[1].split("\n### ", 1)[0] if "\n### 13.5" in _s13 else "").split())
+check("... 13.5 counts the residual by an OK charge_target carrying CHARGE_WINDOW_NOT_PRICED; on an item that is not OK the "
+      "code says only that the window was not price-checked (ENG8-1)",
+      "the cycles whose **OK** `charge_target`" in _s13_5 and "says only that the window was not price-checked" in _s13_5)
+check("... 13.5 says which finding texts are published (R9D-2): of a WARN or INFO finding only the code, a BLOCK "
+      "finding's text as its blocker text; never that every finding's text stays inside the engine",
+      "A BLOCK finding's text is published as its blocker text" in _s13_5
+      and "A finding's text stays inside the engine" not in _s13_5 and "Only codes are published" not in _s13_5)
+check("... once the next day's rates are published the window is checked by the named run or, for a tariff that names "
+      "none, by the A35 spread check (R9D-4); section 13 carries no dated owner decision (A45)",
+      "by the named run (A30), or, for a tariff that names none" in _s13_5 and "by the A35 spread check" in _s13_5
+      and "the named run (A30) checks the window" not in _s13_5
+      and not re.search(r"owner'?s? decision of|decision of \d", _s13, re.I))
+_s3 = " ".join((_doc.split("\n## 3.", 1)[1].split("\n## 4.", 1)[0] if "\n## 3." in _doc else "").split())
+check("section 3 makes the TOU table's grid-charge run the only charge-window source, which a VERIFIED tariff "
+      "cross-checks and never replaces (A30, R8D-3)",
+      _s3.count("a tariff alone is never a window") == 2
+      and "the only charge-window source, which a VERIFIED import tariff cross-checks but never replaces" in _s3
+      and "a VERIFIED tariff (`tariff.import_rates`), else" not in _s3
+      and "a VERIFIED tariff, else the read-only TOU slot table" not in _s3, _s3[:200])
 check("SiteReading.problems: unknown key, wrong unit, naive time, missing source",
       ac.SiteReading("x.y", 1, "W", NOW, "s").problems() and ac.SiteReading("limits.max_grid_charge_w", 1, "kW", NOW, "s").problems()
       and ac.SiteReading("limits.max_grid_charge_w", 1, "W", datetime(2030, 1, 1), "s").problems()

@@ -7,12 +7,17 @@
   [3] provenance: OWNER_RECORD only from the site-local file with a pattern-valid record_ref; a non-accepted provenance
       counts as OPEN; the default acceptance is OWNER_RECORD only
   [4] gates: ITEM_GATES, conditional I-D4 / I-D9, the fixed DST boundary rule, an INVALID I-D7
-  [5] required inputs: the code constants, decision-chosen readings, dongle liveness, add-only I-D7
+  [5] required inputs: the code constants, decision-chosen readings, dongle liveness, add-only I-D7; the
+      configuration-poll liveness for every charge-window item and whenever a configuration-poll reading is required (A6)
   [6] freshness: the mirror equals ecco_core.freshness's ADVISORY catalogue; overrides tighten-only, unknown refused,
-      above the 900 s ceiling INVALID; nothing applies unless I-D6 is satisfied
+      above the 900 s ceiling INVALID; nothing applies unless I-D6 is satisfied; the configuration-poll constants
+      (CCR-CFG-1) and the configuration-poll liveness never an I-D6 key, excluded exactly like the dongle liveness (A5);
+      the TOU enables and overlay are I-D6 keys (CCR-TOU-1); the dongle readings (configuration poll, overlay,
+      supervision)
   [7] apply_to_siteconfig: no example value survives; HA_RESERVE_HELPER / READ_ONLY_SENSOR_SNAPSHOT without a fresh finite
       reading BLOCK; I-D2 never lowers the technical minimum; I-D5 percent / one-way is normalised
-  [8] PROPOSED answers are text only and never loadable; reserve roles; import and token rules
+  [8] PROPOSED answers are text only and never loadable; the I-D6 proposal split into dongle / bridged / tariff keys (a
+      partition of the I-D6 keys that re-validates); reserve roles; import and token rules
 """
 
 from __future__ import annotations
@@ -336,6 +341,28 @@ check("a recorded I-D7 only ADDS (and brings liveness for a dongle input)",
       sd.required_inputs("overnight_demand", add7).signals == ("history.hourly", "house.power")
       and sd.LIVENESS_KEY in sd.required_inputs("overnight_demand", add7).readings
       and "tou.slot_table" in sd.required_inputs("pv_tomorrow", add7).readings)
+check("A6: every charge-window item requires the configuration-poll liveness reading (its window rests on the TOU table, "
+      "a configuration-poll reading that is a charge-window source, not a required reading), with or without decisions",
+      all(sd.CONFIG_LIVENESS_KEY in sd.required_inputs(i, ds_, acc_).readings for i in sd.CHARGE_WINDOW_ITEMS
+          for ds_, acc_ in ((allopen, sd.DEFAULT_ACCEPT_PROVENANCE), (syn, ACC_T), (helper, ACC_T))))
+check("... the items that rest on no configuration-poll reading do not (overnight_demand is bound through its window, "
+      "not through required_inputs)",
+      all(sd.CONFIG_LIVENESS_KEY not in sd.required_inputs(i, syn, ACC_T).readings
+          for i in sd.ITEMS if i not in sd.CHARGE_WINDOW_ITEMS))
+add7c = allopen.with_decision("D7", sd.RequiredInputsOverride({}, {"pv_tomorrow": ("capacity.reg204_ah",),
+                                                                   "predicted_day_load": ("stop.dump_soc_pct",),
+                                                                   "overnight_demand": ("tou.enabled",)}), T)
+check("A6: whenever a configuration-poll reading is required the configuration-poll liveness is added too (an I-D7 adding "
+      "the Ah register or the TOU enable brings both liveness readings); a dongle reading the configuration poll does not "
+      "publish (the Dump stop level) brings only the telemetry liveness",
+      {sd.LIVENESS_KEY, sd.CONFIG_LIVENESS_KEY} <= set(sd.required_inputs("pv_tomorrow", add7c).readings)
+      and {sd.LIVENESS_KEY, sd.CONFIG_LIVENESS_KEY} <= set(sd.required_inputs("overnight_demand", add7c).readings)
+      and sd.LIVENESS_KEY in sd.required_inputs("predicted_day_load", add7c).readings
+      and sd.CONFIG_LIVENESS_KEY not in sd.required_inputs("predicted_day_load", add7c).readings)
+check("... each key appears once, and the code constants stay as they are (tighten-only, a function-body change: no "
+      "REQUIRED_READINGS entry names a liveness reading)",
+      all(len(set(r.readings)) == len(r.readings) for r in (sd.required_inputs(i, helper, ACC_T) for i in sd.ITEMS))
+      and not any(k in rs for rs in sd.REQUIRED_READINGS.values() for k in sd.LIVENESS_KEYS))
 check("every reading named by the gates is a gate reading key", set(sd.GATE_READING_KEYS) >= {r for rs in sd.REQUIRED_READINGS.values() for r in rs})
 check("every required signal is a known ecco_core.state signal",
       all(sd.spec_for(s) is not None for ss in sd.REQUIRED_SIGNALS.values() for s in ss))
@@ -367,7 +394,8 @@ check("... but applies nothing when its provenance is not accepted", lim_na["hou
 for bad, code in (({"battery.soc": 1000.0}, "FRESHNESS_OVERRIDE_REFUSED"), ({"house.power": 901.0}, "FRESHNESS_OVERRIDE_ABOVE_CEILING"),
                   ({"house.power": 0.0}, "FRESHNESS_OVERRIDE_INVALID"), ({"house.power": float("inf")}, "FRESHNESS_OVERRIDE_INVALID"),
                   ({"house.power": True}, "FRESHNESS_OVERRIDE_INVALID"), ({"house.powr": 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY"),
-                  ({sd.LIVENESS_KEY: 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY"), ({"pv.forecast_tomorrow_kwh": 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY")):
+                  ({sd.LIVENESS_KEY: 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY"), ({sd.CONFIG_LIVENESS_KEY: 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY"),
+                  ({"pv.forecast_tomorrow_kwh": 60.0}, "FRESHNESS_OVERRIDE_UNKNOWN_KEY")):
     ds = d6({**bad, "pv.power": 60.0})
     lim, notes = sd.freshness_limits(ds, ACC_T)
     check(f"I-D6 {bad} is INVALID ({code}); nothing is applied and it BLOCKs",
@@ -387,6 +415,44 @@ lim_ccr, _ = sd.freshness_limits(d6({k: 600.0 for k in CCR_KEYS}), ACC_T)
 check("... a satisfied I-D6 supplies them (capped by the 900 s ceiling like every unresolved key)",
       all(lim_ccr[k] == 600.0 for k in CCR_KEYS) and d6({"tariff.events": 901.0}).status("D6") == "INVALID"
       and d6({"tou.current_target_soc_pct": 901.0}).status("D6") == "INVALID")
+check("CCR-CFG-1: CONFIG_LIVENESS_KEY is the configuration-poll liveness reading, distinct from the dongle liveness; "
+      "CONFIG_POLL_READINGS names, each once, the readings the configuration poll publishes (Block A: the Ah register, the "
+      "shutdown level and the grid-charge enable; Block B: the TOU table, the current target and the TOU enable), not the "
+      "Dump stop level (a dongle setting the poll does not read) and not the liveness key itself",
+      sd.CONFIG_LIVENESS_KEY == "liveness.config_poll_changed_at" and sd.CONFIG_LIVENESS_KEY != sd.LIVENESS_KEY
+      and sd.CONFIG_POLL_READINGS == ("tou.slot_table", "tou.current_target_soc_pct", "tou.enabled", "tou.grid_charge_enabled",
+                                      "protection.shutdown_soc_pct", "capacity.reg204_ah")
+      and len(set(sd.CONFIG_POLL_READINGS)) == len(sd.CONFIG_POLL_READINGS)
+      and "stop.dump_soc_pct" not in sd.CONFIG_POLL_READINGS and sd.CONFIG_LIVENESS_KEY not in sd.CONFIG_POLL_READINGS,
+      str(sd.CONFIG_POLL_READINGS))
+check("A5: CONFIG_LIVENESS_KEY is never an I-D6 key (its bound is fixed like the dongle liveness bound, so no site can "
+      "loosen it) and freshness_limits gives it no limit entry, with or without a satisfied I-D6",
+      sd.CONFIG_LIVENESS_KEY not in sd.FRESHNESS_OVERRIDE_KEYS and sd.LIVENESS_KEY not in sd.FRESHNESS_OVERRIDE_KEYS
+      and sd.CONFIG_LIVENESS_KEY not in lim0 and sd.CONFIG_LIVENESS_KEY not in lim1)
+check("A5: ... excluded exactly like LIVENESS_KEY: both are gate readings (an I-D7 may add either), LIVENESS_KEYS names "
+      "both, and neither ever gets a limit entry, also from a recorded I-D6 that supplies every key",
+      sd.LIVENESS_KEYS == (sd.LIVENESS_KEY, sd.CONFIG_LIVENESS_KEY) and set(sd.LIVENESS_KEYS) <= set(sd.GATE_READING_KEYS)
+      and not (set(sd.LIVENESS_KEYS) & set(sd.FRESHNESS_OVERRIDE_KEYS))
+      and allopen.with_decision("D7", sd.RequiredInputsOverride({}, {"pv_tomorrow": (sd.CONFIG_LIVENESS_KEY,)}), T).status("D7") == "RECORDED"
+      and not (set(sd.LIVENESS_KEYS) & set(sd.freshness_limits(d6({k: 300.0 for k in sd.FRESHNESS_OVERRIDE_KEYS
+                                                                   if sd.ADVISORY_LIMITS_S.get(k) is None}), ACC_T)[0])))
+check("CCR-TOU-1 (contract 13.1): the TOU enables and the overlay state are gate readings and I-D6 keys, each once, with "
+      "no default limit (UNRESOLVED until a site records one); a satisfied I-D6 supplies them, at most the ceiling",
+      sd.TOU_GATE_READING_KEYS == ("tou.enabled", "tou.grid_charge_enabled", "tou.overlay_state")
+      and all(k in sd.GATE_READING_KEYS and sd.FRESHNESS_OVERRIDE_KEYS.count(k) == 1 and k in lim0 and lim0[k] is None
+              for k in sd.TOU_GATE_READING_KEYS)
+      and all(sd.freshness_limits(d6({k: 240.0 for k in sd.TOU_GATE_READING_KEYS}), ACC_T)[0][k] == 240.0
+              for k in sd.TOU_GATE_READING_KEYS)
+      and d6({"tou.overlay_state": 901.0}).status("D6") == "INVALID")
+check("13.3: every configuration-poll reading stays a dongle reading (the telemetry liveness rule still applies; the TOU "
+      "enables join), and the overlay state and the supervision state and stable flag are dongle readings (aged by the "
+      "telemetry poll text); the overlay is telemetry, not a configuration-poll reading; the heartbeat keeps its own time",
+      set(sd.CONFIG_POLL_READINGS) <= set(sd.DONGLE_READINGS)
+      and {"tou.overlay_state", "supervision.state", "supervision.stable"} <= set(sd.DONGLE_READINGS)
+      and "tou.overlay_state" not in sd.CONFIG_POLL_READINGS and "supervision.heartbeat_age_s" not in sd.DONGLE_READINGS
+      and len(set(sd.DONGLE_READINGS)) == len(sd.DONGLE_READINGS))
+check("... the supervision readings are not I-D6 keys (their bound is the quality layer's fixed supervision rule)",
+      not ({"supervision.state", "supervision.stable", "supervision.heartbeat_age_s"} & set(sd.FRESHNESS_OVERRIDE_KEYS)))
 
 # ---------------------------------------------------------------------------------------------------------------------
 section("[7] apply_to_siteconfig: no fallbacks")
@@ -493,6 +559,36 @@ check("the proposals carry the agreed figures", "8.0 %" in sd.PROPOSED_ANSWERS["
       and "EXCLUDE_PRE_CUTOVER" in sd.PROPOSED_ANSWERS["I-D8"] and "NORMALISE_TO_NOMINAL" in sd.PROPOSED_ANSWERS["I-D9"]
       and "SCALE_UP_ONLY" in sd.PROPOSED_ANSWERS["I-D9"])
 check("PROPOSED_ANSWERS cannot be loaded as decisions", raises(lambda: sd.DecisionSet.from_mapping(dict(sd.PROPOSED_ANSWERS), source="test")))
+cls = sd.PROPOSED_D6_KEY_CLASSES
+class_keys = [k for ks in cls.values() for k in ks]
+check("I-D6 proposal split by key class: dongle 300 s, bridged 600 s, tariff 900 s (never above the ceiling)",
+      dict(sd.PROPOSED_D6_CLASS_LIMITS_S) == {"dongle": 300.0, "bridged": 600.0, "tariff": 900.0}
+      and set(cls) == set(sd.PROPOSED_D6_CLASS_LIMITS_S)
+      and max(sd.PROPOSED_D6_CLASS_LIMITS_S.values()) <= sd.PROPOSED_FRESHNESS_CEILING_S)
+check("... the classes and the no-proposal list partition the I-D6 keys exactly (each key once, none left out)",
+      len(class_keys) == len(set(class_keys)) and not (set(class_keys) & set(sd.PROPOSED_D6_NO_PROPOSAL))
+      and set(class_keys) | set(sd.PROPOSED_D6_NO_PROPOSAL) == set(sd.FRESHNESS_OVERRIDE_KEYS),
+      str(sorted(set(sd.FRESHNESS_OVERRIDE_KEYS) ^ (set(class_keys) | set(sd.PROPOSED_D6_NO_PROPOSAL)))))
+check("... the dongle class is exactly the dongle signals and readings among the I-D6 keys (every configuration-poll "
+      "reading and the TOU enables and overlay included); the bridged class is no dongle key; the tariff class is the "
+      "tariff tables",
+      set(cls["dongle"]) == {k for k in sd.FRESHNESS_OVERRIDE_KEYS if k in sd.DONGLE_SIGNALS or k in sd.DONGLE_READINGS}
+      and {k for k in sd.CONFIG_POLL_READINGS if k in sd.FRESHNESS_OVERRIDE_KEYS} <= set(cls["dongle"])
+      and set(sd.TOU_GATE_READING_KEYS) <= set(cls["dongle"])
+      and not (set(cls["bridged"]) & (set(sd.DONGLE_SIGNALS) | set(sd.DONGLE_READINGS)))
+      and set(cls["tariff"]) == {k for k in sd.FRESHNESS_OVERRIDE_KEYS if k.startswith("tariff.")})
+proposal = {k: sd.PROPOSED_D6_CLASS_LIMITS_S[c] for c, ks in cls.items() for k in ks}
+check("... applied as an I-D6 (in this test only) the proposal re-validates: tighten-only for a defined limit, at most "
+      "the ceiling for the others, no unknown key; the hourly history keeps its defined limit",
+      sd.FreshnessOverrides(proposal).entry_problems() == [] and d6(proposal).status("D6") == "RECORDED"
+      and "history.hourly" not in proposal and sd.ADVISORY_LIMITS_S["history.hourly"] is not None,
+      str(sd.FreshnessOverrides(proposal).entry_problems()[:3]))
+txt6 = sd.PROPOSED_ANSWERS["I-D6"]
+check("... the I-D6 text names the three figures, every bridged and tariff key, the configuration-poll readings in the "
+      "dongle class, the unchanged ceiling and the key without a proposal",
+      all(s in txt6 for s in ("300 s", "600 s", "900 s", "configuration-poll readings", "ceiling", "capacity.fe1_wh_per_pct"))
+      and all(k in txt6 for k in cls["bridged"] + cls["tariff"]) and txt6.startswith(sd.PROPOSED_ANSWERS_STATUS)
+      and "not an owner decision" in txt6)
 check("the single ProposedThresholds keeps S0's values", sd.ProposedThresholds() == sd.ProposedThresholds(
     "PROPOSED_PENDING_OWNER", 8.0, (0.5, 500.0), 0.97, 0.88, 0.01, 2.0, 100.0, 0.05, 0.05))
 check("six reserve roles, kept apart", len(set(sd.ReserveRole.ALL)) == 6 and "INVERTER_TOU_SETTING" in sd.ReserveRole.ALL
