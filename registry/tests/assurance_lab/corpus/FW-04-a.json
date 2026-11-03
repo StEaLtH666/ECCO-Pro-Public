@@ -1,0 +1,207 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "down_s": 5,
+        "nvs_fault": [
+          "absent",
+          "dump.valid"
+        ]
+      },
+      "at_s": 120,
+      "do": "reboot"
+    },
+    {
+      "args": {
+        "seconds": 600
+      },
+      "at_s": 127,
+      "do": "run_for"
+    }
+  ],
+  "classification": "FINDING-KNOWN:PLATFORM-ABSENT",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status",
+      "op": "==",
+      "value": "Inactive"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "ABSENT"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "corrupt",
+      "op": "==",
+      "value": false
+    },
+    {
+      "args": {
+        "addrs": [
+          244,
+          256,
+          257,
+          258,
+          259,
+          260,
+          261
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "244": 0,
+        "256": 1000,
+        "257": 1000,
+        "258": 1000,
+        "259": 1000,
+        "260": 1000,
+        "261": 1000
+      }
+    },
+    {
+      "args": {
+        "names": [
+          "dump_snapshot_valid",
+          "dump_active_persisted"
+        ]
+      },
+      "observe": "globals",
+      "op": "==",
+      "value": {
+        "dump_active_persisted": false,
+        "dump_snapshot_valid": false
+      }
+    },
+    {
+      "args": {
+        "names": [
+          "INV-NO-SILENT-OVERRIDE"
+        ]
+      },
+      "observe": "invariants",
+      "op": "!=",
+      "value": []
+    },
+    {
+      "args": {
+        "names": [
+          "INV-WS",
+          "INV-ONE-LEASE",
+          "INV-NO-2ND-RESTORER",
+          "INV-NO-RESUME",
+          "INV-LOCKOUT-QUIET",
+          "INV-RESTORE-BOUND",
+          "INV-BOOT-MIRROR"
+        ]
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    },
+    {
+      "args": {
+        "form": "summary",
+        "names": [
+          "INV-NO-SILENT-OVERRIDE"
+        ]
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": [
+        {
+          "boot": 1,
+          "inv": "INV-NO-SILENT-OVERRIDE",
+          "tags": [
+            "PLATFORM-ABSENT"
+          ]
+        }
+      ]
+    }
+  ],
+  "failure_outcome": "the lost marker reads CLEAR: 244 = 0 and 256-261 = 1000 stay live for 40 watchdog ticks with no lockout, no restore, no export supervision and no obligation, status or alert in HA (the live 244 is only shown informationally on the load-limit sensor, FW:16641, source reading); the data record (active_persisted = 1, true ORIGINAL) is still stored and never consulted",
+  "finding_priority": "P1",
+  "grade": "VERIFIED",
+  "id": "FW-04-a",
+  "invariant": "INV-NO-SILENT-OVERRIDE",
+  "notes": "Known platform limit: the firmware's own UNKNOWN status warns that a reboot may make the record read as absent (FW:913); the S4 record names NVS marker loss as an exit that reads CLEAR at boot (S4:677). Severity safety, bounded: ECCO's own export trip, Stop SOC and SG-02 are lost silently; the inverter's own export limit (245) and battery protection are untouched. Reachability INFERRED: a CRC-bad marker chunk reads READ_ERROR on its first boot and ABSENT only on a further boot (the suite's read-error-then-absent variant; that further reboot can be automatic, e.g. the default 15 min no-client API reboot); a direct ABSENT needs another IDF self-heal path (S4 section 2.2). Frequency UNKNOWN, probably low. Not documented as an accepted end state: SAFETY.md describes only unreadable records as unknown.",
+  "ownership": "Dump holds an ACTIVE 30 min lease (synthetic 1000 W, Stop SOC 25 %) with a durable RESTORE_REQUIRED marker, data and retry records; no other obligation; the owner changes nothing",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "on_boot only (description, not implemented): when a lease marker loads LOAD_ABSENT and the same domain's current-tag data record (FP V4 / Dump V2) loads OK with active_persisted == 1, treat the domain as UNKNOWN with the existing READ_ERROR-marker lockout (snapshot_valid = true, metadata_corrupt = true, a 'marker lost' status; no commit, no Modbus at boot). Key it on active_persisted == 1, never on a bare 'data loads' or 'retry record exists': a START whose marker commit failed honestly leaves active_persisted = 0 (and, for Dump, a retry record, committed before the marker). Limits: (a) the loss becomes alarmed, not contained - Dump containment stays unarmed as for a READ_ERROR marker (the N13 shape), so 244 = 0 stays until an operator acts; (b) the data record is never reset at lease end, so it also locks an idle domain whose CLEAR marker was lost (fail-closed, consistent with the S4 vanish rule) and that lockout has no in-firmware exit (availability cost; the exit must stay operator-reviewed, never automatic); (c) it cannot see a whole-partition erase (FW-04-d) or a Phase-B false positive on a used device (stale CLEAR, FW-06-b / FW-06-c).",
+  "source_anchors": [
+    {
+      "line_at_record": 801,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "uint8_t state = have_marker ? marker.state : (uint8_t) ecco_durable::MARKER_CLEAR;\n              id(dump_marker_state) = state;"
+    },
+    {
+      "line_at_record": 913,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "export containment not armed - do NOT reboot: a reboot may make the record read as absent"
+    },
+    {
+      "line_at_record": 677,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "an NVS loss of the marker (ABSENT reads as CLEAR at boot;"
+    }
+  ],
+  "source_digests": {
+    "docs/architecture/fallback/design/S4_domains_decisions_final.md": "06263342ae40c6af72f05c77520d3214789417c4261e028ac345fa98a635b220",
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Dump marker lost (single key) at a reboot during an ACTIVE lease: Allow Export and the lease ceiling stay live and unsupervised, with no obligation, lockout or alert",
+  "trace_digest": "4c74614fb7b21776a5fed0d35b44d82546e11e22e0f108779cc568f8ff279a91",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {}
+}
