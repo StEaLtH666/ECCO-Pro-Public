@@ -16,8 +16,8 @@ the Octopus Energy integration's rate events (entity ids are site-private, for e
 The runtime passes only the first shape (the quality layer accepts only a list for a table reading): the rows of the one
 rate event mapped for the key, or the rows of the two or three day events mapped for it, merged by the Home Assistant
 runtime in day order under fail-closed rules (A38 Part B, CCR-RT-DAYS: the contract that runtime implements;
-FOUNDATION CONTRACT section 3). The production site file maps the import rates as [current day, next day] (A42); the
-three-event form, with the previous day first, is allowed. One day-rates event never covers the cheap-run search
+FOUNDATION CONTRACT section 3). A site maps the import rates as [current day, next day], the recommended form (A42);
+the three-event form, with the previous day first, is allowed. One day-rates event never covers the cheap-run search
 period outside local midnight; the day events cover it once the next day's rates are published (13.5). The other two
 shapes are parsed when this adapter is called directly.
 
@@ -75,8 +75,8 @@ EVENT_KINDS = ("saving_session", "free_electricity")
 PROPOSED_MAX_ABS_GBP_PER_KWH = 1.5       # beyond this magnitude a GBP/kWh rate is a unit mismatch (a p/kWh figure)
 PROPOSED_MAX_MEDIAN_GBP_PER_KWH = 0.75   # a payload whose median rate is above this is taken as a unit mismatch
 PROPOSED_CHEAP_BAND_P_PER_KWH = 0.5      # slots within this of the cheapest rate belong to the cheap window
-PROPOSED_MIN_CHEAP_WINDOW_MIN = 60       # a cheap run shorter than this is not a charge window
-PROPOSED_MAX_CHEAP_WINDOW_MIN = 720      # a cheap run longer than this is not a charge window (a flat / near-flat tariff)
+PROPOSED_MIN_CHEAP_WINDOW_MIN = 60       # a cheap run shorter than this is not a named cheap run
+PROPOSED_MAX_CHEAP_WINDOW_MIN = 720      # a longer cheap run is not a named cheap run (a flat / near-flat tariff)
 PROPOSED_MIN_CHEAP_SPREAD_P_PER_KWH = 2.0  # the cheap run must be this much cheaper than every slot outside the cheap band
 PROPOSED_WINDOW_SEARCH_H = 24            # the cheap window is looked for in [now, now + this), which the rates must cover
 MAX_SLOTS = 400                          # more rows than this is not a rate payload (a 48 h half-hour table has 96)
@@ -329,7 +329,7 @@ def horizon_low_p_per_kwh(result: TariffResult, now: datetime) -> float | None:
 
 
 def cheap_window(result: TariffResult, now: datetime) -> tuple[CheapWindow | None, list[Finding]]:
-    """The charge window a VERIFIED import tariff implies: the longest contiguous run (earliest on a tie) of slots priced
+    """The cheap run a VERIFIED import tariff names: the longest contiguous run (earliest on a tie) of slots priced
     within PROPOSED_CHEAP_BAND_P_PER_KWH of the cheapest rate, among slots that end after `now` and start before
     now + PROPOSED_WINDOW_SEARCH_H, at least PROPOSED_MIN_CHEAP_WINDOW_MIN and at most PROPOSED_MAX_CHEAP_WINDOW_MIN long.
     A run in progress counts from the slot that holds `now` (the slots that have ended are not candidates) and a run is
@@ -343,8 +343,8 @@ def cheap_window(result: TariffResult, now: datetime) -> tuple[CheapWindow | Non
         return None, [finding("TARIFF_NOT_VERIFIED", WARN, subject, "the import tariff is not verified")]
     horizon = now + timedelta(hours=PROPOSED_WINDOW_SEARCH_H)
     if not result.covers(now, horizon):
-        return None, [finding("TARIFF_COVERAGE_SHORT", WARN, subject, "the verified rates do not cover the whole period "
-                                                                      "the charge window is looked for in",
+        return None, [finding("TARIFF_COVERAGE_SHORT", WARN, subject, "the verified rates do not cover the whole "
+                                                                      "cheap-run search period",
                               need_start=now, need_end=horizon)]
     cand = [s for s in result.slots if s.end > now and s.start < horizon]
     if not cand:
@@ -373,10 +373,11 @@ def cheap_window(result: TariffResult, now: datetime) -> tuple[CheapWindow | Non
             best = (length, r)
     if best is None or best[0] < PROPOSED_MIN_CHEAP_WINDOW_MIN * 60:
         return None, [finding("TARIFF_NO_CHEAP_WINDOW", WARN, subject,
-                              "no cheap run long enough to be a charge window lies ahead")]
+                              "no cheap run long enough lies ahead")]
     if best[0] > PROPOSED_MAX_CHEAP_WINDOW_MIN * 60:
-        return None, [finding("TARIFF_CHEAP_RUN_TOO_LONG", WARN, subject, "the cheapest run is longer than a charge window: "
-                                                                          "the tariff is flat or nearly flat",
+        return None, [finding("TARIFF_CHEAP_RUN_TOO_LONG", WARN, subject,
+                              "the cheapest run is longer than PROPOSED_MAX_CHEAP_WINDOW_MIN: the tariff is flat or "
+                              "nearly flat",
                               run_minutes=round(best[0] / 60.0))]
     r = best[1]
     rest = [s.p_per_kwh for s in cand if not cheap(s)]

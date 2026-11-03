@@ -1473,4 +1473,3 @@ def _prepare(history: object, decisions: object, now: object, accept_provenance:
         if counts[key]:
             out.append(finding(code, WARN, "history", text, hours=counts[key]))
     return copy_, out
-

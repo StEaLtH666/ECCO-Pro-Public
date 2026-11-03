@@ -727,8 +727,8 @@ def _run(inputs: CycleInputs) -> AdvisoryEnvelope:
     def obs_at(key: str):
         r = by_key.get(key)
         return r.observed_at if r is not None else None
-    # the import rates verify only when they cover the whole period the charge window is looked for in: a payload with
-    # only today's rates (tomorrow's not published yet), or only a few slots, is never a window source or a price
+    # the import rates verify only when they cover the whole cheap-run search period: a payload with only today's rates
+    # (tomorrow's not published yet), or only a few slots, never names a cheap run and is never a price
     imp = tf.assess_rates(ages.get("tariff.import_rates"), now, kind="import", observed_at=obs_at("tariff.import_rates"),
                           need=(now, now + timedelta(hours=tf.PROPOSED_WINDOW_SEARCH_H)))
     # the window check (A30 / A35, contract 13.5) reads the same payload with the same parse, freshness and future-dated

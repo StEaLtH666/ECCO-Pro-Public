@@ -12,7 +12,7 @@ This document is the single description of the shared Intelligence contracts tha
 | [`intelligence/periods.py`](../../intelligence/periods.py) | local wall-clock periods across clock changes (DST) |
 | [`intelligence/advisory_contract.py`](../../intelligence/advisory_contract.py) | `CycleInputs`, the `AdvisoryEnvelope`, the entity contract `ecco-intel-entities/1` and its null rule |
 | [`intelligence/authority_vocab.py`](../../intelligence/authority_vocab.py) | modes, action kinds, outcomes, preconditions, refusal codes (data only) |
-| `intelligence/quality.py`, `intelligence/shadow_cycle.py` (published with the engine, after these contracts) | the frozen seams `assess_inputs`, `prepare_history`, `run_cycle` (minimal fail-closed bodies until the streams fill them) |
+| [`intelligence/quality.py`](../../intelligence/quality.py), [`intelligence/shadow_cycle.py`](../../intelligence/shadow_cycle.py) | the frozen seams `assess_inputs`, `prepare_history`, `run_cycle` (bodies published with the engine) |
 
 The S0 diagnostic ([`INTELLIGENCE_S0_INPUT_CONTRACT.md`](INTELLIGENCE_S0_INPUT_CONTRACT.md)) consumes the register and periods.
 The V1 / V1.1 modules, `SiteConfig`, `ecco_core` and `render_ha_prototype` are unchanged; the prototype renderer and its
@@ -125,41 +125,41 @@ table's grid-charge run, cross-checked against a VERIFIED import tariff when the
 window: 13.5); without one the result is `None` with `CHARGE_WINDOW_UNKNOWN`.
 An `HA_RESERVE_HELPER` reading outside 0..100 BLOCKs (`RESERVE_HELPER_OUT_OF_RANGE`).
 
-**Value shape of the tariff readings (CCR-PLAN-3).** `tariff.import_rates` and `tariff.export_rates` (unit `table`) carry
-the tariff integration's rate rows `{start, end, value_inc_vat}`: ISO-8601 times with a UTC offset and a rate in GBP/kWh
-(the integration's unit). The planning adapter accepts a list of rows, one rate event's attributes `{rates: [...],
-unit_of_measurement}` (a stated unit must be GBP/kWh), or rate events merged into `{previous_day | current_day |
+**Value shape of the tariff readings (CCR-PLAN-3).** `tariff.import_rates` and `tariff.export_rates` (unit `table`)
+carry the tariff integration's rate rows `{start, end, value_inc_vat}`: ISO-8601 times with a UTC offset and a rate in
+GBP/kWh (the integration's unit). The planning adapter accepts a list of rows, one rate event's attributes `{rates:
+[...], unit_of_measurement}` (a stated unit must be GBP/kWh), or rate events merged into `{previous_day | current_day |
 next_day: ...}`. **Mapping (A38 Part B, CCR-RT-DAYS: the contract the Home Assistant runtime implements; it replaces
 ENG6-2's "the runtime merges nothing").** A rate table key maps either one `{entity, attribute}`, whose value is passed
 only when it is a list of rows (anything else is `TABLE_MISSING`), or an ordered list of two or three of them: the
 integration's day rate events in day order (current day, next day; or previous day, current day, next day). The runtime
-reads each and hands the engine one list of rows (INTELLIGENCE_HA_RUNTIME 2.3):
-an event that is unavailable, or whose attribute is absent or an empty list, contributes nothing (the next day before
-its rates are published); every contributing attribute must be a list, otherwise the whole table is refused; the rows
-are concatenated in mapped order, and a row with the same start, end and rate as an earlier row is collapsed; any other
-overlap, rows out of order or a row whose start or end is unusable refuses the whole table; a gap (in the three-event
-form, the current-day event unavailable while the other two contribute) is passed on unchanged, never filled, and the
-planning layer's parse rule refuses a table with a gap (`TARIFF_GAP`), so that tariff is unusable for the cycle; the
-merged reading's age and validity are those of its oldest contributing event (the single form's rule applied to that
-event); an empty merge is `TABLE_MISSING`. A refused table gives no reading, so the engine sees no tariff (a classified
-TOU window then stands with the WARN "no verified tariff" and INFO `CHARGE_WINDOW_NOT_PRICED`, 13.5; the runtime's
-refusal code is in the diagnostics' `source_notes`). The same entity listed twice, and the same entity and attribute
-under two of `tariff.import_rates`, `tariff.export_rates` and `tariff.events` (every day event of a list counted; A42),
-are refused by the entity map (`site-check` exits 1), and `tariff.events` takes the single form only. The production site
-file maps the import rates as the two-event list `[current day, next day]` (A42). The three-event form is allowed; the
-previous-day event is added only by a later decision, once a readiness read shows that its report cadence stays within
-its I-D6 limit (the merged reading is as old as its oldest contributing event). On a site the value is therefore always
-a list of rows; the quality layer, too, accepts only a list for a table reading, so the two mapping shapes are parsed
-only when the adapter is called directly (the offline suites). The list shape states no unit, so the planning layer's
-unit check on it is a plausibility guard only. One day-rates event of the tariff integration prices one local day,
-which covers the 24 h charge-window search period (13.5) only in a cycle at local midnight itself; the day events cover
-it from the moment the next day's rates are published, and before that they price the current day (and, in the
-three-event form, the previous day). A reading that does not cover the period is not VERIFIED for prices, the
-tariff block or the value, it names no cheap run (so the A30 check does not run on it), and the window check compares
-the TOU occurrence's priced slots with the lowest rate the reading prices from 24 h before `now` to 24 h after it (13.5,
-"The look-back" and "What remains on one day-rates event"). `tariff.events` (unit `table`) is a list of `{start, end,
-kind}` periods (kind `saving_session` or `free_electricity`) or the integration's event attributes. Any other shape, a
-naive time or a price under another key is refused, never repaired (`intelligence/tariff.py`).
+reads each and hands the engine one list of rows (INTELLIGENCE_HA_RUNTIME 2.3): an event that is unavailable, or whose
+attribute is absent or an empty list, contributes nothing (the next day before its rates are published); every
+contributing attribute must be a list, otherwise the whole table is refused; the rows are concatenated in mapped order,
+and a row with the same start, end and rate as an earlier row is collapsed; any other overlap, rows out of order or a
+row whose start or end is unusable refuses the whole table; a gap (in the three-event form, the current-day event
+unavailable while the other two contribute) is passed on unchanged, never filled, and the planning layer's parse rule
+refuses a table with a gap (`TARIFF_GAP`), so that tariff is unusable for the cycle; the merged reading's age and
+validity are those of its oldest contributing event (the single form's rule applied to that event); an empty merge is
+`TABLE_MISSING`. A refused table gives no reading, so the engine sees no tariff (a classified TOU window then stands
+with the WARN "no verified tariff" and INFO `CHARGE_WINDOW_NOT_PRICED`, 13.5; the runtime's refusal code is in the
+diagnostics' `source_notes`). The same entity listed twice, and the same entity and attribute under two of
+`tariff.import_rates`, `tariff.export_rates` and `tariff.events` (every day event of a list counted; A42), are refused
+by the entity map (`site-check` exits 1), and `tariff.events` takes the single form only. A site maps the import rates
+as the two-event list `[current day, next day]`, the recommended form (A42). The three-event form, with the previous-day
+event first, is allowed; the previous-day event is added only once its report cadence is known to stay within its I-D6
+limit (the merged reading is as old as its oldest contributing event). On a site the value is therefore always a list of
+rows; the quality layer, too, accepts only a list for a table reading, so the two mapping shapes are parsed only when
+the adapter is called directly (the offline suites). The list shape states no unit, so the planning layer's unit check
+on it is a plausibility guard only. One day-rates event of the tariff integration prices one local day, which covers the
+24 h charge-window search period (13.5) only in a cycle at local midnight itself; the day events cover it from the
+moment the next day's rates are published, and before that they price the current day (and, in the three-event form, the
+previous day). A reading that does not cover the period is not VERIFIED for prices, the tariff block or the value, it
+names no cheap run (so the A30 check does not run on it), and the window check compares the TOU occurrence's priced
+slots with the lowest rate the reading prices from 24 h before `now` to 24 h after it (13.5, "The look-back" and "What
+remains on one day-rates event"). `tariff.events` (unit `table`) is a list of `{start, end, kind}` periods (kind
+`saving_session` or `free_electricity`) or the integration's event attributes. Any other shape, a naive time or a price
+under another key is refused, never repaired (`intelligence/tariff.py`).
 
 ## 4. Freshness (defence in depth)
 
@@ -525,21 +525,24 @@ row before) while the table is still published: the planning layer then refuses 
     (STALE), and an export or Dump item is valid at most the 180 s liveness bound after the telemetry poll it rests on.
 
   No bound, margin or limit changes. The engine suite pins the exemption (an OK Dump item valid for the liveness bound,
-  longer than the supervision gate has left, and `SUPERVISION_NOT_STABLE` at the next compute after the lapse); the
-  runtime suite pins both runtime halves (supervision stops while polls continue: export and Dump BLOCKED
-  `SUPERVISION_NOT_STABLE` at the first poll-driven compute after the lapse; the polls stop: every item resting on a
-  dongle input loses its number no later than the first tick after the last poll plus `PROPOSED_POLL_ACTIVE_S`, and
-  never holds one past its inputs' bound; with the supervision heartbeat stopped too, the first compute after the last
-  poll's BLOCKs export and Dump `SUPERVISION_NOT_STABLE`). **Any ASSISTED use of export or Dump validity needs
-  supervision in the validity first; that is a separate owner decision.**
+  longer than the supervision gate has left, and `SUPERVISION_NOT_STABLE` at the next compute after the lapse); the Home
+  Assistant runtime's suites (published with the runtime) pin both runtime halves (supervision stops while polls
+  continue: export and Dump BLOCKED `SUPERVISION_NOT_STABLE` at the first poll-driven compute after the lapse; the polls
+  stop: every item resting on a dongle input loses its number no later than the first tick after the last poll plus
+  `PROPOSED_POLL_ACTIVE_S`, and never holds one past its inputs' bound; with the supervision heartbeat stopped too, the
+  first compute after the last poll's BLOCKs export and Dump `SUPERVISION_NOT_STABLE`). **Any ASSISTED use of export or
+  Dump validity needs supervision in the validity first; that is a separate owner decision.**
 - **Refresh before expiry (WP-4, runtime only).** A refresh cycle starts at a tick when less than `REFRESH_MARGIN_S` of
   the envelope's validity is left, or when the published result holds an item or forecast BLOCKED `INPUT_EXPIRING`
   (integration fixup: such an item is withheld until its inputs are refreshed, and since it no longer shortens the
   envelope's validity, that validity alone would keep it withheld until the envelope nears its end, up to the 900 s
   advice validity), at most once a tick (55 s floor), with a CPU guard of 180 s per rolling hour (refreshes suspended,
-  slot cycles continue; the only effect is STALE) and the existing second-run guard. A drift test compares the runtime's
-  margin with the engine constant. `next_run_at` = min(the next slot, `valid_until` - margin), or the refresh floor while
-  an item is BLOCKED `INPUT_EXPIRING`. STALE keeps its meaning; no contract change.
+  slot cycles continue; the only effect is STALE) and the existing second-run guard. The guard's headroom is tracked
+  explicitly, not inferred from STALE (A49): the install runbook (published with the runtime) requires the diagnostics
+  counter `refresh_suppressed_cpu` to stay 0 in its go / no-go row R3 and its 72 h row T9, and T9 also bounds the
+  diagnostics' `cadence.cpu_s_rolling_hour` (p95 at most 120 s per hour, under the 180 s guard). A drift test compares
+  the runtime's margin with the engine constant. `next_run_at` = min(the next slot, `valid_until` - margin), or the
+  refresh floor while an item is BLOCKED `INPUT_EXPIRING`. STALE keeps its meaning; no contract change.
 - **Poll-phase-aligned refresh (A23, runtime only; cadence, no rule change).** The dongle's telemetry poll text moves about
   every 60 s on the target platform, and the 60 s tick holds a near-fixed phase against it; a refresh started more than 55 s after a poll
   would withhold every item resting on a dongle input (`INPUT_EXPIRING`: the 180 s liveness bound less the 125 s margin).
@@ -718,22 +721,24 @@ charge target does not show that the TOU window lies in the cheap run. A one-day
 outside local midnight and gives no price or value; the tariff's `TARIFF_COVERAGE_SHORT` and the `NOT_VERIFIED`
 provenance show the case, and the planning suite pins it.
 
-**With the day events (A38 Part B, CCR-RT-DAYS: the contract the Home Assistant runtime implements).** The production
-site file maps the import rates as the current-day and next-day events, `[current day, next day]` (section 3, A42). The
-three-event form, with the previous-day event first, is allowed; the previous-day event is added only by a later
-decision, once a readiness read shows its report cadence within its I-D6 limit. The current day is always priced, so the
-look-back always finds today's cheap slots (in the three-event form also the previous day's), and once the next day's
-rates are published (in the afternoon) the reading covers the search period, so the window is checked against its whole
-priced occurrence: by the named run (A30), or, for a tariff that names none (for example a flat one), by the A35 spread
-check; prices and value return. A TOU window misconfigured to the evening peak BLOCKs `CHARGE_WINDOW_SOURCES_DISAGREE`
-at every cycle of the day (the runtime suite `test_runtime_tariff_days` pins it at every half-hour, the next day's rates
-appearing at 16:00). The accepted residual is limited to the hours before the next day's rates are published: an
-occurrence that is tomorrow's (today's has ended) while tomorrow is not yet priced keeps the WARN "... does not price
-the whole TOU window" and INFO `CHARGE_WINDOW_NOT_PRICED`. A window that ends after the publication time has no such
-hours; one that ends earlier has them from its end until the publication. All of this holds only while the merged table
-is accepted and fresh: a table the runtime refuses, one with a gap (`TARIFF_GAP`) and one whose oldest event is not
-re-reported within its I-D6 limit (`TARIFF_NOT_FRESH`) give no usable tariff, so the window stands with the WARN "no
-verified tariff" and INFO `CHARGE_WINDOW_NOT_PRICED` (INTELLIGENCE_HA_RUNTIME, risk 8).
+**With the day events (A38 Part B, CCR-RT-DAYS: the contract the Home Assistant runtime implements).** A site maps the
+import rates as the current-day and next-day events, `[current day, next day]`, the recommended form (section 3, A42).
+The three-event form, with the previous-day event first, is allowed; the previous-day event is added only once its
+report cadence is known to stay within its I-D6 limit. The current day is always priced, so the look-back always finds
+today's cheap slots (in the three-event form also the previous day's), and once the next day's rates are published (in
+the afternoon) the reading covers the search period, so the window is checked against its whole priced occurrence: by
+the named run (A30), or, for a tariff that names none (for example a flat one), by the A35 spread check; prices and
+value return. A TOU window misconfigured to the evening peak BLOCKs `CHARGE_WINDOW_SOURCES_DISAGREE` at every cycle of
+the day (the Home Assistant runtime's suite `test_runtime_tariff_days`, published with the runtime, pins it at every
+half-hour, the next day's rates appearing at 16:00). The accepted residual is limited to the hours before the next day's
+rates are published: an occurrence that is tomorrow's (today's has ended) while tomorrow is not yet priced keeps the
+WARN "... does not price the whole TOU window" and INFO `CHARGE_WINDOW_NOT_PRICED`. A window that ends after the
+publication time has no such hours; one that ends earlier has them from its end until the publication. All of this holds
+only while the merged table is accepted and fresh: a table the runtime refuses, one the engine refuses (a gap
+`TARIFF_GAP`, an overlap `TARIFF_OVERLAP`, an unusable row such as `TARIFF_RATE_INVALID` or `TARIFF_SLOT_INVALID`, or a
+unit `TARIFF_UNIT_*`) and one whose oldest event is not re-reported within its I-D6 limit (`TARIFF_NOT_FRESH`) give no
+usable tariff, so the window stands with the WARN "no verified tariff" and INFO `CHARGE_WINDOW_NOT_PRICED`
+(INTELLIGENCE_HA_RUNTIME, risk 8).
 
 **Only the codes of WARN and INFO findings are published; the residual's code (A41).** A WARN or INFO finding's text
 stays inside the engine: the published items carry its code only. A BLOCK finding's text is published as its blocker
@@ -848,7 +853,9 @@ They are documented where they land.
 
 ### 13.11 Integration notes (phase 3)
 
-What merging WP-0 to WP-4 added, beyond each package's own rules (each a separate integration commit):
+What merging WP-0 to WP-4 added, beyond each package's own rules (each a separate integration commit). The runtime
+notes name the Home Assistant runtime's modules, suites, diagnostics download and install runbook, which are published
+with the runtime (part 3 of the publication order above); until then they describe what it must contain (13, Status).
 
 - **Refresh on `INPUT_EXPIRING` (runtime).** The refresh trigger of 13.4 also fires while the published result holds an
   item BLOCKED `INPUT_EXPIRING`, so such an item is recomputed at the next tick instead of when the envelope nears its
@@ -859,19 +866,19 @@ What merging WP-0 to WP-4 added, beyond each package's own rules (each a separat
   timestamp-only attributes out of the recorder (13.4); the mapping suite pins that set.
 - **Tests on the real rules.** The planning suites' in-process WP-1 simulation is removed, and the L2 checks that waited
   for WP-1 or WP-2 are strict.
-- **Poll-phase-aligned refresh (A23, runtime).** On the target platform the telemetry poll text moves every 60 s, not 10 s as designed, so
-  refreshes follow the poll (13.4): one state listener on the mapped telemetry poll text, a poll-driven step
-  `PROPOSED_POLL_SETTLE_S` after each new poll, the tick held back while polls arrive and back on its present rules when
-  they stop. New constants in `const.py`: `PROPOSED_POLL_INTERVAL_S` (60 s), `PROPOSED_POLL_SETTLE_S` (3 s),
-  `PROPOSED_POLL_ACTIVE_S` (90 s) and the derived `POLL_REFRESH_THRESHOLD_S` (185 s). The runtime boundary suite now allows
-  `async_track_state_change_event` and `async_call_later` beside the one timer, each called from one place in
+- **Poll-phase-aligned refresh (A23, runtime).** On the target platform the telemetry poll text moves every 60 s, not
+  10 s as designed, so refreshes follow the poll (13.4): one state listener on the mapped telemetry poll text, a
+  poll-driven step `PROPOSED_POLL_SETTLE_S` after each new poll, the tick held back while polls arrive and back on its
+  present rules when they stop. New constants in `const.py`: `PROPOSED_POLL_INTERVAL_S` (60 s), `PROPOSED_POLL_SETTLE_S`
+  (3 s), `PROPOSED_POLL_ACTIVE_S` (90 s) and the derived `POLL_REFRESH_THRESHOLD_S` (185 s). The runtime boundary suite
+  now allows `async_track_state_change_event` and `async_call_later` beside the one timer, each called from one place in
   `coordinator.py`, and the L2 pin "no event listener" is now "exactly one state listener, on the mapped telemetry poll
   text, removed on unload". The stand-in Home Assistant delivers `state_changed` to state listeners and fires one-shot
-  timers at their times; `test_runtime_poll_phase.py` drives the poll text every 60 s plus or minus 3 s at swept phase
-  offsets from the tick (no `INPUT_EXPIRING` and no STALE over three simulated hours at each offset; recovery from an
-  unknown slot, a frozen configuration text and a frozen telemetry text within one poll plus the settle delay; a frozen
-  telemetry text still fails closed). The earlier L2 suites set their world between ticks without events and keep
-  pinning the tick's own rules.
+  timers at their times; the runtime suite `test_runtime_poll_phase.py` (published with the runtime) drives the poll
+  text every 60 s plus or minus 3 s at swept phase offsets from the tick (no `INPUT_EXPIRING` and no STALE over three
+  simulated hours at each offset; recovery from an unknown slot, a frozen configuration text and a frozen telemetry text
+  within one poll plus the settle delay; a frozen telemetry text still fails closed). The earlier L2 suites set their
+  world between ticks without events and keep pinning the tick's own rules.
 - **Missed polls, supervision, fast poll texts (A31(b), A32, A33; runtime tests and docs, no rule change).** The poll-phase
   suite counts STALE, `INPUT_EXPIRING` and the numbers from the stand-in's recorder rows (every write, not only the state
   after each cycle) and adds: a poll 90 s late, one skipped poll (120 s), a 150 s gap and a freeze (480 s), each at seven
@@ -924,25 +931,25 @@ What merging WP-0 to WP-4 added, beyond each package's own rules (each a separat
 - **Rate tables from the day events and two more refused pairs (third runtime review, A38 Part B and A39; runtime,
   tighten-only, and docs).** With one day-rates event mapped, the import rates named no cheap run outside local
   midnight, and a TOU window misplaced to the peak stood OK with a WARN once today's occurrence had ended (the Part A
-  residual). A rate table key may now map two or three day events in day order (CCR-RT-DAYS; the production site file
-  maps the current-day and next-day events, A42); the runtime merges their rows under the fail-closed rules of section 3 and
+  residual). A rate table key may now map two or three day events in day order (CCR-RT-DAYS; the recommended form maps
+  the current-day and next-day events, A42); the runtime merges their rows under the fail-closed rules of section 3 and
   the engine's parse, unit and coverage rules are unchanged. With the next day's rates published at 16:00 such a window
-  BLOCKs at every half-hour of the day (the L2 suite `test_runtime_tariff_days`), and the residual is limited to the
-  hours before the next day's rates are published.
-  `runtime/sources.parse_entity_map` also refuses any boolean gate reading (`supervision.stable`, `tou.enabled`,
-  `tou.grid_charge_enabled`) on the configuration poll's online entity, and `battery.soc_raw_pct` on the `battery.soc`
-  signal's entity and attribute (A39, RT3-1 / RT3B-1, RT3B-2: each would silently skip a fail-closed check; by field
-  path only, `site-check` exits 1). No PROPOSED value, bound, reason code or published-value rule changes.
+  BLOCKs at every half-hour of the day (the runtime's L2 suite `test_runtime_tariff_days`, published with the runtime),
+  and the residual is limited to the hours before the next day's rates are published. `runtime/sources.parse_entity_map`
+  also refuses any boolean gate reading (`supervision.stable`, `tou.enabled`, `tou.grid_charge_enabled`) on the
+  configuration poll's online entity, and `battery.soc_raw_pct` on the `battery.soc` signal's entity and attribute (A39,
+  RT3-1 / RT3B-1, RT3B-2: each would silently skip a fail-closed check; by field path only, `site-check` exits 1). No
+  PROPOSED value, bound, reason code or published-value rule changes.
 - **The import table checked on the site, one event per tariff table (fourth runtime review, A42, RT4-1 / RT4-2;
   runtime, tighten-only, and docs).** A merged import table that is refused, gapped or not fresh gives the engine no
   usable tariff, so the window check is absent and nothing blocks (a BLOCK for that case is not in v0.1; it is decided
-  on the 72 h data). The install runbook's go / no-go row R5, its 72 h row T11 and its 7-day row Q6 now require the
-  import rates `TARIFF_VERIFIED` and fresh after the next-day publication; the diagnostics download shows the runtime's
-  source notes (each a contract key and a constant code, so a refusal such as `TABLE_ROWS_OUT_OF_ORDER` is visible);
-  and the production site file maps the two day events `[current day, next day]`. `runtime/sources.parse_entity_map`
-  also refuses one rate event (entity and attribute) under two of the tariff tables, which would let its freshness
-  stand in for the other table's own event (by field path only, `site-check` exits 1). No PROPOSED value, bound,
-  reason code or published-value rule changes.
+  on the 72 h data). The install runbook (published with the runtime) requires, in its go / no-go row R5, its 72 h row
+  T11 and its 7-day row Q6, the import rates `TARIFF_VERIFIED` and fresh after the next-day publication; the runtime's
+  diagnostics download shows its source notes (each a contract key and a constant code, so a refusal such as
+  `TABLE_ROWS_OUT_OF_ORDER` is visible); and the recommended mapping is the two day events `[current day, next day]`.
+  `runtime/sources.parse_entity_map` also refuses one rate event (entity and attribute) under two of the tariff tables,
+  which would let its freshness stand in for the other table's own event (by field path only, `site-check` exits 1). No
+  PROPOSED value, bound, reason code or published-value rule changes.
 - **The residual made visible (fourth engine review, A41, R7-E3; engine, one INFO code).** The published items carry
   codes only, and the WARN `CHARGE_WINDOW_FROM_TOU_TABLE` was the same code for a window checked within the spread and
   for one that no price check covered (the residual of 13.5), so the 72 h and 7-day acceptance could not count the
