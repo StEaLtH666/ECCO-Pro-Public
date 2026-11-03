@@ -1,0 +1,47 @@
+{
+ "_note": "SYNTHETIC fixture: fictional 2030 rates and periods in the rate-event shape (GBP/kWh); not site data, not a real price; the slot times carry no UTC offset",
+ "payload": [
+  {
+   "end": "2030-01-15T00:30:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T00:00:00",
+   "value_inc_vat": 0.3
+  },
+  {
+   "end": "2030-01-15T01:00:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T00:30:00",
+   "value_inc_vat": 0.3
+  },
+  {
+   "end": "2030-01-15T01:30:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T01:00:00",
+   "value_inc_vat": 0.075
+  },
+  {
+   "end": "2030-01-15T02:00:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T01:30:00",
+   "value_inc_vat": 0.075
+  },
+  {
+   "end": "2030-01-15T02:30:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T02:00:00",
+   "value_inc_vat": 0.075
+  },
+  {
+   "end": "2030-01-15T03:00:00",
+   "is_capped": false,
+   "is_intelligent_adjusted": false,
+   "start": "2030-01-15T02:30:00",
+   "value_inc_vat": 0.075
+  }
+ ]
+}

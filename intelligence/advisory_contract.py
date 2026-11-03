@@ -152,6 +152,8 @@ PV_TOMORROW_SUMMARY_KEYS = frozenset({"inflation", "usable", "day", "source", "r
 
 SITE_READING_KEYS: Mapping[str, str] = MappingProxyType({
     "liveness.dongle_poll_changed_at": "datetime",
+    # the time the dongle's configuration-poll text last changed (value = observed_at; CCR-CFG-1)
+    "liveness.config_poll_changed_at": "datetime",
     "supervision.state": "enum",
     "supervision.stable": "bool",
     "supervision.heartbeat_age_s": "s",
@@ -163,8 +165,11 @@ SITE_READING_KEYS: Mapping[str, str] = MappingProxyType({
     "efficiency.helper_pct": "%",
     "protection.shutdown_soc_pct": "%",
     "stop.dump_soc_pct": "%",
-    "tou.slot_table": "table",
+    "tou.slot_table": "table",                  # schema v2 value shape: TOU_SLOT_TABLE_* below (CCR-TOU-1)
     "tou.current_target_soc_pct": "%",
+    "tou.enabled": "bool",                      # the inverter's TOU enable (register 248 bit 0; CCR-TOU-1)
+    "tou.grid_charge_enabled": "bool",          # the grid-charge enable (register 232 bit 0; CCR-TOU-1)
+    "tou.overlay_state": "enum",                # TOU_OVERLAY_STATES: Free Power, Dump to Grid or a manual write (CCR-TOU-1)
     "limits.max_grid_charge_w": "W",
     "tariff.import_rates": "table",
     "tariff.export_rates": "table",
@@ -174,8 +179,25 @@ SITE_READING_KEYS: Mapping[str, str] = MappingProxyType({
     "inverter.clock_offset_s": "s",
     "pref.wear_cost_p_per_kwh": "p/kWh",
     "pref.normal_max_charge_target_pct": "%",
+    "pref.advisory_reserve_raise_pct": "%",     # a raise-only advisory reserve preference, never a decision (CCR-PREF-1)
 })
-OPTIONAL_READING_KEYS = ("pref.wear_cost_p_per_kwh", "pref.normal_max_charge_target_pct")
+# readings whose absence (not mapped) is never a blocker; one that is present but unusable may still block (foundation
+# contract section 13)
+OPTIONAL_READING_KEYS = ("pref.wear_cost_p_per_kwh", "pref.normal_max_charge_target_pct", "pref.advisory_reserve_raise_pct")
+
+# The value of `tou.slot_table`, schema v2 (CCR-TOU-1): data carried inside the reading, not an envelope field. Exactly
+# TOU_SLOT_TABLE_ROWS rows in slot order, each with exactly TOU_SLOT_ROW_KEYS; `end` is the next row's `start` (slot 6 runs
+# into slot 1); a null field is unknown. `charge_source` and `mode` are the dongle's texts exactly as published; their
+# register encodings in `flags_raw` (registers 274-279) are below. The planning layer judges the table and refuses any
+# other shape; the classification itself (which sources count as grid charging) is the planning layer's, not data here.
+TOU_SLOT_TABLE_SCHEMA = 2
+TOU_SLOT_TABLE_ROWS = 6
+TOU_SLOT_ROW_KEYS = ("slot", "start", "end", "target_soc_pct", "charge_source", "flags_raw", "mode", "power_w")
+TOU_CHARGE_SOURCE_BITS: Mapping[str, int] = MappingProxyType({      # flags_raw & 0x03
+    "None": 0x00, "Grid": 0x01, "Generator": 0x02, "Grid + Generator": 0x03})
+TOU_MODE_BITS: Mapping[str, int] = MappingProxyType({               # flags_raw & 0x1C
+    "None": 0x00, "General": 0x04, "Backup": 0x08, "Charge": 0x10})
+TOU_OVERLAY_STATES = ("NONE", "ACTIVE")
 
 
 @dataclass(frozen=True)

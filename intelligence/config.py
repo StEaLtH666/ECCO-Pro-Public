@@ -23,19 +23,27 @@ def _finite(x: object) -> bool:
 class EffectiveReserve:
     """The minimum battery SOC every recommendation must respect, plus the context a UI needs to explain it.
 
-    effective = max(user reserve, technical minimum, a reserve value supplied from HA at run time). Pure data: the single value
-    other modules (dynamic charge, Dump-to-Grid, Saving Session optimisation, the bridge) can consume later. It
-    commands nothing."""
+    effective = max(user reserve, technical minimum, a reserve value supplied from HA at run time, the raise-only advisory
+    reserve preference). Pure data: the single value other modules (dynamic charge, Dump-to-Grid, Saving Session
+    optimisation, the bridge) can consume later. It commands nothing. The HA helper and the raise preference are kept apart
+    (A33, ENG-5): `ha_reserve_pct` is always the helper's own value, and a binding raise preference is named as itself
+    (binding "reserve_raise", code PREF_RESERVE_RAISE), never as the helper."""
     user_reserve_pct: float             # what the user asked for (user_reserve_soc_pct)
     technical_min_pct: float            # hardware / inverter constraint (technical_min_soc_pct)
     ha_reserve_pct: float | None        # a finite reserve supplied at run time (HA helper), else None; only ever raises
     effective_pct: float
-    binding: str                        # "user_reserve" | "technical_min" | "ha_reserve": which input set effective_pct
+    binding: str                        # "user_reserve" | "technical_min" | "ha_reserve" | "reserve_raise": which set it
     override_code: str | None           # None when the user's reserve is what applies
     override_reason: str | None         # plain-language explanation when something above overrides the user's reserve
+    reserve_raise_pct: float | None = None  # the raise-only advisory reserve preference (SHADOW, contract 13.7), else None
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        """The breakdown as plain data. `reserve_raise_pct` appears only when a raise preference was supplied, so a
+        breakdown without one (every V1 output) is exactly what it was before the preference existed."""
+        d = asdict(self)
+        if d["reserve_raise_pct"] is None:
+            del d["reserve_raise_pct"]
+        return d
 
 
 @dataclass(frozen=True)
@@ -129,17 +137,22 @@ class SiteConfig:
         bad("baseline_guard_ratio", fin(self.baseline_guard_ratio) and 0.3 <= self.baseline_guard_ratio <= 1.0)
         bad("baseline_days", isinstance(self.baseline_days, int) and 14 <= self.baseline_days <= 120)
 
-    def effective_reserve(self, ha_reserve_pct: float | None = None) -> EffectiveReserve:
-        """max(user reserve, technical minimum, run-time HA reserve), with the reasoning. A run-time reserve that is
-        not a finite number is ignored; anything above 100 is capped at 100. It can only raise the result, so a low
-        HA helper never undoes the user's or the hardware's minimum."""
+    def effective_reserve(self, ha_reserve_pct: float | None = None,
+                          reserve_raise_pct: float | None = None) -> EffectiveReserve:
+        """max(user reserve, technical minimum, run-time HA reserve, raise-only advisory reserve preference), with the
+        reasoning. A run-time reserve or preference that is not a finite number is ignored; anything above 100 is capped
+        at 100. Each can only raise the result, so a low HA helper or preference never undoes the user's or the
+        hardware's minimum. The preference binds only when strictly above the rest, and is then named as itself."""
         user, tech = float(self.user_reserve_soc_pct), float(self.technical_min_soc_pct)
         ha = min(100.0, float(ha_reserve_pct)) if _finite(ha_reserve_pct) else None
+        rz = min(100.0, float(reserve_raise_pct)) if _finite(reserve_raise_pct) else None
         eff, binding = user, "user_reserve"
         if tech > eff:
             eff, binding = tech, "technical_min"
         if ha is not None and ha > eff:
             eff, binding = ha, "ha_reserve"
+        if rz is not None and rz > eff:
+            eff, binding = rz, "reserve_raise"
         code = reason = None
         if binding == "technical_min":
             code = "TECHNICAL_MIN_OVERRIDES_USER_RESERVE"
@@ -149,10 +162,14 @@ class SiteConfig:
             code = "HA_RESERVE_RAISES_USER_RESERVE"
             reason = (f"The reserve value supplied from Home Assistant ({eff:.0f}%) is above your {user:.0f}% setting "
                       f"(and the {tech:.0f}% technical minimum), so {eff:.0f}% is used.")
-        return EffectiveReserve(user, tech, ha, eff, binding, code, reason)
+        elif binding == "reserve_raise":
+            code = "PREF_RESERVE_RAISE"
+            reason = (f"Your advisory reserve raise preference ({eff:.0f}%) is above your {user:.0f}% setting (and the "
+                      f"{tech:.0f}% technical minimum and any Home Assistant reserve), so {eff:.0f}% is used.")
+        return EffectiveReserve(user, tech, ha, eff, binding, code, reason, rz)
 
-    def effective_min_soc_pct(self, ha_reserve_pct: float | None = None) -> float:
-        return self.effective_reserve(ha_reserve_pct).effective_pct
+    def effective_min_soc_pct(self, ha_reserve_pct: float | None = None, reserve_raise_pct: float | None = None) -> float:
+        return self.effective_reserve(ha_reserve_pct, reserve_raise_pct).effective_pct
 
     def config_hash(self) -> str:
         blob = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))

@@ -161,6 +161,9 @@ Forecast kinds recorded: `load_kwh:{next_1h,cheap_window,morning,overnight,to_us
   HA reserve (capped at 100) as plain data: configured reserve, technical minimum, effective minimum, which of them was binding, and a plain-language
   `override_reason` when the technical minimum (or an HA reserve) overrides what the user asked for. The advisor emits it as `recommended.reserve`
   (with the legacy `floor_pct` = the effective minimum) and as a `TECHNICAL_MIN_OVERRIDES_USER_RESERVE` / `HA_RESERVE_RAISES_USER_RESERVE` reason.
+  The SHADOW cycle can also pass the raise-only advisory reserve preference (`reserve_raise_pct`, contract 13.7): it is named as itself
+  (`binding` `reserve_raise`, `PREF_RESERVE_RAISE`) and listed in the breakdown as `reserve_raise_pct`, never as the HA reserve; without it the
+  breakdown above is unchanged.
   `SiteConfig` refuses, at construction, a non-finite, boolean or out-of-range (0-100) reserve or technical minimum, a `max_soc_pct` at or below the
   effective minimum, a technical minimum at or above `max_soc_pct`, a reserve that leaves no room for the safety margin below `max_soc_pct`, a negative or
   non-finite margin and nonsense advisor constants, so no configuration can put a recommended target at or below the effective minimum. The same
