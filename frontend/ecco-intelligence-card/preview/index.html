@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECCO Intelligence card preview</title>
+<!--
+  Development preview for ecco-intelligence-card.js. It runs the real card against a stand-in `hass` object that holds
+  only `states`, built from the golden contract fixtures READ IN PLACE from intelligence/tests/fixtures/advisory_contract
+  (never copied). The card has no write path, so there is nothing to log or reject. The card's clock is set to the
+  fixture's generated_at plus two minutes (or plus `age` minutes).
+
+  Browsers refuse ES module imports and fetches from file:// pages, so serve the REPOSITORY ROOT (the fixtures live
+  outside the card folder) on the loopback address, then open the preview:
+
+      python -m http.server 8765 --bind 127.0.0.1
+      http://127.0.0.1:8765/frontend/ecco-intelligence-card/preview/?s=all_open_blocked
+
+  Query: s = fixture (all_open_blocked, synthetic_ok, stale, paused, self_test_failed, starting), w = card width in px,
+  theme = dark | light, age = minutes after generated_at, chrome = 0 hides the option panel (for screenshots).
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.45 "Segoe UI", Roboto, Arial, sans-serif; background: #0f1724; color: #e8edf4; }
+  body.dark {
+    --primary-text-color: #e8edf4; --secondary-text-color: #a9b4c2; --card-background-color: #172133; --divider-color: rgba(255, 255, 255, 0.12);
+  }
+  body.light {
+    color-scheme: light; background: #e9edf3; color: #1b2330;
+    --primary-text-color: #1b2330; --secondary-text-color: #556070; --card-background-color: #ffffff; --divider-color: rgba(0, 0, 0, 0.12);
+  }
+  [hidden] { display: none !important; }
+  .wrap { padding: 12px 0 32px; }
+  .panel { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 12px 12px; padding: 8px 10px; border: 1px dashed rgba(128, 128, 160, 0.6); border-radius: 10px; }
+  .panel span { width: 100%; font-size: 11px; font-weight: 700; text-transform: uppercase; opacity: 0.7; }
+  .panel button { font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(128, 128, 160, 0.6); background: transparent; color: inherit; cursor: pointer; }
+  .panel button[aria-pressed="true"] { background: rgba(128, 110, 230, 0.25); }
+  #stage { margin: 0 0 0 0; }
+  #err { margin: 12px; color: #ff8a80; white-space: pre-wrap; }
+</style>
+</head>
+<body class="dark">
+<div class="wrap">
+  <div class="panel" id="scen" role="group" aria-label="Fixture"><span>Fixture (golden contract fixture, read in place)</span></div>
+  <div class="panel" id="opts" role="group" aria-label="Options"><span>Options</span></div>
+  <div id="stage"></div>
+  <pre id="err" hidden></pre>
+</div>
+<script type="module">
+import { TAG, DEFAULT_ENTITIES } from '../ecco-intelligence-card.js';
+
+const FIXTURES = ['all_open_blocked', 'synthetic_ok', 'stale', 'paused', 'self_test_failed', 'starting'];
+const FIXTURE_DIR = '../../../intelligence/tests/fixtures/advisory_contract/';
+const q = new URLSearchParams(location.search);
+const state = {
+  s: FIXTURES.includes(q.get('s')) ? q.get('s') : 'all_open_blocked',
+  w: Number(q.get('w')) || 0,
+  theme: q.get('theme') === 'light' ? 'light' : 'dark',
+  age: Number.isFinite(Number(q.get('age'))) && q.get('age') !== null ? Number(q.get('age')) : 2,
+};
+if (q.get('chrome') === '0') { document.getElementById('scen').hidden = true; document.getElementById('opts').hidden = true; }
+
+const haState = (v) => (v === null || v === undefined ? 'unknown' : v === true ? 'on' : v === false ? 'off'
+  : typeof v === 'number' ? (Number.isInteger(v) ? v.toFixed(1) : String(v)) : String(v));
+
+async function statesFor(name) {
+  const fx = await (await fetch(`${FIXTURE_DIR}${name}.json`)).json();
+  const out = {};
+  for (const [eid, e] of Object.entries(fx.entities)) {
+    out[eid] = { entity_id: eid, state: haState(e.state), attributes: { ...e.recorded, ...e.unrecorded }, last_updated: e.recorded.generated_at };
+  }
+  out[DEFAULT_ENTITIES.paused] = { entity_id: DEFAULT_ENTITIES.paused, state: name === 'paused' ? 'on' : 'off', attributes: {} };
+  const fresh = ['all_open_blocked', 'synthetic_ok', 'paused', 'starting'].includes(name);
+  out[DEFAULT_ENTITIES.watchdog_fresh] = { entity_id: DEFAULT_ENTITIES.watchdog_fresh, state: fresh ? 'on' : 'off', attributes: {} };
+  return { states: out, gen: Date.parse(fx.entities[DEFAULT_ENTITIES.status].recorded.generated_at) };
+}
+
+let el = null;
+async function show() {
+  document.body.className = state.theme;
+  const stage = document.getElementById('stage');
+  stage.style.width = state.w ? `${state.w}px` : '';
+  stage.style.padding = state.w ? '0' : '0 12px';
+  try {
+    const { states, gen } = await statesFor(state.s);
+    if (!el) {
+      el = document.createElement(TAG);
+      el.setConfig({ type: `custom:${TAG}` });
+      stage.appendChild(el);
+      window.__eccoIntelCard = el;
+    }
+    el._now = () => gen + state.age * 60000;
+    el.hass = { states };
+    el._render();
+    window.__eccoIntelScenario = state.s;
+  } catch (e) {
+    const err = document.getElementById('err');
+    err.hidden = false;
+    err.textContent = `Could not load the fixture (serve the repository root, see the comment at the top of this page): ${e}`;
+  }
+  for (const b of document.querySelectorAll('button[data-s]')) b.setAttribute('aria-pressed', String(b.dataset.s === state.s));
+}
+
+const scen = document.getElementById('scen');
+for (const name of FIXTURES) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.s = name;
+  b.textContent = name;
+  b.addEventListener('click', () => { state.s = name; show(); });
+  scen.appendChild(b);
+}
+const opts = document.getElementById('opts');
+for (const [label, fn] of [['375 px', () => { state.w = 375; }], ['500 px', () => { state.w = 500; }], ['full width', () => { state.w = 0; }],
+  ['dark', () => { state.theme = 'dark'; }], ['light', () => { state.theme = 'light'; }], ['report +40 min', () => { state.age = 40; }],
+  ['report +2 min', () => { state.age = 2; }]]) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.addEventListener('click', () => { fn(); show(); });
+  opts.appendChild(b);
+}
+show();
+</script>
+</body>
+</html>
