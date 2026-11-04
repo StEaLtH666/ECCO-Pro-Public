@@ -775,7 +775,7 @@ def _charge_window_rules(c: _Ctx, per_item: Mapping) -> None:
         return
     for item in items:
         c.note(WARN, item, "CHARGE_WINDOW_FROM_TOU_TABLE",
-               "unless a verified tariff checks it, the charge window comes from the read-only TOU slot table")
+               "the charge window comes from the read-only TOU slot table; a verified tariff only cross-checks it")
 
 
 def _soc_rules(c: _Ctx) -> None:

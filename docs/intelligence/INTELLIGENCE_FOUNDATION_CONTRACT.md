@@ -543,6 +543,24 @@ row before) while the table is still published: the planning layer then refuses 
   diagnostics' `cadence.cpu_s_rolling_hour` (p95 at most 120 s per hour, under the 180 s guard). A drift test compares
   the runtime's margin with the engine constant. `next_run_at` = min(the next slot, `valid_until` - margin), or the
   refresh floor while an item is BLOCKED `INPUT_EXPIRING`. STALE keeps its meaning; no contract change.
+- **The engine's profile memo (A50, engine; CPU only, no rule change).** Most of a cycle's CPU went to the usage
+  model's slot profiles (`intelligence/usage.py` `build_profile`: a robust EWMA or median per local-hour slot over up to
+  120 complete past days, a few hundred profiles per cycle for today and the 90 walk-forward days). `run_cycle` builds a
+  new model every cycle and a refresh runs about once a minute, so the engine keeps these profiles between cycles in one
+  exact, bounded memo, the only state it holds between calls, so that the CPU guard above keeps its headroom on a
+  low-power host. Exact: the key is an exact image of every input the build reads (the chosen complete days' slot
+  values bit for bit and in day order, which slots are missing, the expert's parameters and the module constants it
+  reads), so a hit returns exactly what a fresh build (`build_profile_uncached`) would, and a revised past day or the
+  history window's oldest partial day losing hours is a miss; an input with no exact image (a non-finite value, an
+  unexpected type) bypasses the memo. Every call returns new lists and the memo keeps tuples, so no caller can change
+  what it holds. Bounded: at most `PROFILE_MEMO_MAX_ENTRIES` (1024) entries, least recently used evicted first, at least
+  three times one cycle's working set. `run_cycle` therefore stays pure in its result: the same inputs give a
+  byte-identical envelope whether the memo is cold or warm. The engine suite `test_intel_profile_memo.py` pins it (memo
+  on against memo off over simulated days through local midnight, the early-morning cycles in which the window's
+  oldest partial day changes, and the 27 Oct 2030 clock change, with recorded and all-OPEN decisions and with the next
+  day's rates unpublished and published; key mutants; a no-mutation audit of the callers over a whole cycle). It is not
+  a cache of results: every input is still judged at every compute, and no bound, margin, PROPOSED value, cadence,
+  freshness, input-expiry or fail-closed rule changes, nor the 180 s per hour guard.
 - **Poll-phase-aligned refresh (A23, runtime only; cadence, no rule change).** The dongle's telemetry poll text moves about
   every 60 s on the target platform, and the 60 s tick holds a near-fixed phase against it; a refresh started more than 55 s after a poll
   would withhold every item resting on a dongle input (`INPUT_EXPIRING`: the 180 s liveness bound less the 125 s margin).

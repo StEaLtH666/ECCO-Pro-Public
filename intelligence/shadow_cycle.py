@@ -44,6 +44,10 @@ Order (each step fails closed; intelligence/tests/test_intel_shadow_cycle_contra
 
 The null rule and the status precedence come from intelligence.advisory_contract (assemble_envelope), never from here.
 Pure: `inputs.now` is the only time, no file or network access, never raises (an internal error gives SELF_TEST_FAILED).
+Pure in its result also across cycles: the one state the engine keeps between calls is the exact, bounded memo of
+intelligence.usage.build_profile (the usage model's slot profiles, most of a cycle's CPU when rebuilt every minute;
+FOUNDATION CONTRACT section 13.4). Its key is an exact image of everything a profile is built from, so a hit returns
+exactly what a fresh build would: the same inputs give a byte-identical envelope whether the memo is cold or warm.
 """
 
 from __future__ import annotations
@@ -258,7 +262,8 @@ def judged_reading(inputs: CycleInputs, key: str) -> InputState:
 
 
 def run_cycle(inputs: CycleInputs) -> AdvisoryEnvelope:
-    """See the module docstring. Never raises."""
+    """See the module docstring. Never raises. Its result depends on `inputs` alone: the usage profile memo it shares
+    with earlier cycles (intelligence.usage.build_profile) only saves CPU and never changes a result."""
     try:
         return _run(inputs)
     except Exception as exc:  # noqa: BLE001 - fail closed: any internal error is a failed self-test, never an exception
