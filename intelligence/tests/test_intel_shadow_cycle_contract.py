@@ -12,7 +12,7 @@
   [7] determinism across two interpreter processes
   [8] AST: no clock read, open(), os, dynamic import or exec in shadow_cycle.py and quality.py
   [9] the conditional gates are wired: I-D4 with several capacity sources, I-D9 and the fixed DST rule on the eve of a
-      clock change, and every INVALID decision BLOCKs (top level and its items)
+      clock change (the fictional 27 Oct 2030 change), and every INVALID decision BLOCKs (top level and its items)
 Streams may not edit this file.
 """
 
@@ -310,14 +310,18 @@ CAP_ITEMS = ("charge_target", "export_event", "dump_to_grid", "predicted_morning
 check("several capacity sources present (stated, helper, FE-1, Ah) and I-D4 OPEN: every capacity item BLOCKs DECISION_D4_OPEN",
       all(d4.item(k).status == "BLOCKED" and "DECISION_D4_OPEN" in item_codes(d4, k) for k in CAP_ITEMS),
       str({k: sorted(item_codes(d4, k))[:4] for k in CAP_ITEMS}))
-EVE = datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc)          # the evening before the 25 Oct 2026 change
+EVE = datetime(2030, 10, 26, 20, 0, tzinfo=timezone.utc)          # the evening before the 27 Oct 2030 change
+from intelligence.periods import clock_changes  # noqa: E402
+check("the eve is fictional 2030 data: the evening before the 27 Oct 2030 clock change (Europe/London)",
+      EVE.year == 2030 and [c.local_day.isoformat() for c in clock_changes(EVE, EVE + timedelta(days=1))] == ["2030-10-27"],
+      str(clock_changes(EVE, EVE + timedelta(days=1))))
 d9 = run_cycle(cf.cycle_inputs(now=EVE, decisions=syn.without("D9"), accept_provenance=cf.SYNTHETIC_ACCEPT))
 check("the eve of a clock change with I-D9 OPEN: charge_target, overnight_demand, predicted_morning_soc BLOCK DECISION_D9_OPEN",
       all(d9.item(k).status == "BLOCKED" and "DECISION_D9_OPEN" in item_codes(d9, k)
           for k in ("charge_target", "overnight_demand", "predicted_morning_soc")),
       str({k: (d9.item(k).status, sorted(item_codes(d9, k))[:4]) for k in ("charge_target", "overnight_demand")}))
 d9r = run_cycle(cf.cycle_inputs(now=EVE, synthetic_recorded=True))
-check("... and with I-D9 recorded the fixed rule still BLOCKs a charge window starting in the repeated hour (01:00 on 25 Oct)",
+check("... and with I-D9 recorded the fixed rule still BLOCKs a charge window starting in the repeated hour (01:00 on 27 Oct)",
       all("DST_BOUNDARY_IN_CHANGED_HOUR" in item_codes(d9r, k) for k in ("charge_target", "overnight_demand", "predicted_morning_soc")),
       str(sorted(item_codes(d9r, "charge_target"))[:5]))
 eve_open = run_cycle(cf.cycle_inputs(now=EVE))

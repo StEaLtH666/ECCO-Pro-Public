@@ -115,6 +115,11 @@ check("clean synthetic fixture: no BLOCK finding at all, nothing blocked", not h
       str([(f.code, f.subject) for f in h.blocks(qb)][:5]))
 check("... the only WARNs are the charge window from the TOU table", h.codes(qb, "WARN") == {"CHARGE_WINDOW_FROM_TOU_TABLE"},
       str(h.codes(qb, "WARN")))
+_tou_texts = {f.text for f in qb.findings if f.code == "CHARGE_WINDOW_FROM_TOU_TABLE"}
+check("... whose text names the TOU slot table as the window's source and a verified tariff as a cross-check only "
+      "(never 'unless a verified tariff checks it', which read as if a tariff could set the window; A30, A50)",
+      _tou_texts == {"the charge window comes from the read-only TOU slot table; a verified tariff only cross-checks it"},
+      str(_tou_texts))
 check("... every required input is fresh", all(qb.ages[k].fresh for i in sd.ITEMS
                                                for k in sd.required_inputs(i, cf.synthetic_decisions(), h.SYN).signals))
 check("... and the three CCR-DQ-1 readings are fresh under "

@@ -15,6 +15,9 @@
       tou.slot_table schema v2 data, and the shared cycle fixture's values for them; the contract text that section 3's
       charge-window source is the TOU table's grid-charge run (a tariff only cross-checks it), the 13.8 rows of
       CHARGE_WINDOW_NOT_PRICED and CHARGE_WINDOW_FROM_TARIFF, and 13.5's count of the residual (OK charge_target only)
+  [10] the engine docs' public wording: the module table links every module; the two-event import mapping is guidance,
+      not a private site file's content; runtime suites cited as pins are published with the runtime; 13.5 counts the
+      engine's own table refusals; 13.4 names the rows that track the CPU guard's headroom; no file ends with a blank line
 """
 
 from __future__ import annotations
@@ -540,6 +543,93 @@ calls = {ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
 check("no clock read, no file access", not [c for c in calls if c.endswith((".now", ".today", "time.time")) or c in ("open", "print")])
 check("render_ha_prototype is untouched and keeps its own (superseded) ecco_intelligence_* ids",
       "sensor.ecco_intelligence_status" in (ROOT / "intelligence" / "tools" / "render_ha_prototype.py").read_text(encoding="utf-8"))
+
+section("[10] the engine docs' public wording (A47, A49)")
+_DOCS = ROOT / "docs" / "intelligence"
+_plan = (_DOCS / "INTELLIGENCE_PLANNING.md").read_text(encoding="utf-8")
+_dqm = (_DOCS / "DATA_QUALITY_METHOD.md").read_text(encoding="utf-8")
+_tariff_src = (ROOT / "intelligence" / "tariff.py").read_text(encoding="utf-8")
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _sec(text: str, start: str, stop: str) -> str:
+    return text.split(start, 1)[1].split(stop, 1)[0] if start in text else ""
+
+
+_rows = [ln for ln in _doc.split("\n## 1.", 1)[0].splitlines() if ln.startswith("| ") and "intelligence/" in ln]
+_cells = [ln.split(" | ", 1)[0] for ln in _rows]
+_links = [t for c in _cells for t in re.findall(r"\]\(\.\./\.\./([^)]+)\)", c)]
+check("the module table links every module it names, each link resolving, and no row calls a seam's body a placeholder "
+      "(MECH-2): quality.py and shadow_cycle.py are linked like the others",
+      len(_rows) == 5 and all(re.findall(r"`intelligence/[a-z_]+\.py`", c) == re.findall(r"(?<=\[)`intelligence/[a-z_]+\.py`", c)
+                              for c in _cells)
+      and {"intelligence/quality.py", "intelligence/shadow_cycle.py"} <= set(_links)
+      and all((ROOT / t).is_file() for t in _links)
+      and not re.search(r"minimal fail-closed bodies|after these contracts", "\n".join(_rows)),
+      str(_cells))
+_mapping_texts = {"the contract": _doc, "INTELLIGENCE_PLANNING": _plan, "DATA_QUALITY_METHOD": _dqm,
+                  "tariff.py": _tariff_src}
+_private_site = [n for n, t in _mapping_texts.items() if re.search(r"production site file|readiness read", t, re.I)]
+_no_guidance = [n for n, t in _mapping_texts.items()
+                if not re.search(r"\ba site maps (?:the import rates as )?(?:the (?:two-event list|current-day and next-day "
+                                 r"events),? )?`?\[current day, next day\]`?, the recommended form", _flat(t), re.I)]
+check("the two-event import mapping is guidance for any site, never a statement of what a private site file holds: the "
+      "contract, INTELLIGENCE_PLANNING, DATA_QUALITY_METHOD and tariff.py each say that a site maps [current day, next day] "
+      "as the recommended form, and none names a production site file or a readiness read (NEW-2)",
+      _private_site == [] and _no_guidance == [], f"private: {_private_site}; no guidance: {_no_guidance}")
+_RUNTIME_PIN = re.compile(r"`test_(?:runtime_\w+|install_drill|integration_e2e)(?:\.py)?`|\bruntime(?:'s)? (?:L2 )?suites?\b")
+_unqualified = []
+for _name, _text in (("contract section 13", _s13), ("INTELLIGENCE_PLANNING", _plan), ("DATA_QUALITY_METHOD", _dqm)):
+    _ft = _flat(_text)
+    for _m in _RUNTIME_PIN.finditer(_ft):
+        if "published with the runtime" not in _ft[_m.start():_m.end() + 80]:
+            _unqualified.append((_name, _ft[max(0, _m.start() - 30):_m.end() + 50]))
+check("every runtime suite the engine docs cite as a pin (contract section 13, INTELLIGENCE_PLANNING, DATA_QUALITY_METHOD) "
+      "is said to be published with the runtime, and 13.11 says so for its runtime notes (NEW-3, MECH-1)",
+      _unqualified == [] and len(list(_RUNTIME_PIN.finditer(_flat(_s13)))) >= 4
+      and "The runtime notes name the Home Assistant runtime's modules, suites, diagnostics download and install runbook, "
+          "which are published with the runtime" in _flat(_sec(_s13, "\n### 13.11", "\n### ")),
+      str(_unqualified[:3]))
+_emitted = set(re.findall(r'"(TARIFF_[A-Z_]+)"', _tariff_src))
+
+
+def _engine_refusals(flat_text: str) -> list[str]:
+    return re.findall(r"`(TARIFF_[A-Z_]+\*?)`", _sec(flat_text, "one the engine refuses (", ")"))
+
+
+def _emitted_code(c: str) -> bool:
+    return len([n for n in _emitted if n.startswith(c[:-1])]) >= 2 if c.endswith("*") else c in _emitted
+
+
+_refusals = {"13.5": _engine_refusals(_s13_5), "INTELLIGENCE_PLANNING": _engine_refusals(_flat(_plan))}
+check("13.5 and INTELLIGENCE_PLANNING count the engine's own refusals of a merged table (a gap, an overlap, an unusable "
+      "row or unit) beside the runtime's as giving no usable tariff, each named code one the planning layer emits "
+      "(R10D-4 (b))",
+      all(set(cs) >= {"TARIFF_GAP", "TARIFF_OVERLAP", "TARIFF_RATE_INVALID", "TARIFF_SLOT_INVALID", "TARIFF_UNIT_*"}
+          and all(_emitted_code(c) for c in cs) for cs in _refusals.values())
+      and all("a table the runtime refuses, one the engine refuses" in t for t in (_s13_5, _flat(_plan))),
+      str(_refusals))
+_s13_4 = _flat(_sec(_s13, "\n### 13.4", "\n### "))
+_cpu_claim = ("requires the diagnostics counter `refresh_suppressed_cpu` to stay 0 in its go / no-go row R3 and its 72 h "
+              "row T9, and T9 also bounds the diagnostics' `cadence.cpu_s_rolling_hour`")
+_runbook = _DOCS / "INTELLIGENCE_SHADOW_INSTALL_RUNBOOK.md"
+_rb_rows = ({m.group(1): m.group(2) for m in re.finditer(r"^\| (R3|T9) \|(.*)$", _runbook.read_text(encoding="utf-8"), re.M)}
+            if _runbook.is_file() else None)
+check("where 13.4 states the CPU guard it says how its headroom is tracked: the install runbook's R3 and T9 require "
+      "refresh_suppressed_cpu 0 and T9 bounds cadence.cpu_s_rolling_hour (A49, AUD-12); with the runbook in the tree, "
+      "its R3 and T9 rows say so",
+      "with a CPU guard of 180 s per rolling hour" in _s13_4 and _cpu_claim in _s13_4
+      and (_rb_rows is None or ("`refresh_suppressed_cpu`" in _rb_rows.get("R3", "")
+                                and "`refresh_suppressed_cpu` 0" in _rb_rows.get("T9", "")
+                                and "`cadence.cpu_s_rolling_hour`" in _rb_rows.get("T9", ""))),
+      f"runbook rows: {sorted(_rb_rows) if _rb_rows is not None else 'not in this tree'}")
+_eof_blank = sorted(str(p.relative_to(ROOT)) for p in list((ROOT / "intelligence").rglob("*.py")) + list(_DOCS.glob("*.md"))
+                    if "__pycache__" not in p.parts and p.read_bytes().endswith(b"\n\n"))
+check("no engine module, engine test or Intelligence doc ends with a blank line (git diff --check's 'new blank line at "
+      "EOF'; MECH-3)", _eof_blank == [], str(_eof_blank))
 
 print("")
 if FAILURES:

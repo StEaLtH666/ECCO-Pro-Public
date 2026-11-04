@@ -14,6 +14,8 @@
   [6] in the cycle: VERIFIED_FROM_INTEGRATION checks the TOU window (a named run); prices only with an OK charge target;
       all OPEN -> no number
   [7] fixtures: fictional 2030, text only, no 13-digit number on a meter / mpan / octopus / parameters line
+  [8] the adapter's words: each way cheap_window names no run gives its own WARN, and neither those texts nor any
+      comment or docstring of tariff.py calls the cheap run a charge window (the TOU table is the only window source)
 """
 
 from __future__ import annotations
@@ -175,7 +177,7 @@ _ov = r.overlapping(datetime(2030, 1, 16, 1, 15, tzinfo=UTC), datetime(2030, 1, 
 check("overlapping(a, b): the slots that overlap [a, b)",
       [x.start for x in _ov] == [datetime(2030, 1, 16, 1, 0, tzinfo=UTC), datetime(2030, 1, 16, 1, 30, tzinfo=UTC)])
 short = judged(ph.go_like_rates(date(2030, 1, 15), 2, cheap=(60, 90)))
-check("a cheap run shorter than the PROPOSED minimum is not a charge window", tf.cheap_window(short, NOW)[0] is None)
+check("a cheap run shorter than the PROPOSED minimum is not a named cheap run", tf.cheap_window(short, NOW)[0] is None)
 check("an unverified tariff gives no window", tf.cheap_window(cases["gappy"], NOW)[0] is None)
 check("coverage of a needed period: inside -> VERIFIED, beyond the rates -> NO_VALUE TARIFF_COVERAGE_SHORT",
       judged(go, need=(NOW, NOW + timedelta(hours=20))).verified
@@ -336,6 +338,27 @@ bad13 = [(p.name, i) for p in own for i, line in enumerate(p.read_text(encoding=
          if re.search(r"meter|mpan|octopus|parameters", line, re.IGNORECASE) and re.search(r"(?<!\d)\d{13}(?!\d)", line)]
 check("no 13-digit number on a meter / mpan / octopus / parameters line", bad13 == [], str(bad13))
 check("every fixture says it is SYNTHETIC", all("SYNTHETIC" in json.loads(t)["_note"] for t in texts.values()))
+
+print("== [8] the adapter names a cheap run, never a charge window (A30; R10D-4 (c))")
+# the TOU table is the only charge-window source; a VERIFIED tariff names a cheap run that only cross-checks it
+_why = {
+    "TARIFF_NOT_VERIFIED": cases["gappy"],
+    "TARIFF_COVERAGE_SHORT": judged(ph.go_like_rates(date(2030, 1, 15), 1)),
+    "TARIFF_NO_CHEAP_WINDOW": short,
+    "TARIFF_CHEAP_RUN_TOO_LONG": judged(flat20()),
+    "TARIFF_NO_PRICE_SPREAD": judged(ph.go_like_rates(date(2030, 1, 15), 2, cheap_gbp=0.075, peak_gbp=0.09)),
+}
+_said = {want: tf.cheap_window(res, NOW) for want, res in _why.items()}
+check("each way cheap_window names no run gives its own WARN, and none of those texts calls the run a charge window",
+      all(cw_ is None and [f.code for f in fs_] == [want] and all(f.severity == "WARN" for f in fs_)
+          for want, (cw_, fs_) in _said.items())
+      and not [f.text for _cw, fs_ in _said.values() for f in fs_ if re.search(r"charge[ -]window", f.text, re.I)],
+      str({w: [(f.code, f.text) for f in fs_] for w, (_cw, fs_) in _said.items()}))
+_src_tf = Path(tf.__file__).read_text(encoding="utf-8")
+check("... nor does any comment, docstring or text of the adapter (tariff.py speaks of the cheap run it names)",
+      not re.search(r"charge[ -]window", _src_tf, re.I)
+      and '"""The cheap run a VERIFIED import tariff names:' in _src_tf,
+      str(re.findall(r".{0,40}charge[ -]window.{0,40}", _src_tf, re.I)[:3]))
 
 print("")
 if FAILURES:

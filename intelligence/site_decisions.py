@@ -1348,4 +1348,3 @@ def site_hints_ignored(site: Mapping | None) -> list[Finding]:
             out.append(finding("SITE_HINT_IGNORED", INFO, f"site.{k}",
                                "a profile reserve hint is ignored by the SHADOW path; reserves come only from I-D1 / I-D2"))
     return out
-

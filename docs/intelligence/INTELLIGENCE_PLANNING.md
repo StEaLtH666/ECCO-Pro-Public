@@ -32,7 +32,7 @@ Every step fails closed; the frozen suite `test_intel_shadow_cycle_contract.py` 
 2. **Quality.** `quality.assess_inputs` re-verifies every input; `quality.prepare_history` gives the learning history
    (none without a satisfied I-D8). Both are called through their frozen signatures.
 3. **Tariff.** `tariff.assess_rates` judges `tariff.import_rates` and `tariff.export_rates` (section 2). The import rates
-   count as verified only when they cover the whole period the charge window is looked for in
+   count as verified only when they cover the whole cheap-run search period
    (`[now, now + PROPOSED_WINDOW_SEARCH_H)`): a payload with only today's rates (tomorrow's not published yet) or only a
    few slots is `NOT_VERIFIED` (`TARIFF_COVERAGE_SHORT`), so it sets no window, no price and no value. The window check
    (step 4) reads the same reading judged without that coverage need, with the same parse, freshness and future-dated
@@ -133,21 +133,21 @@ first OK item expires, is valid for at least the margin whenever any item is OK.
 ## 2. Tariff (`intelligence/tariff.py`)
 
 - **Shapes:** the rate events of the Octopus Energy integration. The `SiteReading` value of `tariff.import_rates` /
-  `tariff.export_rates` (unit `table`) is a **list of rows** `{start, end, value_inc_vat}`. The site file maps one
-  rate event, or two or three day events in day order (A38 Part B, CCR-RT-DAYS: the contract the Home Assistant
-  runtime implements, contract section 3). The production site file maps the import rates as `[current day, next day]`
-  (A42). The three-event form, with the previous-day event first, is allowed; the previous-day event is added only by
-  a later decision, once a readiness read shows its report cadence within its I-D6 limit. The runtime merges the
-  events' rows into one list under fail-closed rules (an unpublished or unavailable event contributes nothing, a
-  repeated row is collapsed, any other overlap or rows out of order refuse the table, the age is the oldest event's),
-  and this adapter's parse, unit and coverage rules apply to that list unchanged. One day-rates event prices one local
-  day and covers the 24 h search period only in a cycle at local midnight itself; the day events cover it once the
-  next day's rates are published, and price the current day (in the three-event form also the previous day) before
-  that. A reading that does not cover the period is not verified for a cheap run, prices or value, and the window
-  check compares the TOU occurrence's priced slots with the lowest rate it prices from 24 h before now to 24 h after
-  it (section 3, "The look-back" and "What remains on one day-rates event").
-  The adapter also parses one event's attributes `{rates, unit_of_measurement}` and `{previous_day | current_day |
-  next_day}` directly, but the quality layer accepts only a list for a table reading. Entity ids are site-private and come only from the site-local profile (for example
+  `tariff.export_rates` (unit `table`) is a **list of rows** `{start, end, value_inc_vat}`. The site file maps one rate
+  event, or two or three day events in day order (A38 Part B, CCR-RT-DAYS: the contract the Home Assistant runtime
+  implements, contract section 3). A site maps the import rates as `[current day, next day]`, the recommended form
+  (A42). The three-event form, with the previous-day event first, is allowed; the previous-day event is added only once
+  its report cadence is known to stay within its I-D6 limit. The runtime merges the events' rows into one list under
+  fail-closed rules (an unpublished or unavailable event contributes nothing, a repeated row is collapsed, any other
+  overlap or rows out of order refuse the table, the age is the oldest event's), and this adapter's parse, unit and
+  coverage rules apply to that list unchanged. One day-rates event prices one local day and covers the 24 h search
+  period only in a cycle at local midnight itself; the day events cover it once the next day's rates are published, and
+  price the current day (in the three-event form also the previous day) before that. A reading that does not cover the
+  period is not verified for a cheap run, prices or value, and the window check compares the TOU occurrence's priced
+  slots with the lowest rate it prices from 24 h before now to 24 h after it (section 3, "The look-back" and "What
+  remains on one day-rates event"). The adapter also parses one event's attributes `{rates, unit_of_measurement}` and
+  `{previous_day | current_day | next_day}` directly, but the quality layer accepts only a list for a table reading.
+  Entity ids are site-private and come only from the site-local profile (for example
   `event.your_..._current_day_rates`).
 - **Units:** the integration's GBP/kWh x 100 = p/kWh. A magnitude above `PROPOSED_MAX_ABS_GBP_PER_KWH`, or a stated
   unit other than GBP/kWh, is a unit mismatch (BLOCK), never rescaled; so is a payload whose median rate is above
@@ -249,16 +249,18 @@ One planning view around one OK V1.1 charge target; the planner never computes a
   keeps the WARN whose text says "... does not price the whole TOU window": on the current-day event from the end of
   today's occurrence until local midnight, on the next-day event alone from local midnight until today's occurrence
   has ended. During those hours an OK charge target does not show that the TOU window lies in the cheap run.
-- **With the day events (A38 Part B, the contract the Home Assistant runtime implements; contract 13.5):** the
-  production site file maps `[current day, next day]` (A42; the three-event form is allowed, section 2). The current day
-  is always priced, so the look-back always finds today's cheap slots, and once the next day's rates are published the
+- **With the day events (A38 Part B, the contract the Home Assistant runtime implements; contract 13.5):** a site maps
+  `[current day, next day]`, the recommended form (A42; the three-event form is allowed, section 2). The current day is
+  always priced, so the look-back always finds today's cheap slots, and once the next day's rates are published the
   reading covers the search period, so the window is checked against its whole priced occurrence: by the named run
   (A30), or, for a tariff that names none (for example a flat one), by the A35 spread check. A window misconfigured to
-  the evening peak BLOCKs at every cycle of the day (the runtime suite `test_runtime_tariff_days`, the next day's rates
-  appearing at 16:00), and the accepted residual is limited to the hours before the next day's rates are published,
-  after today's occurrence has ended. Only while the merged table is accepted and fresh: a refused table, a gap
-  (`TARIFF_GAP`) or a stale oldest event (`TARIFF_NOT_FRESH`) gives no usable tariff, and the window stands with the
-  WARN "no verified tariff" and INFO `CHARGE_WINDOW_NOT_PRICED` (INTELLIGENCE_HA_RUNTIME, risk 8).
+  the evening peak BLOCKs at every cycle of the day (the Home Assistant runtime's suite `test_runtime_tariff_days`,
+  published with the runtime, the next day's rates appearing at 16:00), and the accepted residual is limited to the
+  hours before the next day's rates are published, after today's occurrence has ended. Only while the merged table is
+  accepted and fresh: a table the runtime refuses, one the engine refuses (a gap `TARIFF_GAP`, an overlap
+  `TARIFF_OVERLAP`, an unusable row such as `TARIFF_RATE_INVALID` or `TARIFF_SLOT_INVALID`, or a unit `TARIFF_UNIT_*`)
+  or a stale oldest event (`TARIFF_NOT_FRESH`) gives no usable tariff, and the window stands with the WARN "no verified
+  tariff" and INFO `CHARGE_WINDOW_NOT_PRICED` (INTELLIGENCE_HA_RUNTIME, risk 8).
 - **Only the codes of WARN and INFO findings are published; the residual's code (A41; contract 13.5 and 13.8):** a WARN
   or INFO finding's text stays in the engine, and the published items carry its code only; a BLOCK finding's text is
   published as its blocker text (step 8), but the residual's WARN text is not. The WARN `CHARGE_WINDOW_FROM_TOU_TABLE`
@@ -490,11 +492,12 @@ window BLOCKs: fail closed. The planning suites run on the real WP-1 rules, with
 
 ### 10.3 The refresh margin and `INPUT_EXPIRING` (contract 13.4)
 
-`shadow_cycle.REFRESH_MARGIN_S = 125` (two 60 s runtime ticks plus 5 s; the runtime has a drift test against it). An
-OK item whose validity at compute time is below it becomes BLOCKED `INPUT_EXPIRING` (a fixed text, no number), per
-item: a TOU item whose configuration liveness is late no longer shortens the envelope, so `pv_tomorrow` and
-`predicted_day_load` stay OK and the envelope stays valid for at least the margin. Whatever rests on a withheld item is
-withheld too (a charge target on an expiring overnight demand is `DEMAND_NOT_AVAILABLE`).
+`shadow_cycle.REFRESH_MARGIN_S = 125` (two 60 s runtime ticks plus 5 s; the Home Assistant runtime, published with the
+runtime, carries a drift test against it). An OK item whose validity at compute time is below it becomes BLOCKED
+`INPUT_EXPIRING` (a fixed text, no number), per item: a TOU item whose configuration liveness is late no longer shortens
+the envelope, so `pv_tomorrow` and `predicted_day_load` stay OK and the envelope stays valid for at least the margin.
+Whatever rests on a withheld item is withheld too (a charge target on an expiring overnight demand is
+`DEMAND_NOT_AVAILABLE`).
 
 ### 10.4 The raise-only reserve preference (contract 13.7)
 

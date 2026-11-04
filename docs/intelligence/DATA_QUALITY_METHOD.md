@@ -219,12 +219,12 @@ Rules of the layer:
   look-back a misconfigured TOU window BLOCKs whenever that event prices its occurrence, and an occurrence it does not
   price at all (on the current-day event, from the end of today's occurrence to local midnight) keeps the WARN whose
   text says "... does not price the whole TOU window" (the accepted residual). With the day events (A38 Part B, the
-  contract the Home Assistant runtime implements; contract section 3) the runtime merges the day events' rows; the production
-  site file maps `[current day, next day]` (A42; the three-event form, with the previous day first, is allowed, and the
-  previous-day event is added only by a later decision, once a readiness read shows its report cadence within its I-D6
-  limit), so the residual is limited to the hours before the next day's
-  rates are published, while the merged table is accepted and fresh (a refused table, a gap or a stale oldest event
-  gives no usable tariff: INTELLIGENCE_HA_RUNTIME, risk 8).
+  contract the Home Assistant runtime implements; contract section 3) the runtime merges the day events' rows; a site
+  maps `[current day, next day]`, the recommended form (A42; the three-event form, with the previous day first, is
+  allowed, and the previous-day event is added only once its report cadence is known to stay within its I-D6 limit), so
+  the residual is limited to the hours before the next day's rates are published, while the merged table is accepted and
+  fresh (a table the runtime or the engine refuses, a gap or a stale oldest event gives no usable tariff:
+  INTELLIGENCE_HA_RUNTIME, risk 8).
   Only the codes of WARN and INFO findings are published (A41; contract 13.5 and 13.8): a WARN or INFO finding's text
   stays in the engine (a BLOCK finding's text is published as its blocker text; the residual's WARN text is not), and
   the WARN `CHARGE_WINDOW_FROM_TOU_TABLE` is the same code for a window whose whole occurrence was priced within the
