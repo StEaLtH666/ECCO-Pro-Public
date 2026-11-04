@@ -21,6 +21,9 @@
       (SYNTHETIC_TEST, accepted explicitly) and all-OPEN decisions; the next day's rates unpublished before 16:00
       local and published after: every envelope and its entity payloads byte-identical, the memo warm (hits) and
       missing exactly where the content changes
+  [7] the docs say so: contract 13.4 names the memo, its bound with the code's value and this suite; the usage and
+      shadow_cycle module docstrings and the run_cycle docstring say the engine keeps this one memo and that it never
+      changes a result
 All values are synthetic (2030, intelligence.synthetic histories); none is site data.
 """
 
@@ -548,6 +551,35 @@ check("... and it missed where the content changed: at local midnight (a new day
 check(f"... and over the schedule most calls were hits ({ON_INFO['hits']} hits, {ON_INFO['misses']} misses); CPU "
       f"{ON_CPU:.1f} s with the memo, {OFF_CPU:.1f} s without",
       ON_INFO["hits"] > 3 * ON_INFO["misses"] and ON_INFO["bypassed"] == 0, str(ON_INFO))
+
+# ---------------------------------------------------------------------------------------------------------------------
+print("== [7] the docs say the engine holds this memo")
+ROOT = Path(__file__).resolve().parents[2]
+_contract = (ROOT / "docs" / "intelligence" / "INTELLIGENCE_FOUNDATION_CONTRACT.md").read_text(encoding="utf-8")
+_s134 = _contract.split("### 13.4 ", 1)[1].split("\n### 13.5 ", 1)[0] if "### 13.4 " in _contract else ""
+_memo_par = _s134[_s134.find("**The engine's profile memo"):] if "**The engine's profile memo" in _s134 else ""
+_memo_par = _memo_par.split("\n- **", 1)[0]
+_flat = " ".join(_memo_par.split())
+check("contract 13.4 has the profile-memo paragraph: exact, bounded, `PROFILE_MEMO_MAX_ENTRIES` with the code's value, "
+      "least recently used evicted first, pure in its result, this suite, and no rule changes",
+      bool(_flat) and "`build_profile`" in _flat and "exact, bounded memo" in _flat
+      and f"`PROFILE_MEMO_MAX_ENTRIES` ({usage.PROFILE_MEMO_MAX_ENTRIES})" in _flat
+      and "least recently used evicted first" in _flat and "stays pure in its result" in _flat
+      and "`test_intel_profile_memo.py`" in _flat and "`build_profile_uncached`" in _flat
+      and "no bound, margin, PROPOSED value, cadence, freshness, input-expiry or fail-closed rule changes" in _flat,
+      _flat[:200])
+import intelligence.shadow_cycle as _sc  # noqa: E402
+
+_usage_doc = " ".join((usage.__doc__ or "").split())
+_sc_doc = " ".join((_sc.__doc__ or "").split())
+_rc_doc = " ".join((_sc.run_cycle.__doc__ or "").split())
+check("the usage module docstring says it keeps one exact, bounded memo of build_profile between calls, and why",
+      "one piece of state between calls: an exact, bounded memo of `build_profile`" in _usage_doc
+      and "returns exactly what a fresh build would" in _usage_doc, _usage_doc[-400:])
+check("the shadow_cycle module docstring and run_cycle's say the memo is the one state kept and never changes a result",
+      "the one state the engine keeps between calls is the exact, bounded memo of intelligence.usage.build_profile"
+      in _sc_doc and "byte-identical envelope whether the memo is cold or warm" in _sc_doc
+      and "never changes a result" in _rc_doc, _rc_doc)
 
 print("")
 if FAILURES:
