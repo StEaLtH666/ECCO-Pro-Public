@@ -14,7 +14,9 @@
   [4] bounded: the memo uses PROFILE_MEMO_MAX_ENTRIES; it never holds more, evicts the least recently used first, keeps
       nothing at a bound of 0; the bound is at least three times one cycle's working set, and a second cycle on the
       same history is all hits, its envelope byte-identical to a cold run
-  [5] threads: concurrent calls with a small bound (evictions racing) never raise, stay exact and keep the bound
+  [5] threads: concurrent calls with a small bound (evictions racing) never raise, stay exact and keep the bound; the
+      two steps a lock-free memo can lose to an overlapping cycle (its entry evicted between the read and the move to
+      the recent end; the memo emptied between the size check and the eviction), made deterministic, never raise
   [6] differential, memo on against memo off over simulated days on a 120-day history window that slides each hour: a
       winter day through local midnight and the early-morning cycles in which the window's oldest partial day changes,
       and the 2030-10-27 clock change (a 25 h day) from the evening before to the next local midnight; recorded
@@ -34,6 +36,7 @@ import random
 import sys
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -441,6 +444,48 @@ check("4 threads x 600 calls over 30 keys with a bound of 8: no exception, every
       "hits and evictions happened",
       not errors and not wrong and _ti["entries"] <= 8 and _ti["hits"] > 0 and _ti["misses"] > 30,
       f"{errors[:2]} {wrong[:2]} {_ti}")
+
+
+class EvictedAfterRead(OrderedDict):
+    """The memo's storage, with another cycle's eviction made deterministic: the entry is gone right after a get()
+    found it (between the read and the move to the recent end)."""
+
+    def get(self, key, default=None):
+        v = super().get(key, default)
+        if v is not None:
+            self.pop(key, None)
+        return v
+
+
+class EmptiedBeforePop(OrderedDict):
+    """... and another cycle's eviction between the size check and popitem(): the storage is empty when it runs."""
+
+    def popitem(self, last=True):
+        self.clear()
+        return super().popitem(last=last)
+
+
+def lost_race(storage_cls, max_entries: int, label: str) -> None:
+    saved = (usage._PROFILE_MEMO._entries, usage._PROFILE_MEMO.max_entries)  # noqa: SLF001
+    try:
+        usage.clear_profile_memo()
+        usage._PROFILE_MEMO._entries = storage_cls()  # noqa: SLF001
+        usage._PROFILE_MEMO.max_entries = max_entries  # noqa: SLF001
+        tab = THREAD_TABLES[0]
+        got = [bits(bp(tab, D0 + timedelta(days=30), a, 30, 5.0)) for a in (0.1, 0.1, 0.2, 0.2)]
+        want = [WANT[(0, a)] for a in (0.1, 0.1, 0.2, 0.2)]
+        check(label, got == want, "results differ")
+    except Exception as exc:  # noqa: BLE001 - the step must not raise
+        check(label, False, repr(exc))
+    finally:
+        usage._PROFILE_MEMO._entries, usage._PROFILE_MEMO.max_entries = saved  # noqa: SLF001
+        usage.clear_profile_memo()
+
+
+lost_race(EvictedAfterRead, 8, "a hit whose entry another cycle evicts between the read and the move to the recent "
+          "end: no exception, the value read is returned (exact)")
+lost_race(EmptiedBeforePop, 1, "a store whose eviction finds the memo already emptied by another cycle: no exception, "
+          "exact results")
 
 # ---------------------------------------------------------------------------------------------------------------------
 print("== [6] differential: memo on against memo off over simulated days")
