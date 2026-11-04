@@ -4,8 +4,8 @@
   [1] exact: on generated and hand-made day tables (gaps, ties, outliers, zeros) every call, cold or warm, equals
       build_profile_uncached bit for bit, and each part of the key matters: alpha, k, mode, a slot value, which slots
       are missing, the sign of a zero, the order of the days, SLOT_SIGMA_FLOOR_KWH, PROFILE_REFERENCE_WINDOW and
-      stats.MAD_TO_SIGMA; a revised past day (a new table), a replaced row (the same table) and a day that is no longer
-      complete are misses
+      stats.MAD_TO_SIGMA; a revised past day (a new table), a slot moved by one ulp or by 1e-9 (the key is exact, not
+      rounded), a replaced row (the same table) and a day that is no longer complete are misses
   [2] inputs with no exact image (a NaN or infinite value or parameter, an int value, a bool parameter, a list row, a
       short row) bypass the memo, store nothing and still give what a fresh build gives (or raise as it raises)
   [3] copies: every call returns a new SlotProfile with its own lists and the memo keeps tuples, so a caller that
@@ -32,6 +32,7 @@ All values are synthetic (2030, intelligence.synthetic histories); none is site 
 from __future__ import annotations
 
 import json
+import math
 import random
 import sys
 import threading
@@ -208,6 +209,18 @@ pair("PROFILE_REFERENCE_WINDOW shortened (read at call time)", (T_OUT, UP, 0.30,
      patch=(usage, "PROFILE_REFERENCE_WINDOW", 3))
 pair("stats.MAD_TO_SIGMA changed (read at call time)", (T_OUT, UP, 0.30, 40, 5.0), (T_OUT, UP, 0.30, 40, 5.0),
      patch=(stats, "MAD_TO_SIGMA", 0.5))
+# The key images values exactly, not to some precision: a lossy image (rounded, or formatted as text) would return a
+# stale profile when the recorder revises a past hour by a tiny amount.
+_ulp0 = {ONE: tuple(0.5 + 0.01 * s for s in range(24))}
+_ulp1 = {ONE: tuple(math.nextafter(x, math.inf) if s == 7 else x for s, x in enumerate(_ulp0[ONE]))}
+pair("one slot of a one-day median profile moved by one ulp (the key is exact, not rounded)",
+     (made_table(_ulp0), ONE + timedelta(days=1), 0.0, 1, 5.0, "median"),
+     (made_table(_ulp1), ONE + timedelta(days=1), 0.0, 1, 5.0, "median"))
+_tiny = dict(OUTLIERS)
+_dn = D0 + timedelta(days=39)                                                         # the newest chosen day
+_tiny[_dn] = tuple(x + 1e-9 if x is not None and s == 7 else x for s, x in enumerate(OUTLIERS[_dn]))
+pair("a backfilled hour: the newest day's slot moved by 1e-9 in an EWMA profile (the key is exact, not rounded)",
+     (T_OUT, UP, 0.30, 40, 5.0), (made_table(_tiny), UP, 0.30, 40, 5.0))
 usage.clear_profile_memo()
 _t = made_table(OUTLIERS)
 _before = bits(bp(_t, UP, 0.30, 40, 5.0))
