@@ -89,7 +89,9 @@ Get-Content (Join-Path $Evidence 'capture-summary\capture_summary.txt')
 
 `capture_summary.json` (schema `ecco-intel-capture-summary/1`, written by `intel-validate-capture-0.1.1`) and
 `capture_summary.txt` hold the blocks below. Version 0.1.1 added `distinguishable_only_swapped` to `energy_balance`; the
-schema id stays `/1` because the change only adds a key (a 0.1.0 summary has the same blocks without it):
+schema id stays `/1` because the change only adds a key. A 0.1.0 summary has the same blocks without it, but its
+`ct_reversed` came from the `intel-quality-0.3.0-cfg` rule, so re-run the validator rather than compare an old summary's
+verdict:
 
 | Block | Content |
 |---|---|

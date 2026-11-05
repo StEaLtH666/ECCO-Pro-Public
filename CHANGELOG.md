@@ -471,8 +471,9 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   `ct_reversed` reads only those two. The evidence of `HISTORY_CT_REVERSED` states the two counts the rule read in each window
   (`history_*`, `lookback_*`, `recent_*`) next to `windows`, and the capture validator's `energy_balance` reports the new count
   (`intel-validate-capture-0.1.1`; the summary schema stays `ecco-intel-capture-summary/1`, as the change only adds a key).
-  No threshold, window or other rule changes; a genuine reversal still blocks in every window, both PROPOSED bounds stay
-  inclusive, and the minimum hours bound the told-apart hours that balance only swapped, not the told-apart hours.
+  No threshold, window or PROPOSED value changes; a genuine reversal still blocks in every window, and both PROPOSED bounds
+  stay inclusive. Like the share, the minimum hours now count only the told-apart hours that balance only swapped (over the
+  whole history and the lookback they also counted the borderline hours).
   Tests: `test_intel_quality` [10b], `test_intel_capture_kit`.
 - **Deployment rollback restores a fresh modification time**: `Invoke-EccoDeploymentRollback` restored the backup with `cp -p`, bringing back the file's old modification time, and Home Assistant keeps serving its cached YAML dashboard while the file is not newer than that cache. It now restores with a plain `cp` and `touch`, and a dashboard rollback ends with a reminder to read back `lovelace/config`. The rollback of a drift recovery adds `DRIFT RECOVERY ROLLED BACK`: its backup is the drifted file, without the policy's layer.
 - **`tools/deploy-ha.ps1` prints the manual-resource reminder for every file it copies to `/config/www/ecco/`**, not only for
