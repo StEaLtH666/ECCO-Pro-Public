@@ -32,8 +32,9 @@ runs.
   [10b] the CT share rule counts only the hours in which import and export can be told apart, on both sides of the share
        and in every window: hours that balance only swapped but cannot be told apart never make a reversal (assess_inputs
        and prepare_history), a genuine reversal still fires in the history, lookback and recent windows with the counts it
-       used as evidence, the minimum hours and the minimum share are inclusive, and the residual rule still counts every
-       hour that balances only swapped
+       used as evidence, the minimum hours and the minimum share are inclusive, the minimum hours bound the told-apart
+       hours that balance only swapped (not the told-apart hours, and never an hour that cannot be told apart), and the
+       residual rule still counts every hour that balances only swapped
   [11] contract hygiene over every scenario: no number with a unit in any text, only declared inputs block, valid input-age
        rows, run_cycle never fails its self-test on these inputs; every code quality.py emits is named in this suite
 """
@@ -1047,14 +1048,26 @@ check("... and so does prepare_history's", ev3 and set(ev3[0]) == CT_EV_KEYS | {
       and ev3[0]["recent_distinguishable_only_swapped"] == ev3[0]["recent_distinguishable"] > 0, str(ev3[:1]))
 
 # (c) the boundaries: exactly the PROPOSED minimum hours and exactly the PROPOSED minimum share fire (both inclusive), one
-# told-apart hour fewer does not, and hours that cannot be told apart never make up the difference
+# told-apart hour fewer does not, and hours that cannot be told apart never make up the difference. The minimum hours
+# bound the told-apart hours that balance only swapped (the numerator), not the told-apart hours (the denominator), and
+# never count hours that cannot be told apart: the share met with one such hour short of the minimum does not fire
 check(f"the PROPOSED share rule this section assumes: {MIN_H} hours, a share of {MIN_SHARE} that {MIN_H} of {AT_SHARE} "
       "hours meets exactly", MIN_H / AT_SHARE == MIN_SHARE and AT_SHARE > MIN_H)
+check(f"... {MIN_H - 1} of {MIN_H + 2} hours meet that share too, and {MIN_H} of {AT_SHARE - 1} is above it (both with "
+      f"more than {MIN_H} hours in the denominator)", (MIN_H - 1) / (MIN_H + 2) >= MIN_SHARE and AT_SHARE - 1 > MIN_H)
 for label, recs_, want in (
         (f"{MIN_H} told-apart hours, all only swapped (exactly the minimum hours)", run_of("sw", MIN_H, END - HR), True),
         (f"{MIN_H - 1} told-apart hours, all only swapped", run_of("sw", MIN_H - 1, END - HR), False),
         (f"{MIN_H - 1} told-apart hours only swapped, and 3 that cannot be told apart",
          {**run_of("sw", MIN_H - 1, END - HR), **run_of("isw", 3, END - 20 * HR)}, False),
+        (f"{MIN_H - 1} of {MIN_H + 2} told-apart hours only swapped (the share met, the minimum hours not)",
+         {**run_of("sw", MIN_H - 1, END - HR), **run_of("bal", 3, END - 20 * HR)}, False),
+        (f"{MIN_H - 1} of {MIN_H + 2} told-apart hours only swapped, and 1 that cannot be told apart (the share met, the "
+         "minimum hours one short)",
+         {**run_of("sw", MIN_H - 1, END - HR), **run_of("bal", 3, END - 20 * HR), **run_of("isw", 1, END - 40 * HR)},
+         False),
+        (f"{MIN_H} of {AT_SHARE - 1} told-apart hours only swapped (both bounds met, the told-apart hours above both)",
+         {**run_of("sw", MIN_H, END - HR), **run_of("bal", AT_SHARE - 1 - MIN_H, END - 20 * HR)}, True),
         (f"{MIN_H} of {AT_SHARE} told-apart hours only swapped (exactly the minimum share)",
          {**run_of("sw", MIN_H, END - HR), **run_of("bal", AT_SHARE - MIN_H, END - 20 * HR)}, True),
         (f"{MIN_H} of {AT_SHARE + 1} told-apart hours only swapped",
@@ -1074,6 +1087,19 @@ for label, seq, want in ((f"{MIN_H} of the most recent {AT_SHARE} told-apart hou
     rv, ev = q.ct_reversal(rr, END, 28)
     check(f"the recent window at its boundary: {label} -> windows {want}", q.DQ_PROPOSED.ct_recent_hours == AT_SHARE
           and ev.get("windows") == want and ev.get("recent_distinguishable") == AT_SHARE, str(ev))
+# the recent window holding fewer told-apart hours than it judges: the minimum hours still bound the told-apart hours that
+# balance only swapped, not the told-apart hours, and an hour that cannot be told apart does not make up the difference
+seq_few = ["sw", "bal", "sw", "sw", "bal", "sw", "bal", "sw"]
+for label, seq in ((f"{MIN_H - 1} of its {MIN_H + 2} told-apart hours only swapped (the share met, the minimum hours not)",
+                    seq_few),
+                   ("... and 1 more hour that balances only swapped but cannot be told apart", seq_few[:3] + ["isw"]
+                    + seq_few[3:])):
+    rr = {**{END - (i + 1) * HR: hr(END - (i + 1) * HR, k) for i, k in enumerate(seq)},
+          **run_of("bal", 100, END - 5 * 24 * HR)}
+    rv, ev = q.ct_reversal(rr, END, 28)
+    check(f"the recent window short of the minimum hours: {label} -> no window", rv is False and ev.get("windows") == ()
+          and seq.count("sw") == MIN_H - 1 and ev.get("recent_distinguishable") == MIN_H + 2
+          and ev.get("recent_distinguishable_only_swapped") == MIN_H - 1, str(ev))
 
 # (d) the residual rule still counts every hour that balances only swapped (told apart or not) in its total
 def residual_case(n_unb: int, n_flat: int, n_isw: int) -> History:

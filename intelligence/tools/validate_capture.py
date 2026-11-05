@@ -49,8 +49,8 @@ from intelligence.quality import (DQ_PROPOSED, QUALITY_VERSION, assess_inputs, b
                                   clock_change_nights, ct_reversed, dropout_runs, stall_hours)
 from intelligence.timeutil import HOUR, UTC, day_bounds, local_wall, zone  # noqa: E402
 
-TOOL_VERSION = "intel-validate-capture-0.1.0"
-SCHEMA = "ecco-intel-capture-summary/1"
+TOOL_VERSION = "intel-validate-capture-0.1.1"   # 0.1.1: energy_balance adds distinguishable_only_swapped
+SCHEMA = "ecco-intel-capture-summary/1"          # an added key keeps the schema id
 BANNER = "REAL DATA - LOCAL ONLY - DO NOT PUBLISH"
 SUMMARY_JSON = "capture_summary.json"
 SUMMARY_TXT = "capture_summary.txt"

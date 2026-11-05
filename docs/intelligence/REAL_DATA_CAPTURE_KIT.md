@@ -87,7 +87,9 @@ Get-Content (Join-Path $Evidence 'capture-summary\capture_summary.txt')
 
 ## 5. What the summary contains (aggregates only)
 
-`capture_summary.json` (schema `ecco-intel-capture-summary/1`) and `capture_summary.txt` hold:
+`capture_summary.json` (schema `ecco-intel-capture-summary/1`, written by `intel-validate-capture-0.1.1`) and
+`capture_summary.txt` hold the blocks below. Version 0.1.1 added `distinguishable_only_swapped` to `energy_balance`; the
+schema id stays `/1` because the change only adds a key (a 0.1.0 summary has the same blocks without it):
 
 | Block | Content |
 |---|---|
