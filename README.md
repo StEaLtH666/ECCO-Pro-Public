@@ -159,7 +159,7 @@ Most of the project is verified **offline**, without hardware.
 
 - Python 3.12 with PyYAML and Jinja2 for the repository checks and test suites.
 - `python tools/validate_repo.py` checks tracked YAML, Python, JSON, Flux and manifest references.
-- Test suites are plain `test_*.py` scripts. The directories to run are listed in one file, `tools/offline_test_roots.txt` (`registry/tests`, `home-assistant/tests`, `health/tests`, `influxdb`, `intelligence/tests`, `tools/tests`); `python tools/run_offline_tests.py --all` runs them all.
+- Test suites are plain `test_*.py` scripts. The directories to run are listed in one file, `tools/offline_test_roots.txt` (`registry/tests`, `home-assistant/tests`, `health/tests`, `influxdb`, `intelligence/tests`, `tools/tests`, `ecco_core/tests`, `custom_components/ecco_intelligence/tests`); `python tools/run_offline_tests.py --all` runs them all.
 - Some suites compile firmware headers with a host C++ compiler and are slow; some firmware checks need `esphome==2026.8.2`.
 - The three custom cards have their own `npm test` (the first two also `npm run typecheck` and `npm run build`). They were run locally with Node.js 24; CI does not run them yet.
 - Hardware proof is separate from CI. A change that can write to an inverter needs a supervised test on real hardware (read back, verified and restored, see the proof levels in [SUPPORTED_HARDWARE.md](SUPPORTED_HARDWARE.md#proof-levels) and the evidence rules in [CONTRIBUTING.md](CONTRIBUTING.md)) before it is called hardware-tested.

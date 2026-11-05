@@ -1,0 +1,13 @@
+{
+  "domain": "ecco_intelligence",
+  "name": "ECCO Intelligence (SHADOW)",
+  "codeowners": ["@StEaLtH666"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/StEaLtH666/ECCO-Pro-Public/blob/main/docs/intelligence/INTELLIGENCE_HA_RUNTIME.md",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

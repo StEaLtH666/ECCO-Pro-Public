@@ -36,7 +36,8 @@ Run the tests (each is a plain script, same convention as `health/tests`):
     python intelligence/tests/test_intelligence_examples.py        # shipped examples == a fresh synthetic run
     python intelligence/tests/test_intelligence_dashboard_prototype.py   # needs PyYAML (+ Node for the render checks)
 
-The test roots CI runs live in one file, `tools/offline_test_roots.txt` (includes `intelligence/tests`).
+The test roots CI runs live in one file, `tools/offline_test_roots.txt` (includes `intelligence/tests`, `ecco_core/tests` and the
+SHADOW runtime boundary root `custom_components/ecco_intelligence/tests`; see `docs/intelligence/INTELLIGENCE_FOUNDATION_CONTRACT.md`).
 
 **Data policy:** no real household consumption, occupancy or entity-account data is committed. Examples and fixtures are
 synthetic (`intelligence/synthetic.py`, fictional year 2030). Real exports, quality-report output and site profiles stay local

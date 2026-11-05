@@ -1,0 +1,113 @@
+# ECCO Intelligence (SHADOW, advice only) - a standalone one-view Lovelace dashboard (YAML mode).
+#
+# Deliberately NOT part of ecco_pro.yaml (frozen; the live dashboard) and not in deployment/ha-manifest.yaml: the deploy
+# bundle never copies it (the single-file tools/deploy-ha.ps1 copies it only when given this file by name, which is the
+# separately approved step 3 below). Contract ecco-intel-entities/1 (intelligence/advisory_contract.py). Entity ids are the contract's
+# generic ecco_intel_* ids; no device slug, no tariff id.
+#
+# What is on it:
+#   - the ECCO Intelligence card (frontend/ecco-intelligence-card): read-only, no write path of any kind;
+#   - a core tile card on input_boolean.ecco_intel_paused: the ONLY control on this dashboard, and the only way the pause is
+#     offered (the custom card never offers it). Pausing is advice-side only: the integration then publishes PAUSED;
+#   - a core entities card with the watchdog (binary_sensor.ecco_intel_watchdog_fresh), the integration's own freshness, the
+#     status and the data quality (read-only rows);
+#   - a core markdown card as a text fallback that works without the custom card's resource: the status, the report time,
+#     the watchdog, the pause and the open decision labels. It shows no advice figure at all.
+# No card defines a service call, a script or a perform-action; the tile's tap toggles the pause helper and nothing else.
+#
+# One-time registration (an OWNER step; nothing in this repository registers anything, and every step is reversible).
+# HELD OUT: the package named in step 1 is not in this release; it ships with PR-6 (decision ui-1). Until then the pause tile,
+# the watchdog row and the markdown fallback's pause and watchdog lines read entities that nothing defines, and the owner has
+# no pause control: do not register this dashboard before PR-6 (docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md, section 5).
+#   1. install home-assistant/packages/ecco_intelligence.yaml FIRST (it defines the pause helper and the watchdog that this
+#      dashboard shows), then the ECCO Intelligence integration;
+#   2. copy frontend/ecco-intelligence-card/ecco-intelligence-card.js to /config/www/ecco/ and add it as a Lovelace resource
+#      of type JavaScript module (Settings - Dashboards - Resources), for example /local/ecco/ecco-intelligence-card.js?v=0.1.0;
+#   3. copy this file to /config/ecco/dashboards/ecco_intelligence.yaml and register it in configuration.yaml:
+#        lovelace:
+#          dashboards:
+#            ecco-intelligence:
+#              mode: yaml
+#              title: "ECCO Intelligence"
+#              icon: mdi:head-lightbulb-outline
+#              show_in_sidebar: true
+#              filename: "ecco/dashboards/ecco_intelligence.yaml"
+#      (a new `lovelace: dashboards:` entry takes effect after a Home Assistant restart, which needs its own approval).
+# Removing it: delete the dashboards entry and the resource; the package and the integration are independent of it.
+
+title: "ECCO Intelligence"
+views:
+  - title: Intelligence
+    path: intelligence
+    icon: mdi:head-lightbulb-outline
+    cards:
+      - type: custom:ecco-intelligence-card
+        title: "ECCO Intelligence"
+        entities:
+          status: sensor.ecco_intel_status
+          charge_target: sensor.ecco_intel_charge_target
+          overnight_demand: sensor.ecco_intel_overnight_demand
+          export_event: sensor.ecco_intel_export_event
+          dump_to_grid: sensor.ecco_intel_dump_to_grid
+          predicted_day_load: sensor.ecco_intel_predicted_day_load
+          pv_tomorrow: sensor.ecco_intel_pv_tomorrow
+          predicted_morning_soc: sensor.ecco_intel_predicted_morning_soc
+          accuracy: sensor.ecco_intel_accuracy
+          data_quality: sensor.ecco_intel_data_quality
+          fresh: binary_sensor.ecco_intel_fresh
+          paused: input_boolean.ecco_intel_paused
+          watchdog_fresh: binary_sensor.ecco_intel_watchdog_fresh
+
+      - type: tile
+        entity: input_boolean.ecco_intel_paused
+        name: Pause ECCO Intelligence (advice only)
+        icon: mdi:pause-circle-outline
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+        hold_action:
+          action: more-info
+
+      - type: entities
+        title: Watchdog and status
+        show_header_toggle: false
+        state_color: true
+        entities:
+          - entity: binary_sensor.ecco_intel_watchdog_fresh
+            name: Watchdog (fresh, recognised result)
+          - entity: binary_sensor.ecco_intel_fresh
+            name: Integration reports fresh
+          - entity: sensor.ecco_intel_status
+            name: Status
+          - entity: sensor.ecco_intel_data_quality
+            name: Data quality
+
+      - type: markdown
+        title: "ECCO Intelligence (text fallback)"
+        content: |-
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {%- set g = state_attr(s, 'generated_at') -%}
+          {%- set known = ['OK', 'NO_ADVICE', 'BLOCKED', 'INSUFFICIENT_DATA', 'STALE', 'SELF_TEST_FAILED', 'STARTING', 'PAUSED'] -%}
+          {%- set labels = ['I-D1', 'I-D2', 'I-D3', 'I-D4', 'I-D5', 'I-D6', 'I-D7', 'I-D8', 'I-D9'] -%}
+          {%- set dec = state_attr(s, 'decisions') -%}
+          {%- if states(s) in ['unknown', 'unavailable'] -%}
+          **ECCO Intelligence is not publishing.**
+          {%- elif not (state_attr(s, 'contract_version') == 'ecco-intel-entities/1' and state_attr(s, 'mode') == 'SHADOW'
+                        and state_attr(s, 'applies_nothing') is sameas true and iv is string and (iv | trim | length) > 0
+                        and states(s) in known) -%}
+          **Intelligence output not recognised.** Nothing from it is shown.
+          {%- else -%}
+          **SHADOW MODE - advice only, nothing is applied.**
+
+          Status: **{{ states(s) }}**{% if g is string and as_timestamp(g, none) is not none %} · report from
+          {{ as_timestamp(g) | timestamp_custom('%a %d %b %H:%M') }}{% endif %}
+
+          Open decisions: {% if dec is mapping %}{% for k in labels if dec.get(k) != 'RECORDED' %}{{ k }}{{ ' ' if not loop.last else '' }}{% else %}none{% endfor %}{% else %}unknown{% endif %}
+
+          The figures, the reasons and the blocked conditions are on the ECCO Intelligence card above.
+          {%- endif %}
+
+          Watchdog: {{ 'fresh' if is_state('binary_sensor.ecco_intel_watchdog_fresh', 'on') else 'not fresh' }} ·
+          Pause: {{ states('input_boolean.ecco_intel_paused') }}

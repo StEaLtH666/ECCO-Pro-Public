@@ -1,0 +1,17 @@
+{
+  "name": "ecco-intelligence-card",
+  "version": "0.1.0",
+  "description": "A dependency-free, read-only Home Assistant Lovelace card for ECCO Intelligence SHADOW advice (contract ecco-intel-entities/1). It applies nothing.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "ecco"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

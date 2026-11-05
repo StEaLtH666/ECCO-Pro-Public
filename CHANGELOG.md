@@ -26,6 +26,11 @@ Development before the first public release happened in a private repository; se
   a conflicting priced slot blocks; INFO `CHARGE_WINDOW_NOT_PRICED` marks a window that no price check covered whole). Input
   expiry: configuration-poll freshness, `INPUT_EXPIRING` for an item valid for less than the 125 s refresh margin, and the
   inverter clock offset in the charge-window items' validity. V1 example outputs unchanged.
+- **Intelligence SHADOW v0.1, Home Assistant runtime and card** (source only; install kit staged, PENDING DP-4; nothing installed
+  or deployed): `custom_components/ecco_intelligence` (sensor and binary_sensor only), the kit builder and mock install drills,
+  the read-only intelligence card and its standalone dashboard, an end-to-end test of the built kit, and
+  [docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md](docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md). The presentation
+  package (pause helper and watchdog) is held back for the post-export entry.
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten
