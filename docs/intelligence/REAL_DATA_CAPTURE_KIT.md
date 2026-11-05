@@ -87,13 +87,17 @@ Get-Content (Join-Path $Evidence 'capture-summary\capture_summary.txt')
 
 ## 5. What the summary contains (aggregates only)
 
-`capture_summary.json` (schema `ecco-intel-capture-summary/1`) and `capture_summary.txt` hold:
+`capture_summary.json` (schema `ecco-intel-capture-summary/1`, written by `intel-validate-capture-0.1.1`) and
+`capture_summary.txt` hold the blocks below. Version 0.1.1 added `distinguishable_only_swapped` to `energy_balance`; the
+schema id stays `/1` because the change only adds a key. A 0.1.0 summary has the same blocks without it, but its
+`ct_reversed` came from the `intel-quality-0.3.0-cfg` rule, so re-run the validator rather than compare an old summary's
+verdict:
 
 | Block | Content |
 |---|---|
 | `input` | the CSV's SHA-256, size, row and statistic-id counts (no ids, no file names) |
 | `audit` | hours expected / present / missing, missing-run count and longest run, per-field coverage and flag counts, first and last date |
-| `energy_balance` | hours that balance, balance only with import and export swapped, or balance neither way; `ct_reversed` |
+| `energy_balance` | hours that balance, balance only with import and export swapped, or balance neither way (`balanced`, `balanced_only_swapped`, `unbalanced`: together every hour with all six counters); the hours in which import and export can be told apart (`distinguishable`) and those of them that balance only swapped (`distinguishable_only_swapped`); `ct_reversed`: the share rule over the whole capture, which reads only the last two counts |
 | `counter_faults` | counter stall hours and catch-up hours |
 | `dropouts` | recovered dropout runs, the longest, days with repeated dropouts |
 | `dst_nights` | each clock-change date in the capture, its kind, hours expected and present |
