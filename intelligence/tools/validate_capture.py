@@ -298,7 +298,8 @@ def summary_text(s: dict) -> str:
         lines.append(f"  {fld}: coverage {v['coverage']}, flags {v['flags']}")
     eb = s["energy_balance"]
     lines.append(f"energy balance: {eb['balanced']} balanced, {eb['balanced_only_swapped']} only swapped, "
-                 f"{eb['unbalanced']} unbalanced; CT reversed: {eb['ct_reversed']}")
+                 f"{eb['unbalanced']} unbalanced; {eb['distinguishable']} with import and export told apart, "
+                 f"{eb['distinguishable_only_swapped']} of them only swapped; CT reversed: {eb['ct_reversed']}")
     lines.append(f"counter faults: {s['counter_faults']}")
     lines.append(f"dropouts: {s['dropouts']}")
     lines.append("clock-change nights: " + (", ".join(f"{n['date']} {n['kind']} {n['hours_present']}/{n['hours_expected']}"

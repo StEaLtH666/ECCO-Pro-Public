@@ -129,7 +129,7 @@ SCHEMA = {
               "soc_suspect_hours": None, "soc_jump_hours": None, "load_power_stale_hours": None, "days_span": None,
               "hours": None},
     "energy_balance": {"balanced": None, "balanced_only_swapped": None, "unbalanced": None, "distinguishable": None,
-                       "ct_reversed": None},
+                       "distinguishable_only_swapped": None, "ct_reversed": None},
     "counter_faults": {"stall_hours": None, "catchup_hours": None},
     "dropouts": {"runs": None, "longest_h": None, "days_with_repeated_dropouts": None},
     "dst_nights": "nights",
@@ -262,6 +262,11 @@ with tempfile.TemporaryDirectory(prefix="ecco_dq_capture_") as td:
     eb = sj["energy_balance"]
     check("the balanced counters balance, and no CT reversal is reported", eb["balanced"] > 0 and eb["ct_reversed"] is False
           and eb["balanced_only_swapped"] == 0, str(eb))
+    check("... the share rule's own counts are reported too: the hours in which import and export can be told apart, and "
+          "those of them that balance only swapped (none here), in the JSON and the text summary",
+          0 < eb["distinguishable"] <= eb["balanced"] + eb["balanced_only_swapped"] + eb["unbalanced"]
+          and eb.get("distinguishable_only_swapped") == 0
+          and f"{eb['distinguishable']} with import and export told apart, 0 of them only swapped" in st, str(eb))
     lc = sj["load_counter_check"]
     check("the I-D8 load-counter check runs before and after the cut-over and finds the counter consistent",
           lc["status"] == "RUN" and lc["before"]["counter_vs_balance"]["n"] > 0 and lc["after"]["counter_vs_balance"]["n"] > 0

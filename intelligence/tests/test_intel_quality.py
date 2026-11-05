@@ -29,6 +29,11 @@ runs.
       clock-change nights, zero PV, malformed records)
   [10] prepare_history: I-D8 EXCLUDE / KEEP_NON_EXPORTING_ONLY / KEEP_AFTER_COUNTER_CHECK on a copy; false zeros after the
        cut-over; a reversed CT; the refusal codes; never raises
+  [10b] the CT share rule counts only the hours in which import and export can be told apart, on both sides of the share
+       and in every window: hours that balance only swapped but cannot be told apart never make a reversal (assess_inputs
+       and prepare_history), a genuine reversal still fires in the history, lookback and recent windows with the counts it
+       used as evidence, the minimum hours and the minimum share are inclusive, and the residual rule still counts every
+       hour that balances only swapped
   [11] contract hygiene over every scenario: no number with a unit in any text, only declared inputs block, valid input-age
        rows, run_cycle never fails its self-test on these inputs; every code quality.py emits is named in this suite
 """
@@ -918,6 +923,182 @@ hjr, fjr = q.prepare_history(junk_hist, cf.synthetic_decisions(), cf.NOW, accept
 check("HISTORY_RECORD_MALFORMED: junk entries and records with malformed fields are left out with a WARN, never raise",
       hjr is not None and js[-5] not in hjr.by_start and js[-6] not in hjr.by_start and js[-7] not in hjr.by_start
       and any(f.code == "HISTORY_RECORD_MALFORMED" and dict(f.evidence)["entries"] == 3 for f in fjr))
+
+print("== [10b] the CT share rule: only hours in which import and export can be told apart count")
+HR = 3600
+END = int(cf.NOW.timestamp())                    # hour aligned
+MIN_H, MIN_SHARE = q.DQ_PROPOSED.ct_reversal_min_hours, q.DQ_PROPOSED.ct_reversal_min_share
+AT_SHARE = int(round(MIN_H / MIN_SHARE))         # distinguishable hours that put MIN_H swapped ones exactly at MIN_SHARE
+CT_EV_KEYS = {f"{w}_{k}" for w in ("history", "lookback", "recent") for k in ("distinguishable", "distinguishable_only_swapped")}
+
+
+def shaped(rec: HourRecord, kind: str) -> HourRecord:
+    """A copy of `rec` with the four grid and battery counters set so the hour's balance class is `kind`; load and PV are
+    kept (fictional kWh). flat: balances, import and export both zero (cannot be told apart); isw: balances only with
+    import and export swapped, but they are 0.15 kWh apart (cannot be told apart); bal / sw / unb: import and export 1 kWh
+    apart (told apart), and the hour balances / balances only swapped (a genuine reversal) / balances neither way."""
+    r = _copy.deepcopy(rec)
+    L, p = r.e["load"], r.e["pv"]
+    if kind == "flat":
+        e = {"imp": 0.0, "exp": 0.0, "dis": max(L - p, 0.0), "chg": max(p - L, 0.0)}
+    elif kind == "isw":                          # residual 0.25 kWh as recorded, 0.05 kWh swapped
+        e = {"imp": 0.0, "exp": 0.15, "dis": max(L - 0.1 - p, 0.0), "chg": max(p - L + 0.1, 0.0)}
+    else:
+        d = L - p - 1.0
+        e = {"imp": 1.0, "exp": 0.0, "dis": max(d, 0.0), "chg": max(-d, 0.0)}
+        if kind == "sw":
+            e["imp"], e["exp"] = e["exp"], e["imp"]
+        elif kind == "unb":
+            e["dis"] += 0.8                      # residual -0.8 kWh as recorded, 1.2 kWh swapped
+    r.e.update(e)
+    return r
+
+
+def hr(start: int, kind: str) -> HourRecord:
+    return shaped(HourRecord(start=start, e={"load": 1.0, "pv": 0.0}), kind)
+
+
+def run_of(kind: str, n: int, newest: int) -> dict:
+    """n consecutive hours of `kind`, the newest beginning at `newest`."""
+    return {newest - i * HR: hr(newest - i * HR, kind) for i in range(n)}
+
+
+CLASS = {"flat": ("balanced", 0), "isw": ("balanced_only_swapped", 0), "bal": ("balanced", 1),
+         "sw": ("balanced_only_swapped", 1), "unb": ("unbalanced", 1)}
+shape_ok = []
+for kind, (cls, dist) in CLASS.items():
+    for L, p in ((1.0, 0.0), (0.3, 1.9), (1.9, 0.6), (0.0, 0.0)):
+        c = q.balance_counts({0: shaped(HourRecord(start=0, e={"load": L, "pv": p}), kind)})
+        shape_ok.append(c.get(cls) == 1 and sum(c.get(k, 0) for k in ("balanced", "balanced_only_swapped", "unbalanced")) == 1
+                        and c.get("distinguishable") == dist)
+check("the hour shapes of this section have the balance class and distinguishability they are named for (any load and PV "
+      "up to about 2 kWh)", all(shape_ok), str(shape_ok))
+one_isw = q.balance_counts({0: hr(0, "isw")})
+check("balance_counts keeps its keys and their meanings and adds distinguishable_only_swapped: an hour that balances only "
+      "swapped but cannot be told apart counts in balanced_only_swapped and in neither distinguishable count",
+      one_isw == {"balanced": 0, "balanced_only_swapped": 1, "unbalanced": 0, "distinguishable": 0,
+                  "distinguishable_only_swapped": 0}, str(one_isw))
+mix = {**run_of("flat", 5, END - 1 * HR), **run_of("isw", 4, END - 10 * HR), **run_of("bal", 3, END - 20 * HR),
+       **run_of("sw", 2, END - 30 * HR), **run_of("unb", 1, END - 40 * HR)}
+mix[END - 50 * HR] = HourRecord(start=END - 50 * HR, e={"load": 1.0, "pv": 0.0})        # no grid / battery counters
+cm = q.balance_counts(mix)
+check("... over a mix: balanced + balanced_only_swapped + unbalanced is every hour with all six counters; distinguishable "
+      "counts the told-apart hours and distinguishable_only_swapped those of them that balance only swapped",
+      cm == {"balanced": 8, "balanced_only_swapped": 6, "unbalanced": 1, "distinguishable": 6,
+             "distinguishable_only_swapped": 2}, str(cm))
+rm_ = q.recent_balance_counts(mix, END)
+check("recent_balance_counts returns the share rule's counts under the same names (distinguishable, "
+      "distinguishable_only_swapped) over the most recent told-apart hours", rm_ == {"distinguishable": 6,
+                                                                                  "distinguishable_only_swapped": 2}, str(rm_))
+
+# (a) many hours that balance only swapped but cannot be told apart, and one told-apart hour that balances
+for n_isw in (MIN_H, 13, 200):
+    shp = {**run_of("flat", 300, END - 2 * HR),
+           **{END - (24 + 7 * i) * HR: hr(END - (24 + 7 * i) * HR, "isw") for i in range(n_isw)}, END - HR: hr(END - HR, "bal")}
+    rv, ev = q.ct_reversal(shp, END, 28)
+    check(f"{n_isw} hours that balance only swapped but cannot be told apart, one told-apart hour that balances: no reversal "
+          "in any window (the share's numerator counts only told-apart hours: 0 of 1)", rv is False and ev.get("windows") == ()
+          and q.balance_counts(shp)["balanced_only_swapped"] == n_isw and ev.get("history_distinguishable") == 1
+          and ev.get("history_distinguishable_only_swapped") == 0, str((rv, ev)))
+bh = History(_copy.deepcopy(r) for r in base.history.by_start.values())
+starts = sorted(bh.by_start)
+picked = [s for s in starts[:-24] if max(bh.by_start[s].e["load"], bh.by_start[s].e["pv"] + 0.1) < 2.0][::90][:13]
+for s in starts:
+    bh.by_start[s] = shaped(bh.by_start[s], "isw" if s in picked else "bal" if s == starts[-1] else "flat")
+cb = q.balance_counts(bh.by_start)
+check("the shape on the clean synthetic history (61 days, counters on every hour): 13 hours balance only swapped and none "
+      "of them is told apart, one told-apart hour balances, every other hour balances and is not told apart",
+      len(picked) == 13 and cb == {"balanced": len(starts) - 13, "balanced_only_swapped": 13, "unbalanced": 0,
+                                    "distinguishable": 1, "distinguishable_only_swapped": 0}, str(cb))
+ab = A("ct_indistinguishable_swapped", replace(base, history=bh))
+check("... assess_inputs raises no HISTORY_CT_REVERSED (nor any BLOCK) on it", "HISTORY_CT_REVERSED" not in h.codes(ab)
+      and not h.blocks(ab), str(sorted(h.codes(ab))))
+pb, fb = q.prepare_history(bh, cf.synthetic_decisions(), cf.NOW, accept_provenance=h.SYN)
+check("... and prepare_history returns a history (learning goes on) without HISTORY_CT_REVERSED", pb is not None
+      and len(pb.by_start) > 0 and "HISTORY_CT_REVERSED" not in {f.code for f in fb}, str([f.code for f in fb]))
+
+# (b) a genuine reversal (told-apart hours that balance only swapped) still fires, in each window on its own, with the
+# counts the rule used as evidence; the hours that cannot be told apart are in none of those counts
+hist_only = {**run_of("sw", 12, END - 40 * 24 * HR), **run_of("isw", 7, END - 20 * 24 * HR), **run_of("bal", 8, END - HR)}
+look_only = {**run_of("bal", 200, END - 50 * 24 * HR), **run_of("sw", 30, END - 10 * 24 * HR),
+             **run_of("bal", 10, END - 12 * 24 * HR), **run_of("isw", 9, END - 5 * 24 * HR), **run_of("bal", 12, END - HR)}
+recent_seq = ["isw", "sw", "isw", "sw", "sw", "isw", "sw", "sw", "sw", "isw", "sw", "sw", "bal", "bal", "isw", "bal", "bal"]
+recent_only = {**{END - (i + 1) * HR: hr(END - (i + 1) * HR, k) for i, k in enumerate(recent_seq)},
+               **run_of("bal", 300, END - 4 * 24 * HR)}
+for label, recs_, want_w, want in (
+        ("history", hist_only, ("history",), {"history": (20, 12), "lookback": (8, 0), "recent": (8, 0)}),
+        ("lookback", look_only, ("lookback",), {"history": (252, 30), "lookback": (52, 30), "recent": (12, 0)}),
+        ("recent", recent_only, ("recent",), {"history": (312, 8), "lookback": (312, 8), "recent": (12, 8)})):
+    rv, ev = q.ct_reversal(recs_, END, 28)
+    got = {w: (ev.get(f"{w}_distinguishable"), ev.get(f"{w}_distinguishable_only_swapped")) for w in want}
+    check(f"a genuine reversal in the {label} window alone fires there and only there, and the evidence states each "
+          "window's two counts (told-apart hours, those of them only swapped)", rv is True and ev.get("windows") == want_w
+          and got == want and set(ev) == CT_EV_KEYS | {"windows"}, str((rv, ev)))
+rc2 = A("ct_recent_2d_evidence", faults.with_reversed_ct(base, 48))
+ev2 = [dict(f.evidence) for f in rc2.findings if f.code == "HISTORY_CT_REVERSED"]
+check("assess_inputs' HISTORY_CT_REVERSED carries the counts the rule used (a two-day onset: the most recent told-apart "
+      "hours all balance only swapped)", ev2 and all(set(e) == CT_EV_KEYS | {"windows"} and "recent" in e["windows"]
+                                                    and e["recent_distinguishable_only_swapped"] == e["recent_distinguishable"]
+                                                    == q.DQ_PROPOSED.ct_recent_hours for e in ev2), str(ev2[:1]))
+_, fr2 = q.prepare_history(faults.with_reversed_ct(cf.cycle_inputs(synthetic_recorded=True), 48).history,
+                           cf.synthetic_decisions(), cf.NOW, accept_provenance=h.SYN)
+ev3 = [dict(f.evidence) for f in fr2 if f.code == "HISTORY_CT_REVERSED"]
+check("... and so does prepare_history's", ev3 and set(ev3[0]) == CT_EV_KEYS | {"windows"}
+      and ev3[0]["recent_distinguishable_only_swapped"] == ev3[0]["recent_distinguishable"] > 0, str(ev3[:1]))
+
+# (c) the boundaries: exactly the PROPOSED minimum hours and exactly the PROPOSED minimum share fire (both inclusive), one
+# told-apart hour fewer does not, and hours that cannot be told apart never make up the difference
+check(f"the PROPOSED share rule this section assumes: {MIN_H} hours, a share of {MIN_SHARE} that {MIN_H} of {AT_SHARE} "
+      "hours meets exactly", MIN_H / AT_SHARE == MIN_SHARE and AT_SHARE > MIN_H)
+for label, recs_, want in (
+        (f"{MIN_H} told-apart hours, all only swapped (exactly the minimum hours)", run_of("sw", MIN_H, END - HR), True),
+        (f"{MIN_H - 1} told-apart hours, all only swapped", run_of("sw", MIN_H - 1, END - HR), False),
+        (f"{MIN_H - 1} told-apart hours only swapped, and 3 that cannot be told apart",
+         {**run_of("sw", MIN_H - 1, END - HR), **run_of("isw", 3, END - 20 * HR)}, False),
+        (f"{MIN_H} of {AT_SHARE} told-apart hours only swapped (exactly the minimum share)",
+         {**run_of("sw", MIN_H, END - HR), **run_of("bal", AT_SHARE - MIN_H, END - 20 * HR)}, True),
+        (f"{MIN_H} of {AT_SHARE + 1} told-apart hours only swapped",
+         {**run_of("sw", MIN_H, END - HR), **run_of("bal", AT_SHARE + 1 - MIN_H, END - 20 * HR)}, False),
+        (f"{MIN_H} of {AT_SHARE + 1} told-apart hours only swapped, and 1 that cannot be told apart",
+         {**run_of("sw", MIN_H, END - HR), **run_of("bal", AT_SHARE + 1 - MIN_H, END - 20 * HR),
+          **run_of("isw", 1, END - 40 * HR)}, False)):
+    c = q.balance_counts(recs_)
+    check(f"ct_reversed over balance_counts: {label} -> {'reversed' if want else 'not reversed'}",
+          q.ct_reversed(c) is want, str(c))
+seq_at = ["sw", "isw", "sw", "bal", "sw", "isw", "bal", "sw", "bal", "sw", "bal", "sw", "bal", "bal"]
+seq_below = ["sw", "isw", "sw", "bal", "sw", "isw", "bal", "sw", "bal", "isw", "bal", "sw", "bal", "bal", "bal"]
+for label, seq, want in ((f"{MIN_H} of the most recent {AT_SHARE} told-apart hours only swapped", seq_at, ("recent",)),
+                         (f"{MIN_H - 1} of them, with hours that cannot be told apart in between", seq_below, ())):
+    rr = {**{END - (i + 1) * HR: hr(END - (i + 1) * HR, k) for i, k in enumerate(seq)},
+          **run_of("bal", 100, END - 5 * 24 * HR)}
+    rv, ev = q.ct_reversal(rr, END, 28)
+    check(f"the recent window at its boundary: {label} -> windows {want}", q.DQ_PROPOSED.ct_recent_hours == AT_SHARE
+          and ev.get("windows") == want and ev.get("recent_distinguishable") == AT_SHARE, str(ev))
+
+# (d) the residual rule still counts every hour that balances only swapped (told apart or not) in its total
+def residual_case(n_unb: int, n_flat: int, n_isw: int) -> History:
+    """The clean synthetic history with grid and battery counters on n_unb + n_flat + n_isw hours of the lookback only."""
+    hh = History(_copy.deepcopy(r) for r in base.history.by_start.values())
+    cand = [s for s in sorted(hh.by_start) if s >= END - 27 * 24 * HR
+            and max(hh.by_start[s].e["load"], hh.by_start[s].e["pv"] + 0.1) < 2.0][::5]
+    kinds = ["unb"] * n_unb + ["flat"] * n_flat + ["isw"] * n_isw
+    assert len(cand) >= len(kinds), len(cand)
+    for s, k in zip(cand, kinds):
+        hh.by_start[s] = shaped(hh.by_start[s], k)
+    return hh
+
+
+r_no = A("residual_total_counts_isw", replace(base, history=residual_case(8, 12, 25)))
+check("HISTORY_BALANCE_RESIDUAL: 8 hours that balance neither way among 45 with counters (25 of them balance only swapped "
+      "but cannot be told apart) stay under a fifth of the total: no WARN, and no CT reversal",
+      not ({"HISTORY_BALANCE_RESIDUAL", "HISTORY_CT_REVERSED"} & h.codes(r_no)), str(sorted(h.codes(r_no))))
+r_yes = A("residual_total_counts_isw_warn", replace(base, history=residual_case(8, 12, 10)))
+ev_r = [dict(f.evidence) for f in r_yes.findings if f.code == "HISTORY_BALANCE_RESIDUAL"]
+check("... the same 8 among 30 (10 only swapped, not told apart) reach a fifth: WARN, whose counts keep their meanings "
+      "(balanced_only_swapped counts the 10; no told-apart hour balances only swapped), and no CT reversal",
+      "HISTORY_BALANCE_RESIDUAL" in h.codes(r_yes, "WARN") and "HISTORY_CT_REVERSED" not in h.codes(r_yes)
+      and ev_r == [{"balanced": 12, "balanced_only_swapped": 10, "unbalanced": 8, "distinguishable": 8,
+                    "distinguishable_only_swapped": 0}], str(ev_r))
 
 print("== [11] contract hygiene over every scenario")
 leaks, undeclared, bad_rows, self_fail = [], [], [], []
