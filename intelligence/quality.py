@@ -70,7 +70,7 @@ from .site_decisions import (BLOCK, CAPACITY_READING_BY_KIND, CONDITIONAL_D4_ITE
                              freshness_limits, required_inputs)
 from .timeutil import HOUR, UTC, day_bounds, local_date, local_wall, zone
 
-QUALITY_VERSION = "intel-quality-0.3.0-cfg"
+QUALITY_VERSION = "intel-quality-0.3.1-cfg"
 
 FRESH, STALE, UNKNOWN, MISSING = "fresh", "stale", "unknown", "missing"
 
@@ -1109,29 +1109,38 @@ def _balance_class(rec: HourRecord) -> tuple[str, bool] | None:
 
 def balance_counts(recs: Mapping[int, HourRecord]) -> dict[str, int]:
     """Energy balance per hour where all six counters exist: load = pv + imp - exp + dis - chg. Counts hours that balance,
-    hours that balance only with import and export swapped (a reversed CT), and hours that balance neither way."""
-    n = {"balanced": 0, "balanced_only_swapped": 0, "unbalanced": 0, "distinguishable": 0}
+    hours that balance only with import and export swapped (a reversed CT), and hours that balance neither way (these three
+    add up to every such hour, whether or not import and export can be told apart); `distinguishable` counts the hours in
+    which import and export can be told apart, and `distinguishable_only_swapped` those of them that balance only swapped
+    (the share rule's numerator, ct_reversed)."""
+    n = {"balanced": 0, "balanced_only_swapped": 0, "unbalanced": 0, "distinguishable": 0,
+         "distinguishable_only_swapped": 0}
     key = {"balanced": "balanced", "swapped": "balanced_only_swapped", "unbalanced": "unbalanced"}
     for r in recs.values():
         bc = _balance_class(r)
         if bc is None:
             continue
         n[key[bc[0]]] += 1
-        n["distinguishable"] += bc[1]
+        if bc[1]:
+            n["distinguishable"] += 1
+            n["distinguishable_only_swapped"] += bc[0] == "swapped"
     return n
 
 
 def ct_reversed(counts: Mapping[str, int]) -> bool:
-    """The share rule: at least the PROPOSED number of hours, and at least the PROPOSED share of the distinguishable
-    hours, balance only with import and export swapped."""
-    sw = counts.get("balanced_only_swapped", 0)
-    dist = counts.get("distinguishable", 0)
+    """The share rule: of the hours in which import and export can be told apart, at least the PROPOSED number, and at
+    least the PROPOSED share, balance only with import and export swapped. Both sides of the share count only those hours:
+    an hour in which import and export cannot be told apart says nothing about the CT's direction, so it is never counted
+    (`balanced_only_swapped` counts it and is not read here). Takes balance_counts' or recent_balance_counts' counts."""
+    sw = counts["distinguishable_only_swapped"]
+    dist = counts["distinguishable"]
     return sw >= DQ_PROPOSED.ct_reversal_min_hours and dist > 0 and sw / dist >= DQ_PROPOSED.ct_reversal_min_share
 
 
 def recent_balance_counts(recs: Mapping[int, HourRecord], end: int) -> dict[str, int]:
     """The share rule's counts over the most recent PROPOSED number of distinguishable hours within the PROPOSED recent
-    window before `end` (a reversal that began recently, which the long windows would dilute)."""
+    window before `end` (a reversal that began recently, which the long windows would dilute), under balance_counts'
+    names: `distinguishable` and `distinguishable_only_swapped`."""
     n = sw = 0
     s = end - end % HOUR - HOUR
     lo = end - DQ_PROPOSED.ct_recent_window_h * HOUR
@@ -1142,20 +1151,24 @@ def recent_balance_counts(recs: Mapping[int, HourRecord], end: int) -> dict[str,
             n += 1
             sw += bc[0] == "swapped"
         s -= HOUR
-    return {"balanced_only_swapped": sw, "distinguishable": n}
+    return {"distinguishable": n, "distinguishable_only_swapped": sw}
+
+
+CT_SHARE_KEYS = ("distinguishable", "distinguishable_only_swapped")   # the counts ct_reversed reads
 
 
 def ct_reversal(recs: Mapping[int, HourRecord], end: int, lookback_nights: int) -> tuple[bool, dict]:
     """The one CT-reversal judgement shared by assess_inputs and prepare_history: the share rule over the whole history
     before `end`, over the learning lookback, and over the most recent distinguishable hours. Reversed when any says so.
-    Returns (reversed, evidence: the lookback counts, the recent counts and the windows that fired)."""
+    Returns (reversed, evidence: the windows that fired and, for each window, the two counts the share rule read, as
+    `<window>_distinguishable` and `<window>_distinguishable_only_swapped` with window history, lookback or recent)."""
     before = {s: r for s, r in recs.items() if s < end}
     lb = {s: r for s, r in before.items() if s >= end - lookback_nights * 24 * HOUR}
-    whole, look, recent = balance_counts(before), balance_counts(lb), recent_balance_counts(before, end)
-    fired = tuple(w for w, hit in (("history", ct_reversed(whole)), ("lookback", ct_reversed(look)),
-                                   ("recent", ct_reversed(recent))) if hit)
-    ev = {**look, "recent_only_swapped": recent["balanced_only_swapped"], "recent_distinguishable": recent["distinguishable"],
-          "windows": fired}
+    counts = (("history", balance_counts(before)), ("lookback", balance_counts(lb)),
+              ("recent", recent_balance_counts(before, end)))
+    fired = tuple(w for w, c in counts if ct_reversed(c))
+    ev: dict = {f"{w}_{k}": c[k] for w, c in counts for k in CT_SHARE_KEYS}
+    ev["windows"] = fired
     return bool(fired), ev
 
 

@@ -49,8 +49,8 @@ from intelligence.quality import (DQ_PROPOSED, QUALITY_VERSION, assess_inputs, b
                                   clock_change_nights, ct_reversed, dropout_runs, stall_hours)
 from intelligence.timeutil import HOUR, UTC, day_bounds, local_wall, zone  # noqa: E402
 
-TOOL_VERSION = "intel-validate-capture-0.1.0"
-SCHEMA = "ecco-intel-capture-summary/1"
+TOOL_VERSION = "intel-validate-capture-0.1.1"   # 0.1.1: energy_balance adds distinguishable_only_swapped
+SCHEMA = "ecco-intel-capture-summary/1"          # an added key keeps the schema id
 BANNER = "REAL DATA - LOCAL ONLY - DO NOT PUBLISH"
 SUMMARY_JSON = "capture_summary.json"
 SUMMARY_TXT = "capture_summary.txt"
@@ -298,7 +298,8 @@ def summary_text(s: dict) -> str:
         lines.append(f"  {fld}: coverage {v['coverage']}, flags {v['flags']}")
     eb = s["energy_balance"]
     lines.append(f"energy balance: {eb['balanced']} balanced, {eb['balanced_only_swapped']} only swapped, "
-                 f"{eb['unbalanced']} unbalanced; CT reversed: {eb['ct_reversed']}")
+                 f"{eb['unbalanced']} unbalanced; {eb['distinguishable']} with import and export told apart, "
+                 f"{eb['distinguishable_only_swapped']} of them only swapped; CT reversed: {eb['ct_reversed']}")
     lines.append(f"counter faults: {s['counter_faults']}")
     lines.append(f"dropouts: {s['dropouts']}")
     lines.append("clock-change nights: " + (", ".join(f"{n['date']} {n['kind']} {n['hours_present']}/{n['hours_expected']}"

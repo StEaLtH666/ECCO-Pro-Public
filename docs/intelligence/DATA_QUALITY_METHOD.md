@@ -134,7 +134,7 @@ and the items each one affects (BLOCK withholds the item, WARN is shown with the
 | History: repeated recovered dropouts in the last day (flaps) | `TELEMETRY_FLAPPING` | BLOCK the dongle items; WARN the history-only items | dongle items |
 | History: a long recovered gap in the lookback; the last week too incomplete | `HISTORY_GAP`; `HISTORY_COVERAGE_LOW` | WARN; BLOCK | -; every history item |
 | History: counter stalls, catch-up jumps, non-finite energies, zero SOC while discharging | `HISTORY_COUNTER_STALL`, `HISTORY_COUNTER_CATCHUP`, `HISTORY_VALUE_INVALID`, `HISTORY_SOC_SUSPECT` | WARN | - |
-| History: the hourly energy balance fits only with import and export swapped (a reversed CT), judged by `quality.ct_reversal` over the whole history, over the learning lookback and over the most recent distinguishable hours (a recent onset); many hours do not balance | `HISTORY_CT_REVERSED` (evidence `windows`); `HISTORY_BALANCE_RESIDUAL` | BLOCK; WARN | every history item; - |
+| History: the hourly energy balance fits only with import and export swapped (a reversed CT), judged by `quality.ct_reversal` over the whole history, over the learning lookback and over the most recent distinguishable hours (a recent onset), each by the share rule over the hours in which import and export can be told apart only (both sides of the share); many hours do not balance (counted over every hour with all six counters, including hours that balance only swapped but cannot be told apart) | `HISTORY_CT_REVERSED` (evidence `windows` and, for each of `history`, `lookback` and `recent`, the two counts the rule read: `<window>_distinguishable` and `<window>_distinguishable_only_swapped`); `HISTORY_BALANCE_RESIDUAL` (evidence `quality.balance_counts`) | BLOCK; WARN | every history item; - |
 | History: a clock-change night in the learning lookback (I-D9 governs) | `DST_NIGHT_IN_LOOKBACK` | WARN | - |
 | Prolonged zero PV against a forecast that said there would be some | `PV_NO_OUTPUT_VS_FORECAST` (evidence `item_status: INSUFFICIENT_DATA`; `QualityResult.insufficient_items()`) | BLOCK pv_tomorrow (fail closed; a cycle reading `insufficient_items()` may show it INSUFFICIENT_DATA instead, never with a number); WARN charge_target and predicted_morning_soc | pv_tomorrow |
 
@@ -305,7 +305,7 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
 | `stall_energy_max_kwh`, `stall_power_min_w` | 0.005 kWh, 300 W | `history.counter_to_hourly`'s stall test and `SiteConfig.stall_power_w` |
 | `catchup_excess_min_kwh` | 1.0 kWh | a counter hour more than twice its power integral and this much above it |
 | `balance_tol_kwh`, `balance_tol_fraction` | 0.2 kWh, 10 % | two counter steps, or a tenth of the largest term |
-| `ct_reversal_min_hours`, `ct_reversal_min_share` | 6, 50 % | of the hours in which import and export can be told apart, in each window |
+| `ct_reversal_min_hours`, `ct_reversal_min_share` | 6, 50 % | of the hours in which import and export can be told apart, in each window: at least this many of them, and at least this share of them, balance only swapped (`distinguishable_only_swapped` against `distinguishable`, both bounds inclusive); an hour in which they cannot be told apart counts on neither side, since it says nothing about the CT's direction |
 | `ct_recent_hours`, `ct_recent_window_h` | 12 hours, 72 h | the most recent distinguishable hours within the last three days, judged on their own (a recent onset) |
 | `export_evidence_kwh` | 0.05 kWh | an hour exporting more than this is an exporting hour |
 | `false_zero_after_cutover_block_hours` | 3 | repeated zero-while-exporting hours after the cut-over |
@@ -329,7 +329,10 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
   the fixture through the year, the clock-change cases) raise no BLOCK on the same seeds, the three CCR-DQ-1 readings
   judged under the synthetic I-D6's own 300 s (section 10); its [0] check on the clean fixture is that it raises no BLOCK.
 - `test_intel_quality.py`: a positive and a negative case for every rule above; it also checks that every code
-  `quality.py` can emit is named in one of its cases.
+  `quality.py` can emit is named in one of its cases. Its [10b] pins the CT share rule's counts: hours that balance only
+  swapped but cannot be told apart never make a reversal (in `assess_inputs` and `prepare_history`), a genuine reversal
+  fires in each window on its own with the counts it read as evidence, both PROPOSED bounds are inclusive, and the
+  residual rule still counts every hour that balances only swapped.
 - `test_intel_quality_fuzz.py`: 2400 seeded malformed inputs and 1600 more on a second seed (its CCR-DQ-1 simulation does
   nothing on the integrated code, so both sets are judged under the contract's own limits) never raise, and an
   independent oracle (`_dq_helpers`: written out from this document, not from `quality.py`) confirms that no
