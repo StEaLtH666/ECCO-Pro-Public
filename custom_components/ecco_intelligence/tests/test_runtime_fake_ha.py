@@ -239,6 +239,29 @@ def scripted_cycle(step, calls):
     return run
 
 
+def entry_spy(scn, run, entries, returned=None, when=None):
+    """Wrap an injected run_cycle for the time-budget scenarios: each entry (only those for which when() holds, when given)
+    appends (time.monotonic(), the overruns counted so far) to `entries`, so a scenario can show that its held run was
+    entered before its budget ran out; what such an entry returns is appended to `returned`."""
+    def spy(inputs):
+        noted = when is None or when()
+        if noted:
+            entries.append((time.monotonic(), scn.c.counters["budget_exceeded"]))
+        out = run(inputs)
+        if noted and returned is not None:
+            returned.append(out)
+        return out
+    return spy
+
+
+def entered_in_budget(entries, since, budget_s):
+    """(passed, detail): exactly one noted entry, with no overrun counted at it, less than `budget_s` after `since` (a
+    time.monotonic() taken before the step that started the cycle, so the cycle's own deadline is later still)."""
+    off = [None if since is None else round(t - since, 3) for t, _n in entries]
+    passed = len(entries) == 1 and entries[0][1] == 0 and off[0] is not None and 0.0 <= off[0] < budget_s
+    return passed, f"entries {len(entries)}, seconds after the start {off}, overruns at entry {[n for _t, n in entries]}"
+
+
 def pv_shown() -> bool:
     """The injected cycles' result is on the entities: pv_tomorrow carries its number and fresh is on (the status is
     BLOCKED, as every advice item is)."""
@@ -411,22 +434,43 @@ try:
 
     # -----------------------------------------------------------------------------------------------------------------
     print("== a time-budget overrun -> SELF_TEST_FAILED with the reason; the late result is discarded")
-    calls = []
+    # A slot cycle waits for two executor jobs before its engine job (the recorder read and the scorecard metrics, each
+    # ending with its SUBMIT_COOLDOWN_S cool-down) against the same deadline. The budget covers them many times over and
+    # the injected run is held on an event set only once the budget has run out, so the overrun is always the engine
+    # run's, however long those jobs take (CPU load).
+    budget_s = 2.0
+    gate = threading.Event()
+    calls, entries, returned = [], [], []
     s = Scn("budget", H.site_profile())
-    s.c.time_budget_s = 0.3
-    H.inject(s.c, pv_ok_cycle(sleep=2.0, calls=calls))
-    s.warm(settle=3.0)
+    s.c.time_budget_s = budget_s
+    H.inject(s.c, entry_spy(s, pv_ok_cycle(block=gate, calls=calls), entries, returned))
+    start_at = None
+    for _ in range(3):                             # s.warm(); the cycle starts at a tick and ends at its budget
+        t0 = time.monotonic()
+        s.advance(60, settle=10.0)
+        if start_at is None and s.c.counters["runs_started"] == 1:
+            start_at = t0
+    ok_entry, entry_detail = entered_in_budget(entries, start_at, budget_s)
+    check("non-vacuity: the injected engine run was entered exactly once, before the budget ran out (no overrun counted "
+          "at its entry, less than the budget after the tick that started the cycle); the overrun came after it",
+          ok_entry and len(calls) == 1 and s.c.counters["budget_exceeded"] == 1, f"{entry_detail} {s.c.counters}")
+    if entries and start_at is not None:
+        print(f"  measured: the held engine run entered {entries[0][0] - start_at:.3f} s after the tick that started "
+              f"the cycle (time budget {budget_s:g} s)")
     st = s.st()
     check("SELF_TEST_FAILED with CYCLE_TIME_BUDGET", st.state == "SELF_TEST_FAILED"
           and "CYCLE_TIME_BUDGET" in (st.attributes.get("self_test") or {}), f"{st.state} {st.attributes.get('self_test')}")
-    check("the run is still in flight (its thread has not ended)", s.c.diagnostics()["busy"])
+    check("the run is still in flight (its thread has not ended)", s.c.diagnostics()["busy"] and not returned)
     s.advance(3600, settle=0.2)
     check("a second run never starts while one is in flight", len(calls) == 1 and s.c.counters["skipped_in_flight"] >= 1,
           f"{len(calls)} {s.c.counters}")
-    time.sleep(2.5)
+    gate.set()                                     # the budget has run out: the held run returns its (late) result
+    ended = wait_for(lambda: not s.c.diagnostics()["busy"])
     h.settle(0.5)
-    check("the late result is discarded (not published)", s.st().state == "SELF_TEST_FAILED"
-          and s.c.counters["late_results_discarded"] == 1 and h.state("pv_tomorrow").state == "unknown", str(s.c.counters))
+    check("the late result is discarded (not published)", ended and len(returned) == 1
+          and isinstance(returned[0], C.AdvisoryEnvelope) and s.st().state == "SELF_TEST_FAILED"
+          and s.c.counters["late_results_discarded"] == 1 and h.state("pv_tomorrow").state == "unknown",
+          f"{ended} {len(returned)} {s.st().state} {s.c.counters}")
     s.c.time_budget_s = 120
     H.inject(s.c, pv_ok_cycle(calls=calls))
     s.advance(60, settle=20)
@@ -445,11 +489,8 @@ try:
     check("a valid result first", h.state("pv_tomorrow").state == "4.2" and h.state("fresh").state == "on")
     H.inject(s.c, pv_ok_cycle(valid_h=0.5, block=gate, calls=calls))
     s.advance(55 * 60, settle=0.3)       # the next full hour (and past valid_until): a run starts and hangs
-    for _ in range(50):
-        if len(calls) == 2:
-            break
-        time.sleep(0.1)
-    check("the second run hangs in flight", len(calls) == 2 and s.c.diagnostics()["busy"], f"{len(calls)}")
+    # the loop runs while waiting (the slot cycle's recorder and metrics jobs, with their cool-downs, come first)
+    check("the second run hangs in flight", wait_for(lambda: len(calls) == 2) and s.c.diagnostics()["busy"], f"{len(calls)}")
     s.advance(60, n=3, settle=0.1)
     st = s.st()
     check("the tick body (its deadline run inside the cycle, the tick detached) applied STALE although the engine thread "
@@ -812,13 +853,15 @@ try:
     s = Scn("failed_while_paused", H.site_profile(), stats_days=3)
     s.c.time_budget_s = 2.0
     H.inject(s.c, pv_ok_cycle(block=gate, started=started))
-    s.warm(settle=0.2)
+    s.warm(settle=0.05)                            # the held run is waited for below, so the helper goes on right after
     check("a cycle is in flight", wait_for(started.is_set))
+    over0 = s.c.counters["budget_exceeded"]
     s.pause = "on"
     s.hass.states.seed(PAUSE_ID, "on")
     h.settle(6.0)                                  # the 2 s budget runs out while the helper is on (no tick)
-    check("the time-budget overrun while paused publishes PAUSED, not SELF_TEST_FAILED",
-          s.c.counters["budget_exceeded"] == 1 and s.st().state == "PAUSED", f"{s.st().state} {s.c.counters}")
+    check("the time-budget overrun while paused publishes PAUSED, not SELF_TEST_FAILED (non-vacuity: no overrun counted "
+          "yet when the helper went on)", over0 == 0 and s.c.counters["budget_exceeded"] == 1 and s.st().state == "PAUSED",
+          f"{over0} {s.st().state} {s.c.counters}")
     gate.set()
     wait_for(lambda: not s.c.diagnostics()["busy"])
     h.settle(0.5)
@@ -1189,24 +1232,34 @@ try:
     s.close()
 
     print("== a time-budget overrun in a refresh: no refresh before the next slot")
-    calls = []
+    calls, entries, returned = [], [], []
     slow = {"n": None}
+    gate = threading.Event()
     s = Scn("refresh_budget", H.site_profile())
-    H.inject(s.c, scripted_cycle(lambda n: {"valid_s": 180.0, "sleep": 1.5 if n == slow["n"] else 0.0}, calls))
+    H.inject(s.c, entry_spy(s, scripted_cycle(lambda n: {"valid_s": 180.0, "block": gate if n == slow["n"] else None},
+                                              calls), entries, returned, when=lambda: len(calls) == slow["n"]))
     s.warm()
-    s.c.time_budget_s = 0.3
+    s.c.time_budget_s = 2.0                        # held on `gate` (set once the budget has run out), not a sleep
     slow["n"] = len(calls)
-    s.advance(60, settle=1.0)
+    t0 = time.monotonic()
+    s.advance(60, settle=10.0)                     # a refresh starts; it ends at its budget, its engine run held
     st1 = s.st()
-    time.sleep(1.6)
+    ok_entry, entry_detail = entered_in_budget(entries, t0, 2.0)
+    check("non-vacuity: the refresh's held engine run was entered exactly once, before the budget ran out, and is still "
+          "in flight at the overrun", ok_entry and s.c.counters["budget_exceeded"] == 1 and s.c.diagnostics()["busy"]
+          and not returned, f"{entry_detail} {s.c.counters['budget_exceeded']}")
+    gate.set()
+    ended = wait_for(lambda: not s.c.diagnostics()["busy"])
     h.settle(0.5)
     s.c.time_budget_s = 120
     n0 = len(calls)
     s.advance(60, n=10, settle=2)
     check("SELF_TEST_FAILED (CYCLE_TIME_BUDGET); after the abandoned thread ends no refresh and no retry starts before "
           "the next slot", st1.state == "SELF_TEST_FAILED" and "CYCLE_TIME_BUDGET" in (st1.attributes.get("self_test") or {})
+          and ended and len(returned) == 1 and s.c.counters["late_results_discarded"] == 1
           and len(calls) == n0 and s.c.diagnostics()["cadence"]["refresh_barred_until_next_slot"]
-          and s.c.diagnostics()["cadence"]["retry_at"] is None, f"{st1.state} {len(calls) - n0} {s.c.diagnostics()['cadence']}")
+          and s.c.diagnostics()["cadence"]["retry_at"] is None,
+          f"{st1.state} {ended} {len(calls) - n0} {s.c.diagnostics()['cadence']}")
     while h.now.minute != 0:
         s.advance(60, settle=2)
     s.advance(60, n=2, settle=2)

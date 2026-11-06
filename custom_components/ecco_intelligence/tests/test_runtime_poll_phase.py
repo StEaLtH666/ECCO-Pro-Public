@@ -861,17 +861,40 @@ try:
           and w.c.selftest.get("CPU_BUDGET").level == "WARN", f"{[(r[0].isoformat()[11:19], r[1], r[2]) for r in rows]}")
     w.close()
 
-    calls = []
+    calls, entries = [], []
     slow = {"n": None}
-    w = World("budget_bar", start=early, offset=25.0, jitter=0.0, seed=15,
-              inject=scripted(lambda n: {"sleep": 1.5 if n == slow["n"] else 0.0}, calls))
+    gate = threading.Event()
+    held_run = scripted(lambda n: {"block": gate if n == slow["n"] else None}, calls)
+    holder: dict = {}
+
+    def spy(inputs):
+        if len(calls) == slow["n"]:
+            entries.append((time.monotonic(), holder["w"].c.counters["budget_exceeded"]))
+        return held_run(inputs)
+    w = World("budget_bar", start=early, offset=25.0, jitter=0.0, seed=15, inject=spy)
+    holder["w"] = w
     w.run(early + timedelta(minutes=6))
-    w.c.time_budget_s = 0.3
+    w.c.time_budget_s = 2.0                        # held on `gate` (set once the budget has run out), not a sleep
     slow["n"] = len(calls)
     t0 = h.now
+    wall0 = time.monotonic()
     w.run_for(70, settle=2.5)
     st1 = h.state("status").state
-    time.sleep(1.6)
+    off = [round(t - wall0, 3) for t, _n in entries]
+    check("non-vacuity: the poll-driven refresh's held engine run was entered exactly once, before the budget ran out (no "
+          "overrun counted at its entry, less than the budget after the world started moving), and is still in flight "
+          "at the overrun", len(entries) == 1 and entries[0][1] == 0 and 0.0 <= off[0] < 2.0
+          and w.c.counters["budget_exceeded"] == 1 and w.c._busy,  # noqa: SLF001
+          f"{off} {[n for _t, n in entries]} {w.c.counters['budget_exceeded']}")
+    gate.set()
+    for _ in range(200):                           # the abandoned thread ends (its late result discarded)
+        if not w.c._busy:  # noqa: SLF001
+            break
+        time.sleep(0.05)
+        h.settle(0.1)
+    check("... its thread ends and its late result is discarded",
+          not w.c._busy and w.c.counters["late_results_discarded"] == 1,  # noqa: SLF001
+          f"{w.c._busy} {w.c.counters['late_results_discarded']}")  # noqa: SLF001
     h.settle(0.5)
     w.c.time_budget_s = 120
     w.run(slot_at + timedelta(minutes=3))
