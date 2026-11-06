@@ -107,7 +107,7 @@ test('synthetic_ok: the figures, the bands, "~" on predicted figures, the shadow
   assert.match(root.querySelector('[data-sec="quality"]').textContent, /battery\.soc 40 s old \(limit 900 s\), fresh/);
   const drill = root.querySelector('details[data-k="drill"]');
   assert.equal(drill.hasAttribute('open'), false);
-  assert.match(drill.textContent, /7-day mean error 1\.2 kWh, inside its range 80% of the time, 7 days scored/);
+  assert.match(drill.textContent, /7-day mean error of the load forecasts 1\.2 kWh, inside its range 80% of the time, 7 forecasts scored/);
   assert.match(drill.textContent, /I-D7 Required signals per advisor \(retired\): OPEN/);
   assert.doesNotMatch(drill.textContent, /I-D1 /, 'recorded decisions are not listed as open');
   assert.match(drill.textContent, /Next charge target: MEDIUM/);

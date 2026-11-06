@@ -15,7 +15,8 @@ PENDING DP-4. Nothing here is installed or deployed.
 
 - SHADOW only: `sensor` and `binary_sensor` entities, no services, `requirements: []`; it reads states and recorder
   statistics and applies nothing. Its only subscriptions are the one-minute tick, one state listener on the site file's
-  telemetry poll text (the poll-phase-aligned refresh) and at most one pending one-shot timer.
+  telemetry poll text (the poll-phase-aligned refresh) and at most one pending one-shot timer; while a cycle is in flight
+  neither timer exists (the quiet cycle).
 - Design, the refresh cadence, contract mapping, the site-file format, the Home Assistant APIs it relies on, risks and open
   questions: `docs/intelligence/INTELLIGENCE_HA_RUNTIME.md`. Check a site file offline with
   `python tools/ecco_intel_drill.py site-check --site <site.local.json>` (no ids printed).

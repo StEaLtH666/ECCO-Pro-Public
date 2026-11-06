@@ -43,7 +43,8 @@ integration is the best live option.
 
 ```
 custom_components/ecco_intelligence/
-  __init__.py        async_setup_entry / async_unload_entry; NO module-level homeassistant import
+  __init__.py        async_setup_entry / async_unload_entry; NO module-level homeassistant import; imports
+                     coordinator.py in Home Assistant's import executor; the release of every executor job
   const.py           DOMAIN, MODE = 'SHADOW', PLATFORMS = (sensor, binary_sensor), the PROPOSED runtime constants
   coordinator.py     start-up gates, the one-minute tick, the poll-driven step, the schedule and refresh cadence, the
                      cycle in the executor, publishing, diagnostics
@@ -128,7 +129,8 @@ At most one cycle starts per `PROPOSED_REFRESH_FLOOR_S` (55 s: one per tick); a 
 polls the implied ceiling between two cycles is 900 - 125 + 60 = **835 s**.
 
 **Poll-phase-aligned refresh (A23).** The dongle's telemetry poll text moves about every `PROPOSED_POLL_INTERVAL_S` (60 s
-on the target platform), and the 60 s tick holds a near-fixed phase against it. An item resting on a dongle input is
+on the target platform), and the 60 s tick holds a phase against it that follows the last cycle's end (the quiet cycle,
+below: near-fixed in steady operation). An item resting on a dongle input is
 valid for at most the 180 s liveness bound less the liveness age, so a refresh started more than 55 s after a poll would
 withhold every such item (`INPUT_EXPIRING`), episode after episode. So the coordinator follows the poll:
 
@@ -148,11 +150,15 @@ withhold every such item (`INPUT_EXPIRING`), episode after episode. So the coord
   name a live signal or site reading, `INPUT_NOT_FRESH`, `TOU_*`, `CHARGE_WINDOW_*`, `TARIFF_*`,
   `PREF_RESERVE_RAISE_UNKNOWN`, `CALLER_FRESHNESS_DISAGREES`: recovery after a transient input fault takes one poll, not up
   to the 835 s ceiling). A code outside that set (an OPEN decision, the history) leaves the item to the tick's rules.
-- **Floor, coverage, in flight.** A step inside the 55 s floor is deferred to the floor's end, never dropped. While a cycle
-  is in flight the step waits and is re-armed when that cycle ends, an abandoned one included; a poll that arrived while
-  the step waited keeps it (A33) and is served by it. A cycle that started after the poll was seen has read it already,
+- **Floor, coverage, in flight.** A step inside the 55 s floor is deferred to the floor's end, never dropped. No step is
+  armed while a cycle is in flight (the quiet cycle, under "Timers" below): a step pending at the cycle's start is
+  cancelled with its due time kept, a poll meanwhile is noted and keeps the earlier due time (A33), and the step is armed
+  when the cycle ends, at max(its due time, now) (after an engine thread abandoned at the time budget, when that thread
+  ends). So a step that comes due during a cycle waits for its end, as the in-flight wait did, and a poll noted meanwhile
+  is served by it. A cycle that started after the poll was seen has read it already,
   so the step is covered (unless a slot is due): by the settle hold below, such a cycle started at least the settle delay
-  after that poll.
+  after that poll. So is a cycle that holds its snapshot for that poll (the settle hold at the snapshot, below), from the
+  moment the hold begins.
 - **The settle hold (A36): no cycle starts inside the settle delay of the newest poll seen.** The rule sits at the one
   place a cycle starts (`_maybe_start`), so it applies to every trigger. A cycle whose start would fall before the newest
   poll seen plus `PROPOSED_POLL_SETTLE_S` is held once to that moment, on the one pending step: a step already pending by
@@ -164,16 +170,31 @@ withhold every such item (`INPUT_EXPIRING`), episode after episode. So the coord
     fire then);
   - a poll-driven step that a newer poll kept (A33 never moves a pending step later): a step deferred to the floor's end
     when a newer poll arrives in the last 3 s of the floor, and a step under a poll text faster than the settle delay;
-  - a step re-armed when a cycle in flight ends inside the settle delay of a poll that arrived while it waited.
+  - a step armed when a cycle in flight ends inside the settle delay of a poll noted while it ran.
 
   The hold is one-shot (the held step starts without a second hold) and at most `PROPOSED_POLL_SETTLE_S` (3 s). A later
   poll never re-arms it, so a poll period below the settle delay cannot starve it, and it never applies when no poll was
   seen within the settle delay (a frozen dongle keeps the tick's own rules). A held cycle is a poll-driven start in
   `cycle_stats` (trigger `POLL`, `poll_age_s` 3). Every hold is counted in `settle_holds`, and a start made by a step
   armed as a settle hold in `settle_held_starts` (a hold that an already pending step serves starts as that step). The
-  one residual, documented and not fixed: two polls within one settle delay (an abnormal sub-settle poll period). The
+  residual, documented and not fixed: two polls within one settle delay (an abnormal sub-settle poll period). The
   held cycle then starts inside the second poll's settle delay (counted in `settle_residual_starts`), and a cycle the
   tick asked for can start up to two settle delays after the first of those polls.
+
+  The same hold at the snapshot. A cycle starts in one event-loop step and reads its snapshot a step or two later (the
+  cycle's steps, below), so a poll text can arrive in between, after the start's check, at any start phase (the tick's
+  refresh after STALE or its exception retry, a step deferred to the floor's end, a resumed step). When a new poll text
+  was seen since the cycle's start (the listener's poll count moved) and its settle delay is still running, the
+  snapshot is held once to the delay's end (`asyncio.sleep` in the cycle task, at most `PROPOSED_POLL_SETTLE_S` and never
+  past the cycle's deadline; counted in `snapshot_holds`, its time in the cycle's `total_s`). The snapshot then reads
+  the rest of that poll's writes, with the delay's end as the cycle time, and the cycle covers that poll: its own step,
+  due at the same moment, starts no second cycle (a hold cancelled by an unload or a shutdown covers nothing). A cycle
+  is held at most once at its start and once at its snapshot (at most two settle delays in all), and a later poll
+  re-arms neither. The residual above has a second form here: when the second of two polls within one settle delay
+  arrives while the snapshot is held, the snapshot is read inside its settle delay (counted in
+  `snapshot_residual_reads`). That poll is not covered, so its step comes at the floor's end and refreshes when a
+  refresh is due. A hold cut short by the cycle's deadline (the time budget) is read inside the settle delay too: it
+  also counts in `snapshot_residual_reads` and covers nothing (RR-N1).
 - **The tick holds back while polls arrive** (a new poll seen within `PROPOSED_POLL_ACTIVE_S` = 1.5 polls = 90 s): it starts
   no slot cycle (the next poll-driven step does, so every slot result is phased like a refresh: up to about one poll plus
   3 s after the slot boundary, also for the first cycle after the grace and after an unpause) and no refresh for validity
@@ -214,7 +235,9 @@ runs of at most two ticks (A13).
 **Failures and guards.**
 
 - **Second-run guard:** no cycle starts while one is in flight; an engine thread abandoned at the time budget counts as in
-  flight until it ends. Skips are counted (`skipped_in_flight`, `refresh_skipped_in_flight`).
+  flight until it ends (it keeps the guard but not the quiet cycle: the tick is attached again when the abandoned cycle
+  ends, so the STALE and pause rules run every minute while the thread hangs, and a step noted meanwhile is armed when
+  the thread ends). Skips are counted (`skipped_in_flight`, `refresh_skipped_in_flight`).
 - **Time budget:** `PROPOSED_TIME_BUDGET_S` covers the whole cycle. When it is exceeded the cycle publishes
   `SELF_TEST_FAILED` with `CYCLE_TIME_BUDGET`, the last values move to `last_good`, the late result is discarded, and no
   refresh starts before the next slot (never while the abandoned thread runs).
@@ -234,7 +257,18 @@ runs of at most two ticks (A13).
   slot profiles between cycles (contract 13.4) and the runtime reuses the parsed history (below). The 180 s budget, the
   cadence, the floor and every freshness, expiry and fail-closed rule stay exactly as they are.
 - **In the executor:** the recorder read runs through the recorder's own executor; the scorecard read, the history build,
-  the bridge and `run_cycle` run through `hass.async_add_executor_job`. Nothing blocking runs on the event loop.
+  the bridge and `run_cycle` run through `hass.async_add_executor_job`. `coordinator.py` itself, and through it most of
+  the vendored engine (the modules it and the runtime package import; the rest, the engine cycle's own closure, load in
+  the start-up gates' executor job), is imported in Home Assistant's import executor (`async_setup_entry` awaits
+  `hass.async_add_import_executor_job`; `__init__.py` imports nothing of it at module level). Nothing blocking runs on
+  the event loop. Every one of these jobs, and the start-up gates' file reads, is held until the event-loop step that
+  submitted it has ended (`__init__.released_call`: the job polls a flag the loop sets in its next handle, every
+  `SUBMIT_RELEASE_POLL_S`, for at most `SUBMIT_RELEASE_CAP_S`), so the job and the rest of that step never run at once.
+  Every one of them also ends with a cool-down: once its target has returned (or raised), the job sleeps
+  `SUBMIT_COOLDOWN_S` (0.15 s, more than one 100 ms CPU-quota period of a CPU-limited container) before it completes, so
+  the loop-side completion and the cycle's next step start in a fresh quota period, not in the throttled tail of the
+  job's own. `recorder_s`, `engine_s` and `store_s` run from each submit to its result, so they include each job's
+  release wait and cool-down; `total_s` includes those and any settle hold; `cpu_s` includes neither.
 
 **The parsed history (A50).** The recorder statistics change only at a read (a slot, the one catch-up, a retry), yet
 parsing about 32k rows and building the History from them took about 0.08 s of every cycle on a desktop test machine,
@@ -259,10 +293,114 @@ cycle says whether it parsed a read (`history_parsed`) or reused the History (`h
 `history_parses` and `history_reuses` count them.
 
 **Timers.** The 60 s `async_track_time_interval` tick, the one state listener and at most one pending one-shot (the
-poll-driven step or a settle hold, A36): nothing else. The tick samples both poll texts, applies the pause and the staleness checks, re-renders the payloads and starts a
-due cycle; it runs on the event loop, so it works while an engine thread hangs. All three are removed on unload.
+poll-driven step or a settle hold, A36): nothing else. The tick samples both poll texts, applies the pause and the
+staleness checks, re-renders the payloads and starts a due cycle; it runs on the event loop. All three are removed on
+unload.
 
-**Publish horizon (IP-4b).** What is written stays on the entities until the next write, at the latest the next tick.
+**The quiet cycle.** While a cycle is in flight (from the moment `_maybe_start` creates its task until the cycle has
+ended) no timer of the integration fires and none is created. The tick is detached when the cycle starts
+(`ticks_deferred`); a pending poll-driven step is cancelled, its due time kept (`poll_steps_held_busy`); the listener
+still notes each poll (its text, time and count) but arms nothing. When the cycle ends (after its last step, or in the
+done callback of a task cancelled before its first step), the second-run guard is released and the tick body runs once
+as a catch-up (`catchup_ticks`: liveness, pause, self-test, STALE, the re-render and `_maybe_start`, so a slot that fell
+due during the cycle starts there; the floor still bars a second refresh). Unless that started the next cycle, the tick
+is attached again through `_attach_tick`, the one `async_track_time_interval` call site, so its phase now follows the
+cycle's end, and the held step is armed at max(its due time, now) through `_arm_poll_step`'s one `async_call_later`, so
+the floor, A33 and A36 apply as before. It is armed unheld, as a step that waited for a cycle in flight was resumed
+before the quiet cycle: a settle hold's one-shot mark does not outlive the cycle, so a step that comes inside the
+settle delay of a poll seen in the cycle's last 3 s is held once more. This end is the same whatever the cycle's
+outcome (`self_test_failed` and `discarded_failed` included), and the tick and the step come back even when recording
+the cycle's diagnostics or the catch-up raises. The tick body still runs at least every `TICK_S` + `PROPOSED_TICK_MARGIN_S` (65
+s), counted from its last run, because the publish horizon maps every payload as of that moment. Inside a cycle its
+deadline is its last run plus `TICK_S`, the moment the tick itself would have come, so the whole
+`PROPOSED_TICK_MARGIN_S` before the horizon that last run mapped its payloads to is left for the deadline run's own
+latency (asyncio's timeout of the job's wait and the cycle task's next step; their observed ranges are given below),
+as it is for a late tick: no number stays on an entity past its `valid_until`. A cycle's first step runs the tick body
+unless the tick body started the cycle (the tick, or the catch-up at the previous cycle's end, ran at its start;
+`tick_start_runs`; before any job of the cycle, so nothing of the integration computes meanwhile), which puts its next
+deadline at least `TICK_S` after the cycle's start. When that deadline comes while the cycle still waits for an
+executor job, the job's wait ends there and the cycle task runs the tick body itself, as one of its own steps (not a
+timer of the integration), and waits on (`tick_deadline_runs`). Only a cycle longer than `TICK_S` can meet it, so in
+steady poll-driven operation (one cycle a poll, jobs of a few seconds), and in every slot cycle measured, the deadline
+run never comes and no tick body runs while a job computes. The bound on a deadline run's lateness is the margin
+itself, `PROPOSED_TICK_MARGIN_S` (5 s): a run less late than that comes before the horizon of the publish before it.
+Probes at a quarter of a CPU with the cadence scaled down (a 6 s tick) and a 23 s slot cycle showed what it costs when
+it does come. Its in-window handles (its asyncio timeout and its cycle step, run while the engine computed) took 0.10
+to 0.19 s. Over the runs, the deadline run came up to about 1.4 s after its moment (0.067 s, 1.417 s and 0.185 s in one
+re-run; 0.02 s at one CPU in the first run) and at least about 3.5 s before the horizon of the publish before it
+(4.933 s, 3.583 s and 4.815 s): observed ranges, inside the margin, not a bound. That is a documented residual
+(section 7, item 7): a cycle reaches it only after about `TICK_S`, which already breaks the runbook's 60 s cycle
+maximum (T5). After an unload nothing is attached or armed again. Home Assistant's shutdown cancels the cycle task but
+does not unload the entry, so the cycle's end after that cancel runs the catch-up (it publishes; `_maybe_start` starts
+no cycle while Core is stopping), and the tick and a held step come back, as the tick stayed attached through a
+shutdown before the quiet cycle. An engine thread abandoned at the time budget keeps the guard but not the quiet
+cycle, by design (above, the second-run guard). The tick body therefore works while an engine thread hangs: inside
+the cycle at its deadline until the time budget, by the tick after it.
+
+**The cycle's steps (event-loop hygiene).** The tick, the poll-driven step and the start-up callbacks do no cycle work:
+`_maybe_start`, the one place a cycle starts, applies the cadence rules, sets the second-run guard and creates the cycle
+task with `hass.async_create_background_task(..., eager_start=False)`. The pinned Core starts a task eagerly by default
+(its coroutine would run inside the timer's callback up to its first suspension), so this callback only schedules it. The
+cycle then runs in short event-loop steps, yielding between them: (1) the pause helper and the self-test; (2) the
+snapshot, both poll texts and every mapped state in one step, after the settle hold at the snapshot when a poll text
+arrived since the start (A36, above), with the cycle time read in that step, so no state in it is newer than the cycle
+time although the cycle started earlier (the start itself, which the floor, the exception retry and `cycle_stats` use,
+stays the moment `_maybe_start` started it); (3) the recorder statistics and the scorecard metrics, read at the cycle
+time; (4) the engine job, built from that snapshot and submitted; (5) after the engine, the pause helper and the
+self-test again, one publish (every changed entity in the same step, so the entities never show a mix of two envelopes)
+and, for a slot cycle, the scorecard step; the cycle's end runs the catch-up tick body (the quiet cycle, above). The
+liveness times are kept with the snapshot, so a tick body run between two steps (the deadline run inside the cycle)
+cannot change the job. An unload or a shutdown cancels the task at whichever step it waits, the settle hold included; a
+task cancelled before its first step ends with the outcome `cancelled` all the same (what its end does then: the quiet
+cycle, above). Every cadence rule (A23, A33,
+A36), the second-run guard, the time budget and the published results are unchanged; A36's hold also applies at the
+snapshot, so no state is read inside the settle delay of a poll seen after the start's check (an eager start read its
+states in the start's own step and had no such window), except in the two residuals counted in
+`snapshot_residual_reads`: a second poll during the hold, and a hold cut short by the cycle's deadline (RR-N1). `tests/test_runtime_loop_steps.py` pins the steps, their order,
+the results with and without the yields and the hold at the snapshot.
+
+The rule these steps serve, checked under L3: in an asyncio debug session, at a quarter of a CPU and at one, no callback
+attributable to the integration takes 0.1 s or more (asyncio's `slow_callback_duration`). In a debug session asyncio
+records the creating stack of every future and handle, checking the source file of each frame; each such check hands the
+GIL to a busy thread, so while the engine (or an import) computes, every future the loop creates waits for its turn.
+Before this layout the poll-driven step's timer ran the start of the cycle eagerly, up to and past the engine submit,
+and took 0.155 s and 0.126 s under L3, and the setup step that imported `coordinator.py` took 0.199 s. On a desktop test
+machine in debug mode the same two handles took about 0.135 s and 0.16 s; with the steps but without the held submit,
+the step that submits the engine job still took 0.13 to 0.21 s there, and with it 4 ms. Home Assistant shows the
+integration's scheduled work by name: the cycle task is `CYCLE_TASK_NAME` (`ecco_intelligence_shadow_cycle`, shown in
+full in a slow-callback line), the tick's interval timer is named `TICK_JOB_NAME` and the poll-driven step's one-shot is
+a `HassJob` named `POLL_STEP_JOB_NAME`. asyncio shortens a job in such a line to its first 13 and last 14 characters
+(`reprlib`). The poll-driven step's line shows `_run_async_call_action(<HomeAssistant RUNNING>, <Job
+ecco_int...ntelligence>>>)` (the coordinator's own repr ends the job's text). The tick's handle holds the Core's
+`_TrackTimeInterval._track_job`, named `ecco_intelligence tick: track time interval 60.0 <the tick's repr>` on
+`_TrackTimeInterval._interval_listener`, so its line shows `_TrackTimeInterval._interval_listener(<Job
+ecco_int...nt.py:1610>)>>)`: the tail is the end of the tracker's own repr, whose next timer handle was created at
+`helpers/event.py:1610` of the pinned Core.
+
+A probe on the pinned image (one-shot containers at a quarter of a CPU and at one, the real Core helpers, the real engine
+computing in the executor) then found that any timer of the integration that runs while an executor job computes can
+take 0.1 s or more at a quarter of a CPU: every new handle, future and task captures its stack and checks its source
+files, each check hands the GIL to the computing thread, and the container's CPU quota is throttled most of the time
+while the engine runs (and the worker's full garbage collections stop everything). The poll-driven step, the tick
+(the Core's interval re-arm plus the tick body) and the listener's one-shot inside the dongle's own write all reached
+0.4 s or more, and a tick inside the job window came back every minute (the tick held a fixed phase against the polls).
+After the job, its completion and the cycle's last step landed in the throttled tail of the quota period (up to
+0.08 s). Hence the quiet cycle (no timer of the integration exists while a job can compute) and the cool-down (the
+completion starts in a fresh quota period). The slow-callback lines the integration can now give: the cycle task's
+steps (`<Task ... name='ecco_intelligence_shadow_cycle' coro=<EccoIntelCoordinator._async_run() ...>`, in full), which
+run while a job computes only at the tick body's deadline (a cycle longer than `TICK_S`), at the time budget or when the
+task is cancelled; asyncio's own timeout of a job's wait (`<TimerHandle when=... Timeout._on_timeout()
+created at .../asyncio/timeouts.py:...>`, made by `asyncio.wait_for` in the cycle task, unnamed), which fires only at
+that deadline or at the time budget, both while a job computes; the settle hold's `asyncio.sleep` timer
+(`_set_result_unless_cancelled(<Future pendi...>, None)`), which runs before any job of its cycle; the tick and the
+poll-driven step (above), which never run while a cycle is in flight; the release handle (`<Handle _release([True])
+...>`), which runs before its job starts; and asyncio's completion of each job (`_chain_future.<locals>._set_state`),
+which runs after the cool-down.
+
+**Publish horizon (IP-4b).** What is written stays on the entities until the next write, at the latest the next run of the
+tick body: the tick, the run at a cycle's first step and the catch-up at its end or, inside a cycle longer than
+`TICK_S`, its deadline run `TICK_S` after its last run (the quiet cycle, above), at least every `TICK_S` +
+`PROPOSED_TICK_MARGIN_S`.
 Every publish therefore maps the envelope with `to_entity_payloads(env, now + TICK_S + PROPOSED_TICK_MARGIN_S)`, so an
 item that would expire before the next tick has no number when it is written, and `binary_sensor.ecco_intel_fresh` is
 never on past the result's `valid_until`. The null rule holds on the entities at every moment, not only at a tick. The
@@ -299,19 +437,27 @@ arrives: if it was turned on while the cycle ran, `PAUSED` is published, the res
 in the scorecard. A failure published while the helper is on (a time-budget overrun, for example) also shows `PAUSED`
 (PAUSED > SELF_TEST_FAILED). When the helper is turned off, the status shows `STARTING` (all nulls, `last_good` kept) and
 a cycle runs at the next minute's tick (or, while polls arrive, at the next poll-driven step), but never before the
-PROPOSED start-up grace has passed since setup. Disabling the config entry also pauses. A restart is never needed.
+PROPOSED start-up grace has passed since setup. A helper turned on while a cycle is in flight shows at the cycle's end
+(its result discarded), or earlier at the tick body's deadline run inside that cycle. Disabling the config entry also pauses. A restart is never needed.
 
 **Diagnostics only** (never an entity attribute): `last_cycle_timing` {recorder_s, engine_s, store_s, total_s, cpu_s},
 `cycle_duration_s`, `cycle_stats` (the last `PROPOSED_CYCLE_STATS_N` = 4800 runs, more than the 72 h acceptance can
 start at the highest cycle rate, so one download at its end holds them all, A50; with the fields `started_at`, `kind`,
 `outcome`, `total_s`, `recorder_s`, `engine_s`, `store_s`, `cpu_s`, `trigger` (TICK / POLL) and `poll_age_s` (the age of
-the last poll text at the start: the tick-to-poll phase); parse rows by the summary's `fields` list; `by_kind` gives the
-p50 / p95 / maximum per kind), the `cadence` block (`refresh_enabled`, `last_start`, `last_kind`, `last_trigger`,
+the last poll text at the cycle's start); parse rows by the summary's `fields` list; `by_kind` gives the
+p50 / p95 / maximum per kind; `job_cooldown_s` and `timings_with_cooldown` name the cool-down each job's time includes:
+`recorder_s`, `engine_s`, `store_s` and `total_s`, not `cpu_s`), the `cadence` block (`refresh_enabled`, `last_start`, `last_kind`, `last_trigger`,
 `cpu_s_rolling_hour`, `refresh_suspended_cpu`, `retry_at`, `stale_backoff_s`, `poll_listener`, `polls_arriving`,
-`last_poll_seen_at`, `poll_step_due`, `poll_step_settle_hold`, `last_tick_at`, `tick_poll_phase_s`, ...), the `liveness`
+`last_poll_seen_at`, `poll_step_due`, `poll_step_settle_hold`, `poll_step_armed`, `cycle_in_flight`, `tick_attached`,
+`last_tick_at` (the tick body's last run, whichever ran it: the tick, the run at a cycle's first step, the catch-up at a
+cycle's end or the deadline run inside a cycle; the tick's own phase follows the last cycle's end), `tick_poll_phase_s`
+(that run's phase against the last poll seen: the seconds from that poll to that run, null while polls are not
+arriving), ...), the `liveness`
 ages of both poll texts, the counters (`runs_started`, `runs_published`, `refresh_runs_started`, `poll_runs_started`,
 `refresh_suppressed_cpu`, `budget_exceeded`, `exceptions`, `tick_refresh_held`, `tick_slot_held`, `settle_holds`,
-`settle_held_starts`, `settle_residual_starts`, `entity_writes`, `history_parses`, `history_reuses`, ...) and
+`settle_held_starts`, `settle_residual_starts`, `snapshot_holds`, `snapshot_residual_reads`, `entity_writes`,
+`history_parses`, `history_reuses`, `ticks_deferred`, `catchup_ticks`, `tick_start_runs`, `tick_deadline_runs`,
+`poll_steps_held_busy`, ...) and
 `proposed_constants`.
 Entity ids, the configuration hash, the location and the git sha are redacted. The last cycle's `source_notes` are shown
 (A42, no longer redacted): each is a contract key and a constant code from `runtime/sources.SOURCE_NOTE_CODES` (for
@@ -432,7 +578,7 @@ changes its `SHA256SUMS`. Kit equivalence between the L3-tested kit and the kit 
 | `SystemStatus.ALL` / `DataQuality.ALL` | the options of the two ENUM sensors |
 | `ITEM_UNITS` | the units of the seven value sensors. No state class, so nothing becomes a long-term statistic |
 | `envelope_summary` | `CycleInputs.previous` (the last computed envelope) |
-| `OutcomeMetrics` | from `Scorecard.metrics` over `load_kwh:*` for the last 7 days (`store.outcome_metrics`), read by slot cycles; refreshes reuse the slot's copy |
+| `OutcomeMetrics` | from `Scorecard.metrics` for the last 7 days (`store.outcome_metrics`): every scored `load_kwh:*` kind the engine records (`next_1h`, `to_next_cheap`, `cheap_window`, `day`, `morning`, `overnight`, `to_useful_pv` or `to_useful_pv_from_now`) pooled, each kind's MAE and coverage weighted by its `n`, so the accuracy entity is the load forecasts' pooled accuracy, not the day-load forecast's; read by slot cycles before that slot's scoring step, so the published figure lags one slot; refreshes reuse the slot's copy |
 | `scorecard_report` | recorded once per schedule slot, by the slot cycle only. It is refused if it carries `recommended` anywhere, so the scorecard's recommendations table stays empty |
 
 Entities: `sensor.ecco_intel_status`, `sensor.ecco_intel_{charge_target, overnight_demand, export_event, dump_to_grid,
@@ -657,16 +803,16 @@ from exactly one place, in `coordinator.py`.
 
 | API | Use | Covered only by the L2 fake (check under L3) |
 |---|---|---|
-| `homeassistant.core`: `HomeAssistant`, `callback`, `CoreState`; `hass.states.get` (read); `hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED)` (the only bus listener); `hass.async_add_executor_job`; `hass.async_create_background_task`; `hass.state` (a cycle starts only while it is `running`); `hass.config.config_dir / latitude / longitude` | reads, scheduling | yes: listen-once removal after it fired; `State.last_reported` presence and semantics (HA >= 2024.3) |
+| `homeassistant.core`: `HomeAssistant`, `callback`, `CoreState`, `HassJob(target, name)` (the poll-driven step's named job); `hass.states.get` (read); `hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED)` (the only bus listener); `hass.async_add_executor_job`; `hass.async_add_import_executor_job` (the import of `coordinator.py`, in `__init__.py`); `hass.async_create_background_task(target, name, eager_start=False)` (the cycle task, never eager); `hass.loop.call_soon` (the release of each executor job); `hass.state` (a cycle starts only while it is `running`); `hass.config.config_dir / latitude / longitude` | reads, scheduling | yes: listen-once removal after it fired; `State.last_reported` presence and semantics (HA >= 2024.3); the Core's eager default for tasks and its import executor (the fake models both; the signatures were checked against the pinned Core's source: `async_create_background_task(target, name, eager_start=True)`, `async_add_import_executor_job(target, *args)`, `HassJob(target, name=None, *, cancel_on_shutdown=None, job_type=None)`) |
 | `homeassistant.const`: `EVENT_HOMEASSISTANT_STARTED`, `__version__`, `REQUIRED_PYTHON_VER` | start-up, versions | yes |
 | `homeassistant.config_entries`: `ConfigFlow`, `ConfigFlowResult`; `entry.data`, `entry.runtime_data`; `hass.config_entries.async_forward_entry_setups / async_unload_platforms` | setup / unload | yes: `runtime_data` (HA >= 2024.4), `single_config_entry` in the manifest |
 | `homeassistant.exceptions.ConfigEntryError` | refuse a non-SHADOW mode | yes |
 | `homeassistant.components.sensor`: `SensorEntity`, `SensorDeviceClass.ENUM`; `homeassistant.components.binary_sensor.BinarySensorEntity` | the entities; `_unrecorded_attributes`; `async_write_ha_state` of their own state | yes: the recorder honouring `_unrecorded_attributes` on these classes (the timestamp-only attributes included); the 16 KiB attribute limit; the ENUM options validation |
 | `homeassistant.components.diagnostics.async_redact_data` | the diagnostics download | yes |
 | `homeassistant.components.recorder.get_instance(hass).async_add_executor_job`; `recorder.statistics.statistics_during_period(hass, start, end, ids, "hour", None, types)` | history (read-only, the recorder's executor) | yes: the row shape (`start` as a float timestamp), the `types` set, behaviour for unknown ids, cost on the site recorder backend |
-| `homeassistant.helpers.event.async_track_time_interval` | the one timer (60 s) | yes |
+| `homeassistant.helpers.event.async_track_time_interval(hass, action, interval, name=TICK_JOB_NAME)` | the one timer (60 s), named | yes: the Core names the timer's job `<name>: track time interval ...` |
 | `homeassistant.helpers.event.async_track_state_change_event` | the one state listener: the mapped telemetry poll text (A23); none when it is not mapped; removed on unload | yes: `event.data["new_state"]`; delivery of a state change while the other entities of the same poll are still being written (the 3 s settle delay covers it); attribute-only changes |
-| `homeassistant.helpers.event.async_call_later` | the poll-driven step, at most one pending, cancelled on unload | yes: the callback's argument; cancellation by the returned function |
+| `homeassistant.helpers.event.async_call_later(hass, delay, HassJob(...))` | the poll-driven step, at most one pending, cancelled on unload; its job named `POLL_STEP_JOB_NAME` | yes: the callback's argument; cancellation by the returned function; a `HassJob` accepted as the action |
 | `homeassistant.helpers.device_registry`: `DeviceInfo`, `DeviceEntryType` | one service device | yes |
 | `homeassistant.helpers.entity_platform` (`AddEntitiesCallback`), `homeassistant.helpers.typing` | the platform signatures | yes |
 | `homeassistant.util.dt.utcnow` | the clock | yes |
@@ -713,6 +859,8 @@ cycle may run or when one starts.
 | `REFRESH_MARGIN_S` | 125 s | 2 x `TICK_S` + `PROPOSED_TICK_MARGIN_S`; equal to the engine's `shadow_cycle.REFRESH_MARGIN_S` (drift test) |
 | `POLL_REFRESH_THRESHOLD_S` | 185 s | `REFRESH_MARGIN_S` + `PROPOSED_POLL_INTERVAL_S` |
 | `CPU_WINDOW_S` | 3600 s | the CPU guard's rolling window |
+| `SUBMIT_RELEASE_POLL_S`, `SUBMIT_RELEASE_CAP_S` | 1 ms, 1 s | an executor job polls the loop's release flag this often, and starts after the cap at the latest (`__init__.released_call`) |
+| `SUBMIT_COOLDOWN_S` | 0.15 s | every executor job sleeps this long after its target before it completes: at least one 100 ms CPU-quota period (event-loop hygiene; no cadence, limit or value depends on it) |
 | `TIMESTAMP_ONLY_ATTRIBUTES` | `generated_at`, `valid_until`, `next_run_at` | kept out of the recorder (A17) |
 | implied refresh ceiling | 835 s | 900 - 125 + 60: the longest gap between cycles on the tick's rules |
 
@@ -744,12 +892,16 @@ bound 180 s and the configuration liveness bound 300 s (`quality.DQ_PROPOSED`), 
    for (1 s after a poll), a step deferred to the floor's end when a newer poll arrives in the last 3 s of the floor,
    and a step re-armed when a cycle in flight ends inside a newer poll's settle delay; the tick's exception to its hold
    and a step under a poll text faster than the settle delay pass the same rule. L3 checks the ordering on the real Core.
-   Two cases are not covered. Writes that land more than 3 s after the text are outside the settle delay by definition.
-   And two polls within one settle delay (an abnormal sub-settle poll period): the hold is one-shot and never re-armed
-   by a later poll (so it cannot starve), so the held cycle starts inside the second poll's settle delay
-   (`settle_residual_starts`). Such a cycle can read the newest poll text with some of the previous poll's values, so its
-   numbers rest on data up to one poll older than their stated freshness, until the next compute (at the latest the
-   item's own validity, at most 180 s after the poll it rests on).
+   A poll text that arrives between a cycle's start and its snapshot (the cycle starts a loop step or two before it
+   reads) is covered too, by the settle hold at the snapshot (L2 tested with the text alone first and a reading 1 s
+   later). Two cases are not covered. Writes that land more than 3 s after the text are outside the settle delay by
+   definition. And two polls within one settle delay (an abnormal sub-settle poll period): the hold is one-shot and
+   never re-armed by a later poll (so it cannot starve), so the held cycle starts inside the second poll's settle delay
+   (`settle_residual_starts`), or, when the second poll arrives while a cycle holds its snapshot for the first, the
+   snapshot is read inside the second poll's settle delay (`snapshot_residual_reads`; that poll is not covered, so its
+   step refreshes at the floor's end when a refresh is due). Such a cycle can read the newest poll text with some of the
+   previous poll's values, so its numbers rest on data up to one poll older than their stated freshness, until the next
+   compute (at the latest the item's own validity, at most 180 s after the poll it rests on).
 3. **Recorder rows (A17).** About 11 states rows per published cycle, one cycle per poll: about 15.8k states rows a day.
    Attributes rows are added only when a recorded value changes. The recorder bytes per day and HA's memory slope are
    measured under L3 (M6) and in the 72 h acceptance (T10) against the live baseline.
@@ -766,7 +918,18 @@ bound 180 s and the configuration liveness bound 300 s (`quality.DQ_PROPOSED`), 
 6. **Recorder cost.** A 120-day hourly read of about 10 to 30 ids runs once per slot (refreshes reuse it). It is bounded
    by the row cap and the time budget, but the cost on the site's recorder backend is UNKNOWN.
 7. **Event-loop safety.** Every file and database access runs in an executor, and the fake records any off-loop call. HA's
-   own blocking-I/O detector is only exercised under L3.
+   own blocking-I/O detector is only exercised under L3. The import of `coordinator.py` runs in the import executor, the
+   cycle task is never started eagerly and runs in short steps, and every executor job starts only after the step that
+   submitted it (section 2.2, the cycle's steps). The slow-callback rule (no callback of the integration at 0.1 s or
+   more in an asyncio debug session) is an L3 check: the L2 suites pin the steps, not their duration. While a cycle is in
+   flight no timer of the integration exists (the quiet cycle, section 2.2), every job ends with a cool-down, and the tick
+   body runs while one of its jobs computes only at its deadline, in a cycle longer than `TICK_S` (a residual: its
+   timeout and its cycle step can reach 0.1 to 0.2 s at a quarter of a CPU, in a cycle that already breaks T5's 60 s
+   maximum).
+   Outside the integration's control: Home Assistant's own handles that run while the engine computes are slowed as
+   well. A deliberate exception of the integration's own: while an engine thread abandoned at the time budget still
+   runs, the tick is attached again (the thread keeps the guard, not the quiet), so the STALE and pause rules run every
+   minute; that tick can be slowed the same way, after a cycle that already failed its time budget.
 8. **Inputs that are not re-reported.** A reading whose entity is not re-reported within its I-D6 limit is never fresh
    and BLOCKs what needs it (an `input_number` mapped directly; the tariff tables, whose report cadence is not yet known,
    so export and Dump advice will probably stay BLOCKED until it is). The configuration bridge's sensors with
@@ -837,10 +1000,12 @@ bound 180 s and the configuration liveness bound 300 s (`quality.DQ_PROPOSED`), 
 | `test_runtime_store.py` | writes only under `state/`, schema version, retention, scorecard once per slot, no recommendation rows, refusals |
 | `test_runtime_selftest.py` | every gate, pure and through the stand-in; a tampered kit; the source tree is not a kit; the `SITE_FILE` texts (A49): "a UTF-8 byte-order mark" whatever follows it (RR1-5), "not a JSON object" with the top level's JSON type, "a non-finite number" for NaN, Infinity and a literal beyond the double range (an integer too large for a double no longer raises out of the loader), "not valid JSON" with the exception type (a nesting too deep to read no longer raises either), each value-free and within the 80 published characters, also through the stand-in |
 | `test_runtime_build.py` | byte-identical builds, manifest hashes, the exact closure, no absolute import at any depth, only imports changed, the built tree runs alone and gives the repository's envelope, exclusions, refusals |
+| `test_runtime_loop_steps.py` (L2) | the event-loop steps under a fake that starts tasks eagerly unless told otherwise (as the pinned Core): the import check (labelled IMPORT), the coordinator module (and most of the vendored engine) imported in the import executor through the integration's own job, nothing of the package first imported on the event loop thread during setup, the import started only after the submitting step ended; the poll-driven step and the tick, fired inside the loop, return before any cycle work runs (the task named, `eager_start=False`, not entered) and the second-run guard holds a second start back; the checks, the snapshot, the history inputs, the engine submit and the publish each in their own loop step, in that order, the tick body in the first step of a cycle the tick body did not start, and the catch-up tick body in the cycle task's last step; identical results with the yields and with them made not to suspend; the settle hold at the snapshot (A36): a poll written between the start and the snapshot step holds the snapshot once to its settle delay's end (in the cycle task, counted), which reads it with that moment as the cycle time and no future observation, a partial poll (the text alone, the SOC 1 s later) is read whole, the held cycle covers that poll (its own step, after the hold, or due during it and so armed at the cycle's end, starts no second cycle and is not deferred), the residual (a second poll during the hold) is counted and its step refreshes at the floor's end, a residual held start is not held again, the hold is cut to the deadline, a SLOT cycle reads its history inputs at the cycle time; a tick body run between the snapshot and the engine job (inside a cycle: the deadline run) leaves the job the snapshot's liveness; an unload and a cancel at each step (before the first, after the checks, during the settle hold, after the snapshot, after the history inputs, during the recorder read, the engine and the store write) end the cycle once as `cancelled`, release the guard and write nothing after an unload (a cancelled hold covers no poll); the job names, the tick's slow-callback text with its timer laid out as the pinned Core's `_TrackTimeInterval`; the release of executor jobs (started only after the submitting step, the flag set by the next handle, the cap) and the cool-down after the target |
+| `test_runtime_quiet_cycle.py` (L2) | the quiet cycle: a cycle's start detaches the tick and cancels a pending step (its due time kept), a poll during the cycle is noted but arms nothing (its due time only earlier, A33), no timer or one-shot is created until the end; the end releases the guard, runs the catch-up tick body in the cycle task, attaches the tick again (its phase following the end) and arms the held step at max(its due time, now), where the floor still defers it; a slot that fell due during a cycle starts from the catch-up, and while that slot cycle runs no timer or one-shot is active or created and the held step stays held; the tick body at the first step of a cycle it did not start (63 s and 2 s after its last run; not in a cycle the tick started), so the deadline comes `TICK_S` after the cycle's start; the tick body at its deadline inside an engine job held 140 s (twice, `TICK_S` after each last run), each deadline run the whole `PROPOSED_TICK_MARGIN_S` before the horizon of the publish before it; the real job wait; the tick body never more than `TICK_S` + `PROPOSED_TICK_MARGIN_S` without running over 90 simulated minutes of polls with jobs that take time on the stand-in's clock (snapshot holds, slot reads, a 110 s engine job), and no deadline run in steady poll-driven operation; the cool-down on every executor job (the import, the start-up gates, the recorder read, the metrics, the engine, the store) and on a raising target, and `cycle_stats` naming the timings that include it; an unload during a cycle (nothing left armed or attached, no catch-up after it), a cancel (the catch-up, the tick and the step back), Home Assistant's shutdown (Core stopping, the entry not unloaded: the catch-up runs and publishes, no cycle starts although a slot is due, the tick and the step back), an engine thread abandoned at the time budget, through the real job wait (the job not cancelled, the tick back at once, no step armed until the thread ends, none after an unload); RR-N1, a snapshot hold cut short by the deadline counted as a residual and covering nothing; the end of a cycle that ended `self_test_failed` (an entity write that raised in its start run) or `discarded_failed` (one that raised at its deadline run): the catch-up, the tick and the step back; a settle hold's step held through a cycle armed unheld at its end, so it is held once more inside the settle delay of a poll seen in the cycle's last 3 s; a `_finish` that raises at the end: the guard released, the catch-up, the tick and the step back; a catch-up whose tick body raises: the exception leaves the cycle task, the tick and the step back |
 | `test_runtime_import_without_ha.py` | the package and every `runtime/*.py` import with homeassistant absent, from the source and from the kit, with nothing on the global path |
 | `test_runtime_fake_ha.py` (L2) | every scenario of the work order on the built kit, each with zero write attempts: refresh before expiry (never STALE over three hours on fresh inputs, at any tick or in any recorder row; statistics once per slot), the exception retry, a hanging job, the frozen dongle (V-4), the CPU guard, `next_run_at`, per-entity writes and state rows per hour, and the lifecycle (exactly one state listener on the mapped telemetry poll text, removed on unload, none when unmapped); A50: every read parsed once and the other cycles reusing the parsed history (parses = reads, parses + reuses = cycles), a refused read keeping none, `cycle_stats` keeping at least 4800 runs (more than 72 h can start) in a bounded deque with the full download small, JSON and redacted. Its world is set between ticks without `state_changed` events, so it pins the tick's own rules |
 | `test_runtime_history_reuse.py` (A50) | the parsed history reused between cycles: the image of a read (immutable; equal content exactly when the rows are bit for bit the same, a zero's sign included); `build` = `build_full` then `truncate` at every `now`; a differential run through `engine_link.compute` and the real `run_cycle` (owner-record decisions and every decision OPEN; across hours without a read, a refused, a repeated and a changed read, a read changed in place, a zero whose sign changed, another configuration): the same envelopes, History and diagnostics as a parse and build every cycle, the reuse happening and every changed or refused read rebuilding; `EngineJob.statistics` annotated with the image, and an image handed in without a `HistoryReuse` giving no history, as a refused read does (RUN-4); no mutation: the kept History fingerprinted before and after every cycle and scorecard step, never handed out, the PV forecast series new dicts every cycle, `prepare_history` changing only its copy, a cycle that writes a shared record caught; the audit pinned: every write to an hour record or a History index in the engine, `ecco_core` and the runtime is in `build_history`, `HourRecord.flag`, `History.__init__` or `quality._prepare` (after its deepcopy), or in offline-only modules outside the runtime's import closure; the parsed-history paragraph of section 2.2 and `engine_link`'s docstring give the measured share and name no workstation (REV-E-4, RUN-5) |
-| `test_runtime_poll_phase.py` (L2, A23) | STALE, `INPUT_EXPIRING` and numbers counted from the recorder rows (every write, A32). The poll text every 60 s plus or minus 3 s at swept phase offsets (0.5, 1.5, 3, 15, 30, 45, 55, 56, 58 and 59.5 s) and a random walk, three simulated hours each: no `INPUT_EXPIRING` and no STALE, no number past its inputs' bound, every cycle poll-driven, at most one cycle per poll, at most 11 state writes per published cycle; recovery from an unknown slot, a frozen configuration text and a frozen telemetry text within one poll plus the settle delay (a frozen telemetry text still fails closed); a poll 90 s late, one skipped poll, a 150 s gap and a freeze over seven phases each: at most one STALE cycle per episode, never a wrong number, then the fallback or the recovery; in the freeze every dongle item, Dump among them, loses its number no later than the first tick after the last poll plus `PROPOSED_POLL_ACTIVE_S`, at most 150 s after it, and with the supervision heartbeat stopped too the first compute after the last poll's (more than 90 s and at most 150 s after it) BLOCKs export and Dump `SUPERVISION_NOT_STABLE` (A31(b), the polls-stop exposure); supervision lapsing while polls continue (A31(b): export and Dump BLOCKED `SUPERVISION_NOT_STABLE` at the first poll-driven compute after the 90 s bound lapses); a poll text every 2 s (a pending step is never moved later, A33, and the settle hold is one-shot: a cycle at each floor's end plus at most 3 s, never starving); the settle hold (A36: no cycle starts inside the settle delay of the newest poll seen; with an entity written after the text, the exception retry the tick asks for 1 s after a poll, a step deferred to the floor's end with a newer poll in its last 3 s, a STALE refresh 0.5 s after a late poll and the in-flight wait when a newer poll arrives while the step waits each start at that poll's settle delay's end and read its late writes); the settle delay, floor deferral, coverage, the guards and pause, what counts as a new poll, unload, the 185 s threshold and the tick's exception to its hold |
+| `test_runtime_poll_phase.py` (L2, A23) | STALE, `INPUT_EXPIRING` and numbers counted from the recorder rows (every write, A32). The poll text every 60 s plus or minus 3 s at swept phase offsets (0.5, 1.5, 3, 15, 30, 45, 55, 56, 58 and 59.5 s, the poll's phase from the start; the tick's phase then follows each cycle's end) and a random walk, three simulated hours each: no `INPUT_EXPIRING` and no STALE, no number past its inputs' bound, the tick body never more than 65 s without running and no deadline run, every cycle poll-driven, at most one cycle per poll, at most 11 state writes per published cycle; recovery from an unknown slot, a frozen configuration text and a frozen telemetry text within one poll plus the settle delay (a frozen telemetry text still fails closed); a poll 90 s late, one skipped poll, a 150 s gap and a freeze over seven phases each: at most one STALE cycle per episode, never a wrong number, then the fallback or the recovery; in the freeze every dongle item, Dump among them, loses its number no later than the first tick after the last poll plus `PROPOSED_POLL_ACTIVE_S`, at most 150 s after it, and with the supervision heartbeat stopped too the first compute after the last poll's (more than 90 s and at most 150 s after it) BLOCKs export and Dump `SUPERVISION_NOT_STABLE` (A31(b), the polls-stop exposure); supervision lapsing while polls continue (A31(b): export and Dump BLOCKED `SUPERVISION_NOT_STABLE` at the first poll-driven compute after the 90 s bound lapses); a poll text every 2 s (a pending step is never moved later, A33, and the settle hold is one-shot: a cycle at each floor's end plus at most 3 s, never starving); the settle hold (A36: no cycle starts inside the settle delay of the newest poll seen; with an entity written after the text, the exception retry the tick asks for 1 s after a poll, a step deferred to the floor's end with a newer poll in its last 3 s, a STALE refresh 0.5 s after a late poll and the in-flight wait when a newer poll arrives while the step waits each start at that poll's settle delay's end and read its late writes); the settle delay, floor deferral, coverage, the guards and pause (a poll while a cycle is in flight arms no step; the step comes at the cycle's end), what counts as a new poll, unload, the 185 s threshold and the tick's exception to its hold |
 | `test_runtime_tariff_days.py` (L2, A38 Part B, A42) | the import rates as day events, the next day's rates published at 16:00, through the built kit's own runtime and `run_cycle`. Three events: a TOU window misplaced to the 17:00-19:00 peak BLOCKs `CHARGE_WINDOW_SOURCES_DISAGREE` with no number at every half-hour of the day (the window check's lowest rate from 00:30 to 15:30, the named run at local midnight and from 16:00); the single current-day event shows the residual from 19:00 that the day events close, with INFO `CHARGE_WINDOW_NOT_PRICED` on the entities of exactly the published charge-window items (A41, passed through the runtime); a window equal to the cheap run is OK with a number at every half-hour and carries `CHARGE_WINDOW_NOT_PRICED` exactly from 05:30 to 15:30 (the residual hours); a refused merge gives the engine no import rates and the diagnostics download shows `["tariff.import_rates", "TABLE_ROWS_OVERLAP"]` in `source_notes`, unredacted, with no entity id anywhere (A42); a previous-day event not re-reported for 3600 s makes the merged table as old (the status entity shows `TARIFF_NOT_FRESH` and the import table's `input_ages` row 3600 s stale, with the WARN `CHARGE_WINDOW_FROM_TOU_TABLE` and INFO `CHARGE_WINDOW_NOT_PRICED`: risk 8); the current-day event unavailable gives no gap before the next day is published and, after it, a gap the engine refuses (`TARIFF_GAP`). The recommended form [current, next] (A42): the peak window BLOCKs at every half-hour, from the 16:00 publication the status entity shows `TARIFF_VERIFIED` (what R5 and T11 read; the live `input_ages` row is fresh beside it), and the agreeing window carries `CHARGE_WINDOW_NOT_PRICED` exactly from 05:30 to 15:30. A45: a next-day row the engine cannot use (a null rate, a row that ends before it starts) gives `TARIFF_RATE_INVALID` / `TARIFF_SLOT_INVALID` after the publication, never `TARIFF_VERIFIED`, with no `TABLE_*` note in `source_notes` (RV9-2); the download lists three PV forecast sources of distinctive names by day and position only, and no source name appears in it, in any entity or in any recorder row (RV9-3); a STALE publication records no tariff code (RV9-1). A47 (RV10-1): a verified import table that names no cheap run (a flat tariff, a cheap run without a clear spread, one cheap half-hour) records `TARIFF_VERIFIED` with the cheap-run code beside it and no other `TARIFF_*` code, and the runbook's R5 / Q6 rule (the import table's own code) finds no fault there, while it finds one after the publication for an engine-refused next-day row |
 | `test_runtime_tou_e2e.py` (L2, WP-E) | the grid-charge classification from Home Assistant states to the entities: slot 1 `Grid` gives OK, an unknown slot, an overlay on, an enable off, a frozen configuration text and `configuration_online` off each BLOCK |
 | `test_integration_e2e.py` | the built kit's own `run_cycle` in a fresh `-I` interpreter, the null rule, SHADOW and the paused status; the WP-E cases |

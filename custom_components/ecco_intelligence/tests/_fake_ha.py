@@ -22,11 +22,19 @@ them by content, hass.recorder_attributes). Every write is logged with its time 
 whether it changed anything) and every states row too (hass.recorder_log: time, entity id, whether it added an
 attributes row), so a test can measure state writes and recorder rows per hour.
 
-helpers.event: async_track_time_interval (hass.timers; the harness fires it at every Harness.tick() call, or at its own
-times under Harness.run_until), async_call_later (hass.later: a one-shot fired once at or after its due time) and
+helpers.event: async_track_time_interval (hass.timers, with the job name given; the harness fires it at every
+Harness.tick() call, or at its own times under Harness.run_until), async_call_later (hass.later: a one-shot fired once at
+or after its due time; its action a @callback or a core.HassJob whose target is one, as the pinned Core accepts) and
 async_track_state_change_event (a state listener: a seeded state or attribute change of its entity calls it on the event
 loop with a state_changed event, as Home Assistant does; a write that changes neither calls nothing; hass.states.events
 False delivers no event at all, as the pre-A23 suites assume).
+
+Tasks and executors as the pinned Core has them: hass.async_create_task and hass.async_create_background_task start a task
+EAGERLY unless eager_start=False is passed (the Core's default is eager_start=True: the coroutine then runs inside the
+calling callback up to its first suspension, when that callback runs on the event loop); every call is logged
+(hass.task_log: name, eager_start). hass.async_add_import_executor_job runs its job in a separate one-thread import executor
+(hass.import_jobs logs each job's target), and the platforms forwarded by async_forward_entry_setups are imported there
+when not imported yet, as the Core's loader does (an integration's import_executor defaults to true).
 
 This is a model of Home Assistant behaviour written for these tests, not Home Assistant: whatever it covers is L2 evidence
 only (see docs/intelligence/INTELLIGENCE_HA_RUNTIME.md, "APIs covered only by the L2 fake").
@@ -37,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import importlib
+import inspect
 import json
 import sys
 import threading
@@ -86,6 +95,41 @@ class CoreState(enum.Enum):
     starting = "STARTING"
     running = "RUNNING"
     stopping = "STOPPING"
+
+
+class HassJobType(enum.Enum):
+    Coroutinefunction = 1
+    Callback = 2
+    Executor = 3
+
+
+class HassJob:
+    """core.HassJob as the pinned Core defines it: a target, an optional name, the job type and the same repr."""
+
+    def __init__(self, target: Callable, name: str | None = None, *, cancel_on_shutdown: bool | None = None,
+                 job_type: HassJobType | None = None) -> None:
+        self.target = target
+        self.name = name
+        self._cancel_on_shutdown = cancel_on_shutdown
+        self._job_type = job_type
+
+    @property
+    def job_type(self) -> HassJobType:
+        if self._job_type is None:
+            if inspect.iscoroutinefunction(self.target):
+                self._job_type = HassJobType.Coroutinefunction
+            elif getattr(self.target, "_hass_callback", False):
+                self._job_type = HassJobType.Callback
+            else:
+                self._job_type = HassJobType.Executor
+        return self._job_type
+
+    @property
+    def cancel_on_shutdown(self) -> bool | None:
+        return self._cancel_on_shutdown
+
+    def __repr__(self) -> str:
+        return f"<Job {self.name} {self.job_type} {self.target}>"
 
 
 class State:
@@ -314,9 +358,12 @@ class HomeAssistant:
         self.state_writes: list[tuple] = []
         self.state_write_log: list[tuple] = []               # (time, entity id, changed state or attributes) per write
         self.tasks: set[asyncio.Task] = set()
+        self.task_log: list[tuple[str | None, bool]] = []   # (name, eager_start) of every task created
         self.timers: list[dict] = []
         self.later: list[dict] = []                          # helpers.event.async_call_later one-shot timers
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fake_ha_executor")
+        self.import_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fake_ha_import_executor")
+        self.import_jobs: list[Callable] = []                # the target of every import executor job
         self.data["recorder_instance"] = Recorder(self)
 
     @property
@@ -335,14 +382,28 @@ class HomeAssistant:
         self._check_loop("hass.async_add_executor_job")
         return self.loop.run_in_executor(self.executor, target, *args)
 
+    def async_add_import_executor_job(self, target: Callable, *args: Any) -> asyncio.Future:
+        self._check_loop("hass.async_add_import_executor_job")
+        self.import_jobs.append(target)
+        return self.loop.run_in_executor(self.import_executor, target, *args)
+
     def async_create_task(self, target: Any, name: str | None = None, eager_start: bool = True) -> asyncio.Task:
+        """As the pinned Core: eager unless eager_start=False (a task created while the loop is not running starts at
+        the loop's next step either way, as asyncio does)."""
         self._check_loop("hass.async_create_task")
-        task = self.loop.create_task(target)
+        self.task_log.append((name, eager_start))
+        if eager_start:
+            task = asyncio.Task(target, loop=self.loop, name=name, eager_start=True)
+            if task.done():
+                return task
+        else:
+            task = self.loop.create_task(target, name=name)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return task
 
-    async_create_background_task = async_create_task
+    def async_create_background_task(self, target: Any, name: str, eager_start: bool = True) -> asyncio.Task:
+        return self.async_create_task(target, name, eager_start)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -403,7 +464,11 @@ class ConfigEntries:
             if p not in ("sensor", "binary_sensor"):
                 self._hass.violations.append(f"platform {p!r} forwarded")
                 continue
-            mod = importlib.import_module(f"custom_components.{entry.domain}.{p}")
+            name = f"custom_components.{entry.domain}.{p}"
+            if name in sys.modules:                  # the Core's loader: an imported platform comes from the cache
+                mod = sys.modules[name]
+            else:                                    # a new one is imported in the import executor
+                mod = await self._hass.async_add_import_executor_job(importlib.import_module, name)
             plat = EntityPlatform(self._hass, entry, p)
             self.platforms.setdefault(entry.entry_id, []).append(plat)
             await mod.async_setup_entry(self._hass, entry, plat.add_entities)
@@ -715,7 +780,7 @@ def async_track_time_interval(hass: HomeAssistant, action: Callable, interval: t
     """An interval timer. The harness fires it: Harness.tick() at every call (the pre-A23 suites), Harness.run_until() at
     its own times (`next`: registration plus every interval, as Home Assistant does)."""
     hass._check_loop("async_track_time_interval")  # noqa: SLF001
-    timer = {"action": action, "interval": interval, "active": True, "next": CLOCK.now + interval}
+    timer = {"action": action, "interval": interval, "active": True, "next": CLOCK.now + interval, "name": name}
     hass.timers.append(timer)
 
     def remove() -> None:
@@ -725,14 +790,17 @@ def async_track_time_interval(hass: HomeAssistant, action: Callable, interval: t
     return remove
 
 
-def async_call_later(hass: HomeAssistant, delay: Any, action: Callable) -> Callable[[], None]:
+def async_call_later(hass: HomeAssistant, delay: Any, action: Callable | HassJob) -> Callable[[], None]:
     """A one-shot timer `delay` (seconds or a timedelta) from now; the harness fires it once at or after that time with the
-    fire time. Its cancel callback may be called after it fired or more than once (as Home Assistant's)."""
+    fire time. `action` is a callable or a HassJob (the Core names an unnamed one 'call_later <delay>'). Its cancel
+    callback may be called after it fired or more than once (as Home Assistant's)."""
     hass._check_loop("async_call_later")  # noqa: SLF001
     secs = delay.total_seconds() if isinstance(delay, timedelta) else float(delay)
-    if not getattr(action, "_hass_callback", False):
+    job = action if isinstance(action, HassJob) else HassJob(action, f"call_later {secs}")
+    if job.job_type is not HassJobType.Callback:
         hass.violations.append("async_call_later with an action that is not a @callback")
-    timer = {"action": action, "due": CLOCK.now + timedelta(seconds=max(secs, 0.0)), "active": True}
+    timer = {"action": job.target, "job": job, "name": job.name, "due": CLOCK.now + timedelta(seconds=max(secs, 0.0)),
+             "active": True}
     hass.later.append(timer)
 
     def cancel() -> None:
@@ -799,7 +867,8 @@ def install() -> dict[str, types.ModuleType]:
         "homeassistant.helpers": _module("homeassistant.helpers", {}, True),
         "homeassistant.util": _module("homeassistant.util", {}, True),
         "homeassistant.core": _module("homeassistant.core", {
-            "HomeAssistant": HomeAssistant, "callback": callback, "CoreState": CoreState, "State": State, "Event": Event}),
+            "HomeAssistant": HomeAssistant, "callback": callback, "CoreState": CoreState, "State": State, "Event": Event,
+            "HassJob": HassJob, "HassJobType": HassJobType}),
         "homeassistant.const": _module("homeassistant.const", {
             "EVENT_HOMEASSISTANT_STARTED": "homeassistant_started", "__version__": "2026.10.4-fake",
             "REQUIRED_PYTHON_VER": (3, 13, 2), "STATE_ON": "on", "STATE_OFF": "off", "STATE_UNAVAILABLE": "unavailable",

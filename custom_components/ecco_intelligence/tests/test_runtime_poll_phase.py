@@ -6,7 +6,10 @@ mapped entities, at chosen times: every 60 s plus or minus 3 s, each poll jitter
 offset from the one-minute tick ('grid'), or each interval 60 s plus or minus 3 s ('walk'), or an explicit list; the
 configuration poll writes its own text every 60 s at its own phase; the recorder compiles each hour as it ends. Time is
 event driven (Harness.run_until): the tick fires at its own times, the coordinator's poll-driven step at its
-async_call_later time, each poll at its time, and every cycle finishes before the clock moves on.
+async_call_later time, each poll at its time, and every cycle finishes before the clock moves on (a cycle held in flight
+by a test meets the tick body's deadline at its time: Harness.install_job_wait). The phase offset is the poll's phase
+from the start, where the tick is first attached: the tick is detached while a cycle is in flight and attached again at
+its end (the quiet cycle), so after the first cycle its phase follows the last cycle's end, at most a minute after it.
 
 STALE, INPUT_EXPIRING and the numbers are counted from the stand-in's recorder rows (every write that changed a state or an
 attribute, as Home Assistant's states table keeps it), never only from observations taken after each cycle has finished:
@@ -16,9 +19,11 @@ a STALE that a tick writes and the same tick's refresh replaces is in the record
       and 59.5 s (A36's list included): at every offset, over three simulated hours after the
       first result, no recorder row has the status STALE or an item or forecast BLOCKED INPUT_EXPIRING, and no computed
       result holds INPUT_EXPIRING; every charge_target and predicted_morning_soc row (and every observation) carries its
-      number, and no item resting on a dongle input ever holds a number its inputs no longer cover; every refresh is
-      poll-driven and starts PROPOSED_POLL_SETTLE_S after its poll (the tick-to-poll phase is in cycle_stats and the
-      diagnostics); cycles per
+      number, and no item resting on a dongle input ever holds a number its inputs no longer cover; the tick body never
+      goes longer than TICK_S + PROPOSED_TICK_MARGIN_S without running (the tick, or the catch-up at each cycle's end)
+      and its deadline run inside a cycle never comes; every refresh is
+      poll-driven and starts PROPOSED_POLL_SETTLE_S after its poll (each cycle's poll age at its start is in cycle_stats, the
+      phase of the tick body's last run against the last poll in the diagnostics); cycles per
       hour are at most one per poll, state writes per hour at most eleven per published cycle; every cycle starts at or
       after the next_run_at published before it, and next_run_at lies between generated_at and valid_until; at the badly
       phased offsets the tick held refreshes and slot cycles back (non-vacuity of the hold); the A36 settle hold never
@@ -34,11 +39,13 @@ a STALE that a tick writes and the same tick's refresh replaces is in the record
   [5] the 55 s floor: a poll inside the floor is deferred to the floor's end, never dropped
   [6] A36: the exception retry the tick asks for 1 s after a poll is held to that poll's settle delay's end (no cycle
       at the tick) and started there by the poll-driven step; it reads what that poll writes 1.5 s after its text, with
-      that poll's liveness time; no second cycle for that poll
-  [7] the second-run guard: a poll-driven step while a cycle is in flight waits for its end, then runs; when a newer
-      poll arrived while it waited (it keeps the step, A33) and the cycle ends inside that poll's settle delay, the step
-      is held (A36) and still starts the settle delay after that poll and reads what that poll writes just after its
-      text (the RR-2 timeline)
+      that poll's liveness time; no second cycle for that poll (the retry falls due at a tick of the phase the failed
+      cycle's end set, and the poll comes a second before that tick)
+  [7] the second-run guard and the quiet cycle: a poll while a cycle is in flight arms no step (the tick is detached
+      too); the step is armed when the cycle ends, then runs; when a newer poll arrived meanwhile (it keeps the earlier
+      due time, A33) and the cycle ends inside that poll's settle delay, the step is held (A36) and still starts the
+      settle delay after that poll and reads what that poll writes just after its text (the RR-2 timeline); a cycle held
+      in flight longer than a minute gets its tick-body deadline run
   [8] the CPU guard, the time-budget bar, the refresh switch, the pause helper and a failed self-test apply to the
       poll-driven step (slot cycles still start at the poll-driven step)
   [9] the listener: exactly one, on the mapped telemetry poll text; a replayed or unavailable text and an attribute-only
@@ -71,8 +78,9 @@ a STALE that a tick writes and the same tick's refresh replaces is in the record
       starvation; each such start is the documented residual: a second poll within one settle delay)
   [14] A36: no cycle starts inside the settle delay of the newest poll seen. (a) a step deferred to the floor's end with
       a newer poll 1 s before that end: held to that poll's settle delay's end and reads what that poll writes 2 s after
-      its text; (b) a late poll 0.5 s before a tick that publishes STALE: the tick's refresh is held to that poll's
-      settle delay's end and reads what that poll writes 1 s after its text; the one STALE row is replaced there
+      its text; (b) a late poll 0.5 s before a tick that publishes STALE (one skipped poll: the tick of the phase the
+      last cycle's end set, two minutes after it): the tick's refresh is held to that poll's settle delay's end and
+      reads what that poll writes 1 s after its text; the one STALE row is replaced there
 Every scenario also ends with zero write attempts of any kind, no stand-in violation and the configuration tree unchanged
 outside ecco/intelligence/state/. Plain script; exits 1 on any failure.
 """
@@ -186,6 +194,13 @@ class World:
         self.entry = h.new_entry()
         h.setup(self.entry)
         self.c = h.coordinator(self.entry)
+        self.tick_runs: list[datetime] = [start]           # every run of the tick body (the start's publish first)
+        o_tick = self.c._tick_body  # noqa: SLF001
+
+        def tick_body(now, _o=o_tick):
+            self.tick_runs.append(h.now)
+            return _o(now)
+        self.c._tick_body = tick_body  # noqa: SLF001
         if grace is not None:
             self.c.grace_s = grace
         if inject is not None:
@@ -451,6 +466,15 @@ def healthy_report(w: World, label: str, hours: float = 3.0) -> None:
     uncovered = w.uncovered_numbers(first, t_end)
     check(f"{label}: no item resting on a dongle input was written with, or held, a number its last telemetry poll no "
           "longer covered", not uncovered, str(uncovered[:3]))
+    gaps = [(b_ - a_).total_seconds() for a_, b_ in zip(w.tick_runs, w.tick_runs[1:]) if a_ < t_end]
+    span = CONST.TICK_S + CONST.PROPOSED_TICK_MARGIN_S
+    n_cycles = len(w.starts())
+    check(f"{label}: the tick body (the tick, or the catch-up at each cycle's end) never went longer than TICK_S + "
+          f"PROPOSED_TICK_MARGIN_S ({span:g} s) without running (longest {max(gaps, default=0):g} s over {len(gaps)} "
+          "runs), and its deadline run inside a cycle never came (steady poll-driven operation: one cycle a poll)",
+          gaps and max(gaps) <= span and w.c.counters["tick_deadline_runs"] == 0
+          and n_cycles > 0 and w.c.counters["catchup_ticks"] == n_cycles,
+          f"{max(gaps, default=None)} {w.c.counters['tick_deadline_runs']} {w.c.counters['catchup_ticks']}")
     rows = w.starts(first)
     refreshes = [r for r in rows if r[1] == "REFRESH"]
     tick_runs = [r for r in rows if r[2] != "POLL"]
@@ -499,7 +523,7 @@ try:
         held[off] = (w.c.counters["tick_refresh_held"], w.c.counters["tick_slot_held"])
         d = w.c.diagnostics()["cadence"]
         if i == 0:
-            check("the diagnostics carry the poll-driven cadence state and the tick-to-poll phase",
+            check("the diagnostics carry the poll-driven cadence state and the tick body's phase against the last poll",
                   d["poll_listener"] is True and d["polls_arriving"] is True and d["last_poll_seen_at"] is not None
                   and isinstance(d["tick_poll_phase_s"], float) and d["poll_refresh_threshold_s"] == 185.0
                   and w.c.diagnostics()["proposed_constants"]["PROPOSED_POLL_SETTLE_S"] == SETTLE, json.dumps(d))
@@ -691,9 +715,13 @@ try:
     jobs6 = []
     s0 = START
     times = [s0 + timedelta(seconds=30 + 60 * k) for k in range(10)]        # ... s0+570
-    p6 = s0 + timedelta(seconds=659)                                         # 1 s before the tick at s0+660
-    times += [p6] + [s0 + timedelta(seconds=719 + 60 * k) for k in range(3)]
-    late6 = LateSoc(1.5)                                                     # that poll's SOC lands at s0+660.5
+    # the failed refresh starts (and ends) at s0+333 and the tick is attached again there: it then comes at s0+393, ...,
+    # s0+633, the first at or after the retry's due time (s0+333 + 300 s); the poll-driven steps between start nothing
+    # (no refresh before the retry), so no cycle moves that phase
+    tick6 = s0 + timedelta(seconds=333 + 5 * 60)
+    p6 = tick6 - timedelta(seconds=1)                                        # 1 s before that tick
+    times += [p6] + [p6 + timedelta(seconds=60 * k) for k in range(1, 4)]
+    late6 = LateSoc(1.5)                                                     # that poll's SOC lands at tick6 + 0.5 s
     ENGINE_LINK.compute = spy_jobs(jobs6)
     try:
         w = World("covered", mode="list", poll_times=times, seed=10,
@@ -704,12 +732,12 @@ try:
         ENGINE_LINK.compute = ORIG_COMPUTE
     rows = w.starts(s0)
     fail_at = s0 + timedelta(seconds=333)
-    tick6 = s0 + timedelta(seconds=660)
     held6 = p6 + timedelta(seconds=SETTLE)
+    next6 = p6 + timedelta(seconds=60 + SETTLE)                             # the next poll's step
     retry = [r for r in rows if r[0] == held6]
     job6 = next((j for j in jobs6 if j[0] == held6), None)
     between = [r for r in rows if tick6 <= r[0] < held6]
-    after = [r for r in rows if held6 < r[0] < s0 + timedelta(seconds=722)]
+    after = [r for r in rows if held6 < r[0] < next6]
     check("a refresh at a poll-driven step raises (RUNTIME_EXCEPTION); the retry 300 s later, which the tick asks for 1 s "
           "after a poll, is held to that poll's settle delay's end (no cycle at the tick) and started there by the "
           "poll-driven step (poll_age_s 3); it reads that poll's SOC, written 1.5 s after its text, with that poll's "
@@ -718,13 +746,14 @@ try:
           and retry[0][1] == "REFRESH" and abs(retry[0][3] - SETTLE) < 1e-6 and not between and not after
           and job6 is not None and job6[1] == late6.want.get(p6) and job6[2] == p6
           and w.c.counters["exception_retries"] == 1 and w.c.counters["settle_holds"] >= 1
-          and any(r[0] == s0 + timedelta(seconds=722) and r[2] == "POLL" for r in rows),
+          and any(r[0] == next6 and r[2] == "POLL" for r in rows),
           f"{[(r[0].isoformat()[11:21], r[2], r[3], r[4]) for r in rows]} job {job6 and (job6[1], job6[2])} want "
           f"{late6.want.get(p6)} holds {w.c.counters['settle_holds']}")
     w.close()
 
     # -----------------------------------------------------------------------------------------------------------------
-    print("== [7] the second-run guard: a poll-driven step while a cycle is in flight waits for its end")
+    print("== [7] the second-run guard and the quiet cycle: a poll while a cycle is in flight arms no step; the step "
+          "comes at its end")
     # -----------------------------------------------------------------------------------------------------------------
     calls = []
     gate = threading.Event()
@@ -734,13 +763,16 @@ try:
     h.at(s0 + timedelta(seconds=400), gate.set)
     w.run(s0 + timedelta(seconds=470))
     rows = w.starts(s0)
-    check("a refresh in flight from 333 s (held until 400 s): the step of the poll at 390 s waits and starts at 400 s, when "
-          "the cycle ended (not dropped, never two cycles at once)",
+    check("a refresh in flight from 333 s (held until 400 s): the poll at 390 s arms no step while it runs (held, its due "
+          "time kept); the step is armed when the cycle ends and starts at 400 s (not dropped, never two cycles at "
+          "once); held longer than a minute, the cycle ran the tick body at its deadline",
           any(r[0] == s0 + timedelta(seconds=333) for r in rows)
           and any(r[0] == s0 + timedelta(seconds=400) and r[2] == "POLL" for r in rows)
           and not any(s0 + timedelta(seconds=333) < r[0] < s0 + timedelta(seconds=400) for r in rows)
-          and w.c.counters["poll_steps_waited_in_flight"] >= 1,
-          f"{[(r[0].isoformat()[11:19], r[2], r[4]) for r in rows]}")
+          and w.c.counters["poll_steps_held_busy"] >= 1 and w.c.counters["poll_steps_waited_in_flight"] == 0
+          and w.c.counters["tick_deadline_runs"] >= 1,
+          f"{[(r[0].isoformat()[11:19], r[2], r[4]) for r in rows]} {w.c.counters['poll_steps_held_busy']} "
+          f"{w.c.counters['tick_deadline_runs']}")
     w.close()
 
     # The waiting step keeps its due time when a newer poll arrives (A33), so the cycle in flight can end inside that
@@ -784,17 +816,17 @@ try:
     resumed = next((j for j in jobs7 if j[0] > hold_at), None)
     row_r = next((r for r in rows if r[0] > hold_at), None)
     check("a slot cycle in flight from the grace's end (held until 0.5 s after the second poll it overlaps): the first "
-          "poll's step waits; the second poll keeps that step (A33); when the cycle ends inside the second poll's settle "
-          "delay the resumed step still starts the settle delay after that poll (poll_age_s 3), never at once, and "
-          "reads that poll's SOC written one second after its text, with that poll's liveness time",
+          "poll's step is held, not armed; the second poll keeps that step (A33); when the cycle ends inside the second "
+          "poll's settle delay the re-armed step still starts the settle delay after that poll (poll_age_s 3), never at "
+          "once, and reads that poll's SOC written one second after its text, with that poll's liveness time",
           any(j[0] == hold_at for j in jobs7) and resumed is not None and row_r is not None
           and resumed[0] == p_new + timedelta(seconds=SETTLE) and resumed[1] == want7.get(p_new)
           and resumed[2] == p_new and row_r[2] == "POLL" and abs(row_r[3] - SETTLE) < 1e-6
           and not any(hold_at < r[0] < release for r in rows)
-          and w.c.counters["poll_steps_waited_in_flight"] >= 1 and w.c.counters["poll_steps_kept_earlier"] >= 1,
+          and w.c.counters["poll_steps_held_busy"] >= 1 and w.c.counters["poll_steps_kept_earlier"] >= 1,
           f"{[(j[0].isoformat()[11:21], j[1], j[2] and j[2].isoformat()[11:19]) for j in jobs7[:3]]} want "
           f"{want7.get(p_new)} {[(r[0].isoformat()[11:21], r[2], r[3]) for r in rows[:3]]} "
-          f"{w.c.counters['poll_steps_waited_in_flight']} {w.c.counters['poll_steps_kept_earlier']}")
+          f"{w.c.counters['poll_steps_held_busy']} {w.c.counters['poll_steps_kept_earlier']}")
     w.close()
 
     # -----------------------------------------------------------------------------------------------------------------
@@ -1232,12 +1264,15 @@ try:
           f"{late14.want.get(p_c)} {w.c.counters['settle_held_starts']}")
     w.close()
 
-    # (b) one skipped poll whose late poll comes 0.5 s before a tick at which the result goes STALE
+    # (b) one skipped poll whose late poll comes 0.5 s before a tick at which the result goes STALE. The last cycle on
+    # time starts (and ends) at that poll's step, p_last + 3 s, where the tick is attached again: it then comes 60 s
+    # later (no poll: it holds the refresh) and 120 s later, when the result's validity falls before its horizon
     jobs14b = []
     base = START + timedelta(seconds=59.5)
     times = [base + timedelta(seconds=60 * k) for k in range(10)]          # ... START+599.5
     p_last = times[-1]
-    p_late = p_last + timedelta(seconds=120)                                # START+719.5, the tick at START+720
+    tick_b = p_last + timedelta(seconds=SETTLE + 2 * CONST.TICK_S)          # START+722.5
+    p_late = tick_b - timedelta(seconds=0.5)
     times += [p_late] + [p_late + timedelta(seconds=60 * k) for k in range(1, 3)]
     late14b = LateSoc(1.0)
     ENGINE_LINK.compute = spy_jobs(jobs14b)
@@ -1247,7 +1282,6 @@ try:
         w.run(p_late + timedelta(seconds=90))
     finally:
         ENGINE_LINK.compute = ORIG_COMPUTE
-    tick_b = START + timedelta(seconds=720)
     held_b = p_late + timedelta(seconds=SETTLE)
     rows = w.starts(p_last)
     status = [(t, s) for t, s, _a in w.rows("status", p_last)]

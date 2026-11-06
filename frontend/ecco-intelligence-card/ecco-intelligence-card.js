@@ -620,9 +620,9 @@ function renderDrill(vm, open) {
   if (vm.kind === 'live') {
     const a = vm.accuracy;
     const parts = [];
-    if (a && a.mae !== null) parts.push(`7-day mean error ${fig('accuracy_mae', figure(a.mae, 'kWh'))}`);
+    if (a && a.mae !== null) parts.push(`7-day mean error of the load forecasts ${fig('accuracy_mae', figure(a.mae, 'kWh'))}`);
     if (a && a.coverage !== null) parts.push(`inside its range ${fig('accuracy_coverage', `${Math.round(a.coverage * 100)}%`)} of the time`);
-    if (a && a.n !== null) parts.push(`${fig('accuracy_n', String(a.n))} days scored`);
+    if (a && a.n !== null) parts.push(`${fig('accuracy_n', String(a.n))} forecasts scored`);
     acc = `<h4>${esc(TEXT.accuracy)}</h4>${parts.length ? `<p>${parts.join(', ')}</p>` : `<p class="muted">${esc(TEXT.none)}</p>`}`;
   }
   const meta = `<p class="muted">${esc(TEXT.integration)} ${esc(vm.integrationVersion)}${vm.engineVersion ? ` · engine ${esc(vm.engineVersion)}` : ''}</p>`;

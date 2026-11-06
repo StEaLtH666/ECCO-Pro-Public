@@ -153,7 +153,7 @@ The card treats these ids and attribute names as a versioned API. The defaults o
 | `predicted_day_load` | `sensor.ecco_intel_predicted_day_load` | the integration (forecast, kWh, p10 / p90) |
 | `pv_tomorrow` | `sensor.ecco_intel_pv_tomorrow` | the integration (forecast, kWh, p10 / p90) |
 | `predicted_morning_soc` | `sensor.ecco_intel_predicted_morning_soc` | the integration (forecast, %) |
-| `accuracy` | `sensor.ecco_intel_accuracy` | the integration (diagnostic: 7-day mean error, coverage, n) |
+| `accuracy` | `sensor.ecco_intel_accuracy` | the integration (diagnostic: the 7-day mean error and band coverage of the load forecasts, every scored `load_kwh` kind pooled, not the day load alone; n, the forecasts scored; it lags one slot) |
 | `data_quality` | `sensor.ecco_intel_data_quality` | the integration (diagnostic: OK / DEGRADED / BLOCKED / UNKNOWN) |
 | `fresh` | `binary_sensor.ecco_intel_fresh` | the integration |
 | `paused` | `input_boolean.ecco_intel_paused` | the package (the owner's pause helper) |

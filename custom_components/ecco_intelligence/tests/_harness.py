@@ -394,8 +394,50 @@ class Harness:
 
     def setup(self, entry: Any) -> bool:
         ok = self.run(self.integration.async_setup_entry(self.hass, entry))
+        self.install_job_wait()
         self.settle(0.5)
         return ok
+
+    def install_job_wait(self) -> None:
+        """The coordinator's job waits (coordinator._job_wait) under the stand-in's clock where Home Assistant's would
+        follow the wall clock. A cycle waits for each executor job at most to its time budget (the loop's clock, kept
+        real here) or, when that comes first, to the tick body's deadline (the wall clock: here the stand-in's, which
+        moves only when the test moves it). So a wait whose timeout is the cycle's tick-body deadline (the coordinator's
+        own _tick_deadline_in) ends when the stand-in's clock reaches it, and that moment is scheduled as a no-op world
+        event, so run_until stops the clock there and the deadline run comes at its time (Harness.tick() moves in whole
+        steps, so there it comes at the first step past it); a time-budget wait keeps the loop's clock alone, as before.
+        Installed once, at the first setup; the real wait stays as real_job_wait."""
+        coord = sys.modules.get("custom_components.ecco_intelligence.coordinator")
+        if coord is None or getattr(coord._job_wait, "_stand_in_clock", False):  # noqa: SLF001
+            return
+        self.real_job_wait = coord._job_wait  # noqa: SLF001
+        harness = self
+
+        def waiting_coordinator() -> Any:
+            task = asyncio.current_task()
+            for e in harness.hass.config_entries.async_entries():
+                co = getattr(e, "runtime_data", None)
+                if co is not None and getattr(co, "_task", None) is task:
+                    return co
+            return None
+
+        async def job_wait(fut: asyncio.Future, timeout: float) -> Any:
+            loop = asyncio.get_running_loop()
+            end_loop = loop.time() + timeout
+            co = waiting_coordinator()
+            tick_cut = co is not None and abs(co._tick_deadline_in() - timeout) < 1e-9  # noqa: SLF001
+            end_clock = harness.fake.CLOCK.now + timedelta(seconds=timeout) if tick_cut else None
+            if end_clock is not None:
+                harness.at(end_clock, lambda: None)
+            while not fut.done():
+                if (end_clock is None and loop.time() >= end_loop) or (end_clock is not None
+                                                                         and harness.fake.CLOCK.now >= end_clock):
+                    raise asyncio.TimeoutError
+                left = end_loop - loop.time() if end_clock is None else 0.02
+                await asyncio.wait({fut}, timeout=max(min(0.02, left), 0.001))
+            return fut.result()
+        job_wait._stand_in_clock = True  # noqa: SLF001
+        coord._job_wait = job_wait  # noqa: SLF001
 
     def unload(self, entry: Any) -> bool:
         ok = self.run(self.integration.async_unload_entry(self.hass, entry))

@@ -39,8 +39,9 @@ python -I -B intelligence/tools/make_examples.py --check
 ```
 
 The roots are listed in `tools/offline_test_roots.txt`. Measured on the full Intelligence source after the SHADOW v0.1
-completion, the `intelligence/tests` root takes about 6 minutes and `custom_components/ecco_intelligence/tests` about 6
-minutes (the poll-phase suite `test_runtime_poll_phase.py` alone about 3.5 minutes). The card's Node suite (`frontend/ecco-intelligence-card`, `node --test test/*.test.mjs`) runs locally only;
+completion, the `intelligence/tests` root takes about 6 minutes and `custom_components/ecco_intelligence/tests` about 20
+minutes (the poll-phase suite `test_runtime_poll_phase.py` alone about 11 minutes: every executor job of every simulated
+cycle ends with the runtime's 0.15 s cool-down). The card's Node suite (`frontend/ecco-intelligence-card`, `node --test test/*.test.mjs`) runs locally only;
 `tools/tests/test_intelligence_card.py` pins it statically for CI.
 
 Run the `home-assistant/tests` root (about 30 minutes), the `tools/tests` root and the registry suites when the machine
@@ -243,10 +244,10 @@ exit 2), so CI would build no test matrix. Each PR edits them for its own slice 
 
 | File | PR-1 and PR-2 | PR-3 | PR-4 |
 |---|---|---|---|
-| `tools/offline_test_roots.txt` | as on main (no new root) | adds `custom_components/ecco_intelligence/tests` (the foundation's F-B1 version) | adds `ecco_autonomy/tests` (the combined source's version) |
+| `tools/offline_test_roots.txt` | as on main (no new root) | adds `custom_components/ecco_intelligence/tests` (the foundation's F-B1 version) | adds the action policy's test root (the combined source's version) |
 | `README.md` (the roots sentence) and `intelligence/README.md` (the boundary roots) | as on main | the F-B1 versions | the combined source's versions |
 | `CHANGELOG.md` | main's `CHANGELOG.md` (every entry of main kept) plus the `[Unreleased]` line of each PR merged so far, its own included | the same | the same (all four lines) |
-| this guide | not included | without the `ecco_autonomy` rows and commands | the combined source's version |
+| this guide | not included | without the action policy's rows and commands | the combined source's version |
 
 Every other file of a PR is one the Intelligence work adds or changes, and it is taken from the combined source
 unchanged. Each head is built on main: a file the Intelligence work does not touch is main's, never the combined

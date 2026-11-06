@@ -12,7 +12,9 @@ poll text stops moving); the poll-driven refresh is test_runtime_poll_phase.py's
   an engine exception -> SELF_TEST_FAILED, every item state None, the last values only in last_good; the exception's
   message appears in no state, attribute, recorder row, self-test value or diagnostics download (only its type);
   a time-budget overrun -> SELF_TEST_FAILED with the reason, its late result discarded;
-  an engine thread that hangs -> STALE through the one-minute timer, every item None, last values only in last_good;
+  an engine thread that hangs -> STALE through the tick body, which the hung cycle runs itself at the body's deadline
+  (TICK_S + PROPOSED_TICK_MARGIN_S after its last run; the tick is detached while a cycle is in flight), every item
+  None, last values only in last_good;
   an injected result with no valid_until (the real cycle always sets one, at most 900 s ahead, and goes STALE then) with
   a hung next run -> STALE once it is older than PROPOSED_RESULT_MAX_AGE_S (the defensive age rule);
   a second run never starts while one is in flight;
@@ -44,7 +46,8 @@ poll text stops moving); the poll-driven refresh is test_runtime_poll_phase.py's
   supervision steady while the poll text moves (site_decisions puts supervision in DONGLE_READINGS, WP-1);
   every decision OPEN -> every gated item without a number; the example profile as the site file -> the same;
   the pause helper on -> PAUSED and nothing computed; the pause helper missing -> not paused, pause_control MISSING,
-  self-test WARN; the pause helper turned on while a cycle is in flight (with and without a tick in between) -> PAUSED,
+  self-test WARN; the pause helper turned on while a cycle is in flight (with and without a tick-body run in between,
+  the deadline run inside the cycle) -> PAUSED,
   the result discarded, no number and no scorecard row; a failure published while the helper is on (a time-budget
   overrun) -> PAUSED; an entity id collision ('_2') -> SELF_TEST_FAILED; a contract entity Home Assistant never adds
   (e.g. disabled in the registry) -> SELF_TEST_FAILED and nothing computed; one entity whose state write raises -> every
@@ -432,7 +435,7 @@ try:
     s.close()
 
     # -----------------------------------------------------------------------------------------------------------------
-    print("== an engine thread that hangs -> STALE via the one-minute timer")
+    print("== an engine thread that hangs -> STALE via the tick body (its deadline run inside the hung cycle)")
     gate = threading.Event()
     calls = []
     s = Scn("hang", H.site_profile())
@@ -449,7 +452,8 @@ try:
     check("the second run hangs in flight", len(calls) == 2 and s.c.diagnostics()["busy"], f"{len(calls)}")
     s.advance(60, n=3, settle=0.1)
     st = s.st()
-    check("the timer applied STALE although the engine thread hangs", st.state == "STALE", st.state)
+    check("the tick body (its deadline run inside the cycle, the tick detached) applied STALE although the engine thread "
+          "hangs", st.state == "STALE" and s.c.counters["tick_deadline_runs"] >= 1, f"{st.state} {s.c.counters}")
     check("STALE: every item state None", not s.items_numeric() and h.state("fresh").state == "off")
     check("STALE: the last values only in the unrecorded last_good",
           (st.attributes.get("last_good") or {}).get("values", {}).get("pv_tomorrow") == 4.2)
@@ -787,8 +791,9 @@ try:
     check("... and the status left PAUSED for STARTING (all nulls) while it runs", s.st().state == "STARTING"
           and s.st().attributes["pause_control"] == "OFF" and not s.items_numeric(), s.st().state)
     s.pause = "on"
-    s.advance(30, settle=0.3)                      # a tick while it runs publishes PAUSED
-    check("a tick while it runs publishes PAUSED", s.st().state == "PAUSED")
+    s.advance(70, settle=0.3)                      # past the tick body's deadline: inside the cycle it publishes PAUSED
+    check("the tick body's deadline run while it runs (the tick is detached) publishes PAUSED", s.st().state == "PAUSED"
+          and s.c.counters["tick_deadline_runs"] >= 1, f"{s.st().state} {s.c.counters['tick_deadline_runs']}")
     gate.set()
     check("... the run ends", wait_for(lambda: not s.c.diagnostics()["busy"]))
     h.settle(2.0)
@@ -1172,7 +1177,7 @@ try:
     check("the refresh hangs in flight", wait_for(lambda: len(calls) == hold["n"] + 1) and s.c.diagnostics()["busy"],
           f"{len(calls)}")
     sk0 = s.c.counters["refresh_skipped_in_flight"]
-    s.advance(60, n=4, settle=0.1)
+    s.advance(60, n=6, settle=0.1)               # the tick body's deadline runs inside the hung cycle (TICK_S apart)
     check("... no refresh starts while it hangs, the skips are counted, and the result goes STALE",
           len(calls) == hold["n"] + 1 and s.c.counters["refresh_skipped_in_flight"] - sk0 >= 3 and s.st().state == "STALE",
           f"{len(calls)} {s.c.counters} {s.st().state}")

@@ -4,15 +4,73 @@ What it touches in Home Assistant (the complete list; the runtime boundary suite
 
   * hass.states.get(...)                     read the mapped entities and the pause helper (never a write)
   * recorder get_instance(hass).async_add_executor_job(statistics_during_period, ...)   read statistics, recorder executor
-  * hass.async_add_executor_job(...)         the engine and the state store, never on the event loop
-  * hass.async_create_background_task(...)   one cycle at a time (cancelled by HA at shutdown and by unload)
-  * async_track_time_interval(.., 60 s)      the one timer
+  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop
+  * hass.async_add_import_executor_job(...)  in __init__.py: this module (and through it most of the vendored engine) is
+                                             imported in the import executor, never on the event loop
+  * hass.loop.call_soon(...)                 the release of each executor job above (__init__.release_after_step): a job
+                                             starts only once the event-loop step that submitted it has ended, and ends
+                                             with the SUBMIT_COOLDOWN_S cool-down (__init__.released_call)
+  * hass.async_create_background_task(..., CYCLE_TASK_NAME, eager_start=False)   one cycle at a time (cancelled by HA at
+                                             shutdown and by unload); never started eagerly, so the callback that starts
+                                             it only schedules it
+  * async_track_time_interval(.., 60 s, name=TICK_JOB_NAME)   the one timer, attached by _attach_tick (its one call site)
+                                             at the start and again when each cycle ends; detached while a cycle is in
+                                             flight, so its phase follows the last cycle's end
   * async_track_state_change_event(hass, <the telemetry poll text>, ...)   the one state listener (A23), on the entity mapped
                                              for liveness.dongle_poll_changed_at only (none when it is not mapped),
-                                             removed on unload
-  * async_call_later(hass, .., ...)          the poll-driven refresh, at most one pending (cancelled on unload)
+                                             removed on unload; while a cycle is in flight it notes a poll, arming nothing
+  * async_call_later(hass, .., HassJob(_on_poll_step, POLL_STEP_JOB_NAME))   the poll-driven refresh, at most one pending,
+                                             never while a cycle is in flight (cancelled at its start with its due time
+                                             kept, armed again at its end), cancelled on unload
   * hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, ...)   the start-up grace starts when HA has started
   * its own entities' async_write_ha_state() (sensor.py / binary_sensor.py)
+
+The quiet cycle. While a cycle is in flight (from the moment _maybe_start creates its task until the cycle has ended) no
+timer of the integration fires and none is created: the tick is detached at the start, a pending poll-driven step is
+cancelled (its due time kept) and the listener notes each poll without arming a step. When the cycle ends (after its last
+step, or in the done callback of a task cancelled before its first step) the second-run guard is released and the tick
+body runs once as a catch-up (liveness, pause, self-test, STALE, re-render, _maybe_start: a slot that fell due can start,
+the floor still bars a second refresh); unless that started the next cycle, the tick is attached again and the held step
+is armed, unheld, at max(its due time, now), where the floor, A33 and A36 apply as before. This holds whatever the cycle's
+outcome, also when recording its diagnostics raised. After an unload nothing is attached or armed again. Home Assistant's
+shutdown cancels the cycle task but does not unload the entry: the catch-up then runs (it publishes; no cycle starts
+while Core is stopping) and the tick and a held step come back, as the tick stayed attached through a shutdown before the
+quiet cycle. The tick body still runs at least every TICK_S + PROPOSED_TICK_MARGIN_S, counted from its last run (the
+publish horizon below). Inside a cycle its deadline is its
+last run plus TICK_S, the moment the tick itself would have come, so the PROPOSED_TICK_MARGIN_S left before the horizon
+the last run mapped its payloads to takes the deadline run's own latency (the job wait's timeout and the cycle task's
+next step), as it takes a late tick's. A cycle's first step runs the tick body unless the tick body started the cycle (the
+tick, or the catch-up at the previous cycle's end, ran at the cycle's start), before any job of the cycle, so its next
+deadline is at least TICK_S after the cycle's start and falls inside the cycle only when the cycle runs longer than
+TICK_S; when that deadline comes while the cycle waits for an executor job, the cycle task runs the tick body itself at
+that moment, as one of its own steps (the job's wait times out there; no timer of the integration), and waits on. An
+engine thread abandoned at the time budget keeps the second-run guard but not the quiet, by design: the tick is attached
+again when that cycle ends (so the STALE and pause rules run every minute while the thread hangs), and a step held
+meanwhile is armed when the thread ends.
+
+The cycle's steps. The tick, the poll-driven step and the start-up callbacks do no cycle work: _maybe_start (the one place a
+cycle starts) applies the cadence rules, sets the second-run guard and creates the cycle task, which first runs at a later
+event-loop step. The cycle then runs in short steps, yielding to the event loop between them (_next_step):
+  1. the tick body unless the tick body started this cycle (the quiet cycle, above), then the pause helper and the
+     self-test (PAUSED or SELF_TEST_FAILED end the cycle there, as before);
+  2. the snapshot: both poll texts and every mapped state, read in one step. The cycle starts a loop step or two before
+     its snapshot, so a new poll text can arrive in between, after the start's settle check: the snapshot is then held
+     once to that poll's settle end (the settle hold at the snapshot, A36 below). The cycle time (the engine's `now`) is
+     read in the snapshot's step, so no state in the snapshot is newer than the cycle time; the cycle's start (the
+     refresh floor, the exception retry, cycle_stats' started_at) stays the moment _maybe_start started it, and a
+     poll-driven step is covered by a cycle that started after its poll or held its snapshot for it;
+  3. the recorder statistics and the scorecard metrics (_history_inputs, at the cycle time; a SLOT cycle awaits both
+     executor jobs);
+  4. the engine job, built from that snapshot (EngineJob, envelope_summary of the last computed result) and submitted;
+  5. after the engine: the pause helper and the self-test are read again, then one publish (every changed entity in the
+     same step, so the entities never show a mix of two envelopes), then, for a SLOT cycle, the scorecard step.
+Each executor job is held until the step that submitted it has ended (__init__.released_call), so the job and the rest of
+that step never run at once, and ends with a cool-down, so its completion starts in a fresh CPU-quota period. The cycle
+waits for each job with asyncio.wait_for (_job_wait), whose timeout is the time budget or the tick body's deadline,
+whichever comes first: a timer asyncio makes, which fires only when that moment comes before the job ends. An unload or a
+shutdown cancels the task at whichever step it waits; a task cancelled before its first step ends with the outcome
+'cancelled' all the same (its done callback, _never_entered). What the cycle's end does then differs (the quiet cycle,
+above): nothing after an unload, the catch-up, the tick and a held step after a shutdown.
 
 Envelopes are built only by the contract constructors (starting_envelope, paused_envelope, stale_from,
 self_test_failed_envelope, with_last_good, with_next_run_at) or returned by run_cycle; entities are fed only from
@@ -35,39 +93,47 @@ Rules:
     tick (PROPOSED_REFRESH_FLOOR_S); a SLOT cycle wins when both are due. Refreshes are suspended while the engine's CPU
     time over the rolling hour exceeds PROPOSED_CPU_BUDGET_S_PER_H (self-test WARN CPU_BUDGET; slot cycles continue, the
     only effect is STALE). A refresh changes no limit, no validity and no rule: the engine decides every value;
-  * poll-phase-aligned refresh (A23; section 13.4): the telemetry poll text moves about every PROPOSED_POLL_INTERVAL_S and
-    the tick holds a near-fixed phase against it, so a refresh started at a tick long after a poll would withhold every
-    item resting on a dongle input (INPUT_EXPIRING). The one state listener notes each new poll text (a replayed or
-    unavailable text is no new poll) and schedules one poll-driven step PROPOSED_POLL_SETTLE_S later (the rest of that
-    poll's entity writes land first); a pending step is never moved later (it keeps the earliest due time, so a text
-    that changes faster than the settle delay cannot postpone it). That step starts a due slot cycle, or a REFRESH when
-    the published result is STALE, has less than POLL_REFRESH_THRESHOLD_S of validity left (the margin plus one poll, so
-    the margin is never entered between two polls), holds an item BLOCKED INPUT_EXPIRING, or holds an item BLOCKED for an
-    input reason (INPUT_BLOCK_CODES: recovery after a transient input fault takes one poll, not up to the 835 s ceiling).
-    A refresh inside the floor is deferred to the floor's end, never dropped; while a cycle is in flight the step waits
-    for its end, then runs (one poll that arrived while it waited is served by it). While polls are arriving (one seen
+  * poll-phase-aligned refresh (A23; section 13.4): the telemetry poll text moves about every PROPOSED_POLL_INTERVAL_S
+    and the tick holds a phase against it that follows the last cycle's end (the quiet cycle above), so a refresh
+    started at a tick long after a poll would withhold every item resting on a dongle input (INPUT_EXPIRING). The one
+    state listener notes each new poll text (a replayed or unavailable text is no new poll) and schedules one
+    poll-driven step PROPOSED_POLL_SETTLE_S later (the rest of that poll's entity writes land first); a pending step is
+    never moved later (it keeps the earliest due time, so a text that changes faster than the settle delay cannot
+    postpone it). That step starts a due slot cycle, or a REFRESH when the published result is STALE, has less than
+    POLL_REFRESH_THRESHOLD_S of validity left (the margin plus one poll, so the margin is never entered between two
+    polls), holds an item BLOCKED INPUT_EXPIRING, or holds an item BLOCKED for an input reason (INPUT_BLOCK_CODES:
+    recovery after a transient input fault takes one poll, not up to the 835 s ceiling). A refresh inside the floor is
+    deferred to the floor's end, never dropped; a step due while a cycle is in flight waits for its end (held, not
+    armed: the quiet cycle), then runs (one poll noted meanwhile is served by it). While polls are arriving (one seen
     within PROPOSED_POLL_ACTIVE_S) the tick starts no slot cycle (the next poll-driven step does) and no refresh for
     validity or INPUT_EXPIRING unless the published envelope would go STALE at the next tick before the next expected
     poll-driven step, so a badly phased tick never replaces a good result with a worse one. When the poll text stops
     moving the tick resumes its present rules, so a frozen dongle fails closed (the dongle items BLOCK). A missed, late
-    or frozen poll can leave the published result expiring before a tick's publish horizon while the hold still
-    expected a poll-driven step: that tick then publishes STALE (every item null, never a wrong number) and starts the
-    refresh that replaces it, so the episode costs at most one STALE cycle (A32, accepted as fail closed; no staleness
-    rule changes; when that tick falls inside a poll's settle delay, its refresh is held to the delay's end, so that
-    STALE lasts at most PROPOSED_POLL_SETTLE_S longer). Healthy polls (60 s plus or minus 3 s, any phase) give no STALE
-    and no INPUT_EXPIRING. The pause helper, the self-test, the second-run guard, the CPU guard, the time-budget bar and
-    the refresh switch apply to the poll-driven step and to a held cycle unchanged;
+    or frozen poll can leave the published result expiring before a tick's publish horizon while the hold still expected
+    a poll-driven step: that tick then publishes STALE (every item null, never a wrong number) and starts the refresh
+    that replaces it, so the episode costs at most one STALE cycle (A32, accepted as fail closed; no staleness rule
+    changes; when that tick falls inside a poll's settle delay, its refresh is held to the delay's end, so that STALE
+    lasts at most PROPOSED_POLL_SETTLE_S longer). Healthy polls (60 s plus or minus 3 s, any phase) give no STALE and no
+    INPUT_EXPIRING. The pause helper, the self-test, the second-run guard, the CPU guard, the time-budget bar and the
+    refresh switch apply to the poll-driven step and to a held cycle unchanged;
   * the settle hold (A36): no cycle starts inside the settle delay of the newest poll seen. At the one place a cycle
     starts (_maybe_start), a cycle of any trigger (the tick's refresh after STALE or its back-off, the exception retry,
-    the tick's exception to its hold, a poll-driven step, one deferred to the floor's end, one resumed after a cycle in
-    flight) whose start falls before the newest poll seen plus PROPOSED_POLL_SETTLE_S is held once to that moment, on
-    the one pending step: when a step is already pending by then it serves the held cycle (a poll-driven step starts
-    whatever the tick would), otherwise the step is armed there as a settle hold. The hold is one-shot (the held step
-    starts without a second hold), at most PROPOSED_POLL_SETTLE_S, never re-armed by a later poll (a pending step is
-    never moved later, A33), so a poll period below the settle delay cannot starve it; it never applies when no poll was
-    seen within the settle delay. So a cycle that started after the poll was seen has read it already (the step is then
-    covered). Residual (documented, not fixed): two polls within one settle delay (an abnormal sub-settle poll period),
-    where the held cycle starts inside the second poll's settle delay;
+    the tick's exception to its hold, a poll-driven step, one deferred to the floor's end, one armed again when a cycle
+    in flight ended) whose start falls before the newest poll seen plus PROPOSED_POLL_SETTLE_S is held once to that
+    moment, on the one pending step: when a step is already pending by then it serves the held cycle (a poll-driven step
+    starts whatever the tick would), otherwise the step is armed there as a settle hold. The hold is one-shot (the held
+    step starts without a second hold), at most PROPOSED_POLL_SETTLE_S, never re-armed by a later poll (a pending step
+    is never moved later, A33), so a poll period below the settle delay cannot starve it; it never applies when no poll
+    was seen within the settle delay. So a cycle that started after the poll was seen has read it already (the step is
+    then covered). The same hold at the snapshot (_snapshot_hold): a cycle starts a loop step or two before its
+    snapshot, so a poll text seen in between (after the start's check) holds the snapshot once to that poll's settle
+    end, at most PROPOSED_POLL_SETTLE_S and never past the cycle's deadline (snapshot_holds); that cycle then covers the
+    poll, so its own step starts no second cycle. A cycle is held at most once at its start and once at its snapshot.
+    Residual (documented, not fixed): two polls within one settle delay (an abnormal sub-settle poll period), where the
+    held cycle starts inside the second poll's settle delay (settle_residual_starts), or the second poll arrives while
+    the snapshot is held and the snapshot is read inside its settle delay (snapshot_residual_reads; that poll is not
+    covered, so its step refreshes at the floor's end when a refresh is due); a snapshot hold cut short by the cycle's
+    deadline is read inside the settle delay too, so it counts there as well and covers nothing;
   * after RUNTIME_EXCEPTION one retry PROPOSED_EXCEPTION_RETRY_S after the failed start, then slot cycles only (until a
     result is published again); after CYCLE_TIME_BUDGET no refresh before the next slot, and never while the abandoned
     thread runs;
@@ -75,15 +141,17 @@ Rules:
   * a cycle longer than PROPOSED_TIME_BUDGET_S is abandoned: SELF_TEST_FAILED with the reason CYCLE_TIME_BUDGET, the last
     values only in last_good; its late result is discarded;
   * any exception -> SELF_TEST_FAILED with a reason (last values only in last_good);
-  * what is written stays on the entities until the next write, at the latest the next tick: the payloads are mapped as of
-    that moment (the publish horizon, TICK_S plus PROPOSED_TICK_MARGIN_S ahead), so no number and no fresh=on outlives
-    its valid_until between ticks. Only the entities whose payload changed are written (plus any whose last write
-    raised); a refresh changes generated_at, so it writes all eleven, and Home Assistant's recorder keeps the
-    timestamp-only attributes out of its rows (sensor.py / binary_sensor.py), so an unchanged refresh adds no new
-    attributes row;
-  * every minute, even while an engine thread hangs: a computed result whose valid_until (or whose age limit,
-    PROPOSED_RESULT_MAX_AGE_S) falls before the publish horizon -> STALE; a fresh result that would expire before the next
-    tick is published STALE at once (its values in last_good);
+  * what is written stays on the entities until the next write, at the latest the next run of the tick body (the tick, the
+    run at a cycle's first step, the catch-up at its end or the deadline run inside it, TICK_S after the last run: at
+    least every TICK_S plus PROPOSED_TICK_MARGIN_S): the payloads are mapped as of that moment (the publish horizon,
+    TICK_S plus PROPOSED_TICK_MARGIN_S ahead), so no number and no fresh=on outlives its valid_until between two runs.
+    Only the entities whose payload changed are written (plus any whose last write raised); a refresh changes
+    generated_at, so it writes all eleven, and Home Assistant's recorder keeps the timestamp-only attributes out of its
+    rows (sensor.py / binary_sensor.py), so an unchanged refresh adds no new attributes row;
+  * at least every TICK_S plus PROPOSED_TICK_MARGIN_S, even while an engine thread hangs (the tick body: by the tick, at a
+    cycle's first step and its end, and inside a cycle at its deadline): a computed result whose valid_until (or whose
+    age limit, PROPOSED_RESULT_MAX_AGE_S) falls before the publish horizon -> STALE; a fresh result that would expire
+    before the next tick is published STALE at once (its values in last_good);
   * next_run_at on every computed and STALE envelope: the earliest moment the next cycle can start, min(the next schedule
     slot, valid_until - REFRESH_MARGIN_S (while polls are arriving valid_until - POLL_REFRESH_THRESHOLD_S, the moment from
     which a poll-driven step refreshes; the refresh floor alone while an item is BLOCKED INPUT_EXPIRING, or, while polls
@@ -99,8 +167,13 @@ Rules:
 
 Diagnostics only (never an entity attribute): last_cycle_timing {recorder_s, engine_s, store_s, total_s, cpu_s},
 cycle_duration_s, cycle_stats (the last PROPOSED_CYCLE_STATS_N runs, more than 72 h of wall time at the highest cycle
-rate (A50): kind, outcome, times, trigger TICK / POLL and the age of the last poll text at the start, the tick-to-poll
-phase L3 logs) and the cadence state.
+rate (A50): kind, outcome, times, trigger TICK / POLL and the age of the last poll text at the cycle's start, which L3
+logs) and the cadence state, with last_tick_at (the tick body's last run, whichever ran it: the tick, the run at a
+cycle's first step, the catch-up at a cycle's end or the deadline run inside a cycle) and tick_poll_phase_s (that run's
+phase against the last poll seen: the seconds from that poll to that run; None while polls are not arriving).
+recorder_s, engine_s and store_s are the event loop's wall time from each submit to its result, so each includes its
+job's release wait and its SUBMIT_COOLDOWN_S cool-down (and a tick body run at the deadline during that wait); total_s is
+the whole cycle, every cool-down and any settle hold included; cpu_s is the engine thread's CPU time, with no cool-down.
 
 Texts that reach an entity or the diagnostics carry codes, field paths and exception types only, never a site value or an
 exception message; the detail goes to a debug log line.
@@ -122,7 +195,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, REQUIRED_PYTHON_VER
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import CoreState, HomeAssistant, callback
+from homeassistant.core import CoreState, HassJob, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -134,12 +207,13 @@ from intelligence.advisory_contract import (ENTITY_IDS, INTEGRATION_ENTITY_KEYS,
 from intelligence.quality import RULE_INPUTS
 from intelligence.site_decisions import CONFIG_LIVENESS_KEY, DecisionSet
 
-from .const import (CPU_WINDOW_S, INTEGRATION_VERSION, MODE, POLL_REFRESH_THRESHOLD_S, PROPOSED_CPU_BUDGET_S_PER_H,
-                    PROPOSED_CYCLE_STATS_N, PROPOSED_EXCEPTION_RETRY_S, PROPOSED_HISTORY_CATCHUP_S,
-                    PROPOSED_POLL_ACTIVE_S, PROPOSED_POLL_INTERVAL_S, PROPOSED_POLL_SETTLE_S, PROPOSED_RECORDER_RETRY_S,
-                    PROPOSED_REFRESH_FLOOR_S, PROPOSED_RESULT_MAX_AGE_S, PROPOSED_STALE_BACKOFF_S,
-                    PROPOSED_STARTUP_GRACE_S, PROPOSED_TICK_MARGIN_S, PROPOSED_TIME_BUDGET_S, REFRESH_MARGIN_S,
-                    SCHEDULE_DAILY_LOCAL, SITE_TZ, TICK_S)
+from . import release_after_step, released_call
+from .const import (CPU_WINDOW_S, CYCLE_TASK_NAME, DOMAIN, INTEGRATION_VERSION, MODE, POLL_REFRESH_THRESHOLD_S,
+                    POLL_STEP_JOB_NAME, PROPOSED_CPU_BUDGET_S_PER_H, PROPOSED_CYCLE_STATS_N, PROPOSED_EXCEPTION_RETRY_S,
+                    PROPOSED_HISTORY_CATCHUP_S, PROPOSED_POLL_ACTIVE_S, PROPOSED_POLL_INTERVAL_S, PROPOSED_POLL_SETTLE_S,
+                    PROPOSED_RECORDER_RETRY_S, PROPOSED_REFRESH_FLOOR_S, PROPOSED_RESULT_MAX_AGE_S,
+                    PROPOSED_STALE_BACKOFF_S, PROPOSED_STARTUP_GRACE_S, PROPOSED_TICK_MARGIN_S, PROPOSED_TIME_BUDGET_S,
+                    REFRESH_MARGIN_S, SCHEDULE_DAILY_LOCAL, SITE_TZ, SUBMIT_COOLDOWN_S, TICK_JOB_NAME, TICK_S)
 from .runtime import engine_link, gates, history_source, sources
 from .runtime import store as rstore
 from .runtime.selftest import FAIL, PASS, WARN, SelfTest
@@ -189,8 +263,9 @@ def due_slot(now: datetime) -> datetime:
 
 
 def publish_horizon(now: datetime) -> datetime:
-    """The latest moment what is written at `now` can still be on the entities: the next tick, plus a margin for a late
-    one. Payloads are mapped as of this moment (to_entity_payloads applies the null rule at that time)."""
+    """The latest moment what is written at `now` can still be on the entities: the next tick (or, inside a cycle, the
+    deadline run that stands in for it, TICK_S after the tick body's last run), plus a margin for a late one. Payloads
+    are mapped as of this moment (to_entity_payloads applies the null rule at that time)."""
     return now + timedelta(seconds=TICK_S + PROPOSED_TICK_MARGIN_S)
 
 
@@ -236,6 +311,24 @@ def next_slot(now: datetime) -> datetime:
     if daily <= now:
         daily = datetime.combine(local.date() + timedelta(days=1), time(*SCHEDULE_DAILY_LOCAL), tzinfo=LONDON).astimezone(UTC)
     return min(hour, daily)
+
+
+async def _next_step() -> None:
+    """Yield to the event loop between two steps of a cycle (the cycle's next step runs at a later loop iteration)."""
+    await asyncio.sleep(0)
+
+
+async def _settle_wait(seconds: float) -> None:
+    """The settle hold at the snapshot (A36): the cycle task waits `seconds` (at most PROPOSED_POLL_SETTLE_S) on the
+    event loop's clock, so the rest of a poll's entity writes land before its snapshot."""
+    await asyncio.sleep(seconds)
+
+
+async def _job_wait(fut: asyncio.Future, timeout: float) -> Any:
+    """The cycle task waits for an executor job's result at most `timeout` seconds on the event loop's clock (the time
+    budget left or the tick body's deadline, whichever comes first): asyncio.TimeoutError then, and the job, shielded,
+    runs on."""
+    return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
 
 
 def _finite_s(v: object) -> float | None:
@@ -291,8 +384,8 @@ async def async_create_coordinator(hass: HomeAssistant, entry: Any) -> "EccoInte
     mode = gates.mode_gate(MODE, data.get("mode"))
     if mode.level == FAIL:
         raise ConfigEntryError(mode.text)
-    startup = await hass.async_add_executor_job(_startup_io, hass.config.config_dir, hass.config.latitude,
-                                                hass.config.longitude)
+    startup = await hass.async_add_executor_job(released_call, release_after_step(hass), _startup_io,
+                                                hass.config.config_dir, hass.config.latitude, hass.config.longitude)
     for code, detail in startup.site.details:          # the offending site-file value, for the owner's debug log only
         _LOGGER.debug("ECCO Intelligence start-up check %s: %s", code, detail)
     startup.selftest.add(mode)
@@ -329,12 +422,17 @@ class EccoIntelCoordinator:
                          "poll_steps_deferred_floor": 0, "poll_steps_covered": 0, "poll_steps_waited_in_flight": 0,
                          "poll_steps_idle": 0, "poll_steps_kept_earlier": 0, "tick_refresh_held": 0, "tick_slot_held": 0,
                          "settle_holds": 0, "settle_held_starts": 0, "settle_residual_starts": 0,
-                         "history_parses": 0, "history_reuses": 0}
+                         "snapshot_holds": 0, "snapshot_residual_reads": 0,
+                         "history_parses": 0, "history_reuses": 0, "ticks_deferred": 0, "catchup_ticks": 0,
+                         "tick_start_runs": 0, "tick_deadline_runs": 0, "poll_steps_held_busy": 0}
         self._run_cycle: Callable | None = None           # None = the vendored shadow_cycle.run_cycle (tests inject)
         self._listeners: list[tuple[str | None, Callable[[], None]]] = []
         self._in_write_failure = False
         self._dirty: set[str] = set()                     # entities whose last state write raised: written again next time
         self._unsubs: list[Callable[[], None]] = []
+        self._tick_unsub: Callable[[], None] | None = None   # the attached tick (None: detached, a cycle is in flight)
+        self._tick_ran_at: datetime | None = None         # the tick body's last run (or the start's publish)
+        self._cycle_live = False                          # a cycle is in flight: from its task's creation to its end
         self._unsub_started: Callable[[], None] | None = None
         self._started_at: datetime | None = None
         self._first_run_done = False
@@ -343,6 +441,7 @@ class EccoIntelCoordinator:
         self._busy = False
         self._orphans: set = set()
         self._task: asyncio.Task | None = None
+        self._pending_start: object | None = None        # the cycle task started but not yet entered (_never_entered)
         self._last_computed: AdvisoryEnvelope | None = None
         self._liveness: sources.LivenessMemory | None = None
         self._liveness_at: datetime | None = None
@@ -369,13 +468,20 @@ class EccoIntelCoordinator:
         self._poll_entity: str | None = None              # the mapped telemetry poll text (None: not mapped, no listener)
         self._poll_text: str | None = None                # the last poll text the listener saw
         self._poll_seen_at: datetime | None = None        # when the listener last saw a new poll text
+        self._poll_seq = 0                                # the new poll texts the listener saw (exact, whatever the clock)
+        self._read_poll_seq: int | None = None            # the poll a snapshot was held for (A36): it covers that poll
         self._poll_due: datetime | None = None            # the pending poll-driven step (None: none pending)
         self._poll_cancel: Callable[[], None] | None = None
+        self._poll_job = HassJob(self._on_poll_step, POLL_STEP_JOB_NAME)   # the one-shot's job, named for Home Assistant
         self._poll_wait: bool = False                     # the pending step waits for the cycle in flight to end
         self._poll_held: bool = False                     # the pending step is a settle hold (A36): it starts unheld
         self._last_trigger: str | None = None
-        self._last_tick_at: datetime | None = None
-        self._tick_poll_phase_s: float | None = None      # seconds from the last poll seen to the last tick (diagnostics)
+        self._last_tick_at: datetime | None = None        # the tick body's last run, whichever ran it (diagnostics)
+        self._tick_poll_phase_s: float | None = None      # seconds from the last poll seen to that run (diagnostics)
+
+    def __repr__(self) -> str:
+        """Short, and naming the integration: Home Assistant's job texts (a slow-callback line among them) end with it."""
+        return f"<{type(self).__name__} {DOMAIN}>"
 
     # --- life cycle --------------------------------------------------------------------------------------------------
     @callback
@@ -389,7 +495,8 @@ class EccoIntelCoordinator:
         else:
             self._publish(starting_envelope(now, self.versions, decisions=self.decisions, paused=paused,
                                             next_run_at=None), now)
-        self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=TICK_S)))
+        self._tick_ran_at = now                          # that publish maps as of the horizon, as a tick body's does
+        self._attach_tick()
         spec = self.site.entity_map.readings.get(sources.LIVENESS_KEY)
         if spec is not None and isinstance(spec.get("entity"), str):
             # the one state listener (A23): the telemetry poll text; its current text is no new poll
@@ -416,6 +523,9 @@ class EccoIntelCoordinator:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        if self._tick_unsub is not None:
+            self._tick_unsub()
+            self._tick_unsub = None
         self._cancel_poll_step()
         if self._unsub_started is not None:
             self._unsub_started()
@@ -713,7 +823,7 @@ class EccoIntelCoordinator:
         self._poll_due = at
         self._poll_wait = False
         self._poll_held = held
-        self._poll_cancel = async_call_later(self.hass, delay, self._on_poll_step)
+        self._poll_cancel = async_call_later(self.hass, delay, self._poll_job)
 
     def _settle_end(self, now: datetime) -> datetime | None:
         """The end of the newest poll's settle delay when `now` falls inside it (A36), else None (also when no poll was
@@ -733,15 +843,38 @@ class EccoIntelCoordinator:
             return
         self._arm_poll_step(end, held=True)
 
+    def _hold_timers(self) -> None:
+        """A cycle starts (the quiet cycle): the tick is detached and a pending poll-driven step is cancelled, its due time
+        kept for _rearm_poll_step (a settle hold's one-shot mark is dropped there). Nothing of the integration fires or is
+        armed until the cycle has ended."""
+        self._detach_tick()
+        if self._poll_cancel is not None:
+            self._poll_cancel()
+            self._poll_cancel = None
+            self.counters["poll_steps_held_busy"] += 1
+
+    def _rearm_poll_step(self) -> None:
+        """The second-run guard is released (the cycle has ended and no abandoned engine thread runs): a poll-driven step
+        held meanwhile is armed again at max(its due time, now), through _arm_poll_step, so the floor, A33 (never later: a
+        poll that arrived meanwhile kept the earlier due time) and A36 (a step that comes inside a newer poll's settle
+        delay is held once at its start, _maybe_start) apply as before. It is armed unheld, as a step that waited for a
+        cycle in flight was resumed before the quiet cycle: a settle hold's one-shot mark does not outlive the cycle, so a
+        poll seen in the cycle's last settle delay holds the step once more. It is armed once here, so a fast poll text
+        cannot postpone it."""
+        if self._busy or self._closed or self._poll_due is None or self._poll_cancel is not None:
+            return
+        self._arm_poll_step(max(self._poll_due, dt_util.utcnow()))
+
     @callback
     def _on_poll(self, event: Any) -> None:
         """The telemetry poll text changed: a new poll text (not a replay of the last one, not unavailable or 'Waiting')
         schedules the poll-driven step PROPOSED_POLL_SETTLE_S later. A pending step is never moved later (A33, RT-2): it
-        keeps the earliest due time, so a text that changes faster than the settle delay cannot postpone it forever, and
-        a step that waits for the cycle in flight keeps waiting; a settle hold (A36) is never re-armed by this poll. When
-        such a kept step comes to start a cycle inside this poll's settle delay, the settle hold applies at that start
-        (_maybe_start), once. A step only moves earlier (a step deferred to the floor's end), where it meets the floor
-        again."""
+        keeps the earliest due time, so a text that changes faster than the settle delay cannot postpone it forever; a
+        settle hold (A36) is never re-armed by this poll. When such a kept step comes to start a cycle inside this poll's
+        settle delay, the settle hold applies at that start (_maybe_start), once. A step only moves earlier (a step
+        deferred to the floor's end), where it meets the floor again. While the second-run guard is set (a cycle in
+        flight, or an abandoned engine thread) the poll is noted all the same but no timer is armed: the step keeps its
+        due time and is armed when the guard is released (_rearm_poll_step)."""
         if self._closed:
             return
         data = getattr(event, "data", None)
@@ -752,10 +885,15 @@ class EccoIntelCoordinator:
         self._poll_text = text
         now = dt_util.utcnow()
         self._poll_seen_at = now
+        self._poll_seq += 1
         self.counters["polls_seen"] += 1
         due = now + timedelta(seconds=PROPOSED_POLL_SETTLE_S)
         if self._poll_due is not None and self._poll_due <= due:
             self.counters["poll_steps_kept_earlier"] += 1   # the pending step is due first: it serves this poll too
+            return
+        if self._busy:                                   # the quiet cycle: the due time is kept, no timer is armed
+            self._poll_due, self._poll_wait, self._poll_held = due, False, False
+            self.counters["poll_steps_held_busy"] += 1
             return
         self._arm_poll_step(due)
 
@@ -770,8 +908,11 @@ class EccoIntelCoordinator:
         now = dt_util.utcnow()
         seen = self._poll_seen_at
         slot_due = self._slot_due(now)
-        if not slot_due and self._last_start is not None and seen is not None and self._last_start >= seen:
-            self._cancel_poll_step()                     # a cycle started after this poll was seen: it read it already
+        covered = seen is not None and ((self._last_start is not None and self._last_start >= seen)
+                                        or self._read_poll_seq == self._poll_seq)
+        if not slot_due and covered:
+            # a cycle started after this poll was seen, or held its snapshot to this poll's settle end: it read it
+            self._cancel_poll_step()
             self.counters["poll_steps_covered"] += 1
             return
         if not slot_due and self._last_start is not None:
@@ -780,8 +921,8 @@ class EccoIntelCoordinator:
                 self.counters["poll_steps_deferred_floor"] += 1
                 self._arm_poll_step(floor_end)
                 return
-        if self._busy:                                   # the second-run guard: wait for the cycle in flight to end
-            self.counters["poll_steps_waited_in_flight"] += 1
+        if self._busy:                                   # the second-run guard (defensive: no step is armed while it is
+            self.counters["poll_steps_waited_in_flight"] += 1   # set): wait for its release, _rearm_poll_step
             self._poll_wait = True
             return
         self._cancel_poll_step()
@@ -792,14 +933,6 @@ class EccoIntelCoordinator:
         if not self._maybe_start(now, POLL, held=held):
             self.counters["poll_steps_idle"] += 1
 
-    def _resume_poll_step(self) -> None:
-        """The cycle in flight ended: a poll-driven step that waited for it is scheduled now. A poll that arrived while the
-        step waited kept it (A33) and is served by it; when the cycle ends inside that poll's settle delay, the settle hold
-        at the start (A36, _maybe_start) holds the step once to the delay's end, so the rest of that poll's entity writes
-        land first. It is armed once here, so a fast poll text cannot postpone it; the floor still applies."""
-        if self._poll_wait and not self._busy and not self._closed and self._poll_due is not None:
-            self._arm_poll_step(dt_util.utcnow())
-
     def _stale_backoff(self, now: datetime) -> None:
         lo, hi = PROPOSED_STALE_BACKOFF_S
         self._stale_backoff_s = lo if self._stale_backoff_s is None else min(self._stale_backoff_s * 2.0, hi)
@@ -807,11 +940,49 @@ class EccoIntelCoordinator:
         self.counters["stale_backoffs"] += 1
 
     # --- the timer ---------------------------------------------------------------------------------------------------
+    def _attach_tick(self) -> None:
+        """Attach the one timer, the TICK_S interval tick (the one async_track_time_interval call site): at the start, and
+        again when a cycle has ended, so its phase follows that end."""
+        if self._closed or self._tick_unsub is not None:
+            return
+        self._tick_unsub = async_track_time_interval(self.hass, self._tick, timedelta(seconds=TICK_S),
+                                                     name=TICK_JOB_NAME)
+
+    def _detach_tick(self) -> None:
+        """A cycle starts: the tick is detached until it has ended (counted in ticks_deferred)."""
+        if self._tick_unsub is not None:
+            self._tick_unsub()
+            self._tick_unsub = None
+            self.counters["ticks_deferred"] += 1
+
+    def _tick_deadline_in(self) -> float:
+        """Seconds until the tick body must run again inside a cycle: its last run plus TICK_S, the moment the tick itself
+        would have come, within 0 and TICK_S. That run mapped its payloads as of its publish horizon, TICK_S +
+        PROPOSED_TICK_MARGIN_S after it, so the whole margin is left for the deadline run's own latency (the job wait's
+        timeout and the cycle task's next step), as it is for a late tick: no number outlives its valid_until."""
+        if self._tick_ran_at is None:
+            return TICK_S
+        left = (self._tick_ran_at + timedelta(seconds=TICK_S) - dt_util.utcnow()).total_seconds()
+        return min(max(left, 0.0), TICK_S)
+
+    def _deadline_tick(self) -> None:
+        """The tick body's deadline (_tick_deadline_in) has come while a cycle is in flight (the tick is detached): the cycle
+        task runs it, as one of its own steps (counted in tick_deadline_runs)."""
+        self.counters["tick_deadline_runs"] += 1
+        self._tick_body(dt_util.utcnow())
+
     @callback
-    def _tick(self, now: datetime | None = None) -> None:
+    def _tick(self, _now: datetime | None = None) -> None:
+        """The TICK_S tick (the one timer; detached while a cycle is in flight)."""
+        self._tick_body(dt_util.utcnow())
+
+    def _tick_body(self, now: datetime) -> None:
+        """The tick's work, also run at the first step of a cycle it did not start, as the catch-up when a cycle ends and at
+        its deadline inside a cycle: both poll texts sampled, the pause helper and the self-test, STALE, the re-render as of
+        the publish horizon, then _maybe_start."""
         if self._closed:
             return
-        now = dt_util.utcnow()
+        self._tick_ran_at = now
         self._sample_liveness(now)
         self._last_tick_at = now
         self._tick_poll_phase_s = (round((now - self._poll_seen_at).total_seconds(), 3) if self._polls_arriving(now)
@@ -890,14 +1061,66 @@ class EccoIntelCoordinator:
             self.counters["refresh_runs_started"] += 1
         if trigger == POLL:
             self.counters["poll_runs_started"] += 1
-        self._busy = True
+        self._busy = True                                # the second-run guard, set before the task exists
+        self._cycle_live = True
+        self._hold_timers()                              # the quiet cycle: no timer of the integration until its end
         self._last_start, self._last_kind, self._last_trigger = now, kind, trigger
         self.counters["runs_started"] += 1
         poll_age = None if self._poll_seen_at is None else round((now - self._poll_seen_at).total_seconds(), 3)
-        # a background task: Home Assistant cancels it at shutdown instead of waiting for it
-        self._task = self.hass.async_create_background_task(
-            self._async_run(now, self._last_slot or slot, kind, trigger, poll_age), "ecco_intelligence_shadow_cycle")
+        token = object()
+        self._pending_start = token
+        # a background task: Home Assistant cancels it at shutdown instead of waiting for it. Never eager: this callback
+        # only schedules it, and its first step runs at a later event-loop step (the module docstring, the cycle's steps)
+        task = self.hass.async_create_background_task(
+            self._async_run(now, self._last_slot or slot, kind, trigger, poll_age, self._poll_seq), CYCLE_TASK_NAME,
+            eager_start=False)
+        self._task = task
+        task.add_done_callback(lambda t: self._never_entered(t, token, now, kind, trigger, poll_age))
         return True
+
+    def _never_entered(self, task: asyncio.Task, token: object, now: datetime, kind: str, trigger: str,
+                       poll_age_s: float | None) -> None:
+        """The cycle task's done callback: a task cancelled before its first step never ran _async_run (whose finally ends
+        a cycle), so it is ended here, with the outcome 'cancelled', exactly as one cancelled at a later step."""
+        if self._pending_start is not token:
+            return                                       # it ran: its own finally ended it
+        self._pending_start = None
+        self._cycle_end(now, kind, "cancelled", {"recorder_s": 0.0, "engine_s": 0.0, "store_s": 0.0, "cpu_s": None}, 0.0,
+                        trigger, poll_age_s)
+
+    def _cycle_end(self, now: datetime, kind: str, outcome: str, timing: dict, total: float, trigger: str,
+                   poll_age_s: float | None) -> None:
+        """A cycle has ended, whatever its outcome: the second-run guard is released (unless an abandoned engine thread
+        still runs) and the diagnostics are recorded. Then, unless the entry was unloaded, the catch-up (_catch_up) runs,
+        also when recording the diagnostics raised. After an unload nothing is attached or armed again. Home Assistant's
+        shutdown cancels the cycle task but does not unload the entry, so the catch-up runs then too (it publishes, and
+        _maybe_start declines while Core is stopping) and the tick and a held step come back, as the tick stayed attached
+        through a shutdown before the quiet cycle."""
+        self._cycle_live = False
+        if not self._orphans:
+            self._busy = False
+        try:
+            self._finish(now, kind, outcome, timing, total, trigger, poll_age_s)
+        finally:
+            if not self._closed:
+                self._catch_up()
+
+    def _catch_up(self) -> None:
+        """The end of a cycle the entry outlived: the tick body runs once as a catch-up (after the guard's release, so a
+        slot that fell due can start; the floor still bars a second refresh) and, unless that started the next cycle, the
+        tick is attached again and a poll-driven step held while the cycle ran is armed again, also when the catch-up
+        raised."""
+        try:
+            self.counters["catchup_ticks"] += 1
+            self._tick_body(dt_util.utcnow())
+        finally:
+            if not self._cycle_live and not self._closed:
+                self._attach_tick()
+                self._rearm_poll_step()
+
+    def _submit(self, add_job: Callable[..., asyncio.Future], target: Callable[..., Any], *args: Any) -> asyncio.Future:
+        """Submit an executor job that starts only once this event-loop step has ended (__init__.released_call)."""
+        return add_job(released_call, release_after_step(self.hass), target, *args)
 
     # --- one cycle ---------------------------------------------------------------------------------------------------
     def _orphan(self, fut: asyncio.Future) -> None:
@@ -911,23 +1134,37 @@ class EccoIntelCoordinator:
             self.counters["late_results_discarded"] += 1
             if not self._orphans:
                 self._busy = False
-                self._resume_poll_step()
+                self._rearm_poll_step()
         fut.add_done_callback(done)
 
     async def _bounded(self, fut: asyncio.Future, deadline: float) -> Any:
-        remaining = deadline - asyncio.get_running_loop().time()
-        try:
-            return await asyncio.wait_for(asyncio.shield(fut), timeout=max(remaining, 0.0))
-        except asyncio.TimeoutError:
-            self._orphan(fut)
-            raise
+        """Wait for an executor job until the cycle's deadline (the time budget: then the job is abandoned, _orphan). The
+        tick is detached meanwhile, so when the tick body's own deadline (_tick_deadline_in: its last run plus TICK_S)
+        comes first, the wait ends there, the cycle task runs the tick body and waits on."""
+        loop = asyncio.get_running_loop()
+        while True:
+            remaining = max(deadline - loop.time(), 0.0)
+            tick_in = self._tick_deadline_in()
+            cut = tick_in < remaining
+            try:
+                return await _job_wait(fut, tick_in if cut else remaining)
+            except asyncio.TimeoutError:
+                if not cut:
+                    self._orphan(fut)
+                    raise
+            try:
+                self._deadline_tick()
+            except Exception:
+                self._orphan(fut)                        # the cycle fails with the job still running: it stays in flight
+                raise
 
     async def _history_inputs(self, now: datetime, slot: datetime, kind: str, deadline: float,
                               timing: dict) -> tuple[Mapping | None, Any]:
         """The recorder statistics and the scorecard metrics. A SLOT cycle reads both; a REFRESH reuses the slot's cached
         copies, except: no cache for this slot (read), a failed recorder read (read again at most every
         PROPOSED_RECORDER_RETRY_S), rows ending before the slot's hour (read once, PROPOSED_HISTORY_CATCHUP_S after the
-        slot)."""
+        slot). `now` is the cycle time (read with the snapshot, the engine's `now`), not the cycle's start: the recorder
+        window, the cache's read_at, the retry and catch-up comparisons and the metrics all use it."""
         plan = self.site.plan
         cache = self._hist
         read = kind == SLOT or cache is None or cache["slot"] != slot
@@ -947,9 +1184,9 @@ class EccoIntelCoordinator:
                 start, end = history_source.window(now)
                 t0 = time_mod.perf_counter()
                 try:
-                    fut = get_instance(self.hass).async_add_executor_job(
-                        statistics_during_period, self.hass, start, end, set(plan.statistic_ids), "hour", None,
-                        set(history_source.STAT_TYPES))
+                    fut = self._submit(get_instance(self.hass).async_add_executor_job,
+                                       statistics_during_period, self.hass, start, end, set(plan.statistic_ids), "hour",
+                                       None, set(history_source.STAT_TYPES))
                     stats = await self._bounded(fut, deadline)
                     self.selftest.record("RECORDER_READ", PASS, f"{len(stats or {})} statistic series read")
                 except asyncio.TimeoutError:
@@ -969,8 +1206,8 @@ class EccoIntelCoordinator:
         if kind == SLOT or not self._metrics_ok:
             t0 = time_mod.perf_counter()
             try:
-                self._metrics = await self._bounded(self.hass.async_add_executor_job(self.store.outcome_metrics, now),
-                                                    deadline)
+                self._metrics = await self._bounded(
+                    self._submit(self.hass.async_add_executor_job, self.store.outcome_metrics, now), deadline)
                 self._metrics_ok = True
             finally:
                 timing["store_s"] += time_mod.perf_counter() - t0
@@ -999,7 +1236,9 @@ class EccoIntelCoordinator:
     def _finish(self, started: datetime, kind: str, outcome: str, timing: dict, total: float, trigger: str = TICK,
                 poll_age_s: float | None = None) -> None:
         """Diagnostics only: last_cycle_timing, cycle_duration_s and one cycle_stats row (with what started the cycle and
-        the age of the last poll text at its start: the tick-to-poll phase)."""
+        the age of the last poll text at its start). recorder_s, engine_s and store_s run from
+        each submit to its result, so they include each job's release wait and SUBMIT_COOLDOWN_S cool-down; total_s
+        includes those and any settle hold; cpu_s (the engine thread's CPU time) includes neither."""
         rec = {"started_at": started.isoformat(), "kind": kind, "outcome": outcome, "total_s": round(max(total, 0.0), 6),
                "recorder_s": round(timing["recorder_s"], 6), "engine_s": round(timing["engine_s"], 6),
                "store_s": round(timing["store_s"], 6), "cpu_s": _finite_s(timing.get("cpu_s")), "trigger": trigger,
@@ -1007,13 +1246,55 @@ class EccoIntelCoordinator:
         self.last_timing = rec
         self.cycle_stats.append(tuple(rec[k] for k in CYCLE_STATS_FIELDS))
 
+    async def _snapshot_hold(self, poll_seq: int | None, deadline: float) -> None:
+        """The settle hold at the snapshot (A36). The cycle started a loop step or two before its snapshot, so a new poll
+        text can have arrived in between, after the start's settle check (`poll_seq`: the poll count at the start). When
+        one did and its settle delay is still running, the snapshot is held once to the delay's end (at most
+        PROPOSED_POLL_SETTLE_S, never past the cycle's deadline), so the rest of that poll's entity writes land first.
+        The cycle covers that poll from the hold on (its own step, due at the same moment, starts no second cycle; not
+        when the hold is cancelled). One-shot: a further poll during the hold is not waited for (the residual of two
+        polls within one settle delay, counted in snapshot_residual_reads, and that poll is not covered). A hold cut short
+        by the cycle's deadline is read inside the settle delay too: it counts there as well and covers nothing."""
+        if poll_seq is None or self._poll_seq == poll_seq or self._poll_seen_at is None:
+            return                                       # no poll since the start: the start's settle check stands
+        seq, before = self._poll_seq, self._read_poll_seq
+        self._read_poll_seq = seq
+        wait = (self._poll_seen_at + timedelta(seconds=PROPOSED_POLL_SETTLE_S) - dt_util.utcnow()).total_seconds()
+        if wait <= 0:
+            return                                       # its settle delay has ended already: read it now
+        self.counters["snapshot_holds"] += 1
+        remaining = deadline - asyncio.get_running_loop().time()
+        hold = min(wait, PROPOSED_POLL_SETTLE_S, max(remaining, 0.0))
+        try:
+            await _settle_wait(hold)
+        except asyncio.CancelledError:
+            self._read_poll_seq = before                 # never read: this cycle does not cover the poll
+            raise
+        if hold < wait:                                  # cut short by the cycle's deadline: read inside the settle delay
+            self._read_poll_seq = before                 # (a residual), so this cycle does not cover the poll
+            self.counters["snapshot_residual_reads"] += 1
+        elif self._poll_seq != seq:
+            self.counters["snapshot_residual_reads"] += 1
+
     async def _async_run(self, now: datetime, slot: datetime, kind: str = SLOT, trigger: str = TICK,
-                         poll_age_s: float | None = None) -> None:
+                         poll_age_s: float | None = None, poll_seq: int | None = None) -> None:
+        """One cycle, in the steps of the module docstring (the cycle's steps). `now` is the moment _maybe_start started
+        it and `poll_seq` the poll count then (None: no settle hold at the snapshot); the cycle time `at` is read with the
+        snapshot, and the history inputs are read at it."""
+        self._pending_start = None                       # entered: the finally below ends this cycle
         t_start = time_mod.perf_counter()
         deadline = asyncio.get_running_loop().time() + self.time_budget_s
         timing = {"recorder_s": 0.0, "engine_s": 0.0, "store_s": 0.0, "cpu_s": None}
         outcome = "aborted"
         try:
+            # the tick body first, unless the tick body started this cycle (it ran at the start, `now`: the tick or the
+            # catch-up at the previous cycle's end) (tick_start_runs): its next deadline (_tick_deadline_in) is then at
+            # least TICK_S after the cycle's start and falls inside this cycle only when the cycle runs longer than
+            # TICK_S, so in practice no tick body runs while one of the cycle's jobs computes
+            if self._tick_ran_at is None or self._tick_ran_at < now:
+                self.counters["tick_start_runs"] += 1
+                self._tick_body(dt_util.utcnow())
+            # step 1: the pause helper and the self-test
             paused = self._pause_state()
             if paused is True:
                 outcome = "paused"
@@ -1023,19 +1304,30 @@ class EccoIntelCoordinator:
                 outcome = "self_test_failed"
                 self._publish_failed(now, dict(self.selftest.failures()))
                 return
-            self._sample_liveness(now)
+            await _next_step()
+            # step 2: the snapshot, after the settle hold of a poll seen since the start (A36), with the cycle time read
+            # in the same step (no state in it is newer than `at`); the liveness times are kept with it (a tick between
+            # two steps samples the poll texts again)
+            await self._snapshot_hold(poll_seq, deadline)
+            at = dt_util.utcnow()
+            self._sample_liveness(at)
+            liveness_at, config_liveness_at = self._liveness_at, self._config_liveness_at
             states = self._collect_states()
-            stats, metrics = await self._history_inputs(now, slot, kind, deadline, timing)
+            await _next_step()
+            # step 3: the recorder statistics and the scorecard metrics
+            stats, metrics = await self._history_inputs(at, slot, kind, deadline, timing)
+            await _next_step()
+            # step 4: the engine job, submitted last in its step
             job = engine_link.EngineJob(
-                now=now, states=states, entity_map=self.site.entity_map, liveness_at=self._liveness_at,
+                now=at, states=states, entity_map=self.site.entity_map, liveness_at=liveness_at,
                 plan=self.site.plan, statistics=stats, base_cfg=self.site.base_cfg, site_facts=self.site.site_facts,
                 decisions=self.decisions, outcome_metrics=metrics, paused=paused,
                 previous=None if self._last_computed is None else envelope_summary(self._last_computed),
-                versions=self.versions, config_liveness_at=self._config_liveness_at,
+                versions=self.versions, config_liveness_at=config_liveness_at,
                 history_reuse=self._history_reuse)
             t0 = time_mod.perf_counter()
             env, diag, history = await self._bounded(
-                self.hass.async_add_executor_job(engine_link.compute, job, self._run_cycle), deadline)
+                self._submit(self.hass.async_add_executor_job, engine_link.compute, job, self._run_cycle), deadline)
             timing["engine_s"] = time_mod.perf_counter() - t0
             timing["cpu_s"] = diag.get("cpu_s") if isinstance(diag, Mapping) else None
             self._note_cpu(timing["cpu_s"])
@@ -1076,8 +1368,9 @@ class EccoIntelCoordinator:
                 return
             t0 = time_mod.perf_counter()
             try:
-                self.last_store = await self._bounded(self.hass.async_add_executor_job(
-                    self.store.record_cycle, env.scorecard_report, slot, now, history, self.site.base_cfg), deadline)
+                self.last_store = await self._bounded(self._submit(
+                    self.hass.async_add_executor_job, self.store.record_cycle, env.scorecard_report, slot, at, history,
+                    self.site.base_cfg), deadline)
                 self.selftest.record("STORE_RECORD", PASS, "the scorecard step completed")
             except asyncio.TimeoutError:
                 self.selftest.record("STORE_RECORD", WARN, "the scorecard step exceeded the time budget")
@@ -1105,10 +1398,7 @@ class EccoIntelCoordinator:
             if not self._closed:                         # only the type is published: a message may carry site values
                 self._publish_failed(now, {"RUNTIME_EXCEPTION": type(exc).__name__})
         finally:
-            if not self._orphans:
-                self._busy = False
-            self._finish(now, kind, outcome, timing, time_mod.perf_counter() - t_start, trigger, poll_age_s)
-            self._resume_poll_step()
+            self._cycle_end(now, kind, outcome, timing, time_mod.perf_counter() - t_start, trigger, poll_age_s)
 
     # --- diagnostics -------------------------------------------------------------------------------------------------
     def _cycle_stats_summary(self) -> dict:
@@ -1121,6 +1411,8 @@ class EccoIntelCoordinator:
             by_kind[kind] = {"n": len(rows), "total_s_p50": _p(tot, 0.5), "total_s_p95": _p(tot, 0.95),
                              "total_s_max": _p(tot, 1.0), "cpu_s_p95": _p(cpu, 0.95), "cpu_s_max": _p(cpu, 1.0)}
         return {"fields": list(CYCLE_STATS_FIELDS), "kept": len(runs), "max_kept": PROPOSED_CYCLE_STATS_N,
+                "job_cooldown_s": SUBMIT_COOLDOWN_S,
+                "timings_with_cooldown": ["recorder_s", "engine_s", "store_s", "total_s"],
                 "by_kind": by_kind, "runs": [list(r) for r in runs]}
 
     def _liveness_diag(self, now: datetime) -> dict:
@@ -1160,7 +1452,8 @@ class EccoIntelCoordinator:
                         "poll_listener": self._poll_entity is not None and not self._closed,
                         "polls_arriving": self._polls_arriving(now), "last_poll_seen_at": iso(self._poll_seen_at),
                         "poll_step_due": iso(self._poll_due), "poll_step_waits_in_flight": self._poll_wait,
-                        "poll_step_settle_hold": self._poll_held,
+                        "poll_step_settle_hold": self._poll_held, "poll_step_armed": self._poll_cancel is not None,
+                        "cycle_in_flight": self._cycle_live, "tick_attached": self._tick_unsub is not None,
                         "last_tick_at": iso(self._last_tick_at), "tick_poll_phase_s": self._tick_poll_phase_s,
                         "poll_refresh_threshold_s": POLL_REFRESH_THRESHOLD_S},
             "liveness": self._liveness_diag(now),

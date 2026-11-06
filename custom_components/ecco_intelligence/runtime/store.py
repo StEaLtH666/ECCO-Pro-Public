@@ -267,8 +267,11 @@ class RuntimeStateStore:
             return self._retention(sc, now)
 
     def outcome_metrics(self, now: datetime) -> OutcomeMetrics | None:
-        """The 7-day measured accuracy of the day-load forecasts (Scorecard.metrics over load_kwh:* kinds), or None when
-        the scorecard does not exist yet. Read-only apart from opening the database."""
+        """The 7-day measured accuracy of the load forecasts, or None when the scorecard does not exist yet: every scored
+        load_kwh:* kind the engine records (next_1h, to_next_cheap, cheap_window, day, morning, overnight, to_useful_pv or
+        to_useful_pv_from_now) whose horizon ended within the 7 days before `now`, pooled, each kind's MAE and coverage
+        weighted by its n (not the day-load forecast alone). The coordinator reads it in a slot cycle before that slot's
+        scoring step (record_cycle), so the published figure lags one slot. Read-only apart from opening the database."""
         if self._closed or not (self._root / SCORECARD_FILE).is_file():
             return None
         with closing(self._scorecard()) as sc:
