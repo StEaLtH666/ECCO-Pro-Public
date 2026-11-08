@@ -100,8 +100,11 @@ feature snapshot, status, confidence, mode), `forecasts` (kind, issued/horizon s
 predicted p50, band low/high, nominal coverage, confidence, model/feature id, explanation JSON, status
 PENDING/SCORED/VOID_NO_DATA/VOID_SCENARIO, **actual, error = actual − predicted, abs_error, pct_error, in_band**, scored time),
 `recommendations` (shadow only; outcome column for the future ledger), `schema_meta`. Recording is idempotent; nothing is scored before
-horizon end + 2 h; a plan-conditional SOC forecast whose plan was not what happened is `VOID_SCENARIO` with a reason (a
-control decision is not a forecast error). `metrics()` gives MAE, RMSE, bias, band coverage, MAPE, groupable by weekday/hour.
+horizon end + 2 h; a plan-conditional SOC forecast whose plan was not what happened (its SOC more than 3 points from the
+planned target) is `VOID_SCENARIO` with a reason (a control decision is not a forecast error). That branch is reserved
+for plan-conditional `soc_pct` kinds, which v0.1 does not record: it skips `soc_pct:pre_window_hour`, the only SOC kind
+the engine records (independent of any charge decision), so it cannot fire in the v0.1 runtime and is no active
+safeguard there. `metrics()` gives MAE, RMSE, bias, band coverage, MAPE, groupable by weekday/hour.
 `insights()` produces sentences like *"I have been underestimating Wednesday mornings by 1.2 kWh (n=8)"* but only past a
 multiple-comparison-corrected t-test (≈ 50 weekday × window comparisons; the 2-σ rule would raise a false finding about every
 other week) and a 0.3 kWh floor. A private-data campaign found none; an injected 1.2 kWh Wednesday bias is found (synthetic test).

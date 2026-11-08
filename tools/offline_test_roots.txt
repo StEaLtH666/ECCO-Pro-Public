@@ -10,3 +10,4 @@ influxdb
 intelligence/tests
 tools/tests
 ecco_core/tests
+custom_components/ecco_intelligence/tests

@@ -562,8 +562,16 @@ row before) while the table is still published: the planning layer then refuses 
   a cache of results: every input is still judged at every compute, and no bound, margin, PROPOSED value, cadence,
   freshness, input-expiry or fail-closed rule changes, nor the 180 s per hour guard.
 - **Poll-phase-aligned refresh (A23, runtime only; cadence, no rule change).** The dongle's telemetry poll text moves about
-  every 60 s on the target platform, and the 60 s tick holds a near-fixed phase against it; a refresh started more than 55 s after a poll
+  every 60 s on the target platform, and the 60 s tick holds a phase against it; a refresh started more than 55 s after a poll
   would withhold every item resting on a dongle input (`INPUT_EXPIRING`: the 180 s liveness bound less the 125 s margin).
+  That phase follows the last cycle's end: no timer of the runtime runs or is created while a cycle is in flight (the
+  quiet cycle: in an asyncio debug session every timer that ran while the engine computed could take 0.1 s or more on a
+  quarter of a CPU), so the tick is detached when a cycle starts and attached again when it ends. The tick's work then
+  runs once at that end, at the first step of a cycle it did not start, and inside a cycle longer than `TICK_S` also at
+  its deadline, `TICK_S` after its last run (when the tick would have come, so the 5 s tick margin takes that run's own
+  latency as it takes a late tick's), so it still runs at least every `TICK_S` + `PROPOSED_TICK_MARGIN_S` (65 s) and no
+  number outlives its validity between two runs (the payloads are mapped as of that horizon); in steady poll-driven
+  operation that deadline run never comes.
   The coordinator therefore holds exactly one state listener (`async_track_state_change_event`), on the entity the site
   file maps for `liveness.dongle_poll_changed_at` (none when it is not mapped), removed on unload. A new poll text (not a
   replay of the last one, not unavailable, unknown or `Waiting`) schedules one poll-driven step
@@ -575,19 +583,23 @@ row before) while the table is still published: the planning layer then refuses 
   or holds an item BLOCKED for an input reason (a blocker among the quality rules whose inputs name a live signal or site
   reading, `TOU_*`, `CHARGE_WINDOW_*`, `TARIFF_*`, `PREF_RESERVE_RAISE_UNKNOWN`, `CALLER_FRESHNESS_DISAGREES`; so recovery
   after a transient input fault takes one poll, not up to the 835 s ceiling). A refresh inside the 55 s floor is deferred
-  to the floor's end, never dropped; while a cycle is in flight the step waits for its end, then runs (a poll that
-  arrived while it waited keeps the step, A33, and is served by it). **The settle hold (A36): no cycle starts inside the
+  to the floor's end, never dropped; a step due while a cycle is in flight waits for its end, as before: it is not
+  armed while the cycle runs (held with its due time; a poll meanwhile keeps the earlier one, A33, and is served by it)
+  and is armed at the cycle's end, at its due time or at once when that has passed. **The settle hold (A36): no cycle starts inside the
   settle delay of the newest poll seen.** At the one place a cycle starts, a cycle of any trigger whose start would fall
   before the newest poll seen plus `PROPOSED_POLL_SETTLE_S` is held once to that moment, on the one pending step (a step
   already pending by then serves it; a poll-driven step starts whatever the tick would). The cases are exactly: a
   refresh the tick asks for after STALE (also after its back-off), the exception retry, the tick's exception to its
   hold, a poll-driven step that a newer poll kept (a step deferred to the floor's end when a newer poll arrives in the
-  last 3 s of the floor, a step under a poll text faster than the settle delay) and a step re-armed when a cycle in
+  last 3 s of the floor, a step under a poll text faster than the settle delay) and a step armed when a cycle in
   flight ends inside a newer poll's settle delay. The hold is one-shot, at most `PROPOSED_POLL_SETTLE_S`, never re-armed
   by a later poll (so a sub-settle poll period cannot starve it), and never applies when no poll was seen within the
-  settle delay. A cycle that started after the poll was seen has therefore read it already (the step is covered). One
-  residual is documented, not fixed: two polls within one settle delay (an abnormal sub-settle poll period), where the
-  held cycle starts inside the second poll's settle delay and can rest on values up to one poll older than its stated
+  settle delay. A cycle reads its states a loop step or two after it starts, so the same hold applies at that read: a
+  poll text seen between the start and the read holds the read once to that poll's settle delay's end (at most
+  `PROPOSED_POLL_SETTLE_S`, never past the cycle's time budget), and that cycle covers the poll. A cycle that started
+  after the poll was seen has therefore read it already (the step is covered). One residual is documented, not fixed:
+  two polls within one settle delay (an abnormal sub-settle poll period), where the held cycle starts, or a held read
+  is made, inside the second poll's settle delay and can rest on values up to one poll older than its stated
   freshness, until the next compute (at the latest the item's own validity). Writes that land more than the settle
   delay after the text are outside it by definition (L3 checks the ordering on the real Core). While poll-driven steps
   are arriving (a new poll text within `PROPOSED_POLL_ACTIVE_S` =
@@ -609,8 +621,11 @@ row before) while the table is still published: the planning layer then refuses 
   floor while an item is BLOCKED for an input reason. No limit, margin, floor value, gate, validity or published item
   value changes. The PROPOSED values are runtime engineering choices (`const.py`), not owner values; the diagnostics show
   them, the cadence state (`polls_arriving`, `last_poll_seen_at`, `poll_step_due`, `poll_step_settle_hold`,
-  `tick_poll_phase_s`; the counters `settle_holds`, `settle_held_starts`, `settle_residual_starts`) and, per cycle in
-  `cycle_stats`, what started it (`TICK` / `POLL`) and the poll text's age at its start (the tick-to-poll phase L3 logs).
+  `last_tick_at` and `tick_poll_phase_s`: the tick body's last run, whichever ran it, and its phase against the last
+  poll seen; the counters `settle_holds`, `settle_held_starts`, `settle_residual_starts`, `snapshot_holds`,
+  `snapshot_residual_reads`, `ticks_deferred`, `catchup_ticks`, `tick_start_runs`, `tick_deadline_runs`,
+  `poll_steps_held_busy`) and, per cycle in
+  `cycle_stats`, what started it (`TICK` / `POLL`) and the poll text's age at its start (which L3 logs).
 - **Caller agreement (WP-4, tighten-only).** `engine_link.advisory_overrides` sets each dongle signal's limit to
   min(its limit, the quality layer's liveness bound); a missing limit stays unset. The caller and the quality layer then
   agree, so `CALLER_FRESHNESS_DISAGREES` no longer blocks the items that rest on no dongle input while the dongle is
@@ -975,3 +990,12 @@ with the runtime (part 3 of the publication order above); until then they descri
   TOU table without a price check of its whole occurrence, and the cycle carries it to every charge-window item
   (13.5, 13.8). No status, number, validity, bound or PROPOSED value changes; the planning suites pin where it appears
   and that the envelope without it is otherwise identical.
+- **The quiet cycle and the cool-down (runtime only; event-loop hygiene).** A probe on the pinned Core image found that
+  every timer of the runtime that runs while an executor job computes (the poll-driven step, the tick, the listener's
+  one-shot) can take 0.1 s or more in an asyncio debug session at a quarter of a CPU, and that a job's completion lands
+  in the throttled tail of the container's CPU quota. While a cycle is in flight the runtime now has no timer (13.4: the
+  tick detached and attached again at the cycle's end, a pending step held with its due time and armed at the end), the
+  tick's work runs at the first step of a cycle it did not start and at its end, and in a cycle longer than `TICK_S`
+  at its deadline too (`TICK_S` after its last run, the margin left for its latency: at least every 65 s), and every
+  executor job ends with a 0.15 s cool-down. A step due during a cycle still waits for its end; the floor, A33 and A36
+  apply unchanged. No bound, margin, floor, gate, validity or published-value rule changes.
