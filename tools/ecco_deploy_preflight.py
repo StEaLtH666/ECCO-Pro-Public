@@ -94,6 +94,9 @@ CARDS = {   # card directory -> (source file, custom element tag)
 DEFAULT_DEPLOY = ("energy-actions", "weather-solar", "advanced-config", "tou-settings")
 ALLOWED_DEST = ("/config/packages/", "/config/ecco/", "/config/www/ecco/")   # tools/EccoDeploy.psm1 Test-EccoDeploymentDestination
 SITE_LOCAL = "/config/ecco/site-local/"   # the site's dashboard protection policy: never a deployment destination (same module)
+# the Intelligence site file and state (tools/place-ha-site-file.ps1 only) and the kit route's staging area (tools/deploy-ha-kit.ps1
+# only): never a single-file deployment destination either (same module)
+NEVER_DEST = (SITE_LOCAL, "/config/ecco/intelligence/", "/config/ecco/staging/")
 THIRD_PARTY = {"button-card": "button-card", "apexcharts-card": "apexcharts-card", "flex-horseshoe-card": "flex-horseshoe-card",
                "sunsynk-power-flow-card": "sunsynk-power-flow-card"}
 DOMAINS = ("sensor|binary_sensor|switch|number|button|input_boolean|input_number|input_text|input_datetime|input_select|script|"
@@ -194,8 +197,8 @@ def site_policy_commands(rep: Report, dash: bytes, entry: dict, policy_arg: str,
 
 
 def destination_allowed(dest: str) -> bool:
-    return (dest.startswith(ALLOWED_DEST) and ".." not in dest.split("/") and not dest.startswith(SITE_LOCAL)
-            and dest != SITE_LOCAL.rstrip("/"))
+    return (dest.startswith(ALLOWED_DEST) and ".." not in dest.split("/")
+            and not any(dest.startswith(p) or dest == p.rstrip("/") for p in NEVER_DEST))
 
 
 def read_json(path: Path, what: str):
