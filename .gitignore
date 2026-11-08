@@ -31,6 +31,9 @@ config.local.yaml
 *_private.yaml
 **/*_private.yaml
 intelligence/profiles/*.local.json
+# the owner's Intelligence site file (placed on the host only by tools/place-ha-site-file.ps1; never committed)
+site.local.json
+**/site.local.json
 hist_*.csv*
 quality_report_data.json
 

@@ -96,6 +96,14 @@ check("the destination allow-list is the deploy tooling's: packages, ecco and ww
 check("the site-local dashboard protection policy area is never a destination (as tools/EccoDeploy.psm1); a sibling sharing its prefix is",
       not F.destination_allowed("/config/ecco/site-local/dashboard-protection.json") and not F.destination_allowed("/config/ecco/site-local")
       and F.destination_allowed("/config/ecco/site-localx/a.yaml"))
+check("the Intelligence site file and state area and the kit staging area are never destinations (as tools/EccoDeploy.psm1); "
+      "siblings sharing their prefixes are",
+      not F.destination_allowed("/config/ecco/intelligence/site.local.json")
+      and not F.destination_allowed("/config/ecco/intelligence/state/history.sqlite")
+      and not F.destination_allowed("/config/ecco/intelligence")
+      and not F.destination_allowed("/config/ecco/staging/20300101-000000/new/ecco_intelligence/manifest.json")
+      and not F.destination_allowed("/config/ecco/staging")
+      and F.destination_allowed("/config/ecco/intelligence-x/a.yaml") and F.destination_allowed("/config/ecco/stagingx/a.yaml"))
 text = ("# sensor.in_a_comment\n"
         "x: sensor.alpha_one\n"
         "y: \"states['binary_sensor.beta_two']\"\n"
@@ -675,13 +683,18 @@ check("it is printed for every /config/www/ecco/ destination: gated on Get-EccoL
 storage = [ln.strip() for ln in dha.splitlines() if ".storage" in ln]
 res_uses = [ln.strip() for ln in dha.splitlines() if "$lovelaceResourcesPath" in ln]
 check("deploy-ha.ps1 only READS the persisted resource list: .storage is spelled in the reminder's captured `cat` and in one path variable, "
-      "which is only ever a read source (the preservation gate's read-only copy, and `cp -p` into the backup folder)",
+      "which is only ever a read source (the preservation gate's read-only copy, `cp -p` into the backup folder, and -Action Retire's "
+      "check that no resource still loads a retired card)",
       len(storage) == 2 and any("-Command 'cat /config/.storage/lovelace_resources' -Capture" in ln for ln in storage)
       and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in storage
-      and len(res_uses) == 4 and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in res_uses
+      and len(res_uses) == 5 and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in res_uses
+      and any(ln.startswith("$retired = Invoke-EccoRetireFile ") and "-ResourcesPath $lovelaceResourcesPath" in ln for ln in res_uses)
       and any("-ResourcesPath $lovelaceResourcesPath" in ln and "Invoke-EccoDashboardPreservationGate" in ln for ln in res_uses)
       and "$resourcesBackupPath = \"$backupDir/\" + ($lovelaceResourcesPath.TrimStart('/') -replace '/', '__')" in res_uses
-      and any("then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath'; fi" in ln for ln in res_uses), str(storage + res_uses))
+      # The copy into the backup folder answers a marker (review L3W-6): copied, or no resource list on the host.
+      and any(ln.startswith("$resourcesCopyCommand = ")
+              and "then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath' && echo ECCO_RESOURCES_COPIED; "
+                  "else echo ECCO_RESOURCES_ABSENT; fi" in ln for ln in res_uses), str(storage + res_uses))
 check("the deployment module names no .storage path in code: it parses the text it is given and never reads or writes Home Assistant storage",
       "/config/.storage" not in mod)
 check("the reminder says when the copy is not live, names the persisted resource or why it is unknown, and points at verify-resource",
