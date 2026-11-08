@@ -65,12 +65,31 @@ current:
     free_power_schedule: home-assistant/packages/ecco_free_power_schedule.yaml
     battery_outlook_readback: home-assistant/packages/ecco_battery_outlook_influx.yaml
     battery_runtime: home-assistant/packages/ecco_battery_runtime.yaml
+    intelligence_package: home-assistant/packages/ecco_intelligence.yaml
   influxdb:
     export_config: influxdb/ecco_influxdb_options_v1_3.yaml
     battery_outlook_task: influxdb/tasks/ecco_battery_outlook_5m.flux
     battery_outlook_model: load_only_v1_2
     battery_outlook_score_task: influxdb/tasks/ecco_battery_outlook_score_daily.flux
     battery_outlook_score_model: load_only_v1_3
+  intelligence:
+    # ECCO Intelligence SHADOW v0.1 (isp1): the read-only Home Assistant integration publishes advice under contract
+    # ecco-intel-entities/1 and applies nothing. Its presentation package (the pause helper, the watchdog and three
+    # notification-only alerts), the raise-only reserve helper package, the standalone dashboard with its registration
+    # package and the card are listed in deployment/ha-manifest.yaml; the integration installs by its own kit route.
+    # ASSISTED and AUTONOMOUS stay disabled. It is STAGED: tested_in_home_assistant stays false until it is installed and
+    # accepted on the reference installation (an isolated test Home Assistant does not count).
+    version: "0.1.0"
+    contract: ecco-intel-entities/1
+    mode: SHADOW
+    applies_nothing: true
+    path: custom_components/ecco_intelligence
+    package: home-assistant/packages/ecco_intelligence.yaml
+    prefs_package: home-assistant/packages/ecco_intelligence_prefs.yaml
+    dashboard_registration: home-assistant/packages/ecco_intelligence_dashboard.yaml
+    dashboard: home-assistant/dashboards/ecco_intelligence.yaml
+    card: frontend/ecco-intelligence-card/ecco-intelligence-card.js
+    tested_in_home_assistant: false
   site_profile:
     # Site values (battery capacity, round-trip efficiency, charge start, grid-charge limits) are configured per
     # installation through the Home Assistant helpers and firmware substitutions; none is recorded here. The one

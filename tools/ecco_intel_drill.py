@@ -310,7 +310,11 @@ SHA256SUMS: {sums_sha} ({n} files, verified: {verified})
              python tools/ecco_intel_drill.py site-check --site <site.local.json>
  4. PENDING  owner: place ecco/intelligence/site.local.json with tools/place-ha-site-file.ps1 (lands with PR-5);
              record its sha256 in <OFFLINE_EVIDENCE_DIR> first.
- 5. PENDING  install the ui package (ecco_intelligence.yaml: the pause helper and the watchdog) BEFORE the integration.
+ 5. PENDING  install both packages BEFORE the integration, each a separate approved step with tools/deploy-ha.ps1:
+             the ui package (ecco_intelligence.yaml: the pause helper and the watchdog) and the preferences package
+             (ecco_intelligence_prefs.yaml: the raise-only reserve helper). They take effect at the restart (step 7); turn
+             the pause helper ON after that restart and before the integration is added (step 8), so its first start
+             computes nothing (gate G8).
  6. NOT AVAILABLE (PR-5, DP-4)  stage, verify, back up and swap the integration with tools/deploy-ha-kit.ps1 (Plan, then
              Install; lands with PR-5).
  7. NOT AVAILABLE (PR-5, DP-4)  restart Home Assistant ONLY with the owner's approval; keep it short (the latch caveat:

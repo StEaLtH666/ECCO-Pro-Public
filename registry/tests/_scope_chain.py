@@ -121,6 +121,7 @@ import _acs1x_scope as _acs1x  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
+import _isp1_scope as _isp1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1220,7 +1221,44 @@ OVW3 = Entry(
          "added); it loads through the Lovelace resource the preview already registered; dashboard 7.23.0 staged: ZERO firmware, Home "
          "Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no manifest stanza",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3)
+# isp1 (ECCO Intelligence SHADOW v0.1 in the release files; _isp1_scope.py): made on the export after ovw3, the newest entry when it was
+# built (its fingerprint is sealed after ovw3's and is sealed again if another entry merges first). Three new Home Assistant packages:
+# the presentation package (the pause helper input_boolean.ecco_intel_paused, the dead-man watchdog
+# binary_sensor.ecco_intel_watchdog_fresh and three notification-only alerts that call persistent_notification.create with fixed
+# ecco_intel_ ids), the raise-only advisory reserve helper (one input_number, no `initial`) and the standalone dashboard's
+# registration (one YAML-mode lovelace dashboards entry, administrators only). CHAIN-PINNED edit: the deployment manifest, three package
+# stanzas, a new top-level intelligence_dashboard mapping and one manual frontend_assets stanza for the card
+# (_isp1_scope.PINNED_REVERTERS). FROZEN edits (PEX): VERSION.yaml (current.home_assistant.intelligence_package and a new
+# current.intelligence block, version 0.1.0, SHADOW, applies_nothing, tested_in_home_assistant false; project_version and the dashboard
+# version unchanged) and the V1 prototype suite's isolation pin (intelligence/tests/test_intelligence_dashboard_prototype.py: "no
+# `intelligence` in the manifest" narrowed to no prototype file and no Intelligence path other than exactly isp1's eleven)
+# (_isp1_scope.FROZEN_REVERTERS); as of pub0 each is the export byte for byte. Nothing is newly enrolled.
+# Measured, not declared: no delta, no op path, no substitution, no banned token; ZERO firmware, registry data, Intelligence engine,
+# runtime or ecco_core byte; ZERO Modbus operation; the production dashboard untouched; no service call other than
+# persistent_notification.create, no script, no write of any entity.
+ISP1 = Entry(
+    id="isp1", pr="ISP1", commit="unmerged",
+    reverts=dict(_isp1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after isp1
+        HA_MANIFEST: "65136f935c12eabaf5c943a7a596bd3bb54ca17dae86be7344e818478d934492",
+    },
+    added_files=_isp1.ADDED_FILES,
+    frozen_reverts=dict(_isp1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after isp1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _isp1.VERSION_REL: "29852433eb4e84a849a790ef2e9debde5a2145c417b1a5823f0ff8b7b7ef4d15",
+        _isp1.PROTO_SUITE_REL: "a6110bfb9b5f06d7f62ce48f02817c37360de60bc1aa5a9033e048002b69868a",
+    },
+    # _pex.fingerprint(ISP1): hashes its parent ovw3's fingerprint and every declaration above
+    fingerprint="ad3a192fb075d32b0b4bb1a36f687941091f49ceb8d9744dd0ba56cc538d0f8c",
+    note="ECCO Intelligence SHADOW v0.1 in the release files: the presentation package (pause helper, dead-man watchdog, three "
+         "notification-only alerts), the raise-only advisory reserve helper and the standalone dashboard's registration as three new "
+         "packages; manifest stanzas for the three packages, the standalone dashboard and the card (manual resource registration); "
+         "VERSION.yaml's intelligence block (0.1.0, SHADOW, applies nothing, not tested in Home Assistant); the V1 prototype suite's "
+         "manifest isolation pin narrowed to exactly isp1's paths: ZERO firmware, registry data, "
+         "Intelligence engine, runtime or ecco_core change, ZERO Modbus operation, no service call other than "
+         "persistent_notification.create, the production dashboard untouched",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

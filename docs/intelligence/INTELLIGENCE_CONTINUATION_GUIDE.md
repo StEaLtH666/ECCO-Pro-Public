@@ -87,7 +87,8 @@ The integration fixups are listed below. None of them loosens a fail-closed rule
 - The stand-in Home Assistant suite follows the real dq and plan bodies:
   - a history-only item follows the history's own freshness;
   - a BLOCKED result turns STALE when its validity ends.
-- The presentation package is held out (section 5).
+- The presentation package was held out of the runtime's release (decision ui-1); the post-export entry isp1 (PR-6)
+  restores it (section 5).
 - IP-4b, after the read-only end-to-end review (none loosens anything either):
   - an item resting on a dongle input is never valid longer than the quality layer's liveness bound minus the liveness
     age (the SHADOW cycle skipped the liveness reading when it bounded the validity);
@@ -98,11 +99,11 @@ The integration fixups are listed below. None of them loosens a fail-closed rule
     entities over two hours of ticks;
   - the e2e test renders the kit's payloads past the validity and through `stale_from`;
   - texts: the real cycle's BLOCKED result is valid for at most 900 s (the age rule covers only an envelope without a
-    validity), the runtime note marks CCR-1 revision 2 as applied, the dashboard marks the package held out, and the
+    validity), the runtime note marks CCR-1 revision 2 as applied, the dashboard marked the package held out (until isp1), and the
     PR-1 and PR-2 texts no longer point at this guide.
 - Wording that the integration made stale: the capture validator's `backtest` text says what the backtest still needs
   (section 4), the data-quality suite labels its clean-base section by whether CCR-DQ-1 has landed, and the card
-  design, card README and install runbook mark the package as held out until PR-6.
+  design, card README and install runbook marked the package as held out until PR-6 (isp1 removed those notes).
 
 **The SHADOW v0.1 completion.** The contract is section 13 of the foundation contract; what each part changed:
 
@@ -134,7 +135,7 @@ The integration fixups are listed below. None of them loosens a fail-closed rule
   every run of a window that spans at most 72 h (after an outage pauses the clock, the first hours come from the
   earlier downloads; runbook section 8).
 - **Docs and drill (PR-3, WP-5):** the runtime note, the runbook (R3, R5, T1-T11, Q1-Q9, the capacity check, the PR-5
-  commands marked "lands with PR-5"), this guide, the card design (the next refresh in the header; the 3D Overview link
+  commands), this guide, the card design (the next refresh in the header; the 3D Overview link
   dropped) and `tools/ecco_intel_drill.py site-check`.
 
 ## 4. Open change requests and decisions
@@ -147,44 +148,64 @@ The integration fixups are listed below. None of them loosens a fail-closed rule
 | CCR-2 (the runtime self-test WARN on the status entity) | DEFERRED | the WARN stays in diagnostics |
 | CCR-policy-01 (additive refusal codes) | DEFERRED | every rule already refuses |
 | CCR-ui-2 (the runner's echo of a failing suite on a cp1252 console) | DEFERRED, not Intelligence-owned | run the runner with `-X utf8` |
-| ui-1 r3 (the presentation package) | HELD OUT until PR-6 | section 5 |
-| No pause control while the package is held out | OPEN, for PR-6 and DP-4 | By the frozen contract a missing pause helper means not paused, with a WARN (`PAUSE_CONTROL_MISSING`), so the runtime keeps publishing SHADOW advice and the owner cannot pause it. Nothing is installed. PR-6 restores the package, and DP-4 must keep the runbook's order: the package installed and the pause helper on before the integration first starts |
+| ui-1 r3 (the presentation package) | RESOLVED by the post-export entry isp1 (PR-6) | section 5 |
+| No pause control while the package is held out | RESOLVED by isp1 (PR-6); the install order stays a DP-4 step | The package restores the owner's pause control (`input_boolean.ecco_intel_paused`). By the frozen contract a missing pause helper still means not paused, with a WARN (`PAUSE_CONTROL_MISSING`), so DP-4 must keep the runbook's order: the package installed and the pause helper on before the integration first starts (gate G8), and the package retired only after the integration's entry is deleted (runbook section 11) |
 | Advice backtest in the capture validator | PENDING | The capture validator's summary field `backtest` stays PENDING. A backtest campaign needs owner decisions, which are OPEN; synthetic decisions are never used on real data. It also needs the TOU readings and tariff payloads at each issue time, which a statistics capture does not carry. The summary schema is pinned by the data-quality suite. Wiring it needs DP-1 and a capture that carries those readings |
 | Runtime cadence against the cycle's validity | RESOLVED in the runtime (SHADOW v0.1 completion); measured under L3 and in the 72 h acceptance | Found at integration: hourly cycles left a result STALE for most of each hour. Refresh before expiry (foundation contract 13.4) recomputes between the slots when less than 125 s of validity is left or an item is BLOCKED `INPUT_EXPIRING`, at most once a tick, under a CPU guard. On the target platform the telemetry poll text moves every 60 s, so the poll-phase-aligned refresh (amendment A23) starts each refresh 3 s after a poll; the stand-in suite, counting from its recorder rows, shows no `INPUT_EXPIRING` and no STALE over three hours at any phase. A missed, late or frozen poll gives at most one STALE cycle per episode (amendment A32: accepted as fail closed, never a wrong number, no staleness rule changed), then the recovery at the next poll plus the settle delay (or the 55 s floor's end), or, when the poll text stops, the tick's own rules, with the dongle items failing closed. A poll text faster than the settle delay no longer postpones the poll-driven step (A33), and no cycle starts inside the settle delay of the newest poll seen (A36; residual: two polls within one settle delay). Remaining: L3 M6 / the 72 h T3 and T9 measure it on the real Core (T3 / R3: STALE in at most 1 % of minutes, runs of at most two ticks). A50 lowers the CPU a cycle takes (the engine's exact profile memo and the runtime's reuse of the parsed history) without changing the CPU guard, the cadence or any rule; R3 and T9 read the target's own figure |
 | Tariff report cadence | OPEN (a live fact) | The tariff entities' report cadence is not known yet; an I-D6 limit has to cover it, within the 900 s ceiling, or export and Dump advice stay BLOCKED. The import rates read the day events in the recommended form [current day, next day] (A38 Part B, A42), and the merged table is as old as its oldest contributing event, so each event's cadence counts; a site adds the previous-day event only once its cadence is known to stay within its I-D6 limit. The runbook's R5 and T11 fail while the cadence does not fit (fail closed). A coverage-based tariff freshness rule would need an independent review and the owner; none is proposed |
 | The merged import table refused or never fresh (RT4-1) | OPEN for part (d) only, decided on the 72 h data | A42 decided parts (a) to (c). (a) The runbook's go / no-go row R5, the 72 h row T11 and the 7-day row Q6 require the import table accepted and fresh after the next-day publication; each reads the import table's own code: a computed cycle without `TARIFF_VERIFIED` (before the next-day publication, with neither it nor `TARIFF_COVERAGE_SHORT`) counts as an input fault although it blocks nothing, T11 counts computed cycles only (A45), and the cheap-run codes that stand beside `TARIFF_VERIFIED` on a verified table naming no cheap run (a flat or smooth tariff) describe its shape and count as no fault (A47). (b) The diagnostics download shows the runtime's refusal code: `source_notes` is no longer redacted, each note a contract key and a constant code (a suite pins it on every refusal path). (c) The recommended form maps the two day events [current day, next day]; the three-event form is allowed, a site adding the previous-day event only once its cadence is known to stay within its I-D6 limit. With A41 the charge-window items carry INFO `CHARGE_WINDOW_NOT_PRICED` whenever no price check covered the window, so a missing cross-check is visible on the items too. Open, not in v0.1: (d) whether a refused, gapped or stale mapped import table BLOCKs the charge-window items instead of the TOU-only WARN (INTELLIGENCE_HA_RUNTIME risk 8) |
 | One rate event under two table keys (RT4-2) | RESOLVED (A42) | `parse_entity_map` and `site-check` (exit 1) refuse the same entity and attribute named by any two of `tariff.import_rates`, `tariff.export_rates` and `tariff.events`, every day event of a list counted, by field path only (INTELLIGENCE_HA_RUNTIME 4.2). The same entity under another attribute is accepted; a site whose import and export rates are one attribute is refused (fail-closed) |
 
-## 5. The held-out presentation package (PR-6)
+## 5. The presentation package (PR-6, post-export entry isp1)
 
-`home-assistant/packages/ecco_intelligence.yaml` (the pause helper and the watchdog) and its behaviour suite
-`home-assistant/tests/test_ecco_intelligence_package.py` are held back: they ship with PR-6, the single post-export entry.
-Until then:
+The presentation package was held out of the runtime's release (decision ui-1) and comes back with the post-export entry
+`isp1` (PR-6), with two companions:
 
-- the card shows the watchdog and the pause as not installed;
-- the runtime reports `pause_control: MISSING` with the WARN `PAUSE_CONTROL_MISSING`. A missing pause control means not
-  paused (the frozen contract), so the runtime still publishes its SHADOW advice, with numbers wherever an item is OK.
-  The owner has no pause control until PR-6 restores the package. This is an open item for PR-6 and DP-4 (section 4);
-- the dashboard's registration steps still begin with installing the package (PR-6 restores it), but a comment line above
-  them (IP-4b) marks the package held out until PR-6 and says the dashboard is not to be registered before then: its pause
-  tile, watchdog row and the markdown fallback's pause and watchdog lines read entities that nothing defines until PR-6.
+- `home-assistant/packages/ecco_intelligence.yaml`: the pause helper `input_boolean.ecco_intel_paused`, the watchdog
+  `binary_sensor.ecco_intel_watchdog_fresh` and three notification-only alerts. Its suite
+  `home-assistant/tests/test_ecco_intelligence_package.py`. The watchdog follows the runbook's gate G8 (all PROPOSED):
+  `WATCHDOG_MAX_AGE_S` = 1200 s, derived from the runtime's constants (the 900 s validity ceiling + one 60 s tick + the
+  120 s time budget + 2 x 60 s); a computed status needs a `valid_until` still ahead; STARTING is bounded by 1200 s;
+  PAUSED is fresh while the pause helper is on, plus `RESUME_GRACE_S` = 130 s (two ticks and their margin) after it turns
+  off, because the runtime publishes PAUSED once per pause and STARTING at its next tick after an unpause. `ALERT_AFTER_S`
+  1800 s and `CLOCK_AHEAD_S` 120 s are unchanged. The self-test alert's start condition is a template (`is_state`), so a start
+  with no status entity logs no condition error (L3 finding P3). The suite derives both thresholds from the runtime's
+  constants and checks that the runbook's G8 row states them.
+- `home-assistant/packages/ecco_intelligence_prefs.yaml`: the raise-only reserve helper
+  `input_number.ecco_advisory_reserve_raise_pct` (0-100 %, no `initial`, so a new helper starts at 0 % and raises nothing).
+  A site maps it as `pref.advisory_reserve_raise_pct` only once it exists. Its suite
+  `home-assistant/tests/test_ecco_intelligence_prefs_package.py`.
+- `home-assistant/packages/ecco_intelligence_dashboard.yaml`: the standalone dashboard's registration, one YAML-mode
+  `lovelace: dashboards: ecco-intelligence:` entry for administrators. Home Assistant merging a package's `lovelace:` entry
+  is proven on the isolated test Home Assistant before a production install; the fallback is the same entry in
+  `configuration.yaml`.
 
-The card suite (`tools/tests/test_intelligence_card.py`) no longer reads either file. One check in it fails as soon as either
-file comes back. Its package section moved out because the package suite pins every one of those checks. PR-6 must restore
-these card-suite checks, which the package suite does not pin:
+`deployment/ha-manifest.yaml` lists the three packages, the dashboard (a new top-level `intelligence_dashboard` mapping) and
+the card (a `frontend_assets` stanza, manual resource registration); `VERSION.yaml` gains `current.intelligence` (0.1.0,
+SHADOW, applies nothing, not tested in Home Assistant) and `current.home_assistant.intelligence_package`. Nothing installs any
+of them automatically. The card suite (`tools/tests/test_intelligence_card.py`) pins the package again, with the checks the
+package suite does not pin: the reserved-token scan, the `custom:` 3D-card scan, the vestigial-id scan, the
+prototype-id scan and the private-value scan (all over the three packages and their two suites), the device-slug and
+tariff-placeholder scan (over the three packages, the dashboard and the card only, not the suites) and the site render of
+the three packages.
 
-1. the reserved fallback and recovery token scan over the package and its suite (four tokens of the card suite's list are
-   missing from the package suite's list);
-2. the scan for the `custom:` form of the 3D card's tag over both files (the package suite bans only the full name);
-3. the scan for the two vestigial bare object ids over both files (the package suite bans only the full entity ids);
-4. the tariff-placeholder scan over the package, and the prototype-entity-id scan over the package's comments and over its suite;
-5. the private-value scan over both files: workstation paths, e-mail addresses, private addresses, MAC addresses and
-   13-digit numbers;
-6. the site-render check that the package renders byte-identical for the default, a renamed-slug and a supplier site, and that
-   the package is in the render set.
+The chain entry `isp1` (`registry/tests/_isp1_scope.py`, `registry/tests/_scope_chain.py`) declares the manifest as its
+chain-pinned edit and two frozen edits: VERSION.yaml, and the frozen V1 prototype suite's isolation pin
+(`intelligence/tests/test_intelligence_dashboard_prototype.py`), which refused the word Intelligence anywhere in the manifest
+and now refuses any prototype file and any Intelligence path other than exactly isp1's eleven, on a path line with or
+without a trailing comment. Its fingerprint hashes the entry before it (`ovw3` when it was built) and the state of each file
+it edits, so it is sealed again with `_pex.sealed` whenever another entry merges first or one of those files' isp1 text
+changes.
 
-PR-6 also brings the chain entry with its fingerprint. The fingerprint depends on the entry before it, so it is recomputed when
-PR-6 is built.
+**A residual that the package cannot remove (accepted).** At Home Assistant's start the watchdog may show its last saved
+state until its template first renders (on the pinned Core no key of a state-based template binary_sensor acts before
+that render); that first render is off while the status entity does not exist yet. Nothing acts on the watchdog alone; its
+own dashboard row and the card footer show the saved state until the first render. No figure is shown meanwhile: without
+the status entity the card and the markdown fallback read "not publishing", and the stale alert needs the status entity.
+The runbook's 72 h row T4 and the isolated test Home Assistant's watchdog row (L3 M7.2) judge the watchdog from its first
+render with the status entity present after each start, which comes within 600 s of the start or of the window start; a
+later first render is a failure, and so is a missing status entity after it. A later card change may show the footer's
+watchdog as unknown while the card is not publishing; v0.1 does not.
 
 ## 6. What PR-5, PR-6 and the owner's decisions still need
 
@@ -195,15 +216,12 @@ PR-6 is built.
   read-back), `deploy-ha.ps1 -Target Test|Production` and `-Action Retire`, the `/config` symlink handling (A26), the
   per-segment symlink refusal (A15), the single-file route's refusal of `/config/ecco/intelligence/**` and
   `/config/ecco/staging/**`, `docs/user/intelligence-deploy.md`, and the L3 harness (`tools/ha-test-instance/`). It is a
-  safety-gate change: the full gate, an independent review and an L3 pass before it merges. The runbook marks its
-  commands "lands with PR-5".
-- **PR-6 (built on main after PR-3).** The single post-export entry:
-  - the manifest stanzas;
-  - `VERSION.yaml`;
-  - its documentation, and the removal of the "lands with PR-5" markers in the runbook and this guide;
-  - the presentation package with its suite and the card checks of section 5, which also restores the owner's pause
-    control (section 4), with the watchdog's `WATCHDOG_MAX_AGE_S` at 1200 s derived from the runtime's constants;
-  - the raise-only reserve helper in its own package (`ecco_intelligence_prefs.yaml`) with its own suite.
+  safety-gate change: the full gate, an independent review and an L3 pass before it merges.
+- **PR-6 (the single post-export entry isp1; built, merges after PR-3).** Section 5: the manifest stanzas,
+  `VERSION.yaml`, the presentation package with its suite and the card checks, which restores the owner's pause control
+  (section 4), the raise-only reserve helper in its own package with its own suite, the dashboard's registration package,
+  and their documentation. It is published after PR-5, so the runbook and this guide no longer mark the PR-5 commands
+  as pending, and the entry's fingerprint is unchanged: no other post-export entry merged before it.
 
   The 3D Overview link is dropped (an engineering default of SHADOW v0.1; UI_DESIGN section 14), so PR-6 does
   not touch the Overview. It is serialised after PR-1 to PR-5.

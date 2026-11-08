@@ -9,8 +9,9 @@
   * refused: a root without the marker, a root that looks like a real HA configuration (.storage/), any argument naming the
     host alias 'ecco-ha' or a host:path remote spec, a tampered kit (nothing staged), a reused stamp, an install over an
     existing one, an upgrade or uninstall with nothing installed;
-  * the runbook printer verifies the kit and marks every live step NOT AVAILABLE / PENDING; its step 8 reads PAUSED with
-    the pause helper on, then STARTING and a computed status once the helper is off, as the runbook document does;
+  * the runbook printer verifies the kit and marks every live step NOT AVAILABLE / PENDING; its step 5 names both packages
+    and the pause helper turned on after the restart (PR6-3); its step 8 reads PAUSED with the pause helper on, then
+    STARTING and a computed status once the helper is off, as the runbook document does;
   * the runbook document (A42, RT4-1 (a); A45, RV9-1 and RV9-2; A47, RV10-1): section 7 has the go / no-go row R5
     (after the first next-day publication the status entity shows TARIFF_VERIFIED, the import table's own code; R5
     reads its presence as T11 does, and without it the table's own code stands in its place, the listed codes examples
@@ -46,7 +47,8 @@
     (RR1-7); RR1-5: section 3 and the SITE_FILE row say the site file has no byte-order mark; RUN-2: section 3 names
     the editor setting and gives a cls-first Windows PowerShell 5.1 block that writes the file back without a mark,
     before site-check; RUN-3: the collision recovery's lead-in says steps 2 to 4 need no restart and step 1's freeing
-    of a holder without a unique id may need a separately approved one;
+    of a holder without a unique id may need a separately approved one; PR6-3: section 11 retires the PR-6 files only
+    after the entry is deleted, so retiring the presentation package never leaves a running integration unpaused;
   * A45 (R9D-3), A47 (RV10-2, R10D-2): no document published with the runtime (the runbook, INTELLIGENCE_HA_RUNTIME, the
     guide, UI_DESIGN, the card README, the integration README) carries owner-process narrative, a dated owner answer,
     decision or default (a decision word within 40 characters of a date), or a commit id; RR1-3: nor does the
@@ -286,6 +288,13 @@ try:
     check("the runbook names the ui package before the integration and the latch caveat",
           r.stdout.index("ui package") < r.stdout.index("stage, verify") and "SHADOW_WOULD_AWAIT_ACK" in r.stdout)
     check("the runbook never names the live host alias", "ecco-ha" not in r.stdout.lower())
+    flat5 = " ".join(r.stdout[r.stdout.find(" 5. "):r.stdout.find(" 6. ")].split())
+    check("step 5 follows the runbook document (section 4, gate G8): both packages, the ui package and the preferences "
+          "package, before the integration, and the pause helper turned on after the restart and before the integration is "
+          "added (A52, PR6-3)",
+          "install both packages BEFORE the integration" in flat5 and "(ecco_intelligence.yaml: the pause helper" in flat5
+          and "(ecco_intelligence_prefs.yaml: the raise-only reserve helper)" in flat5
+          and "turn the pause helper ON after that restart and before the integration is added (step 8)" in flat5, flat5)
     step8 = r.stdout[r.stdout.find(" 8. "):r.stdout.find(" 9. ")]
     flat8 = " ".join(step8.split())
     check("step 8 follows the runbook document (section 7): added with the pause helper on, the status reads PAUSED with "
@@ -625,6 +634,16 @@ try:
           "period)" in coll and "for as long as it keeps that record (it purges orphaned deleted-entity records after a "
           "retention period" in intro_rt and "for as long as it keeps their deleted-entity records (it purges orphaned "
           "ones after a retention period)" in api5, sec11[:300])
+    _s4 = sec11.find("4. only for a full removal")
+    _s5 = sec11.find("5. restart with approval")
+    check("PR6-3: section 11 retires the PR-6 files only after the entry is deleted (step 2), never during an upgrade or a "
+          "rollback, because a retired presentation package leaves a running integration with no pause control, which reads "
+          "as not paused (PAUSE_CONTROL_MISSING); one restart follows",
+          0 <= sec11.find("2. delete the integration entry") < sec11.find("3. `deploy-ha-kit.ps1 -Action Uninstall`") < _s4 < _s5
+          and "only for a full removal, and only once step 2 is done: retire the PR-6 files" in sec11
+          and "`PAUSE_CONTROL_MISSING`" in sec11 and "Never retire it before the entry is deleted" in sec11
+          and "never as part of an upgrade or a rollback" in sec11
+          and "one restart covers steps 3 and 4" in sec11, sec11[:600])
     sec3 = " ".join(section(doc, "## 3. ", "## 4. ").split())
     site_row = row(rt_doc, "`SITE_FILE`")
     check("RR1-5: the runbook's section 3 and INTELLIGENCE_HA_RUNTIME's SITE_FILE row say the site file is UTF-8 without a "

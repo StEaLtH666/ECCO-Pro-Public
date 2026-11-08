@@ -85,10 +85,39 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # ECCO Intelligence SHADOW v0.1 - isp1 (advice only; applies nothing). The presentation package (the pause helper, the dead-man
+  # watchdog and three notification-only alerts) and the raise-only reserve helper: install both BEFORE the integration and turn
+  # the pause helper on before the integration first starts (the install runbook, gate G8). The integration itself
+  # (custom_components/ecco_intelligence) installs by its own kit route and is not listed here.
+  - source: home-assistant/packages/ecco_intelligence.yaml
+    destination: /config/packages/ecco_intelligence.yaml
+    method: ssh_file_copy
+    restart_required: true
+  - source: home-assistant/packages/ecco_intelligence_prefs.yaml
+    destination: /config/packages/ecco_intelligence_prefs.yaml
+    method: ssh_file_copy
+    restart_required: true
+  # The ECCO Intelligence dashboard's registration (one YAML-mode lovelace dashboards entry, nothing else). Deploy it after the
+  # dashboard file (intelligence_dashboard below).
+  - source: home-assistant/packages/ecco_intelligence_dashboard.yaml
+    destination: /config/packages/ecco_intelligence_dashboard.yaml
+    method: ssh_file_copy
+    restart_required: true
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml
   method: ssh_file_copy_staged
+  restart_required: false
+  activation_required: true
+
+# ECCO Intelligence SHADOW v0.1 - isp1: the standalone ECCO Intelligence dashboard (YAML mode, read-only apart from the pause
+# tile). It is separate from the production dashboard above and never changes it; ecco_intelligence_dashboard.yaml registers it,
+# which takes effect at a Home Assistant restart.
+intelligence_dashboard:
+  source: home-assistant/dashboards/ecco_intelligence.yaml
+  destination: /config/ecco/dashboards/ecco_intelligence.yaml
+  method: ssh_file_copy
   restart_required: false
   activation_required: true
 
@@ -130,6 +159,15 @@ frontend_assets:
     restart_required: false
     resource_registration: manual
     resource_url: /local/ecco/ecco-tou-settings-card.js
+  # ECCO Intelligence card - isp1 (read-only display of the ecco-intel-entities/1 output; no write path of any kind).
+  # A single dependency-free ES module (no dist build step). Copying the file and registering the resource stay
+  # deliberate manual steps.
+  - source: frontend/ecco-intelligence-card/ecco-intelligence-card.js
+    destination: /config/www/ecco/ecco-intelligence-card.js
+    method: ssh_file_copy
+    restart_required: false
+    resource_registration: manual
+    resource_url: /local/ecco/ecco-intelligence-card.js
 
 firmware:
   source: firmware/ecco_clock_dongle_stage3_4_free_power.yaml

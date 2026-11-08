@@ -704,8 +704,9 @@ Notes on the example:
   learned capacity) and `capacity.reg204_ah` (it reads in Ah and needs a nominal voltage nobody has recorded). `site-check`
   refuses a file that maps any of them. The learned figure is compared read-only, outside the runtime, during acceptance
   (runbook section 9, Q8).
-- `pref.advisory_reserve_raise_pct` is optional: `{"entity": "input_number.<the raise helper>"}`. Map it only once the
-  helper exists (PR-6 ships it in its own package): a mapped helper that is missing, unavailable, non-numeric or outside
+- `pref.advisory_reserve_raise_pct` is optional: `{"entity": "input_number.ecco_advisory_reserve_raise_pct"}`, the helper
+  of `home-assistant/packages/ecco_intelligence_prefs.yaml` (0-100 %, no `initial`). Map it only once that package is
+  installed: a mapped helper that is missing, unavailable, non-numeric or outside
   0..100 BLOCKs the reserve items (`PREF_RESERVE_RAISE_UNKNOWN`). Unmapped means no raise.
 - `reserve.ha_minimum_soc` (signal) is needed only when I-D1 takes its value from the Home Assistant reserve helper
   (`HA_RESERVE_HELPER`); the SHADOW defaults record I-D1 as the Intelligence user reserve instead.

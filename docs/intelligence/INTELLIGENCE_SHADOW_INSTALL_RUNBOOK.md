@@ -4,8 +4,7 @@
 >
 > 1. **PR-3** (the runtime) and **PR-5** (the deploy route for `/config/custom_components/ecco_intelligence/` and the site
 >    file: `tools/deploy-ha-kit.ps1`, `tools/place-ha-site-file.ps1`) have merged, and **PR-6** (the presentation and
->    preferences packages) for the pause helper and the watchdog. PR-5 merges after PR-3, so its commands below are marked
->    "lands with PR-5".
+>    preferences packages) for the pause helper and the watchdog.
 > 2. The isolated test Home Assistant (L3) has passed with no unresolved material failure, and the kit to install is
 >    equivalent to the L3-tested kit (amendment A3).
 > 3. The owner's release closeout is committed and the owner has given the separate go for the install and its one
@@ -14,7 +13,7 @@
 > Nothing here has been installed or run on Home Assistant. SHADOW only: ASSISTED and AUTONOMOUS stay disabled.
 
 What the integration does is described in [`INTELLIGENCE_HA_RUNTIME.md`](INTELLIGENCE_HA_RUNTIME.md); the deploy route in
-`docs/user/intelligence-deploy.md` (lands with PR-5).
+`docs/user/intelligence-deploy.md`.
 
 **Notation.** Placeholders are written `<like this>`. `<OFFLINE_EVIDENCE_DIR>` is the owner's local evidence folder; it is
 never in a repository. `<production alias>` is the owner's SSH alias for the production host. Every PowerShell block
@@ -33,7 +32,7 @@ Go only when **every** line below holds. Otherwise stop: this is a no-go.
 | G5 | the site's Home Assistant Core version and **Python version** have been re-read read-only and equal the versions L3 ran (the target platform: Core 2026.10.4, Python 3.14.9) |
 | G6 | the kit verifies (section 2) and is equivalent to the L3-tested kit (its SHA256SUMS identical except the two `VENDOR_MANIFEST.json` lines, same `modules`); the offline suites are green; the mock-root drill passes |
 | G7 | `site-check` on the owner's `site.local.json` exits 0 with the readiness the owner expects, its sha256 is recorded in `<OFFLINE_EVIDENCE_DIR>`, and it is placed (section 3) |
-| G8 | the ui package (`ecco_intelligence.yaml`: the pause helper `input_boolean.ecco_intel_paused` and the watchdog) is installed **before** the integration (section 4), the pause helper is **on**, and the watchdog carries PR-6's numbers: `WATCHDOG_MAX_AGE_S` = **1200 s** (900 s validity + 60 s tick + 120 s budget + 2 x 60 s), `ALERT_AFTER_S` 1800 s, `CLOCK_AHEAD_S` 120 s, PAUSED fresh only while the helper is on (plus 130 s), STARTING bounded by 1200 s (all PROPOSED) |
+| G8 | the presentation package (`ecco_intelligence.yaml`: the pause helper `input_boolean.ecco_intel_paused` and the watchdog) and the preferences package (`ecco_intelligence_prefs.yaml`) are installed **before** the integration (section 4), the pause helper is **on**, and the watchdog carries the numbers of `ecco_intelligence.yaml`: `WATCHDOG_MAX_AGE_S` = **1200 s** (900 s validity + 60 s tick + 120 s budget + 2 x 60 s), `ALERT_AFTER_S` 1800 s, `CLOCK_AHEAD_S` 120 s, PAUSED fresh only while the helper is on (plus 130 s), STARTING bounded by 1200 s, a computed status fresh only with a `valid_until` still ahead (all PROPOSED) |
 | G9 | the facts below were re-read read-only in the same session and match what L3 and the site file assume |
 
 **Facts the install rests on** (read-only, each result recorded offline; ids and values only in the offline evidence and
@@ -153,33 +152,57 @@ diagnostics download redacts it).
 
 The file goes to `/config/ecco/intelligence/site.local.json`. The integration only reads it, at start-up and at a config-entry
 reload. The single-file deploy route refuses everything under `/config/ecco/intelligence/`; the only way the file reaches
-the host is the placement command (lands with PR-5; NOT AVAILABLE before it merges). `-Plan` is read-only. A file already
+the host is the placement command. `-Plan` is read-only. A file already
 in place is replaced only with `-ReplaceExistingSha256 <its live sha256>`, after a verified backup; the output shows sizes
 and hashes only. The new file takes effect at a separately approved config-entry reload or restart:
 
 ```powershell
 cls
-# Lands with PR-5.
 .\tools\place-ha-site-file.ps1 -SiteFile $SITE -ExpectedSha256 <sha256> -SshHost <production alias> -Target Production -Plan
 .\tools\place-ha-site-file.ps1 -SiteFile $SITE -ExpectedSha256 <sha256> -SshHost <production alias> -Target Production
 ```
 
-## 4. Install the ui package first (PENDING, PR-6, owner approval)
+## 4. Install the ui package first (owner approval; NOT AVAILABLE: PR-5, DP-4)
 
-> **Held out until PR-6 (decision ui-1).** The package is not part of the runtime's release; it ships with PR-6 (see
-> [INTELLIGENCE_CONTINUATION_GUIDE.md](INTELLIGENCE_CONTINUATION_GUIDE.md) section 5). Without it the integration has no
-> pause control: it reports `PAUSE_CONTROL_MISSING` (not paused, with a WARN) and publishes its SHADOW advice. Gate G8
-> cannot hold until PR-6 restores the package.
+The presentation package (`home-assistant/packages/ecco_intelligence.yaml`: the pause helper, the watchdog and three
+notification-only alerts) and the preferences package (`home-assistant/packages/ecco_intelligence_prefs.yaml`: the
+raise-only reserve helper `input_number.ecco_advisory_reserve_raise_pct`) are installed with the established single-file
+route, `tools/deploy-ha.ps1` (an allowlisted destination, staging, a sha256 check, a backup, `ha core check` and an
+automatic rollback), each under its own approval and **before** the integration. Both are listed in
+`deployment/ha-manifest.yaml`; nothing installs them automatically. Like every package they take effect at the one approved
+restart (section 6). Turn the pause helper **on** after that restart and before the integration first starts, so the first
+start computes nothing (gate G8). Map `pref.advisory_reserve_raise_pct` in the site file only once its helper exists (a
+mapped helper that is missing BLOCKs the reserve items); while it is unmapped it raises nothing.
 
-The presentation package (`home-assistant/packages/ecco_intelligence.yaml`) provides the pause helper and the watchdog; the
-raise-only reserve helper comes in its own package (`ecco_intelligence_prefs.yaml`). They are installed with the existing
-package route under their own approval, **before** the integration. Turn the pause helper **on** before the integration
-first starts, so the first start computes nothing. Map `pref.advisory_reserve_raise_pct` in the site file only once its
-helper exists (a mapped helper that is missing BLOCKs the reserve items).
+```powershell
+cls
+# NOT AVAILABLE until PR-5 has merged and DP-4 is decided.
+.\tools\deploy-ha.ps1 home-assistant/packages/ecco_intelligence.yaml -SshHost <production alias> -Target Production -Python $PY
+.\tools\deploy-ha.ps1 home-assistant/packages/ecco_intelligence_prefs.yaml -SshHost <production alias> -Target Production -Python $PY
+```
+
+The standalone dashboard and the card are optional for SHADOW (the advice is on the entities); each is a separate approved
+step with the same route:
+
+1. the dashboard file `home-assistant/dashboards/ecco_intelligence.yaml` (to `/config/ecco/dashboards/`). It is a new
+   dashboard that the site's preservation policy does not protect, so when a gate pin is set the step names
+   `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE`; the production dashboard is never touched;
+2. then its registration package `home-assistant/packages/ecco_intelligence_dashboard.yaml`: one YAML-mode
+   `lovelace: dashboards:` entry, `ecco-intelligence`, for administrators only. Home Assistant merges it into the
+   configuration's own `lovelace:` block; the isolated test Home Assistant proves that merge and the panel first. If Home
+   Assistant does not accept it, `ha core check` fails and the route restores the previous state; the fallback is the same
+   entry added to `configuration.yaml` by the owner;
+3. the card: `-Source frontend/ecco-intelligence-card/ecco-intelligence-card.js -Destination
+   /config/www/ecco/ecco-intelligence-card.js`, then the owner adds the resource
+   `/local/ecco/ecco-intelligence-card.js?v=0.1.0` (JavaScript module) in Settings, Dashboards, Resources.
+
+After the restart, read-only: `get_panels` lists `ecco-intelligence` in YAML mode; `.storage/lovelace_resources` holds
+exactly one item for the card (type module) and no other item changed; the served card file's sha256 equals the
+repository file's; the dashboard guard's `verify-live` on the production dashboard shows its protected layer intact.
 
 ## 5. Install the integration (NOT AVAILABLE: PR-5, DP-4)
 
-The PR-5 route (`tools/deploy-ha-kit.ps1`, lands with PR-5) does what the drill exercises offline, plus the host checks:
+The PR-5 route (`tools/deploy-ha-kit.ps1`) does what the drill exercises offline, plus the host checks:
 
 1. local checks before any ssh call: the kit's SHA256SUMS sha matches `-ExpectedSumsSha256`, every line is an allowed
    path, the folder holds exactly the listed files, `git_sha` = this checkout's HEAD and a rebuild is byte-identical, and
@@ -202,7 +225,7 @@ rollback command:
 
 ```powershell
 cls
-# NOT AVAILABLE until PR-5 has merged and DP-4 is decided. Lands with PR-5.
+# NOT AVAILABLE until PR-5 has merged and DP-4 is decided.
 .\tools\deploy-ha-kit.ps1 -Action Plan -SshHost <production alias> -Target Production -ExpectedHaVersion <version> `
     -Kit $KIT -ExpectedSumsSha256 <sha256> -ReferenceKit <the L3-tested kit> -ReferenceSumsSha256 <its sha256> -Python $PY
 .\tools\deploy-ha-kit.ps1 -Action Install -SshHost <production alias> -Target Production -ExpectedHaVersion <version> `
@@ -234,10 +257,14 @@ supervision. Keep the restart short. If the latch is set, recovery is a **superv
    - the diagnostics download shows no `FAIL` in `self_test` (VENDOR_MANIFEST, TZ_EUROPE_LONDON, SITE_*, STORE_WRITABLE,
      ENTITY_IDS), `decisions` as the site-check showed them, and `cadence.poll_listener` true (the telemetry poll text
      is mapped);
-   - `pause_control` reads `ON`.
+   - `pause_control` reads `ON`;
+   - `binary_sensor.ecco_intel_watchdog_fresh` reads `on` (PAUSED is fresh while the helper is on, gate G8) and no
+     `ecco_intel_*` notification is shown.
 3. Turn the pause helper **off**. The status changes to `STARTING`. The first cycle runs after the PROPOSED 180 s start-up
    grace has passed since setup, at the first poll-driven step (a few seconds after a telemetry poll) or, without polls,
    at the next minute's tick; a later un-pause runs a cycle the same way.
+   The watchdog stays `on` through the change: PAUSED stays fresh for 130 s after the helper turns off, and the
+   integration publishes `STARTING` at its next tick.
 4. Leave every entity of the integration enabled. A contract entity disabled in the entity registry fails the self-test
    (`ENTITY_IDS`) and stops all computing. To stop it, use the pause helper (section 10) or disable the whole entry.
 
@@ -306,7 +333,7 @@ covers the clock's start must be at or before it; hours no kept row covers leave
 | T1 | every schedule slot published | each slot has a `SLOT` row with outcome `published` in `cycle_stats`, read from the downloads' `runs` rows (above); `runs_published` = `runs_started` while not paused |
 | T2 | no failure | zero `SELF_TEST_FAILED`; `exceptions`, `budget_exceeded`, `late_results_discarded` and `entity_write_failures` stay 0 |
 | T3 | freshness | `STALE` in at most 1 % of minutes while the inputs are fresh, in gaps of at most 2 ticks (status history); no dongle item BLOCKED `INPUT_EXPIRING` while both poll texts move |
-| T4 | the watchdog | `binary_sensor.ecco_intel_watchdog_fresh` stays on; no `ecco_intel_*` notification |
+| T4 | the watchdog | `binary_sensor.ecco_intel_watchdog_fresh` stays on, judged from its first render with the status entity present after each Home Assistant start, which comes within 600 s of the start or of the window start (a later first render fails T4): before it, Home Assistant shows the state it saved for the watchdog before the restart, and a first render while the status entity does not exist yet is off, which nothing acts on and which T4 does not judge (the card shows "not publishing" and no figure while the status entity is absent); after it, a missing status entity fails T4; no `ecco_intel_*` notification |
 | T5 | cycle times and stability | cycle `total_s_p95` at most 30 s and maximum at most 60 s, refresh `total_s_p95` at most 5 s, computed from the `total_s` of the downloads' `runs` rows that started inside the 72 h (above; `cycle_stats.by_kind` covers every kept run and is only a cross-check); `total_s` includes the settle hold at the snapshot (up to 3 s) and every job's 0.15 s cool-down (R3), and the bounds include them; no blocking-I/O warning; supervision stable throughout (R1) |
 | T6 | nothing else changed | the R4 baseline equal at the start and at the end |
 | T7 | the null rule | in the recorded states no number in a null status or for an item whose decisions are OPEN. `valid_until` is not recorded (A17: a timestamp-only attribute), so "no number past `valid_until`" is a live check: at each live read of the entities (each item's state and its `valid_until` attribute, read for example at the time of each diagnostics download; the download itself carries neither), no item shows a number while the time is past its own `valid_until` (the runtime half, the publish horizon, is pinned by the L2 suites) |
@@ -365,11 +392,15 @@ published and not recorded. Alternatively disable the config entry.
      `ecco_intelligence`);
   3. `deploy-ha-kit.ps1 -Action Uninstall`: the tree is backed up and moved to `/config/ecco/staging/<stamp>/uninstalled/`,
      never deleted;
-  4. restart with approval.
+  4. only for a full removal, and only once step 2 is done: retire the PR-6 files (the two packages, the dashboard's
+     registration package, the dashboard and the card) one at a time with `deploy-ha.ps1 -Action Retire -Destination
+     <file>` (moved to `/config/ecco-backups/<stamp>/`, never deleted). The presentation package holds the
+     pause helper: retired while the entry still exists, it would leave the integration with no pause control at the next
+     restart, which the integration reads as not paused (`PAUSE_CONTROL_MISSING`) and so computes. Never retire it before
+     the entry is deleted, and never as part of an upgrade or a rollback;
+  5. restart with approval (one restart covers steps 3 and 4).
 
-  `site.local.json` and `state/` are the owner's data and stay where they are. The PR-6 package, dashboard and card files
-  are retired one at a time with `deploy-ha.ps1 -Action Retire -Destination <file>` (moved to `/config/ecco-backups/<stamp>/`,
-  never deleted; lands with PR-5).
+  `site.local.json` and `state/` are the owner's data and stay where they are.
 
   **What Home Assistant itself recorded.** The integration's code makes no registry or storage call. When the entry was
   added, Home Assistant recorded the config entry, the eleven entity-registry entries and one device-registry entry (the
@@ -385,7 +416,7 @@ Every command ends with `ha core check` and leaves the restart to the owner:
 
 ```powershell
 cls
-# NOT AVAILABLE until PR-5 has merged and DP-4 is decided. Lands with PR-5.
+# NOT AVAILABLE until PR-5 has merged and DP-4 is decided.
 .\tools\deploy-ha-kit.ps1 -Action Upgrade -SshHost <production alias> -Target Production -ExpectedHaVersion <version> `
     -Kit $KIT -ExpectedSumsSha256 <sha256> -ReferenceKit <the L3-tested kit> -ReferenceSumsSha256 <its sha256> -Python $PY
 .\tools\deploy-ha-kit.ps1 -Action Rollback -BackupStamp <stamp> -SshHost <production alias> -Target Production -ExpectedHaVersion <version>

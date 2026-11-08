@@ -68,16 +68,16 @@ Keys: `status`, `charge_target`, `overnight_demand`, `export_event`, `dump_to_gr
 
 The standalone dashboard `home-assistant/dashboards/ecco_intelligence.yaml` uses this card. Order:
 
-> The package is held out until PR-6 (decision ui-1): it ships with PR-6; see
-> `docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md` section 5. Until then the card shows the watchdog and the pause
-> as not installed.
-
 1. the package `home-assistant/packages/ecco_intelligence.yaml` first (the pause helper and the watchdog), then the ECCO
    Intelligence integration;
-2. copy `ecco-intelligence-card.js` to `/config/www/ecco/` and add it as a Lovelace resource of type JavaScript module;
-3. register the dashboard (its header gives the `lovelace: dashboards:` entry).
+2. copy `ecco-intelligence-card.js` to `/config/www/ecco/` and add it as a Lovelace resource of type JavaScript module
+   (for example `/local/ecco/ecco-intelligence-card.js?v=0.1.0`);
+3. copy the dashboard file, then install its registration package `home-assistant/packages/ecco_intelligence_dashboard.yaml`
+   (one `lovelace: dashboards:` entry; the dashboard's header gives the same entry for `configuration.yaml` as the fallback).
 
-Neither the card nor the dashboard is in `deployment/ha-manifest.yaml`.
+`deployment/ha-manifest.yaml` lists the card (a `frontend_assets` stanza, resource registration manual), the dashboard
+(`intelligence_dashboard`) and the packages (post-export entry isp1); nothing copies or registers them automatically. The
+install runbook (`docs/intelligence/INTELLIGENCE_SHADOW_INSTALL_RUNBOOK.md`, section 4) gives each step.
 
 ## Tests
 
