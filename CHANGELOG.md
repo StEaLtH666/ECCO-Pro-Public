@@ -29,8 +29,15 @@ Development before the first public release happened in a private repository; se
 - **Intelligence SHADOW v0.1, Home Assistant runtime and card** (source only; install kit staged, PENDING DP-4; nothing installed
   or deployed): `custom_components/ecco_intelligence` (sensor and binary_sensor only), the kit builder and mock install drills,
   the read-only intelligence card and its standalone dashboard, an end-to-end test of the built kit, and
-  [docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md](docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md). The presentation
-  package (pause helper and watchdog) is held back for the post-export entry.
+  [docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md](docs/intelligence/INTELLIGENCE_CONTINUATION_GUIDE.md).
+- **Intelligence SHADOW v0.1, Home Assistant presentation** (post-export entry `isp1`; nothing installed or registered): the
+  presentation package `home-assistant/packages/ecco_intelligence.yaml` (the pause helper, three notification-only alerts and
+  a dead-man watchdog that follows the install runbook's gate G8: a 1200 s age bound derived from the runtime's constants, a
+  `valid_until` still ahead for a computed status, STARTING bounded by 1200 s, PAUSED fresh while the pause is on plus 130 s;
+  the self-test alert stays quiet at a start without the integration), the raise-only reserve helper package
+  `ecco_intelligence_prefs.yaml` and the standalone dashboard's registration package `ecco_intelligence_dashboard.yaml`, each
+  with its suite. `deployment/ha-manifest.yaml` lists the three packages, the standalone dashboard and the card (manual
+  resource registration); `VERSION.yaml` records Intelligence 0.1.0 (SHADOW, applies nothing, not tested in Home Assistant).
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten

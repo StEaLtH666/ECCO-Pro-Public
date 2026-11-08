@@ -1,0 +1,236 @@
+# ECCO Intelligence (SHADOW, advice only) - the presentation package: the pause helper, a dead-man watchdog and three alerts.
+#
+# Contract ecco-intel-entities/1 (intelligence/advisory_contract.py). The ECCO Intelligence integration (custom_components/
+# ecco_intelligence) publishes sensor.ecco_intel_status and the item sensors; this package only READS sensor.ecco_intel_status.
+# It is listed in deployment/ha-manifest.yaml (post-export entry isp1) beside its two companions, the raise-only reserve
+# helper (ecco_intelligence_prefs.yaml) and the dashboard registration (ecco_intelligence_dashboard.yaml). Nothing deploys it
+# automatically: the single-file deploy script (tools/deploy-ha.ps1) places it as an explicit, separately approved install step,
+# and the install runbook installs this package FIRST, with the pause helper on before the integration first starts (gate G8).
+#
+# What this package may do, and nothing else:
+#   input_boolean.ecco_intel_paused          the owner's pause control. Only the owner toggles it (the dashboard's tile card). No
+#                                            `initial:` - Home Assistant restores the owner's last choice across a restart (a
+#                                            new helper starts off). The integration reads it; while it is on the integration
+#                                            publishes PAUSED (no advice). A missing helper means "not paused" plus the reason
+#                                            code PAUSE_CONTROL_MISSING.
+#   binary_sensor.ecco_intel_watchdog_fresh  a dead-man watchdog over sensor.ecco_intel_status, computed here in Home Assistant so
+#                                            it keeps working when the integration is down. ON only while ALL of these hold:
+#                                              - the status is one of OK, NO_ADVICE, BLOCKED, INSUFFICIENT_DATA, STARTING, PAUSED
+#                                                (STALE and SELF_TEST_FAILED are not fresh; unknown / unavailable is not fresh,
+#                                                and so is a status entity that does not exist);
+#                                              - contract_version is exactly ecco-intel-entities/1, integration_version is a
+#                                                text that is not blank (spaces only is blank), the mode is the advice-only mode
+#                                                and applies_nothing is true;
+#                                              - generated_at is a timestamp no further ahead of this clock than CLOCK_AHEAD_S;
+#                                              - a computed status (OK, NO_ADVICE, BLOCKED, INSUFFICIENT_DATA) carries a
+#                                                valid_until that parses and is still in the future (every computed result has
+#                                                one), and its generated_at is no older than WATCHDOG_MAX_AGE_S;
+#                                              - a STARTING status has a generated_at no older than WATCHDOG_MAX_AGE_S and has
+#                                                not lasted longer than WATCHDOG_MAX_AGE_S (by the status entity's
+#                                                last_changed), so a start-up that never finishes is not fresh;
+#                                              - a PAUSED status counts as fresh only while the pause helper is on, or for at
+#                                                most RESUME_GRACE_S after the helper last changed while it is not on (the
+#                                                integration publishes PAUSED once per pause and replaces it with STARTING at
+#                                                its next tick after the helper turns off); its generated_at age is not bounded,
+#                                                so a long pause stays fresh, and a PAUSED status with the helper missing is not
+#                                                fresh. A STARTING or PAUSED status carries no valid_until (one that it does
+#                                                carry must still be in the future).
+#                                            At Home Assistant's start, Home Assistant may show the watchdog's last saved state
+#                                            until the template first renders; its first render with the status entity absent
+#                                            (the integration not set up yet) is off. Until then only the watchdog's own row or
+#                                            footer can read the saved state: the card and the dashboard's text fallback show
+#                                            "not publishing" and no figure while the status entity is absent, and the stale
+#                                            alert needs the status entity.
+#   three automations                        each calls ONLY persistent_notification.create with a fixed notification_id that
+#                                            starts ecco_intel_ and a fixed text (no entity text is copied into a notification).
+#                                            None dismisses anything; the owner dismisses a notification in Home Assistant.
+#                                            They alert only when there is something to do:
+#                                              ecco_intel_watchdog_stale     the watchdog has been not-on (off, or unknown after a
+#                                                                            template fault) for ALERT_AFTER_S, the pause is not on
+#                                                                            and last changed at least ALERT_AFTER_S ago (so an
+#                                                                            unpause gives the next cycle time to publish), the
+#                                                                            status entity exists (the integration is installed),
+#                                                                            and neither alert below applies;
+#                                              ecco_intel_self_test_failed   the status turns SELF_TEST_FAILED, or already is
+#                                                                            SELF_TEST_FAILED when Home Assistant starts; its
+#                                                                            condition is a template (is_state), so a start with
+#                                                                            no status entity (the integration not installed or
+#                                                                            not set up yet) is quiet and logs no condition error;
+#                                              ecco_intel_contract_mismatch  the status is published but its contract_version is
+#                                                                            not ecco-intel-entities/1, applies_nothing is not true or
+#                                                                            integration_version is missing or blank: when that
+#                                                                            starts, or when it already holds as Home Assistant starts.
+#                                            Why the start triggers: persistent notifications do not survive a restart, and Home
+#                                            Assistant arms a template trigger that is already true at attach WITHOUT firing it
+#                                            (a state trigger fires only on a later change). Without them a fault that persists
+#                                            across a restart (an integration upgraded and restarted out of step with this
+#                                            package) would raise nothing, and the stale alert stays quiet for both faults. Each
+#                                            start trigger re-checks the same fault in the automation's condition, so a start with
+#                                            a good status, or with no status entity, raises nothing.
+#                                            Residuals (stated, not alerted): the watchdog entity itself missing (it is defined
+#                                            in this same package); an automation reload while a fault persists raises no second
+#                                            notification (the first one is still shown: notifications survive a reload).
+#
+# It writes nothing else: no helper, no script, no service other than persistent_notification.create, no dongle, inverter,
+# InfluxDB or recorder setting. It defines no other entity and reads no dongle entity.
+#
+# PROPOSED thresholds (engineering defaults derived from the integration's PROPOSED constants; NOT owner decisions):
+#   WATCHDOG_MAX_AGE_S = 1200   PROPOSED: the install runbook's formula (gate G8): the advice validity ceiling (900 s,
+#                               intelligence/daily_plan.PROPOSED_ADVICE_VALIDITY_S) + one tick (60 s, const.TICK_S) + the cycle
+#                               budget (120 s, const.PROPOSED_TIME_BUDGET_S) + 2 x 60 s. The oldest generated_at that is fresh
+#                               (every status but PAUSED), and the longest a STARTING status counts as fresh: about 835 s of
+#                               Home Assistant start-up beyond the 180 s start-up grace, a late tick and one cycle budget
+#   RESUME_GRACE_S     = 130    PROPOSED: 2 x (one 60 s tick + the 5 s tick margin, const.PROPOSED_TICK_MARGIN_S): after the pause
+#                               helper turns off, PAUSED stays fresh this long, so the STARTING the integration publishes at its
+#                               next tick arrives before the watchdog would turn off
+#   CLOCK_AHEAD_S      = 120    PROPOSED: a generated_at more than 2 min ahead of this clock is a clock fault, not fresh
+#   ALERT_AFTER_S      = 1800   PROPOSED: the watchdog must stay not-on for 30 min before the stale alert, and the pause must have
+#                               last changed 30 min ago (start-up and short gaps stay quiet; Home Assistant's own start shows
+#                               the status unavailable for a while); at least twice the 900 s validity ceiling
+# The numbers appear in the templates below; home-assistant/tests/test_ecco_intelligence_package.py pins them, derives
+# WATCHDOG_MAX_AGE_S and RESUME_GRACE_S from the integration's constants and checks the runbook's G8 row states them, so a
+# change on either side shows up in review.
+#
+# The automations never spell the mode word: the firmware shadow-check UX suite under home-assistant/tests refuses any
+# automation that mentions it. A wrong mode turns the watchdog OFF (and the card shows "Intelligence output not recognised"),
+# which raises the stale alert after ALERT_AFTER_S.
+
+input_boolean:
+  ecco_intel_paused:
+    name: "ECCO Intel Paused"
+    icon: mdi:pause-circle-outline
+
+template:
+  - binary_sensor:
+      - name: "ECCO Intel Watchdog Fresh"
+        unique_id: "ecco_intel_watchdog_fresh"
+        icon: mdi:timer-check-outline
+        # PROPOSED limits: 1200 s (WATCHDOG_MAX_AGE_S), 130 s (RESUME_GRACE_S), 120 s (CLOCK_AHEAD_S); see the header.
+        state: >-
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set st = states(s) -%}
+          {%- set g = state_attr(s, 'generated_at') -%}
+          {%- set v = state_attr(s, 'valid_until') -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {%- set p = states.input_boolean.ecco_intel_paused -%}
+          {%- set t = as_timestamp(now()) -%}
+          {%- set gt = as_timestamp(g, none) if g is string else none -%}
+          {%- set vt = as_timestamp(v, none) if v is string else none -%}
+          {{ st in ['OK', 'NO_ADVICE', 'BLOCKED', 'INSUFFICIENT_DATA', 'STARTING', 'PAUSED']
+             and state_attr(s, 'contract_version') == 'ecco-intel-entities/1'
+             and state_attr(s, 'mode') == 'SHADOW'
+             and state_attr(s, 'applies_nothing') is sameas true
+             and iv is string and (iv | trim | length) > 0
+             and gt is not none and (t - gt) >= -120
+             and (v is none or (vt is not none and t <= vt))
+             and (st in ['STARTING', 'PAUSED'] or vt is not none)
+             and (st == 'PAUSED' or (t - gt) <= 1200)
+             and (st != 'STARTING'
+                  or (t - as_timestamp(states.sensor.ecco_intel_status.last_changed)) <= 1200)
+             and (st != 'PAUSED'
+                  or (p is not none
+                      and (p.state == 'on' or (t - as_timestamp(p.last_changed)) <= 130))) }}
+
+automation:
+  - id: "ecco_intel_alert_watchdog_stale"
+    alias: "ECCO Intel - alert: no fresh Intelligence result"
+    description: >-
+      Notification only (no device action, no helper write). Fires once when the ECCO Intel watchdog has been not-on for 30
+      minutes (PROPOSED ALERT_AFTER_S = 1800) while the pause is not on and has not changed for 30 minutes, and the status entity
+      exists. Quiet when the status is SELF_TEST_FAILED or its contract does not match: those have their own alerts.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        value_template: >-
+          {%- set w = states.binary_sensor.ecco_intel_watchdog_fresh -%}
+          {%- set p = states.input_boolean.ecco_intel_paused -%}
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {%- set t = as_timestamp(now()) -%}
+          {{ w is not none and w.state != 'on'
+             and (t - as_timestamp(w.last_changed)) >= 1800
+             and (p is none or (t - as_timestamp(p.last_changed)) >= 1800)
+             and states.sensor.ecco_intel_status is not none
+             and not is_state('input_boolean.ecco_intel_paused', 'on')
+             and not is_state(s, 'SELF_TEST_FAILED')
+             and (states(s) in ['unknown', 'unavailable']
+                  or (state_attr(s, 'contract_version') == 'ecco-intel-entities/1'
+                      and state_attr(s, 'applies_nothing') is sameas true
+                      and iv is string and (iv | trim | length) > 0)) }}
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: "ecco_intel_watchdog_stale"
+          title: "ECCO Intelligence: no fresh result"
+          message: >-
+            ECCO Intelligence has not published a fresh, recognised result for at least 30 minutes (PROPOSED limit). Its
+            advice is withheld; nothing was changed. Check that the ECCO Intelligence integration is loaded (Settings -
+            Devices and services) and open the ECCO Intelligence dashboard for its status.
+
+  - id: "ecco_intel_alert_self_test_failed"
+    alias: "ECCO Intel - alert: self-test failed"
+    description: >-
+      Notification only (no device action, no helper write). Fires when sensor.ecco_intel_status turns SELF_TEST_FAILED, and at
+      Home Assistant's start when it already is SELF_TEST_FAILED (a notification does not survive a restart): the integration
+      publishes nothing until the failed checks are fixed. The condition is a template, so a start with no status entity is
+      quiet and logs no condition error.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: sensor.ecco_intel_status
+        to: "SELF_TEST_FAILED"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: "{{ is_state('sensor.ecco_intel_status', 'SELF_TEST_FAILED') }}"
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: "ecco_intel_self_test_failed"
+          title: "ECCO Intelligence: self-test failed"
+          message: >-
+            The ECCO Intelligence integration failed its start-up self-test and publishes no advice; nothing was changed. The
+            ECCO Intelligence dashboard lists the failed checks. Fix them (for example an entity registered with a suffix) and
+            reload the integration.
+
+  - id: "ecco_intel_alert_contract_mismatch"
+    alias: "ECCO Intel - alert: output not recognised"
+    description: >-
+      Notification only (no device action, no helper write). Fires when sensor.ecco_intel_status is published but its
+      contract_version is not ecco-intel-entities/1, applies_nothing is not true or integration_version is missing or blank, and
+      at Home Assistant's start when that already holds (a notification does not survive a restart): the card and the watchdog
+      then show nothing from it.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        value_template: >-
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {{ states(s) not in ['unknown', 'unavailable']
+             and (state_attr(s, 'contract_version') != 'ecco-intel-entities/1'
+                  or state_attr(s, 'applies_nothing') is not sameas true
+                  or not (iv is string and (iv | trim | length) > 0)) }}
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: >-
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {{ states(s) not in ['unknown', 'unavailable']
+             and (state_attr(s, 'contract_version') != 'ecco-intel-entities/1'
+                  or state_attr(s, 'applies_nothing') is not sameas true
+                  or not (iv is string and (iv | trim | length) > 0)) }}
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: "ecco_intel_contract_mismatch"
+          title: "ECCO Intelligence: output not recognised"
+          message: >-
+            sensor.ecco_intel_status is published in a form this package and the ECCO Intelligence card do not recognise
+            (expected contract ecco-intel-entities/1 with applies_nothing true and an integration version). The card shows
+            nothing from it; nothing was changed. Install the package and card that match the integration's version.

@@ -3,16 +3,13 @@
 Status: follows the output contract **`ecco-intel-entities/1`** (`intelligence/advisory_contract.py`, described in
 [`INTELLIGENCE_FOUNDATION_CONTRACT.md`](INTELLIGENCE_FOUNDATION_CONTRACT.md)); the header names the next refresh
 (section 2), and the 3D Overview link is dropped for v0.1 (section 14). The card
-(`frontend/ecco-intelligence-card`), its standalone dashboard (`home-assistant/dashboards/ecco_intelligence.yaml`) and its
-package (`home-assistant/packages/ecco_intelligence.yaml`) exist as **source only**: nothing is deployed, registered or wired to
-Home Assistant, and none of them is in `deployment/ha-manifest.yaml`. Every Intelligence decision I-D1..I-D9 is OPEN; every
-threshold marked PROPOSED is an engineering default, not an owner decision.
-
-**Held out until PR-6 (decision ui-1).** The package and its behaviour suite
-(`home-assistant/tests/test_ecco_intelligence_package.py`) are held back: they ship with PR-6; see
-[INTELLIGENCE_CONTINUATION_GUIDE.md](INTELLIGENCE_CONTINUATION_GUIDE.md) section 5. Sections 10 and 13 describe them as
-they will ship. Until PR-6 the card shows the watchdog and the pause as not installed, and the runtime reports
-`PAUSE_CONTROL_MISSING`: not paused, with a WARN, so it still publishes its SHADOW advice.
+(`frontend/ecco-intelligence-card`), its standalone dashboard (`home-assistant/dashboards/ecco_intelligence.yaml`), its
+package (`home-assistant/packages/ecco_intelligence.yaml`), the preferences package
+(`home-assistant/packages/ecco_intelligence_prefs.yaml`) and the dashboard's registration package
+(`home-assistant/packages/ecco_intelligence_dashboard.yaml`) are listed in `deployment/ha-manifest.yaml` (post-export entry
+isp1), but nothing installs, registers or wires them to Home Assistant automatically: each is a separately approved step of
+the install runbook (section 4). Every Intelligence decision I-D1..I-D9 is OPEN; every threshold marked PROPOSED is an
+engineering default, not an owner decision.
 
 The V1 design reference of 2026-10-05 (the five `sensor.ecco_intelligence_*` sensors, the mock in
 `docs/intelligence/mockup/`, the prototype in `home-assistant/prototypes/intelligence-v1/`) is **superseded** by the contract
@@ -234,8 +231,9 @@ Follows `frontend/ecco-fallback-recovery-card`:
 | Suite | What it proves | Where it runs |
 |---|---|---|
 | `frontend/ecco-intelligence-card/test/*.test.mjs` (`node --test`) | over the six golden fixtures `intelligence/tests/fixtures/advisory_contract/{all_open_blocked,synthetic_ok,stale,paused,self_test_failed,starting}.json`, read in place: the exact copy of section 4; no figure for BLOCKED / INSUFFICIENT_DATA / NO_ADVICE items or in STALE / PAUSED / SELF_TEST_FAILED / STARTING (last_good only as labelled history); every advice hidden for a wrong or missing `contract_version` / `integration_version`, a mode other than SHADOW or `applies_nothing` not true, and for the prototype's shape; per-item guards; card-side expiry; tariff, value and plan conditions; escaping; no button or link; the element reads `hass.states` only and calls nothing; the timer's lifecycle | local (CI runs no Node) |
-| `tools/tests/test_intelligence_card.py` | the static pins: folder, licence, no write or network API, the attribute names and default ids against the contract, the guard and the null rule in the source, that the held-out package and its suite are absent (decision ui-1; their checks return with PR-6), the dashboard's cards and actions, tokens, the site render, scope | CI (`tools/tests`) |
-| `home-assistant/tests/test_ecco_intelligence_package.py` (held out until PR-6, decision ui-1: it ships with the package) | the package's automations driven by `home-assistant/tests/_ha_script_sim.py`: watchdog fresh / stale at the PROPOSED boundaries over the golden fixtures and an oracle (status ages included), SELF_TEST_FAILED, contract mismatch (a blank version included), both also when already published at Home Assistant's start (a restart), a good status at the start quiet, pause and unpause, a start-up that never finishes, a watchdog stuck unknown, an absent or unavailable integration; each automation's keys, triggers, conditions and its one `{action, data}` step pinned; only `persistent_notification.create` with `ecco_intel_` ids is ever called and nothing is written; mutants killed | CI (`home-assistant/tests`), once PR-6 restores it |
+| `tools/tests/test_intelligence_card.py` | the static pins: folder, licence, no write or network API, the attribute names and default ids against the contract, the guard and the null rule in the source, the package's keys, entities, automations and thresholds, the dashboard's cards and actions, tokens over the card, the dashboard, the three packages and their suites, the site render of the dashboard and the three packages, scope (none of it in the production dashboard) | CI (`tools/tests`) |
+| `home-assistant/tests/test_ecco_intelligence_package.py` | the package's automations driven by `home-assistant/tests/_ha_script_sim.py`: watchdog fresh / stale at the PROPOSED boundaries over the golden fixtures and an oracle (status ages and pause helper states included): a computed status needs a future `valid_until` and a `generated_at` at most 1200 s old, STARTING bounded by 1200 s, PAUSED fresh while the helper is on plus 130 s; healthy publishing silent for 72 simulated hours; SELF_TEST_FAILED, contract mismatch (a blank version included), both also when already published at Home Assistant's start (a restart), a good status or no status entity at the start quiet with no condition error, pause, unpause and the hand-over to STARTING, a start-up that never finishes, a restored watchdog replaced by its first render, a watchdog stuck unknown, an absent or unavailable integration; each automation's keys, triggers, conditions and its one `{action, data}` step pinned; only `persistent_notification.create` with `ecco_intel_` ids is ever called and nothing is written; the thresholds derived from the integration's constants and equal to the runbook's G8; the registration package; the post-export entry isp1; mutants killed | CI (`home-assistant/tests`) |
+| `home-assistant/tests/test_ecco_intelligence_prefs_package.py` | the raise-only reserve helper: one input_number, 0-100 % by 1, no `initial`, every value it can hold read by the runtime as usable, Home Assistant's start-up restore, no writer anywhere, mutants caught | CI (`home-assistant/tests`) |
 | headless captures | `preview/index.html` for the six fixtures at 375 px and about 500 px (headless Chrome clamps its window near 500 px) | local, never committed |
 
 ## 11. What is real and what is mocked
@@ -266,31 +264,38 @@ depends on it"). Minimum battery reserve (V1 section 12) is now decision I-D1 an
 
 ## 13. The package: pause, watchdog, alerts
 
-> Held out until PR-6 (decision ui-1): the package ships with PR-6; see
-> [INTELLIGENCE_CONTINUATION_GUIDE.md](INTELLIGENCE_CONTINUATION_GUIDE.md) section 5. This section describes it as it
-> will ship.
-
 `home-assistant/packages/ecco_intelligence.yaml`:
 
 - `input_boolean.ecco_intel_paused` (no `initial:`; Home Assistant restores the owner's choice). Only the owner toggles it.
 - `binary_sensor.ecco_intel_watchdog_fresh`, a dead-man watchdog computed in Home Assistant: on only while the status is
   OK / NO_ADVICE / BLOCKED / INSUFFICIENT_DATA / STARTING / PAUSED, the contract fields match (a blank `integration_version`
-  does not), `generated_at` is no older than 2700 s and no more than 120 s ahead (both PROPOSED), `valid_until` (when present)
-  has not passed, and a STARTING status has not lasted longer than 2700 s (by the status entity's `last_changed`: a start-up
-  that never finishes is not fresh even when each STARTING publish carries a new `generated_at`).
+  does not), `generated_at` is no more than 120 s ahead (`CLOCK_AHEAD_S`), and, by status (the install runbook's gate G8):
+  - a computed status (OK, NO_ADVICE, BLOCKED, INSUFFICIENT_DATA) carries a `valid_until` that has not passed (every
+    computed result has one) and a `generated_at` no older than `WATCHDOG_MAX_AGE_S` = **1200 s**;
+  - STARTING: `generated_at` no older than 1200 s and the status has not lasted longer than 1200 s (by the status entity's
+    `last_changed`: a start-up that never finishes is not fresh even when each STARTING publish carries a new
+    `generated_at`);
+  - PAUSED: fresh only while the pause helper is on, or for `RESUME_GRACE_S` = **130 s** after it last changed while it is
+    not on. The integration publishes PAUSED once per pause, so its age is not bounded while the helper is on, and the
+    STARTING it publishes at its next tick after an unpause arrives within the 130 s.
 
-  **Changes PR-6 brings (the package half of the SHADOW v0.1 completion).** With refresh before expiry a healthy result is
-  never older than the refresh ceiling plus the cycle budget, so the 2700 s limit becomes `WATCHDOG_MAX_AGE_S` = **1200 s**,
-  derived from the integration's constants (the 900 s validity ceiling + one 60 s tick + the 120 s time budget + two ticks;
-  the package suite pins the formula); `valid_until` is required for a computed status; PAUSED counts as fresh only while
-  the pause helper is on (plus 130 s); STARTING is bounded by the same 1200 s. `ALERT_AFTER_S` (1800 s) and `CLOCK_AHEAD_S`
-  (120 s) stay. The raise-only reserve helper ships in its own package, `ecco_intelligence_prefs.yaml`, never in this one.
-  All PROPOSED.
+  The 1200 s is derived from the integration's constants: the 900 s validity ceiling + one 60 s tick + the 120 s time budget +
+  two ticks; the 130 s is two ticks plus their 5 s margin. The package suite pins both formulas and that the runbook's G8
+  states them. With refresh before expiry a computed result's `valid_until` decides first; the 1200 s also leaves Home
+  Assistant about 835 s of start-up for STARTING. `ALERT_AFTER_S` (1800 s) and `CLOCK_AHEAD_S` (120 s) are unchanged. All
+  PROPOSED. At Home Assistant's start the watchdog may show its last saved state until its first render, which is off while
+  the status entity does not exist yet. Nothing acts on the watchdog alone: until that render its own row and the card's
+  footer show the saved state, while the card and the markdown fallback show "not publishing" and no figure without the
+  status entity, and the stale alert needs it. The install runbook's 72 h row T4 and the isolated test Home Assistant's
+  watchdog row (M7.2) judge the watchdog from its first render with the status entity present after each start, which comes
+  within 600 s of the start or of the window start; a later first render is a failure, and so is a missing status entity
+  after it.
 - Three automations that only call `persistent_notification.create` with a fixed `ecco_intel_` id, each with exactly one
   action:
   - stale: the watchdog not-on (off, or unknown after a template fault) for a PROPOSED 1800 s, the pause not on and unchanged
     for 1800 s (an unpause gives the next cycle time to publish), the integration installed, and neither fault below;
-  - SELF_TEST_FAILED: when the status turns SELF_TEST_FAILED, **and at Home Assistant's start when it already is**;
+  - SELF_TEST_FAILED: when the status turns SELF_TEST_FAILED, **and at Home Assistant's start when it already is** (its
+    condition is a template, `is_state`, so a start with no status entity is quiet and logs no condition error);
   - contract mismatch: when the status starts not matching the contract, **and at Home Assistant's start when it already
     does not**.
 
@@ -302,13 +307,21 @@ depends on it"). Minimum battery reserve (V1 section 12) is now decision I-D1 an
   persists (no second notification; the first is still shown, since notifications survive a reload).
 
   Nothing dismisses a notification; there is no recorder block and no other write.
-- **Install route.** The package and the dashboard are not in `deployment/ha-manifest.yaml`, so the deploy bundle never copies
-  them, and the deploy preflight renders both (the site render's YAML globs) but stages neither. The single-file
-  `tools/deploy-ha.ps1` has no manifest gate: given either file by name as `-Source` it copies it (packages to
-  `/config/packages/`, dashboards to `/config/ecco/dashboards/`). So the install runbook must name that route explicitly, as
-  its own approved step, package first; `tools/tests/test_intelligence_card.py` keeps the dashboard rendering byte-identical
-  under the site render, so it cannot break the dashboard preflight. The same check for the package left the card suite
-  with the package (decision ui-1), and PR-6 restores it.
+- **Install route.** The package, the preferences package, the registration package, the dashboard and the card are listed in
+  `deployment/ha-manifest.yaml` (post-export entry isp1: three package stanzas, the `intelligence_dashboard` mapping and one
+  `frontend_assets` stanza with manual resource registration). The deploy bundle copies them for review only, and the deploy
+  preflight renders the YAML files (the site render's globs) but stages none of them. The single-file `tools/deploy-ha.ps1`
+  installs each one as its own approved step, the packages first (install runbook section 4);
+  `tools/tests/test_intelligence_card.py` keeps the dashboard and the three packages rendering byte-identical under the site
+  render, so none of them can break a site's preflight.
+- **Registration.** `home-assistant/packages/ecco_intelligence_dashboard.yaml` holds only the dashboard's
+  `lovelace: dashboards: ecco-intelligence:` entry (YAML mode, `filename: ecco/dashboards/ecco_intelligence.yaml`, sidebar,
+  administrators only). It is a separate file so that a registration Home Assistant refuses never takes the pause helper and
+  the watchdog down with it; the isolated test Home Assistant proves the merge and the panel before a production install,
+  and the fallback is the same entry added to `configuration.yaml` by the owner.
+- **Preferences.** `home-assistant/packages/ecco_intelligence_prefs.yaml` holds only the raise-only reserve helper
+  `input_number.ecco_advisory_reserve_raise_pct` (0-100 %, no `initial`), which the site file may map as
+  `pref.advisory_reserve_raise_pct`; neither the card nor the dashboard shows or edits it.
 
 ## 14. Linking the 3D Overview card to this card: dropped for v0.1
 
