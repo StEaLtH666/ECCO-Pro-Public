@@ -1,0 +1,229 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 1,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "seconds": 200
+      },
+      "at_s": 60,
+      "do": "run_for"
+    },
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 260,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "mode": "false_negative",
+        "state": 1,
+        "tag": "dump.valid",
+        "times": 1
+      },
+      "at_s": 260,
+      "do": "nvs_policy"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 260,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 3000
+      },
+      "at_s": 290,
+      "do": "fp_start"
+    },
+    {
+      "args": {
+        "down_s": 5,
+        "nvs_fault": [
+          "read_error",
+          "dump.data"
+        ]
+      },
+      "at_s": 350,
+      "do": "reboot"
+    },
+    {
+      "args": {
+        "seconds": 120
+      },
+      "at_s": 357,
+      "do": "run_for"
+    }
+  ],
+  "classification": "FINDING-KNOWN:N17",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "corrupt",
+      "op": "==",
+      "value": true
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "RESTORE_REQUIRED"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "status",
+      "op": "startswith",
+      "value": "RESTORED OK"
+    },
+    {
+      "args": {
+        "names": [
+          "INV-LOCKOUT-QUIET"
+        ]
+      },
+      "observe": "invariants",
+      "op": "!=",
+      "value": []
+    },
+    {
+      "args": {
+        "names": [
+          "INV-NO-2ND-RESTORER"
+        ]
+      },
+      "observe": "invariants",
+      "op": "contains",
+      "value": {
+        "detail": "fp wrote 256x6 (restore_free_power_snapshot_dispatch) while dump holds a durable RESTORE_REQUIRED marker",
+        "inv": "INV-NO-2ND-RESTORER",
+        "seq": 253,
+        "tags": [
+          "N17"
+        ]
+      }
+    },
+    {
+      "args": {
+        "names": [
+          "INV-NO-SILENT-OVERRIDE",
+          "INV-NO-RESUME",
+          "INV-RESTORE-BOUND",
+          "INV-BOOT-MIRROR"
+        ]
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    },
+    {
+      "args": {
+        "addrs": [
+          230,
+          232,
+          244,
+          256,
+          268
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "230": 120,
+        "232": 0,
+        "244": 2,
+        "256": 8000,
+        "268": 20
+      }
+    }
+  ],
+  "failure_outcome": "Free Power's automatic restore writes the shared 256-261 (to its own verified ORIGINAL) while Dump holds an unresolved, corrupt-locked RESTORE_REQUIRED obligation; the bank ends at ORIGINAL",
+  "finding_priority": "P3",
+  "grade": "VERIFIED",
+  "id": "FW-05-e",
+  "invariant": "INV-NO-2ND-RESTORER",
+  "notes": "The lab's N17 owner (counted once, here): test_lab_fw_obligations F-FW03-1 (the triple-obligation route; its FW-03-a is this construction) and test_lab_property F-PB01-2 (the UNKNOWN form) print themselves as duplicates of F-FW05-2. Accepted residual N17 (S4 decisions table: 'the write direction is the domain's own ORIGINAL'); severity diagnostics (low). The INV-NO-2ND-RESTORER expectation pins the post-boot, N17-tagged restore write (the pre-boot one is the phantom-admitted START, FW-05-c). Power cuts at every event of this restore are swept in the suite (C-restore): none leaves a violation after the reboot. V0.1 (brief B5, the NVS USED-KEY RULE): the first three actions are a completed-lease prelude - a real 1-minute Dump lease whose verified restore commits the marker CLEAR (restore_dump_to_grid_snapshot FW:20386 / 20393) - so the injected fault hits a key stored earlier in the run; every later action is the V0 timeline moved by +200 s. The INV-NO-2ND-RESTORER expectation's seq moved 153 -> 253 with the prelude's events (the same boot-1 restore write: inv, tags and detail unchanged).",
+  "ownership": "Dump phantom + Free Power lease, then a boot where the Dump data record cannot be read",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none needed: keep N17 as the S4 record's accepted residual (optionally a diagnostics-only status note). The bare '!other_corrupt' gate terms are not safe (scratch mutants): on the Free Power gate they leave the 58 A grid-charge override live (INV-RESTORE-BOUND); on the Dump gate they leave 244 = 0 uncontained. An R1 enforcement would go through the boot lockout under an owner decision. Description only.",
+  "source_anchors": [
+    {
+      "line_at_record": 169,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "| **N17** | P1 restores (FP and Dump) carry no cross-domain terms."
+    },
+    {
+      "line_at_record": 1150,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "DUAL DURABLE OBLIGATION (Free Power/Dump, 256-261) - Free Power and Dump-to-Grid both hold "
+    }
+  ],
+  "source_digests": {
+    "docs/architecture/fallback/design/S4_domains_decisions_final.md": "06263342ae40c6af72f05c77520d3214789417c4261e028ac345fa98a635b220",
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Dump data unreadable at boot (Dump corrupt-locked, PR41 skipped): the Free Power restore writes 256-261 over Dump's RESTORE_REQUIRED and clears its own marker",
+  "trace_digest": "504ab073abc4336357d0f03bcbc25b56be79a84deadd575d0be5fa358376cfd4",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {}
+}

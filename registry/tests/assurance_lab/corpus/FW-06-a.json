@@ -1,0 +1,284 @@
+{
+  "actions": [
+    {
+      "args": {
+        "minutes": 1,
+        "power_w": 3000
+      },
+      "at_s": 60,
+      "do": "fp_start"
+    },
+    {
+      "args": {
+        "seconds": 200
+      },
+      "at_s": 60,
+      "do": "run_for"
+    },
+    {
+      "args": {
+        "mode": "not_landed",
+        "tag": "fp.data",
+        "times": 1
+      },
+      "at_s": 260,
+      "do": "nvs_policy"
+    },
+    {
+      "args": {
+        "minutes": 30,
+        "power_w": 3000
+      },
+      "at_s": 260,
+      "do": "fp_start"
+    }
+  ],
+  "classification": "FINDING-NEW",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "status_history",
+      "op": "contains",
+      "value": "START FAILED - could not durably commit the recovery snapshot; nothing written"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "status_history",
+      "op": "contains",
+      "value": "ACTIVATION WRITE FAILED - restoring saved snapshot"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "status",
+      "op": "==",
+      "value": "END IGNORED - no saved Free Power snapshot"
+    },
+    {
+      "args": {
+        "names": [
+          "free_power_failures"
+        ]
+      },
+      "observe": "globals",
+      "op": "==",
+      "value": {
+        "free_power_failures": 2
+      }
+    },
+    {
+      "args": {},
+      "observe": "writes",
+      "op": "==",
+      "value": [
+        {
+          "addr": 232,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 45,
+          "t_utc": 1792579860,
+          "vals": [
+            1
+          ]
+        },
+        {
+          "addr": 230,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 47,
+          "t_utc": 1792579860,
+          "vals": [
+            58
+          ]
+        },
+        {
+          "addr": 268,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 49,
+          "t_utc": 1792579860,
+          "vals": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "addr": 256,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 52,
+          "t_utc": 1792579860,
+          "vals": [
+            3000,
+            3000,
+            3000,
+            3000,
+            3000,
+            3000
+          ]
+        },
+        {
+          "addr": 232,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 89,
+          "t_utc": 1792579933,
+          "vals": [
+            0
+          ]
+        },
+        {
+          "addr": 256,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 90,
+          "t_utc": 1792579933,
+          "vals": [
+            8000,
+            8000,
+            7000,
+            8000,
+            8000,
+            5000
+          ]
+        },
+        {
+          "addr": 268,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 93,
+          "t_utc": 1792579933,
+          "vals": [
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "addr": 230,
+          "boot": 0,
+          "dom": "fp",
+          "landed": true,
+          "outcome": "ok",
+          "seq": 94,
+          "t_utc": 1792579933,
+          "vals": [
+            120
+          ]
+        }
+      ]
+    },
+    {
+      "args": {
+        "names": [
+          "INV-WS",
+          "INV-ONE-LEASE",
+          "INV-NO-2ND-RESTORER",
+          "INV-NO-RESUME",
+          "INV-LOCKOUT-QUIET",
+          "INV-NO-SILENT-OVERRIDE",
+          "INV-RESTORE-BOUND",
+          "INV-BOOT-MIRROR"
+        ]
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    }
+  ],
+  "failure_outcome": "the operator-facing status ends on 'END IGNORED - no saved Free Power snapshot' after naming an activation write that never happened; the cumulative failure counter counts one START twice",
+  "finding_priority": "P3",
+  "grade": "VERIFIED",
+  "id": "FW-06-a",
+  "invariant": "INV-STATUS-TRUTH",
+  "notes": "Diagnostics only: HA's start-failure health uses attempts minus successes (docs/FAILED_START_HEALTH.md). Partial prior knowledge: test_sg01_journal_phase1_2.py [C] pins the restore hand-off for the retry / journal sites as intended but asserts neither the overwritten text, the double count nor the data / marker END IGNORED ending. F-HF07-3 (HA phantom suite) reports the HA-side copy of this cascade; this is the canonical id. INV-STATUS-TRUTH is a suite-local invariant name, not a core checker. Dump START shows the single-text behaviour. V0.1 (brief B5, the NVS USED-KEY RULE): the first two actions are a completed-lease prelude - a real 1-minute Free Power lease whose verified restore commits the marker CLEAR (restore_free_power_snapshot_dispatch FW:11219 / 11226) - so the injected fault hits a key stored earlier in the run; every later action is the V0 timeline moved by +200 s. The writes expectation (V0: [] on a fresh device) lists the whole run's writes: exactly the prelude lease's eight, all in boot 0 before the failed START at +260 s - its START at +60 s (232 := 1 FW:9257, 230 := 58 FW:9341, 268-279 := 100 x6 / 1 x6 FW:9411, 256-261 := 3000 x6 FW:9615) and its verified restore at +133 s back to the SITE ORIGINAL (232 FW:10608, 256-261 FW:10691, 268-279 FW:10891, 230 FW:10954); the failed START writes nothing, as before. free_power_failures stays 2: the completed prelude lease counts no failure.",
+  "ownership": "Free Power START on the synthetic SITE; the data record commit does not land (true negative)",
+  "scenario_priority": "P2",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "start_free_power_override only, no write / gate / durable change: run the sibling activation action only after a successful commit phase (move it inside the commit-success else branch) and, in the commit-failure branch, run restore_free_power_snapshot only when free_power_snapshot_valid is set. Result: no ACTIVATION WRITE FAILED after a commit-phase failure, failures counted once, final text START FAILED (data / marker) or the restore's own result (retry / journal). Keep the [C] route pinned by test_sg01_journal_phase1_2.py (start then restore for the journal and retry-reset failures) and the genuine activation-failure route. Description only.",
+  "source_anchors": [
+    {
+      "line_at_record": 9251,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "START FAILED - could not durably commit the recovery snapshot; nothing written"
+    },
+    {
+      "line_at_record": 9914,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "ACTIVATION WRITE FAILED - restoring saved snapshot"
+    },
+    {
+      "line_at_record": 10152,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "publish_state(\"END IGNORED - no saved Free Power snapshot\")"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Free Power START durable-commit failure: 'START FAILED' overwritten by 'ACTIVATION WRITE FAILED', failures += 2, final 'END IGNORED'",
+  "trace_digest": "5711819baa6f3adf51f12c02b3186f84079cc8919036222727a0b2735b14769a",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {}
+}
