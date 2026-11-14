@@ -358,3 +358,18 @@ def _fit(out: dict, max_bytes: int) -> dict:
         dropped += 1
         out["days_dropped"] = dropped
     return out
+
+
+def to_entity_payload(feed: Mapping) -> tuple[str, dict]:
+    """UNWIRED helper: (state, attributes) a read-only Ghost entity would publish for `feed` (build_ghost_feed's result).
+
+    Nothing calls this: the entity contract (advisory_contract.ENTITY_IDS, the self-test, the frozen fixtures, the card and
+    package defaults) lists exactly the eleven integration entities and the integration has no options mechanism, so a twelfth
+    entity cannot be added off-by-default without an owner decision. The state is the feed's
+    status ("OK" or "INSUFFICIENT_HISTORY"); the attributes are the feed itself plus the SHADOW markers, JSON-safe, one flat
+    mapping, and carry no contract_version (they are not part of the frozen contract)."""
+    if not isinstance(feed, Mapping) or feed.get("schema") != FEED_SCHEMA:
+        raise ValueError("not a ghost feed")
+    attrs = {**feed, "mode": "SHADOW", "applies_nothing": True, "kind": "ghost"}
+    json.dumps(attrs, allow_nan=False)
+    return str(feed["status"]), attrs

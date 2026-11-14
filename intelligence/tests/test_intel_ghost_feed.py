@@ -133,6 +133,14 @@ def money_keys(obj, path=""):
     return out
 
 
+def _raised(fn) -> bool:
+    try:
+        fn()
+    except (ValueError, TypeError):
+        return True
+    return False
+
+
 H0 = house(80.0)
 T0 = tariff(H0)
 check("the synthetic house has 16 days of hourly records with the six energies and a SOC",
@@ -286,6 +294,18 @@ check("advice_records filters by time and kind and writes nothing", sc.advice_re
 fl = gf.build_ghost_feed(H0, got, CFG, import_tariff=tb)
 check("the logged advice runs through the feed as the same losing day", fl["advice"]["followed"] == 1
       and next(d for d in fl["days"] if d["date"] == "2030-01-09")["delta_stock_adjusted_p"] < -1.0)
+
+print("== [7b] the unwired entity payload helper")
+st, at = gf.to_entity_payload(f2)
+check("to_entity_payload: state is the feed status, attributes are the feed plus the SHADOW markers, no contract version",
+      st == "OK" and at["mode"] == "SHADOW" and at["applies_nothing"] is True and at["days"] == f2["days"]
+      and "contract_version" not in at and len(json.dumps(at, sort_keys=True, separators=(",", ":")).encode()) <= gf.MAX_BYTES + 100)
+check("to_entity_payload refuses anything that is not a ghost feed", all(
+    _raised(lambda x=x: gf.to_entity_payload(x)) for x in ({}, {"schema": "other"}, None)))
+check("nothing in the integration or the contract calls it (unwired)", not any(
+    "to_entity_payload" in p.read_text(encoding="utf-8") and "ghost_feed" in p.read_text(encoding="utf-8")
+    for p in (ROOT / "custom_components" / "ecco_intelligence").rglob("*.py") if "tests" not in p.parts)
+      and "ghost_feed" not in (ROOT / "intelligence" / "advisory_contract.py").read_text(encoding="utf-8"))
 
 print("== [8] no write path (static)")
 src = (ROOT / "intelligence" / "ghost_feed.py").read_text(encoding="utf-8")
