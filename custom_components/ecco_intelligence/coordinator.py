@@ -222,6 +222,9 @@ _LOGGER = logging.getLogger(__name__)
 UTC = timezone.utc
 LONDON = ZoneInfo(SITE_TZ)
 PAUSE_ENTITY = ENTITY_IDS["paused"]
+# The intended Dump-to-Grid duration for the advice log: the engine builds DumpInputs without duration_min, so there is none to
+# pass (the dump advice is then logged without a window; the Ghost treats that as an unknown window).
+DUMP_DURATION_MIN: float | None = None
 SLOT, REFRESH = "SLOT", "REFRESH"                       # the two cycle kinds
 # The engine's per-item code for an OK item valid for less than REFRESH_MARGIN_S at compute time (FOUNDATION CONTRACT
 # section 13.4): the item is withheld until the inputs are refreshed, so its presence asks for a refresh at the next tick.
@@ -1370,7 +1373,7 @@ class EccoIntelCoordinator:
             try:
                 self.last_store = await self._bounded(self._submit(
                     self.hass.async_add_executor_job, self.store.record_cycle, env.scorecard_report, slot, at, history,
-                    self.site.base_cfg), deadline)
+                    self.site.base_cfg, self.payloads, DUMP_DURATION_MIN), deadline)
                 self.selftest.record("STORE_RECORD", PASS, "the scorecard step completed")
             except asyncio.TimeoutError:
                 self.selftest.record("STORE_RECORD", WARN, "the scorecard step exceeded the time budget")

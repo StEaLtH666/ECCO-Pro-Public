@@ -11,6 +11,8 @@ Writes: only under <config>/ecco/intelligence/state/, and only
                          the PROPOSED retention are deleted. The slot claim and the run row are committed together (one
                          transaction), so a process that dies at any point records a slot at most once: a restart in the
                          middle of a run, or a crash between the two writes, never records it twice.
+                         The advice just published is also logged (advice_log, additive; record_cycle's `advice`), in its own
+                         transaction after the scorecard work; a failure there is counted and never raised.
 The parent <config>/ecco/intelligence/ must already exist (the owner places the site file there); this module never creates
 anything above state/. Every path is resolved and checked to lie inside state/ before it is written.
 
@@ -204,9 +206,16 @@ class RuntimeStateStore:
         return Scorecard(str(self._inside(SCORECARD_FILE)), self._tz)
 
     # --- the scorecard -----------------------------------------------------------------------------------------------
-    def record_cycle(self, report: Mapping | None, slot_utc: datetime, now: datetime, history=None, cfg=None) -> dict:
+    def record_cycle(self, report: Mapping | None, slot_utc: datetime, now: datetime, history=None, cfg=None,
+                     advice: Mapping | None = None, dump_duration_min: float | None = None) -> dict:
         """After a computed cycle: score the pending forecasts against `history`, record `report` for `slot_utc` (once per
-        slot), then apply the retention. Returns what happened (diagnostics)."""
+        slot), then apply the retention. Returns what happened (diagnostics).
+
+        `advice` (default None: nothing is logged) is the payload set the coordinator has just published
+        (advisory_contract.to_entity_payloads). When given, it is logged in the scorecard's advice_log AFTER the scorecard
+        work, in its own transaction: a failure there is caught and only counted (out['advice_write_failures'] > 0, or
+        out['advice_error']); it never raises, so it cannot affect the published outputs or the scorecard record. The advice
+        keys are added to the result only when `advice` was given."""
         out = {"recorded": False, "scored": 0, "removed": 0, "duplicate_slot": False}
         if self._closed:
             out["refused"] = "closed"
@@ -231,7 +240,21 @@ class RuntimeStateStore:
                     self._claim_and_record(sc, dict(report), slot, now)
                     out["recorded"] = True
             out["removed"] = self._retention(sc, now)
+        if advice is not None:
+            self._log_advice(out, advice, dump_duration_min)
         return out
+
+    def _log_advice(self, out: dict, advice: Mapping, dump_duration_min: float | None) -> None:
+        """Log the published advice (see record_cycle). Never raises: Scorecard.record_advice counts its own failures, and
+        opening the store for it is guarded here."""
+        out["advice_rows"], out["advice_write_failures"] = 0, 0
+        try:
+            with closing(self._scorecard()) as sc:
+                out["advice_rows"] = sc.record_advice(dict(advice), dump_duration_min=dump_duration_min)
+                out["advice_write_failures"] = sc.advice_write_failures
+        except Exception as exc:  # noqa: BLE001 - the advice log is diagnostics only; the type is the whole message
+            out["advice_write_failures"] += 1
+            out["advice_error"] = type(exc).__name__
 
     @staticmethod
     def _claim_and_record(sc: Scorecard, report: dict, slot: str, now: datetime) -> None:
@@ -292,7 +315,7 @@ class RuntimeStateStore:
         con = sqlite3.connect(f"file:{(self._root / SCORECARD_FILE).as_posix()}?mode=ro", uri=True)
         try:
             out = {}
-            for t in ("model_runs", "forecasts", "recommendations", "ecco_intel_slots"):
+            for t in ("model_runs", "forecasts", "recommendations", "ecco_intel_slots", "advice_log"):
                 try:
                     out[t] = int(con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
                 except sqlite3.Error:
