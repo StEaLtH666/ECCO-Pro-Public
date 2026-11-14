@@ -28,9 +28,26 @@ export const SCENARIOS: Record<string, { layout?: string; patch?: (s: States) =>
   },
 };
 
+/** A fixed clock: the card's countdowns read Date.now() when it is constructed. */
+export const FROZEN_NOW = Date.parse("2026-11-14T12:00:00Z");
+
 export function renderScenario(Card: Ctor, name: string, extra: Record<string, unknown> = {}): string {
   const sc = SCENARIOS[name];
   if (!sc) throw new Error("unknown scenario " + name);
+  return withFrozenClock(() => renderFrozen(Card, sc, extra));
+}
+
+export function withFrozenClock<T>(fn: () => T): T {
+  const realNow = Date.now;
+  Date.now = () => FROZEN_NOW;
+  try {
+    return fn();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+function renderFrozen(Card: Ctor, sc: { layout?: string; patch?: (s: States) => void }, extra: Record<string, unknown>): string {
   const states = idleStates();
   sc.patch?.(states);
   const card = new Card();

@@ -57,6 +57,7 @@ import {
 } from "./schedule";
 import { formatCountdown, formatLocalTimestamp, formatWeekdayDateTime, parseLocalTimestamp } from "./utils/time";
 import { formatDurationMinutes, formatPercent, formatPower, toBoolean, toNumber } from "./utils/format";
+import { planStyles, renderPlanSection } from "./plan/view.ts";
 
 // Minimal shape of the pieces of `hass` this card actually reads/calls -
 // same pattern as the sibling ecco-energy-flow-card, avoiding a dependency
@@ -421,9 +422,17 @@ export class EccoEnergyActionsCard extends LitElement {
         <div class="actions-grid">
           ${this._renderFreePowerTile()}
           ${this._renderDumpToGridTile()}
-        </div>
+        </div>${this._renderPlan()}
       </ha-card>
     `;
+  }
+
+  /**
+   * Read-only plan views (Tomorrow's Plan, six-slot TOU timeline). `nothing` unless the config has `show_plan: true`; the views
+   * display only and make no service call. See src/plan/.
+   */
+  private _renderPlan() {
+    return renderPlanSection(this._config, this.hass?.states);
   }
 
   // ---------------------------------------------------------------------
@@ -524,7 +533,7 @@ export class EccoEnergyActionsCard extends LitElement {
           : nothing}
         <div class="actions-grid is-tabbed">
           ${track === "free_power" ? this._renderFreePowerTile() : this._renderDumpToGridTile()}
-        </div>
+        </div>${this._renderPlan()}
       </ha-card>
     `;
   }
@@ -1887,7 +1896,7 @@ export class EccoEnergyActionsCard extends LitElement {
   // Styles
   // ---------------------------------------------------------------------
 
-  static styles = css`
+  static styles = [planStyles, css`
     :host {
       /* Container query, not a viewport media query: this card is often
          docked in a narrow dashboard column on an otherwise-wide desktop
@@ -2827,7 +2836,7 @@ export class EccoEnergyActionsCard extends LitElement {
         font-size: 12px;
       }
     }
-  `;
+  `];
 }
 
 declare global {
