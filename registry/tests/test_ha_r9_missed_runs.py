@@ -376,7 +376,16 @@ for kind in KINDS:
             x.restart(ST - 120 if order == "recovery first" else ST - 30,
                       ST + 600 if order == "recovery first" else ST + 60, restore_last_changed=restored, pre_boot=hold)
             x.until(ST + DURATION * 60 + 600)
-            label = f"{nm} start in the downtime, last_changed {'restored' if restored else 'not restored'}, {order}"
+            # WHICH automation recorded it: the watchdog fires only when armed.last_changed (kept) is earlier than the start. With
+            # last_changed NOT restored it is the boot time, later than the start, so the watchdog never fires: the (delayed)
+            # recovery writes the record, and that variant is labelled as such.
+            wd = any(tid == "watchdog" for a in x.ha.automations if a.id.endswith("_schedule_fire") for _, tid in a.fired)
+            expect_wd = order == "watchdog first" and restored
+            who = "watchdog first" if expect_wd else ("recovery first" if order == "recovery first" else
+                                                      "recovery, delayed (the watchdog cannot fire: last_changed reset to the boot)")
+            label = f"{nm} start in the downtime, last_changed {'restored' if restored else 'not restored'}, {who}"
+            check(f"{label}: the watchdog {'did' if expect_wd else 'did not'} fire",
+                  wd == expect_wd, f"watchdog fired={wd}")
             check(f"{label}: never started, MISSED recorded once, disarmed",
                   x.presses() == [] and x.started() == 0 and x.last() == MISSED_TEXT and not x.is_armed()
                   and len(x.missed_alerts()) == 1 and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]],

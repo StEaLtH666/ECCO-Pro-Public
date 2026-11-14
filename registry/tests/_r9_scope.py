@@ -128,6 +128,11 @@ DUMP_0_NEW = _blk(r"""
 # is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
 # startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
 # watchdog or restart recovery starting a late run, read R9.
+# DEVIATION (deliberate): the captured Home Assistant start means 'when the clock was first trusted', which can be seconds to
+# minutes after the true boot. A start in that gap counts as missed (fail closed): if its on-time trigger fired it runs normally;
+# only a LOST on-time trigger is refused by the watchdog. The dongle's NTP Time text carries local time without an offset, so the
+# check assumes Home Assistant's time zone is Europe/London (otherwise the capture stays unknown and everything fails closed); an
+# unambiguous comparison needs a future firmware change to publish an offset or an epoch.
 # DEPLOY: install this change with a FULL Home Assistant restart (not a package reload). The capture runs only on the start
 # event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
 # on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
@@ -441,6 +446,11 @@ FREE_0_NEW = _blk(r"""
 # is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
 # startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
 # watchdog or restart recovery starting a late run, read R9.
+# DEVIATION (deliberate): the captured Home Assistant start means 'when the clock was first trusted', which can be seconds to
+# minutes after the true boot. A start in that gap counts as missed (fail closed): if its on-time trigger fired it runs normally;
+# only a LOST on-time trigger is refused by the watchdog. The dongle's NTP Time text carries local time without an offset, so the
+# check assumes Home Assistant's time zone is Europe/London (otherwise the capture stays unknown and everything fails closed); an
+# unambiguous comparison needs a future firmware change to publish an offset or an epoch.
 # DEPLOY: install this change with a FULL Home Assistant restart (not a package reload). The capture runs only on the start
 # event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
 # on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
