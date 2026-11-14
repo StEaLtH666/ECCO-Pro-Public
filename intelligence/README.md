@@ -22,6 +22,9 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `explain.py` | V1.1: the `Advice` answer format (status, confidence factors, reasons, assumptions, blockers, input ages; SHADOW only) |
 | `overnight.py` | V1.1: overnight demand learning, with conservative fallback and the return-from-away regime check |
 | `charge_target.py`, `events.py`, `dump_advice.py` | V1.1: charge-target, Saving Session / export-event and reserve-aware Dump-to-Grid advice (energy budgets, fail closed) |
+| `net_value.py` (the retrospective ledger; `value.py` is the plan-value module) | read-only battery value ledger: gross avoided import vs net benefit (export income the stored solar could really have earned, losses, optional wear; unknown wear is never folded into the net), well-mixed source tagging of the stored energy |
+| `ghost.py`, `tools/ghost_report.py` | read-only Intelligence-vs-reality: a simulated ghost battery that follows recorded advice (`AdviceRecord`), both runs valued by `net_value.py`; per-day deltas, divergences in words, losing days, `ready_for_assisted_evidence` (evidence only; ghost below reserve must be 0); JSON export format in the tool docstring |
+| `scorecard.py` `advice_log`, `tools/advice_export.py` | durable advice log (additive table, one row per published charge-target / dump change, 400-day retention, failure-isolated `record_advice`) and a read-only (`mode=ro`) exporter printing the Ghost export's `advice` list; the host calls `Scorecard.record_advice(to_entity_payloads(env), dump_duration_min=...)` after publishing |
 
 The V1.1 modules are a foundation: nothing consumes them yet and the V1 report is unchanged. See
 `docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md`; their suites are `tests/test_intelligence_v11_*.py`.
