@@ -308,9 +308,11 @@ check("the module registers the element once (guarded) and pushes one card-picke
       and code.count("window.customCards.push(") == 1)
 prev = all_card_text.get("preview/index.html", "")
 prev_code = re.sub(r"<!--[\s\S]*?-->", "", prev)
-check("the preview loads the real module and fetches only the golden fixtures by relative path (no copy, no external URL)",
-      "import { TAG, DEFAULT_ENTITIES } from '../ecco-intelligence-card.js';" in prev_code
-      and len(re.findall(r"\bfetch\s*\(", prev_code)) == 1 and "fetch(`${FIXTURE_DIR}${name}.json`)" in prev_code
+check("the preview loads the real module and fetches only the golden fixtures and the Ghost test fixtures by relative path (no copy, no external URL)",
+      "import { TAG, DEFAULT_ENTITIES, DEFAULT_GHOST_ENTITY } from '../ecco-intelligence-card.js';" in prev_code
+      and len(re.findall(r"\bfetch\s*\(", prev_code)) == 2 and "fetch(`${FIXTURE_DIR}${name}.json`)" in prev_code
+      and "fetch(`${GHOST_DIR}${kind === 'malformed' ? 'ghost_money' : kind}.json`)" in prev_code
+      and "const GHOST_DIR = '../test/fixtures/';" in prev_code
       and "const FIXTURE_DIR = '../../../intelligence/tests/fixtures/advisory_contract/';" in prev_code
       and not re.search(r"https?://|<link|@import|url\(|<script[^>]+src=", prev_code)
       and not [t for t in ("callService", "callWS", "XMLHttpRequest", "WebSocket", "localStorage") if t in prev_code])
