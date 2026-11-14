@@ -144,7 +144,9 @@ def js_function(text: str, name: str) -> str:
 print("[1] the card folder")
 # =====================================================================================================================
 EXPECTED = {"README.md", f"{TAG}.js", "package.json", "preview/index.html", "test/core.test.mjs", "test/element.test.mjs",
-            "test/helpers.mjs", "test/minidom.mjs", "test/render.test.mjs", "test/static.test.mjs"}
+            "test/helpers.mjs", "test/minidom.mjs", "test/render.test.mjs", "test/static.test.mjs",
+            # the optional Ghost section: its node suite and the fixtures built by running intelligence/ghost_feed.py on synthetic data
+            "test/ghost.test.mjs", "test/fixtures/ghost_money.json", "test/fixtures/ghost_nomoney.json", "test/fixtures/ghost_insufficient.json"}
 files = sorted(p.relative_to(CARD).as_posix() for p in CARD.rglob("*") if p.is_file())
 check("the card folder holds exactly the module, README, package.json, the preview and the Node suite (no build, lockfile or hacs file)",
       set(files) == EXPECTED, f"extra {sorted(set(files) - EXPECTED)} missing {sorted(EXPECTED - set(files))}")
@@ -261,7 +263,9 @@ renderers = code[_r0:_r1] if 0 <= _r0 < _r1 else ""
 # built from checked templates, list() over markup built from checked templates. Anything else (an engine string reaching the
 # markup without esc, for example `${b.text || b.code}`) fails, and adding a raw interpolation is a reviewed change to this list.
 SAFE_CALL = re.compile(r"^(?:esc|fig|codeText|callout|renderHeader|renderFooter|renderTariff|renderHistory|renderDrill|renderValue|"
-                       r"renderQuality|renderChargeTarget)\(")
+                       r"renderQuality|renderChargeTarget|"
+                       # the optional Ghost section: each returns markup built from esc()-ed pieces
+                       r"renderGhostAdvice|renderGhostEvidence|renderGhostHeadline|renderGhostNoise|renderGhostRows|renderGhostSoc)\(")
 RAW_INTERPOLATIONS = {
     "m", "h", "m % 60", "Math.floor(h / 24)", "Math.round(value)", "(Math.round(value * 10) / 10).toFixed(1)", "value.toFixed(2)",
     "value.toFixed(1)", "cls", "cls ? ` ${cls}` : ''", "r", "rows.map((r) => `<li>${r}</li>`).join('')", "b.text ? ` ${esc(b.text)}` : ''",
@@ -280,6 +284,12 @@ RAW_INTERPOLATIONS = {
     "list(vm.blockers.map((b) => esc(b.text || b.code)))", "parts.join('')",
     "rows.filter((v) => ADVICE_ITEMS.includes(v.key)).map(itemRow).join('')",
     "rows.filter((v) => FORECAST_ITEMS.includes(v.key)).map(itemRow).join('')",
+    # the optional Ghost section: whole-number percentages (pct, rpct), fixed class / state words, and variables that hold markup
+    # already built from esc() and the render* helpers above (title, sub, head, split, verdict, quality, approx, days, hrs, neg,
+    # pos, cell.track, cell.tag)
+    "pct", "rpct", "st.cls", "w ? 'tone-warn' : 'tone-idle'", "w ? 'yes' : 'no'", "g.money ? 'yes' : 'no'", "title", "sub", "head",
+    "split", "verdict", "quality", "approx", "days", "hrs", "neg", "pos", "cell.track", "cell.tag", "rows.join('')",
+    "renderGhostSoc(d, g.evidence.reservePct)",
 }
 _interp = interpolations(renderers)
 _unsafe = sorted({e for e in _interp if not SAFE_CALL.match(e) and e not in RAW_INTERPOLATIONS})
@@ -334,9 +344,13 @@ contract_attrs = set(ac.RECORDED_ATTRIBUTES) | set(ac.UNRECORDED_ATTRIBUTES)
 check("every attribute the card reads is a contract attribute (RECORDED | UNRECORDED)", read_attrs and set(read_attrs) <= contract_attrs,
       str(sorted(set(read_attrs) - contract_attrs)))
 used = re.findall(r"\batt\(\s*\w+\s*,\s*'([^']*)'\s*\)", code)
-check("every att() call names a literal from ATTRIBUTES_READ, and every listed name is read",
-      used and set(used) <= set(read_attrs) and set(read_attrs) == set(used) and not re.search(r"(?<!function )\batt\(\s*\w+\s*,\s*[^'\s]", code),
-      str(sorted(set(used) ^ set(read_attrs))))
+ghost_attrs = js_list(js, "GHOST_ATTRIBUTES_READ")
+check("the optional Ghost entity's attributes are listed apart (GHOST_ATTRIBUTES_READ) and are none of the contract's attributes",
+      ghost_attrs and not set(ghost_attrs) & contract_attrs and not set(ghost_attrs) & set(read_attrs), str(sorted(set(ghost_attrs) & contract_attrs)))
+check("every att() call names a literal from ATTRIBUTES_READ or GHOST_ATTRIBUTES_READ, and every listed name is read",
+      used and set(used) <= set(read_attrs) | set(ghost_attrs) and set(read_attrs) | set(ghost_attrs) == set(used)
+      and not re.search(r"(?<!function )\batt\(\s*\w+\s*,\s*[^'\s]", code),
+      str(sorted(set(used) ^ (set(read_attrs) | set(ghost_attrs)))))
 att_fn = js_function(code, "att")
 outside_att = code.replace(att_fn, "")
 check("`attributes` is read only inside att()",
@@ -520,7 +534,7 @@ check("the vestigial automation-mode / writes-armed entities are neither reused 
 slug_hits = [f for f, text in OWN.items() if f not in (SELF_REL, HA_TEST_REL, PREFS_TEST_REL, DOC_REL)
              and re.search("ecco_clock_" + "dongle|your_" + r"(?:meter_serial|import_mpan|export_mpan)|octo" + "pus", text)]
 proto_hits = [f for f, text in {**OWN, **_PKG_COMMENTS}.items() if re.search(r"(?:sensor|binary_sensor)\.ecco_intelligence_\w", text)
-              and f not in (f"frontend/{TAG}/test/core.test.mjs", f"frontend/{TAG}/test/element.test.mjs", DOC_REL)]
+              and f not in (f"frontend/{TAG}/test/core.test.mjs", f"frontend/{TAG}/test/element.test.mjs", f"frontend/{TAG}/test/ghost.test.mjs", DOC_REL)]
 check("no device slug or tariff placeholder in the card, the packages or the dashboard; a prototype id (also in the package's "
       "comments) only in the refusal tests and the doc",
       not slug_hits and not proto_hits, str(slug_hits + proto_hits))
