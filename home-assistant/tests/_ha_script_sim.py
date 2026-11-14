@@ -97,9 +97,10 @@ def _truthy(value) -> bool:
 class _StateObj:
     """What `states.domain.object` returns in a template: the state and its last_changed (aware datetime)."""
 
-    def __init__(self, state: str, last_changed: float):
+    def __init__(self, state: str, last_changed: float, last_updated: float | None = None):
         self.state = state
         self.last_changed = datetime.fromtimestamp(last_changed, LOCAL)
+        self.last_updated = datetime.fromtimestamp(last_changed if last_updated is None else last_updated, LOCAL)
 
 
 class _States:
@@ -121,7 +122,7 @@ class _States:
                 eid = f"{domain}.{obj}"
                 if eid not in w.states:
                     return None
-                return _StateObj(w.states[eid][0], w.changed_at.get(eid, 0.0))
+                return _StateObj(w.states[eid][0], w.changed_at.get(eid, 0.0), w.updated_at.get(eid))
         return _Domain()
 
 
@@ -147,6 +148,7 @@ class World:
         env = jinja2.sandbox.ImmutableSandboxedEnvironment(undefined=jinja2.StrictUndefined,
                                                            extensions=["jinja2.ext.loopcontrols"])
         self.changed_at: dict[str, float] = {}
+        self.updated_at: dict[str, float] = {}      # last_updated: any write that changed the state or its attributes
         env.globals.update(states=_States(self), is_state=self.is_state, state_attr=self.state_attr,
                            now=self.now, as_timestamp=self.as_timestamp, namespace=jinja2.utils.Namespace)
         env.filters.update({
@@ -196,6 +198,7 @@ class World:
         if old is not None and old[0] == state and (attrs is None or attrs == old[1]):
             return
         self.states[entity_id] = (state, dict(attrs or (old[1] if old else {})))
+        self.updated_at[entity_id] = self.t
         if old is None or old[0] != state:
             self.changed_at[entity_id] = self.t
         self.history.append((self.t, entity_id, state))
@@ -300,6 +303,9 @@ class World:
                 handler = lambda e, d, s=svc: self.set(e, "on" if s == "turn_on" else "off")  # noqa: E731
             elif domain == "input_number" and svc == "set_value":
                 handler = lambda e, d: self.set(e, f"{float(d['value'])}")  # noqa: E731
+            elif domain == "input_datetime" and svc == "set_datetime" and "timestamp" in data:
+                def handler(e, d):                  # a date+time helper set from an epoch (local time), as Home Assistant does
+                    self.set(e, local_str(float(d["timestamp"])))
             elif domain == "input_datetime" and svc == "set_datetime":
                 def handler(e, d):
                     hh, mm, ss = (int(x) for x in str(d["time"]).split(":"))

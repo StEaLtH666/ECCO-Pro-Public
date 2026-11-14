@@ -135,6 +135,8 @@ def old_package_text() -> str:
 
 
 OLD_TEXT = old_package_text()
+import _pex as _pex  # noqa: E402  (PEX: r9's declared edits are undone below, so the earlier entry's round trip still lands on its package)
+PRE_R9_TEXT = _pex.as_of(PKG_REL, "isp1", PKG_TEXT)   # PEX: the live package with r9 undone (r9 is declared by its own entry)
 
 # ======================================================================================================================
 print("[0] static")
@@ -142,12 +144,16 @@ print("[0] static")
 pkg = yaml.safe_load(PKG_TEXT)
 old = yaml.safe_load(OLD_TEXT)
 shape = {k: len(v) for k, v in pkg.items()}
-check("the package keeps its helper, script and automation counts (1/1/2/1 helpers, 2 scripts, 3 automations, 1 template)",
-      shape == {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 2,
-                                                         "input_text": 1, "script": 2, "automation": 3, "template": 1},
+check("the package keeps its helper, script and automation counts, plus r9's captured-start helper and capture automation "
+      "(1/2/2/1 helpers, 2 scripts, 4 automations, 1 template; before r9: 1/1/2/1, 2, 3, 1)",
+      shape == {"input_boolean": 1, "input_datetime": 2, "input_number": 2, "input_text": 1, "script": 2, "automation": 4,
+                "template": 1}
+      and {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 2,
+                                                  "input_text": 1, "script": 2, "automation": 3, "template": 1},
       str(shape))
 check("helper definitions, the cancel script and the template sensor's attributes are unchanged",
-      all(pkg[k] == old[k] for k in ("input_boolean", "input_datetime", "input_number", "input_text"))
+      all(pkg[k] == old[k] for k in ("input_boolean", "input_number", "input_text"))
+      and {k: v for k, v in pkg["input_datetime"].items() if k != "ecco_free_power_ha_start"} == old["input_datetime"]
       and pkg["script"]["ecco_free_power_cancel_schedule"] == old["script"]["ecco_free_power_cancel_schedule"]
       and pkg["template"][0]["sensor"][0]["attributes"] == old["template"][0]["sensor"][0]["attributes"])
 fw_names = set(re.findall(r'name: "([^"]+)"', FW_TEXT))
@@ -173,7 +179,7 @@ services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
                    "button.press", "script.ecco_free_power_start_scheduled", "persistent_notification.create",
-                   "persistent_notification.dismiss"}, str(sorted(services)))
+                   "persistent_notification.dismiss", "input_datetime.set_datetime"}, str(sorted(services)))   # r9: the capture's helper write
 check("the package never calls an ESPHome action, a Modbus service or a register write",
       not any(re.search(r"esphome|modbus|register", sv, re.I) for sv in services))
 
@@ -355,9 +361,10 @@ r = down_then_back(ST - 40, ST - 10, ST + 7300)
 check("HA restarted at 10:59:20-10:59:50: starts on time, no alert", r.d.successes == 1 and r.d.started_at - ST < 60
       and r.created() == [], f"{r.created()}")
 r = down_then_back(ST - 120, ST + 600, ST + 7300)
-check("HA down 10:58-11:10 (the start trigger missed): recovered after the restart with an alert, ends inside the window",
-      r.d.successes == 1 and 600 <= r.d.started_at - ST <= 700 and any("missed" in n[3] for n in r.created())
-      and r.d.ends_at <= r.end_ts + 30, f"{r.d.started_at and r.d.started_at - ST} {r.created()}")
+check("HA down 10:58-11:10 (the start trigger missed): R9 - NOT started after the restart; MISSED recorded, alerted, disarmed",
+      r.d.successes == 0 and r.d.press_log == [] and r.last() == "MISSED - not started after a Home Assistant restart"
+      and any("missed" in n[3] for n in r.created()) and r.w.state(ARMED) == "off",
+      f"{r.d.started_at and r.d.started_at - ST} {r.last()} {r.created()}")
 r = down_then_back(ST - 120, ST + 7300, ST + 7400)
 check("HA back only after the window ended: MISSED recorded, alerted, nothing pressed, status FAILED",
       r.last().startswith("MISSED") and any("missed" in n[3] for n in r.created()) and r.d.press_log == []
@@ -416,8 +423,6 @@ def battery(text: str) -> dict:
         res["clamp"] = x.d.ends_at is not None and x.d.ends_at <= x.end_ts + 30
         x = Run(text, lose={"start"}).until(7300)
         res["watchdog"] = x.d.successes == 1
-        x = down_then_back_text(text, ST - 120, ST + 60, ST + 900, setup=lambda y: y.d.rtc.append((ST - 5, ST + 420)))
-        res["no_double"] = x.d.successes == 1 and not any("already running" in m for m in x.w.warnings)
         x = Run(text, setup=lambda y: y.d.set_offline(ST - 60, ST + 180)).until(600)
         res["offline"] = x.d.successes == 1 and all(not (ST - 60 <= ST + p < ST + 180) for p in x.presses())
         x = Run(text)
@@ -446,10 +451,9 @@ MUTANTS = [
     ("no duration clamp", "(((window_end | float(0)) - as_timestamp(now()) + 20) / 60) | round(0, 'floor') | int(0)] | min }}",
      "99999] | min }}", "clamp"),
     ("no watchdog", "and as_timestamp(now()) - s >= 180\n", "and as_timestamp(now()) - s >= 99999999\n", "watchdog"),
-    ("the start branch as the default (a watchdog tick during a restart recovery calls the script again)",
-     "          # Only the start trigger starts on time; a readiness or watchdog tick never falls through to here.\n"
-     "          - conditions:\n              - condition: trigger\n                id: start\n            sequence:\n",
-     "        default:\n", "no_double"),
+    # r9: the former 'start branch as the default' mutant (a watchdog tick while a restart recovery's start was retrying called the
+    # script again) is retired: the startup recovery no longer starts anything, and the fire automation is mode single, so no watchdog
+    # tick can reach a second start call while the first still runs (test_ha_r9_missed_runs.py pins every start call's guard).
     ("staging while another write is in progress (the not-ready branch disabled)",
      "                    # another Free Power / manual write is in progress. Stage nothing, press nothing; look again.\n"
      "                    - conditions:\n",
@@ -509,9 +513,9 @@ r.w.run_until(ST + 600)
 r.ha = S.HA(r.w, yaml.safe_load(PKG_TEXT))
 r.ha.start()
 r.w.run_until(ST + 7300)
-check("Home Assistant back inside the window while the dongle is still reconnecting (40 s): it waits, then recovers and "
-      "starts, with an alert", r.d.successes == 1 and r.created() != [] and r.d.ends_at <= r.end_ts + 30,
-      f"{r.last()} {r.created()}")
+check("Home Assistant back inside the window while the dongle is still reconnecting (40 s): it waits, then (R9) records the "
+      "missed start and starts nothing, with an alert", r.d.successes == 0 and r.d.press_log == [] and r.created() != []
+      and r.last() == "MISSED - not started after a Home Assistant restart", f"{r.last()} {r.created()}")
 r = Run(setup=lambda x: x.d.set_offline(ST - 60, ST + 60)).until(600)
 check("the dongle (and so the effective-limit sensor) unavailable at the start: waited for, then started - not BLOCKED",
       r.d.successes == 1 and not r.last().startswith("BLOCKED"), r.last())
@@ -679,7 +683,7 @@ check("fps1's fingerprint is the pinned value, linked to fe1's",
       FPS1.fingerprint == FPS1_FINGERPRINT == _pex.fingerprint(FPS1) and _pex.record(FPS1)["parent"] == FE1_FINGERPRINT)   # PEX: hash link
 check("undone exactly, the package is its fe1 state byte for byte, the pre-fix policy (one retry after 12 s, no alert)",
       F.sha(OLD_TEXT).startswith(BEFORE_SHA) and 'delay: "00:00:12"' in OLD_TEXT and "persistent_notification" not in OLD_TEXT)
-check("the fps1 pair round-trips (applying it to the fe1 text gives the live package)", F.add_fps1_package(OLD_TEXT) == PKG_TEXT)
+check("the fps1 pair round-trips (applying it to the fe1 text gives the live package)", F.add_fps1_package(OLD_TEXT) == PRE_R9_TEXT)
 
 # ======================================================================================================================
 print("")

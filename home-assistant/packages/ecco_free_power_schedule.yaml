@@ -26,6 +26,12 @@
 #     its full duration (as before), a late start ends within about a minute of the window end;
 #   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, restart recovery,
 #     and a persistent notification for every failure or miss; the write enable always ends off.
+#
+# R9 (2026-11, owner requirement of 12 Nov): a missed scheduled run is never started after a Home Assistant restart. A start
+# time earlier than the captured Home Assistant start (or any start time while that capture is unknown or stale: fail closed)
+# is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
+# startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
+# watchdog or restart recovery starting a late run, read R9.
 
 input_boolean:
   ecco_free_power_schedule_armed:
@@ -35,6 +41,15 @@ input_boolean:
 input_datetime:
   ecco_free_power_schedule_start:
     name: ECCO Free Power Schedule Start
+    has_date: true
+    has_time: true
+
+  # R9 (no automatic start of a missed run after a Home Assistant restart): the time Home Assistant last
+  # started, written ONLY by ecco_free_power_ha_start_capture on the `homeassistant` start event. Never edit
+  # it by hand. Helpers are restored across a restart, so a value this boot did not write is stale: the guards
+  # then treat the start as unknown and fail closed (nothing starts).
+  ecco_free_power_ha_start:
+    name: ECCO Free Power HA Start (captured)
     has_date: true
     has_time: true
 
@@ -619,6 +634,17 @@ automation:
           fired_for: "{{ states('input_datetime.ecco_free_power_schedule_start') }}"
           start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"
           end_ts: "{{ (start_ts | float(0)) + (states('input_number.ecco_free_power_schedule_duration') | int(1)) * 60 }}"
+          # R9: a start time earlier than the captured Home Assistant start is a missed run, and so is any start
+          # time while the capture is unknown or stale (fail closed). Compared directly, never via last_changed.
+          ha_start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_ha_start'), 0) }}"
+          ha_start_known: >-
+            {% set c = states('input_datetime.ecco_free_power_ha_start') %}
+            {% set cs = as_timestamp(c, 0) %}
+            {% set o = states.input_datetime.ecco_free_power_ha_start %}
+            {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+            {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+               and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
       - choose:
           - conditions:
               - condition: trigger
@@ -656,6 +682,40 @@ automation:
                         Free Power is due at {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} but would be refused now:
                         {{ blockers }}. ECCO will still try at the start time (and retry transient refusals for
                         up to 10 minutes), but clear these first if you can.
+          # R9: a start time that fell before Home Assistant started (or while its start is unknown) is a missed
+          # run. It is recorded, notified and disarmed, never started. Listed BEFORE the watchdog's start below.
+          - conditions:
+              - condition: trigger
+                id: watchdog
+              - condition: state
+                entity_id: script.ecco_free_power_start_scheduled
+                state: "off"
+              - condition: template
+                value_template: "{{ missed_run }}"
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_free_power_schedule
+                  title: "ECCO: scheduled Free Power was missed"
+                  message: >-
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start fell
+                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
+              # Disarm only the schedule this miss was for (the owner may have re-armed a new one).
+              - if:
+                  - condition: template
+                    value_template: "{{ states('input_datetime.ecco_free_power_schedule_start') == fired_for }}"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.ecco_free_power_schedule_armed
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: >-
+                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
+                        ' (Home Assistant start time unknown; failed closed)' }}
           - conditions:
               - condition: trigger
                 id: watchdog
@@ -663,6 +723,9 @@ automation:
               - condition: state
                 entity_id: script.ecco_free_power_start_scheduled
                 state: "off"
+              # R9 guard: never the start of a missed run (the branch above records it).
+              - condition: template
+                value_template: "{{ not missed_run }}"
             sequence:
               - action: persistent_notification.create
                 data:
@@ -705,6 +768,22 @@ automation:
                     target:
                       entity_id: input_boolean.ecco_free_power_schedule_armed
 
+  # R9: capture the time Home Assistant started, once per start, so the two start paths that run after a
+  # restart (the startup recovery and the watchdog) can tell a missed run from a start that fell while Home
+  # Assistant was running. Written nowhere else; never derived from any entity's last_changed.
+  - id: ecco_free_power_ha_start_capture
+    alias: "ECCO - Capture Home Assistant start time (Free Power)"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ecco_free_power_ha_start
+        data:
+          timestamp: "{{ as_timestamp(now()) | int }}"
+
   - id: ecco_free_power_schedule_startup_recovery
     alias: "ECCO - Recover scheduled Free Power after Home Assistant restart"
     mode: single
@@ -734,6 +813,16 @@ automation:
           power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(500) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
+          # R9: same definition as the fire automation's guard (the package test pins them identical).
+          ha_start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_ha_start'), 0) }}"
+          ha_start_known: >-
+            {% set c = states('input_datetime.ecco_free_power_ha_start') %}
+            {% set cs = as_timestamp(c, 0) %}
+            {% set o = states.input_datetime.ecco_free_power_ha_start %}
+            {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+            {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+               and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
           - conditions:
@@ -772,6 +861,14 @@ automation:
               - action: input_boolean.turn_off
                 target:
                   entity_id: input_boolean.ecco_free_power_schedule_armed
+          # R9: a start time between the Home Assistant start and this evaluation is not a missed run: the normal
+          # triggers own it (the on-time start fired, or is still to fire); this recovery neither starts nor disarms it.
+          - conditions:
+              - condition: template
+                value_template: "{{ not missed_run }}"
+            sequence: []
+          # R9: a start time before the Home Assistant start (or an unknown / stale capture: fail closed) with the
+          # window still open is a missed run. It is NOT started: recorded, notified, and only it is disarmed.
           - conditions:
               - condition: template
                 value_template: "{{ now_ts < end_ts }}"
@@ -779,16 +876,11 @@ automation:
               - action: persistent_notification.create
                 data:
                   notification_id: ecco_free_power_schedule
-                  title: "ECCO: scheduled Free Power start was missed"
+                  title: "ECCO: scheduled Free Power was missed"
                   message: >-
-                    Home Assistant restarted during the scheduled Free Power window. ECCO is starting it now
-                    for the rest of the window, ending by {{ (end_ts | float(0)) | timestamp_custom('%H:%M') }}.
-              - action: script.ecco_free_power_start_scheduled
-                continue_on_error: true
-                data:
-                  duration_minutes: "{{ duration_min }}"
-                  power_w: "{{ power_w }}"
-                  window_end_ts: "{{ end_ts }}"
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start fell
+                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               - if:
                   - condition: template
                     value_template: "{{ states('input_datetime.ecco_free_power_schedule_start') == fired_for }}"
@@ -796,6 +888,13 @@ automation:
                   - action: input_boolean.turn_off
                     target:
                       entity_id: input_boolean.ecco_free_power_schedule_armed
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: >-
+                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
+                        ' (Home Assistant start time unknown; failed closed)' }}
         default:
           - action: input_boolean.turn_off
             target:

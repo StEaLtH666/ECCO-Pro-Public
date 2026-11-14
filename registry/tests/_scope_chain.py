@@ -127,6 +127,7 @@ import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
 import _ovw3_scope as _ovw3  # noqa: E402
+import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
@@ -1258,7 +1259,33 @@ ISP1 = Entry(
          "Intelligence engine, runtime or ecco_core change, ZERO Modbus operation, no service call other than "
          "persistent_notification.create, the production dashboard untouched",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1)
+# r9 (no automatic start of a missed scheduled run after a Home Assistant restart; _r9_scope.py): the owner's requirement of 12 Nov 2026
+# (docs/dev/grid-loss-interlock-spec.md section 5 R9), made on the export after isp1. FROZEN edits (PEX): the Export to Grid and the Charge
+# Battery schedule packages (_r9_scope.FROZEN_REVERTERS); as of isp1 each is the isp1-state blob byte for byte. Each package gains a
+# captured-Home-Assistant-start helper written only by a new capture automation on the `homeassistant` start event, a fail-closed guard
+# (`missed_run`) on both start paths (the schedule watchdog and the startup recovery), and a record / notification / disarm of a missed run in
+# place of its start; future occurrences and the on-time start are unchanged. Measured, not declared: no chain-pinned reverter, no checkpoint,
+# no delta, no op path; ZERO firmware, registry, deployment manifest (the packages are already deployed), dashboard or card byte; no register
+# and no dongle entity written that was not written before (the one new service call is input_datetime.set_datetime on the package's own helper).
+R9 = Entry(
+    id="r9", pr="R9", commit="unmerged",
+    added_files=_r9.ADDED_FILES,
+    frozen_reverts=dict(_r9.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after r9
+        _r9.DUMP_REL: "6b09f6f3b116675a3dbb78b8f1188e9073812a846186852665480249e3c8b18d",
+        _r9.FREE_REL: "c60804a03e8a4f09aa186640b8414b8c92e29518d2e5f33a5bd61e330905384d",
+        _r9.PKGTEST_REL: "2e85448a97c195bbf8bf5c16621df81e9f077d5b673abc1324128b4f807dcfb1",
+        _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
+    },
+    # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="74e25ca2ea6e2d06167f64786340789ccb25099ac360bdfd4f2b15cda6ef869d",
+    note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
+         "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
+         "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "
+         "disarmed instead of started, future occurrences and the on-time start unchanged: ZERO firmware, registry, deployment, "
+         "dashboard or card change, no new inverter or dongle write",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

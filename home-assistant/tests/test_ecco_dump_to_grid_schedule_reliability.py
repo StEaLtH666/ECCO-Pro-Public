@@ -140,6 +140,8 @@ def old_package_text() -> str:
 
 
 OLD_TEXT = old_package_text()
+import _pex as _pex  # noqa: E402  (PEX: r9's declared edits are undone below, so the earlier entry's round trip still lands on its package)
+PRE_R9_TEXT = _pex.as_of(PKG_REL, "isp1", PKG_TEXT)   # PEX: the live package with r9 undone (r9 is declared by its own entry)
 
 # ======================================================================================================================
 print("[0] static")
@@ -147,12 +149,16 @@ print("[0] static")
 pkg = yaml.safe_load(PKG_TEXT)
 old = yaml.safe_load(OLD_TEXT)
 shape = {k: len(v) for k, v in pkg.items()}
-check("the package keeps its helper, script and automation counts (1/1/3/1 helpers, 2 scripts, 3 automations, 1 template)",
-      shape == {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 3,
-                                                         "input_text": 1, "script": 2, "automation": 3, "template": 1},
+check("the package keeps its helper, script and automation counts, plus r9's captured-start helper and capture automation "
+      "(1/2/3/1 helpers, 2 scripts, 4 automations, 1 template; before r9: 1/1/3/1, 2, 3, 1)",
+      shape == {"input_boolean": 1, "input_datetime": 2, "input_number": 3, "input_text": 1, "script": 2, "automation": 4,
+                "template": 1}
+      and {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 3,
+                                                  "input_text": 1, "script": 2, "automation": 3, "template": 1},
       str(shape))
 check("helper definitions, the cancel script and the template sensor's attributes are unchanged",
-      all(pkg[k] == old[k] for k in ("input_boolean", "input_datetime", "input_number", "input_text"))
+      all(pkg[k] == old[k] for k in ("input_boolean", "input_number", "input_text"))
+      and {k: v for k, v in pkg["input_datetime"].items() if k != "ecco_dump_to_grid_ha_start"} == old["input_datetime"]
       and pkg["script"]["ecco_dump_to_grid_cancel_schedule"] == old["script"]["ecco_dump_to_grid_cancel_schedule"]
       and pkg["template"][0]["sensor"][0]["attributes"] == old["template"][0]["sensor"][0]["attributes"])
 new_av, old_av = (next(a for a in p["automation"] if a["id"] == "ecco_dump_to_grid_schedule_arm_validation") for p in (pkg, old))
@@ -198,7 +204,7 @@ services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
                    "button.press", "script.ecco_dump_to_grid_start_scheduled", "persistent_notification.create",
-                   "persistent_notification.dismiss"}, str(sorted(services)))
+                   "persistent_notification.dismiss", "input_datetime.set_datetime"}, str(sorted(services)))   # r9: the capture's helper write
 check("the package never calls an ESPHome action, a Modbus service or a register write, and never a recovery button",
       not any(re.search(r"esphome|modbus|register", sv, re.I) for sv in services)
       and "force_restore" + "_original" not in PKG_TEXT and "accept" + "_current_state" not in PKG_TEXT)
@@ -464,9 +470,10 @@ r = down_then_back(PKG_TEXT, ST - 40, ST - 10, ST + 3700)
 check("HA restarted at 17:59:20-17:59:50: starts on time, no alert", r.d.successes == 1 and r.d.started_at - ST < 60
       and r.created() == [])
 r = down_then_back(PKG_TEXT, ST - 120, ST + 600, ST + 3700)
-check("HA down 17:58-18:10 (the start trigger missed): recovered after the restart with an alert, ends inside the window",
-      r.d.successes == 1 and 600 <= r.d.started_at - ST <= 700 and any("missed" in n_[3] for n_ in r.created())
-      and r.d.ends_at <= r.end_ts + 30, f"{r.d.started_at and r.d.started_at - ST} {r.created()}")
+check("HA down 17:58-18:10 (the start trigger missed): R9 - NOT started after the restart; MISSED recorded, alerted, disarmed",
+      r.d.successes == 0 and r.d.press_log == [] and r.last() == "MISSED - not started after a Home Assistant restart"
+      and any("missed" in n_[3] for n_ in r.created()) and r.w.state(ARMED) == "off",
+      f"{r.d.started_at and r.d.started_at - ST} {r.last()} {r.created()}")
 r = down_then_back(PKG_TEXT, ST - 120, ST + 3700, ST + 3800)
 check("HA back only after the window ended: MISSED recorded, alerted, nothing pressed, status FAILED",
       r.last().startswith("MISSED") and any("missed" in n_[3] for n_ in r.created()) and r.d.press_log == []
@@ -699,7 +706,7 @@ check("dgs1's fingerprint is the pinned value, linked to rsv1's",
       DGS1.fingerprint == DGS1_FINGERPRINT == _pex.fingerprint(DGS1) and _pex.record(DGS1)["parent"] == RSV1_FINGERPRINT)   # PEX: hash link
 check("undone exactly, the package is its fps1 state byte for byte (press at +2 s, one retry after 12 s, no alert)",
       G.sha(OLD_TEXT).startswith(BEFORE_SHA) and 'delay: "00:00:12"' in OLD_TEXT and "persistent_notification" not in OLD_TEXT)
-check("the dgs1 pair round-trips (applying it to the fps1 text gives the live package)", G.add_dgs1_package(OLD_TEXT) == PKG_TEXT)
+check("the dgs1 pair round-trips (applying it to the fps1 text gives the live package)", G.add_dgs1_package(OLD_TEXT) == PRE_R9_TEXT)
 
 # ======================================================================================================================
 print("")
