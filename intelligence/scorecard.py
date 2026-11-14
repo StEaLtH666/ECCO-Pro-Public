@@ -17,6 +17,7 @@ VOID_SCENARIO, so a controller decision cannot masquerade as a model error."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -92,6 +93,88 @@ CREATE TABLE IF NOT EXISTS recommendations (
 );
 """
 
+# Durable advice log (additive: a table of its own, created if missing; no existing table or query is touched).
+# One row per published CHANGE of the charge_target / dump_to_grid advice; an identical re-publish is not written again.
+ADVICE_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS advice_log (
+    advice_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    issued_utc       TEXT NOT NULL,
+    valid_until_utc  TEXT,
+    window_start_utc TEXT,
+    window_end_utc   TEXT,
+    target_soc_pct   REAL,
+    effective_reserve_pct REAL,
+    conservative_fallback INTEGER NOT NULL DEFAULT 0,
+    stop_soc_pct     REAL,
+    export_kwh       REAL,
+    export_kw_avg    REAL,
+    dump_advisable   INTEGER,
+    duration_min     REAL,
+    confidence       TEXT,
+    reasons_json     TEXT NOT NULL,
+    run_id           INTEGER,
+    content_hash     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_advice_log_kind_issued ON advice_log (kind, issued_utc);
+"""
+ADVICE_LOG_KINDS = ("charge_target", "dump_to_grid")
+ADVICE_LOG_RETENTION_DAYS = 400
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) != float("inf") else None
+
+
+def advice_log_rows(published: dict, *, dump_duration_min: float | None = None, run_id: int | None = None) -> list[dict]:
+    """Pure: the advice_log rows for one cycle, from the published payloads ({entity_id: (state, recorded, unrecorded)}, the
+    output of advisory_contract.to_entity_payloads). Only what was actually published is read, so a withheld or non-numeric
+    item is logged with its status and no numbers. `dump_duration_min` is the intended Dump-to-Grid duration (a DumpInputs
+    input, not part of the recommendation)."""
+    rows = []
+    for _eid, (_state, rec, unrec) in published.items():
+        kind = rec.get("kind")
+        if kind not in ADVICE_LOG_KINDS or rec.get("status") not in ("OK", "BLOCKED", "INSUFFICIENT_DATA"):
+            continue
+        adv = (unrec or {}).get("advice") or {}
+        ok = rec["status"] == "OK" and "blocker_codes" not in adv
+        r = {"kind": kind, "status": rec["status"], "issued_utc": rec["generated_at"], "valid_until_utc": rec.get("valid_until"),
+             "window_start_utc": None, "window_end_utc": None, "target_soc_pct": None, "effective_reserve_pct": None,
+             "conservative_fallback": 0, "stop_soc_pct": None, "export_kwh": None, "export_kw_avg": None,
+             "dump_advisable": None, "duration_min": None, "confidence": rec.get("confidence"),
+             "reasons_json": json.dumps(list(rec.get("reason_codes") or []), sort_keys=True), "run_id": run_id}
+        if ok:
+            r["effective_reserve_pct"] = _num(adv.get("effective_reserve_pct"))
+            if kind == "charge_target":
+                w = adv.get("window")
+                if isinstance(w, (list, tuple)) and len(w) == 2:
+                    r["window_start_utc"], r["window_end_utc"] = _iso(datetime.fromisoformat(w[0])), _iso(datetime.fromisoformat(w[1]))
+                r["target_soc_pct"] = _num(adv.get("target_soc_pct"))
+                r["conservative_fallback"] = 1 if adv.get("conservative_fallback") else 0
+            else:
+                gen = datetime.fromisoformat(rec["generated_at"])
+                dur = _num(dump_duration_min)
+                r["stop_soc_pct"] = r["target_soc_pct"] = _num(adv.get("stop_soc_pct"))
+                r["export_kwh"], r["export_kw_avg"] = _num(adv.get("export_kwh")), _num(adv.get("export_kw_avg"))
+                r["dump_advisable"] = None if adv.get("dump_advisable") is None else int(bool(adv.get("dump_advisable")))
+                if dur is not None and dur > 0:
+                    r["duration_min"] = dur
+                    r["window_start_utc"], r["window_end_utc"] = _iso(gen), _iso(gen + timedelta(minutes=dur))
+        r["issued_utc"] = _iso(datetime.fromisoformat(r["issued_utc"]))
+        if r["valid_until_utc"]:
+            r["valid_until_utc"] = _iso(datetime.fromisoformat(r["valid_until_utc"]))
+        rows.append(r)
+    return rows
+
+
+def _advice_hash(r: dict) -> str:
+    """Content hash: everything except the issue time, run id, validity end (it rolls forward each cycle) and the dump window (issue time + duration), so an identical re-publish hashes the same."""
+    body = {k: v for k, v in r.items() if k not in ("issued_utc", "run_id", "valid_until_utc")}
+    if r["kind"] == "dump_to_grid":        # its window is issue time + duration: moves every cycle, not a change
+        body.pop("window_start_utc"); body.pop("window_end_utc")
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:24]
+
 
 # Two-sided Student-t critical values at p = 0.001, i.e. a Bonferroni-style allowance for the ~50 weekday x
 # window-kind comparisons that insights() scans (0.05 / 50). Plain "3 sigma" is not enough with n of 6-10.
@@ -116,6 +199,8 @@ class Scorecard:
         self.db.row_factory = sqlite3.Row
         self.tz = zone(tz_name)
         self.db.executescript(DDL)
+        self.db.executescript(ADVICE_LOG_DDL)
+        self.advice_write_failures = 0
         self.db.execute("INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         self.db.commit()
 
@@ -162,6 +247,40 @@ class Scorecard:
                  _iso(issued + timedelta(minutes=30)), report["mode"]))
         self.db.commit()
         return run_id
+
+    def record_advice(self, published: dict, *, dump_duration_min: float | None = None, run_id: int | None = None) -> int:
+        """Durably log the advice just published (see advice_log_rows). Never raises and never changes the caller's outputs:
+        any failure is rolled back, counted in `advice_write_failures` and 0 is returned. Returns the rows written (a row
+        identical in content to the latest one of its kind is skipped). Rows older than ADVICE_LOG_RETENTION_DAYS are
+        dropped at write time."""
+        try:
+            written = 0
+            for r in advice_log_rows(published, dump_duration_min=dump_duration_min, run_id=run_id):
+                h = _advice_hash(r)
+                last = self.db.execute("SELECT content_hash, valid_until_utc, window_end_utc FROM advice_log WHERE kind=? "
+                                       "ORDER BY issued_utc DESC, advice_id DESC LIMIT 1", (r["kind"],)).fetchone()
+                if last is not None and last["content_hash"] == h:
+                    # a duplicate only while the latest row is still current (dump: its window; others: its validity)
+                    lim = last["valid_until_utc"]
+                    if r["kind"] == "dump_to_grid" and last["window_end_utc"] is not None:
+                        lim = last["window_end_utc"]       # no duration known: fall back to the validity end
+                    if lim is not None and lim > r["issued_utc"]:
+                        continue
+                cols = list(r) + ["content_hash"]
+                self.db.execute(f"INSERT INTO advice_log ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                                [r[c] for c in r] + [h])
+                written += 1
+                cutoff = _iso(datetime.fromisoformat(r["issued_utc"]) - timedelta(days=ADVICE_LOG_RETENTION_DAYS))
+                self.db.execute("DELETE FROM advice_log WHERE issued_utc < ?", (cutoff,))
+            self.db.commit()
+            return written
+        except Exception:
+            self.advice_write_failures += 1
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+            return 0
 
     # --- score ----------------------------------------------------------------------------------------------
     def resolve(self, history: History, cfg: SiteConfig, now: datetime) -> list[dict]:
