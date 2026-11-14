@@ -128,6 +128,10 @@ DUMP_0_NEW = _blk(r"""
 # is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
 # startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
 # watchdog or restart recovery starting a late run, read R9.
+# DEPLOY: install this change with a FULL Home Assistant restart (not a package reload). The capture runs only on the start
+# event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
+# on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
+# for Home Assistant's clock to agree with it; if that never happens the capture stays unknown (fail closed).
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -169,7 +173,7 @@ DUMP_1_NEW = _blk(r"""
             {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
             {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
                and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
-          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           - conditions:
 """)
@@ -206,8 +210,9 @@ DUMP_2_NEW = _blk(r"""
                   notification_id: ecco_dump_to_grid_schedule
                   title: "ECCO: scheduled Dump to Grid was missed"
                   message: >-
-                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start fell
-                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
                     It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               # Disarm only the schedule this miss was for (the owner may have re-armed a new one).
               - if:
@@ -222,8 +227,8 @@ DUMP_2_NEW = _blk(r"""
                       entity_id: input_text.ecco_dump_to_grid_schedule_last_result
                     data:
                       value: >-
-                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
-                        ' (Home Assistant start time unknown; failed closed)' }}
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
           - conditions:
               - condition: trigger
                 id: watchdog
@@ -257,23 +262,63 @@ DUMP_3_NEW = _blk(r"""
       - trigger: homeassistant
         event: start
     actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.ecco_dump_to_grid_ha_start
-        data:
-          timestamp: "{{ as_timestamp(now()) | int }}"
+      # The clock must be trustworthy before it is captured: a host without an RTC can boot with a clock that is behind, and a capture
+      # of that early time would pass the staleness check (last_updated is stamped by the same clock). Wait (bounded) until the dongle's
+      # NTP is synced and Home Assistant's time agrees with the dongle's NTP time (published about once a minute, so 120 s is allowed).
+      # If that never happens the helper is left alone: unknown or stale, and every guard fails closed.
+      - wait_template: >-
+          {% set n = states('sensor.ecco_clock_dongle_ntp_time') %}
+          {{ is_state('binary_sensor.ecco_clock_dongle_ntp_synced', 'on')
+             and (as_timestamp(now()) - as_timestamp(n, 0)) | abs <= 120 }}
+        timeout: "00:10:00"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ wait.completed }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ecco_dump_to_grid_ha_start
+            data:
+              timestamp: "{{ as_timestamp(now()) | int }}"
 
   - id: ecco_dump_to_grid_schedule_startup_recovery
     alias: "ECCO - Recover scheduled Dump to Grid after Home Assistant restart"
 """)
 
 DUMP_4_OLD = _blk(r"""
+            target:
+              entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+      - variables:
+          fired_for: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}"
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_dump_to_grid_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(500) }}"
+          stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(25) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
 """)
 DUMP_4_NEW = _blk(r"""
+            target:
+              entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+      # R9: give the capture (it waits for a trustworthy clock) a bounded time before judging; unknown after that fails closed.
+      - wait_template: >-
+          {% set c = states('input_datetime.ecco_dump_to_grid_ha_start') %}
+          {% set cs = as_timestamp(c, 0) %}
+          {% set o = states.input_datetime.ecco_dump_to_grid_ha_start %}
+          {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+          {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+             and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+        timeout: "00:03:00"
+        continue_on_timeout: true
+      - variables:
+          fired_for: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}"
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_dump_to_grid_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_dump_to_grid_schedule_power') | int(500) }}"
+          stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(25) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
           # R9: same definition as the fire automation's guard (the package test pins them identical).
@@ -285,7 +330,7 @@ DUMP_4_NEW = _blk(r"""
             {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
             {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
                and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
-          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
 """)
@@ -328,7 +373,7 @@ DUMP_5_NEW = _blk(r"""
           # triggers own it (the on-time start fired, or is still to fire); this recovery neither starts nor disarms it.
           - conditions:
               - condition: template
-                value_template: "{{ not missed_run }}"
+                value_template: "{{ not missed_run and now_ts < end_ts }}"
             sequence: []
           # R9: a start time before the Home Assistant start (or an unknown / stale capture: fail closed) with the
           # window still open is a missed run. It is NOT started: recorded, notified, and only it is disarmed.
@@ -341,8 +386,9 @@ DUMP_5_NEW = _blk(r"""
                   notification_id: ecco_dump_to_grid_schedule
                   title: "ECCO: scheduled Dump to Grid was missed"
                   message: >-
-                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start fell
-                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
                     It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               - if:
                   - condition: template
@@ -356,8 +402,8 @@ DUMP_5_NEW = _blk(r"""
                       entity_id: input_text.ecco_dump_to_grid_schedule_last_result
                     data:
                       value: >-
-                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
-                        ' (Home Assistant start time unknown; failed closed)' }}
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
         default:
           - action: input_boolean.turn_off
 """)
@@ -395,6 +441,10 @@ FREE_0_NEW = _blk(r"""
 # is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
 # startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
 # watchdog or restart recovery starting a late run, read R9.
+# DEPLOY: install this change with a FULL Home Assistant restart (not a package reload). The capture runs only on the start
+# event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
+# on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
+# for Home Assistant's clock to agree with it; if that never happens the capture stays unknown (fail closed).
 
 input_boolean:
   ecco_free_power_schedule_armed:
@@ -436,7 +486,7 @@ FREE_1_NEW = _blk(r"""
             {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
             {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
                and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
-          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           - conditions:
 """)
@@ -473,8 +523,9 @@ FREE_2_NEW = _blk(r"""
                   notification_id: ecco_free_power_schedule
                   title: "ECCO: scheduled Free Power was missed"
                   message: >-
-                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start fell
-                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
                     It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               # Disarm only the schedule this miss was for (the owner may have re-armed a new one).
               - if:
@@ -489,8 +540,8 @@ FREE_2_NEW = _blk(r"""
                       entity_id: input_text.ecco_free_power_schedule_last_result
                     data:
                       value: >-
-                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
-                        ' (Home Assistant start time unknown; failed closed)' }}
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
           - conditions:
               - condition: trigger
                 id: watchdog
@@ -524,23 +575,61 @@ FREE_3_NEW = _blk(r"""
       - trigger: homeassistant
         event: start
     actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.ecco_free_power_ha_start
-        data:
-          timestamp: "{{ as_timestamp(now()) | int }}"
+      # The clock must be trustworthy before it is captured: a host without an RTC can boot with a clock that is behind, and a capture
+      # of that early time would pass the staleness check (last_updated is stamped by the same clock). Wait (bounded) until the dongle's
+      # NTP is synced and Home Assistant's time agrees with the dongle's NTP time (published about once a minute, so 120 s is allowed).
+      # If that never happens the helper is left alone: unknown or stale, and every guard fails closed.
+      - wait_template: >-
+          {% set n = states('sensor.ecco_clock_dongle_ntp_time') %}
+          {{ is_state('binary_sensor.ecco_clock_dongle_ntp_synced', 'on')
+             and (as_timestamp(now()) - as_timestamp(n, 0)) | abs <= 120 }}
+        timeout: "00:10:00"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ wait.completed }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ecco_free_power_ha_start
+            data:
+              timestamp: "{{ as_timestamp(now()) | int }}"
 
   - id: ecco_free_power_schedule_startup_recovery
     alias: "ECCO - Recover scheduled Free Power after Home Assistant restart"
 """)
 
 FREE_4_OLD = _blk(r"""
+            target:
+              entity_id: switch.ecco_clock_dongle_free_power_write_enable
+      - variables:
+          fired_for: "{{ states('input_datetime.ecco_free_power_schedule_start') }}"
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_free_power_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(500) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
 """)
 FREE_4_NEW = _blk(r"""
+            target:
+              entity_id: switch.ecco_clock_dongle_free_power_write_enable
+      # R9: give the capture (it waits for a trustworthy clock) a bounded time before judging; unknown after that fails closed.
+      - wait_template: >-
+          {% set c = states('input_datetime.ecco_free_power_ha_start') %}
+          {% set cs = as_timestamp(c, 0) %}
+          {% set o = states.input_datetime.ecco_free_power_ha_start %}
+          {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+          {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+             and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+        timeout: "00:03:00"
+        continue_on_timeout: true
+      - variables:
+          fired_for: "{{ states('input_datetime.ecco_free_power_schedule_start') }}"
+          start_ts: "{{ as_timestamp(states('input_datetime.ecco_free_power_schedule_start'), 0) }}"
+          duration_min: "{{ states('input_number.ecco_free_power_schedule_duration') | int(1) }}"
+          power_w: "{{ states('input_number.ecco_free_power_schedule_power') | int(500) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
           # R9: same definition as the fire automation's guard (the package test pins them identical).
@@ -552,7 +641,7 @@ FREE_4_NEW = _blk(r"""
             {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
             {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
                and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
-          missed_run: "{{ not ha_start_known or (start_ts | float(0)) < (ha_start_ts | float(0)) }}"
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
 """)
@@ -594,7 +683,7 @@ FREE_5_NEW = _blk(r"""
           # triggers own it (the on-time start fired, or is still to fire); this recovery neither starts nor disarms it.
           - conditions:
               - condition: template
-                value_template: "{{ not missed_run }}"
+                value_template: "{{ not missed_run and now_ts < end_ts }}"
             sequence: []
           # R9: a start time before the Home Assistant start (or an unknown / stale capture: fail closed) with the
           # window still open is a missed run. It is NOT started: recorded, notified, and only it is disarmed.
@@ -607,8 +696,9 @@ FREE_5_NEW = _blk(r"""
                   notification_id: ecco_free_power_schedule
                   title: "ECCO: scheduled Free Power was missed"
                   message: >-
-                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start fell
-                    before Home Assistant started{{ '' if ha_start_known else ' (or its start time is unknown)' }}.
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Free Power start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
                     It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               - if:
                   - condition: template
@@ -622,8 +712,8 @@ FREE_5_NEW = _blk(r"""
                       entity_id: input_text.ecco_free_power_schedule_last_result
                     data:
                       value: >-
-                        MISSED - not started after a Home Assistant restart{{ '' if ha_start_known else
-                        ' (Home Assistant start time unknown; failed closed)' }}
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
         default:
           - action: input_boolean.turn_off
 """)

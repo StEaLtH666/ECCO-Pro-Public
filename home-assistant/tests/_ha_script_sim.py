@@ -131,6 +131,8 @@ class World:
 
     def __init__(self, t0: float):
         self.t = t0
+        self.clock_offset = 0.0           # Home Assistant's clock minus the true time (a host without an RTC booting with a wrong clock)
+        self.ntp_off = False              # the dongle's NTP time text is not published (test hook)
         self.states: dict[str, tuple[str, dict]] = {}
         self.history: list[tuple[float, str, str]] = []
         self.template_entities: dict[str, str] = {}
@@ -163,7 +165,15 @@ class World:
 
     # --- clock and events -------------------------------------------------------------------------------------
     def now(self) -> datetime:
-        return datetime.fromtimestamp(self.t, LOCAL)
+        return datetime.fromtimestamp(self.t + self.clock_offset, LOCAL)
+
+    def publish_ntp_time(self, period: float = 60.0) -> None:
+        """The dongle's `NTP Time` text sensor (a TRUE-time string, published about once a minute while its NTP is synced)."""
+        def tick():
+            if not self.ntp_off:
+                self.set("sensor.ecco_clock_dongle_ntp_time", local_str(self.t))
+            self.after(period, tick)
+        tick()
 
     def at(self, when: float, fn) -> None:
         heapq.heappush(self._q, (when, next(self._seq), fn))
@@ -198,9 +208,9 @@ class World:
         if old is not None and old[0] == state and (attrs is None or attrs == old[1]):
             return
         self.states[entity_id] = (state, dict(attrs or (old[1] if old else {})))
-        self.updated_at[entity_id] = self.t
+        self.updated_at[entity_id] = self.t + self.clock_offset      # stamped by Home Assistant's own clock
         if old is None or old[0] != state:
-            self.changed_at[entity_id] = self.t
+            self.changed_at[entity_id] = self.t + self.clock_offset
         self.history.append((self.t, entity_id, state))
         self._changed()
 
@@ -814,6 +824,7 @@ class Dongle:
                      (E_STATUS, "IDLE - no Free Power override active")):
             world.set(e, s)
         world.at(world.t + 7.0, self._attempts_tick)
+        world.publish_ntp_time()
         world.service_handlers.update({
             "switch.turn_on": self._switch(True), "switch.turn_off": self._switch(False),
             "button.press": self._press, "number.set_value": self._number,

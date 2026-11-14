@@ -57,6 +57,12 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 ST = S.parse_local("2026-10-11 18:00:00")          # the scheduled start (a minute boundary: the time trigger fires on it)
 T0 = ST - 3600                                      # first Home Assistant boot
 MISSED_TEXT = "MISSED - not started after a Home Assistant restart"
+UNKNOWN_PREFIX = "MISSED - not started: the Home Assistant start time was unknown"
+
+
+def failed_closed(s: str) -> bool:
+    """The record for an unknown / untrusted Home Assistant start: MISSED, and it does not claim the start fell before the start."""
+    return s.startswith(UNKNOWN_PREFIX) and "failed closed" in s and "after a Home Assistant restart" not in s
 DURATION = 120                                      # window 18:00-20:00
 
 KINDS = {
@@ -72,7 +78,8 @@ for k, v in KINDS.items():
 class Run:
     """One schedule on a virtual clock: Home Assistant (booted at T0) + the real package + the dongle model, armed for ST."""
 
-    def __init__(self, kind: str, start_ts: float = ST, mutate=None, lose=(), text: str | None = None):
+    def __init__(self, kind: str, start_ts: float = ST, mutate=None, lose=(), text: str | None = None,
+                 duration: int = DURATION):
         self.kind = kind
         k = KINDS[kind]
         self.p = k["p"]
@@ -95,7 +102,7 @@ class Run:
         self.cap_e = f"input_datetime.{p}_ha_start"
         self.start_e = f"input_datetime.{p}_schedule_start"
         w.set(self.start_e, S.local_str(start_ts))
-        w.set(f"input_number.{p}_schedule_duration", f"{float(DURATION)}")
+        w.set(f"input_number.{p}_schedule_duration", f"{float(duration)}")
         w.set(f"input_number.{p}_schedule_power", "3000.0")
         if kind == "dump":
             w.set(f"input_number.{p}_schedule_stop_soc", "40.0")
@@ -105,7 +112,7 @@ class Run:
         other = "ecco_free_power" if kind == "dump" else "ecco_dump_to_grid"
         w.set(f"input_boolean.{other}_schedule_armed", "off")
         self.start_ts = start_ts
-        self.end_ts = start_ts + DURATION * 60
+        self.end_ts = start_ts + duration * 60
         self._boot()
         w.run_until(T0 + 60)
         w.set(self.armed, "on")                       # armed at T0 + 1 min: its last_changed is earlier than the start
@@ -123,7 +130,7 @@ class Run:
         for a in self.ha.automations:
             a.disabled_triggers |= self.lose
 
-    def restart(self, down_from: float, back_at: float, restore_last_changed: bool = True):
+    def restart(self, down_from: float, back_at: float, restore_last_changed: bool = True, pre_boot=None):
         """Home Assistant stops at down_from and starts again at back_at; the dongle keeps running. Every restored entity's
         last_updated is the boot; its last_changed is kept (restore_last_changed) or reset to the boot."""
         self.w.run_until(down_from)
@@ -133,6 +140,8 @@ class Run:
             self.w.updated_at[e] = back_at
             if not restore_last_changed:
                 self.w.changed_at[e] = back_at
+        if pre_boot:
+            pre_boot(self)
         self._boot()
         return self
 
@@ -209,11 +218,19 @@ for kind, k in KINDS.items():
           and pkg["input_datetime"][f"{p}_ha_start"].get("has_time") is True
           and "initial" not in pkg["input_datetime"][f"{p}_ha_start"])
     cap = next((a for a in pkg["automation"] if a["id"] == f"{p}_ha_start_capture"), None)
-    check(f"{nm} one capture automation: trigger homeassistant start, one action, writing only that helper from now()",
+    check(f"{nm} one capture automation: trigger homeassistant start; waits (bounded, continuing) for the dongle's NTP synced and "
+          "a Home Assistant clock within 120 s of the dongle's NTP time; only then writes that helper, once, from now()",
           cap is not None and cap["triggers"] == [{"trigger": "homeassistant", "event": "start"}]
-          and len(cap["actions"]) == 1 and cap["actions"][0]["action"] == "input_datetime.set_datetime"
-          and cap["actions"][0]["target"] == {"entity_id": f"input_datetime.{p}_ha_start"}
-          and cap["actions"][0]["data"] == {"timestamp": "{{ as_timestamp(now()) | int }}"}, str(cap))
+          and len(cap["actions"]) == 2 and "wait_template" in cap["actions"][0]
+          and "binary_sensor.ecco_clock_dongle_ntp_synced" in cap["actions"][0]["wait_template"]
+          and "sensor.ecco_clock_dongle_ntp_time" in cap["actions"][0]["wait_template"]
+          and "<= 120" in cap["actions"][0]["wait_template"]
+          and cap["actions"][0]["timeout"] == "00:10:00" and cap["actions"][0]["continue_on_timeout"] is True
+          and cap["actions"][1]["if"] == [{"condition": "template", "value_template": "{{ wait.completed }}"}]
+          and len(cap["actions"][1]["then"]) == 1
+          and cap["actions"][1]["then"][0]["action"] == "input_datetime.set_datetime"
+          and cap["actions"][1]["then"][0]["target"] == {"entity_id": f"input_datetime.{p}_ha_start"}
+          and cap["actions"][1]["then"][0]["data"] == {"timestamp": "{{ as_timestamp(now()) | int }}"}, str(cap))
     fire = next(a for a in pkg["automation"] if a["id"] == f"{p}_schedule_fire")
     rec = next(a for a in pkg["automation"] if a["id"] == f"{p}_schedule_startup_recovery")
 
@@ -227,8 +244,8 @@ for kind, k in KINDS.items():
           vf is not None and vr is not None
           and all(vf[x] == vr[x] for x in ("ha_start_ts", "ha_start_known", "missed_run")), "")
     known, missed = vf["ha_start_known"], vf["missed_run"]
-    check(f"{nm} the guard compares the start time with the captured start and never reads last_changed",
-          "last_changed" not in known and "last_changed" not in missed and "ha_start_ts" in missed
+    check(f"{nm} the guard compares the start time with the captured start (<=: the same second is missed) and never reads last_changed",
+          "last_changed" not in known and "last_changed" not in missed and "<= (ha_start_ts | float(0))" in missed
           and "not ha_start_known" in missed, f"{known!r} {missed!r}")
     check(f"{nm} the guard fails closed: unknown / unavailable / epoch / future / stale-vs-last_updated capture is not known",
           all(s in known for s in ("'unknown'", "'unavailable'", "cs > 1000000000", "cs <= as_timestamp(now())",
@@ -237,7 +254,15 @@ for kind, k in KINDS.items():
           not any("set_datetime" in yaml.dump(x) for x in pkg["automation"] + list(pkg["script"].values())
                   if x.get("id") != f"{p}_ha_start_capture"))
     check(f"{nm} the missed-run status text is in the package and the status sensor treats MISSED as terminal FAILED",
-          k["text"].count(MISSED_TEXT + "{{") == 2 and "r.startswith('MISSED')" in k["text"])
+          k["text"].count("{{ '" + MISSED_TEXT + "' if ha_start_known else") == 2 and "r.startswith('MISSED')" in k["text"]
+          and k["text"].count("FULL Home Assistant restart") == 1)
+    check(f"{nm} the fire automation's `choose` has no `default:` (a watchdog tick can never fall through to a start call)",
+          all("default" not in a for a in fire["actions"] if "choose" in a))
+    rec_choose = next(a for a in rec["actions"] if "choose" in a)
+    leave = [b for b in rec_choose["choose"] if b["sequence"] == [] and any(
+        c.get("value_template") == "{{ not missed_run and now_ts < end_ts }}" for c in b["conditions"])]
+    check(f"{nm} the recovery's leave-alone branch applies only while the window is open (an expired not-missed start reaches the default)",
+          len(leave) == 1 and "default" in rec_choose)
     check(f"{nm} the transient-refusal list is a whitelist that does not include a GRID INTERLOCK refusal",
           "GRID INTERLOCK" not in k["text"] and "REJECTED - Modbus bus busy" in k["text"])
 
@@ -315,17 +340,17 @@ for kind in KINDS:
     # --- the capture never written / stale / late: fail closed
     x = Run(kind, mutate=drop_capture).restart(ST - 120, ST + 600).until(ST + 7300)
     check(f"{nm} capture never written (automation absent): window open -> not started, MISSED with the reason, disarmed",
-          x.presses() == [] and x.last().startswith(MISSED_TEXT) and "failed closed" in x.last() and not x.is_armed()
+          x.presses() == [] and failed_closed(x.last()) and not x.is_armed()
           and len(x.missed_alerts()) == 1, f"{x.presses()} {x.last()!r}")
     x = Run(kind)
     x.mutate = drop_capture                     # the capture existed at the first boot, is gone at the second: a STALE value
     x.restart(ST - 120, ST + 600).until(ST + 7300)
     check(f"{nm} capture stale (written at the previous boot, not at this one): not started, MISSED, failed closed",
-          x.presses() == [] and x.started() == 0 and x.last().startswith(MISSED_TEXT) and "failed closed" in x.last()
+          x.presses() == [] and x.started() == 0 and failed_closed(x.last())
           and not x.is_armed(), f"{x.presses()} {x.last()!r}")
     x = Run(kind, mutate=late_capture(400)).restart(ST - 120, ST + 600).until(ST + 7300)
     check(f"{nm} capture late (after the recovery's evaluation): the recovery fails closed, nothing started",
-          x.presses() == [] and x.started() == 0 and x.last().startswith(MISSED_TEXT) and not x.is_armed(),
+          x.presses() == [] and x.started() == 0 and failed_closed(x.last()) and not x.is_armed(),
           f"{x.presses()} {x.last()!r}")
     x = Run(kind, mutate=drop_capture).restart(ST - 3000, ST - 1800).until(ST - 1500)
     check(f"{nm} capture unknown but the start is later than the boot (proved by now < start): kept and reported, not touched",
@@ -338,22 +363,120 @@ for kind in KINDS:
     x2.w.set(x2.cap_e, "2099-01-01 00:00:00")
     x2.until(ST + 400)
     check(f"{nm} a future captured start is incredible: the watchdog does not start the lost on-time start",
-          x2.presses() == [] and x2.last().startswith(MISSED_TEXT) and "failed closed" in x2.last(), f"{x2.last()!r}")
+          x2.presses() == [] and failed_closed(x2.last()), f"{x2.last()!r}")
 
     # --- last_changed restored / not restored, either automation first (the watchdog's own edge needs the boot at ST+60)
     for restored in (True, False):
         for order in ("recovery first", "watchdog first"):
             x = Run(kind)
-            if order == "watchdog first":
-                x.d.set_offline(ST + 40, ST + 400)       # the recovery waits for the dongle (<= 3 min): the watchdog edge comes first
+            hold = None
+            if order == "watchdog first":                # the recovery waits (<= 3 min) for the dongle's active sensor: the watchdog edge
+                x.w.at(ST + 60 + 190, lambda x=x: x.w.set(x.e_active, "off"))   # (+180 s) comes first, with the capture already known
+                hold = lambda x_: x_.w.set(x_.e_active, "unavailable")  # noqa: E731
             x.restart(ST - 120 if order == "recovery first" else ST - 30,
-                      ST + 600 if order == "recovery first" else ST + 60, restore_last_changed=restored)
+                      ST + 600 if order == "recovery first" else ST + 60, restore_last_changed=restored, pre_boot=hold)
             x.until(ST + DURATION * 60 + 600)
             label = f"{nm} start in the downtime, last_changed {'restored' if restored else 'not restored'}, {order}"
             check(f"{label}: never started, MISSED recorded once, disarmed",
                   x.presses() == [] and x.started() == 0 and x.last() == MISSED_TEXT and not x.is_armed()
                   and len(x.missed_alerts()) == 1 and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]],
                   f"{x.presses()} {x.last()!r} alerts={len(x.missed_alerts())} runs={x.ha.runs}")
+
+    # --- R9 review fixes ---------------------------------------------------------------------------------------------
+    # a start in the SAME second as the Home Assistant start is a missed run (<=)
+    x = Run(kind, lose=("start",)).restart(ST - 120, ST).until(ST + 400)
+    check(f"{nm} start in the same second as the Home Assistant start: missed (not started, MISSED recorded, disarmed)",
+          x.presses() == [] and x.started() == 0 and x.last() == MISSED_TEXT and not x.is_armed(), f"{x.presses()} {x.last()!r}")
+
+    # a host with no RTC boots with a clock that is BEHIND: nothing is captured until the clock agrees with the dongle's NTP time
+    def behind(x_, off=-1200.0):
+        x_.w.clock_offset = off
+    x = Run(kind, lose=("start",)).restart(ST - 120, ST + 600, pre_boot=behind).until(ST + 1100)
+    stale_cap = x.w.state(x.cap_e)
+    check(f"{nm} clock behind at the boot: nothing captured (the helper keeps the old value), nothing started (the recovery, on the "
+          "wrong clock, still sees the start as future and only reports it)",
+          stale_cap == S.local_str(T0) and x.presses() == [] and x.is_armed(), f"{stale_cap} {x.presses()} {x.last()!r}")
+    x.w.clock_offset = 0.0                               # NTP steps the clock forward
+    x.until(ST + 1500)
+    check(f"{nm} ...then the clock is stepped (inside the capture's 10 minutes): the capture is written with the corrected time, the "
+          "watchdog's flip finds the start missed, and nothing was ever started",
+          x.w.state(x.cap_e) >= S.local_str(ST + 1100) and x.presses() == [] and x.started() == 0
+          and x.last().startswith("MISSED") and not x.is_armed(), f"{x.w.state(x.cap_e)} {x.presses()} {x.last()!r}")
+    # the same, with the watchdog's own edge produced by the step (armed, not yet disarmed: the recovery's wait is long)
+    x = Run(kind, lose=("start",))
+    x.d.set_offline(ST + 590, ST + 2100)                 # the dongle is away too: the capture waits, the recovery times out
+    x.restart(ST - 120, ST + 600, pre_boot=behind)
+    x.until(ST + 2300)
+    x.w.clock_offset = 0.0
+    x.until(ST + 7300)
+    check(f"{nm} clock behind and stepped while the dongle is away: no start by either path, MISSED recorded",
+          x.presses() == [] and x.started() == 0 and x.last().startswith("MISSED") and not x.is_armed(), f"{x.presses()} {x.last()!r}")
+
+    # the dongle's NTP not synced / its clock disagreeing: no capture (fail closed); eventually trustworthy: captured, watchdog rescue works
+    def ntp_off(x_):
+        x_.w.set(S.E_NTP, "off")
+    x = Run(kind, lose=("start",)).restart(ST - 120, ST + 600, pre_boot=ntp_off).until(ST + 1500)
+    check(f"{nm} dongle NTP not synced: the capture waits its 10 minutes then leaves the helper alone; the recovery fails closed",
+          x.w.state(x.cap_e) == S.local_str(T0) and x.presses() == [] and failed_closed(x.last()), f"{x.w.state(x.cap_e)} {x.last()!r}")
+
+    def clock_off(x_):
+        x_.w.ntp_off = True
+        x_.w.set("sensor.ecco_clock_dongle_ntp_time", S.local_str(x_.w.t + 7200))
+    x = Run(kind, lose=("start",)).restart(ST - 120, ST + 600, pre_boot=clock_off).until(ST + 1500)
+    check(f"{nm} dongle clock disagreeing with Home Assistant's by 2 h: no capture, fail closed",
+          x.w.state(x.cap_e) == S.local_str(T0) and x.presses() == [] and failed_closed(x.last()), f"{x.w.state(x.cap_e)} {x.last()!r}")
+    x = Run(kind, lose=("start",)).restart(ST - 3000, ST - 1800, pre_boot=ntp_off)
+    x.w.at(ST - 1800 + 300, lambda: x.w.set(S.E_NTP, "on"))
+    x.until(ST + 400)
+    check(f"{nm} NTP trustworthy after 5 minutes (inside the 10): captured then (not at the boot), and the watchdog rescue of a lost "
+          "on-time start works as before",
+          x.w.state(x.cap_e) == S.local_str(ST - 1800 + 300) and x.started() == 1,
+          f"{x.w.state(x.cap_e)} {x.started()}")
+
+    # DST: a capture made in the fall-back hour parses one hour early (the local string is ambiguous): last_updated disagrees -> unknown
+    x = Run(kind, lose=("start",))
+    x.until(ST - 600)
+    x.w.set(x.cap_e, S.local_str(ST - 600 - 3600))
+    x.until(ST + 400)
+    check(f"{nm} DST: a capture that parses one hour early is unknown, never trusted: the lost on-time start is not started, MISSED",
+          x.presses() == [] and failed_closed(x.last()), f"{x.presses()} {x.last()!r}")
+
+    # a start late in the 20 s - 3 min 20 s window: the start is 180 s after the boot; the recovery evaluates after it (the dongle's
+    # active sensor is unavailable for 190 s): not a missed run, left to the normal triggers
+    def hold_active(x_):
+        x_.w.set(x_.e_active, "unavailable")
+    x = Run(kind, lose=("start",))
+    x.w.at(ST - 180 + 190, lambda: x.w.set(x.e_active, "off"))
+    x.restart(ST - 300, ST - 180, pre_boot=hold_active).until(ST + 100)
+    check(f"{nm} start 180 s after the Home Assistant start, recovery evaluating at about +200 s: not missed (not started, not disarmed)",
+          x.presses() == [] and x.is_armed() and x.missed_alerts() == [] and not x.last().startswith("MISSED"), f"{x.last()!r} {x.is_armed()}")
+    x.until(ST + 500)
+    check(f"{nm} ...and the watchdog (start later than the capture) then starts it", x.started() == 1, f"{x.started()}")
+
+    # a not-missed start whose window has already expired reaches the existing 'window already expired' disarm
+    x = Run(kind, lose=("start", "watchdog"), duration=1)
+    x.w.at(ST - 60 + 190, lambda: x.w.set(x.e_active, "off"))
+    x.restart(ST - 200, ST - 60, pre_boot=hold_active).until(ST + 600)
+    check(f"{nm} 1-minute window, on-time start lost, recovery evaluating after the window: the expired default disarms it (MISSED expired)",
+          x.presses() == [] and x.last().startswith("MISSED - scheduled") and "expired" in x.last() and not x.is_armed(),
+          f"{x.last()!r} {x.is_armed()}")
+
+    # a package reload without a restart (the package is installed as a reload): the capture never ran -> unknown -> fail closed
+    pre = {"dump": "pre_r9_dump_package", "free": "pre_r9_free_package"}[kind]
+    import _r9_scope as _r9s  # noqa: E402
+    old_text = getattr(_r9s, pre)(KINDS[kind]["text"])
+    x = Run(kind, lose=("start",), text=old_text)
+    x.until(ST - 300)
+    x.text = KINDS[kind]["text"]
+    x.ha.stop()
+    x.ha = S.HA(x.w, x._pkg())                          # the reload: automations re-created, NO homeassistant start event
+    for a in x.ha.automations:
+        a.setup()
+        a.disabled_triggers |= x.lose
+    x.until(ST + 400)
+    check(f"{nm} package reload without a restart: the captured start stays unknown and the watchdog does NOT rescue a lost on-time "
+          "start (fail closed; the deploy note requires a full restart)",
+          x.w.state(x.cap_e) in ("unknown", "") and x.presses() == [] and failed_closed(x.last()), f"{x.w.state(x.cap_e)!r} {x.last()!r}")
 
     # --- unchanged: a start that fell while Home Assistant ran (its on-time trigger lost) is started by the watchdog
     x = Run(kind, lose=("start",)).until(ST + 400)
@@ -369,7 +492,7 @@ for kind in KINDS:
     # --- a stale capture on the WATCHDOG path (the capture did not run at this boot; the old value predates the start)
     x = Run(kind, lose=("start",), mutate=drop_capture).restart(ST - 120, ST + 60).until(ST + DURATION * 60 + 600)
     check(f"{nm} stale capture, watchdog path: the stale value is not trusted, nothing is started, MISSED recorded (failed closed)",
-          x.presses() == [] and x.started() == 0 and x.last().startswith(MISSED_TEXT) and not x.is_armed(),
+          x.presses() == [] and x.started() == 0 and failed_closed(x.last()) and not x.is_armed(),
           f"{x.presses()} {x.last()!r}")
 
     # --- only the missed occurrence is disarmed: the disarm and the record sit under the fired_for guard
