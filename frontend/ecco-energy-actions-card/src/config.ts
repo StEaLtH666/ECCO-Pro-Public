@@ -144,6 +144,21 @@ export interface DumpToGridEntities {
   schedule?: DumpScheduleEntities;
 }
 
+/**
+ * Optional read-only plan views (stage 2 of the two-master-card energy-control UI). Used only when `show_plan: true`. Nothing here
+ * is ever written: every id is read, never called. All ids are optional; anything missing is shown as unknown, never guessed.
+ */
+export interface PlanConfig {
+  /** The dongle device slug the six TOU slot entities are named after (the TOU settings card's `entity_prefix`). */
+  entity_prefix?: string;
+  /** input_number - the backup reserve in percent (read only). */
+  reserve?: string;
+  /** Grid-loss lock state: only an explicit "off" counts as unlocked; absent or anything else is treated as locked (fail-safe). */
+  control_lock?: string;
+  /** Overrides for the Intelligence advice entity ids (default: the contract's generic ids). */
+  advice?: Partial<Record<"status" | "charge_target" | "export_event" | "pv_tomorrow" | "fresh" | "paused", string>>;
+}
+
 export interface EccoEnergyActionsCardConfig {
   type: string;
   /** Card/section title. Default "Energy Actions". */
@@ -162,6 +177,12 @@ export interface EccoEnergyActionsCardConfig {
    * between the two.
    */
   layout?: "side-by-side" | "tabbed";
+  /**
+   * Default false. When exactly `true` the card also shows read-only plan views (Tomorrow's Plan and the six-slot TOU timeline).
+   * Absent, false or any other value: the card renders exactly as before. The views display only; they make no service call.
+   */
+  show_plan?: boolean;
+  plan?: PlanConfig;
 }
 
 export const DEFAULT_TITLE = "Energy Actions";
