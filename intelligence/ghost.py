@@ -571,6 +571,7 @@ def run_ghost(period: ActualPeriod, advice: Sequence[AdviceRecord], cfg: SiteCon
         "share_days_ghost_ahead": (len(ahead) / n) if n else None,
         "worst_ghost_day": None if worst is None else {"date": worst["date"], "delta_p": worst["delta_p"]},
         "ghost_below_reserve_slots": g_br, "ghost_below_reserve_days": len(g_br_days),
+        "ghost_below_reserve_dates": sorted(d.isoformat() for d in g_br_days),
         "reserve_pct": reserve_pct, "basis": basis, "stock_rule": STOCK_RULE,
         "delta_realised_p": dl["total"]["realised_p"], "delta_stock_adjusted_p": dl["total"]["adjusted_p"],
         "model_baseline_delta_p": bl["total"]["adjusted_p"], "advice_effect_p": dl["total"]["adjusted_p"] - bl["total"]["adjusted_p"],

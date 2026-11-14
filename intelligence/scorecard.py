@@ -282,6 +282,27 @@ class Scorecard:
                 pass
             return 0
 
+    def advice_records(self, start: datetime | None = None, end: datetime | None = None, kind: str | None = None) -> list[dict]:
+        """Read-only: the logged advice issued in [start, end) (UTC instants; both optional), oldest first, as the dicts of the
+        Ghost's AdviceRecord.from_dict (the same mapping as tools/advice_export.py). Writes nothing."""
+        q, args = "SELECT * FROM advice_log WHERE 1=1", []
+        if start is not None:
+            q, args = q + " AND issued_utc >= ?", args + [_iso(start)]
+        if end is not None:
+            q, args = q + " AND issued_utc < ?", args + [_iso(end)]
+        if kind is not None:
+            q, args = q + " AND kind = ?", args + [kind]
+        out = []
+        for r in self.db.execute(q + " ORDER BY issued_utc, advice_id", args):
+            out.append({"kind": r["kind"], "status": r["status"], "issued_at": r["issued_utc"],
+                        "window_start": r["window_start_utc"], "window_end": r["window_end_utc"],
+                        "target_soc_pct": r["target_soc_pct"], "export_kwh": r["export_kwh"], "export_kw": r["export_kw_avg"],
+                        "effective_reserve_pct": r["effective_reserve_pct"],
+                        "conservative_fallback": bool(r["conservative_fallback"]),
+                        "dump_advisable": True if r["dump_advisable"] is None else bool(r["dump_advisable"]),
+                        "advice_id": f"advice_log:{r['advice_id']}"})
+        return out
+
     # --- score ----------------------------------------------------------------------------------------------
     def resolve(self, history: History, cfg: SiteConfig, now: datetime) -> list[dict]:
         """Score every PENDING forecast whose horizon ended at least SETTLE_HOURS ago."""
