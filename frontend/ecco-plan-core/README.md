@@ -47,8 +47,30 @@ Property tests use a seeded generator, so a failure reproduces.
 - Baseline slots a derived interval does not cover stay exactly as the owner set them (for example a longer native grid-charge
   slot is not shortened to a shorter derived window); that can cost an extra slot and is then reported as infeasible.
 
-## Stage 2 (not part of this change)
+## Stage 2: read-only views in the Energy Actions card (done, offline, unreleased)
 
-Wire read-only views into the existing cards behind a default-off configuration flag: Tomorrow's Plan, the shared-settings
-preview and the override chips, reading the entities the cards already read. No write path changes. Stage 3 (separately
-authorised, with the reserve and grid-loss gates proven) would route plan actions through the existing guarded editors.
+The Energy Actions card (`frontend/ecco-energy-actions-card/src/plan/`) imports this package and shows Tomorrow's Plan and the
+six-slot TOU timeline behind `show_plan: true` (default off; flag-off render proven identical to the pre-plan card). It only
+reads: `adapter.ts` maps the entities the card and the TOU Settings card already read onto `createSettings` /
+`compileTou` / `buildTomorrowPlan`; no write, no service call.
+
+What the adapter fed in, and what it could not:
+
+- Charge Battery = the card's Free Power helpers (schedule start, duration, power); Export to Grid = the Dump to Grid helpers.
+  Armed schedule -> ARMED; an active session -> EXECUTING; the firmware's latched export power / Stop SOC equal -> APPLIED_VERIFIED,
+  different -> MISMATCH. The grid-charge target is read from the single native grid-charge slot. Nothing else is ever verified.
+- No entity exists for the charge buffer, the planning reserve, a charge finish time or an override; those are explicit unknowns
+  (overrides: an empty list). The backup reserve helper has no read-back, so it stays PROPOSED.
+- Tomorrow's Plan comes from the Intelligence advice entities (import = its planned overnight grid charge, export = the export
+  event, solar = PV tomorrow, confidence, why); paused, stale or not-OK advice withholds every figure with the reason.
+- The grid-loss lock is passed fail-safe (only an explicit "off" on a configured entity is unlocked), so with no lock entity an
+  armed export is not placed in the table.
+- Live data on the Export-as-slot assumption: the card's Dump to Grid is a firmware session with its own snapshot, restore and
+  latched export power and Stop SOC, and the TOU editor treats it as owning the inverter; it is not a table slot. The data
+  therefore contradicts "export occupies a slot", so the timeline shows the derived slot as a conservative cost estimate only.
+
+What stage 3 (overrides and writes, separately authorised) needs: a plan helper (the durable `revision`, per-field state and the
+active-override list) that does not exist yet; override start/cancel routed through the existing guarded paths with the expiry,
+caps and power-cut reserve supplied as an `OverridePolicy` (owner choices); a grid-loss lock entity and read-back entities for
+the reserve and the charge buffer; the owner decision on whether a plan may ever write an export slot; and a deliberate
+post-export (PEX) chain entry for the card's frozen files.

@@ -183,6 +183,32 @@ layout: tabbed        # optional - side-by-side (default) | tabbed
     modes so a stale "tap again" can never apply to the other one. The
     firmware's own mutual-exclusion preconditions apply unchanged.
 
+### Plan views (read only, default off)
+
+`show_plan: true` adds a **Plan** section at the bottom of the card: a **Tomorrow's Plan** strip (expected import, export,
+solar, charge finish, reserve, confidence, each with a Proposed / Armed / Executing / Applied and verified / Mismatch / Unknown
+chip, plus a **Why?** detail and the planned settings), a **six-slot TOU timeline** (intended versus what the inverter reports,
+mismatches and plans that do not fit six slots in plain words) and an honest SHADOW / advice-only line. Absent, `false` or any
+value other than `true`: the card renders exactly as before (pinned by `test/planView.test.ts` against a golden captured
+from the pre-plan source).
+
+```yaml
+show_plan: true
+plan:                                   # all optional; anything missing is shown as unknown, never guessed
+  entity_prefix: ecco_clock_dongle      # the six TOU slot entities (same prefix as the TOU Settings card)
+  reserve: input_number.ecco_minimum_reserve_soc
+  control_lock: input_boolean.example   # only an explicit "off" counts as unlocked; absent = export is not placed (fail-safe)
+  advice:                               # defaults: the Intelligence contract's generic sensor.ecco_intel_* ids
+    status: sensor.ecco_intel_status
+```
+
+The views **display only**: no button, no handler, no service call, no entity write (a test asserts `hass.callService` is
+never called). Quick overrides appear as a read-only "none active" line. Figures come from the Intelligence advice entities
+(import is Intelligence's planned overnight grid charge); a paused, stale or not-OK advice withholds every figure with its
+reason. A setting reads "Applied and verified" only when a read-back equals it. The logic is the pure `frontend/ecco-plan-core`
+package, bundled in (no runtime dependency): `src/plan/adapter.ts` (entities to plan inputs), `present.ts` (wording and
+chips), `view.ts` (Lit templates).
+
 ## The safety model
 
 Two-step, deliberately never collapsible into one click:
@@ -394,7 +420,7 @@ entity-id-free config schema (`src/config.ts`), bundled by esbuild into one
 dependency-free `dist/ecco-energy-actions-card.js` - the standard HACS
 "plugin" shape, no build step required on the end user's side.
 
-Pure, DOM-free logic lives in four small modules, all unit tested without a
+Pure, DOM-free logic lives in small modules (plus the read-only plan views under `src/plan/`), all unit tested without a
 DOM (see `test/`):
 
 - `src/freePowerState.ts` - the seven-state hardware classifier.
