@@ -294,3 +294,44 @@ export function* sweepCases(carriers, pick) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 7: the LONG kinds. The round-6 sweep put twelve SHORT kinds (the longest is 74 characters) at every offset, so a reader that scans overlapping chunks passed it whenever its overlap was longer
+// than the longest kind: mutants N31, N32 and N33 read a string in chunks of 3000, 1024 and 4000 characters that overlap by 200, 128 and 400, and a secret of up to 74 characters always lay whole inside one
+// of them. The class is "a secret that is only recognised WHOLE, and is longer than any overlap a chunked reader would leave". The kinds below are such secrets: only one rule recognises each, and only when it
+// sees the whole text, because every cut of it (a head, a tail, a piece) holds nothing any other rule takes for a secret. They are swept at a stride below their length, in carriers of 4500, 12000 and 20000
+// characters, so every chunk edge and every step size of every window is crossed by some start. Every value is assembled from fragments, as above.
+// ---------------------------------------------------------------------------------------------------------------------------
+export const LONG_PASSWORD_LENGTHS = Object.freeze([150, 300, 600, 1200, 3000]);
+export const LONG_CONNECTION_LENGTHS = Object.freeze([400, 3000]);
+export const LONG_CARRIERS = Object.freeze([4500, 12000, 20000]);
+
+/** `n` characters of a password that no rule reads as a secret on its own: letters, a digit and an exclamation mark (a run of letters and digits is never longer than three), ending in the exclamation mark (so that, in a URL, what stands before the at sign is not an e-mail local part). */
+export const longPassword = (n) => `${'Ab1!'.repeat(Math.ceil(n / 4)).slice(0, n - 1)}!`;
+
+export const LONG_KINDS = Object.freeze([
+  ...LONG_PASSWORD_LENGTHS.map((n) => ({ label: `url with a ${n}-character password`, rule: 'url credentials', value: j('https', ':', '//', 'dana', ':', longPassword(n), '@', 'host.example', '.test/x'), probe: longPassword(32).slice(0, 28) })),
+  ...LONG_CONNECTION_LENGTHS.map((n) => ({ label: `connection pairs with a ${n}-character value`, rule: 'connection pairs', value: j('Server', '=', longPassword(n), ';'), probe: longPassword(32).slice(0, 28) })),
+]);
+
+/** The stride of the long sweep for a kind: a twelfth of its length, never less than 7, so that the starts hit every window a chunked reader could leave a secret of that length straddling (the width of such a window is the secret's length less the reader's overlap). */
+export const longStride = (len) => Math.max(7, Math.floor(len / 12));
+
+/** Every start of a long kind in a carrier: every `longStride` characters from 0, and the last four that fit. */
+export function longStarts(len, total) {
+  const maxStart = total - len;
+  const out = new Set();
+  for (let s = 0; s <= maxStart; s += longStride(len)) out.add(s);
+  for (let s = maxStart - 3; s <= maxStart; s += 1) out.add(s);
+  return [...out].filter((s) => s >= 0 && s <= maxStart).sort((a, b) => a - b);
+}
+
+/** Every swept case of the long kinds, one at a time: { kind, label, text, probe, value, start, total, id }. */
+export function* longCases(carriers = LONG_CARRIERS, pick = longStarts) {
+  for (let ki = 0; ki < LONG_KINDS.length; ki += 1) {
+    const k = LONG_KINDS[ki];
+    for (const total of carriers) {
+      for (const start of pick(k.value.length, total)) yield { id: `l${ki}_${total}_${start}`, kind: k.label, label: `${k.label}, in ${total} characters, at offset ${start}`, text: carrier(k.value, start, total), probe: k.probe, value: k.value, start, total };
+    }
+  }
+}

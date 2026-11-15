@@ -1962,3 +1962,98 @@ test('AC10 [r6] a value too long to be checked is withheld in the row, in the op
   const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
   assert.match(raw, /"huge": "\[withheld\]"/);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 7 ([r7]). KEY FOLD on the DOM paths (reviewer mutant N13: the catalogue fragment was matched on the key as written, so site_<zero-width space>owner, a Cyrillic o and a fullwidth s showed Alice
+// Example): a value under any form of a key that holds a fragment is in no row, no open attribute list, no raw view, no search result, no copy and no download. And the scan budget on the DOM: an entity with
+// more text than the budget pays for says so, and shows nothing it did not read.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC10 [r7] KEY FOLD on every DOM path: under every form of the key site_owner (zero-width, bidi, Cyrillic, Greek, fullwidth, upper case, hyphen, space, dot, camel case) the value is in no row, no raw view, no search result, no copy and no download', async () => {
+  const forms = ['site_owner', 'SITE_OWNER', 'site_​owner', 'site‍_owner', 'site_‮owner', 'site_o­wner', 'site_оwner', 'sitе_owner', 'ѕite_owner', 'sιte_owner', 'site_Οwner',
+    'ｓite_owner', 'ｓｉｔｅ_ｏｗｎｅｒ', 'site-owner', 'site owner', 'siteOwner', 'site.owner', 'site​Owner', 'my_site_owner_name'];
+  const marker = (i) => `zq7domfold${String(i).padStart(2, '0')}`;
+  const states = miniStates((s) => { forms.forEach((k, i) => { s['sensor.ecco_intel_new_diagnostic'].attributes[k] = marker(i); }); });
+  const clip = installClipboardAndDownload();
+  try {
+    const el = mount({ states });
+    geek(el);
+    openEverything(el);
+    const text = allText(root(el));
+    const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+    forms.forEach((_, i) => {
+      assert.ok(!text.includes(marker(i)), `form ${i}: the DOM carries the value`);
+      assert.ok(!raw.includes(marker(i)), `form ${i}: the raw view carries the value`);
+      typeSearch(el, marker(i));
+      assert.equal(rows(el).length, 0, `form ${i}: a search finds a row`);
+    });
+    typeSearch(el, '');
+    assert.ok((raw.match(/\[withheld\]/g) || []).length >= forms.length, 'the raw view says withheld for every one of them');
+    q(el, '[data-inspector-copy]').click();
+    await tick();
+    q(el, '[data-inspector-export="json"]').click();
+    q(el, '[data-inspector-export="csv"]').click();
+    rowFor(el, 'sensor.ecco_intel_new_diagnostic').querySelector('[data-inspector-copy="row"]').click();
+    await tick();
+    const outputs = [...clip.clips, ...(await Promise.all(clip.blobs.map((b) => b.text())))];
+    assert.equal(outputs.length, 4);
+    for (const bytes of outputs) {
+      assert.ok(bytes.length > 100);
+      forms.forEach((_, i) => assert.ok(!bytes.includes(marker(i)), `form ${i}: an output carries the value`));
+    }
+    // the control: a key that holds no fragment in any form shows its value, so the withholding above is the fragment and nothing else
+    el.disconnectedCallback();
+    const states2 = miniStates((s) => { s['sensor.ecco_intel_new_diagnostic'].attributes['site_own'] = 'zq7domfold-shown'; s['sensor.ecco_intel_new_diagnostic'].attributes['sit_owner'] = 'zq7domfold-shown-too'; });
+    const el2 = mount({ states: states2 });
+    geek(el2);
+    openEverything(el2);
+    const raw2 = qa(el2, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+    assert.ok(raw2.includes('zq7domfold-shown') && raw2.includes('zq7domfold-shown-too'), 'a key without the fragment is shown');
+    el2.disconnectedCallback();
+  } finally {
+    clip.restore();
+  }
+});
+
+test('AC12 [r7] an entity with more text than the scan budget pays for says so in the DOM (the row, the open attribute list and the raw view), shows nothing it did not read, and the marker says why', () => {
+  const big = (m) => `${m} ${'The planner checked the overnight window and the tariff boundary before it chose. '.repeat(260)}`.slice(0, 19990);
+  const states = miniStates((s) => {
+    const a = s['sensor.ecco_intel_new_diagnostic'].attributes;
+    ['zq7readA', 'zq7readB', 'zq7readC', 'zq7readD', 'zq7unreadE', 'zq7unreadF', 'zq7unreadG'].forEach((m, i) => { a[`long_${i}`] = big(m); });
+  });
+  const el = mount({ states });
+  geek(el);
+  openEverything(el);
+  const text = allText(root(el));
+  const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+  assert.ok(text.includes('values not read'), 'the attribute list says that values were not read');
+  assert.ok(text.includes(`${LIMITS.entityChars} characters`), 'and how much text the budget pays for');
+  for (const m of ['zq7unreadE', 'zq7unreadF', 'zq7unreadG']) {
+    assert.ok(!text.includes(m) && !raw.includes(m), `${m}: text that was not read is not shown`);
+    typeSearch(el, m);
+    assert.equal(rows(el).length, 0, `${m}: and is not found`);
+  }
+  typeSearch(el, '');
+  for (const m of ['zq7readA', 'zq7readD']) assert.ok(raw.includes(m), `${m}: text that was read is shown, cut at the display cap`);
+  const marks = qa(el, '[data-withheld]');
+  assert.ok(marks.length >= 2);
+  for (const m of marks) assert.match(m.getAttribute('title'), /too long to be checked/);
+  el.disconnectedCallback();
+});
+
+test('AC12 [r7] a hostile entity (200 attributes of 19990 characters of near-miss text) does not freeze the card: mounting it, switching to Geek Mode and opening everything takes well under two seconds, and the alert strip is built (it took 38 seconds of the main thread in round 6)', () => {
+  const text = (' .local @ x ' + '0123.'.repeat(4000)).slice(0, 19990);
+  const states = miniStates((s) => {
+    const a = {};
+    for (let i = 0; i < 200; i += 1) a[`k${i}`] = text;
+    s['sensor.ecco_intel_hostile_freeze'] = mkState('sensor.ecco_intel_hostile_freeze', '1', a);
+  });
+  const t0 = performance.now();
+  const el = mount({ states });
+  geek(el);
+  openEverything(el);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2500, `${ms.toFixed(0)} ms`);
+  assert.ok(q(el, '[data-ecco-alert-strip]'), 'the alert strip is there');
+  assert.ok(rowFor(el, 'sensor.ecco_intel_hostile_freeze'), 'and so is the row');
+  el.disconnectedCallback();
+});

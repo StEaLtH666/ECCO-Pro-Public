@@ -963,3 +963,34 @@ test('AC6 [r1] with the status entity unavailable, unknown or missing the four n
     }
   }
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 7 ([r7]): the scan budget (LIMITS.entityChars) against the REAL data. The budget exists to bound a hostile or odd entity; it must never touch an honest one. The largest real Intelligence entity
+// (from the live shape listing: the encoded size of every attribute, and the length of every name) is a small part of it, and every synthetic fixture is read whole.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC12 [r7] the scan budget has room: the largest real Intelligence entity (names and encoded values, from the live shape listing) is at most a twentieth of LIMITS.entityChars, and so is the whole listing of sixteen entities', () => {
+  const shapePath = realCataloguePath.replace('intelligence.catalogue.json', 'live-shape.intelligence.json');
+  const shape = JSON.parse(readFileSync(shapePath, 'utf8'));
+  const sizes = shape.ecco_intel.map((e) => [e.entity_id, (e.state_len || 0) + Object.entries(e.attributes || {}).reduce((n, [k, v]) => n + k.length + (v.bytes || 0), 0)]);
+  assert.ok(sizes.length >= 10, `${sizes.length} real entities`);
+  const [biggestId, biggest] = sizes.sort((a, b) => b[1] - a[1])[0];
+  assert.ok(biggest * 20 <= mod.LIMITS.entityChars, `${biggestId} is ${biggest} characters of names and values; the budget is ${mod.LIMITS.entityChars}`);
+  assert.ok(sizes.reduce((n, [, s]) => n + s, 0) * 5 <= mod.LIMITS.entityChars * 3, 'the whole listing is within a few entities of budget, and each entity has a budget of its own');
+});
+
+test('AC12 [r7] every Intelligence fixture is read whole by the budget: no row has an attribute row that says values were not read, and no value is withheld that the redaction rules alone would not withhold (the same snapshot with the budget made unreachable gives the same withheld counts)', () => {
+  const cat = validateCatalogue(realCatalogue()).catalogue;
+  for (const name of intelFixtureNames()) {
+    const f = intelStates(name);
+    const snap = buildSnapshot(f.states, cat, f.now);
+    for (const r of snap.rows) assert.equal(r.attributes.some((a) => a.name.includes('values not read')), false, `${name}: ${r.entity_id}`);
+    assert.ok(snap.rows.length >= 16, `${name}: ${snap.rows.length} rows`);
+    // each entity redacted with a budget of its own, each one with a budget a hundred times the size: the withheld counts are the same
+    for (const r of snap.rows) {
+      const st = f.states[r.entity_id];
+      if (!st) continue;
+      const wide = mod.redactAttributes(st.attributes || {}, { extraKeyPatterns: cat.redaction.extra_key_patterns, scan: { left: 100 * mod.LIMITS.entityChars } });
+      assert.deepEqual(r.redacted, wide, `${name}: ${r.entity_id}`);
+    }
+  }
+});

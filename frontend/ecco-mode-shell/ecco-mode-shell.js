@@ -63,6 +63,7 @@ export const LIMITS = Object.freeze({
   value: 300, // characters of one value shown in a row
   stringCap: 4000, // characters of one string SHOWN: the whole text is read first, then cut here, so no part of a secret that crosses the cut can be left in view
   scanBound: 20000, // the most characters of one string, or of one key name, that is read at all: a longer one is withheld whole, never read in part
+  entityChars: 100000, // review round 7: the most characters read for secrets across ALL the strings and key names of one entity (its state and every attribute): what follows is withheld, not read. 25 times the largest real Intelligence entity (3927)
   dictKeys: 200, // keys of one dict kept
   listItems: 200, // items of one list kept
   attrsPerRow: 200, // attribute rows listed for one entity
@@ -246,30 +247,36 @@ function isSecretKey(key, extra) {
   if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && PASS_WORDS.has(tokens[tokens.length - 1])) return true;
-  return keyHasFragment(fold(String(key)), extra);
+  // review round 7: a catalogue fragment is looked for in the key as it is written (folded and lower-cased), and also in the key's words joined by an underscore, so site-owner, "site owner" and siteOwner are found as site_owner
+  return keyHasFragment(fold(String(key)), extra) || keyHasFragment(tokens.join('_'), extra);
 }
 
 // VALUE rules: [reason, required substring or null, pattern]. The gates keep the common case (short plain strings) cheap.
 const RULES = [
-  ['jwt', 'eyJ', /\beyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]*/],
-  ['key block', '-----', /-----BEGIN [A-Z0-9 ]+-----/],
-  ['url credentials', '@', /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*@/i],
+  ['jwt', 'eyJ', /\beyJ[\w-]{4,512}\.[\w-]{4,4096}\.[\w-]*/],
+  ['key block', '-----', /-----BEGIN [A-Z0-9 ]{1,64}-----/],
+  // review round 7: the scheme is not read (one character of it, just before the colon, is enough), so a long run of scheme-like text costs one step per start and the user-info that follows (any length) is read once
+  ['url credentials', '@', /[a-z0-9+.-]:\/\/[^\s/?#@]*@/i],
   ['connection string', '://', /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?|mqtts?|influxdb|mssql|sqlserver|jdbc|ftps?|sftp|ssh|smb|ldaps?|couchdb)(?::[a-z0-9]+)?:\/\//i],
-  ['url token', '=', /[?&#;][\w.%-]*(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\w.%-]*=[^&\s]{3,}/i],
+  ['url token', '=', /[?&#;][\w.%-]{0,64}(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\w.%-]{0,64}=[^&\s]{3,}/i],
   ['credential pair', null, /\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b["']?\s*[:=]\s*["']?[^\s,;"']{3,}/i],
-  ['connection pairs', ';', /\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*;/i],
+  // review round 7: two forms. A value of up to 256 characters, after any boundary; or a value of any length, but then the key must stand at the start of the text or after a semicolon or a space, so no start can lie inside the value of another and every character is read once
+  ['connection pairs', ';', /\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]{1,256}\s*;|(?:^|[;\s])(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*;/i],
   // a password written as a pair under a short name: a quoted "pass" or "pw" key, or pass=value and pw=value (not plain prose such as "pass: true"); the same pattern as the Python scanner's PASS_PAIR
-  ['pass pair', null, /["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:[a-z0-9]+[_-])*(?:pass|pw)=["']?[^\s,;&"']{3,}/i],
+  // review round 7: the unquoted form needs no prefix of segments: a prefix such as wifi_ ends at a separator, so the key word is always preceded by a character that is not a letter or digit, and that alone is the test (the same verdicts, read once)
+  ['pass pair', null, /["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:pass|pw)=["']?[^\s,;&"']{3,}/i],
   // the text a phone reads from a Wi-Fi QR code: WIFI:S:<name>;T:<type>;P:<password>;;
   ['wifi credentials', ':', /\bWIFI:[A-Z]:/i],
   ['bearer', null, /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/i],
   ['known token', null, /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk_(?:live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,})/],
-  ['email address', '@', /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/],
+  // review round 7: the rule starts at the at sign (one character of the local part before it is enough), so a long run of local-part characters is not walked once per start
+  ['email address', '@', /(?<=[A-Za-z0-9._%+-])@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/],
   ['IPv4 address', '.', /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/],
   ['IPv6 address', ':', /(?:^|[^0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])|(?:^|[^0-9a-zA-Z:])(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-zA-Z:])/],
   ['MAC address', null, /\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/],
   // the dotted form (three groups of four) that network equipment writes; at least one letter, so a version such as 2026.1114.0900 is not taken for one
-  ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]*[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i],
+  // review round 7: the letter is looked for in the fourteen characters of the address only (a letter further on, as in 2026.1114.0900.beef, is not part of it), so the look-ahead is bounded and not read to the end of the text from every start
+  ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]{0,13}[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i],
   // the six bytes with a space between them ("aa bb cc dd ee ff"), as some tools and hex dumps print one (review round 4); at least one letter, so six two-digit numbers
   // are not taken for one. The same pattern as the Python scanner's MAC_SPACED. An all-digit address written this way is indistinguishable from six numbers and stays shown.
   ['MAC address (spaced)', ' ', /(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])/i],
@@ -277,9 +284,11 @@ const RULES = [
   ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
   ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],
   // a webhook: the id in the path IS the credential (the Home Assistant webhook path and the chat services path); the same pattern as the Python scanner's WEBHOOK_PATH
-  ['webhook path', '/', /\/api\/webhook\/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]+\/services\/[A-Za-z0-9/_-]{12,}/i],
-  ['internal host name', '://', /\b[a-z][a-z0-9+.-]*:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
-  ['private host name', '.', /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i],
+  ['webhook path', '/', /\/api\/webhook\/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]{1,253}\/services\/[A-Za-z0-9/_-]{12,}/i],
+  // review round 7: the scheme is not read here either (see url credentials)
+  ['internal host name', '://', /[a-z0-9+.-]:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
+  // review round 7: the rule starts at the dot before the suffix (one host-name character before it is enough), so a long dotted text is not walked once per start
+  ['private host name', '.', /(?<=[a-z0-9-])\.(?:local|lan|internal|home\.arpa|localdomain)\b/i],
 ];
 // Review round 6: a PRE-TEST is a cheap, linear test that every match of a rule must pass (a necessary condition, so the verdict is the same). A text is now read whole up to LIMITS.scanBound, and
 // three of the rules above read ahead from every start position, so a long text that only LOOKS like the start of one of them (a dotted run of letters, a long run of ab- groups) was walked once per start:
@@ -290,6 +299,8 @@ const RULE_PRETESTS = {
   'private host name': /\.(?:local|lan|internal|home\.arpa|localdomain)\b/i,
 };
 const PRETEST = RULES.map(([reason]) => RULE_PRETESTS[reason]);
+/** Test hook (a table, not state): the value rules as the scan holds them, so a test can run each pattern alone, with no gate and no pre-test, on texts built to make it walk. */
+export const SCAN_RULES = Object.freeze(RULES.map(([reason, gate, pattern], i) => Object.freeze({ reason, gate, pattern, pretest: PRETEST[i] === undefined ? null : PRETEST[i] })));
 const RE_HEX = /(?:^|[^0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/;
 const RE_B64 = /[A-Za-z0-9+/_-]{32,}={0,2}/g;
 const RE_GIT = /^[0-9a-f]{40}$/i;
@@ -316,26 +327,55 @@ function valueReason(raw, digestOk, digestKey = false) {
   return null;
 }
 
-function redactString(s, key) {
-  const k = key === null ? '' : keyTokens(key).join('');
-  const digestKey = DIGEST_KEYS.has(k);
+/**
+ * Review round 7: a SCAN BUDGET is the most characters the card reads, for secrets, across everything of one entity (its state, every attribute value and every key name). Reading a string
+ * costs its length, reading a key name its length (at most LIMITS.scanBound), and what follows the last character the budget pays for is withheld, not read. A budget is a plain object { left }.
+ * It bounds the whole of an entity's work whatever its shape (200 attributes of 19990 characters, a list of 200 items under a 20000-character key, a thousand short strings), which no per-string
+ * limit does; the real Intelligence data is a twenty-fifth of it at most (the largest real entity is 3927 characters).
+ */
+const newScan = () => ({ left: LIMITS.entityChars });
+
+function redactString(s, key, scan, digest) {
+  const digestKey = digest === undefined ? DIGEST_KEYS.has(key === null ? '' : keyTokens(key).join('')) : digest;
   const digestOk = digestKey && RE_GIT.test(s);
   // review round 6: the WHOLE text is read first (up to a hard bound; a longer one is not read in part, it is withheld), and only then cut at the display cap,
   // so no part of a secret can be left before the cut and nothing past the cut can hide one
   if (s.length > LIMITS.scanBound) return WITHHELD;
   const t = s;
+  if (scan !== undefined) {
+    scan.left -= t.length;
+    if (scan.left < 0) return WITHHELD;
+  }
   if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;
   const cut = t.length > LIMITS.stringCap ? t.length - LIMITS.stringCap : 0;
   return cut ? `${cleanText(t.slice(0, LIMITS.stringCap), LIMITS.stringCap)}\u2026 [truncated ${cut} more characters]` : cleanText(t, LIMITS.stringCap);
 }
 
+/** What the card works out about one key name, once per call: whether it names a secret or private value, and whether it is a revision key. A key is read once however many values sit under it (a list of 200 items under one key). */
+function keyInfo(key, ctx) {
+  let info = ctx.keys.get(key);
+  if (info === undefined) {
+    ctx.scan.left -= Math.min(String(key).length, LIMITS.scanBound);
+    if (ctx.scan.left < 0) return KEY_UNREAD; // not remembered: a budget that is filled again (the export's next item) reads this key then
+    const secret = isSecretKey(key, ctx.extra);
+    info = { secret, digest: !secret && DIGEST_KEYS.has(keyTokens(key).join('')) };
+    ctx.keys.set(key, info);
+  }
+  return info;
+}
+const KEY_UNREAD = Object.freeze({ secret: true, digest: false });
+
 function redactNode(v, key, ctx, depth) {
   ctx.budget.n -= 1;
   if (ctx.budget.n < 0) return '[more values omitted]';
   if (v === null || v === undefined) return null;
-  if (key !== null && isSecretKey(key, ctx.extra)) return WITHHELD;
+  let info = null;
+  if (key !== null) {
+    info = keyInfo(key, ctx);
+    if (info.secret) return WITHHELD;
+  }
   const t = typeof v;
-  if (t === 'string') return redactString(v, key);
+  if (t === 'string') return redactString(v, key, ctx.scan, info === null ? false : info.digest);
   if (t === 'number') return Number.isFinite(v) ? v : String(v);
   if (t === 'boolean') return v;
   if (t === 'bigint') return String(v);
@@ -344,7 +384,10 @@ function redactNode(v, key, ctx, depth) {
   if (Array.isArray(v)) {
     const out = [];
     const n = Math.min(v.length, LIMITS.listItems);
-    for (let i = 0; i < n; i += 1) out.push(redactNode(v[i], key, ctx, depth + 1));
+    for (let i = 0; i < n; i += 1) {
+      if (ctx.eachItem && depth === 0) ctx.scan.left = LIMITS.entityChars;
+      out.push(redactNode(v[i], key, ctx, depth + 1));
+    }
     if (v.length > n) out.push(`\u2026 ${v.length - n} more items`);
     return out;
   }
@@ -358,11 +401,15 @@ function redactNode(v, key, ctx, depth) {
     }
     i += 1;
     let shown;
-    if (k === '__proto__') shown = '[__proto__]';
+    if (ctx.scan.left <= 0) {
+      ctx.keyCount += 1;
+      shown = `${WITHHELD_KEY} ${ctx.keyCount}]`;
+    } else if (k === '__proto__') shown = '[__proto__]';
     else if (valueReason(k.length > 200 ? k.slice(0, 200) : k, false) !== null) {
       ctx.keyCount += 1;
       shown = `${WITHHELD_KEY} ${ctx.keyCount}]`;
     } else shown = cleanText(k, 120);
+    ctx.scan.left -= Math.min(k.length, 200);
     out[shown] = redactNode(v[k], k, ctx, depth + 1);
   }
   return out;
@@ -371,6 +418,9 @@ function redactNode(v, key, ctx, depth) {
 const newCtx = (opts) => ({
   extra: opts && Array.isArray(opts.extraKeyPatterns) ? compileExtra(opts.extraKeyPatterns) : [],
   budget: { n: LIMITS.nodes },
+  scan: opts && isObj(opts.scan) && isNum(opts.scan.left) ? opts.scan : newScan(),
+  eachItem: Boolean(opts && opts.eachItem), // the items of a top-level list are separate entities, each with a scan budget of its own (the export)
+  keys: new Map(),
   keyCount: 0,
 });
 
@@ -791,7 +841,7 @@ function partsFor(source, state, cat) {
   if (hit && hit.cat === cat && hit.ref === ref) return hit;
   STATS.partsBuilt += 1;
   const attrsRaw = isObj(state.attributes) ? state.attributes : {};
-  const opts = { extraKeyPatterns: cat.extraPatterns };
+  const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan() }; // one scan budget for the whole entity: its attributes, its state, its unit and its name
   const red = redactAttributes(attrsRaw, opts);
   const stateStr = state.state === null || state.state === undefined ? '' : String(state.state);
   const stateRed = redactValue(stateStr, opts);
@@ -803,6 +853,8 @@ function partsFor(source, state, cat) {
     rows = rows.slice(0, LIMITS.attrsPerRow);
     rows.push(attrRow('\u2026', `\u2026 ${more} more attributes`, null, 0, null, true, 'see the raw view'));
   }
+  // review round 7: an entity with more text than the scan budget pays for says so: what was not read is withheld, never shown unread
+  if (opts.scan.left < 0) rows.push(attrRow('\u2026', '\u2026 values not read', null, 0, null, true, `this entity has more than ${LIMITS.entityChars} characters of text; what is past that is withheld, not read`));
   const unitRaw = isStr(attrsRaw.unit_of_measurement) ? redactValue(attrsRaw.unit_of_measurement, opts) : '';
   const friendly = isStr(attrsRaw.friendly_name) ? redactValue(attrsRaw.friendly_name, { ...opts, key: 'note' }) : '';
   const bits = [];
@@ -1096,7 +1148,7 @@ const csvCell = (v) => {
 export function exportRows(rows, format = 'json', meta = {}) {
   if (format !== 'json' && format !== 'csv') throw new Error('unsupported export format');
   const m = isObj(meta) ? meta : {};
-  const items = redactValue((Array.isArray(rows) ? rows : []).map(exportRow));
+  const items = redactValue((Array.isArray(rows) ? rows : []).map(exportRow), { eachItem: true });
   if (format === 'json') {
     const doc = { schema: EXPORT_SCHEMA, view_id: isStr(m.viewId) ? cleanText(m.viewId, 80) : '', generated_at: isNum(m.nowMs) ? new Date(m.nowMs).toISOString() : null,
       count: items.length, note: 'Values that look secret or private are replaced by the word withheld. Nothing here can change ECCO.', rows: items };

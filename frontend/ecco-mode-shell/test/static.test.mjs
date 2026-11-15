@@ -1042,3 +1042,191 @@ test('catalogue key patterns [r6]: no regular expression is built from data (the
   assert.equal((fn.match(/\.slice\(/g) || []).length, 1, 'redactString slices once, for the display, after the read');
   assert.ok(fn.indexOf('.slice(') > order[1], 'and that slice is after the read');
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 7 ([r7]). Three static nets, each closing a class and not an instance.
+//  (1) THE REDACTION PATH CUTS NOTHING. Reviewer mutants N31, N32 and N33 added a chunked read INSIDE valueReason, where the round-6 pin (which froze the one line of redactString) did not look. The class is "a
+//      function on the redaction path reads part of a string": so every function on it is read here, and the only calls that cut or split text, and the only loop that steps by more than one, are the
+//      documented ones, by function and by count.
+//  (2) EVERY QUANTIFIER OF EVERY RULE IS ACCOUNTED FOR. A rule is linear when no unbounded quantifier can be walked again from many starts; the number of unbounded quantifiers of each rule is pinned, so
+//      a bound taken off (or a rule written back as it was in round 6) changes a count and fails here as well as in perf.test.mjs.
+//  (3) NO ANIMATION AND NO DYNAMIC STYLESHEET API. Reviewer mutant N21 hid the alert strip in Geek Mode with the Web Animations API (`strip.animate(...)`, fill forwards); the static rules refused every other way
+//      of hiding it but not this one, so only the headless browser check failed it. The Web Animations API and every dynamic stylesheet API are now refused, with planted forms as negative controls.
+// ---------------------------------------------------------------------------------------------------------------------------
+const topLevel = (name) => {
+  const m = new RegExp(`^(?:export )?(?:function ${name}\\(|const ${name} = )`, 'm').exec(code);
+  assert.ok(m, `the declaration of ${name} is found`);
+  const rest = code.slice(m.index + 1);
+  const next = rest.search(/\n(?:export |function |const |let |class )/);
+  return code.slice(m.index, next < 0 ? undefined : m.index + 1 + next);
+};
+const REDACTION_PATH = ['cleanText', 'fold', 'keyTokens', 'compileExtra', 'keyHasFragment', 'isSecretKey', 'valueReason', 'newScan', 'redactString', 'keyInfo', 'redactNode', 'newCtx', 'redactValue', 'redactAttributes'];
+const CUTTERS = /\.(slice|substring|substr|split|splice|matchAll|subarray|at)\(/g;
+// what each function may cut, and why: the display cut (cleanText, redactString: after the read), the tokeniser (the whole key, in words), the fragment list's length, the one documented window of a key (the fragment
+// search: overlapping by one less than the longest fragment) and the first 200 characters of a key NAME (the name is shown cut at 120)
+const ALLOWED_CUTS = { cleanText: { slice: 1 }, keyTokens: { split: 1 }, compileExtra: { slice: 1 }, keyHasFragment: { slice: 1 }, redactString: { slice: 1 }, redactNode: { slice: 1 } };
+const cutsIn = (text) => {
+  const out = {};
+  for (const m of text.matchAll(CUTTERS)) out[m[1]] = (out[m[1]] || 0) + 1;
+  return out;
+};
+
+test('redaction path [r7]: every function on it is read; the only calls that cut or split text are the documented ones (the display cut after the read, the key tokeniser, the fragment count, the one overlapping key window, the 200-character key-name scan); none is in valueReason (reviewer mutants N30 to N33)', () => {
+  for (const name of REDACTION_PATH) assert.deepEqual(cutsIn(topLevel(name)), ALLOWED_CUTS[name] || {}, `${name}: the calls that cut text`);
+  const vr = topLevel('valueReason');
+  assert.equal((vr.match(/\.match\(/g) || []).length, 1, 'valueReason has one match, and it is of the whole text');
+  assert.match(vr, /for \(const t of s\.match\(RE_B64\) \|\| \[\]\)/);
+  assert.doesNotMatch(vr, /(?<!const\s)\braw\s*=(?!=)/, 'the text that is read is never reassigned');
+  assert.doesNotMatch(vr, /(?<!const\s)\bs\s*=(?!=)/);
+  // no loop on the path steps by more than one, except the key window; none carries an index into a string
+  for (const name of REDACTION_PATH) {
+    const steps = [...topLevel(name).matchAll(/for\s*\([^)]*;\s*[A-Za-z_]+\s*\+=(?!\s*1\s*\))[^)]*\)/g)].map((m) => m[0].replace(/\s+/g, ' '));
+    assert.deepEqual(steps, name === 'keyHasFragment' ? ['for (let i = 0; i < lower.length; i += step)'] : [], `${name}: loops that step by more than one`);
+  }
+  for (const re of [/\blastIndex\b/, /\.exec\(/, /\.sticky\b/, /\bsetTimeout\b/, /\bsubarray\b/]) for (const name of REDACTION_PATH) assert.doesNotMatch(topLevel(name), re, `${name}: ${re}`);
+  // the key window overlaps by one less than the longest fragment (the existing round-6 pin), and the three numbers stay what they were
+  assert.match(topLevel('keyHasFragment'), /const step = EXTRA_KEY_CAP - \(EXTRA_FRAGMENT_MAX - 1\);/);
+  assert.match(topLevel('redactNode'), /valueReason\(k\.length > 200 \? k\.slice\(0, 200\) : k, false\)/);
+});
+
+test('redaction path [r7]: planted cuts in each function of the path are each refused (negative controls: a chunk, a prefix, a substring, a split, a window in valueReason, redactString, redactNode, isSecretKey and keyInfo)', () => {
+  const planted = [
+    ['valueReason', 'function valueReason(raw, digestOk, digestKey = false) {\n  if (raw.length < 6) return null;', '  if (raw.length > 3000) { for (let i = 0; i < raw.length; i += 2800) { const r = valueReason(raw.substring(i, i + 3000), digestOk, digestKey); if (r !== null) return r; } return null; }'],
+    ['valueReason', 'function valueReason(raw, digestOk, digestKey = false) {\n  if (raw.length < 6) return null;', '  if (raw.length > 1024) raw = raw.slice(0, 1024);'],
+    ['valueReason', 'function valueReason(raw, digestOk, digestKey = false) {\n  if (raw.length < 6) return null;', "  if (raw.split('\\n').length > 9) return null;"],
+    ['isSecretKey', 'function isSecretKey(key, extra) {', '  key = String(key).substr(0, 100);'],
+    ['keyInfo', 'function keyInfo(key, ctx) {', '  key = key.slice(0, 50);'],
+    ['redactString', 'function redactString(s, key, scan, digest) {', '  s = s.slice(0, 8000);'],
+    ['redactNode', 'function redactNode(v, key, ctx, depth) {', "  if (typeof v === 'string') v = v.substring(0, 5000);"],
+    ['keyTokens', 'function keyTokens(key) {', '  key = String(key).slice(0, 300);'],
+  ];
+  for (const [name, anchor, extra] of planted) {
+    assert.equal(code.split(anchor).length - 1, 1, `the anchor of ${name} is found once`);
+    const text = code.replace(anchor, () => `${anchor}\n${extra}`);
+    const m = new RegExp(`^(?:export )?function ${name}\\(`, 'm').exec(text);
+    const rest = text.slice(m.index + 1);
+    const body = text.slice(m.index, m.index + 1 + rest.search(/\n(?:export |function |const |let |class )/));
+    const got = cutsIn(body);
+    assert.notDeepEqual(got, ALLOWED_CUTS[name] || {}, `${name}: the planted cut is seen (${extra.slice(0, 50)})`);
+  }
+});
+
+// the number of UNBOUNDED quantifiers (a star, a plus, or {n,}) of each rule, outside character classes and escapes. Each is linear by construction: the text after an at sign or a dotted suffix is read once from
+// the one start; a tail after the match is complete; a run that no other start can enter (a run of characters that the start itself is not); a bounded count of starts times a bounded run.
+const UNBOUNDED = {
+  'jwt': 1, 'key block': 0, 'url credentials': 1, 'connection string': 1, 'url token': 1, 'credential pair': 3, 'connection pairs': 7, 'pass pair': 7, 'wifi credentials': 0, 'bearer': 2,
+  'known token': 5, 'email address': 4, 'IPv4 address': 0, 'IPv6 address': 0, 'MAC address': 0, 'MAC address (dotted)': 0, 'MAC address (spaced)': 0, 'coordinates': 4, 'labelled coordinate': 2,
+  'hemisphere coordinates': 5, 'webhook path': 2, 'internal host name': 1, 'private host name': 0,
+};
+const unboundedQuantifiers = (src) => {
+  const out = [];
+  let inClass = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (inClass) {
+      if (c === ']') inClass = false;
+      continue;
+    }
+    if (c === '[') inClass = true;
+    else if (c === '*' || c === '+') out.push(src.slice(Math.max(0, i - 12), i + 1));
+    else if (c === '{') {
+      const m = /^\{(\d+),(\d*)\}/.exec(src.slice(i));
+      if (m) {
+        if (m[2] === '') out.push(src.slice(Math.max(0, i - 12), i + m[0].length));
+        i += m[0].length - 1;
+      }
+    }
+  }
+  return out;
+};
+
+test('rules [r7]: the number of unbounded quantifiers of every rule is pinned (23 rules); a bound taken off, or a rule written back as it was in round 6, changes a count (reviewer finding: the dotted MAC look-ahead, the e-mail, the host name)', async () => {
+  const { SCAN_RULES } = await import(cardUrl);
+  assert.equal(SCAN_RULES.length, 23);
+  assert.deepEqual(SCAN_RULES.map((r) => r.reason).sort(), Object.keys(UNBOUNDED).sort());
+  for (const r of SCAN_RULES) assert.equal(unboundedQuantifiers(r.pattern.source).length, UNBOUNDED[r.reason], `${r.reason}: ${JSON.stringify(unboundedQuantifiers(r.pattern.source))}`);
+  // the counter itself: it sees a star, a plus and {n,}, and not a bounded count, an escaped one or one inside a class
+  assert.deepEqual(unboundedQuantifiers('a*b+c{2,}d{2,5}e\\*f\\+[x*+]g{3}').length, 3);
+  // the round-6 patterns, which are the ones the reviewer's probe made walk, have more of them than the rules that replaced them
+  const r6 = { 'MAC address (dotted)': /\b(?=[0-9a-f.]*[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i, 'email address': /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/,
+    'private host name': /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i, 'url credentials': /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*@/i };
+  for (const [reason, re] of Object.entries(r6)) assert.notEqual(unboundedQuantifiers(re.source).length, UNBOUNDED[reason], `${reason}: the round-6 form is not the pinned one`);
+});
+
+test('rules [r7]: the pre-tests are wired as they were (three entries, asked for every rule, in step with the table), so a pre-test that is dropped, loosened, never asked or asked of the next rule is a change of the code that is seen here too', () => {
+  const table = code.slice(code.indexOf('const RULE_PRETESTS = {'), code.indexOf('const PRETEST = RULES.map'));
+  assert.equal(table.replace(/\s+/g, ' ').trim(), 'const RULE_PRETESTS = { \'pass pair\': /(?:pass|pw)(?:\\s*["\']|=)/i, \'MAC address (dotted)\': /[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}/i, \'private host name\': /\\.(?:local|lan|internal|home\\.arpa|localdomain)\\b/i, };');
+  const vr = topLevel('valueReason');
+  assert.equal((vr.match(/PRETEST\[i\] !== undefined && !PRETEST\[i\]\.test\(s\)\) continue;/g) || []).length, 1);
+  assert.equal((vr.match(/if \(gate !== null && !s\.includes\(gate\)\) continue;/g) || []).length, 1);
+  assert.equal((vr.match(/if \(re\.test\(s\)\) return reason;/g) || []).length, 1);
+  assert.match(vr, /const \[reason, gate, re\] = RULES\[i\];/);
+  assert.match(code, /const PRETEST = RULES\.map\(\(\[reason\]\) => RULE_PRETESTS\[reason\]\);/);
+});
+
+test('scan budget [r7]: the budget is charged where a string is read and where a key is read, withholds when it is gone, and an export gives each row its own (the wiring, by the source)', () => {
+  assert.match(code, /entityChars: 100000,/);
+  assert.match(topLevel('newScan'), /\{ left: LIMITS\.entityChars \}/);
+  const rs = topLevel('redactString');
+  assert.ok(rs.indexOf('scan.left -= t.length;') > rs.indexOf('const t = s;') && rs.indexOf('scan.left -= t.length;') < rs.indexOf('valueReason(t, digestOk, digestKey)'), 'the charge is after the bound and before the read');
+  assert.match(rs, /if \(scan\.left < 0\) return WITHHELD;/);
+  const ki = topLevel('keyInfo');
+  assert.match(ki, /ctx\.scan\.left -= Math\.min\(String\(key\)\.length, LIMITS\.scanBound\);/);
+  assert.match(ki, /if \(ctx\.scan\.left < 0\) return KEY_UNREAD;/);
+  assert.ok(ki.indexOf('return KEY_UNREAD') < ki.indexOf('isSecretKey(key, ctx.extra)'), 'a key the budget cannot pay for is not read');
+  assert.ok(ki.indexOf('ctx.keys.set(key, info)') > ki.indexOf('return KEY_UNREAD'), 'and what it says is not remembered');
+  const rn = topLevel('redactNode');
+  assert.match(rn, /if \(ctx\.scan\.left <= 0\) \{/);
+  assert.match(rn, /if \(ctx\.eachItem && depth === 0\) ctx\.scan\.left = LIMITS\.entityChars;/);
+  assert.match(code, /redactValue\(\(Array\.isArray\(rows\) \? rows : \[\]\)\.map\(exportRow\), \{ eachItem: true \}\)/);
+  assert.match(code, /const opts = \{ extraKeyPatterns: cat\.extraPatterns, scan: newScan\(\) \};/);
+  assert.equal((code.match(/\bnewScan\(\)/g) || []).length, 2, 'a budget is made in partsFor and as the default of a call: nowhere else');
+});
+
+// ---- (3) the Web Animations API and every dynamic stylesheet API
+const ANIMATION_APIS = [/\.animate\s*\(/, /\bgetAnimations\b/, /\bKeyframeEffect\b/, /\bAnimationEffect\b/, /\bnew\s+Animation\b/, /\bAnimationTimeline\b/, /\bDocumentTimeline\b/, /\bScrollTimeline\b/, /\bViewTimeline\b/,
+  /\bcomputedStyleMap\b/, /\bcommitStyles\b/, /\bAnimation\s*\(/, /\.timeline\b/, /\bpersist\s*\(\s*\)/, /\bfinish\s*\(\s*\)/, /\bonfinish\b/];
+const STYLESHEET_APIS = [/\badoptedStyleSheets\b/, /\bCSSStyleSheet\b/, /\bCSSStyleDeclaration\b/, /\binsertRule\b/, /\bdeleteRule\b/, /\baddRule\b/, /\bremoveRule\b/, /\breplaceSync\b/, /\bregisterProperty\b/, /\bpaintWorklet\b/,
+  /\bWorklet\b/, /\bstyleSheets\b/, /\bcssRules\b/, /\.sheet\b/, /\bcreateElement\(\s*['"`](?:style|link)['"`]/, /\bcreateElementNS\([^)]*['"`](?:style|link)['"`]/, /\bstyleMap\b/i, /\bgetComputedStyle\b/, /\bCSS\s*\./,
+  /\bCSSOM\b/, /\bwebkitAnimation\b/, /\banimationName\b/, /\banimationend\b/i, /\btransitionend\b/i, /\bmatchMedia\b/];
+const dynamicStyleProblems = (text) => [...ANIMATION_APIS, ...STYLESHEET_APIS].filter((re) => re.test(text)).map(String);
+
+test('no Web Animations API and no dynamic stylesheet API anywhere in the module: no animate(), getAnimations, KeyframeEffect, Animation, computedStyleMap, adoptedStyleSheets, CSSStyleSheet, insertRule, deleteRule, addRule, replaceSync, a style or link element made from code, registerProperty, paintWorklet or .sheet (reviewer mutant N21)', () => {
+  assert.deepEqual(dynamicStyleProblems(plainCode), []);
+  assert.deepEqual(dynamicStyleProblems(code), [], 'and in the whole code, the stylesheet builder included');
+  // the card's one style element is the one the builder makes (mk(doc, 'style')), by name, and no other element of that kind is made from code
+  assert.equal((code.match(/mk\(doc, 'style'\)/g) || []).length, 1);
+  assert.equal((code.match(/mk\(doc, '(?:link|script)'/g) || []).length, 0);
+});
+
+test('no Web Animations API [r7]: the planted forms are each refused (negative controls: animate on the strip, getAnimations, KeyframeEffect, Animation, computedStyleMap, a stylesheet made, edited, adopted or registered, a style or link element made, a worklet, .sheet)', () => {
+  const anchor = "    ui.geekBody.hidden = mode !== 'geek';";
+  assert.equal(plainCode.split(anchor).length - 1, 1, 'the anchor is found once');
+  const forms = [
+    "    if (mode === 'geek' && typeof ui.strip.animate === 'function') ui.strip.animate([{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' });",
+    "    ui.strip.animate([{ opacity: 0 }], 1);",
+    "    for (const a of ui.strip.getAnimations()) a.pause();",
+    "    new KeyframeEffect(ui.strip, [{ opacity: 0 }], 1);",
+    "    new Animation();",
+    "    void ui.strip.computedStyleMap;",
+    "    this.ownerDocument.adoptedStyleSheets = [];",
+    "    const s = new CSSStyleSheet();",
+    "    ui.shell.sheet.insertRule('a{}');",
+    "    ui.shell.sheet.deleteRule(0);",
+    "    ui.shell.sheet.addRule('a', 'b');",
+    "    ui.shell.sheet.replaceSync('a{}');",
+    "    CSS.registerProperty({ name: '--x' });",
+    "    const st = this.ownerDocument.createElement('style');",
+    "    const lk = this.ownerDocument.createElement('link');",
+    "    CSS.paintWorklet.addModule('x');",
+    "    void ui.shell.sheet;",
+    "    ui.strip.addEventListener('animationend', () => {});",
+    "    window.matchMedia('(min-width: 1px)');",
+  ];
+  assert.deepEqual(dynamicStyleProblems(plainCode), [], 'the real source is clean by these same rules');
+  for (const f of forms) assert.notDeepEqual(dynamicStyleProblems(plainCode.replace(anchor, () => `${anchor}\n${f}`)), [], f);
+});
