@@ -85,8 +85,8 @@ def entity_ids_used(cards) -> set[str]:
                 elif k == "entities" and isinstance(v, dict):
                     out.update(x for x in v.values() if isinstance(x, str))
                 elif k == "content" and isinstance(v, str):
-                    out.update(re.findall(r"(?:sensor|binary_sensor|input_boolean).ecco_intel_[a-z_]+", v))
-                    out.update(re.findall(r"'((?:sensor|binary_sensor|input_boolean).ecco_intel_[a-z_]+)'", v))
+                    out.update(re.findall(r"\b(?:sensor|binary_sensor|input_boolean)\.ecco_intel_[a-z_]+\b", v))
+                    out.update(re.findall(r"'((?:sensor|binary_sensor|input_boolean)\.ecco_intel_[a-z_]+)'", v))
                 walk(v)
         elif isinstance(node, list):
             for x in node:

@@ -1,12 +1,13 @@
 # Production Mode and Geek Mode (offline proof on the ECCO Intelligence tab)
 
-Status: DESIGN AND DATA SIDE of the first offline proof. Nothing here is deployed, installed or registered; nothing touches Home
+Status: the first offline proof, complete on both sides (the data side and the shell, merged and run against each other). Nothing here is deployed, installed or registered; nothing touches Home
 Assistant, the dongle, the inverter or InfluxDB; no firmware is involved. The proof is one representative tab, the standalone ECCO
 Intelligence SHADOW view, so that the idea can be judged before any other tab is converted.
 
 This document records the design, the invariants both halves of the proof must keep, the acceptance cases, how to apply the shell
 to another tab, what the proof does not do, and the integration steps that are left to the owner. The numbers quoted are those of
-this change; the generated ledger (`docs/product-ui/GEEK_MODE_COVERAGE_LEDGER_intelligence.md`) is the authority for the current ones.
+this change; the generated ledger (`docs/product-ui/GEEK_MODE_COVERAGE_LEDGER_intelligence.md`) is the authority for the current ones. Section 12
+records what running the two halves against each other found.
 
 ## 1. The idea
 
@@ -41,9 +42,9 @@ owner-action-needed status stay visible in both modes.
 ```
 
 The shell is the reusable part: ONE per-view mode switch and ONE adapter, parameterised by a catalogue. A new tab is a new
-catalogue plus its existing card as a child, not a second dashboard implementation. The shell itself (`frontend/ecco-mode-shell/
-ecco-mode-shell.js`) is written separately; this change delivers its data side: the catalogue, the information coverage ledger,
-the synthetic fixtures and the Python tests, and these notes.
+catalogue plus its existing card as a child, not a second dashboard implementation. The shell itself is `frontend/ecco-mode-shell/ecco-mode-shell.js` (one file, no dependency). This change delivers both halves: the data
+side (the catalogue, the information coverage ledger, the synthetic fixtures and the Python tests) and the shell, its node tests, its
+preview and the example dashboard; section 12 records how they were joined.
 
 ## 2. What this change contains (new files only)
 
@@ -58,7 +59,15 @@ the synthetic fixtures and the Python tests, and these notes.
 | `frontend/ecco-mode-shell/test/fixtures/intelligence.states.*.json`, `noise.states.json`, `intelligence.states.meta.json` | synthetic fixtures for the card tests |
 | `docs/product-ui/GEEK_MODE_COVERAGE_LEDGER_intelligence.md` | the human-readable ledger (generated) |
 | `docs/product-ui/PRODUCTION_GEEK_MODE.md` | this document |
-| `tools/tests/test_geek_mode_*.py`, `tools/tests/_geek_scratch.py` | five suites and their shared helper |
+| `tools/tests/test_geek_mode_*.py`, `tools/tests/_geek_scratch.py` | six suites (catalogue, coverage, ledger, fixtures, privacy, example) and their shared helper |
+| `frontend/ecco-mode-shell/ecco-mode-shell.js` | the shell: the mode switch, the one adapter, the alert strip, the Geek inspector, the redactor |
+| `frontend/ecco-mode-shell/test/*.test.mjs`, `test/minidom.mjs`, `test/helpers.mjs`, `test/secrets.mjs` | the node tests (core, element, coverage, static, mutations, and `real-catalogue.test.mjs` against the real catalogue, ledger and fixtures) |
+| `frontend/ecco-mode-shell/test/fixtures/{mini,hostile}*.json` | the card's own small synthetic fixtures |
+| `frontend/ecco-mode-shell/preview/index.html` | the offline preview: the real card and the real Intelligence card on the real catalogue and fixtures |
+| `frontend/ecco-mode-shell/examples/intelligence-modes.yaml`, `test/test_example_dashboard.py` | the example dashboard (the existing cards, wrapped; the real catalogue included) and its Python check |
+| `frontend/ecco-mode-shell/README.md` | how to use, test and preview the shell |
+
+Every file is new: no existing, frozen, pinned, sealed or deployed file is edited.
 
 Regenerate, in this order (the ledger records the hash of the fixtures, so the fixtures come first):
 
@@ -103,7 +112,9 @@ fetches nothing. The catalogue is data, never code, and the card must tolerate u
   `{attribute: name, in: [..]}`. The intended meaning of `{unavailable: true}` is: the entity's state is `unavailable`, or the entity
   is missing from `hass.states` (a declared entity that is missing is as bad as an unavailable one; it must not hide an alert).
   An `in` list may mix booleans and texts (`applies_nothing` is listed as false, "false" and "False") so a strict or a stringified
-  comparison both match. The shell's tests should pin both readings.
+  comparison both match. The shell pins both readings in `frontend/ecco-mode-shell/test/real-catalogue.test.mjs`: the state `unavailable`
+  or a missing entity fires an `unavailable` alert; an `unknown` state does not (it is reported as a condition that cannot be checked, so a
+  restart does not raise a critical alert), while a listed `unknown` state fires its own alert.
 - `discover` lists `<domain>.ecco_intel_` prefixes. An entity that matches a prefix and is not in `sources` appears in the group
   `discovered` by itself, with no hand-designed card. A lookalike (the frozen V1 prototype's `ecco_intelligence_` family, a name that
   merely contains the prefix, a domain that is not listed) never appears.
@@ -184,8 +195,8 @@ The proof keeps these, and each has a test on the data side or the card side:
 
 ## 5. Acceptance cases AC1 to AC16
 
-"This change" is the data side delivered here and proven by the Python suites. "Shell" is the card side, written and tested in the
-shell worktree (`frontend/ecco-mode-shell`), against the same catalogue and fixtures.
+"This change" is the data side, proven by the Python suites. "Shell" is the card side (`frontend/ecco-mode-shell`), proven by the node tests,
+which since the merge run against the very same catalogue, ledger and fixtures (`test/real-catalogue.test.mjs`); section 12 lists the results.
 
 | AC | Behaviour | This change | Shell |
 |---|---|---|---|
@@ -232,12 +243,15 @@ live shape: each fails with its own message.
   InfluxDB. The one live read it used, a read-only shape listing, was taken separately and is committed without any value.
 - It does not change the existing Intelligence card, package, integration, dashboard, manifest, changelog, version or any pinned or
   sealed file. It does not touch the running Intelligence acceptance.
-- It does not write the shell itself (`ecco-mode-shell.js`) or its tests; those are written separately.
+- It does not run in a real Home Assistant. The shell was run in a node stand-in for the DOM and in headless Chrome against a stand-in `hass`;
+  the real card helpers, the real `location-changed` and cache behaviour, the real theme variables and the real entities card and tile are
+  not exercised.
 - It does not show information that is not a Home Assistant state or attribute: the diagnostics download, the recorder history, the
   logs, the registries, the notifications, the scorecard database and the owner's site file are listed as exceptions, each with a
   note on what exposing it would take (a new read-only diagnostic entity is a contract change request).
 - It does not generate the descriptions: they are written by hand and checked for presence and for orphans, not for wording.
-- It does not prove the card-side behaviours (AC1 to AC7, AC9 to AC14, AC16): those belong to the shell's tests.
+- It does not prove the card-side behaviours with Python: those are proven by the node tests (CI runs no Node); the Python side pins the
+  data, the ledger, the example and these documents.
 
 ## 8. Integration TODOs for the owner (nothing here was done)
 
@@ -262,6 +276,13 @@ owner:
 7. Decide whether the three alert automations' entity ids (derived by Home Assistant from their aliases, for example
    `automation.ecco_intel_alert_no_fresh_intelligence_result` for the automation whose unique id is `ecco_intel_alert_watchdog_stale`)
    are the ones to keep; the catalogue uses the live entity id and the unique id as the source id.
+
+8. The shell's resource: the manifest entry of item 1 names `frontend/ecco-mode-shell/ecco-mode-shell.js`, and the dashboard that includes the
+   catalogue must be able to read it (the example uses a path relative to the example; a deployed dashboard needs the catalogue next to it).
+9. A Python pin suite for the shell's source under `tools/tests`, mirroring `tools/tests/test_intelligence_card.py` (CI runs no Node, so the
+   node tests do not run in CI). `tools/tests/test_geek_mode_example.py` already pins the example, the ledger and these documents.
+10. Decide whether the pause tile may stay hidden in Geek Mode (today it does: Geek Mode only shows, it never offers a control, so the tile
+    lives in Production only; the always-visible cards must be read-only and the shell refuses any that is not).
 
 ## 9. Known limits
 
@@ -293,6 +314,13 @@ owner:
 - The descriptions were written against the code and its docstrings; where the code is the only source (for example the plan block's
   `precharge_by`), the wording is cautious. Review them with the owner before the proof is shown to normal users.
 
+- A timestamp in the future (clock skew between the browser and Home Assistant) is read as an age of 0 and so as fresh; the shell does not
+  flag it. The fixtures are in 2030 and are read at their own reference clock, never the wall clock.
+- The catalogue has no `{unavailable: true}` alert for the data-quality entity, so while that entity is unavailable the strip shows two
+  'cannot check' lines for it (blocked and degraded) instead of one 'unavailable' line. Adding that alert is a catalogue text change.
+- Nothing ran in a real Home Assistant: the alert automations' live entity ids, the reserve helper's attributes, the real card helpers and
+  the real theme are confirmed from code, the one shape listing and headless Chrome only.
+
 ## 10. Findings for the owner, and deviations from the brief
 
 Findings (also in the ledger's section 2 where the tool can compute them):
@@ -305,8 +333,8 @@ Findings (also in the ledger's section 2 where the tool can compute them):
    uses the live entity id, and the unique id inside the source id.
 3. While PAUSED the integration publishes once, so a paused system's rows legitimately age past `stale_after_s`; see section 9.
 4. The contract-version mismatch cannot be written with the agreed alert conditions; see section 9.
-5. The meaning of `{unavailable: true}` and of a mixed-type `in` list is written in section 3.1; the shell's tests should pin both
-   readings.
+5. The meaning of `{unavailable: true}` and of a mixed-type `in` list is written in section 3.1; the shell now pins both readings (and had
+   to be corrected to read them, see section 12).
 6. 42 declared attributes are absent from the live listing, every one a conditional shape (the OK advice keys of the two items that
    are not OK live, the non-OK advice keys of the five that are OK, and `last_good.*` because `last_good` is empty live).
 
@@ -320,12 +348,91 @@ Deviations from the brief, all deliberate:
   earlier list of room names contained the repository's private-area prefix literal and tripped `test_public_privacy.py`; found and
   fixed before the commit).
 - The reserve helper is a 17th source; Home Assistant standard attributes are catalogued like any other attribute.
-- No example dashboard was written (it belongs with the shell); section 6 describes how one wraps the existing card.
+- The example dashboard was written with the shell (`frontend/ecco-mode-shell/examples/intelligence-modes.yaml`); section 6 describes how one wraps the existing card.
 - The owner's private pattern scan of `tools/tests/test_public_privacy.py` (`ECCO_PRIVATE_PATTERNS`) was not applied: the variable is
   not set and the patterns live in the offline area, which was not read.
 
 ## 11. How the proof was checked (summary)
 
-`python -I -B -X utf8 tools/tests/test_geek_mode_catalogue.py`, `..._coverage.py`, `..._ledger.py`, `..._fixtures.py`,
-`..._privacy.py`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check`; `tools/validate_repo.py`; and
-`tools/run_offline_tests.py --root tools/tests --parallel 4`. The report that came with this change states the outcome of each run.
+The data side: `python -I -B -X utf8 tools/tests/test_geek_mode_catalogue.py`, `..._coverage.py`, `..._ledger.py`, `..._fixtures.py`,
+`..._privacy.py`, `..._example.py`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check`; `tools/validate_repo.py`; and
+`tools/run_offline_tests.py --root tools/tests --parallel 4`.
+
+The shell: in `frontend/ecco-mode-shell`, `node --test test/*.test.mjs` (the node suite, including the mutation proof) and
+`python -I -B -X utf8 test/test_example_dashboard.py`; the preview in headless Chrome (section 12.4).
+
+## 12. Joining the two halves (what running them against each other found)
+
+The two halves were built apart, from the same agreed interfaces, by two builders. They were merged (the data side's branch into the shell's
+branch; both only added files, so there was no conflict) and the shell's node tests were then run against the REAL catalogue, the machine
+ledger and every fixture (`frontend/ecco-mode-shell/test/real-catalogue.test.mjs`, 118 tests). No assertion was weakened: every difference
+found was repaired in the card, the test or the data, and each repair has a test that fails without it.
+
+### 12.1 What the first run found
+
+1. **The real catalogue was refused by the card.** The critical `applies_nothing_false` alert lists its values as `false`, `"false"` and
+   `"False"` (a mixed-type in-list, section 3.1); the card accepted texts only, so `validateCatalogue` returned an error, dropped the
+   alert and the shell would have failed closed with no inventory. The card now accepts booleans in the list and matches a value strictly or as
+   text. (Mutant `AC6-bool-in-list-rejected`.)
+2. **A listed `unknown` state never fired.** `status_unknown` lists the state `unknown`; the card treated every `unknown` state as unreadable and
+   reported "cannot check" instead. A listed state that is the state now fires, whatever it is. (Mutant `AC6-listed-down-state-silent`.)
+3. **`{unavailable: true}` fired on `unknown`.** The catalogue's reading is "unavailable, or missing"; the card also fired the critical "not
+   publishing" alert on an `unknown` state, which every Home Assistant restart produces. An `unknown` state is now reported as a condition that
+   cannot be checked, never as silence and never as the critical alert. (Mutants `AC6-unavailable-fires-on-unknown`,
+   `AC6-unavailable-ignores-missing`.)
+4. **Redundant lines.** One failed entity could raise its own alert and a "cannot check" line for every other alert on it. An alert that already
+   says the entity is down now replaces those lines. (Mutant `AC6-redundant-lines-kept`.)
+5. **A false positive in the card's own hygiene scan.** `static.test.mjs` read the noise fixture's two connection-string decoys
+   (`scheme://synthetic:decoy@host.invalid`) as e-mail addresses. Only that exact shape is exempt now, and a new assertion fails any other URL
+   with credentials anywhere in the folder, so the scan is stricter than before, not weaker.
+
+Nothing was found the other way round: the ledger agrees with the card row for row, nothing present live is `UNDECLARED`, and the fixtures
+exercise every declared attribute (section 12.2).
+
+### 12.2 What the real-catalogue test proves
+
+| Case | Proven on the real catalogue, ledger and fixtures |
+|---|---|
+| AC6 | every one of the 15 alerts fires in Production and in Geek Mode, with its text, its action, its severity and an icon, for every way its condition can hold (20 cases); with each alert's entity unavailable, unknown or missing the strip is never silently clear; each fixture raises exactly the alerts the documented readings give; the strip is outside both bodies and identical in both modes |
+| AC7 | one hass object reaches the strip, the Production summary, the Geek rows and the child cards; the Geek rows are the one adapter's rows |
+| AC8 | on all 8 fixtures every source has one row and every declared attribute is reachable; the four new `ecco_intel_` entities of the `extras` fixture are discovered with no new card and the five lookalikes never appear; 300+ noise entities change nothing; every exception is listed with its reason |
+| AC9 | on all 8 fixtures every row says its status in words and an icon, an unavailable, unknown or missing source shows no value, a stale source is never also Live, the simulated entity is labelled Simulated |
+| AC10 | all 11 decoy entities (token, password, JWT-shaped, webhook, address, coordinates, connection strings, URL token, blobs, nested secrets, key names) are withheld in rows, attributes, raw views, search, copy and both exports; the catalogue's own redaction list withholds `git_sha` and `config_hash` everywhere |
+| AC11 | groups in catalogue order, headline first inside each group, discovered last; search reaches an obscure attribute and an undeclared one |
+| AC12 | with 5000 extra entities one page is in the DOM, search is quick and one changed entity rebuilds one row |
+| AC15 | the catalogue, the live shape and every fixture have the hash the ledger recorded; the ids the card can show are exactly the 361 ledger rows; on every fixture each ledger row has a card row, each attribute is present exactly when the ledger says the fixture shows it, every card row has a ledger row, the honesty vocabulary, the two withheld values and the 28 exceptions agree |
+
+The other cases (AC1 to AC5, AC13, AC14, AC16) are proven by the card's own node tests (`core`, `element`, `static`), now with 86 mutants (78
+of the card's and 8 added for the points above), every one killed. The one deliberate undeclared item the card lists is the `extras`
+fixture's invented attribute; the keys of `self_test` are data under a declared parent (section 9).
+
+### 12.3 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 99, element 97, coverage 4, static 17, real-catalogue 118, mutation proof 88) | 423 of 423 pass; 86 of 86 mutants killed |
+| `python -I -B -X utf8 test/test_example_dashboard.py` | all checks pass (YAML with the include tag, the include resolves to the real catalogue, the wrapped cards equal the existing dashboard's) |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass |
+| `tools/gen_geek_fixtures.py --check`, `tools/geek_mode_coverage.py --check` | both match a fresh regeneration |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root tools/tests`, `ecco_core/tests`, `health/tests` | 21 of 21, 6 of 6 and 2 of 2 |
+| the tests of `home-assistant/tests`, `intelligence/tests` and `registry/tests` that read `frontend/` or `docs/` (47) | 45 pass; two fail for reasons outside this change (see below) |
+
+The two exceptions: `registry/tests/test_rtc_policy.py` fails its check "a C++ compiler is available" (no compiler on this PC; the test asks for
+`ECCO_CXX`), and `registry/tests/test_dump_to_grid_v1.py` passes when run as `python -B -X utf8 <file>` but cannot import its sibling helper under
+`-I`. Neither reads anything this change touches.
+
+### 12.4 The preview, captured
+
+`frontend/ecco-mode-shell/preview/index.html` runs the real card and the real Intelligence card on the real catalogue and fixtures (fourteen
+scenarios, light and dark, a width control). It was captured in headless Chrome at 1280 px and 375 px, Production and Geek Mode, light and
+dark, plus the alert, stale, unavailable, discovery, decoy, large and invalid scenarios (17 captures, kept outside the repository). A layout
+probe at 375 px over 42 combinations (7 fixtures or scenarios, light and dark, Production, Geek and Geek with every row and raw view open)
+found the card exactly 375 px wide, no element outside it and no button, select or input below 44 px.
+
+### 12.5 The recommendation, and what must be decided before the second tab
+
+One per-view mode switch and one adapter (this shell), parameterised by one catalogue per view, never two dashboard implementations. Before
+the second tab: split `tools/geek_mode_coverage.py` into a generic core and one view module per tab (section 6), decide the pause-tile
+question (section 8, item 10), and review the descriptions with the owner (section 9). The decisions the owner still owns are the integration
+steps of section 8, none of which was done.
