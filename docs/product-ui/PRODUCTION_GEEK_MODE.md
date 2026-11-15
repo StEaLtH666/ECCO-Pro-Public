@@ -332,6 +332,12 @@ owner:
   burst, so the two can differ for up to about 500 ms; and a reused row may trail its age text by less than a second, never its status.
 - Nothing ran in a real Home Assistant: the alert automations' live entity ids, the reserve helper's attributes, the real card helpers and
   the real theme are confirmed from code, the one shape listing and headless Chrome only.
+- The alert strip's visibility rests on four nets (review round 3, section 15.2): the pin of the whole stylesheet, the allowlist for rules that can reach the strip, the
+  strict reader and the opt-in headless Chrome check. The first three read CSS text and cannot see a rule on a neighbour that overlaps the strip, nor two allowed colours
+  that are unreadable together; the pin and the browser check do. The browser check runs two window sizes and two card widths at load and after the mode switch only,
+  measures contrast from computed colours (nothing is behind the strip but an opaque surface), and is run by a person.
+- The redactor is a heuristic net with an exceptions list (section 15.3 lists what it still shows: a coarse degrees-minutes-seconds position, a phone number, a post code,
+  a chat-bot token inside a URL path, a very short webhook id, compact words such as `wifipassword`); `state_not_in` is fail-safe for a down entity and cannot express "quiet when down".
 
 ## 10. Findings for the owner, and deviations from the brief
 
@@ -371,7 +377,8 @@ The data side: `python -I -B -X utf8 tools/tests/test_geek_mode_catalogue.py`, `
 `tools/run_offline_tests.py --root tools/tests --parallel 4`.
 
 The shell: in `frontend/ecco-mode-shell`, `node --test test/*.test.mjs` (the node suite, including the mutation proof) and
-`python -I -B -X utf8 test/test_example_dashboard.py`; the preview in headless Chrome (section 12.4).
+`python -I -B -X utf8 test/test_example_dashboard.py`; the preview in headless Chrome (section 12.4); and, opt-in since review round 3,
+`node preview/check-strip.mjs` and `--selftest` (headless Chrome measures the alert strip in both modes, section 15.5).
 
 ## 12. Joining the two halves (what running them against each other found)
 
@@ -581,3 +588,123 @@ catalogue and the state objects and reads them five seconds later now pins the w
   webhook values were appended to the same list); a new test runs the three on every path.
 - `mutations.test.mjs`: the target text of `AC12-row-reuse-ignores-clock` follows the re-aimed guard (the mutant still removes the one-second window).
 - `secrets.mjs`: three hostile values and five hostile key names were appended (the indices of the existing ones did not move).
+
+## 15. Review round 3 (15 Nov 2026): findings and fixes
+
+The third independent review found one MAJOR, which it called structural, and two MINOR findings. The MAJOR: rounds 1 and 2 each answered a reviewer mutant by adding
+it to a list of ways to hide the alert strip, and each round the reviewer found one the list did not hold. This round does not extend the list. Each finding was
+reproduced first (the reviewer's mutants run against the committed suites, and the probe), then fixed; each fix has a test that fails without it, and a mutant that
+undoes it. No assertion was weakened or deleted (section 15.7). The same rules held: nothing pinned, sealed or deployed was edited, nothing is live, nothing was pushed.
+
+### 15.1 The findings and what was done
+
+| # | Severity | Finding | Fix | Proof |
+|---|---|---|---|---|
+| 1 | MAJOR | Reviewer mutants R3-C1 to R3-C7: `.shell[DATA-MODE=geek]>[role=region]{transform:rotateX(90deg)}` (C1), `...>[aria-live]{font-size:.01px}` (C2), `div[aria-live]{color:rgba(0,0,0,0)}` (C3), `[aria-live]{transform:scale(.001)}` (C4), `...>[aria-live]{order:99}` (C5), the R2-16 literal (C6) and `[aria-live]{filter:blur(40px)}` (C7). C1 to C5 and C7 survived every node suite (C6 was already killed): the mode token was case-sensitive although HTML attribute names in a selector are not, `[role=region]` and `[aria-live]` were not counted as naming the strip, and rotateX, a tiny font, scale(.001), a transparent colour, a blur and `order` were not in the list of hiding declarations. Headless Chrome measured the Geek strip at height 0.00 and the Production strip at 18.00 | Four nets, none of which asks "is this a known way to hide it" (section 15.2): the PIN of every rule, selector and declaration; the ALLOWLIST of properties a rule that can reach the strip may set; a strict READER that refuses what it cannot judge; and the opt-in headless Chrome check that measures what is drawn. The mode and strip tokens are case-insensitive and the strip token names `role`, `aria-live` and `aria-label` | `static.test.mjs` 11 new tests (38 in all); `strip-check.test.mjs` 10 tests; R3-C1 to R3-C7 and 136 declarations on 12 selectors (1632 combinations) are negative controls for both the semantic net and the pin, each also appended to the real stylesheet; 23 new mutants (21 `AC6-css-r3-*`, 2 `AC6-strip-*`); `check-strip.mjs --selftest` catches 25 of 25 broken copies |
+| 2 | MINOR | Reviewer mutant R3-20: `down \|\|` read as `!input.present \|\|` in the `state_not_in` branch survived every suite, because the one catalogue alert that uses `state_not_in` lists neither `unknown` nor `unavailable`. The Intelligence catalogue has none, so the mutant is equivalent on this tab and matters when the shell is reused | a core test pins the fail-safe reading and the reading is documented: an entity that is down (missing, unavailable or unknown) FIRES a `state_not_in` alert even when the list itself names `unknown` or `unavailable`; an entity that is up reads the list as written | `core.test.mjs` `AC6 [r3] state_not_in is fail-safe`; mutant `AC6-not-in-down-honours-list` is R3-20 |
+| 3 | MINOR | Probe `probe.mjs`: values passed through `redactValue` under an innocent key were shown: a key named `wifi_pass` or `pw`, a MAC address with no separators or in the dotted form, a coordinate pair with three decimals, the text of a Wi-Fi QR code and a JSON-like `{"pass": ...}` string. None occurs in the Intelligence data | key rules: `pass` as the last word after a qualifier (`wifi_pass`, `mqttPass`; a bare `pass` is shown, it is also a test result), `pw` in any position, the compact `wifipass` and `wifipw`. Value rules: the dotted MAC (needs a letter, so a version number is not one), twelve hex digits with no separator (needs a letter; a revision key may hold a short git revision), a coordinate pair from three decimals, the text of a Wi-Fi QR code, a quoted `pass` or `pw` pair and `pass=value`. The hostile fixtures (12 values, 8 keys) and the Python STRICT scanners follow, and a privacy test compares the card's two new rule texts with the scanners' | `core.test.mjs` 4 new tests; `secrets.mjs` `SECRET_VALUES_R3` and `SECRET_KEYS_R3` run in every end-to-end hostile test; 13 new mutants `AC10-*`; `test_geek_mode_privacy.py` 9 new checks (146 in all), shown to fail with each new scanner broken |
+
+How the failures were shown. Against the committed round-2 suites the reviewer's mutants were run first: C1 to C5, C7 and R3-20 pass 423 of 423 (survive), C6 fails 3
+(killed). With this round's suites the same seven stylesheet mutants fail 5 to 7 tests each, including tests that already existed (the case-insensitive tokens make the
+round-1 and round-2 tests see them), the new pin and allowlist tests, and the headless Chrome check (372, 156, 240, 480, 204, 228 and 48 failing checks). The new
+redaction tests fail on the card as reviewed (copy of it in scratch, `ECCO_MODE_SHELL_PATH`): 9 tests, four of them new and five existing hostile-value tests that now also run the new shapes.
+
+### 15.2 The four nets for the alert strip, and what each cannot see
+
+1. **The pin** (`test/fixtures/style.pin.json`, read by `static.test.mjs`). `test/css-guard.mjs` parses the stylesheet into a canonical list of 135 rules: the at-rule
+   context, the selectors and each declaration with its value. The pin holds the list a person approved. Any new selector, any new or changed declaration or value, a
+   removed or re-conditioned rule and a changed order of rules fails the test until the file is regenerated (`node test/style-pin.mjs > test/fixtures/style.pin.json`)
+   and its diff reviewed with the stylesheet change. White space, a trailing semicolon and the case of a property name are free. Nothing in the repository writes
+   the pin: regenerating it IS the decision. This is the mandatory net: it does not need to know what a rule does.
+2. **The allowlist** (`STRIP_ALLOWLIST` in `css-guard.mjs`). A rule can reach the strip when it names it (the token now includes `role`, `aria-live` and `aria-label`),
+   when it applies to what contains it (`.shell`, `:host`) or to something with no class (a tag, `*`, an attribute, a pseudo-class), and when every class it asks for
+   is one the strip, its parent and its lines can carry; a rule on `.row` or `.healthbar>span` cannot reach it. In a rule that can reach the strip, every declaration
+   must be on the list with a bounded value: 37 properties (display grid, flex or block; gap, padding and margin up to 32, 48 and 24 px, never negative; colours with
+   a minimum opacity; border, outline, font-size 12 px or more, a font shorthand of 12 px or more; the icon's size 16 to 48 px; and so on). A property that is not on the
+   list is refused however harmless it looks: transform, rotate, scale, translate, filter, opacity, clip-path, mask, visibility, content-visibility, contain, position,
+   inset, z-index, order, line-height, height, max-height, overflow, text-indent, pointer-events and everything else. `!important` is refused except in the one
+   reduced-motion rule and the `[hidden]` rule. Custom properties and `var()` are accepted in such a rule only for the 15 pinned theme names, in a colour position,
+   with a visible colour as the value. The real stylesheet's 30 reaching rules (and its 2 keyframe rules, which may animate only box-shadow) all pass.
+3. **The strict reader** (`parseSheet`). It refuses what it cannot judge instead of guessing: a backslash (a CSS escape), a comment (one between a property and its colon
+   changes a rule's meaning), an HTML comment token, a control character, an `@import`, `@charset` or any other statement at-rule, an at-rule or condition that is not on the
+   pinned list of six (`@media`, `@container` and `@supports` blocks nobody pinned), an at-rule inside an at-rule, a nested rule or `&` (CSS nesting), a declaration with no colon or an odd
+   property name, and unbalanced braces. The round-2 reader treated an `@import` followed by a rule as one at-rule and read none of the rule.
+4. **The headless Chrome check** (`preview/check-strip.mjs`, opt-in, section 15.5). It never reads the stylesheet. It measures what the browser computed and drew for the
+   strip in 48 states and requires, among other things, a real box inside the viewport and the card, opacity 1, no transform, filter, clip, mask or containment on it or
+   any ancestor, nothing covering it, text of 12 px or more at 4.5 : 1, and the same box in both modes.
+
+What each cannot see, honestly:
+
+- The pin is a person's decision, not a proof: a person can regenerate it over a harmful rule. What it guarantees is that no change to the stylesheet passes unseen.
+- The allowlist reads rules, not the cascade or the document. A rule on a neighbour of the strip can overlap it (for example `.top` positioned, with a negative bottom margin
+  and a higher z-index: the self-test's "covered by a positioned block"); the strict reading does not judge rules on classes the strip cannot carry. The pin and the browser
+  check catch it. Two colours that are each allowed (the theme variables for text and surface set to the same value) are unreadable together: the pin and the browser check
+  catch that, the allowlist cannot.
+- The browser check runs two window sizes (520 and 1100 px wide; Chrome clamps a headless window to about 500 px) and two card widths (390 and 1000 px), at load and after
+  the mode switch. It does not resize, scroll, animate, use a different font, or follow a data change after the first render. Contrast is computed from the
+  computed colours and the background colours of the line's ancestors; a gradient or an image behind text is not measured (the shell has none behind the strip). It
+  is run by a person: it is not part of `node --test`, and without Chrome or Edge it prints SKIPPED.
+
+### 15.3 Redaction: what the new rules catch, and what is still shown
+
+New (section 15.1, finding 3): `wifi_pass`, `mqttPass`, `pw` and the compact `wifipass` and `wifipw` as key names; the dotted three-groups-of-four MAC; twelve hex digits with no
+separator and at least one letter (not under a revision key); a coordinate pair of two numbers with three or more decimals; text that starts like a Wi-Fi QR code; a
+quoted `pass` or `pw` key with a value and `pass=value` or `pw=value`. **Over-withholding, deliberately:** any key with `pw` in it; a key that ends in `_pass`
+(a self-test result named `self_test_pass` would be withheld); a pair of two ratios with three decimals written as one string (`0.125, 0.250`). Plain prose such as `pass: true`, a
+version number such as `2026.1114.0900`, twelve plain digits and a pair with one coarse number are shown (tests).
+
+Still shown, found by the probe and not in the finding: a position written in degrees, minutes and seconds (`51 30 26 N 0 7 39 W`); a phone number; a post code; an Open Location
+Code or a geohash; a chat-bot token inside a URL path (`.../bot<digits>:<token>/sendMessage`); a webhook id shorter than eight characters; a notification topic name used as a URL path;
+a JWT-like text with three very short parts; a short base64 password; a private address written inside a longer word; and compact key names that join a secret word to
+another word without a separator (`wifipassword`, `adminpassword`). None occurs in the Intelligence data (the strict scanners find none in any committed fixture or in the catalogue).
+The redactor is a heuristic net with an exceptions list, not a proof: for another tab, run the strict scanners over its fixtures and extend the catalogue's `extra_key_patterns` for
+the names that tab's integration uses.
+
+### 15.4 What the owner needs to know
+
+1. **Changing the stylesheet now needs the pin regenerated in the same commit.** That is the intended friction: a person reads the new rule, runs `node test/style-pin.mjs`, and
+   the diff of `style.pin.json` goes to the reviewer. A rule that can reach the strip must also fit the allowlist. The shell's own rules need nothing else.
+2. **A mode or strip selector in any case is now a mode or strip selector** (`[DATA-MODE=geek]`, `[Role=region]`, `.ALERTS`). The old tests therefore also fail on the reviewer's
+   mutants; they were not changed.
+3. **`state_not_in` is fail-safe and says so** (finding 2). A catalogue that wants "alert unless the state is one of these, and say nothing when the source is down" cannot be written
+   with it; use `state_in`, or the `unavailable` form for the down case.
+4. **The browser check is run by a person** (`node preview\check-strip.mjs`, and `--selftest`). It found no defect in the shell itself: the real card passes all 2856 checks.
+5. Nothing else changed for the owner: the integration steps of section 8 are unchanged, no pinned or deployed file was edited.
+
+### 15.5 The browser check, run
+
+On this PC (Google Chrome 157, headless, window 520 x 1500 with a 390 px card, and window 1100 x 1500 with 390 and 1000 px cards):
+
+| Run | Result |
+|---|---|
+| `node preview/check-strip.mjs` | PASS: 48 states measured (scenario with alerts of every severity and a healthy one, x light and dark, x with and without Home Assistant's theme variables, x Production and Geek, x the widths), 24 Production / Geek pairs; 2856 of 2856 checks hold. About two seconds |
+| `node preview/check-strip.mjs --selftest` | SELFTEST PASS: the unbroken card passes, and each of 25 broken copies fails (R3-C1 to R3-C7; display none, visibility, opacity .02, height 0, off screen, clip-path, mask, line-height 0, text colour equal to the background, equal theme colours, faint text, a covering block, a sideways shift, content-visibility, size containment, an inline style on the strip, the strip hidden by the code in Geek Mode, only the first alert in Geek Mode). 36 to 648 checks fail on each (108 for the equal theme colours). About 40 seconds |
+| the reviewer's seven mutants, one by one (`--card`) | all seven fail: 372, 156, 240, 480, 204, 228 and 48 of 2856 checks |
+| no browser | prints SKIPPED in a banner on stdout and stderr and exits 0 (3 with `--require`); `findBrowser` is unit-tested with a fake file system |
+
+### 15.6 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 132, element 108, coverage 4, static 38, real-catalogue 157, strip-check 10, mutation proof 190) | 639 of 639 pass; 188 of 188 mutants killed (151 before this round: 37 new) |
+| the reviewer's seven stylesheet mutants against the round-two suites, then against these | before: C1 to C5 and C7 pass 423 of 423 (survive), C6 fails 3; after: each fails 5 to 7 tests |
+| the new redaction tests against the card as reviewed (`ECCO_MODE_SHELL_PATH` pointing at a copy of it) | 9 fail there (four new tests and five existing hostile-value tests that now also run the new shapes); the `state_not_in` test fails on mutant R3-20 and passes on the card |
+| `python -I -B -X utf8 test/test_example_dashboard.py` | all example-dashboard checks pass |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass (110, 112, 52, 102, 146 and 35 checks; the privacy suite gained 9) |
+| `tools/gen_geek_fixtures.py --check`, `tools/geek_mode_coverage.py --check` | both match a fresh regeneration |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root` `tools/tests`, `ecco_core/tests`, `health/tests`, `intelligence/tests` | 21 of 21, 6 of 6, 2 of 2 and 33 of 33 |
+| `tools/run_offline_tests.py --root` `home-assistant/tests` | 18 of 18 |
+| `tools/run_offline_tests.py --root registry/tests` | not run to completion in this round: it was still working through the registry suites (more than thirty of 78 done, none failed) when this record was written. It reads nothing this change touches (rounds 1 and 2 ran it: 76 of 78, the two that need a C++ compiler this PC does not have fail as before) |
+| `node preview/check-strip.mjs`, `--selftest` | section 15.5 |
+
+### 15.7 Changes to existing tests (none weakens an assertion)
+
+- `static.test.mjs`: the two local constants `ALERT_TOKEN` and `MODE_TOKEN` were replaced by imports of the same names from `css-guard.mjs`; they are the old patterns made
+  case-insensitive, with the strip token also naming `role=`, `aria-live`, `aria-label`, `aria-atomic` and `aria-relevant`. Every round-1 and round-2 assertion is unchanged and passes.
+  `hidingDeclaration` was NOT extended: the point of the round is that it is not the net. Eleven tests were appended.
+- `core.test.mjs`: the import line also takes `SECRET_VALUES_R3` and `SECRET_KEYS_R3`; five tests were appended. The round-two tests that address `SECRET_VALUES.slice(32)` and
+  `SECRET_KEYS.slice(-5)` read the same values as before, because the new hostile values are in their own lists.
+- `secrets.mjs`: two exports were added; `hostileAttributes()` and `forbiddenStrings()` carry them as well, so every existing end-to-end hostile test now also runs them.
+- `mutations.test.mjs`: 36 mutants were appended (their count is in 15.6); nothing was removed or changed.
+- `test_geek_mode_privacy.py`: five scanners and nine checks were added (the old scanners and checks are unchanged).
