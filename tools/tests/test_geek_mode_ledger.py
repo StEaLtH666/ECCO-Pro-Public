@@ -251,6 +251,56 @@ for label, edit, expect in (
     finally:
         cleanup(sd, so)
 
+# ===========================================================================
+print("")
+print("[7] review round 5: an ecco_intel_ entity defined in ANY other Home Assistant YAML file can no longer pass --check (reviewer mutants L05 and L06)")
+# ===========================================================================
+import shutil  # noqa: E402
+
+HA_PK = "home-assistant/packages/"
+L05_REL = HA_PK + "ecco_dump_limits.yaml"
+L06_REL = HA_PK + "ecco_zz_probe.yaml"
+L05_ADD = "\n# probe\ninput_text:\n  ecco_intel_zz_probe:\n    name: probe\n"
+L06_TEXT = "sensor:\n  - platform: template\n    sensors:\n      ecco_intel_zz_probe:\n        value_template: '1'\n"
+for label, rel, make, expect in (
+        ("L05 an input_text added to ecco_dump_limits.yaml", L05_REL, lambda p: (ROOT / L05_REL).read_text(encoding="utf-8") + L05_ADD, "ecco_dump_limits.yaml: input_text.ecco_intel_zz_probe"),
+        ("L06 a new package file ecco_zz_probe.yaml with a legacy template sensor", L06_REL, lambda p: L06_TEXT, "ecco_zz_probe.yaml: sensor[0].sensors.ecco_intel_zz_probe")):
+    sd, so = scratch_dir(), scratch_dir()
+    try:
+        copy_read_set(sd)
+        copy_outputs(so)
+        f = sd / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(make(f), encoding="utf-8", newline="\n")
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: --check exits 1, names the file and the key, and no longer says the files match a fresh regeneration",
+              rc == 1 and expect in out and "match a fresh regeneration" not in out and "FINDING" in out, out[-500:])
+        rc, out = run_tool("geek_mode_coverage.py", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: writing the ledger is refused too (exit 1)", rc == 1 and "FINDING" in out and expect in out, out[-300:])
+        f.unlink()
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: with the file removed --check passes again (negative control)", rc == 0 and "match a fresh regeneration" in out, out[-300:])
+    finally:
+        cleanup(sd, so)
+
+# the negative control the other way: a scratch repository that holds EVERY YAML file of the real home-assistant/ tree (the packages, the dashboards, the prototypes) still passes
+sd, so = scratch_dir(), scratch_dir()
+try:
+    copy_read_set(sd)
+    copy_outputs(so)
+    n = 0
+    for p in (ROOT / "home-assistant").rglob("*"):
+        if p.is_file() and p.suffix.lower() in (".yaml", ".yml"):
+            dest = sd / p.relative_to(ROOT)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(p, dest)
+            n += 1
+    check("the whole real home-assistant/ YAML tree is in the scratch repository (24 files at the time of writing)", n >= 20, str(n))
+    rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(sd), "--out-root", str(so))
+    check("--check passes on a scratch repository that holds every real YAML file: the scan finds nothing in the repository's own files", rc == 0 and "match a fresh regeneration" in out, out[-400:])
+finally:
+    cleanup(sd, so)
+
 print("")
 if FAILURES:
     print(f"{len(FAILURES)} check(s) FAILED:")

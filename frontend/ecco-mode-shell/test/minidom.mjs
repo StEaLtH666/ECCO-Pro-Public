@@ -299,6 +299,15 @@ export class MElement {
     if (root instanceof MShadowRoot && root.activeElement === this) root.activeElement = null;
   }
 
+  /**
+   * Any real element can take a shadow root (and a shadow root with no slot hides what the element holds). The card gives one to its own host and to nothing else:
+   * modelling it on every element lets the element tests see a break that gives one to the alert strip (review round 5, reviewer mutant AR08).
+   */
+  attachShadow() {
+    this.shadowRoot = new MShadowRoot(this);
+    return this.shadowRoot;
+  }
+
   scrollIntoView() {}
 
   getBoundingClientRect() {

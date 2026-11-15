@@ -197,7 +197,55 @@ function keyTokens(key) {
 }
 
 const EXTRA_CACHE = new WeakMap();
-/** Catalogue extra_key_patterns -> safe RegExps. A pattern that is too long, shaped for catastrophic backtracking or invalid is ignored. */
+/** The most characters of a key that one catalogue pattern is ever run on (a longer key is read from both ends), so a pattern's work is bounded by this. */
+const EXTRA_KEY_CAP = 200;
+/** The most unbounded repeats (* + {n,}) one catalogue pattern may hold: with the key cap, the work of a pattern is at most polynomial of a low degree. */
+const EXTRA_MAX_REPEATS = 3;
+
+/**
+ * True when a catalogue pattern has a shape that can make a backtracking engine take exponential or high-degree polynomial time: a group that is
+ * repeated (* + {n}) and itself holds a repeat or a choice between alternatives, such as (a|aa)*c or (x+x+)+y, an unbalanced group, a character class
+ * that is never closed, or more than EXTRA_MAX_REPEATS repeats. Escapes and character classes are skipped, so a literal parenthesis or bar is no group.
+ * This is a reader of the pattern text, not of what it matches: it errs on the side of refusing.
+ */
+function riskyPattern(src) {
+  const stack = [];
+  let cur = { alt: false, rep: false };
+  let repeats = 0;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '\\') {
+      i += 1;
+    } else if (ch === '[') {
+      i += 1;
+      while (i < src.length && src[i] !== ']') i += src[i] === '\\' ? 2 : 1;
+      if (i >= src.length) return true;
+    } else if (ch === '(') {
+      stack.push(cur);
+      cur = { alt: false, rep: false };
+      if (src[i + 1] === '?') i += 1; // (?: (?= (?! (?<= (?<name> : the ? belongs to the group syntax, it is not a repeat
+    } else if (ch === ')') {
+      if (stack.length === 0) return true;
+      const inner = cur;
+      cur = stack.pop();
+      const next = src[i + 1];
+      const repeated = next === '*' || next === '+' || next === '{';
+      if (repeated && (inner.alt || inner.rep)) return true;
+      cur.alt = cur.alt || inner.alt;
+      cur.rep = cur.rep || inner.rep || repeated || next === '?';
+    } else if (ch === '|') {
+      cur.alt = true;
+    } else if (ch === '*' || ch === '+' || ch === '{') {
+      cur.rep = true;
+      repeats += 1;
+    } else if (ch === '?') {
+      cur.rep = true;
+    }
+  }
+  return stack.length !== 0 || repeats > EXTRA_MAX_REPEATS;
+}
+
+/** Catalogue extra_key_patterns -> safe RegExps. A pattern that is too long, shaped for catastrophic backtracking (see riskyPattern) or invalid is ignored. */
 function compileExtra(list) {
   if (!Array.isArray(list)) return [];
   if (EXTRA_CACHE.has(list)) return EXTRA_CACHE.get(list);
@@ -205,6 +253,7 @@ function compileExtra(list) {
   for (const src of list.slice(0, 40)) {
     if (!isStr(src) || src.length === 0 || src.length > 80) continue;
     if (/\([^)]*[+*][^)]*\)\s*[+*{]/.test(src) || /\\[1-9]/.test(src)) continue;
+    if (riskyPattern(src)) continue;
     try {
       out.push(new RegExp(src, 'i'));
     } catch {
@@ -230,8 +279,14 @@ function isSecretKey(key, extra) {
   if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && PASS_WORDS.has(tokens[tokens.length - 1])) return true;
-  const k = fold(String(key));
+  const whole = fold(String(key));
+  // a catalogue pattern never sees more than EXTRA_KEY_CAP characters at once: a longer key is read from its start and from its end
+  const k = whole.length > EXTRA_KEY_CAP ? whole.slice(0, EXTRA_KEY_CAP) : whole;
   for (const re of extra) if (re.test(k)) return true;
+  if (k !== whole) {
+    const tail = whole.slice(-EXTRA_KEY_CAP);
+    for (const re of extra) if (re.test(tail)) return true;
+  }
   return false;
 }
 
@@ -586,6 +641,13 @@ export function validateConfig(config) {
     viewId: isStr(c.view_id) ? cleanText(c.view_id, 80) : null, title: isStr(c.title) ? cleanText(c.title, 120) : null,
     catalogue: c.catalogue, always: list('always'), production: list('production'), pageSize, allowCustom, errors,
   };
+}
+
+/** The words of the strip line for a configuration with problems: the first three (path and message, both fixed text from validateConfig), then a count. */
+function configProblemText(errors) {
+  const n = errors.length;
+  const shown = errors.slice(0, 3).map((e) => `${e.path}: ${e.message}`).join('; ');
+  return `The card configuration has ${n} problem${n === 1 ? '' : 's'}, so part of this view may be missing or ignored (${shown}${n > 3 ? `; and ${n - 3} more` : ''}).`;
 }
 
 // ===========================================================================
@@ -1943,6 +2005,11 @@ export class EccoModeShell extends Base {
     if (!this._cat.ok) {
       this._shellAlerts.push({ id: 'shell:catalogue-invalid', severity: 'warning', entity_id: '', kind: 'shell', text: 'The Geek Mode catalogue is not valid, so the Geek Mode inventory is switched off.',
         action: 'Ask whoever installed this view to fix the catalogue. Everything else on this view still works.' });
+    }
+    if (cfg.errors.length) {
+      // a configuration problem is never silent: a list given as text becomes an empty list, so a card the view's author wanted (the pause tile) would just be missing
+      this._shellAlerts.push({ id: 'shell:config-invalid', severity: 'warning', entity_id: '', kind: 'shell', text: configProblemText(cfg.errors),
+        action: 'Ask whoever installed this view to fix the card configuration. The rest of this view still works.' });
     }
     this._build();
     this._lastStates = null;

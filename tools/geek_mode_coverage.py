@@ -313,13 +313,88 @@ def _package_doc(root: Path, rel: str, allowed: tuple[str, ...]) -> dict:
 
 
 def _package_listing(root: Path) -> None:
-    """The ECCO Intelligence package files are exactly the three the tool reads: a fourth file would define entities nobody accounted for."""
+    """The ECCO Intelligence package files are exactly the three the tool reads: a fourth file would define entities nobody accounted for.
+    No other Home Assistant YAML file may define or name an ecco_intel_ data point either (review round 5: _foreign_definitions)."""
     d = root / "home-assistant" / "packages"
     found = sorted(f.name for f in d.glob("ecco_intel*")) if d.is_dir() else []
     known = sorted(Path(r).name for r in PACKAGE_FILES)
     if found != known:
         raise UniverseError(f"home-assistant/packages holds the ECCO Intelligence package files {found}, but tools/geek_mode_coverage.py models {known}: "
                             f"a package file it does not read can define data points the ledger would not account for")
+    _foreign_definitions(root)
+
+
+# Review round 5 (reviewer mutants L05 and L06). The listing above looks at the NAMES of the files in home-assistant/packages, so an ecco_intel_ entity that another
+# package file defines (an input_text in ecco_dump_limits.yaml, a legacy template sensor in a new ecco_zz_probe.yaml) was neither COVERED nor an EXCEPTION, and --check
+# still said the ledger matched. This reads the CONTENT of every other YAML file under home-assistant/ (packages, dashboards, prototypes) and refuses what defines or names
+# one. A file that does not even spell ecco_intel is not parsed (it cannot define one), so the cost is a text search per file and a parse of the few that mention it.
+HA_DIR_REL = "home-assistant"
+INTEL_OBJECT_RE = re.compile(r"^(?:[a-z_]+\.)?ecco_intel(?:_|$)")   # an object id, or a full entity id, in the ecco_intel family (not ecco_intelligence_*)
+INTEL_MENTION_RE = re.compile(r"ecco[\W_]*intel", re.IGNORECASE)    # the cheap test: can this text spell such a name at all
+DEFINING_VALUE_KEYS = ("unique_id", "object_id", "default_entity_id")  # their value IS (or becomes) an object id
+NAMING_KEYS = ("name", "alias")  # in a package, the slug of one is the object id (a dashboard's `name:` is only a label, so a dashboard is not read for these)
+# keys under which a name is not an entity at all: a Lovelace template library (the prototype dashboard defines a button-card template called ecco_intel_block)
+NON_ENTITY_PARENT_KEYS = ("button_card_templates", "decluttering_templates")
+
+
+def _intel_hits(node, path: str, dashboard: bool, non_entity: bool, hits: list) -> None:
+    """Collect where a parsed YAML document defines or names an ecco_intel_ object id (see _foreign_definitions)."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            ks = str(k)
+            here = f"{path}.{ks}" if path else ks
+            if not non_entity and INTEL_OBJECT_RE.match(ks.strip().lower()):
+                hits.append(f"{here} (a key named like an ecco_intel_ entity)")
+            if isinstance(v, str):
+                if ks in DEFINING_VALUE_KEYS and INTEL_OBJECT_RE.match(v.strip().lower()):
+                    hits.append(f"{here}: {v.strip()[:60]} (an object id)")
+                elif ks in NAMING_KEYS and not dashboard and INTEL_OBJECT_RE.match(_slug(v)):
+                    hits.append(f"{here}: {v.strip()[:60]} (a name whose entity id is ecco_intel_...)")
+            _intel_hits(v, here, dashboard, non_entity or ks in NON_ENTITY_PARENT_KEYS, hits)
+    elif isinstance(node, list):
+        for i, x in enumerate(node):
+            _intel_hits(x, f"{path}[{i}]", dashboard, non_entity, hits)
+
+
+def _foreign_definitions(root: Path) -> tuple[int, list[str]]:
+    """Refuse (UniverseError) any YAML file under home-assistant/ OTHER than the three modelled package files that defines or names an `ecco_intel_` data point: a key
+    (a helper, a legacy template sensor, a customize entry), a `unique_id`, `object_id` or `default_entity_id`, or, in a package, a `name` or `alias` whose slug is one.
+    A reference to an entity (an `entity_id:` value, a template, a dashboard card) is not a definition and passes. Returns (files read, files parsed) for the tests.
+    What it cannot see: a name built by a template or spelled with YAML escapes (a text search cannot read those)."""
+    base = root / HA_DIR_REL
+    if not base.is_dir():
+        return 0, []
+    modelled = set(PACKAGE_FILES)
+    scanned = 0
+    parsed: list[str] = []
+    problems: list[str] = []
+    for f in sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in (".yaml", ".yml")):
+        rel = f.relative_to(root).as_posix()
+        if rel in modelled:
+            continue
+        scanned += 1
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise UniverseError(f"cannot read {rel}: {exc}") from None
+        if not INTEL_MENTION_RE.search(text):
+            continue
+        try:
+            docs = list(yaml.load_all(text, Loader=_Loader))
+        except yaml.YAMLError as exc:
+            raise UniverseError(f"{rel} spells ecco_intel but does not parse as YAML, so the tool cannot tell whether it defines a data point: {exc}") from None
+        parsed.append(rel)
+        dashboard = any(isinstance(d, dict) and "views" in d for d in docs)
+        hits: list[str] = []
+        for d in docs:
+            _intel_hits(d, "", dashboard, False, hits)
+        problems.extend(f"{rel}: {h}" for h in hits)
+    if problems:
+        shown = "; ".join(problems[:8]) + (f"; and {len(problems) - 8} more" if len(problems) > 8 else "")
+        raise UniverseError(f"home-assistant YAML other than the three ECCO Intelligence package files {list(PACKAGE_FILES)} defines or names an ecco_intel_ data point "
+                            f"that tools/geek_mode_coverage.py does not read: {shown}. Model it (add its file to PACKAGE_FILES and read it in _package_entities) and catalogue it, or, "
+                            f"if it is not a Home Assistant entity, add its parent key to NON_ENTITY_PARENT_KEYS")
+    return scanned, parsed
 
 
 def _package_entities(root: Path) -> tuple[list, list]:

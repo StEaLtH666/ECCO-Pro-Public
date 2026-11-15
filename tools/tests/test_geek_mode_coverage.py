@@ -420,6 +420,92 @@ pkg_case("input_boolean that is a list", [(MAIN, "REPLACEALL", "input_boolean:\n
 pkg_case("input_number that is a list", [(PREFS, "REPLACEALL", "input_number:\n  - a\n")], "input_number is not a mapping of helpers")
 pkg_case("an input_boolean spec that is text", [(MAIN, "REPLACEALL", "input_boolean:\n  ecco_intel_paused: yes please\n")], "input_boolean.ecco_intel_paused is not a mapping")
 
+# ===========================================================================
+print("")
+print("[7] review round 5: no OTHER Home Assistant YAML file may define or name an ecco_intel_ data point (reviewer mutants L05 and L06)")
+# ===========================================================================
+try:
+    real_scanned, real_parsed = G._foreign_definitions(ROOT)
+    real_ok, real_detail = True, ""
+except G.UniverseError as exc:
+    real_scanned, real_parsed, real_ok, real_detail = 0, [], False, str(exc)[:400]
+on_disk = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "home-assistant").rglob("*") if p.is_file() and p.suffix.lower() in (".yaml", ".yml"))
+check("the real tree passes the scan (the negative control: no false positive on the repository's own YAML)", real_ok, real_detail)
+check("it reads every YAML file under home-assistant/ except the three modelled package files",
+      real_scanned == len(on_disk) - 3 and not set(G.PACKAGE_FILES) & set(real_parsed) and set(G.PACKAGE_FILES) <= set(on_disk), f"{real_scanned} of {len(on_disk)}")
+check("it parses only the files that can spell the name at all (the real dashboard and the two prototype files among them), not every file",
+      {"home-assistant/dashboards/ecco_intelligence.yaml", "home-assistant/prototypes/intelligence-v1/ecco_intelligence_v1_prototype_dashboard.yaml",
+       "home-assistant/prototypes/intelligence-v1/ecco_intelligence_v1_mock_package.yaml"} <= set(real_parsed) and len(real_parsed) < real_scanned, str(real_parsed))
+check("the table of the tool is data: the defining keys, the naming keys and the one non-entity parent the repository needs",
+      G.DEFINING_VALUE_KEYS == ("unique_id", "object_id", "default_entity_id") and G.NAMING_KEYS == ("name", "alias") and "button_card_templates" in G.NON_ENTITY_PARENT_KEYS)
+check("an ecco_intel_ id matches, an ecco_intelligence_ id and a plain word do not",
+      all(G.INTEL_OBJECT_RE.match(x) for x in ("ecco_intel_zz", "sensor.ecco_intel_zz", "ecco_intel")) and not any(G.INTEL_OBJECT_RE.match(x) for x in ("ecco_intelligence_status", "sensor.ecco_intelligence_x", "xecco_intel_a", "my_ecco_intel_a")))
+
+
+def foreign_case(label: str, files: dict, expect: str | None) -> None:
+    """files: {relative path: text, or ('append', real relative path, text) to start from the real file}. expect None means the scan must pass."""
+    d = pkg_scratch()
+    try:
+        for rel, spec in files.items():
+            f = d / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(spec, tuple):
+                f.write_text((ROOT / spec[1]).read_text(encoding="utf-8") + spec[2], encoding="utf-8", newline="\n")
+            else:
+                f.write_text(spec, encoding="utf-8", newline="\n")
+        try:
+            G._package_entities(d)
+            ok, detail = expect is None, "no error raised" if expect is not None else ""
+        except G.UniverseError as exc:
+            ok, detail = expect is not None and expect in str(exc), str(exc)[:400]
+        check(f"foreign YAML case '{label}' " + ("passes" if expect is None else f"is refused with {expect!r}"), ok, detail)
+    finally:
+        cleanup(d)
+
+
+PK = "home-assistant/packages/"
+DB = "home-assistant/dashboards/"
+foreign_case("no other file at all (negative control)", {}, None)
+foreign_case("[L05] an input_text added to ecco_dump_limits.yaml (the real file, with one helper appended)",
+             {PK + "ecco_dump_limits.yaml": ("append", PK + "ecco_dump_limits.yaml", "\n# probe\ninput_text:\n  ecco_intel_zz_probe:\n    name: probe\n")},
+             "ecco_dump_limits.yaml: input_text.ecco_intel_zz_probe")
+foreign_case("[L06] a new package file ecco_zz_probe.yaml with a legacy template sensor",
+             {PK + "ecco_zz_probe.yaml": "sensor:\n  - platform: template\n    sensors:\n      ecco_intel_zz_probe:\n        value_template: '1'\n"},
+             "ecco_zz_probe.yaml: sensor[0].sensors.ecco_intel_zz_probe")
+foreign_case("a template sensor named 'ECCO Intel zz probe' in another package", {PK + "ecco_zz.yaml": "template:\n  - sensor:\n      - name: 'ECCO Intel zz probe'\n        state: '1'\n"},
+             "template[0].sensor[0].name: ECCO Intel zz probe (a name whose entity id is ecco_intel_...)")
+foreign_case("a unique_id alone", {PK + "ecco_zz.yaml": "template:\n  - sensor:\n      - name: 'zz'\n        unique_id: ecco_intel_zz_probe\n        state: '1'\n"}, "unique_id: ecco_intel_zz_probe (an object id)")
+foreign_case("an automation alias", {PK + "ecco_zz.yaml": "automation:\n  - alias: 'ECCO Intel - zz probe'\n    triggers: []\n    actions: []\n"}, "automation[0].alias: ECCO Intel - zz probe")
+foreign_case("an MQTT object_id", {PK + "ecco_zz.yaml": "mqtt:\n  sensor:\n    - name: zz\n      object_id: ecco_intel_zz_probe\n      state_topic: a/b\n"}, "object_id: ecco_intel_zz_probe")
+foreign_case("a default_entity_id with a domain", {PK + "ecco_zz.yaml": "mqtt:\n  sensor:\n    - name: zz\n      default_entity_id: sensor.ecco_intel_zz_probe\n"}, "default_entity_id: sensor.ecco_intel_zz_probe")
+foreign_case("a customize entry (a full entity id as a key)", {PK + "ecco_zz.yaml": "homeassistant:\n  customize:\n    sensor.ecco_intel_zz_probe:\n      icon: mdi:flash\n"},
+             "homeassistant.customize.sensor.ecco_intel_zz_probe")
+foreign_case("a helper two levels down, in a list", {PK + "ecco_zz.yaml": "group:\n  - outer:\n      inner:\n        ecco_intel_zz_probe:\n          entities: []\n"}, "group[0].outer.inner.ecco_intel_zz_probe")
+foreign_case("a script", {PK + "ecco_zz.yaml": "script:\n  ecco_intel_zz_probe:\n    sequence: []\n"}, "script.ecco_intel_zz_probe")
+foreign_case("a key in a dashboard file (a dashboard defines no entity)", {DB + "ecco_zz.yaml": "title: x\nviews: []\necco_intel_zz_probe: 1\n"}, "ecco_zz.yaml: ecco_intel_zz_probe")
+foreign_case("a unique_id in a dashboard file", {DB + "ecco_zz.yaml": "views:\n  - cards:\n      - type: x\n        unique_id: ecco_intel_zz_probe\n"}, "unique_id: ecco_intel_zz_probe")
+foreign_case("a file under home-assistant/prototypes", {"home-assistant/prototypes/zz/mock.yaml": "input_boolean:\n  ecco_intel_zz_probe:\n    name: zz\n"}, "prototypes/zz/mock.yaml: input_boolean.ecco_intel_zz_probe")
+foreign_case("a .yml extension", {PK + "ecco_zz.yml": "input_number:\n  ecco_intel_zz_probe:\n    min: 0\n    max: 1\n"}, "ecco_zz.yml: input_number.ecco_intel_zz_probe")
+foreign_case("a second document of a multi-document file", {PK + "ecco_zz.yaml": "input_boolean: {}\n---\ninput_text:\n  ecco_intel_zz_probe:\n    name: zz\n"}, "input_text.ecco_intel_zz_probe")
+foreign_case("an upper-case key", {PK + "ecco_zz.yaml": "input_text:\n  ECCO_INTEL_zz_probe:\n    name: zz\n"}, "input_text.ECCO_INTEL_zz_probe")
+foreign_case("a file that mentions the name and cannot be parsed", {PK + "ecco_zz.yaml": "input_text: [ecco_intel_zz_probe\n  name: : :\n"}, "spells ecco_intel but does not parse as YAML")
+foreign_case("several findings: the first eight are named and the rest counted",
+             {PK + "ecco_zz.yaml": "input_text:\n" + "".join(f"  ecco_intel_zz_{i}:\n    name: zz\n" for i in range(11))}, "; and 3 more")
+# what must NOT be refused: references, labels, template libraries, and the other family
+foreign_case("an automation that only REFERENCES the entities (entity_id values, a template, a trigger list)",
+             {PK + "ecco_zz.yaml": "automation:\n  - alias: 'Zz watcher'\n    triggers:\n      - trigger: state\n        entity_id: sensor.ecco_intel_status\n    actions:\n      - action: persistent_notification.create\n        data:\n          message: \"{{ states('sensor.ecco_intel_status') }} / {{ states('input_boolean.ecco_intel_paused') }}\"\n"}, None)
+foreign_case("a dashboard card with a display name that slugs to ecco_intel_ and an entity reference (a label, not an entity)",
+             {DB + "ecco_zz.yaml": "title: x\nviews:\n  - cards:\n      - type: tile\n        entity: sensor.ecco_intel_status\n        name: 'ECCO Intel status'\n"}, None)
+foreign_case("a button-card template library named ecco_intel_block (the prototype dashboard's own shape)",
+             {DB + "ecco_zz.yaml": "button_card_templates:\n  ecco_intel_block:\n    show_name: false\nviews: []\n"}, None)
+foreign_case("a template library deeper down is still a library", {DB + "ecco_zz.yaml": "x:\n  decluttering_templates:\n    ecco_intel_block:\n      card: {}\nviews: []\n"}, None)
+foreign_case("the other family: ecco_intelligence_* ids and names (the prototype mock package)",
+             {"home-assistant/prototypes/zz/mock.yaml": "template:\n  - sensor:\n      - name: 'ECCO Intelligence status'\n        unique_id: ecco_intelligence_status\n        state: '1'\n"}, None)
+foreign_case("a file that does not mention the name is not even parsed (it is not valid YAML, and does not matter)", {PK + "ecco_zz.yaml": "key: [unclosed\n  : :\n"}, None)
+foreign_case("a package name 'ECCO Intelligence zz' (the slug is ecco_intelligence_zz: the other family, not ecco_intel_)",
+             {PK + "ecco_zz.yaml": "template:\n  - sensor:\n      - name: 'ECCO Intelligence zz'\n        state: '1'\n"}, None)
+foreign_case("an entity of another family whose name merely contains ecco_intel later on", {PK + "ecco_zz.yaml": "input_boolean:\n  my_ecco_intel_flag:\n    name: 'x'\n"}, None)
+
 print("")
 if FAILURES:
     print(f"{len(FAILURES)} check(s) FAILED:")

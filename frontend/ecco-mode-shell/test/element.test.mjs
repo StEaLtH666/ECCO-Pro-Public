@@ -1628,3 +1628,204 @@ test('AC16 [r2] fail closed, all the way: with one malformed source the snapshot
   assert.equal(el.snapshot.rows.length, 0, 'not by update, not by discovery');
   assert.equal(rows(el).length, 0);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 5 ([r5]). Five mutants survived every node suite and were caught only by the opt-in headless-browser check (J13, J14, J20, J21, AR08): the strip moved
+// inside the shell in Geek Mode only (J14, J20), a custom property set on the shell by the call that sets one on a bar segment or a ring (J13, J21), and a shadow root
+// attached to the strip (AR08). The two tests below pin where the strip sits; the source pins are in static.test.mjs.
+// ---------------------------------------------------------------------------------------------------------------------------
+const SHELL_ORDER = ['top', 'mode-note', 'strip', 'always', 'body:production', 'body:geek'];
+function shellKind(n) {
+  if (n.hasAttribute('data-ecco-alert-strip')) return 'strip';
+  if (n.hasAttribute('data-ecco-always')) return 'always';
+  if (n.hasAttribute('data-ecco-body')) return `body:${n.getAttribute('data-ecco-body')}`;
+  if (n.hasAttribute('data-ecco-mode-note')) return 'mode-note';
+  if (n.className.split(/\s+/).includes('top')) return 'top';
+  return `other:${n.tagName}`;
+}
+/** Where the strip sits: its parent, the order of everything in that parent, and the chain from the strip up to the shadow root. */
+function stripPlace(el) {
+  const strip = q(el, '[data-ecco-alert-strip]');
+  const shell = q(el, '[data-ecco-shell]');
+  const chain = [];
+  for (let n = strip; n; n = n.parentNode) chain.push(n.nodeType === 1 ? shellKind(n) : 'root');
+  return { parentIsShell: strip.parentNode === shell, shellIsTop: shell.parentNode === root(el), order: shell.children.map(shellKind), index: shell.childNodes.indexOf(strip),
+    chainLength: chain.length, shadowOfStrip: strip.shadowRoot === undefined || strip.shadowRoot === null, count: qa(el, '[data-ecco-alert-strip]').length };
+}
+function expectPlace(p, where) {
+  assert.equal(p.count, 1, `${where}: there is one strip`);
+  assert.equal(p.parentIsShell, true, `${where}: the strip is a direct child of the shell`);
+  assert.equal(p.shellIsTop, true, `${where}: the shell is the top of the shadow root`);
+  assert.deepEqual(p.order, SHELL_ORDER, `${where}: the strip comes after the title and the note and BEFORE the always region, the Production body and the Geek body`);
+  assert.equal(p.index, p.order.indexOf('strip'), `${where}: its place among the shell's children (text nodes included)`);
+  assert.equal(p.shadowOfStrip, true, `${where}: the strip has no shadow root of its own`);
+}
+
+test('AC6 [r5] the strip sits in the shell at the same place in both modes: a direct child, after the title and the note, before the always region, the Production body and the Geek body (reviewer mutants J14, J20)', () => {
+  const scenarios = { healthy: undefined, 'critical, warning and notice together': (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); }, ...Object.fromEntries(Object.entries(TRIGGER)) };
+  for (const [name, mutate] of Object.entries(scenarios)) {
+    const el = mount({ states: miniStates(mutate), config: { always: [{ type: 'custom:stub-card' }], production: [{ type: 'custom:stub-card' }] } });
+    const p0 = stripPlace(el);
+    expectPlace(p0, `${name}, Production`);
+    geek(el);
+    const g0 = stripPlace(el);
+    expectPlace(g0, `${name}, Geek`);
+    assert.deepEqual(g0, p0, `${name}: the place of the strip differs between Production and Geek Mode`);
+    el.hass = makeHass(miniStates(mutate), { themes: { darkMode: true } });
+    el._tick();
+    assert.deepEqual(stripPlace(el), p0, `${name}: after an update, a tick and a theme change in Geek Mode`);
+    production(el);
+    assert.deepEqual(stripPlace(el), p0, `${name}: back in Production`);
+    geek(el);
+    production(el);
+    geek(el);
+    assert.deepEqual(stripPlace(el), p0, `${name}: after switching again`);
+    el.hass = makeHass(miniStates(), { themes: { darkMode: false } });
+    expectPlace(stripPlace(el), `${name}, after the condition cleared`);
+  }
+});
+
+test('AC6 [r5] the placement check has teeth: each way of moving, wrapping or duplicating the strip, planted on a live element, is reported (negative controls)', () => {
+  expectPlace(stripPlace(mount({ states: miniStates(TRIGGER.A01) })), 'control: the untouched card passes');
+  const part = (e, sel) => q(e, sel);
+  const plants = {
+    'moved to the end of the shell (after the Geek body)': (e) => part(e, '[data-ecco-shell]').appendChild(part(e, '[data-ecco-alert-strip]')),
+    'moved to just before the Geek body': (e) => part(e, '[data-ecco-shell]').insertBefore(part(e, '[data-ecco-alert-strip]'), part(e, '[data-ecco-body="geek"]')),
+    'moved to just before the Production body': (e) => part(e, '[data-ecco-shell]').insertBefore(part(e, '[data-ecco-alert-strip]'), part(e, '[data-ecco-body="production"]')),
+    'moved above the title': (e) => part(e, '[data-ecco-shell]').insertBefore(part(e, '[data-ecco-alert-strip]'), part(e, '[data-ecco-shell]').firstChild),
+    'moved between the title and the note': (e) => part(e, '[data-ecco-shell]').insertBefore(part(e, '[data-ecco-alert-strip]'), part(e, '[data-ecco-mode-note]')),
+    'moved into the always region': (e) => part(e, '[data-ecco-always]').appendChild(part(e, '[data-ecco-alert-strip]')),
+    'moved into the Production body': (e) => part(e, '[data-ecco-body="production"]').appendChild(part(e, '[data-ecco-alert-strip]')),
+    'moved into the Geek body': (e) => part(e, '[data-ecco-body="geek"]').appendChild(part(e, '[data-ecco-alert-strip]')),
+    'moved out of the shell, into the shadow root': (e) => root(e).appendChild(part(e, '[data-ecco-alert-strip]')),
+    'wrapped in another element': (e) => {
+      const w = doc.createElement('div');
+      part(e, '[data-ecco-shell]').insertBefore(w, part(e, '[data-ecco-always]'));
+      w.appendChild(part(e, '[data-ecco-alert-strip]'));
+    },
+    'the always region moved above the strip': (e) => part(e, '[data-ecco-shell]').insertBefore(part(e, '[data-ecco-always]'), part(e, '[data-ecco-alert-strip]')),
+    'a shadow root of its own (planted as a property, as a real attachShadow would leave one)': (e) => { part(e, '[data-ecco-alert-strip]').shadowRoot = {}; },
+    'a second strip': (e) => {
+      const w = doc.createElement('div');
+      w.setAttribute('data-ecco-alert-strip', '');
+      part(e, '[data-ecco-shell]').insertBefore(w, part(e, '[data-ecco-always]'));
+    },
+  };
+  for (const [what, plant] of Object.entries(plants)) {
+    const e = mount({ states: miniStates(TRIGGER.A01) });
+    plant(e);
+    assert.throws(() => expectPlace(stripPlace(e), what), undefined, `not reported: ${what}`);
+  }
+});
+
+// Review round 5, NIT: validateConfig collected its errors and nothing showed them (production given as text became an empty list, and the pause tile just vanished).
+test('AC16 [r5] a configuration problem is shown on the strip, in both modes, as a warning with words and an icon: it is never silent (production given as text no longer makes the pause tile vanish unannounced)', () => {
+  const tile = { type: 'tile', entity: 'sensor.ecco_intel_status', name: 'Status', tap_action: { action: 'none' } };
+  const cases = {
+    'production given as text': [{ production: 'pause tile' }, /production/],
+    'production given as a number': [{ production: 7 }, /production/],
+    'always given as an object': [{ always: {} }, /always/],
+    'page_size out of range': [{ page_size: 3 }, /page_size/],
+    'page_size not a whole number': [{ page_size: 'many' }, /page_size/],
+    'alerts_from not the catalogue': [{ alerts_from: 'elsewhere' }, /alerts_from/],
+    'a custom card name that is not a name': [{ allow_custom_cards: ['<img src=x onerror=1>'] }, /allow_custom_cards\[0\]/],
+    'allow_custom_cards not a list': [{ allow_custom_cards: 'custom:x-y' }, /allow_custom_cards/],
+  };
+  for (const [name, [patch, path]] of Object.entries(cases)) {
+    const el = mount({ config: patch });
+    for (const where of ['Production', 'Geek']) {
+      if (where === 'Geek') geek(el);
+      assert.ok(stripIds(el).includes('shell:config-invalid'), `${name}: no line on the strip in ${where}`);
+      const line = qa(el, '[data-ecco-alert-strip] [data-alert-id="shell:config-invalid"]')[0];
+      assert.equal(line.getAttribute('data-severity'), 'warning', name);
+      assert.equal(line.getAttribute('role'), 'status', name);
+      assert.ok(line.querySelector('svg'), `${name}: an icon, not colour alone`);
+      assert.match(textOf(line), /Warning/, name);
+      assert.match(textOf(line), /1 problem,/, name);
+      assert.match(textOf(line), path, `${name}: the line names the setting`);
+      assert.match(textOf(line), /What to do: Ask whoever installed this view/, name);
+      assert.doesNotMatch(textOf(line), /<img|onerror|pause tile/, `${name}: no value from the configuration is echoed`);
+    }
+    expectAccessible(stripAccess(el), `${name}: a configuration warning leaves the strip as accessible as before`);
+    expectPlace(stripPlace(el), `${name}: and in the same place`);
+  }
+  // a valid configuration raises nothing; the same catalogue and states, so the only difference is the configuration
+  const ok = mount({ config: { production: [tile], always: [] } });
+  assert.ok(!stripIds(ok).includes('shell:config-invalid'));
+  assert.deepEqual(stripIds(mount()), []);
+  // no configuration at all, and a configuration that is not an object
+  for (const bad of [undefined, null, 5, 'x']) {
+    const el = new EccoModeShell();
+    live.add(el);
+    el.setConfig(bad);
+    el.hass = makeHass(miniStates());
+    el.connectedCallback();
+    assert.ok(stripIds(el).includes('shell:config-invalid'), `setConfig(${String(bad)}) is announced`);
+    assert.match(textOf(qa(el, '[data-ecco-alert-strip] [data-alert-id="shell:config-invalid"]')[0]), /config: the card configuration must be an object/);
+  }
+  // several problems: the first three are named and the rest are counted; it sits with the other shell warnings
+  const many = mount({ config: { production: 'x', always: 'y', page_size: 1, alerts_from: 'z', allow_custom_cards: ['bad'] }, catalogue: { schema: 'nope' } });
+  const line = textOf(qa(many, '[data-ecco-alert-strip] [data-alert-id="shell:config-invalid"]')[0]);
+  assert.match(line, /5 problems,/);
+  assert.match(line, /page_size: .*; alerts_from: .*; allow_custom_cards\[0\]: .*; and 2 more\)/);
+  assert.ok(stripIds(many).includes('shell:catalogue-invalid'), 'the catalogue warning is still there beside it');
+  // the strip is the one strip: nothing about the mode changes it, and a later setConfig with a good configuration clears the line
+  geek(many);
+  assert.ok(stripIds(many).includes('shell:config-invalid'));
+  many.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue: miniCatalogue(), page_size: 100, always: [], production: [] });
+  assert.equal(many.mode, 'production', 'setConfig is an entry: it starts in Production again');
+  assert.ok(!stripIds(many).includes('shell:config-invalid'), 'fixed configuration, no line');
+});
+
+// Review round 5 (MAJOR): the secret kinds of the owner's review, at offsets 100, 1500, 3990 and 4000 of a 4000-character text, on the DOM paths: the rows, the open attribute lists, the raw view,
+// the search box, copy and both exports. (The core test has the same cases on the data side.)
+test('AC10 [r5] every kind at every offset holds on every DOM path: the rows, the raw view, the search, copy and both exports show none of it; the harmless long text is shown whole and found by search', async () => {
+  const { positionedCases, benignControl, BENIGN_MARKERS } = await import('./secrets.mjs');
+  const cases = positionedCases();
+  const states = miniStates();
+  for (const c of cases) states[`sensor.ecco_intel_pos_${c.id}`] = mkState(`sensor.ecco_intel_pos_${c.id}`, 'ok', { pos_note: c.text, friendly_name: `Positioned ${c.id}` });
+  states['sensor.ecco_intel_pos_control'] = mkState('sensor.ecco_intel_pos_control', 'ok', { pos_note: benignControl(), friendly_name: 'Positioned control' });
+  const clip = installClipboardAndDownload();
+  try {
+    const el = mount({ states });
+    geek(el);
+    assert.ok(rows(el).length >= cases.length + 1, `every positioned entity is a row (${rows(el).length})`);
+    openEverything(el);
+    const text = allText(root(el));
+    const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+    for (const c of cases) assert.ok(!text.includes(c.probe), `${c.label}: the DOM carries ${c.probe.slice(0, 8)}`);
+    assert.ok((raw.match(/"pos_note": "\[withheld\]"/g) || []).length >= cases.length, 'the raw view says withheld for every one of them');
+    for (const m of BENIGN_MARKERS) assert.ok(raw.includes(m), `the raw view of the harmless long text reaches ${m}`);
+    for (const c of cases) {
+      typeSearch(el, c.probe);
+      assert.equal(rows(el).length, 0, `${c.label}: a search for it finds a row`);
+    }
+    for (const m of BENIGN_MARKERS) {
+      typeSearch(el, m);
+      assert.equal(rows(el).length, 1, `the search reaches ${m} in the harmless long text`);
+      assert.equal(rows(el)[0].getAttribute('data-entity-id'), 'sensor.ecco_intel_pos_control');
+    }
+    typeSearch(el, '');
+    q(el, '[data-inspector-copy]').click();
+    await tick();
+    q(el, '[data-inspector-export="json"]').click();
+    q(el, '[data-inspector-export="csv"]').click();
+    for (const id of ['sensor.ecco_intel_pos_control', `sensor.ecco_intel_pos_${cases[0].id}`, `sensor.ecco_intel_pos_${cases[cases.length - 1].id}`]) {
+      rowFor(el, id).querySelector('[data-inspector-copy="row"]').click();
+      await tick();
+    }
+    assert.equal(clip.clips.length, 4, 'one copy of every row and three row copies');
+    assert.equal(clip.blobs.length, 2);
+    const outputs = [...clip.clips, ...(await Promise.all(clip.blobs.map((b) => b.text())))];
+    for (const bytes of outputs) {
+      assert.ok(bytes.length > 100);
+      for (const c of cases) assert.ok(!bytes.includes(c.probe), `${c.label}: an output carries ${c.probe.slice(0, 8)}`);
+    }
+    assert.ok(outputs[0].includes(benignControl()), 'the copy of every row carries the harmless long text whole');
+    assert.ok(outputs[1].includes(benignControl()), 'and so does the copy of that one row (the first of the three row copies)');
+    assert.ok(outputs[4].includes(benignControl()), 'and the json export');
+    assert.match(outputs[1], /^\{/);
+  } finally {
+    clip.restore();
+  }
+});

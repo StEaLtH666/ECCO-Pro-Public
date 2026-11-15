@@ -10,6 +10,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { cardDir } from './helpers.mjs';
+import { findBrowser } from '../preview/check-strip.mjs';
 
 const nested = process.env.ECCO_MODE_SHELL_PATH !== undefined || process.env.ECCO_SKIP_MUTATIONS === '1';
 const REAL = path.join(cardDir, 'ecco-mode-shell.js');
@@ -23,6 +24,7 @@ const sub = (find, replace, all = false) => (s) => {
 };
 const chain = (...fs) => (s) => fs.reduce((acc, f) => f(acc), s);
 const GEEK_LINE = "    ui.geekBody.hidden = mode !== 'geek';";
+const SCAN_LINE = '  if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;';
 
 const MUTANTS = [
   // ---- AC1 default Production
@@ -266,6 +268,43 @@ const MUTANTS = [
   { id: 'AC10-mac-spaced-starts-mid-group', ac: 'AC10', note: 'the spaced-MAC rule may start inside a longer group of digits', f: sub('(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])', '(?=[0-9a-f ]{0,16}[a-f])') },
   { id: 'AC10-mac-spaced-ends-mid-group', ac: 'AC10', note: 'the spaced-MAC rule may end inside a longer group of digits', f: sub('(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])/i]', '(?:[0-9a-f]{2} ){5}[0-9a-f]{2}/i]') },
   { id: 'AC6-aria-r4-render-strip-aria-hidden', ac: 'AC6', note: 'the one strip renderer hides the strip from assistive technology on every render, in both modes', f: sub("strip.setAttribute('data-alert-count', String(alerts.length));", "strip.setAttribute('data-alert-count', String(alerts.length));\n  strip.setAttribute('aria-hidden', 'true');") },
+  // ---- review round 5: a secret deep inside a long string. The card reads every string whole (up to the 4000-character cap): each of these reads only a part of it. The reviewer's R14,
+  // R15 and R16 (the first 64, 300 and 1000 characters) survived all five suites of round 4; the hostile fixtures of rounds 1 to 4 all have their secret at the start of the string.
+  { id: 'AC10-r5-R14-scan-first-64', ac: 'AC10', note: 'R14: only the first 64 characters of a string are read for secrets', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(0, 64),')) },
+  { id: 'AC10-r5-R15-scan-first-300', ac: 'AC10', note: 'R15: only the first 300 characters are read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(0, 300),')) },
+  { id: 'AC10-r5-R16-scan-first-1000', ac: 'AC10', note: 'R16: only the first 1000 characters are read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(0, 1000),')) },
+  { id: 'AC10-r5-R17-scan-last-64', ac: 'AC10', note: 'R17: only the last 64 characters are read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(-64),')) },
+  { id: 'AC10-r5-R18-scan-last-1000', ac: 'AC10', note: 'R18: only the last 1000 characters are read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(-1000),')) },
+  { id: 'AC10-r5-R19-scan-first-3900', ac: 'AC10', note: 'R19: the last 100 characters of a string that fits the cap are not read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(0, 3900),')) },
+  { id: 'AC10-r5-R20-scan-first-3999', ac: 'AC10', note: 'R20: the very last character of a string that fits the cap is not read', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.slice(0, 3999),')) },
+  { id: 'AC10-r5-scan-middle-only', ac: 'AC10', note: 'only the middle of a long string is read (the first and last 500 characters are skipped)', f: sub(SCAN_LINE, SCAN_LINE.replace('valueReason(t,', 'valueReason(t.length > 1500 ? t.slice(500, -500) : t,')) },
+  { id: 'AC10-r5-cap-raised', ac: 'AC10', note: 'the cap is raised, so text past 4000 characters is kept and read (the cut is no longer said)', f: sub('  stringCap: 4000,', '  stringCap: 400000,') },
+  // ---- review round 5, NIT: a catalogue pattern with overlapping alternatives took 274 ms on a 36-character key, and the time doubles with each character (reviewer probe probe-redos)
+  { id: 'AC10-r5-extra-key-uncapped', ac: 'AC10', note: 'a catalogue pattern is run on the whole key, however long', f: sub('  const k = whole.length > EXTRA_KEY_CAP ? whole.slice(0, EXTRA_KEY_CAP) : whole;', '  const k = whole;') },
+  { id: 'AC10-r5-extra-key-tail-unread', ac: 'AC10', note: 'a key longer than the cap is read from its start only', f: sub('    for (const re of extra) if (re.test(tail)) return true;\n', '') },
+  { id: 'AC10-r5-extra-risky-guard-dropped', ac: 'AC10', note: 'the pattern reader is never asked (the reviewer pattern (a|aa)*c is accepted)', f: sub('    if (riskyPattern(src)) continue;\n', '') },
+  { id: 'AC10-r5-extra-alternation-allowed', ac: 'AC10', note: 'a repeated group may hold an alternation (only a repeat inside it is refused)', f: sub('      if (repeated && (inner.alt || inner.rep)) return true;', '      if (repeated && inner.rep) return true;') },
+  { id: 'AC10-r5-extra-alternation-not-propagated', ac: 'AC10', note: 'an alternation two groups deep is not seen by the group that repeats', f: sub('      cur.alt = cur.alt || inner.alt;', '      cur.alt = cur.alt;') },
+  { id: 'AC10-r5-extra-repeat-not-propagated', ac: 'AC10', note: 'a repeat two groups deep is not seen by the group that repeats', f: sub('      cur.rep = cur.rep || inner.rep || repeated || next === \'?\';', '      cur.rep = cur.rep || repeated;') },
+  { id: 'AC10-r5-extra-repeat-count-dropped', ac: 'AC10', note: 'any number of unbounded repeats in a pattern is accepted', f: sub('  return stack.length !== 0 || repeats > EXTRA_MAX_REPEATS;', '  return stack.length !== 0;') },
+  { id: 'AC10-r5-extra-class-not-skipped', ac: 'AC10', note: 'a bar or a bracket inside a character class counts as a group or an alternative (sound patterns are refused)', f: sub("    } else if (ch === '[') {\n      i += 1;\n      while (i < src.length && src[i] !== ']') i += src[i] === '\\\\' ? 2 : 1;\n      if (i >= src.length) return true;\n    } else if (ch === '(') {", "    } else if (ch === '(') {") },
+  // ---- review round 5, NIT: a configuration problem was collected and never shown
+  { id: 'AC16-r5-config-errors-not-shown', ac: 'AC16', note: 'a configuration problem (production given as text) leaves no line on the strip', f: sub('    if (cfg.errors.length) {', '    if (false) {') },
+  { id: 'AC16-r5-config-errors-only-first', ac: 'AC16', note: 'the strip line names only the first problem and never says how many there are', f: sub("  const shown = errors.slice(0, 3).map((e) => `${e.path}: ${e.message}`).join('; ');", "  const shown = errors.slice(0, 1).map((e) => `${e.path}: ${e.message}`).join('; ');") },
+  // ---- review round 5: the five mutants that only the opt-in browser check caught (J13, J14, J20, J21, AR08), now also killed by the node suites. `browser: true` marks the ones the
+  // browser check is asked about too when Chrome or Edge is installed (the extra layer: it must fail them as well; the node suites alone must already kill them)
+  { id: 'AC6-r5-J13-inline-property-on-shell', ac: 'AC6', browser: true, note: 'J13: the Geek header sets --ecco-fg to transparent on the shell, from the call that sets --ecco-w on a bar segment', f: sub("seg.style.setProperty('--ecco-w', String(c[s]));", "this.o.container.parentNode.style.setProperty('--ecco-fg', String('rgba(0,0,0,0)'));") },
+  { id: 'AC6-r5-J21-ring-property-on-shell', ac: 'AC6', browser: true, note: 'J21: a tile ring sets --ecco-accent to transparent on the shell instead of --ecco-p on the ring', f: sub("if (ring.mode === 'percent') ringEl.style.setProperty('--ecco-p', String(ring.pct));", "if (ring.mode === 'percent') this.o.container.parentNode.style.setProperty('--ecco-accent', String('transparent'));") },
+  { id: 'AC6-r5-setproperty-name-changed', ac: 'AC6', note: 'the bar segment call sets another --ecco property (the receiver is right, the name is not)', f: sub("seg.style.setProperty('--ecco-w', String(c[s]));", "seg.style.setProperty('--ecco-fg', String(c[s]));") },
+  { id: 'AC6-r5-setproperty-receiver-changed', ac: 'AC6', note: 'the ring call sets --ecco-p on the tile instead of the ring', f: sub("if (ring.mode === 'percent') ringEl.style.setProperty('--ecco-p', String(ring.pct));", "if (ring.mode === 'percent') el.style.setProperty('--ecco-p', String(ring.pct));") },
+  { id: 'AC6-r5-setproperty-added', ac: 'AC6', note: 'a third inline custom property is set (a number, so the old pattern accepted it)', f: sub("      if (ring.mode === 'percent')", "      ringEl.style.setProperty('--ecco-q', String(1));\n      if (ring.mode === 'percent')") },
+  { id: 'AC6-r5-J14-strip-moved-last-in-geek', ac: 'AC6', browser: true, note: 'J14: in Geek Mode the strip is moved to the end of the shell, after the Geek body', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') ui.shell.appendChild(ui.strip); else ui.shell.insertBefore(ui.strip, ui.always);`) },
+  { id: 'AC6-r5-J20-strip-before-geek-body', ac: 'AC6', browser: true, note: 'J20: in Geek Mode the strip is moved to just before the Geek body, after the always region and the Production body', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') ui.shell.insertBefore(ui.strip, ui.geekBody); else ui.shell.insertBefore(ui.strip, ui.always);`) },
+  { id: 'AC6-r5-strip-moved-into-always', ac: 'AC6', note: 'in Geek Mode the strip is moved into the always region (still on screen, no longer a child of the shell)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') ui.always.appendChild(ui.strip); else ui.shell.insertBefore(ui.strip, ui.always);`) },
+  { id: 'AC6-r5-strip-moved-above-top', ac: 'AC6', note: 'in Geek Mode the strip is moved above the title and the switch', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') ui.shell.insertBefore(ui.strip, ui.shell.firstChild); else ui.shell.insertBefore(ui.strip, ui.always);`) },
+  { id: 'AC6-r5-AR08-strip-shadow-root-in-geek', ac: 'AC6', browser: true, note: 'AR08: attachShadow on the strip in Geek Mode (a shadow root with no slot empties it in a browser)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek' && !ui.strip.shadowRoot && typeof ui.strip.attachShadow === 'function') ui.strip.attachShadow({ mode: 'open' });`) },
+  { id: 'AC6-r5-shadow-root-on-strip-at-build', ac: 'AC6', note: 'attachShadow on the strip when the shell is built (not in the constructor of the card)', f: sub('    this._root.replaceChildren(style, shell);', "    this._root.replaceChildren(style, shell);\n    if (typeof strip.attachShadow === 'function') strip.attachShadow({ mode: 'closed' });") },
+  { id: 'AC6-r5-shadow-root-on-shell', ac: 'AC6', note: 'attachShadow on the shell element (a second shadow root in the tree)', f: sub('    this._root.replaceChildren(style, shell);', "    this._root.replaceChildren(style, shell);\n    if (typeof shell.attachShadow === 'function') shell.attachShadow({ mode: 'open' });") },
 ];
 
 const MIN = { AC5: 6, AC6: 6, AC10: 6, AC13: 6 };
@@ -316,6 +355,24 @@ if (nested) {
   writeFileSync(baseFile, original);
   const baseline = await runSuites(baseFile);
   const results = await pool(prepared, 6, async (m) => (m.file ? { ...m, run: await runSuites(m.file) } : { ...m, run: null }));
+  // The extra layer (review round 5): where Chrome or Edge is installed, the mutants marked browser: true are also given to the headless browser check, one after the other (each starts
+  // its own browser). The node suites above must kill every mutant by themselves; this layer only adds a second opinion, and is skipped, loudly, where there is no browser.
+  const browserPath = findBrowser();
+  const browserRuns = [];
+  if (browserPath) {
+    for (const m of results.filter((x) => x.browser && x.file)) {
+      const checkScript = path.join(cardDir, 'preview', 'check-strip.mjs');
+      const env = { ...process.env, ECCO_CHROME: browserPath };
+      delete env.NODE_TEST_CONTEXT;
+      browserRuns.push({ id: m.id, ...(await new Promise((resolve) => {
+        const child = spawn(process.execPath, [checkScript, '--require', '--card', m.file], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        child.stdout.on('data', (d) => { out += d; });
+        child.stderr.on('data', (d) => { out += d; });
+        child.on('close', (code) => resolve({ code, out: out.slice(-600) }));
+      })) });
+    }
+  }
   rmSync(dir, { recursive: true, force: true });
 
   test('mutation baseline: the unmutated copy passes the suites it is run against (the harness works)', () => {
@@ -327,6 +384,19 @@ if (nested) {
       assert.equal(m.error, null, m.error);
       assert.notEqual(m.run.code, 0, `SURVIVED: no test failed with this break`);
     });
+  }
+
+  if (browserPath) {
+    for (const b of browserRuns) {
+      test(`mutant ${b.id}: the headless browser check (extra layer) fails it too`, () => {
+        assert.equal(b.code, 1, `exit code ${b.code} (1 means a check failed): ${b.out}`);
+      });
+    }
+    test('mutation browser layer: at least five mutants were also given to the browser check', () => {
+      assert.ok(browserRuns.length >= 5, `${browserRuns.length} browser runs`);
+    });
+  } else {
+    test('mutation browser layer: no Chrome or Edge found, so the extra layer did not run (the node suites above killed every mutant by themselves)', { skip: 'no browser installed' }, () => {});
   }
 
   test('mutation coverage: each case that needs a mutation proof has enough mutants, and all were killed', () => {

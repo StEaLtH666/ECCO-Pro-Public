@@ -143,3 +143,83 @@ export function forbiddenStrings() {
   out.add(j('192', '.', '168', '.', '77', '.', '23'));
   return [...out];
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 5: the same kinds of secret, hidden DEEP inside a long string. A redactor that reads only the start of a long text (the first 64, 300 or 1000
+// characters) or only its end passes every short test, because every hostile value above sits at the start of its string. Each kind below is therefore
+// placed at four offsets of a string that stays within the card's 4000-character cap (the longest string it keeps whole), and every end-to-end test runs them
+// all: row, raw view, search index, copy and export. Every value is assembled from fragments, like the ones above.
+// ---------------------------------------------------------------------------------------------------------------------------
+export const POSITION_CAP = 4000;
+
+/** The innocent text around a secret: no digit, no address, no key: nothing any redaction rule takes for a secret. */
+export const FILLER = 'The planner checked the overnight window and the tariff boundary before it chose, and the details follow here. ';
+
+/** `n` characters of filler (never more, never less). */
+export const filler = (n) => (n <= 0 ? '' : FILLER.repeat(Math.ceil(n / FILLER.length)).slice(0, n));
+
+/** The eight kinds named by the owner's review: each has a probe, a stretch of the secret that must never be seen anywhere. */
+export const POSITIONED_KINDS = Object.freeze([
+  { label: 'jwt', value: j('eyJhbGciOiJI', 'UzI1NiJ9.', 'eyJzdWIiOiJwb3NpdGlvbmVkIn0.', 'cG9zaXRpb25lZHNpZw'), probe: j('eyJzdWIiOiJwb3Np') },
+  { label: 'ipv4', value: j('172', '.', '16', '.', '88', '.', '41'), probe: j('172', '.', '16', '.', '88') },
+  { label: 'password pair', value: j('pass', 'word', '=', 'plumbus4242'), probe: j('plumbus', '4242') },
+  { label: 'mac', value: ['de', 'ad', 'be', 'ef', '00', '1c'].join(':'), probe: ['ad', 'be', 'ef', '00'].join(':') },
+  { label: 'email', value: j('someone', '@', 'example', '.test'), probe: j('someone', '@', 'exam') },
+  { label: 'bearer token', value: j('Bear', 'er ', 'zyxwvutsrqponmlk98765432'), probe: j('zyxwvutsrqpo', 'nmlk') },
+  { label: 'long hex blob', value: j('b3a1c0de5eed4bad', 'f00d1e57ab1e0dd5', 'a11ceb00c1e5ba5e', 'd00dfeedc0ffee42'), probe: j('f00d1e57', 'ab1e0dd5') },
+  { label: 'url with userinfo', value: j('https', ':', '//', 'carol', ':', 'plumbus', '4242', '@', 'host.example', '.test/x'), probe: j('carol', ':', 'plumbus') },
+]);
+
+/** Two kinds that are short enough to START at offset 3990 and still end within the cap (10 characters or fewer). */
+export const SHORT_KINDS = Object.freeze([
+  { label: 'ipv4 (short)', value: j('10', '.', '20', '.', '30', '.', '4'), probe: j('10', '.', '20', '.', '30') },
+  { label: 'email (short)', value: j('me', '@', 'x', '.org'), probe: j('me', '@', 'x.') },
+]);
+
+/**
+ * `value` set into a string of filler at the offsets of the review: it STARTS at 100 and at 1500, ENDS at 3990 and at 4000 (so the longest text the card keeps
+ * whole carries it in its last characters), and, when it is short enough to fit, STARTS at 3990. A space before and after it (the end of the string for the last
+ * one) keeps every word-boundary rule of the card honest. Every text is at most POSITION_CAP characters, so none of them is cut before it is read.
+ */
+export function placements(value) {
+  const make = (label, start, total) => {
+    const head = `${filler(start - 1)} `;
+    const rest = total - start - value.length;
+    const text = rest > 0 ? `${head}${value} ${filler(rest - 1)}` : `${head}${value}`;
+    if (text.length !== total || text.slice(start, start + value.length) !== value) throw new Error(`placement ${label} is wrong`);
+    return { label, text, start, end: start + value.length };
+  };
+  const out = [make('starts at offset 100', 100, 3999), make('starts at offset 1500', 1500, 3999), make('ends at offset 3990', 3990 - value.length, 3999),
+    make('ends at offset 4000', POSITION_CAP - value.length, POSITION_CAP)];
+  if (value.length <= 10) out.push(make('starts at offset 3990', 3990, POSITION_CAP));
+  return out;
+}
+
+/** Every kind at every offset: [{ id, label, text, probe }], `id` a safe suffix for an entity id. */
+export function positionedCases() {
+  const out = [];
+  [...POSITIONED_KINDS, ...SHORT_KINDS].forEach((k, ki) => {
+    placements(k.value).forEach((p, pi) => out.push({ id: `${ki}_${pi}`, label: `${k.label}, ${p.label}`, text: p.text, probe: k.probe, kind: k.label, start: p.start, end: p.end }));
+  });
+  return out;
+}
+
+/** The control: the same length and the same offsets, with a harmless marker word where a secret would be. It is shown whole, so a search for a marker finds it at every offset. */
+export const BENIGN_MARKERS = Object.freeze(['zqmarkerhundred', 'zqmarkerfifteen', 'zqmarkernearend', 'zqmarkerattheend']);
+export function benignControl() {
+  let t = filler(POSITION_CAP);
+  const at = (marker, start) => {
+    t = `${t.slice(0, start)}${marker}${t.slice(start + marker.length)}`;
+  };
+  at(BENIGN_MARKERS[0], 100);
+  at(BENIGN_MARKERS[1], 1500);
+  at(BENIGN_MARKERS[2], 3950);
+  at(BENIGN_MARKERS[3], POSITION_CAP - BENIGN_MARKERS[3].length);
+  return t;
+}
+
+/** A string over the cap whose only secret lies wholly beyond it: the card drops everything past the cap before it reads, and says so. */
+export function beyondCap(value) {
+  const text = `${filler(4099)} ${value} ${filler(150)}`;
+  return { text, probe: value };
+}

@@ -17,6 +17,8 @@ FAILURES: list[str] = []
 PY = [sys.executable, "-I", "-B", "-X", "utf8"]
 
 # what tools/geek_mode_coverage.py and tools/gen_geek_fixtures.py read (repo-relative; a trailing / is a directory, *.py only)
+# (review round 5: the coverage tool also reads every OTHER YAML file under home-assistant/, but only to refuse an ecco_intel_ data point defined in one: a scratch repository
+# needs none of them, and a test that wants one writes it itself, or copies the whole tree as test_geek_mode_ledger.py block [7] does)
 READ_SET = (
     "intelligence/", "ecco_core/", "custom_components/ecco_intelligence/", "home-assistant/packages/ecco_intelligence.yaml",
     "home-assistant/packages/ecco_intelligence_prefs.yaml", "home-assistant/packages/ecco_intelligence_dashboard.yaml",

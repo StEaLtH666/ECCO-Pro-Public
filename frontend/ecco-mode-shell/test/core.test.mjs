@@ -1458,3 +1458,151 @@ test('AC10 [r4] the spaced MAC addresses hold on every path: row text, raw attri
     }
   }
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 5 ([r5]). The card reads every string whole, up to the 4000-character cap; nothing pinned that. Reviewer mutants R14, R15 and R16 (read only the
+// first 64, 300 or 1000 characters) survived every suite, because every hostile value of rounds 1 to 4 sits at the start of its string.
+// ---------------------------------------------------------------------------------------------------------------------------
+import { POSITIONED_KINDS, SHORT_KINDS, POSITION_CAP, FILLER, filler, placements, positionedCases, benignControl, BENIGN_MARKERS, beyondCap } from './secrets.mjs';
+
+const POS = positionedCases();
+const ent = (kind, c) => `sensor.ecco_intel_${kind}_${c.id}`;
+
+test('AC10 [r5] the positioned fixtures are what they say: ten kinds, every text within the cap, the secret at the stated offset and nowhere else, the filler alone holds none', () => {
+  assert.equal(POSITIONED_KINDS.length, 8);
+  assert.equal(SHORT_KINDS.length, 2);
+  assert.equal(POS.length, 8 * 4 + 2 * 5, 'four offsets for each of eight kinds, five for the two short ones');
+  assert.equal(new Set(POS.map((c) => c.id)).size, POS.length);
+  const offsets = (k) => placements(k.value).map((p) => p.label);
+  for (const k of POSITIONED_KINDS) assert.deepEqual(offsets(k), ['starts at offset 100', 'starts at offset 1500', 'ends at offset 3990', 'ends at offset 4000'], k.label);
+  for (const k of SHORT_KINDS) assert.ok(offsets(k).includes('starts at offset 3990'), `${k.label} starts at 3990`);
+  for (const c of POS) {
+    assert.ok(c.text.length <= POSITION_CAP, `${c.label}: ${c.text.length} characters`);
+    assert.equal(c.text.split(c.probe).length - 1, 1, `${c.label}: the probe occurs exactly once`);
+    assert.ok(c.text.indexOf(c.probe) >= c.start && c.text.indexOf(c.probe) < c.end, `${c.label}: the probe lies inside the secret`);
+  }
+  assert.deepEqual(POS.filter((c) => c.label.endsWith('starts at offset 100')).map((c) => c.start), Array(10).fill(100));
+  assert.deepEqual(POS.filter((c) => c.label.endsWith('ends at offset 3990')).map((c) => c.end), Array(10).fill(3990));
+  assert.deepEqual(POS.filter((c) => c.label.endsWith('ends at offset 4000')).map((c) => c.end), Array(10).fill(POSITION_CAP));
+  assert.deepEqual(POS.filter((c) => c.label.endsWith('starts at offset 3990')).map((c) => c.start), [3990, 3990]);
+  assert.equal(filler(1234).length, 1234);
+  for (const k of [...POSITIONED_KINDS, ...SHORT_KINDS]) assert.ok(!FILLER.includes(k.probe), `${k.label}: the filler cannot contain the probe`);
+  assert.equal(benignControl().length, POSITION_CAP);
+  assert.deepEqual(BENIGN_MARKERS.map((m) => benignControl().indexOf(m)), [100, 1500, 3950, POSITION_CAP - BENIGN_MARKERS[3].length]);
+});
+
+test('AC10 [r5] a secret of every kind is withheld wherever it sits in a long string: at offset 100, 1500, ending at 3990 and at 4000, under any key, bare, in a dict and in a list', () => {
+  for (const c of POS) {
+    assert.equal(redactValue(c.text, { key: 'note' }), WITHHELD, `${c.label}: under an innocent key`);
+    assert.equal(redactValue(c.text), WITHHELD, `${c.label}: with no key`);
+    assert.equal(redactValue({ a: { b: [c.text] } }).a.b[0], WITHHELD, `${c.label}: nested in a dict and a list`);
+    assert.equal(redactValue({ [`k_${c.id}`]: c.text })[`k_${c.id}`], WITHHELD, `${c.label}: as a dict value`);
+    assert.equal(redactAttributes({ pos_note: c.text }).pos_note, WITHHELD, `${c.label}: as an attribute`);
+  }
+});
+
+test('AC10 [r5] the control: the same strings with the secret replaced by filler are shown whole, so the withholding above is the secret, not the length of the text', () => {
+  const b = benignControl();
+  assert.equal(redactValue(b, { key: 'note' }), b);
+  for (const c of POS) {
+    const clean = c.text.slice(0, c.start) + filler(c.end - c.start) + c.text.slice(c.end);
+    assert.equal(clean.length, c.text.length);
+    assert.equal(redactValue(clean, { key: 'note' }), clean, `${c.label}: without the secret`);
+  }
+});
+
+test('AC10 [r5] a secret wholly beyond the cap is dropped before the text is read, and the cut is said (nothing past the cap is kept, so nothing past it can leak)', () => {
+  for (const k of [...POSITIONED_KINDS, ...SHORT_KINDS]) {
+    const o = beyondCap(k.value);
+    assert.ok(o.text.length > POSITION_CAP + 100);
+    const r = redactValue(o.text, { key: 'note' });
+    assert.equal(typeof r, 'string');
+    assert.notEqual(r, WITHHELD, `${k.label}: the secret lies past the cap, so there is nothing in the kept text to withhold`);
+    assert.ok(!r.includes(k.probe), `${k.label}: the kept text holds no part of it`);
+    assert.match(r, /\[truncated \d+ more characters\]$/, `${k.label}: the cut is said`);
+    assert.ok(r.length < POSITION_CAP + 60);
+  }
+});
+
+test('AC10 [r5] every kind at every offset holds on every path of the core: row text, the redacted raw attributes, the search index, the state and the export carry none of it', () => {
+  const s = snap((states) => {
+    for (const c of POS) {
+      states[ent('pos', c)] = mkState(ent('pos', c), 'ok', { pos_note: c.text, friendly_name: `Positioned ${c.id}` });
+      states[ent('posstate', c)] = mkState(ent('posstate', c), c.text, { friendly_name: `Positioned state ${c.id}` });
+    }
+    states['sensor.ecco_intel_pos_control'] = mkState('sensor.ecco_intel_pos_control', 'ok', { pos_note: benignControl() });
+  });
+  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_pos')).length, 2 * POS.length + 1, 'every positioned entity is a row');
+  const all = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const c of POS) {
+    const probe = c.probe;
+    const attrRow = byEntity(s, ent('pos', c));
+    const stateRow = byEntity(s, ent('posstate', c));
+    assert.equal(attrRow.redacted.pos_note, WITHHELD, `${c.label}: the attribute is withheld`);
+    assert.equal(stateRow.stateText, WITHHELD, `${c.label}: the state is withheld`);
+    for (const r of [attrRow, stateRow]) {
+      const mine = dump([r.stateText, r.attributes, r.redacted, r.searchText, r.title]);
+      assert.ok(!mine.includes(probe), `${c.label}: a row carries ${probe.slice(0, 8)}`);
+      assert.ok(!r.searchText.includes(probe.toLowerCase()), `${c.label}: the search index carries it`);
+      assert.ok(!exportRows([r], 'json', { nowMs: NOW }).includes(probe), `${c.label}: the json export carries it`);
+      assert.ok(!exportRows([r], 'csv', { nowMs: NOW }).includes(probe), `${c.label}: the csv export carries it`);
+    }
+    assert.equal(searchRows(s.rows, probe).length, 0, `${c.label}: a search for it finds a row`);
+    assert.ok(!all.includes(probe) && !exported.includes(probe), `${c.label}: it is somewhere in the whole snapshot or its export`);
+  }
+  assert.ok(s.counts.withheld >= 2 * POS.length, 'each withheld value is counted');
+  // the control row keeps its text whole, and the search reaches every offset of it: a miss above is the withholding, not a short index
+  const control = byEntity(s, 'sensor.ecco_intel_pos_control');
+  assert.equal(control.redacted.pos_note, benignControl());
+  for (const m of BENIGN_MARKERS) assert.deepEqual(searchRows(s.rows, m).map((r) => r.entity_id), ['sensor.ecco_intel_pos_control'], `the search finds ${m}`);
+  assert.ok(exported.includes(benignControl()), 'the export carries the harmless long text whole');
+});
+
+// Review round 5, NIT: the catalogue's extra key patterns are the one place where a catalogue (data) can make the page run an expression of its own.
+test('AC10 [r5] a catalogue pattern that repeats a group holding an alternation or a repeat, or repeats too much, is refused (ignored, never thrown); sound patterns still work (reviewer probe probe-redos)', () => {
+  const refused = [['(a|aa)*c', 'aac'], ['(a|a?)+$', 'aaa'], ['((a|b))*c', 'abc'], ['(?:a|aa)+c', 'aac'], ['(x+x+)+y', 'xxy'], ['(a*)*b', 'ab'], ['(a|b){2,}c', 'abc'],
+    ['(a?)+b', 'ab'], ['((a+))+b', 'aab'], ['(?:(?:a+))+b', 'aab'], ['((a)?)+b', 'ab'], ['a*a*a*a*b', 'aaab'], ['.*.*.*.*x', 'ax'], ['a+a+a+a+b', 'aaaab']];
+  for (const [pattern, key] of refused) {
+    assert.equal(redactAttributes({ [key]: 'visible' }, { extraKeyPatterns: [pattern] })[key], 'visible', `${pattern} is ignored, so a key it would match is not withheld by it`);
+    assert.ok(new RegExp(pattern, 'i').test(key), `${pattern} does match ${key} (the control: ignoring it is a decision of the card, not a typo here)`);
+  }
+  const sound = [['^site_owner$', 'site_owner'], ['^(?:foo|bar)_key$', 'bar_key'], ['owner', 'my_owner_name'], ['^[a-z]+_(?:token|secret)$', 'cloud_secret'], ['^zz(?:ab|cd)?x$', 'zzcdx'],
+    ['a*b*c*d', 'aabbccd'], ['^[(|]+$', '(|('], ['\\(a|b\\)*c', 'zzb)c']];
+  for (const [pattern, key] of sound) assert.equal(redactAttributes({ [key]: 'hidden' }, { extraKeyPatterns: [pattern] })[key], WITHHELD, `${pattern} withholds ${key}`);
+  // the work: a key that made the old reader run for a third of a second at 36 characters (and for minutes at 60) costs nothing now
+  const t0 = performance.now();
+  for (const n of [36, 60, 5000]) redactAttributes({ [`${'a'.repeat(n)}`]: 1 }, { extraKeyPatterns: ['(a|aa)*c', '(x+x+)+y', '(a|a?)+$'] });
+  assert.ok(performance.now() - t0 < 250, `${(performance.now() - t0).toFixed(0)} ms`);
+});
+
+test('AC10 [r5] a catalogue pattern is never run on more than 200 characters of a key: a longer key is read from both ends, so a name hidden at the end of a long key is still found', () => {
+  const seen = [];
+  const original = RegExp.prototype.test;
+  RegExp.prototype.test = function spy(s) {
+    if (this.source === '^zzhead' || this.source === 'zzmark$' || this.source === 'zzshort') seen.push(String(s).length);
+    return original.call(this, s);
+  };
+  let out;
+  try {
+    out = redactAttributes({ [`zzhead${'k'.repeat(5000)}zzmark`]: 'v-long', zzshortkey: 'v-short', other: 'v-other' }, { extraKeyPatterns: ['^zzhead', 'zzmark$', 'zzshort'] });
+  } finally {
+    RegExp.prototype.test = original;
+  }
+  assert.ok(seen.length >= 5, `the patterns were run (${seen.length} times)`);
+  assert.ok(Math.max(...seen) <= 200, `longest text a pattern was run on: ${Math.max(...seen)}`);
+  assert.deepEqual(Object.values(out).sort(), [WITHHELD, WITHHELD, 'v-other'].sort(), 'the long key is withheld through its start OR its end, the short one as before, the other is shown');
+  const endOnly = redactAttributes({ [`${'k'.repeat(5000)}zzmark`]: 'v' }, { extraKeyPatterns: ['zzmark$'] });
+  assert.deepEqual(Object.values(endOnly), [WITHHELD], 'a pattern that matches only the END of a 5000-character key still withholds');
+  const startOnly = redactAttributes({ [`zzhead${'k'.repeat(5000)}`]: 'v' }, { extraKeyPatterns: ['^zzhead'] });
+  assert.deepEqual(Object.values(startOnly), [WITHHELD], 'and one that matches only the START');
+});
+
+test('AC16 [r5] validateConfig reports every problem with a path and a fixed message, and echoes no value (the strip line is built from these)', () => {
+  const bad = validateConfig({ always: 'no', production: 7, page_size: 3, alerts_from: 'x', allow_custom_cards: ['bad', 5] });
+  assert.equal(bad.errors.length, 6);
+  assert.deepEqual(bad.errors.map((e) => e.path), ['page_size', 'alerts_from', 'allow_custom_cards[0]', 'allow_custom_cards[1]', 'always', 'production']);
+  assert.ok(bad.errors.every((e) => typeof e.message === 'string' && e.message.length > 10 && !e.message.includes('"x"')));
+  assert.deepEqual(bad.production, []);
+  assert.equal(validateConfig(undefined).errors.length, 1);
+});

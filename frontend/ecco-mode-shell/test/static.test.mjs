@@ -906,3 +906,42 @@ test('AC6 [r4] the guard also refuses a changed or removed pinned write, and ign
   assert.ok(code.includes('[aria-checked="true"]') && !withoutStyle(code).includes('[aria-checked="true"]'));
   assert.deepEqual(ariaProblems(code), []);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 5 ([r5]). Four reviewer mutants (J13, J21: a custom property set on the shell by the call that sets one on a bar segment or a ring; AR08: a shadow root
+// on the strip) were caught only by the opt-in browser check, so on a machine with no Chrome they passed every suite. The first two slipped through because the round-1
+// pin read the SHAPE of an inline-style call ('--ecco-<letters>', then String(...)) and not its receiver or its name.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('inline style [r5]: the two setProperty calls are exactly the bar segment width and the tile ring percentage; receiver, property name and value are pinned (reviewer mutants J13, J21)', () => {
+  const total = (code.match(/\.style\.setProperty\(/g) || []).length;
+  const sites = [...code.matchAll(/([A-Za-z_][\w$.]*(?:\[[^\]]*\])*)\.style\.setProperty\(\s*'(--[a-z-]+)'\s*,\s*([^;]*?)\);/g)].map((m) => [m[1], m[2], m[3]]);
+  assert.equal(total, 2);
+  assert.equal(sites.length, total, 'every call has a quoted name and a receiver the pin can read');
+  assert.deepEqual(sites, [['seg', '--ecco-w', 'String(c[s])'], ['ringEl', '--ecco-p', 'String(ring.pct)']], 'receiver, name and value of both calls');
+  // the two receivers are made once, each as a plain span of its own, and never assigned again (so neither can be pointed at the shell, the host or the strip)
+  assert.equal((code.match(/\bconst seg = mk\(doc, 'span', \{ 'data-seg': s, title: /g) || []).length, 1);
+  assert.equal((code.match(/\bconst ringEl = mk\(doc, 'span', \{ class: 'ring', 'aria-hidden': 'true' \}/g) || []).length, 1);
+  assert.equal((code.match(/(?<![\w$.-])(?:seg|ringEl)\s*=(?!=)/g) || []).length, 2, 'only the two declarations assign them');
+  assert.doesNotMatch(code, /\b(?:seg|ringEl)\.(?:parentNode|parentElement|closest|getRootNode|ownerDocument)\b/, 'neither receiver is walked up to an ancestor');
+  // the two custom properties that are set are read by the stylesheet for exactly these two elements (the bar segments and the rings), and by nothing else
+  assert.match(src, /\.healthbar>span\{flex:var\(--ecco-w,1\) 1 0;/);
+  assert.match(src, /\.ring\{[^}]*calc\(var\(--ecco-p,0\)\*1%\)/);
+  assert.equal((src.match(/var\(--ecco-w\b/g) || []).length, 1, '--ecco-w is read once');
+  assert.equal((src.match(/var\(--ecco-p\b/g) || []).length, 1, '--ecco-p is read once');
+});
+
+test('shadow roots [r5]: attachShadow is written once, as this.attachShadow in the constructor of the card; no other element is given a shadow root (reviewer mutant AR08)', () => {
+  const lines = code.split('\n').filter((l) => /attachShadow|shadowRoot|attachInternals|ShadowRoot/.test(l));
+  assert.equal(lines.length, 1, `lines that mention a shadow root: ${JSON.stringify(lines)}`);
+  assert.equal(lines[0], "    this._root = typeof this.attachShadow === 'function' ? this.attachShadow({ mode: 'open' }) : null;");
+  assert.equal((code.match(/attachShadow/g) || []).length, 2, 'the test and the call, on that one line');
+  const cls = code.indexOf('class EccoModeShell');
+  const ctor = code.indexOf('  constructor() {', cls);
+  const next = code.indexOf('\n  static getStubConfig()', ctor);
+  const at = code.indexOf(lines[0]);
+  assert.ok(cls > 0 && ctor > cls && next > ctor, 'the constructor of the card element is found');
+  assert.ok(at > ctor && at < next, 'and the call is inside it');
+  // nothing reads a shadow root back from another element, and nothing is attached to a variable that is not `this`
+  assert.doesNotMatch(code, /\b(?!this\b)\w+\.attachShadow\b/);
+  assert.doesNotMatch(code, /\[\s*['"`]attach/);
+});
