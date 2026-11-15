@@ -708,3 +708,128 @@ On this PC (Google Chrome 157, headless, window 520 x 1500 with a 390 px card, a
 - `secrets.mjs`: two exports were added; `hostileAttributes()` and `forbiddenStrings()` carry them as well, so every existing end-to-end hostile test now also runs them.
 - `mutations.test.mjs`: 36 mutants were appended (their count is in 15.6); nothing was removed or changed.
 - `test_geek_mode_privacy.py`: five scanners and nine checks were added (the old scanners and checks are unchanged).
+
+## 16. Review round 4 (15 Nov 2026): findings and fixes
+
+The fourth review found two MAJOR findings and two NIT findings. Round 3's direction (pin the stylesheet, allowlist what can reach the strip, a strict reader, a behavioural browser net,
+`state_not_in`, the redaction gaps) is complete and unchanged (section 15); this round does not redo it. Each finding was reproduced first (the reviewer's mutants run against the committed
+suites), then fixed; each fix has a test that fails without it and mutants that undo it. No assertion was weakened or deleted (section 16.7). The same rules held: nothing pinned, sealed or
+deployed was edited, nothing is live, nothing was pushed.
+
+### 16.1 The findings and what was done
+
+| # | Severity | Finding | Fix | Proof |
+|---|---|---|---|---|
+| 1 | MAJOR | Reviewer mutants J2 (`ui.strip.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false')`) and J5 (`aria-live` set to `off` in Geek Mode) survived all five node suites AND the round-3 headless Chrome check (2856 of 2856). A screen-reader user in Geek Mode would get no safety alert while Production still announced them. A comment in `static.test.mjs` said aria-hidden writes were pinned; no assertion checked one | The CSS nets cannot see an attribute, so the same structural rule is applied to attributes (section 16.2): every attribute write of the card is at a pinned site; the aria / role / tabindex keys of every built element are counted; no other door to an accessibility property exists; the element tests compare the strip, everything around it and every alert line in both modes and require region / polite / a label / role alert or status / no aria-hidden, inert or hidden; the browser check reads the same attributes and compares them in both modes | `test/aria-guard.mjs` and 3 tests in `static.test.mjs` (a pin of 18 sites; 39 planted breaks, each also appended at the end of the module); 2 tests in `element.test.mjs` (9 scenarios x 6 steps; 23 planted attribute changes); 3 new checks per state, 1 per alert line and 3 per pair in the browser check (3192 checks, from 2856), shown by 26 offline measurement controls; 21 new mutants (J2, J5 and 19 variants); the self-test has 6 more broken copies (31 of 31 caught) |
+| 2 | MAJOR | Reviewer mutants P3 (an `input_number` in the main package) and P5 (a template `sensor` named `ECCO Intel zz probe`): `tools/geek_mode_coverage.py --check` still printed "match a fresh regeneration" and exited 0. `_package_entities` read only `input_boolean`, template `binary_sensor` and `automation` (and `input_number` of the prefs package) and skipped anything else, so a new package entity was neither COVERED nor an EXCEPTION in the ledger, which breaks AC15 | `_package_entities` fails closed (section 16.3): every top-level key of the three Intelligence package files and every kind of entity in a template block is either modelled or refused with a `UniverseError` that names it; a fourth `ecco_intel*` package file, a missing one, a malformed one and an entity id defined twice are refused too | `test_geek_mode_coverage.py` 56 new checks (block [6]: 52 checks, 50 of them package cases; and P3 and P5 as mutations of a scratch tree: 4 checks); `test_geek_mode_ledger.py` 8 new checks (block [6]: P3 and P5 end to end through `--check`, through the writer, and restored) |
+| 3 | NIT | Probe: a MAC address written with spaces (`AA BB CC DD EE FF`) was shown, and so were prose such as `mqtt pass hunter22`, `p@ss: hunter22`, `0x1A2B3C4D5E6F` and a bare key named `pass`. The bare `pass` is a documented choice; none of these occurs in the Intelligence data | A value rule for six bytes separated by single spaces with at least one letter (`MAC address (spaced)`), the same pattern in the Python strict scanners (the privacy suite compares the two texts); the bare `pass` choice is written into the README and section 16.4; the other shapes are listed there as still shown | `core.test.mjs` 3 tests; `secrets.mjs` `SECRET_VALUES_R4` (3 values) in every end-to-end hostile test; 4 new mutants; `test_geek_mode_privacy.py` 3 new checks |
+| 4 | NIT | Child cards are mounted inside the shell's shadow root. A child card that has no shadow root of its own could put a `<style>` element into its light DOM, and that stylesheet would apply to the strip; neither the pin nor `validateChildCards` sees it. Found by reading the code | Documented, not changed (section 16.4 and the README): the cards used today render into their own shadow root; a custom card in `always` must already be named by the owner; the production list is not filtered. A nested shadow root per region (or the browser check with that card mounted) is a decision for the second tab | none (documentation only) |
+
+How the failures were shown. J2 and J5 were built from the committed card and run against the committed round-3 suites (the five node suites and the strip-check suite, 449 tests):
+both pass 449 of 449; the round-3 browser check reports PASS 2856 of 2856 on each. Against this round's suites J2 fails 4 and J5 fails 3 of the new `AC6 [r4]` tests (the element
+comparison, the source pin and one more of the source tests among them), and the new browser check fails 96 and 72 of 3192 checks. P3 and P5 were applied to a scratch copy of the
+packages: `--check` exited 0 and said the files match; now it exits 1 with a finding that names the key, and the writer refuses as well (the new Python tests fail on the round-3 tool: 4 checks in the
+ledger suite, 4 in the coverage suite before it stops on the missing constants).
+
+### 16.2 The accessibility net, and what it cannot see
+
+Three nets, none of which asks whether a break is one somebody has already thought of:
+
+1. **The source pin** (`test/aria-guard.mjs`, used by `static.test.mjs`). Every `setAttribute`, `toggleAttribute` and `removeAttribute` call of the card must be one of 18 pinned sites, each
+   written as method, attribute and receiver (`setAttribute('aria-hidden') on svg`, `setAttribute('aria-checked') on ui.opts[m]`, `setAttribute('aria-pressed') on ui.problems` are the only ARIA writes after a
+   build: never the strip, the shell or an alert). The attribute name must be a single-quoted literal (or `k`, in the two builders that take it from the literal they are given), so a
+   template literal, a concatenation, a variable and an upper-case spelling are each reported. The `role`, `aria-*`, `tabindex`, `hidden`, `inert`, `style`, `slot`, `part`, `popover` and `contenteditable`
+   keys of every object literal are counted (for example `aria-live` in exactly two: the strip and the Geek status line). No other door is used: ARIA reflection properties (`el.ariaHidden`,
+   `el.role`), attribute-node and named-item APIs, `classList`, `className`, `inert`, `Object.assign`, an alias, `call`, `apply` or `bind` of a method, a method reached by bracket. Formatting
+   is free; a new write, a changed receiver or name, a second write at a pinned site or a removed one is reported until a person edits the pin in the same commit. The strip's own literal and its alert nodes
+   stay pinned by the round-3 test.
+2. **The element comparison** (`element.test.mjs`). In nine scenarios (a healthy view, the three severities together, each of the seven alerts), after the first render, in Geek Mode, after an update and a tick
+   with a theme change, back in Production, again in Geek and again in Production, the strip's complete attribute map, the accessibility attributes of every ancestor up to the host, of the host itself and
+   of every node inside the strip, and the role of every alert line are identical, and they satisfy the rule: role `region`, `aria-live` polite, a label, no `aria-hidden` (except the decorative icons), `inert`,
+   `hidden` or `style`, role `alert` for a critical alert and `status` for the others, none on the quiet line. A second test plants 23 changes on a live element (aria-hidden true and false, aria-live off, removed and
+   assertive, role presentation or removed, an empty or missing label, inert, hidden and style on the strip, aria-hidden, inert and a role on the shell and the host, hidden or aria-hidden on an alert line, a critical
+   alert that is only a status, aria-live inside the strip) and requires each to be reported, and a changed label that is still a label to differ between the modes.
+3. **The browser check** (`preview/check-strip.mjs`). It now also reads, from the real page, the `role`, `aria-hidden`, `aria-live`, `aria-label`, `aria-atomic`, `aria-relevant`, `aria-busy`, `inert` and `hidden`
+   attributes of the strip, each of its ancestors (through the shadow root to the host and the page) and each alert line, and judges: none of `aria-hidden`, `inert`, `hidden` (of any value) on the strip or an
+   ancestor; role `region`, `aria-live` polite and a label of at least five characters; no `aria-busy` or `aria-relevant`; the right role on each line; and the same attributes on all of them in both modes. The
+   self-test gained six broken copies (J2, J5, aria-hidden on the shell, inert on the host, role presentation on the strip in Geek Mode, every alert line given role presentation).
+
+What they cannot see, honestly:
+
+- A static read of source cannot exclude every dynamic way to write an attribute (a method name computed at run time). The card already refuses `eval`, `Function`, `Reflect`, `Proxy`, `globalThis` and `document`, and
+  the guard refuses the alias and bracket forms of the three methods; the two behavioural nets look at the result instead of the source, and between them a dynamic write is caught as soon as it happens on the strip,
+  its ancestors, the host or a line.
+- The DOM stand-in does not model ARIA reflection properties (`ui.strip.ariaHidden = 'true'` sets a JavaScript property and no attribute there): only the source pin and, in a real browser, the browser check (a real
+  element reflects the property to the attribute) see that: the `ariaHidden` mutant fails 96 of 3192 browser checks. The mutation proof includes three such mutants, killed by the pin.
+- None of the nets runs a screen reader or reads the browser's accessibility tree (it is not reachable from a headless page dump). The attributes are the evidence; a role Chrome computes differently from the attribute
+  is not measured.
+- A person can edit the pin over a harmful write. What the pin guarantees is that no new write passes unseen.
+
+### 16.3 The package files fail closed
+
+`tools/geek_mode_coverage.py` reads three package files of the Intelligence tab and now models exactly what they hold, constant by constant: `PACKAGE_MAIN_KEYS` (`input_boolean`, `template`, `automation` in
+`ecco_intelligence.yaml`), `PACKAGE_PREFS_KEYS` (`input_number` in `ecco_intelligence_prefs.yaml`), `PACKAGE_DASHBOARD_KEYS` (`lovelace` in `ecco_intelligence_dashboard.yaml`, a registration that defines no entity: the
+tool now holds it to that) and `TEMPLATE_BLOCK_KEYS` (`binary_sensor`). It raises a `UniverseError`, and so exits 1 for `--check` and for the writer, for:
+
+- any other top-level key in a package file (an `input_text`, `input_select`, `counter`, `timer`, `script`, `sensor`, `group`, `homeassistant`, `mqtt`, `lovelace` in the wrong file and so on: 22 kinds are tested);
+- any other key in a template block: a `sensor`, `number`, `select`, `button`, `image`, `weather`, `switch` or `light` block, or a trigger-based block (its `trigger` key is not modelled either);
+- a fourth file whose name starts with `ecco_intel` in `home-assistant/packages` (any extension), or one of the three missing;
+- a package that is not a mapping, a `template` that is not a list of mappings, an `automation` that is not a list, an automation or binary sensor with no usable alias or name, an `input_boolean` or
+  `input_number` that is not a mapping of helpers, and an entity id that two definitions produce (two names that slug alike).
+
+A kind the tool models (another alert automation with an `ecco_intel_` id, for example) passes the walk and is then caught by the coverage check as an uncatalogued source, as before. To add a new kind of
+entity to a package file, model it in `_package_entities`, give it catalogue texts (or an exception with a reason from the fixed list), and the ledger is regenerated. Other package files
+(`ecco_pro.yaml` and the rest) are not read; a data point defined in one of those is outside this ledger and would have to be discovered at run time (the card discovers `ecco_intel_` entities without a hand-designed card).
+
+### 16.4 What is still shown, and the child cards' style scope
+
+Redaction (finding 3). New: six bytes written with single spaces, at least one letter among them, anywhere in a string (`aa bb cc dd ee ff`, also inside a sentence), under any key except that a revision
+key does not excuse it (a revision has no spaces). Over-withholding: any prose that happens to hold six two-digit hex bytes with a letter (`be ad ca fe 01 02`). **A bare key named `pass` is shown on purpose**
+(`self_test: pass`, `pass: ok`): it is also a test result; a password under `wifi_pass`, `mqttPass`, `pw` and the other qualified names is withheld, and so is a quoted `"pass": "..."` pair inside a string.
+Still shown, added to the list in 15.3: prose that names a password in words (`mqtt pass hunter22`), `p@ss: hunter22`, a MAC address written as a `0x` hex literal, and an all-digit MAC address written with spaces
+(`00 11 22 33 44 55`), which cannot be told from six numbers. None occurs in the Intelligence data (the privacy suite's strict scanners, which now include the spaced form, find none in any committed fixture or in the catalogue).
+
+Child cards (finding 4). The shell mounts child cards inside its own shadow root, in the `always` and `production` regions. A child that renders into its own shadow root (the ECCO Intelligence card, the pause
+tile and Home Assistant's built-in cards do) cannot style the strip. A child with no shadow root of its own could add a `<style>` element to its light DOM, which belongs to the shell's tree scope and would apply to
+the strip. The pin reads the shell's `STYLE`, `validateChildCards` reads a child's configuration, and the browser check mounts no child, so none of them sees it. Two controls exist today: a custom card in `always`
+must be named in `allow_custom_cards` by the owner, and the `production` list is not filtered (controls live there). Options for the second tab, to be decided before any third-party card is allowed in either
+region: mount each region's children inside a nested element with its own shadow root (the cost is that `querySelector` from the shell no longer reaches them, and a number of element tests would need a helper),
+or run the browser check with that card mounted. This was found by reading the code, not run in Home Assistant, and nothing was changed for it here.
+
+### 16.5 What the owner needs to know
+
+1. **A new attribute write in the card now needs the pin edited in the same commit** (`test/aria-guard.mjs`, `ARIA_PIN`), exactly as a stylesheet change needs the style pin. That is the intended friction.
+2. **Adding a new kind of entity to an Intelligence package file now stops the ledger build** until the tool models it. That is the intended behaviour: the alternative was a ledger that said it matched while an
+   entity was unaccounted for.
+3. The browser check found no defect in the shell itself: the real card passes all 3192 checks. J2 and J5 were never in the card; they were holes in the tests.
+4. The decision on child cards (16.4) belongs to the second-tab work. Nothing else changed for the owner: the integration steps of section 8 are unchanged, no pinned or deployed file was edited.
+
+### 16.6 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 135, element 110, coverage 4, static 41, real-catalogue 157, strip-check 11, mutation proof 215) | 673 of 673 pass; 213 of 213 mutants killed (188 before this round: 25 new, of which 21 aria and 4 spaced-MAC) |
+| J2 and J5 against the round-3 suites, then against these | before: 449 of 449 pass on each; after: 4 and 3 of the new tests fail, and the mutation proof kills both |
+| `node preview/check-strip.mjs` | PASS: 48 states, 24 Production / Geek pairs, 3192 of 3192 checks (2856 before this round) |
+| `node preview/check-strip.mjs --selftest` | SELFTEST PASS: the card passes and 31 of 31 broken copies fail (the 25 of round 3 and the 6 accessibility ones: 72 to 156 failing checks each) |
+| the round-3 browser check, then this one, on J2 and J5 (`--card`) | before: PASS 2856 of 2856 on each; after: FAIL, 96 and 72 of 3192 checks |
+| `python -I -B -X utf8 frontend/ecco-mode-shell/test/test_example_dashboard.py` | all example-dashboard checks pass |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass (110, 168, 60, 102, 149 and 35 checks; coverage gained 56, ledger 8, privacy 3) |
+| `tools/geek_mode_coverage.py --check`, `tools/gen_geek_fixtures.py --check` | both match a fresh regeneration (the ledger and the catalogue are byte-identical to before: the tool's walk changed, not its output) |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root` `tools/tests`, `ecco_core/tests`, `health/tests`, `intelligence/tests` | 21 of 21, 6 of 6, 2 of 2 and 33 of 33 |
+| `tools/run_offline_tests.py --root home-assistant/tests` | 18 of 18 |
+| `tools/run_offline_tests.py --root registry/tests` | NOT completed: it was still running (33 of 78 suites done) when this record was written. The one failure so far is `test_fallback_durable_host_compile.py`, a suite that needs a C++ compiler this PC does not have (rounds 1 and 2: 76 of 78, the two compiler-dependent suites failing as before). It reads nothing this change touches |
+
+### 16.7 Changes to existing tests (none weakens an assertion)
+
+- `static.test.mjs`: an import line and three tests were appended; one COMMENT in the round-3 literal test was rewritten (it claimed aria-hidden writes were pinned there, and no assertion checked one; it now says where they are pinned).
+  Every assertion is unchanged.
+- `element.test.mjs`: two tests and three helpers were appended; nothing else changed.
+- `core.test.mjs`: the import line also takes `SECRET_VALUES_R4`; three tests were appended.
+- `secrets.mjs`: one export was added (`SECRET_VALUES_R4`, 3 values); `hostileAttributes()` and `forbiddenStrings()` carry it, so every existing end-to-end hostile test also runs it.
+- `mutations.test.mjs`: 25 mutants and one constant were appended; nothing was removed or changed.
+- `strip-check.test.mjs`: the synthetic healthy measurement gained the accessibility attributes it now has to carry (and its builder two constants), one test was appended; every earlier case still fails the check it failed.
+- `preview/strip-check.html`, `strip-check-lib.mjs`, `check-strip.mjs`: the page measures the attributes, the judge checks them, the self-test table has six more entries; no existing check was changed.
+- `tools/geek_mode_coverage.py`: `_package_entities` was rewritten to fail closed (output unchanged on the real packages: `--check` passes against the committed ledger).
+- `test_geek_mode_coverage.py`, `test_geek_mode_ledger.py`, `test_geek_mode_privacy.py`: checks were appended (a block [6] in the first two, a scanner and two checks in the third); one ledger-suite import gained a name.

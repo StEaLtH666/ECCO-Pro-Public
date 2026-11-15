@@ -41,7 +41,10 @@ The design, the acceptance cases AC1 to AC16, the ledger and the findings are in
 - **Safety-critical alerts, recovery state and owner-action-needed status stay visible in both modes.** They come from the
   catalogue's `alerts` list through one function (`deriveAlerts`) and are drawn by one function (`renderAlertStrip`) into a strip
   that sits **outside** both switchable bodies. A condition that cannot be checked (entity unavailable, unknown, missing, or
-  attribute absent) is shown as "Cannot check this right now", never as silence.
+  attribute absent) is shown as "Cannot check this right now", never as silence. The strip is the same for a screen reader in both
+  modes: a labelled `region` that is announced politely (`aria-live="polite"`), its alerts `role="alert"` (critical) or `role="status"`,
+  and nothing in the shell ever sets `aria-hidden`, `inert`, `hidden` or a different role or `aria-live` on it or around it
+  (pinned in the source, compared in both modes by the element tests and by the browser check; see "Tests").
 - Geek Mode adds **no** permission: it shows, it offers no control and no installer-only write, and it bypasses nothing. The only
   things it can do besides read are: dispatch the standard `hass-more-info` event (open an entity) **for an entity of a read-only
   domain only** (sensor, binary sensor, event), write to the clipboard on a button press, and offer a Blob download on a button press.
@@ -115,10 +118,11 @@ Replaced by a **withheld marker** (an icon and the word) in rows, raw view, sear
 as token, password, secret, api key, authorization, bearer, credential, private key, webhook, cookie, session; latitude,
 longitude, location, address, e-mail, serial, MPAN; a compound key name that ends in a key word (`encryption_key`, `wifi_key`,
 `license_key`, `sshKey`), a compound key name that ends in a login word (`mqtt_user`, `db_login`, `serviceUser`; a bare `user` is shown),
-`pin` and `psk`, even for a short value; a compound key name that ends in `pass` (`wifi_pass`, `mqttPass`; a bare `pass` is shown: it is also a test result), `pw` in any
+`pin` and `psk`, even for a short value; a compound key name that ends in `pass` (`wifi_pass`, `mqttPass`; **a bare key named `pass` is shown on purpose**: it is also the
+word for a passed test, so a value under it is not withheld by the key rule, though a quoted `"pass": "..."` pair inside a string is), `pw` in any
 position and the compact `wifipass` and `wifipw`; webhook paths (the id in the path is the credential), under any key; JWT-like strings, long hex and base64 blobs, URLs with credentials or
-token query parameters, connection strings, IP and MAC addresses (with colons or dashes, in the dotted three-groups-of-four form, and twelve hex digits with no separator and at least one
-letter, except under a revision key), coordinate pairs (from three decimals), labelled coordinates (`lat 51.5 lon -0.1`) and hemisphere coordinates (`52.1 N 0.12 W`), the text of a
+token query parameters, connection strings, IP and MAC addresses (with colons or dashes, in the dotted three-groups-of-four form, written with a space between the six bytes
+(`aa bb cc dd ee ff`, at least one letter), and twelve hex digits with no separator and at least one letter, except under a revision key), coordinate pairs (from three decimals), labelled coordinates (`lat 51.5 lon -0.1`) and hemisphere coordinates (`52.1 N 0.12 W`), the text of a
 Wi-Fi QR code (`WIFI:S:...;P:...;;`), a password written as a quoted `pass` or `pw` pair or as `pass=value`,
 private host names, URLs whose host is one bare word (`ws://homeassistant:8123`), credential pairs also in JSON or Python form
 (`{"token":"..."}`); keys and values are matched on a **folded copy** (invisible and zero-width characters removed, compatibility forms
@@ -128,8 +132,9 @@ folded copy; the catalogue's own
 lists; key **names** that look secret. The export is passed through the redactor a second time. A public git revision is the one
 deliberate exception (a 40-hex git object name is shown only under a revision key). The redaction is a heuristic safety net: it errs
 towards withholding (for example a four-part dotted number reads as an address), and the catalogue's `exceptions` list is where a
-source is excluded on purpose. What it does NOT catch is listed honestly in section 15.3 of the design document (for example a coarse
-degrees-minutes-seconds position, a phone number, a post code, a chat-bot token inside a URL path, a compact word such as `wifipassword`).
+source is excluded on purpose. What it does NOT catch is listed honestly in sections 15.3 and 16.4 of the design document (for example a coarse
+degrees-minutes-seconds position, a phone number, a post code, a chat-bot token inside a URL path, a compact word such as `wifipassword`, a prose sentence such as
+`mqtt pass hunter22`, `p@ss: hunter22`, a `0x` hex literal of a MAC address and an all-digit MAC address written with spaces, which cannot be told from six numbers).
 
 ## Use
 
@@ -222,8 +227,9 @@ python -I -B -X utf8 test\test_example_dashboard.py          # the example wraps
 | `test/coverage.test.mjs` | the card-side coverage check, generic: on the mini fixtures by default; set `ECCO_GEEK_CATALOGUE`, `ECCO_GEEK_STATES` and `ECCO_GEEK_NOW` to run it on any catalogue and fixture |
 | `test/real-catalogue.test.mjs` | the card on the REAL catalogue, ledger and fixtures: AC6 (every alert, every way it can fire, both modes, never silent), AC7, AC8, AC9, AC10 on the noise decoys, AC11, AC12 and AC15 (card and ledger agree) |
 | `test/static.test.mjs` | forbidden APIs absent, `hass` reads pinned, names never computed from data, one adapter / one strip renderer, ASCII-only source, no secret-shaped text in the folder, and the STYLESHEET itself: no mode-dependent selector except the switch thumb; no hiding declaration except the `[hidden]` rule; only the pinned selectors may name the alert strip; no rule but `[hidden]` may use `:has()`, `:is()`, a positional pseudo-class, the hidden attribute or a sibling combinator; and a rule that can reach the strip may not carry a negative, huge or unjudgeable margin, inset, offset or translation, a negative z-index, an animation or a clip to a sliver of height, so no mode can hide, shift or clip the alert strip. Review round 3 added three nets that do not ask "is this a known way to hide it": the PIN (every rule, selector and declaration of the stylesheet is in `test/fixtures/style.pin.json`; any new or changed one fails until a person regenerates it with `node test/style-pin.mjs` and the diff is reviewed), the ALLOWLIST (a rule that can reach the strip may set only the properties on `STRIP_ALLOWLIST`, each with a bounded value) and a strict READER that refuses CSS escapes, comments, `@import`, unpinned at-rules and nested rules; mode and strip tokens are case-insensitive |
-| `test/strip-check.test.mjs` | the logic of the browser check, offline: colour and contrast arithmetic, a healthy measurement passes, measurements of a strip hidden in 40 ways fail, the two modes are compared, the browser search order, and the self-test table cannot rot |
-| `test/mutations.test.mjs` | 188 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed (at least 6 each for AC5, AC6, AC10, AC13) |
+| `test/aria-guard.mjs` (used by `static.test.mjs`) | review round 4: every `setAttribute`, `toggleAttribute` and `removeAttribute` call of the card is written at one of 18 pinned sites (method, attribute, receiver), the name is always a plain literal, the `role` / `aria-*` / `tabindex` keys of every built element are counted, and no other door to an accessibility property exists (ARIA reflection properties, attribute-node and named-item APIs, `classList`, `className`, `inert`, `Object.assign`, an alias or a bracket call of the three methods). A new write is a decision for a person, who edits the pin in the same commit |
+| `test/strip-check.test.mjs` | the logic of the browser check, offline: colour and contrast arithmetic, a healthy measurement passes, measurements of a strip hidden in 40 ways, or hidden from or muted for a screen reader in 25 ways, fail, the two modes are compared (pixels and accessibility attributes), the browser search order, and the self-test table cannot rot |
+| `test/mutations.test.mjs` | 213 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed (at least 6 each for AC5, AC6, AC10, AC13) |
 | `tools/tests/test_geek_mode_*.py` | the Python side: catalogue, coverage, ledger, fixtures, privacy, and (`test_geek_mode_example.py`) the example and the documents |
 
 Fixtures are synthetic: the small hand-made `test/fixtures/mini.*` and `hostile.states.json` of the card, and the generated
@@ -253,12 +259,15 @@ alert strip, in Production and in Geek Mode, light and dark, with and without Ho
 every state and both modes: a strip box with a real size, inside the viewport and inside its card; opacity 1 on the strip and every ancestor; no transform, rotate, scale,
 translate, filter, clip-path, mask, backdrop filter or size containment on the strip or any ancestor; no ancestor that clips it; nothing covering the middle of each line;
 text and icons at least 12 px, opaque, with at least 4.5 : 1 (text) and 3 : 1 (icon) contrast against what is behind them; and the SAME box with the same lines in both modes.
+Since review round 4 it also reads the ATTRIBUTES that decide what a screen reader gets, because pixels cannot show them: no `aria-hidden`, `inert` or `hidden` (of any value) on the strip
+or on any ancestor, role `region`, `aria-live="polite"` and a label on the strip, no `aria-busy` or `aria-relevant`, role `alert` / `status` on each alert line, and identical attributes on the strip,
+everything around it and every line in both modes. (The browser's own accessibility tree is not reachable from a headless page dump, so the attributes are the evidence.)
 
 ```
 cls
 cd frontend\ecco-mode-shell
 node preview\check-strip.mjs                  # check the card as it is (about two seconds)
-node preview\check-strip.mjs --selftest       # also prove it is not vacuous: the card passes, 25 deliberately broken copies fail (about 40 seconds)
+node preview\check-strip.mjs --selftest       # also prove it is not vacuous: the card passes, 31 deliberately broken copies fail (about one minute)
 node preview\check-strip.mjs --card C:\path\to\a-copy-of-ecco-mode-shell.js
 ```
 
@@ -266,6 +275,19 @@ It looks for Chrome and then Edge in the standard install places (`ECCO_CHROME` 
 exits 0 (3 with `--require`), so a skipped run cannot be mistaken for a pass. It serves the folder on the loopback address only, read only, writes nothing but a temporary
 browser profile it deletes, and makes no network request. The judging half (`preview/strip-check-lib.mjs`) is tested offline in `test/strip-check.test.mjs` with synthetic
 measurements of strips hidden in every way found so far. The static net stays the mandatory one; this one is run by a person.
+
+## Known limit: a child card shares the shell's style scope
+
+The child cards (the `always` and `production` lists) are mounted inside the shell's own shadow root, in two region elements, so a `<style>` element that a child puts into
+its LIGHT DOM (a card without a shadow root of its own) is part of the shell's tree scope and applies to the whole shell, the alert strip included. Neither the stylesheet pin nor
+`validateChildCards` can see it: the pin reads the shell's `STYLE`, the guard reads a child's configuration, not its DOM. The cards used today (the ECCO Intelligence card, the pause tile
+and Home Assistant's built-in cards) render into their own shadow root, so their styles cannot reach the strip. This was found by reading the code, not in a running Home Assistant.
+
+What holds it today: a custom card in the `always` list must be named in `allow_custom_cards` (the owner's decision per card; the `production` list is not filtered, because that is where
+controls live, so a style element there is held by review of the dashboard configuration alone), and the browser check
+(`preview/check-strip.mjs`) measures the strip with no child at all, so it does not cover a third-party child. **Before a third-party or unreviewed card is put in either list, do one of:**
+mount each region's children inside a nested element with its own shadow root (so a child's light-DOM style stays inside it), or run the browser check with that card mounted. This is an
+integration decision for the second tab (design document, section 16.4), not something this proof does.
 
 ## Design notes
 
