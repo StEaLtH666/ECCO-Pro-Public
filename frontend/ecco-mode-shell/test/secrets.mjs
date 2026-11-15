@@ -11,6 +11,7 @@ export const SECRET_VALUES = Object.freeze([
   { label: 'hex 32', value: j('0f1e2d3c4b5a69788796a5b4c3d2e1f0') },
   { label: 'base64 blob', value: j('Qm9ndXNTZWNyZXRCbG9i', 'MDEyMzQ1Njc4OWFi', 'Y2RlZkdISUpL') },
   { label: 'url userinfo', value: j('https', ':', '//', 'alice', ':', 'hunter2', '@', 'host.example', '.test/path') },
+  { label: 'url userinfo, bare host', value: j('https', ':', '//', 'bob', ':', 's3cr3tvalue', '@', 'intranet', '/status') },
   { label: 'url token query', value: j('https', ':', '//', 'host.example', '.test/api?', 'access_', 'token', '=abc123def456ghi') },
   { label: 'url signed path', value: j('/api/image/serve/x?', 'auth', 'Sig', '=zzzz1111aaaa2222') },
   { label: 'ipv4', value: j('192', '.', '168', '.', '77', '.', '23') },
@@ -73,6 +74,7 @@ export function forbiddenStrings() {
   for (const m of ['tokens-list-1', 'tokens-list-2', 'creduser', 'credpw', 'siteowner']) out.add(KEY_MARKER(m));
   for (const n of SECRET_KEY_NAMES) out.add(n);
   out.add('hunter2');
+  out.add('s3cr3tvalue');
   out.add('correcthorse');
   out.add(j('192', '.', '168', '.', '77', '.', '23'));
   return [...out];

@@ -1053,17 +1053,17 @@ border:1px solid rgba(160,190,255,.2);box-shadow:0 10px 30px rgba(6,10,24,.35),i
 .panel-head{display:grid;gap:2px}
 .panel-title{margin:0;font-size:1rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ecco-accent)}
 .panel-sub{margin:0;color:var(--ecco-fg2);font-size:.82rem}
-.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
+.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(122px,1fr));gap:8px}
 .count{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0 8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14)}
 .count>.ico{grid-row:1/3;width:22px;height:22px;color:var(--ecco-st,var(--ecco-fg2))}
 .count strong{font:700 1.3rem/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.count span{font-size:.78rem;color:var(--ecco-fg2)}
+.count span{font-size:.78rem;color:var(--ecco-fg2);overflow-wrap:normal}
 .healthbar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1)}
 .healthbar>span{flex:var(--ecco-w,1) 1 0;min-width:4px;background:var(--ecco-st)}
 .healthbar>[data-seg="STALE"]{background:repeating-linear-gradient(45deg,var(--ecco-st) 0 4px,transparent 4px 8px)}
 .healthbar>[data-seg="UNKNOWN"],.healthbar>[data-seg="NOT_MEASURED"]{background:radial-gradient(circle,var(--ecco-st) 0 1.6px,transparent 2px) 0 0/6px 10px}
 .healthbar>[data-seg="UNAVAILABLE"]{background:repeating-linear-gradient(90deg,var(--ecco-st) 0 3px,transparent 3px 5px)}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:10px}
 .tile{position:relative;min-width:0;border-radius:14px;background:linear-gradient(160deg,rgba(255,255,255,.1),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.16)}
 .tile-btn{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;width:100%;min-height:44px;padding:10px;border:0;border-radius:14px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .ring{position:relative;display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:conic-gradient(var(--ecco-st) calc(var(--ecco-p,0)*1%),rgba(255,255,255,.16) 0)}
@@ -1072,9 +1072,9 @@ border:1px solid rgba(160,190,255,.2);box-shadow:0 10px 30px rgba(6,10,24,.35),i
 .tile[data-ring="empty"] .ring{background:repeating-conic-gradient(rgba(255,255,255,.3) 0 8deg,transparent 8deg 24deg)}
 .tile[data-ring="none"] .ring{background:conic-gradient(rgba(255,255,255,.24) 0 100%)}
 .tile-body{display:grid;gap:1px;min-width:0}
-.tile-name{font-size:.78rem;color:var(--ecco-fg2)}
-.tile-val{font:700 1.1rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-width:0}
-.tile-sub{font-size:.76rem}
+.tile-name{font-size:.78rem;color:var(--ecco-fg2);overflow-wrap:break-word}
+.tile-val{font:700 1rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-width:0;overflow-wrap:break-word}
+.tile-sub{font-size:.76rem;overflow-wrap:break-word}
 @media (prefers-reduced-motion: no-preference){.tile[data-status="LIVE"] .ring{animation:ecco-pulse 3.2s ease-in-out infinite}}
 @keyframes ecco-pulse{0%,100%{box-shadow:0 0 0 0 rgba(111,220,160,0)}50%{box-shadow:0 0 14px 2px rgba(111,220,160,.38)}}
 .inspector{display:grid;gap:10px;min-width:0;padding:12px;border-radius:16px;background:var(--ecco-surface);border:1px solid var(--ecco-line)}
@@ -1129,8 +1129,8 @@ border:1px solid rgba(160,190,255,.2);box-shadow:0 10px 30px rgba(6,10,24,.35),i
 .keys{display:grid;gap:6px;margin:0;padding:0;list-style:none}
 .keys li{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
 .fine{margin:0;color:var(--ecco-fg2);font-size:.82rem}
-@container (min-width:561px){.attr{grid-template-columns:minmax(120px,.9fr) minmax(0,1.2fr) minmax(0,1.6fr);align-items:start}.toolbar{grid-template-columns:minmax(0,1fr) auto;align-items:start}}
-@container (max-width:560px){.row-toggle{grid-template-columns:minmax(0,1fr)}.row-side{justify-items:start;text-align:left}.tiles{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}.opt{padding:0 12px}.top{align-items:stretch}.switch{width:100%}}
+@container (min-width:561px){.attr{grid-template-columns:minmax(120px,.9fr) minmax(0,1.2fr) minmax(0,1.6fr);align-items:start}.toolbar{grid-template-columns:minmax(180px,1.1fr) minmax(0,2.6fr) auto;align-items:start}}
+@container (max-width:560px){.row-toggle{grid-template-columns:minmax(0,1fr)}.row-side{justify-items:start;text-align:left}.counts{grid-template-columns:repeat(2,minmax(0,1fr))}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile-btn{gap:8px;padding:8px}.ring{width:40px;height:40px}.ring::after{inset:4px}.ring>.ico{width:20px;height:20px}.tile-val{font-size:.88rem}.opt{padding:0 12px}.top{align-items:stretch}.switch{width:100%}}
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation: none !important;transition: none !important;scroll-behavior:auto !important}}
 `;
 
@@ -1602,7 +1602,8 @@ class GeekSurface {
       'data-priority': row.priority, 'data-source-id': row.id, 'data-discovered': row.discovered ? 'true' : 'false',
     });
     const extra = row.flags.slice(1).map((f) => mk(doc, 'span', { class: 'tag', 'data-flag-chip': f }, STATUS_WORD[f]));
-    const idLine = mk(doc, 'span', { class: 'row-ids' }, row.discovered ? `${row.entity_id} \u00b7 discovered` : `${row.id} \u00b7 ${row.entity_id}`);
+    const idText = row.discovered ? (row.title === row.entity_id ? 'discovered' : `${row.entity_id} \u00b7 discovered`) : `${row.id} \u00b7 ${row.entity_id}`;
+    const idLine = mk(doc, 'span', { class: 'row-ids' }, idText);
     const stateNode = mk(doc, 'span', { class: 'row-state', 'data-row-state': '' }, [row.stateText === WITHHELD ? valueNode(doc, WITHHELD) : doc.createTextNode(row.unitText ? `${row.stateText} ${row.unitText}` : row.stateText)]);
     const ageWords = row.status === 'NOT_MEASURED' ? 'no data' : `${row.ageText}${row.ageMonitored ? '' : ' \u00b7 age not monitored'}`;
     const toggle = mk(doc, 'button', { type: 'button', class: 'row-toggle', 'data-row-toggle': '', 'data-row-head': '', 'aria-expanded': open ? 'true' : 'false', 'data-focus-key': `${key}:t` }, [
