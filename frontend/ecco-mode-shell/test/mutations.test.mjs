@@ -13,7 +13,7 @@ import { cardDir } from './helpers.mjs';
 
 const nested = process.env.ECCO_MODE_SHELL_PATH !== undefined || process.env.ECCO_SKIP_MUTATIONS === '1';
 const REAL = path.join(cardDir, 'ecco-mode-shell.js');
-const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs'].map((f) => path.join(cardDir, 'test', f));
+const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs'].map((f) => path.join(cardDir, 'test', f));
 
 /** sub(find, replace[, all]): replace the one occurrence of `find` (or every occurrence with all = true). */
 const sub = (find, replace, all = false) => (s) => {

@@ -757,6 +757,14 @@ test('AC16 validateChildCards: the read-only Intelligence card passes; the pause
   assert.ok(r.errors.some((e) => e.action === 'toggle'));
 });
 
+test('AC16 validateChildCards: the existing dashboard watchdog and status entities card (read-only rows) passes in a Geek-visible region', () => {
+  const entities = { type: 'entities', title: 'Watchdog and status', show_header_toggle: false, state_color: true, entities: [
+    { entity: 'binary_sensor.ecco_intel_watchdog_fresh', name: 'Watchdog (fresh, recognised result)' }, { entity: 'binary_sensor.ecco_intel_fresh', name: 'Integration reports fresh' },
+    { entity: 'sensor.ecco_intel_status', name: 'Status' }, { entity: 'sensor.ecco_intel_data_quality', name: 'Data quality' }] };
+  assert.equal(validateChildCards([entities]).ok, true);
+  assert.equal(validateChildCards([{ ...entities, entities: [...entities.entities, { entity: 'input_boolean.ecco_intel_paused' }] }]).ok, false, 'adding the pause helper row would add a toggle');
+});
+
 test('AC16 validateChildCards: only none, more-info and navigate are allowed actions, under every action key and nesting', () => {
   const ok = (cfg) => validateChildCards([cfg]).ok;
   for (const a of ['none', 'more-info', 'navigate']) {

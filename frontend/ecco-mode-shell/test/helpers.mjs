@@ -124,3 +124,15 @@ export const tick = () => new Promise((r) => setImmediate(r));
 
 /** All text of a node tree. */
 export const textOf = (n) => n.textContent.replace(/\s+/g, ' ').trim();
+
+/**
+ * The inputs of the generic coverage test: the mini fixtures by default, or a real catalogue and a states fixture when
+ * ECCO_GEEK_CATALOGUE and ECCO_GEEK_STATES name files (the states file has the shape of fixtures/mini.states.json). This is how the
+ * information coverage ledger and the card are run against the SAME catalogue and fixtures when the real catalogue is merged in.
+ */
+export function coverageInputs() {
+  const c = process.env.ECCO_GEEK_CATALOGUE;
+  const s = process.env.ECCO_GEEK_STATES;
+  if (c && s) return { source: 'env', catalogue: JSON.parse(readFileSync(path.resolve(c), 'utf8')), statesRaw: JSON.parse(readFileSync(path.resolve(s), 'utf8')) };
+  return { source: 'mini', catalogue: miniCatalogue(), statesRaw: miniStatesRaw() };
+}

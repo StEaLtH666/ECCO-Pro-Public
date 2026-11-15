@@ -1,0 +1,106 @@
+# ECCO Intelligence with the Mode Shell (EXAMPLE, SHADOW, advice only) - a standalone one-view Lovelace dashboard (YAML mode).
+#
+# This is an offline proof, not a deployment: nothing in the repository registers, copies or loads it, and it does not replace
+# home-assistant/dashboards/ecco_intelligence.yaml, which it never changes. It shows how the SAME cards of that dashboard are
+# wrapped by ONE reusable shell with a Production / Geek Mode switch (frontend/ecco-mode-shell):
+#
+#   always:      shown in BOTH modes, so they must be read-only: the shell REFUSES (with a visible notice and an alert) any card in
+#                this list that carries an action other than none, more-info or navigate, a service call, or a write-capable type.
+#                The existing ECCO Intelligence card and the existing watchdog / status entities card are copied unchanged.
+#   production:  shown only in Production Mode, passed through unchanged (the very same configuration object), so a control keeps
+#                exactly the permissions it has today. The existing pause tile is copied unchanged and lives here: Geek Mode only
+#                shows, it never offers a control. Switching modes hides the tile, it never changes it.
+#   catalogue:   the Geek Mode catalogue (schema ecco-geek-catalogue/1), included from data, never code. The card does not fetch it.
+#
+# The text-fallback markdown card is copied unchanged and stays OUTSIDE the shell on purpose: it still works if the shell's resource
+# is not loaded.
+#
+# INTEGRATION TODO (owner steps, none done here; each would edit a pinned or deployed file, so each needs its own approval):
+#   1. generate the real catalogue (the parallel catalogue workstream, branch dev/mode-shell-catalogue) and place it next to this file
+#      as ecco_intelligence.catalogue.json;
+#   2. add the card resource (frontend/ecco-mode-shell/ecco-mode-shell.js) to the deploy manifest and to the Lovelace resources;
+#   3. add this dashboard (or a merge of it into ecco_intelligence.yaml) to deployment/ha-manifest.yaml and the dashboard registration
+#      package, plus a CHANGELOG line and the scope-chain entries the release process requires;
+#   4. add a Python pin suite under tools/tests (CI runs no Node), mirroring tools/tests/test_intelligence_card.py.
+
+title: "ECCO Intelligence (modes)"
+views:
+  - title: Intelligence
+    path: intelligence
+    icon: mdi:head-lightbulb-outline
+    cards:
+      - type: custom:ecco-mode-shell
+        view_id: intelligence
+        title: "ECCO Intelligence"
+        catalogue: !include ecco_intelligence.catalogue.json
+        always:
+          - type: custom:ecco-intelligence-card
+            title: "ECCO Intelligence"
+            entities:
+              status: sensor.ecco_intel_status
+              charge_target: sensor.ecco_intel_charge_target
+              overnight_demand: sensor.ecco_intel_overnight_demand
+              export_event: sensor.ecco_intel_export_event
+              dump_to_grid: sensor.ecco_intel_dump_to_grid
+              predicted_day_load: sensor.ecco_intel_predicted_day_load
+              pv_tomorrow: sensor.ecco_intel_pv_tomorrow
+              predicted_morning_soc: sensor.ecco_intel_predicted_morning_soc
+              accuracy: sensor.ecco_intel_accuracy
+              data_quality: sensor.ecco_intel_data_quality
+              fresh: binary_sensor.ecco_intel_fresh
+              paused: input_boolean.ecco_intel_paused
+              watchdog_fresh: binary_sensor.ecco_intel_watchdog_fresh
+
+          - type: entities
+            title: Watchdog and status
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: binary_sensor.ecco_intel_watchdog_fresh
+                name: Watchdog (fresh, recognised result)
+              - entity: binary_sensor.ecco_intel_fresh
+                name: Integration reports fresh
+              - entity: sensor.ecco_intel_status
+                name: Status
+              - entity: sensor.ecco_intel_data_quality
+                name: Data quality
+        production:
+          - type: tile
+            entity: input_boolean.ecco_intel_paused
+            name: Pause ECCO Intelligence (advice only)
+            icon: mdi:pause-circle-outline
+            tap_action:
+              action: toggle
+            icon_tap_action:
+              action: toggle
+            hold_action:
+              action: more-info
+
+      - type: markdown
+        title: "ECCO Intelligence (text fallback)"
+        content: |-
+          {%- set s = 'sensor.ecco_intel_status' -%}
+          {%- set iv = state_attr(s, 'integration_version') -%}
+          {%- set g = state_attr(s, 'generated_at') -%}
+          {%- set known = ['OK', 'NO_ADVICE', 'BLOCKED', 'INSUFFICIENT_DATA', 'STALE', 'SELF_TEST_FAILED', 'STARTING', 'PAUSED'] -%}
+          {%- set labels = ['I-D1', 'I-D2', 'I-D3', 'I-D4', 'I-D5', 'I-D6', 'I-D7', 'I-D8', 'I-D9'] -%}
+          {%- set dec = state_attr(s, 'decisions') -%}
+          {%- if states(s) in ['unknown', 'unavailable'] -%}
+          **ECCO Intelligence is not publishing.**
+          {%- elif not (state_attr(s, 'contract_version') == 'ecco-intel-entities/1' and state_attr(s, 'mode') == 'SHADOW'
+                        and state_attr(s, 'applies_nothing') is sameas true and iv is string and (iv | trim | length) > 0
+                        and states(s) in known) -%}
+          **Intelligence output not recognised.** Nothing from it is shown.
+          {%- else -%}
+          **SHADOW MODE - advice only, nothing is applied.**
+
+          Status: **{{ states(s) }}**{% if g is string and as_timestamp(g, none) is not none %} · report from
+          {{ as_timestamp(g) | timestamp_custom('%a %d %b %H:%M') }}{% endif %}
+
+          Open decisions: {% if dec is mapping %}{% for k in labels if dec.get(k) != 'RECORDED' %}{{ k }}{{ ' ' if not loop.last else '' }}{% else %}none{% endfor %}{% else %}unknown{% endif %}
+
+          The figures, the reasons and the blocked conditions are on the ECCO Intelligence card above.
+          {%- endif %}
+
+          Watchdog: {{ 'fresh' if is_state('binary_sensor.ecco_intel_watchdog_fresh', 'on') else 'not fresh' }} ·
+          Pause: {{ states('input_boolean.ecco_intel_paused') }}
