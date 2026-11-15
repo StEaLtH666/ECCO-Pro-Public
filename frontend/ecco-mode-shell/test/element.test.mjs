@@ -4,7 +4,7 @@
 // fail-closed behaviour.
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { installDom, installResizeObserver, MElement, MEvent } from './minidom.mjs';
+import { installDom, installResizeObserver, MElement, MEvent, MDocument, MShadowRoot, tripwires, TRIPWIRE_NAMES } from './minidom.mjs';
 
 const { registry, doc, win } = installDom(); // BEFORE the card module is evaluated
 const ros = installResizeObserver();
@@ -54,6 +54,9 @@ function mount({ config = {}, states = null, hass = null, catalogue = miniCatalo
 afterEach(() => {
   for (const el of live) el.disconnectedCallback();
   live.clear();
+  // review round 8: after EVERY test, in whatever mode it left the element, nothing has read or called a Web Animations, style-map or stylesheet member of any element, shadow root or document (see the tripwires in minidom.mjs)
+  const touched = tripwires.splice(0);
+  assert.deepEqual(touched, [], 'a tripwire was touched');
 });
 
 const root = (el) => el.shadowRoot;
@@ -2056,4 +2059,147 @@ test('AC12 [r7] a hostile entity (200 attributes of 19990 characters of near-mis
   assert.ok(q(el, '[data-ecco-alert-strip]'), 'the alert strip is there');
   assert.ok(rowFor(el, 'sensor.ecco_intel_hostile_freeze'), 'and so is the row');
   el.disconnectedCallback();
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 8 ([r8]): TRIPWIRES. The round-7 net refused the NAMES of the animation and stylesheet APIs in the source; two mutants passed every node suite, one by building the name from pieces
+// (const fn = 'ani' + 'mate'; strip[fn](...)), one by finding it on the prototype chain (Object.getOwnPropertyNames). The stand-in had no such member, so the mutants' own `typeof` test was false and they did nothing.
+// Now every element, shadow root, fragment and document of the stand-in HAS each member (on the prototype, as a browser has it) and records being read or called; the afterEach above asserts that nothing was
+// recorded after every test, and the tests below assert it step by step, in both modes.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC6 [r8] the tripwires are armed (negative control for the net): each member of the Web Animations, style-map and stylesheet APIs is recorded when it is read or called, however it is reached: by name, by a computed key built from pieces, through the prototype chain; on an element, a shadow root, a fragment and a document', () => {
+  tripwires.splice(0);
+  assert.ok(TRIPWIRE_NAMES.length >= 10);
+  for (const need of ['animate', 'getAnimations', 'attributeStyleMap', 'computedStyleMap', 'sheet', 'adoptedStyleSheets', 'insertRule']) assert.ok(TRIPWIRE_NAMES.includes(need), need);
+  const el = doc.createElement('div');
+  const targets = { element: el, 'shadow root': el.attachShadow(), fragment: doc.createDocumentFragment(), document: doc };
+  assert.ok(targets.document instanceof MDocument && targets['shadow root'] instanceof MShadowRoot);
+  for (const [what, target] of Object.entries(targets)) {
+    for (const name of TRIPWIRE_NAMES) {
+      tripwires.splice(0);
+      void target[name];
+      assert.ok(tripwires.length >= 1, `${what}.${name}: reading it is recorded`);
+      tripwires.splice(0);
+      const v = target[name];
+      if (typeof v === 'function') {
+        tripwires.splice(0);
+        v.call(target, [], {});
+        assert.ok(tripwires.some((t) => t.endsWith('()')), `${what}.${name}: calling it is recorded`);
+      }
+    }
+  }
+  // a name made of pieces, a computed key, and the prototype chain
+  for (const [label, reach] of [
+    ['a name built from pieces', () => el[['ani', 'mate'].join('')]([{ opacity: 0 }], { duration: 1 })],
+    ['a computed key', () => { const k = 'getAnimations'; return el[k](); }],
+    ['the prototype chain', () => {
+      let p = Object.getPrototypeOf(el);
+      let k = null;
+      while (p && !k) {
+        k = Object.getOwnPropertyNames(p).find((n) => n.length === 7 && n.startsWith('anim')) || null;
+        if (!k) p = Object.getPrototypeOf(p);
+      }
+      assert.ok(k, 'the member is found on the chain');
+      return p[k].call(el, [{ opacity: 0 }], { duration: 1 });
+    }],
+    ['a stylesheet reached from an element', () => el.sheet.insertRule('a{}')],
+    ['a style map', () => el.attributeStyleMap.set('opacity', 0)],
+    ['an adopted stylesheet', () => { doc.adoptedStyleSheets = []; }],
+  ]) {
+    tripwires.splice(0);
+    reach();
+    assert.ok(tripwires.length >= 1, `${label}: recorded`);
+  }
+  tripwires.splice(0);
+  assert.equal(doc.recorded.apiCalls, tripwires, 'and the document exposes the record');
+});
+
+test('AC6 [r8] BOTH MODES, EVERY STEP: nothing of the Web Animations, style-map or stylesheet APIs is read or called by the card on mount, on a switch to Geek Mode, on opening every row, on searching, filtering and paging, on a hass update, on a switch back and on disconnecting (the strip and everything else, in both modes)', () => {
+  const check = (where) => assert.deepEqual(tripwires.splice(0), [], where);
+  tripwires.splice(0);
+  const el = mount({ states: miniStates(TRIGGER.A01) });
+  check('after mount, in Production');
+  geek(el);
+  check('after the switch to Geek Mode');
+  openEverything(el);
+  check('with every group and row open');
+  typeSearch(el, 'status');
+  check('after a search');
+  choose(el, 'status', 'LIVE');
+  check('after a filter');
+  typeSearch(el, '');
+  choose(el, 'status', 'all');
+  check('after clearing both');
+  el.hass = makeHass(miniStates((s) => { s['sensor.ecco_intel_status'] = mkState('sensor.ecco_intel_status', 'OK', {}); }));
+  check('after a hass update in Geek Mode');
+  production(el);
+  check('after the switch back to Production');
+  geek(el);
+  production(el);
+  geek(el);
+  check('after switching back and forth');
+  el.disconnectedCallback();
+  check('after disconnecting');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 8 ([r8]): an entity that the snapshot did not read, in the DOM. The snapshot reads at most LIMITS.snapshotChars across all its entities (budget.test.mjs); this is what a person sees past it.
+// ---------------------------------------------------------------------------------------------------------------------------
+function unreadView() {
+  const N = 30;
+  const sources = Array.from({ length: N }, (_, i) => ({
+    id: `B${String(i).padStart(2, '0')}`, entity_id: `sensor.ecco_big_${String(i).padStart(2, '0')}`, group: 'g', title: `Big ${i}`, description: '', priority: 'normal', unit: null,
+    expected_update_s: null, stale_after_s: null, origin: 'integration', attributes: [],
+  }));
+  const catalogue = {
+    schema: 'ecco-geek-catalogue/1', view_id: 'big', title: 'Big', contract: 'big/1', groups: [{ id: 'g', title: 'G', order: 1, description: '' }], sources,
+    discover: { entity_prefixes: [], group: 'g', exclude_entity_ids: [] }, alerts: [], exceptions: [], redaction: { extra_key_patterns: [] },
+  };
+  const states = {};
+  for (let i = 0; i < N; i += 1) {
+    const id = `sensor.ecco_big_${String(i).padStart(2, '0')}`;
+    const a = {};
+    for (let k = 0; k < 6; k += 1) a[`text_${k}`] = `zqmark${String(i).padStart(2, '0')}x${k} ${'The planner checked the overnight window. '.repeat(480).slice(0, 19970)}`;
+    states[id] = mkState(id, 'ok', a);
+  }
+  return { catalogue, states, N };
+}
+
+test('AC12 [r8] the DOM says what was not read: Geek Mode counts them in the header, each row says "values not read" and holds nothing of the entity, the Problems filter lists them, and Production says so in one sentence; the entities that were read still show their text', () => {
+  const { catalogue, states, N } = unreadView();
+  const el = mount({ catalogue, states, config: { page_size: 100 } });
+  const prodNote = q(el, '[data-ecco-summary]').textContent;
+  assert.match(prodNote, /\d+ data points were not read: this view holds more data than it reads at once/, 'Production says it');
+  geek(el);
+  openEverything(el);
+  const sub = q(el, '[data-geek-sub]').textContent;
+  const m = /(\d+) not read \(too much data for one pass\)/.exec(sub);
+  assert.ok(m, sub);
+  const unread = Number(m[1]);
+  assert.ok(unread >= 8 && unread < N, `${unread} of ${N} not read`);
+  assert.equal(rows(el).length, N, 'every entity is a row, read or not');
+  const text = allText(root(el));
+  let withText = 0;
+  for (let i = 0; i < N; i += 1) {
+    const id = `sensor.ecco_big_${String(i).padStart(2, '0')}`;
+    const row = rowFor(el, id);
+    assert.ok(row, id);
+    const marker = `zqmark${String(i).padStart(2, '0')}x0`;
+    const shown = allText(row);
+    if (shown.includes('values not read') && !shown.includes(marker)) continue;
+    withText += 1;
+    assert.ok(shown.includes(marker) || text.includes(marker), `${id}: a row that was read shows its text`);
+  }
+  assert.equal(withText, N - unread, 'the rows that were read are the others');
+  // an entity that was not read has no marker text anywhere in the shadow tree
+  const lastId = `sensor.ecco_big_${String(N - 1).padStart(2, '0')}`;
+  assert.ok(!text.includes(`zqmark${String(N - 1).padStart(2, '0')}x0`), `nothing of ${lastId} (not read) is in the DOM`);
+  assert.ok(allText(rowFor(el, lastId)).includes('values not read'), 'its row says so');
+  // the Problems filter lists them (and the data points that were read are live)
+  q(el, '[data-inspector-filter="problems"]').click();
+  assert.equal(rows(el).length, unread, 'the Problems filter lists exactly the rows that were not read');
+  // and a search for the words
+  q(el, '[data-inspector-filter="problems"]').click();
+  typeSearch(el, 'not read');
+  assert.equal(rows(el).length, unread);
 });

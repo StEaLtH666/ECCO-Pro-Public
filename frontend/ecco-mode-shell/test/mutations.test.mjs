@@ -14,9 +14,12 @@ import { findBrowser } from '../preview/check-strip.mjs';
 
 const nested = process.env.ECCO_MODE_SHELL_PATH !== undefined || process.env.ECCO_SKIP_MUTATIONS === '1';
 const REAL = path.join(cardDir, 'ecco-mode-shell.js');
-const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs', 'real-catalogue.test.mjs', 'scan.test.mjs'].map((f) => path.join(cardDir, 'test', f));
+const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs', 'real-catalogue.test.mjs', 'scan.test.mjs', 'budget.test.mjs'].map((f) => path.join(cardDir, 'test', f));
 // review round 7: the timing tests take several seconds, so only the mutants about speed (`perf: true`) and the baseline are given them
 const PERF_SUITE = path.join(cardDir, 'test', 'perf.test.mjs');
+// review round 8: the differential gate (test/differential.test.mjs) is heavy too, so it is given only to the mutants about the rules (`diff: true`) and to the baseline
+const DIFF_SUITE = path.join(cardDir, 'test', 'differential.test.mjs');
+const extraSuites = (m) => [...(m.perf ? [PERF_SUITE] : []), ...(m.diff ? [DIFF_SUITE] : [])];
 
 /** sub(find, replace[, all]): replace the one occurrence of `find` (or every occurrence with all = true). */
 const sub = (find, replace, all = false) => (s) => {
@@ -91,7 +94,7 @@ const MUTANTS = [
   { id: 'AC10-no-ipv4-rule', ac: 'AC10', note: 'IP addresses pass', f: sub("['IPv4 address', '.',", "['IPv4 address', 'zzzz',") },
   { id: 'AC10-extra-patterns-ignored', ac: 'AC10', note: 'the catalogue extra key patterns are ignored', f: sub("  return keyHasFragment(fold(String(key)), extra) || keyHasFragment(tokens.join('_'), extra);", '  return false;') },
   { id: 'AC10-privacy-keys-ignored', ac: 'AC10', note: 'latitude, longitude, address and friends pass', f: sub('if (SECRET_TOKENS.has(tokens[i]) || PRIVATE_TOKENS.has(tokens[i])) return true;', 'if (SECRET_TOKENS.has(tokens[i])) return true;') },
-  { id: 'AC10-discovered-id-not-redacted', ac: 'AC10', note: 'a discovered entity id that looks secret is shown', f: sub("const shown = redactString(id, 'note');", 'const shown = id;') },
+  { id: 'AC10-discovered-id-not-redacted', ac: 'AC10', note: 'a discovered entity id that looks secret is shown', f: sub("? WITHHELD : redactString(job.id, 'note');", '? WITHHELD : job.id;') },
   // ---- AC11 search and filters
   { id: 'AC11-terms-or', ac: 'AC11', note: 'search terms are OR-ed', f: sub('terms.every((t) => r.searchText.includes(t))', 'terms.some((t) => r.searchText.includes(t))') },
   { id: 'AC11-problems-ignored', ac: 'AC11', note: 'the problems filter does nothing', f: sub('(!f.problems || r.problem)', 'true') },
@@ -132,7 +135,7 @@ const MUTANTS = [
   { id: 'AC6-redundant-lines-kept', ac: 'AC6', note: 'a listed unknown state does not silence the cannot-check lines for that entity', f: sub(" || (a.when.state_in && (input.state === 'unavailable' || input.state === 'unknown')))) downActive.add(a.entity_id);", ')) downActive.add(a.entity_id);') },
   { id: 'AC8-rows-capped-low', ac: 'AC8', note: 'only twenty attribute rows are listed for an entity', f: sub('attrsPerRow: 200,', 'attrsPerRow: 20,') },
   { id: 'AC8-declared-subrows-dropped', ac: 'AC8', note: 'declared first-level paths of a present dict are not listed', f: sub('      subs.push(attrRow(a.name, rest, top, rest.split(\'.\').length, a, has, has ? value[rest] : undefined));', '') },
-  { id: 'AC10-extra-patterns-not-prepared', ac: 'AC10', note: 'the catalogue extra key patterns never reach the redactor', f: sub('const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan() };', 'const opts = { extraKeyPatterns: [], scan: newScan() };') },
+  { id: 'AC10-extra-patterns-not-prepared', ac: 'AC10', note: 'the catalogue extra key patterns never reach the redactor', f: sub('const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan(), work };', 'const opts = { extraKeyPatterns: [], scan: newScan(), work };') },
   { id: 'AC16-nested-cards-not-walked', ac: 'AC16', note: 'the guard does not look inside nested cards', f: sub("    if (v !== null && typeof v === 'object') walkCard(v, `${path}.${k}`, bad, seen, depth + 1);", '') },
   // ---- review round 1: each fix is shown to be needed by a mutant that undoes it
   { id: 'AC16-open-row-any-domain', ac: 'AC16', note: 'the row offers Open in Home Assistant for every domain (a writable domain dialog is an extra write path)', f: sub('      if (canOpenMoreInfo(row.entity_id)) {', '      if (true) {') },
@@ -156,7 +159,7 @@ const MUTANTS = [
   { id: 'AC3-setconfig-no-reset', ac: 'AC3', note: 'setConfig on the same element keeps Geek Mode', f: sub('    this._ctl.reset();\n    const cfg = validateConfig(config);', '    const cfg = validateConfig(config);') },
   { id: 'AC3-setconfig-forces-geek', ac: 'AC3', note: 'setConfig switches to Geek Mode', f: sub('    this._ctl.reset();\n    const cfg = validateConfig(config);', "    this._ctl.set('geek');\n    const cfg = validateConfig(config);") },
   { id: 'AC6-not-in-coerced', ac: 'AC6', note: 'not_in compares as text, so the text "true" counts as the boolean true', f: sub('when.not_in.some((x) => x === v)', 'when.not_in.some((x) => String(x) === String(v))') },
-  { id: 'AC6-not-in-inverted', ac: 'AC6', note: 'not_in fires when the value IS listed', f: sub("if (when.not_in) return when.not_in.some((x) => x === v) ? 'clear' : 'active';", "if (when.not_in) return when.not_in.some((x) => x === v) ? 'active' : 'clear';") },
+  { id: 'AC6-attribute-not-in-inverted', ac: 'AC6', note: 'not_in fires when the value IS listed', f: sub("if (when.not_in) return when.not_in.some((x) => x === v) ? 'clear' : 'active';", "if (when.not_in) return when.not_in.some((x) => x === v) ? 'active' : 'clear';") },
   { id: 'AC6-state-outside-inverted', ac: 'AC6', note: 'state_outside fires for a listed state', f: sub("return when.state_outside.includes(input.state) ? 'clear' : 'active';", "return when.state_outside.includes(input.state) ? 'active' : 'clear';") },
   { id: 'AC6-state-outside-fires-when-down', ac: 'AC6', note: 'state_outside also fires for an unavailable or unknown state', f: sub("  if (down) return 'unknown';\n  if (when.state_in)", "  if (down && !when.state_outside) return 'unknown';\n  if (when.state_in)") },
   { id: 'AC6-in-and-not-in-both-accepted', ac: 'AC6', note: 'an alert with both in and not_in is accepted', f: sub("  if (isStr(w.attribute) && w.attribute !== '' && hasOwn(w, 'in') && hasOwn(w, 'not_in')) return null;\n", '') },
@@ -199,7 +202,7 @@ const MUTANTS = [
   { id: 'AC16-invalid-catalogue-keeps-sources', ac: 'AC16', note: 'an invalid catalogue still builds the rows of its valid sources, so partial coverage looks complete (reviewer mutant R2-41)', f: sub("const effective = this._cat.ok ? cat : { ...cat, sources: [], discover: { entity_prefixes: [], group: 'discovered', exclude_entity_ids: [] } };", 'const effective = cat;') },
   { id: 'AC16-invalid-catalogue-keeps-discovery', ac: 'AC16', note: 'an invalid catalogue still discovers entities by prefix', f: sub("const effective = this._cat.ok ? cat : { ...cat, sources: [], discover: { entity_prefixes: [], group: 'discovered', exclude_entity_ids: [] } };", 'const effective = this._cat.ok ? cat : { ...cat, sources: [] };') },
   { id: 'AC10-no-webhook-rule', ac: 'AC10', note: 'a webhook URL under an innocent key is shown (the id in its path is the credential)', f: sub("['webhook path', '/',", "['webhook path', 'zzzz',") },
-  { id: 'AC10-webhook-services-form-dropped', ac: 'AC10', note: 'the chat services webhook path is shown', f: sub('|hooks\\.[a-z0-9.-]{1,253}\\/services\\/[A-Za-z0-9/_-]{12,}/i],', '/i],') },
+  { id: 'AC10-webhook-services-form-dropped', ac: 'AC10', note: 'the chat services webhook path is shown', f: sub('|(?<=hooks\\.[a-z0-9.-]+)\\/services\\/[A-Za-z0-9/_-]{12,}/i],', '/i],') },
   { id: 'AC10-login-key-rule-dropped', ac: 'AC10', note: 'a key such as mqtt_user or db_login is shown', f: sub('  if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;\n', '') },
   { id: 'AC10-login-key-needs-no-qualifier', ac: 'AC10', note: 'a bare user key is withheld too (the rule needs a qualifier, as the key rule does)', f: sub('  if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;', '  if (LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;') },
   // ---- review round 3: state_not_in fail-safe (R3-20) and the redaction gaps
@@ -383,10 +386,6 @@ const MUTANTS = [
   { id: 'AC12-r7-pass-pair-prefix-walk', ac: 'AC12', perf: true, note: 'the unquoted pass pair walks a prefix of segments from every start, as in round 6', f: sub('|(?<![a-z0-9])(?:pass|pw)=', '|(?<![a-z0-9])(?:[a-z0-9]+[_-])*(?:pass|pw)=') },
   { id: 'AC12-r7-url-credentials-scheme-run', ac: 'AC12', perf: true, note: 'the url credentials rule reads the scheme as a run from every word boundary, as in round 6 (quadratic on a.a.a.a...)', f: sub("['url credentials', '@', /[a-z0-9+.-]:\\/\\/[^\\s/?#@]*@/i],", "['url credentials', '@', /\\b[a-z][a-z0-9+.-]*:\\/\\/[^\\s/?#@]*@/i],") },
   { id: 'AC12-r7-internal-host-scheme-run', ac: 'AC12', perf: true, note: 'the internal host name rule reads the scheme as a run from every word boundary, as in round 6', f: sub("['internal host name', '://', /[a-z0-9+.-]:\\/\\/[a-z0-9-]+", "['internal host name', '://', /\\b[a-z][a-z0-9+.-]*:\\/\\/[a-z0-9-]+") },
-  { id: 'AC12-r7-url-token-names-unbounded', ac: 'AC12', perf: true, note: 'the url token rule walks parameter names of any length around the key word', f: sub('{0,64}', '*', true) },
-  { id: 'AC12-r7-connection-pairs-value-unbounded', ac: 'AC12', perf: true, note: 'the first form of the connection pairs rule reads a value of any length from every key (host=host=host=... is quadratic)', f: sub('[^;\\s]{1,256}', '[^;\\s]+') },
-  { id: 'AC12-r7-jwt-segments-unbounded', ac: 'AC12', perf: true, note: 'the JWT rule reads segments of any length from every eyJ (eyJ-eyJ-eyJ-... is quadratic)', f: sub('{4,512}\\.[\\w-]{4,4096}', '{4,}\\.[\\w-]{4,}') },
-  { id: 'AC12-r7-webhook-host-unbounded', ac: 'AC12', perf: true, note: 'the webhook rule reads a host of any length from every hooks. (hooks.hooks.hooks... is quadratic)', f: sub('hooks\\.[a-z0-9.-]{1,253}', 'hooks\\.[a-z0-9.-]+') },
   { id: 'AC12-r7-budget-not-enforced', ac: 'AC12', perf: true, note: 'a string past the scan budget is still read', f: sub('    if (scan.left < 0) return WITHHELD;\n', '') },
   { id: 'AC12-r7-budget-huge', ac: 'AC12', perf: true, note: 'the scan budget is a hundred million characters (no bound in practice)', f: sub('entityChars: 100000,', 'entityChars: 100000000,') },
   { id: 'AC12-r7-budget-halved', ac: 'AC12', note: 'the scan budget is 50000 characters', f: sub('entityChars: 100000,', 'entityChars: 50000,') },
@@ -397,7 +396,7 @@ const MUTANTS = [
   { id: 'AC12-r7-key-read-after-exhaustion', ac: 'AC12', note: 'a key name is still read and shown after the budget is gone', f: sub('    if (ctx.scan.left <= 0) {\n      ctx.keyCount += 1;', '    if (false) {\n      ctx.keyCount += 1;') },
   { id: 'AC12-r7-key-unread-remembered', ac: 'AC12', note: 'a key the budget could not pay for is remembered as secret (the next export row, with a fresh budget, withholds it too)', f: sub('    if (ctx.scan.left < 0) return KEY_UNREAD;', '    if (ctx.scan.left < 0) { ctx.keys.set(key, KEY_UNREAD); return KEY_UNREAD; }') },
   { id: 'AC12-r7-export-shares-budget', ac: 'AC12', note: 'every row of an export draws on one budget', f: sub(', { eachItem: true })', ')') },
-  { id: 'AC12-r7-state-own-budget', ac: 'AC12', note: 'the attributes, the state, the unit and the name of an entity each have a budget of their own', f: sub('const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan() };', 'const opts = { extraKeyPatterns: cat.extraPatterns };') },
+  { id: 'AC12-r7-state-own-budget', ac: 'AC12', note: 'the attributes, the state, the unit and the name of an entity each have a budget of their own', f: sub('const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan(), work };', 'const opts = { extraKeyPatterns: cat.extraPatterns, work };') },
   { id: 'AC12-r7-budget-note-dropped', ac: 'AC12', note: 'an entity cut by the budget does not say so', f: sub('if (opts.scan.left < 0) rows.push(attrRow(', 'if (false) rows.push(attrRow(') },
   { id: 'AC12-r7-budget-per-string-not-total', ac: 'AC12', note: 'the budget is reset for every string (a limit per string, not per entity)', f: sub('    scan.left -= t.length;\n', '    scan.left = LIMITS.entityChars - t.length;\n') },
   // ---- review round 7: the chunk class (reviewer mutants N30 to N33 inside valueReason, and the substring forms of the round-6 chunk mutants)
@@ -430,6 +429,74 @@ const MUTANTS = [
   { id: 'AC6-r7-second-style-element', ac: 'AC6', note: 'Geek Mode makes a second style element that hides the strip', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') { const st = this.ownerDocument.createElement('style'); st.textContent = '[data-ecco-alert-strip]{display:none}'; this._root.appendChild(st); }`) },
   { id: 'AC6-r7-link-element', ac: 'AC6', note: 'Geek Mode makes a link element', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') { const lk = this.ownerDocument.createElement('link'); lk.setAttribute('rel', 'stylesheet'); this._root.appendChild(lk); }`) },
   { id: 'AC6-r7-computedstylemap', ac: 'AC6', note: 'Geek Mode reads the computed style map of the strip', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') void ui.strip.computedStyleMap;`) },
+  // ---- review round 8: the regression class (the rules written back as round 7 had them, with the bounds; `diff: true`: the differential gate is asked, and the bounds test of scan.test.mjs asks too)
+  { id: 'AC10-r8-jwt-bounded-as-round-7', ac: 'AC10', diff: true, note: 'the JWT rule is bounded as in round 7 ({4,512} and {4,4096}): a first segment of 600 characters is shown', f: sub('/(?<=\\beyJ[\\w-]{4,}\\.[\\w-]{4,})\\./],', '/\\beyJ[\\w-]{4,512}\\.[\\w-]{4,4096}\\.[\\w-]*/],') },
+  { id: 'AC10-r8-jwt-bounded-large', ac: 'AC10', diff: true, note: 'the JWT rule is bounded at 2000 and 8000 characters (a bound larger than anything a source writes is still a hole)', f: sub('/(?<=\\beyJ[\\w-]{4,}\\.[\\w-]{4,})\\./],', '/\\beyJ[\\w-]{4,2000}\\.[\\w-]{4,8000}\\.[\\w-]*/],') },
+  { id: 'AC10-r8-key-block-bounded-as-round-7', ac: 'AC10', diff: true, note: 'the key block label is bounded as in round 7 ({1,64}): a label of 80 characters is shown', f: sub('/-----BEGIN [A-Z0-9 ]+-----/],', '/-----BEGIN [A-Z0-9 ]{1,64}-----/],') },
+  { id: 'AC10-r8-url-token-bounded-as-round-7', ac: 'AC10', diff: true, note: 'the URL token parameter name is bounded as in round 7 ({0,64} each side): a name of 65 characters shows a real secret value',
+    f: sub('/[?&#;](?=[\\w.%-]*=[^&\\s]{3})(?=[\\w.%-]*?(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key))/i],',
+      '/[?&#;][\\w.%-]{0,64}(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\\w.%-]{0,64}=[^&\\s]{3,}/i],') },
+  { id: 'AC10-r8-url-token-bounded-large', ac: 'AC10', diff: true, note: 'the URL token parameter name is bounded at 300 characters each side',
+    f: sub('/[?&#;](?=[\\w.%-]*=[^&\\s]{3})(?=[\\w.%-]*?(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key))/i],',
+      '/[?&#;][\\w.%-]{0,300}(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\\w.%-]{0,300}=[^&\\s]{3,}/i],') },
+  { id: 'AC10-r8-connection-pairs-bounded-as-round-7', ac: 'AC10', diff: true, note: 'the connection pairs rule is bounded as in round 7 (a value of 256 after a boundary, any length only after a space, a semicolon or the start)',
+    f: sub('/(?<=\\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*);/i],',
+      '/\\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]{1,256}\\s*;|(?:^|[;\\s])(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*;/i],') },
+  { id: 'AC10-r8-connection-pairs-key-after-space-only', ac: 'AC10', diff: true, note: 'the connection pairs rule needs the key at the start, after a space or after a semicolon (a bracket, a comma or a quote before the key hides the pair)',
+    f: sub('/(?<=\\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*);/i],',
+      '/(?<=(?:^|[;\\s])(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*);/i],') },
+  { id: 'AC10-r8-webhook-host-bounded-as-round-7', ac: 'AC10', diff: true, note: 'the chat services webhook host is bounded as in round 7 ({1,253})', f: sub('(?<=hooks\\.[a-z0-9.-]+)\\/services\\/', 'hooks\\.[a-z0-9.-]{1,253}\\/services\\/') },
+  { id: 'AC10-r8-mac-dotted-narrowed-as-round-7', ac: 'AC10', diff: true, note: 'the dotted MAC rule looks for the letter in the fourteen characters only (2026.1114.0900.beef is shown)',
+    f: sub('|[a-f](?![0-9a-f.]*?[a-f])(?<=\\b[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}\\b[0-9a-f.]*[a-f])/i],', '/i],') },
+  // ---- review round 8: the rules written back as round 6 had them (exact, and quadratic on near-miss text: `perf: true`)
+  { id: 'AC12-r8-url-token-round-6-form', ac: 'AC12', perf: true, note: 'the URL token rule is the round-6 form (names of any length walked from every separator: quadratic on ?tokentoken...)',
+    f: sub('/[?&#;](?=[\\w.%-]*=[^&\\s]{3})(?=[\\w.%-]*?(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key))/i],',
+      '/[?&#;][\\w.%-]*(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\\w.%-]*=[^&\\s]{3,}/i],') },
+  { id: 'AC12-r8-connection-pairs-round-6-form', ac: 'AC12', perf: true, note: 'the connection pairs rule is the round-6 form (host=host=host=... is quadratic)',
+    f: sub('/(?<=\\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*);/i],',
+      '/\\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\\s*=\\s*[^;\\s]+\\s*;/i],') },
+  { id: 'AC12-r8-jwt-round-6-form', ac: 'AC12', perf: true, note: 'the JWT rule is the round-6 form (eyJ-eyJ-eyJ-... is quadratic)', f: sub('/(?<=\\beyJ[\\w-]{4,}\\.[\\w-]{4,})\\./],', '/\\beyJ[\\w-]{4,}\\.[\\w-]{4,}\\.[\\w-]*/],') },
+  { id: 'AC12-r8-webhook-round-6-form', ac: 'AC12', perf: true, note: 'the webhook rule is the round-6 form (hooks.hooks.hooks... is quadratic)', f: sub('(?<=hooks\\.[a-z0-9.-]+)\\/services\\/', 'hooks\\.[a-z0-9.-]+\\/services\\/') },
+  { id: 'AC12-r8-mac-dotted-round-6-form', ac: 'AC12', perf: true, note: 'the dotted MAC rule is the round-6 form (a look-ahead to the end of the dotted text from every start)',
+    f: sub('/\\b(?=[0-9a-f.]{0,13}[a-f])[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}\\b|[a-f](?![0-9a-f.]*?[a-f])(?<=\\b[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}\\b[0-9a-f.]*[a-f])/i],', '/\\b(?=[0-9a-f.]*[a-f])[0-9a-f]{4}\\.[0-9a-f]{4}\\.[0-9a-f]{4}\\b/i],') },
+  { id: 'AC12-r8-mac-dotted-eager-lookahead', ac: 'AC12', perf: true, note: 'the second alternative of the dotted MAC rule looks ahead greedily (a text of letters is walked from every letter)', f: sub('[a-f](?![0-9a-f.]*?[a-f])(?<=', '[a-f](?![0-9a-f.]*[a-f])(?<=') },
+  // ---- review round 8: KEY UNREAD (reviewer mutant M14) and the snapshot budget (budget.test.mjs, perf.test.mjs)
+  { id: 'AC10-r8-M14-key-unread-not-secret', ac: 'AC10', note: 'M14: a key the budget could not pay for is not treated as secret (every number and boolean under it is shown)', f: sub('const KEY_UNREAD = Object.freeze({ secret: true, digest: false });', 'const KEY_UNREAD = Object.freeze({ secret: false, digest: false });') },
+  { id: 'AC10-r8-key-unread-strings-only', ac: 'AC10', note: 'a key the budget could not pay for withholds a string but shows a number, a boolean, a list and a dict', f: sub('    if (info.secret) return WITHHELD;\n  }\n  const t = typeof v;', "    if (info.secret && (typeof v === 'string' || info === KEY_UNREAD && typeof v === 'string')) return WITHHELD;\n  }\n  const t = typeof v;") },
+  { id: 'AC12-r8-snapshot-budget-not-spent', ac: 'AC12', note: 'the snapshot budget is never charged (every entity is read)', f: sub('    budget.left -= row.spent;\n', '') },
+  { id: 'AC12-r8-snapshot-budget-ignored', ac: 'AC12', note: 'the decision to read ignores the budget', f: sub('isObj(state) && budget.left <= 0)', 'false)') },
+  { id: 'AC12-r8-snapshot-budget-one-more', ac: 'AC12', note: 'one entity more than the budget pays for is read', f: sub('isObj(state) && budget.left <= 0)', 'isObj(state) && budget.left <= -LIMITS.entityChars)') },
+  { id: 'AC12-r8-snapshot-budget-huge', ac: 'AC12', perf: true, note: 'the snapshot budget is a hundred million characters (no bound in practice)', f: sub('snapshotChars: 2000000,', 'snapshotChars: 100000000,') },
+  { id: 'AC12-r8-snapshot-budget-tenfold', ac: 'AC12', perf: true, note: 'the snapshot budget is twenty million characters', f: sub('snapshotChars: 2000000,', 'snapshotChars: 20000000,') },
+  { id: 'AC12-r8-order-not-ranked', ac: 'AC12', note: 'the entities are read in catalogue order, not alert-bearing first', f: sub('  jobs.sort((a, b) => a.rank - b.rank || a.order - b.order);', '  jobs.sort((a, b) => a.order - b.order);') },
+  { id: 'AC12-r8-alert-rank-dropped', ac: 'AC12', note: 'an entity an alert watches is read like any other source', f: sub("rank: cat.alertIds.has(src.entity_id) ? 0 : src.priority === 'headline' ? 1 : 2,", "rank: src.priority === 'headline' ? 1 : 2,") },
+  { id: 'AC12-r8-headline-rank-dropped', ac: 'AC12', note: 'a headline source is read like any other source', f: sub("rank: cat.alertIds.has(src.entity_id) ? 0 : src.priority === 'headline' ? 1 : 2,", 'rank: cat.alertIds.has(src.entity_id) ? 0 : 2,') },
+  { id: 'AC12-r8-discovered-first', ac: 'AC12', note: 'the discovered entities are read before the catalogue sources', f: sub('rank: cat.alertIds.has(id) ? 0 : 3,', 'rank: cat.alertIds.has(id) ? 0 : -1,') },
+  { id: 'AC12-r8-unread-through-the-cache', ac: 'AC12', note: 'an entity that is not to be read is given a row through the cache (it is read, or a cached row is shown)', f: sub('  if (unread) return buildRow(source, state, nowMs, cat, order, ledgerKey, true);\n', '') },
+  { id: 'AC12-r8-unread-keeps-parts', ac: 'AC12', note: 'an entity that was not read still has its parts built (it is scanned and its text is in the row)', f: sub('const parts = present && !unreadHere ? partsFor(source, state, cat) : null;', 'const parts = present ? partsFor(source, state, cat) : null;') },
+  { id: 'AC12-r8-unread-state-shown', ac: 'AC12', note: 'the state of an entity that was not read is shown as it is', f: sub('else stateText = unreadHere ? WITHHELD : parts.stateStr;', 'else stateText = unreadHere ? String(state.state) : parts.stateStr;') },
+  { id: 'AC12-r8-unread-no-note', ac: 'AC12', note: 'an entity that was not read does not say so in its attribute list', f: sub("if (unreadHere) attributes = [attrRow('\\u2026', '\\u2026 values not read', null, 0, null, true, UNREAD_NOTE)];", 'if (unreadHere) attributes = [];') },
+  { id: 'AC12-r8-unread-not-a-problem', ac: 'AC12', note: 'an entity that was not read is not a problem row', f: sub("problem: cls.status !== 'LIVE' || unreadHere,", "problem: cls.status !== 'LIVE',") },
+  { id: 'AC12-r8-unread-not-counted', ac: 'AC12', note: 'the count of entities that were not read is dropped', f: sub('    if (r.unread) counts.unread += 1;\n', '') },
+  { id: 'AC12-r8-summary-silent', ac: 'AC12', note: 'Production does not say that data points were not read', f: sub("  if (unread > 0) notes.push(", "  if (false) notes.push(") },
+  { id: 'AC12-r8-spent-zero', ac: 'AC12', note: 'a row carries no cost (the budget is never charged)', f: sub('order, unread: unreadHere, spent: parts ? parts.spent : 0,', 'order, unread: unreadHere, spent: 0,') },
+  { id: 'AC12-r8-nodes-not-charged', ac: 'AC12', note: 'the values an entity visited are not charged (twenty thousand numbers cost nothing)', f: sub(' + work.nodes * LIMITS.nodeChars);', ');') },
+  { id: 'AC12-r8-base-cost-dropped', ac: 'AC12', note: 'an entity costs only what it read (a tiny entity is free)', f: sub('const spent = Math.max(LIMITS.entityBaseChars, Math.min(', 'const spent = Math.max(0, Math.min(') },
+  { id: 'AC12-r8-cost-uncapped', ac: 'AC12', note: 'the cost of an entity is not capped at its own budget (a read that overshoots is charged in full)', f: sub('Math.min(LIMITS.entityChars, LIMITS.entityChars - opts.scan.left)', '(LIMITS.entityChars - opts.scan.left)') },
+  { id: 'AC12-r8-charge-order-attributes-first', ac: 'AC12', note: 'the attributes are charged and read before the state, the name and the unit (round 7: the headline of an over-budget entity is withheld)',
+    f: chain(sub('  const red = redactAttributes(attrsRaw, opts);\n  const declared', '  const declared'), sub('  const stateRed = redactValue(stateStr, opts);\n', '  const red = redactAttributes(attrsRaw, opts);\n  const stateRed = redactValue(stateStr, opts);\n')) },
+  { id: 'AC12-r8-charge-order-name-last', ac: 'AC12', note: 'the name and the unit are charged after the attributes', f: chain(sub("  const friendly = isStr(attrsRaw.friendly_name) ? redactValue(attrsRaw.friendly_name, { ...opts, key: 'note' }) : '';\n", ''), sub("  const unitRaw = isStr(attrsRaw.unit_of_measurement) ? redactValue(attrsRaw.unit_of_measurement, opts) : '';\n  const red = redactAttributes(attrsRaw, opts);\n", "  const unitRaw = isStr(attrsRaw.unit_of_measurement) ? redactValue(attrsRaw.unit_of_measurement, opts) : '';\n  const red = redactAttributes(attrsRaw, opts);\n  const friendly = isStr(attrsRaw.friendly_name) ? redactValue(attrsRaw.friendly_name, { ...opts, key: 'note' }) : '';\n")) },
+  { id: 'AC12-r8-id-length-uncapped', ac: 'AC12', note: 'an id of any length is read (and a long one that no rule objects to is shown)', f: sub('const display = job.id.length > LIMITS.entityIdChars ? WITHHELD : redactString(job.id, \'note\');', "const display = redactString(job.id, 'note');") },
+  // ---- review round 8: the tripwires (reviewer mutants M38, M39, M40, M40b): the member is reached by a name made of pieces, by a computed key, by the prototype chain
+  { id: 'AC12-r8-header-count-dropped', ac: 'AC12', note: 'the Geek header does not say how many data points were not read', f: sub("${c.unread ? ` \\u00b7 ${c.unread} not read (too much data for one pass)` : ''}", '') },
+  { id: 'AC6-r8-M38-animate-bracket-concat', ac: 'AC6', browser: true, note: 'M38: Geek Mode hides the strip with the animation API reached by a name built from pieces (const fn = ani + mate; strip[fn](...))', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const fn = 'ani' + 'mate'; if (mode === 'geek' && typeof ui.strip[fn] === 'function') ui.strip[fn]([{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' }); }`) },
+  { id: 'AC6-r8-M39-attribute-style-map', ac: 'AC6', note: 'M39: Geek Mode sets the opacity of the strip through its typed style map', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek' && ui.strip.attributeStyleMap) ui.strip.attributeStyleMap.set('opacity', 0);`) },
+  { id: 'AC6-r8-M40-prototype-call', ac: 'AC6', note: 'M40: Geek Mode finds animate on the grandparent prototype of the strip and calls it (in a real browser animate lives one level higher, on Element.prototype, so this one hides nothing there: the headless check passes it, and the node suites alone kill it)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const P = Object.getPrototypeOf(Object.getPrototypeOf(ui.strip)); const k = Object.getOwnPropertyNames(P).find((n) => n.length === 7 && n.startsWith('anim')); if (mode === 'geek' && k) P[k].call(ui.strip, [{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' }); }`) },
+  { id: 'AC6-r8-M40b-prototype-walk-animate', ac: 'AC6', browser: true, note: 'M40b: Geek Mode walks the whole prototype chain of the strip, finds animate and calls it', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { let P = ui.strip; let k; while (P && !k) { P = Object.getPrototypeOf(P); if (P) k = Object.getOwnPropertyNames(P).find((n) => n.length === 7 && n.startsWith('anim')); } if (mode === 'geek' && k) P[k].call(ui.strip, [{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' }); }`) },
+  { id: 'AC6-r8-computed-key-getanimations', ac: 'AC6', note: 'Geek Mode pauses the animations of the strip through a key held in a variable', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const k = mode === 'geek' ? 'getAnimations' : 'x'; if (typeof ui.strip[k] === 'function') for (const a of ui.strip[k]()) a.pause(); }`) },
+  { id: 'AC6-r8-computed-key-sheet', ac: 'AC6', note: 'Geek Mode inserts a rule into a stylesheet reached through a key held in a variable', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const k = 'sh' + 'eet'; if (mode === 'geek' && this._root.firstChild && this._root.firstChild[k]) this._root.firstChild[k].insertRule('[data-ecco-alert-strip]{display:none}'); }`) },
+  { id: 'AC6-r8-computed-key-adopted', ac: 'AC6', note: 'Geek Mode adopts a stylesheet reached through a key held in a variable', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const k = ['adopted', 'Style', 'Sheets'].join(''); if (mode === 'geek') this.ownerDocument[k] = []; }`) },
+  { id: 'AC6-r8-string-key-animate', ac: 'AC6', note: 'Geek Mode calls animate through a quoted bracket key', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek' && typeof ui.strip['animate'] === 'function') ui.strip['animate']([{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' });`) },
 ];
 
 const MIN = { AC5: 6, AC6: 6, AC10: 6, AC13: 6 };
@@ -478,8 +545,8 @@ if (nested) {
   });
   const baseFile = path.join(dir, 'baseline.mjs');
   writeFileSync(baseFile, original);
-  const baseline = await runSuites(baseFile, [PERF_SUITE]);
-  const results = await pool(prepared, 6, async (m) => (m.file ? { ...m, run: await runSuites(m.file, m.perf ? [PERF_SUITE] : []) } : { ...m, run: null }));
+  const baseline = await runSuites(baseFile, [PERF_SUITE, DIFF_SUITE]);
+  const results = await pool(prepared, 6, async (m) => (m.file ? { ...m, run: await runSuites(m.file, extraSuites(m)) } : { ...m, run: null }));
   // The extra layer (review round 5): where Chrome or Edge is installed, the mutants marked browser: true are also given to the headless browser check, one after the other (each starts
   // its own browser). The node suites above must kill every mutant by themselves; this layer only adds a second opinion, and is skipped, loudly, where there is no browser.
   const browserPath = findBrowser();
@@ -499,6 +566,14 @@ if (nested) {
     }
   }
   rmSync(dir, { recursive: true, force: true });
+
+  test('mutation table [r8]: every mutant has an id of its own (the file of a mutant is named by its id, so two with one id would run only the last of them)', () => {
+    const seen = new Set();
+    for (const m of MUTANTS) {
+      assert.ok(!seen.has(m.id), `the id ${m.id} is used twice`);
+      seen.add(m.id);
+    }
+  });
 
   test('mutation baseline: the unmutated copy passes the suites it is run against (the harness works)', () => {
     assert.equal(baseline.code, 0, baseline.out.slice(-2000));

@@ -7,6 +7,28 @@
 // element or attribute NAME is ever derived from data.
 //
 // It is NOT a browser: layout, painting, focus order and CSS are checked with the preview page in headless Chrome.
+//
+// TRIPWIRES (review round 8). The round-7 net refused the NAMES of the Web Animations and stylesheet APIs in the source, and two mutants that build the name at run time (`const fn = 'ani' + 'mate'; strip[fn](...)`) or
+// find it by walking the prototype chain (`Object.getOwnPropertyNames(proto)`) passed every node suite, because the stand-in had no such method and the mutant's `typeof` test was false. The net must look at the BEHAVIOUR:
+// every element, shadow root and document of this stand-in has the members below, defined on the prototype exactly as a browser defines them, and each one RECORDS being read or called (document.recorded.apiCalls, and the
+// array `tripwires` itself). The element tests assert that nothing was recorded, in both modes, after every test. A reader that reaches one of them by a name made of pieces, by a computed key or through the prototype
+// chain is seen all the same, because it has to reach the member to use it.
+/** Every read or call of a tripwire, as a string (shared by every element and document of the process: a prototype is not an element, so a call through the prototype has no document to record in). */
+export const tripwires = [];
+const trip = (name) => {
+  tripwires.push(name);
+};
+/** The members that the Mode Shell must never touch: the Web Animations API, the typed style maps, the stylesheet objects and their rule methods. */
+export const TRIPWIRE_NAMES = Object.freeze(['animate', 'getAnimations', 'computedStyleMap', 'insertRule', 'deleteRule', 'addRule', 'replaceSync', 'attributeStyleMap', 'sheet', 'adoptedStyleSheets']);
+/** An object whose every method records its call (what a style map, a stylesheet or an animation would give back). */
+const wire = (label) => new Proxy({}, { get: (_t, p) => (typeof p === 'string' ? (...a) => { trip(`${label}.${p}()`); return a.length ? undefined : wire(`${label}.${p}`); } : undefined) });
+/** Define the tripwires on a prototype: an accessor each, so reading the member records, and the function it returns records when it is called. */
+export function armTripwires(proto) {
+  const method = (name) => ({ configurable: true, enumerable: false, get() { trip(`${name} (read)`); return (...a) => { trip(`${name}()`); return name === 'getAnimations' ? [] : wire(name); }; } });
+  const object = (name) => ({ configurable: true, enumerable: false, get() { trip(`${name} (read)`); return wire(name); }, set(v) { trip(`${name} = (write)`); void v; } });
+  for (const name of TRIPWIRE_NAMES.slice(0, 7)) Object.defineProperty(proto, name, method(name));
+  for (const name of TRIPWIRE_NAMES.slice(7)) Object.defineProperty(proto, name, object(name));
+}
 
 export class MEvent {
   constructor(type, init = {}) {
@@ -331,7 +353,7 @@ export class MShadowRoot extends MElement {
 
 export class MDocument {
   constructor() {
-    this.recorded = { tags: new Set(), attrNames: new Set(), styleProps: new Set(), innerHTMLAttempts: 0 };
+    this.recorded = { tags: new Set(), attrNames: new Set(), styleProps: new Set(), innerHTMLAttempts: 0, apiCalls: tripwires };
     this.registry = new Map();
     this.activeElement = null;
     this.body = new MElement('body', this);
@@ -342,6 +364,7 @@ export class MDocument {
     this.recorded.attrNames.clear();
     this.recorded.styleProps.clear();
     this.recorded.innerHTMLAttempts = 0;
+    tripwires.length = 0;
   }
 
   /** Register a factory for a tag name so createElement(tag) returns a stub child card. */
@@ -375,6 +398,9 @@ export class MDocument {
     return new MFragment(this);
   }
 }
+
+armTripwires(MElement.prototype);
+armTripwires(MDocument.prototype);
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // selectors: tag, #id, .class, [attr], [attr="v"], [attr^="v"], [attr*="v"], [attr$="v"]; descendant (space) and child (>)

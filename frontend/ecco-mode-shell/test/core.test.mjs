@@ -1918,35 +1918,50 @@ test('AC10 [r6] a text longer than LIMITS.scanBound is not read in part: it is w
 test('AC10 [r6] SWEEP, row paths: every kind at the boundary starts of every carrier is withheld in the row text, the redacted raw attributes, the search index, the state and both exports; the harmless control is whole', () => {
   const cases = [...sweepCases(SWEEP_CARRIERS, PATHS)];
   assert.ok(cases.length >= 1500);
-  const s = snap((states) => {
-    for (const c of cases) {
-      states[`sensor.ecco_intel_sw_${c.id}`] = mkState(`sensor.ecco_intel_sw_${c.id}`, 'ok', { sweep_note: c.text, friendly_name: `Sweep ${c.id}` });
-      states[`sensor.ecco_intel_swstate_${c.id}`] = mkState(`sensor.ecco_intel_swstate_${c.id}`, c.text, { friendly_name: `Sweep state ${c.id}` });
-    }
-    states['sensor.ecco_intel_sw_control'] = mkState('sensor.ecco_intel_sw_control', 'ok', { sweep_note: filler(3999) });
-  });
-  const byId = new Map(s.rows.map((r) => [r.entity_id, r]));
-  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_sw')).length, 2 * cases.length + 1, 'every swept entity is a row');
+  // review round 8: a snapshot reads at most LIMITS.snapshotChars characters across ALL its entities, and this sweep is some eight million characters of text, so it is read in snapshots of 100 cases (two entities each,
+  // about 900000 characters): the snapshot budget is not what is under test here (scan.test.mjs tests it), and every assertion below is made on every batch. Every probe is looked for in every batch.
+  const BATCH = 100;
+  const probes = [...new Set(cases.map((c) => c.probe))];
   const failures = [];
-  for (const c of cases) {
-    const attrRow = byId.get(`sensor.ecco_intel_sw_${c.id}`);
-    const stateRow = byId.get(`sensor.ecco_intel_swstate_${c.id}`);
-    if (attrRow.redacted.sweep_note !== WITHHELD) failures.push(`${c.label}: attribute`);
-    if (stateRow.stateText !== WITHHELD) failures.push(`${c.label}: the state`);
-    if (attrRow.attributes.every((x) => !x.withheld)) failures.push(`${c.label}: the row does not say withheld`);
+  let rowsSeen = 0;
+  let controlSeen = false;
+  for (let from = 0; from < cases.length; from += BATCH) {
+    const batch = cases.slice(from, from + BATCH);
+    const s = snap((states) => {
+      for (const c of batch) {
+        states[`sensor.ecco_intel_sw_${c.id}`] = mkState(`sensor.ecco_intel_sw_${c.id}`, 'ok', { sweep_note: c.text, friendly_name: `Sweep ${c.id}` });
+        states[`sensor.ecco_intel_swstate_${c.id}`] = mkState(`sensor.ecco_intel_swstate_${c.id}`, c.text, { friendly_name: `Sweep state ${c.id}` });
+      }
+      if (from === 0) states['sensor.ecco_intel_sw_control'] = mkState('sensor.ecco_intel_sw_control', 'ok', { sweep_note: filler(3999) });
+    });
+    assert.equal(s.counts.unread, 0, `batch ${from}: the snapshot budget is not used up (it is not what is under test)`);
+    const byId = new Map(s.rows.map((r) => [r.entity_id, r]));
+    rowsSeen += s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_sw')).length;
+    for (const c of batch) {
+      const attrRow = byId.get(`sensor.ecco_intel_sw_${c.id}`);
+      const stateRow = byId.get(`sensor.ecco_intel_swstate_${c.id}`);
+      if (attrRow.redacted.sweep_note !== WITHHELD) failures.push(`${c.label}: attribute`);
+      if (stateRow.stateText !== WITHHELD) failures.push(`${c.label}: the state`);
+      if (attrRow.attributes.every((x) => !x.withheld)) failures.push(`${c.label}: the row does not say withheld`);
+    }
+    const all = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText, r.title]));
+    const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+    for (const probe of probes) {
+      assert.ok(!all.includes(probe), `a row carries ${probe.slice(0, 8)}`);
+      assert.ok(!exported.includes(probe), `an export carries ${probe.slice(0, 8)}`);
+      assert.equal(searchRows(s.rows, probe).length, 0, `a search for ${probe.slice(0, 8)} finds a row`);
+    }
+    for (const k of SWEEP_KINDS) assert.ok(!all.includes(k.value) && !exported.includes(k.value), `${k.label}: the whole secret is nowhere`);
+    assert.ok(s.counts.withheld >= 2 * batch.length, 'each withheld value is counted');
+    if (from === 0) {
+      controlSeen = true;
+      assert.equal(byId.get('sensor.ecco_intel_sw_control').redacted.sweep_note, filler(3999), 'the harmless control is whole');
+      assert.equal(searchRows(s.rows, 'planner checked').filter((r) => r.entity_id === 'sensor.ecco_intel_sw_control').length, 1, 'and found');
+    }
   }
+  assert.equal(rowsSeen, 2 * cases.length + 1, 'every swept entity is a row');
+  assert.ok(controlSeen);
   assert.deepEqual(failures.slice(0, 8), []);
-  const all = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText, r.title]));
-  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
-  for (const probe of new Set(cases.map((c) => c.probe))) {
-    assert.ok(!all.includes(probe), `a row carries ${probe.slice(0, 8)}`);
-    assert.ok(!exported.includes(probe), `an export carries ${probe.slice(0, 8)}`);
-    assert.equal(searchRows(s.rows, probe).length, 0, `a search for ${probe.slice(0, 8)} finds a row`);
-  }
-  for (const k of SWEEP_KINDS) assert.ok(!all.includes(k.value) && !exported.includes(k.value), `${k.label}: the whole secret is nowhere`);
-  assert.ok(s.counts.withheld >= 2 * cases.length, 'each withheld value is counted');
-  assert.equal(byId.get('sensor.ecco_intel_sw_control').redacted.sweep_note, filler(3999), 'the harmless control is whole');
-  assert.equal(searchRows(s.rows, 'planner checked').filter((r) => r.entity_id === 'sensor.ecco_intel_sw_control').length, 1, 'and found');
 });
 
 test('AC10 [r6] a secret inside a long KEY NAME is never shown: at every offset of a 300-character key, for every kind (the name is read whole, and only its first 120 characters are ever shown)', () => {
@@ -1969,14 +1984,30 @@ test('AC10 [r6] a secret inside a long KEY NAME is never shown: at every offset 
 
 test('AC12 [r6] reading every string whole keeps the budgets: two thousand entities with a harmless 4500-character text snapshot in well under a few seconds, and the three read-ahead rules are not walked once per start (a 20000-character text that only looks like the start of a host name, a MAC address or a pass pair)', () => {
   const text = filler(4500);
+  // review round 8: 350 entities of 4500 characters (1.6 million characters) fit in the snapshot budget and are all read whole; 2000 of them (nine million) do not, so the snapshot reads the first of them in the order of
+  // their ids and says that it did not read the rest (nothing of an entity that was not read is shown). Both are quick.
   const t0 = performance.now();
   const s = snap((states) => {
-    for (let i = 0; i < 2000; i += 1) states[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: text });
+    for (let i = 0; i < 350; i += 1) states[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: text });
   });
   const ms = performance.now() - t0;
-  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_long_')).length, 2000);
+  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_long_')).length, 350);
+  assert.equal(s.counts.unread, 0, 'they fit in the snapshot budget');
   assert.equal(byEntity(s, 'sensor.ecco_intel_long_7').redacted.long_text, `${text.slice(0, 4000)}… [truncated 500 more characters]`);
-  assert.ok(ms < 4000, `${ms.toFixed(0)} ms for 2000 entities of 4500 characters`);
+  assert.ok(ms < 4000, `${ms.toFixed(0)} ms for 350 entities of 4500 characters`);
+  const t00 = performance.now();
+  const big = snap((states) => {
+    for (let i = 0; i < 2000; i += 1) states[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: text });
+  });
+  const msBig = performance.now() - t00;
+  const longRows = big.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_long_'));
+  assert.equal(longRows.length, 2000, 'every entity is a row, read or not');
+  const readRows = longRows.filter((r) => !r.unread);
+  assert.ok(readRows.length >= 400 && readRows.length <= 480, `${readRows.length} entities were read (the budget pays for about 440 of 4500 characters)`);
+  assert.equal(longRows.filter((r) => r.unread).length, 2000 - readRows.length);
+  assert.equal(big.counts.unread, big.rows.filter((r) => r.unread).length, 'the count says how many rows were not read');
+  assert.ok(longRows.filter((r) => r.unread).every((r) => r.stateText === WITHHELD && !JSON.stringify(r).includes('planner checked')), 'nothing of an entity that was not read is in its row');
+  assert.ok(msBig < 4000, `${msBig.toFixed(0)} ms for 2000 entities of 4500 characters`);
   // shapes that made the host-name, dotted-MAC and pass-pair rules quadratic when read whole at 20000 characters (about 700 ms between them without the pre-tests, about 1 ms with)
   const shapes = ['a.'.repeat(10000), 'xy-'.repeat(6666), `${'a-'.repeat(9990)}.x`, 'abc.'.repeat(4999), `${'x-'.repeat(9990)}pass`];
   const t1 = performance.now();

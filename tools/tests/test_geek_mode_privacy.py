@@ -45,14 +45,18 @@ import geek_mode_coverage as G  # noqa: E402
 RFC1918 = re.compile(r"(?<![0-9.])(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?![0-9.])")
 MAC = re.compile(r"(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])")
 USER_PATH = re.compile(r"[A-Za-z]:\\{1,2}Users\\{1,2}(?!<)[^\\/\s'\"<>]+|/[cC]/Users/[^/\s'\"<>]+|(?<![A-Za-z])/Users/[a-z][^/\s'\"<>]*/")
-# review round 7: bounded (a local part of up to 64 characters is the RFC limit; labels of up to 63; a domain of up to 16 labels), so a long run of local-part characters is not walked once per start
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63}){0,16}\.[A-Za-z]{2,24}")
+# review round 8 (the NIT): the DOMAIN is not bounded at all (round 7 bounded it to 16 labels of 63 characters and a top-level domain of 24, and an address of 17 labels, or one label of 64 characters, was missed that the round-6
+# form found). The local part keeps its bound of 64 (the RFC limit): a longer one still matches, from its last 64 characters, so nothing is missed, and a long run of local-part characters is not walked once per start. The domain
+# starts at the at sign and is read once from each of the (at most 64) starts that reach it, so the scanner is linear.
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 EMAIL_OK = re.compile(r"(@users\.noreply\.github\.com|^noreply@anthropic\.com|@example\.(com|org|net)|\.(invalid|test|example|localhost))$", re.I)
 SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\bghp_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{40,}|\bAKIA[0-9A-Z]{16}\b"
                     r"|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bsk-[A-Za-z0-9]{32,}|\bsk-ant-[A-Za-z0-9_-]{20,}"
-                    r"|eyJ[A-Za-z0-9_-]{20,512}\.eyJ[A-Za-z0-9_-]{20,4096}\.[A-Za-z0-9_-]{10,}")
-# review round 7: the segments are bounded (512 and 4096, as in the card), so a text of eyJ-eyJ-eyJ- is not walked once per start
-JWT_LOOSE = re.compile(r"eyJ[A-Za-z0-9_-]{6,512}\.[A-Za-z0-9_-]{6,4096}\.[A-Za-z0-9_-]*")
+                    r"|(?<![A-Za-z0-9_-])(?>[A-Za-z0-9_-]*?eyJ)[A-Za-z0-9_-]{20,}+\.eyJ[A-Za-z0-9_-]{20,}+\.[A-Za-z0-9_-]{10,}")
+# review round 8: NO BOUND ON A SEGMENT (round 7 bounded them to 512 and 4096 and a token with a longer first segment was missed). The match starts at the start of a RUN of token characters (so there is one start per run), takes the
+# FIRST eyJ of the run in an atomic group (no later eyJ of the run has more characters after it, so a later one can never succeed where the first failed) and reads the rest of the run possessively (Python 3.11): every
+# character is read once, whatever the length of a segment, and a text of eyJ-eyJ-eyJ- is not walked once per start. The same verdicts as the unbounded round-6 form (the differential check in [8]).
+JWT_LOOSE = re.compile(r"(?<![A-Za-z0-9_-])(?>[A-Za-z0-9_-]*?eyJ)[A-Za-z0-9_-]{6,}+\.[A-Za-z0-9_-]{6,}+\.[A-Za-z0-9_-]*")
 IPV4 = re.compile(r"(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9.])")
 HEX_BLOB = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])")
 B64_BLOB = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])")
@@ -67,14 +71,18 @@ ENTITY = re.compile(r"(?<![A-Za-z0-9_.])(?:sensor|binary_sensor|input_boolean|in
 # that emitted one would have passed the privacy scan (only the regeneration drift check and the node suites would have noticed)
 BEARER = re.compile(r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}", re.I)
 CRED_PAIR = re.compile(r"[\"']?\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"'{}]{3,}", re.I)
-WEBHOOK_PATH = re.compile(r"/api/webhook/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]{1,253}/services/[A-Za-z0-9/_-]{12,}", re.I)
+# review round 8: the host of the chat services form has no bound (round 7: {1,253}, and a longer host was missed). The first alternative is the card's, character for character. The second is the round-6 form
+# hooks\.[a-z0-9.-]+/services/ read once: the match starts at the start of a run of host characters, takes the FIRST hooks. of the run in an atomic group and reads the rest of the run possessively, so hooks.hooks.hooks. is not
+# walked once per start. The card writes the same verdict as a look-behind from /services/ (a variable-width look-behind that Python's re does not have); [8] proves each is the round-6 form.
+WEBHOOK_PATH = re.compile(r"/api/webhook/[A-Za-z0-9_-]{8,}|(?<![a-z0-9.-])(?>[a-z0-9.-]*?hooks\.)[a-z0-9.-]++/services/[A-Za-z0-9/_-]{12,}", re.I)
 
 # review round 3: the card withheld none of these under an innocent key, and no scanner here looked for them either, so a generator that emitted one would have
 # passed this scan: a MAC address written with no separator or in the dotted form, a coordinate pair with three decimals, the text of a Wi-Fi QR code and a
 # password written as a pass / pw pair
 MAC_BARE = re.compile(r"(?<![0-9A-Za-z])(?=[0-9A-Fa-f]*[A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Za-z])")
-# review round 7: the letter is looked for in the fourteen characters of the address only (the look-ahead was unbounded, and walked to the end of a dotted text from every start)
-MAC_DOTTED = re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]{0,13}[A-Fa-f])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])")
+# review round 8: the letter is looked for anywhere in the run of hex digits and dots that the address starts (the round-6 verdict; round 7 looked in the fourteen characters of the address only, so 2026.1114.0900.beef was
+# missed). This scanner needs no trick to stay linear: an address here starts where no letter, digit or dot stands before it, so there is one start per run and the look-ahead reads each run once.
+MAC_DOTTED = re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]*[A-Fa-f])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])")
 COORD_PAIR = re.compile(r"(?<![\d.])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])")
 WIFI_QR = re.compile(r"\bWIFI:[A-Z]:", re.I)
 # review round 7: the unquoted form has no prefix of segments (a prefix such as wifi_ ends at a separator, so the key word is always preceded by a character that is not a letter or digit: the same verdicts, read once)
@@ -139,8 +147,16 @@ check("a clean text has no hit for any scanner", not any(hits("nothing to see: v
 # the two sides disagreed. The card's rule is now the same pattern, and this check keeps it so.
 _card_src = (ROOT / "frontend" / "ecco-mode-shell" / "ecco-mode-shell.js").read_text(encoding="utf-8")
 _rule = re.search(r"\['webhook path', '/', /(.+)/i\],", _card_src)
-check("[r2] the card's value rule for a webhook path is this scanner's pattern (the two sides agree)",
-      _rule is not None and _rule.group(1).replace("\\/", "/") == WEBHOOK_PATH.pattern, "" if _rule is None else _rule.group(1))
+# review round 8: the two sides still agree, but no longer by being the same text. The card's first alternative is this scanner's, character for character; the card's second is the round-6 form
+# hooks\.HOST/services/TAIL with its head moved into a look-behind from /services/ (a variable-width look-behind: JavaScript has it, Python's re does not), and this scanner's second reads the same run once with an atomic
+# group and a possessive quantifier (Python 3.11). That each is exactly the round-6 form is proved by the differential checks of [8] (here) and by test/differential.test.mjs (the card).
+_R6_HEAD = r"hooks\.[a-z0-9.-]+"
+_TAIL = r"/services/[A-Za-z0-9/_-]{12,}"
+_card_alts = [] if _rule is None else _rule.group(1).replace("\\/", "/").split("|")
+_py_alts = WEBHOOK_PATH.pattern.split("|")
+check("[r2] the card's value rule for a webhook path and this scanner's pattern agree: the same first alternative, and a second that is the round-6 form (the host of any length) written by each side its own way",
+      _rule is not None and len(_card_alts) == 2 and len(_py_alts) == 2 and _card_alts[0] == _py_alts[0]
+      and _card_alts[1] == "(?<=" + _R6_HEAD + ")" + _TAIL and _py_alts[1] == r"(?<![a-z0-9.-])(?>[a-z0-9.-]*?hooks\.)[a-z0-9.-]++" + _TAIL, "" if _rule is None else _rule.group(1))
 check("[r2] and the scanner flags the two shapes the card's hostile fixtures use (assembled here from fragments)",
       all(hits(s, WEBHOOK_PATH) for s in ("https://hooks.example.test/api/" + "webhook/" + "abcdef123456", "hooks.example.test/" + "services/" + "team-alpha/chan-beta/abcdefghijkl")))
 # review round 3: the card's rules for a pass / pw pair and for the Wi-Fi QR text are these scanners' patterns, and each scanner flags what the card's hostile fixtures
@@ -362,7 +378,10 @@ _REFERENCE = {
     "e-mail": (_OLD_EMAIL, EMAIL, "exact"),
     "JWT-like": (re.compile(r"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*"), JWT_LOOSE, "exact"),
     "URL with userinfo": (re.compile(r"[a-z][a-z0-9+.-]*://[^/\s:@\"']+:[^/\s@\"']+@"), URL_USERINFO, "superset"),
-    "MAC, dotted": (re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]*[A-Fa-f])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])"), MAC_DOTTED, "narrower"),
+    # review round 8: exact again (round 7 narrowed it, and 2026.1114.0900.beef was no longer found)
+    "MAC, dotted": (re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]*[A-Fa-f])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])"), MAC_DOTTED, "exact"),
+    # review round 8: the JWT form of the token-or-key-shape scanner, against its round-6 form (that scanner holds other alternatives too, so it may match MORE)
+    "token or key shape (the JWT form)": (re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}"), SECRET, "superset"),
 }
 _PIECES = {
     "pass or pw pair": ["pass", "pw", "\"", "'", ":", "=", " ", "_", "-", "wifi", "a", "abc", "hunter22", ",", ";", "&", "x1", "compass", "pass=hunter22", "wifi_pass=abc", "\"pass\": \"abc\""],
@@ -371,6 +390,7 @@ _PIECES = {
     "JWT-like": ["eyJ", "eyJhbGci", "abcdefg", "abcdefgh", ".", "-", "_", " ", "x", "eyJabcdefg.", "abcdefgh.abcdefgh.", "eyJabcdefg.abcdefg."],
     "URL with userinfo": ["://", "https", "a", "ws", "1", "_", ".", "-", "+", "u", ":", "p", "@", "host", "/", "?", "#", " ", "A", "https://", "user:pw@h", "mqtt://"],
     "MAC, dotted": ["aabb", "1234", "ccdd", "eeff", "5678", "0900", ".", "ab", "a", "9", ".beef", " ", "AABB", "2026", "aabb.ccdd.eeff", "1234.5678.9abc", "a1b2.c3d4.", "2026.1114.0900"],
+    "token or key shape (the JWT form)": ["eyJ", "eyJabcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwxyz", ".", "-", "_", " ", "x", "eyJabcdefghijklmnopqrstuvwx.", "eyJabcdefghijklmnopqrstuvwx." + "eyJabcdefghijklmnopqrstuvwx." + "abcdefghijkl"],
 }
 
 
@@ -394,22 +414,127 @@ for name, (old, new, kind) in _REFERENCE.items():
     old_hits = [t for t in corpus if old.search(t)]
     lost = [t for t in old_hits if not new.search(t)]
     gained = [t for t in corpus if not old.search(t) and new.search(t)]
-    if kind == "narrower":
-        explained = all(not any(re.search(r"[A-Fa-f]", g) for g in re.findall(r"(?<![0-9A-Za-z.])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])", t)) for t in lost)
-        check(f"[r7] the {name} scanner differs from its round-6 form only where the letter lies beyond the fourteen characters of the address ({len(old_hits)} matched before, {len(lost)} lost, {len(gained)} gained)",
-              len(old_hits) >= 100 and explained and not gained)
-    else:
-        check(f"[r7] the {name} scanner matches everything its round-6 form matched ({len(old_hits)} of {len(corpus)} texts), {'and nothing else' if kind == 'exact' else 'and only more (a scheme-less start)'}",
-              len(old_hits) >= 100 and not lost and (kind == "superset" or not gained), f"lost {lost[:2]} gained {gained[:2]}")
+    check(f"[r7] the {name} scanner matches everything its round-6 form matched ({len(old_hits)} of {len(corpus)} texts), {'and nothing else' if kind == 'exact' else 'and only more (a scheme-less start)'}",
+          len(old_hits) >= 100 and not lost and (kind == "superset" or not gained), f"lost {lost[:2]} gained {gained[:2]}")
 
 # the scanners the card agrees with, and the numbers they share with it
 _card_src = (ROOT / "frontend" / "ecco-mode-shell" / "ecco-mode-shell.js").read_text(encoding="utf-8")
-_m = re.search(r"\['MAC address \(dotted\)', '\.', /\\b\(\?=\[0-9a-f\.\]\{0,13\}\[a-f\]\)", _card_src)
-check("[r7] the card's dotted MAC rule and this scanner look for the letter in the fourteen characters of the address (the same bound, {0,13})", _m is not None and "{0,13}" in MAC_DOTTED.pattern)
-_m = re.search(r"\['jwt', 'eyJ', /\\beyJ\[\\w-\]\{4,(\d+)\}\\\.\[\\w-\]\{4,(\d+)\}", _card_src)
-check("[r7] the card's JWT rule and this scanner bound the two segments alike (512 and 4096)", _m is not None and _m.groups() == ("512", "4096") and "{6,512}" in JWT_LOOSE.pattern and "{6,4096}" in JWT_LOOSE.pattern, "" if _m is None else str(_m.groups()))
+# review round 8: the dotted MAC rule of the card is the round-6 verdict in two alternatives (a letter in the address, then a letter after it in the same run), this scanner's look-ahead has no bound
+_m = re.search(r"\['MAC address \(dotted\)', '\.', /(.+)/i\],", _card_src)
+check("[r8] the card's dotted MAC rule has the two alternatives (a letter inside the address, a letter after it in the same run) and no bound on the run, and this scanner looks for the letter in the whole run",
+      _m is not None and "{0,13}" in _m.group(1) and "(?<=\\b[0-9a-f]{4}" in _m.group(1) and "[0-9a-f.]*[a-f])" in _m.group(1) and "(?=[0-9A-Fa-f.]*[A-Fa-f])" in MAC_DOTTED.pattern and "{0,13}" not in MAC_DOTTED.pattern, "" if _m is None else _m.group(1))
+# review round 8: no segment of a JWT is bounded on either side (the card: a look-behind from the second dot; this scanner: a run read once)
+_m = re.search(r"\['jwt', 'eyJ', /(.+)/\],", _card_src)
+check("[r8] the card's JWT rule and this scanner have no bound on any segment", _m is not None and _m.group(1) == r"(?<=\beyJ[\w-]{4,}\.[\w-]{4,})\." and not re.search(r"\d,\d+\}", _m.group(1))
+      and not re.search(r"\{\d+,\d+\}", JWT_LOOSE.pattern) and not re.search(r"\{\d+,\d+\}", SECRET.pattern.split("|(?<![A-Za-z0-9_-])")[-1]) and "{6,}+" in JWT_LOOSE.pattern, "" if _m is None else _m.group(1))
 _m = re.search(r"LIMITS = Object\.freeze\(\{.*?entityChars: (\d+),", _card_src, re.S)
 check("[r7] the card's scan budget is 100000 characters per entity (the number the design document gives)", _m is not None and _m.group(1) == "100000", "" if _m is None else _m.group(1))
+_m = re.search(r"LIMITS = Object\.freeze\(\{.*?snapshotChars: (\d+),", _card_src, re.S)
+check("[r8] the card's snapshot budget is 2000000 characters across all the entities of one snapshot (the number the design document gives)", _m is not None and _m.group(1) == "2000000", "" if _m is None else _m.group(1))
+
+# ===========================================================================
+print("")
+print("[8] review round 8: THE DIFFERENTIAL GATE of the scanners (a scanner may be stricter than its round-6 form, never looser): every component of every kind swept from 1 to 1000 characters")
+# ===========================================================================
+# Round 7 bounded some scanners to make them linear, and a bounded scanner stops matching a secret whose COMPONENT is longer than its bound (an address of 17 labels, a token with a first segment of 600
+# characters, a host of 260): the same class as the card's rules (test/differential.test.mjs). The corpus below is built the same way: one family per kind of secret, ONE component swept at every length from 1 to 300 and
+# at 400, 600, 1000 and 4100 (past every bound a scanner had), bare and at the start, in the middle and at the end of prose; the assertion is one direction only: whatever the round-6 form matched is still matched.
+_LET = "ghijklmnopqrstuvwxyz"  # no hex digit, no digit, no capital: no other scanner reads it as a secret
+
+
+def _w(n: int) -> str:
+    return (_LET * (n // 20 + 1))[:n]
+
+
+def _seg(n: int) -> str:
+    return "".join(("-_"[(i // 9) % 2] if i % 9 == 8 and i != n - 1 else _LET[i % 20]) for i in range(n))
+
+
+_AT = "@"
+_DENSE_LENGTHS = list(range(1, 301)) + [400, 600, 1000, 4100]
+_PROSE = "The planner checked the overnight window and the tariff boundary before it chose, and the details follow here. " * 2
+_FAMILIES = {
+    "JWT-like": [
+        lambda n: "eyJ" + _seg(n + 6) + "." + _seg(40) + ".sig",
+        lambda n: "eyJ" + _seg(10) + "." + _seg(n + 6) + ".sig",
+        lambda n: "eyJ" + _seg(10) + "." + _seg(10) + "." + _seg(n),
+        lambda n: "eyJ-" * n + "eyJabcdefgh.abcdefgh.sig",
+        lambda n: _w(n) + "eyJabcdefgh.abcdefgh.sig",
+    ],
+    "token or key shape (the JWT form)": [
+        lambda n: "eyJ" + _seg(n + 20) + ".eyJ" + _seg(30) + "." + _seg(12),
+        lambda n: "eyJ" + _seg(30) + ".eyJ" + _seg(n + 20) + "." + _seg(12),
+        lambda n: "eyJ" + _seg(30) + ".eyJ" + _seg(30) + "." + _seg(n + 10),
+        lambda n: "eyJ-" * n + "eyJ" + _seg(30) + ".eyJ" + _seg(30) + "." + _seg(12),
+    ],
+    "e-mail": [
+        lambda n: ("ghij.klmn_op%qr+st-uv" * (n // 21 + 1))[:n] + _AT + "mail.example.org",
+        lambda n: "bob" + _AT + "a1." * n + "com",
+        lambda n: "bob" + _AT + _w(n) + ".org",
+        lambda n: "bob" + _AT + "mail." + _w(n + 1),
+    ],
+    "webhook path": [
+        lambda n: "https://hooks." + ("ghijklmnopqrs.tuvwxyz-" * (n // 22 + 1))[:n] + ".test/services/T01/B02/" + _w(12),
+        lambda n: "/api/" + "web" + "hook/" + _w(n),
+        lambda n: "hooks." * n + "a/services/abcdefghijkl",
+    ],
+    # this scanner needs the address to STAND ALONE (nothing alphanumeric or a dot before or after it), so the run of hex digits and dots that its look-ahead reads ends where the address does: the letter is in the
+    # address or nowhere, and the bound of round 7 changed no verdict here (the card's rule is a different matter: it has no such boundary, see test/differential.test.mjs). The family sweeps what stands around it.
+    "MAC, dotted": [
+        lambda n: " a123.4567.8901 " + "0" * n,
+        lambda n: _w(n) + " 0123.4567.89ab",
+        lambda n: " 2026.1114.0900 " + "9" * n + " 0123.4567.89ab " + "0" * n,
+    ],
+    "URL with userinfo": [
+        lambda n: "https://" + _w(n) + ":pw" + _AT + "host",
+        lambda n: "https://u:" + _w(n) + _AT + "host",
+        lambda n: _w(n) + "://u:p" + _AT + "h",
+    ],
+    "pass or pw pair": [
+        lambda n: "a_" * n + "pass=qwerty",
+        lambda n: '"' + _w(n) + '_pass": "qwerty"',
+        lambda n: "wifi_pw=" + _w(n + 3),
+    ],
+}
+
+
+def _places(secret: str) -> list[tuple[str, str]]:
+    return [("bare", secret), ("start", secret + " " + _PROSE), ("middle", _PROSE[:80] + " " + secret + " " + _PROSE[:80]), ("end", _PROSE + " " + secret)]
+
+
+_long_total = 0
+for _name, _builders in _FAMILIES.items():
+    _old, _new, _kind = _REFERENCE[_name]
+    _old_hits, _lost = 0, []
+    for _bi, _build in enumerate(_builders):
+        for _n in _DENSE_LENGTHS:
+            for _place, _text in _places(_build(_n)):
+                if _old.search(_text):
+                    _old_hits += 1
+                    if not _new.search(_text):
+                        _lost.append(f"family {_bi} n={_n} {_place}")
+    _long_total += _old_hits
+    check(f"[r8] DIFFERENTIAL, long components: the {_name} scanner still matches every text its round-6 form matched ({_old_hits} texts: each component from 1 to 1000 characters and 4100, bare and in prose)",
+          _old_hits >= 1000 and not _lost, f"{len(_lost)} lost: " + "; ".join(_lost[:3]))
+check("[r8] the corpus is large enough to mean something (the round-6 forms match more than 20000 of its texts)", _long_total > 20000, str(_long_total))
+
+# the gate can see the class: the round-7 BOUNDED forms of the scanners lose texts on this corpus (negative controls)
+_R7 = {
+    "JWT-like": re.compile(r"eyJ[A-Za-z0-9_-]{6,512}\.[A-Za-z0-9_-]{6,4096}\.[A-Za-z0-9_-]*"),
+    "token or key shape (the JWT form)": re.compile(r"eyJ[A-Za-z0-9_-]{20,512}\.eyJ[A-Za-z0-9_-]{20,4096}\.[A-Za-z0-9_-]{10,}"),
+    "e-mail": re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63}){0,16}\.[A-Za-z]{2,24}"),
+    "webhook path": re.compile(r"/api/webhook/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]{1,253}/services/[A-Za-z0-9/_-]{12,}", re.I),
+}
+# (the dotted MAC scanner is not in this list: it needs the address to stand alone, so the round-7 bound changed no verdict of it; see the family above)
+for _name, _r7 in _R7.items():
+    _old = _REFERENCE[_name][0]
+    _lost7 = [f"family {_bi} n={_n}" for _bi, _build in enumerate(_FAMILIES[_name]) for _n in _DENSE_LENGTHS if _old.search(_build(_n)) and not _r7.search(_build(_n))]
+    check(f"[r8] negative control: the round-7 bounded form of the {_name} scanner loses texts on this corpus ({len(_lost7)}), so the gate can see the class", len(_lost7) >= 1, "")
+# the NIT, said directly: an address whose domain has more than 17 labels, every label with a digit, is found (the round-7 form did not find it), and so is one with a label of 64 characters
+_many = "bob" + _AT + "a1." * 20 + "com"
+_long_label = "bob" + _AT + "a" * 64 + ".com"
+check("[r8] the e-mail scanner finds an address of 21 labels that all hold a digit, and one with a label of 64 characters (the round-7 form found neither)",
+      bool(EMAIL.search(_many)) and bool(EMAIL.search(_long_label)) and not _R7["e-mail"].search(_many) and not _R7["e-mail"].search(_long_label))
 
 print("")
 if FAILURES:

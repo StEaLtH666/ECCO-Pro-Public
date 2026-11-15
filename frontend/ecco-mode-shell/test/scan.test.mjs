@@ -38,7 +38,8 @@ const R6 = {
   'private host name': /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i,
 };
 // what the new rule is allowed to do differently, said as a test of the text (none for the exact ones)
-const EXACT = ['jwt', 'key block', 'url token', 'connection pairs', 'pass pair', 'webhook path'];
+// review round 8: the dotted MAC rule is exact again too (round 7 narrowed it: a letter after the address, as in 2026.1114.0900.beef, was no longer read; the round-8 rule is the round-6 verdict, in two alternatives that are each read once)
+const EXACT = ['jwt', 'key block', 'url token', 'connection pairs', 'pass pair', 'webhook path', 'MAC address (dotted)'];
 const SUPERSET = ['url credentials', 'internal host name', 'email address', 'private host name'];
 
 // pieces from which short texts are built: the rule's own words, separators and near misses
@@ -99,16 +100,7 @@ test('AC10 [r7] DIFFERENTIAL: every rewritten rule still matches EVERYTHING the 
     }
     total[reason] = { texts: corpus.length, oldHits, lost: lost.length, gained: gained.length };
     assert.ok(oldHits >= 100, `${reason}: the corpus has ${oldHits} texts the round-6 rule matches (it must exercise the rule)`);
-    if (reason === 'MAC address (dotted)') {
-      // the one narrowing, on purpose: the letter must be among the fourteen characters of the address (2026.1114.0900.beef is not an address); a text lost is a text whose every address is all digits
-      for (const t of lost) {
-        const groups = [...t.matchAll(/\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/gi)].map((m) => m[0]);
-        assert.ok(groups.length > 0 && groups.every((g) => !/[a-f]/i.test(g)), `${reason}: lost ${JSON.stringify(t)}`);
-      }
-      assert.deepEqual(gained.slice(0, 5), [], `${reason}: gains nothing`);
-      assert.ok(lost.length >= 1, 'the corpus has a text that shows the narrowing');
-      continue;
-    }
+    // review round 8: the one narrowing of round 7 (the dotted MAC, where 2026.1114.0900.beef was no longer an address) is withdrawn: that rule is exact like the others
     assert.deepEqual(lost.slice(0, 5), [], `${reason}: ${lost.length} texts the round-6 rule matched are no longer matched`);
     if (EXACT.includes(reason)) assert.deepEqual(gained.slice(0, 5), [], `${reason}: ${gained.length} texts are matched that were not (an exact rewrite must not widen)`);
     else assert.ok(SUPERSET.includes(reason));
@@ -131,25 +123,41 @@ test('AC10 [r7] the widened rules widen in the safe direction only, and only in 
   }
 });
 
-test('AC10 [r7] the bounds the rewrite introduced, and what happens beyond each (every one is a text no real source writes, and each is still withheld by another rule or stated as a limit)', () => {
-  // jwt: the rule reads a first segment of up to 512 characters and a second of up to 4096; a JWT with a longer one is still caught by the encoded-value rule
+test('AC10 [r8] the bounds of round 7 are GONE (review round 8: each of these was pinned there as a limit, a text the rule did not match; each is now matched by the rule itself, whatever the length of the component, so no secret is shown because a part of it is long)', () => {
+  // jwt: a first segment of any length and a second of any length
   const seg = (n) => 'eyJ' + 'aB3'.repeat(Math.ceil(n / 3)).slice(0, n - 3);
   assert.ok(rule('jwt').test(`${seg(512 + 3)}.${'x'.repeat(4096)}.sig`), 'a first segment of 512 characters after eyJ and a second of 4096 are matched');
-  assert.equal(rule('jwt').test(`${seg(600)}.${'x'.repeat(100)}.sig`), false, 'a first segment longer than the bound is beyond this rule');
-  assert.equal(redactValue(`${seg(600)}.${'x'.repeat(100)}.sig`), WITHHELD, 'and is withheld all the same (a long encoded value)');
-  // webhook: a host name of up to 253 characters (the DNS limit)
+  assert.equal(rule('jwt').test(`${seg(600)}.${'x'.repeat(100)}.sig`), true, 'a first segment longer than the old bound is matched by the rule itself (round 7 pinned this as false)');
+  assert.equal(rule('jwt').test(`${seg(5000)}.${'x'.repeat(5000)}.sig`), true, 'and so are a first and a second segment of 5000 characters');
+  assert.equal(redactValue(`${seg(600)}.${'x'.repeat(100)}.sig`), WITHHELD);
+  const plain = (n) => 'eyJ' + 'abcdefgh-'.repeat(Math.ceil(n / 9)).slice(0, n);
+  assert.equal(rule('jwt').test(`${plain(600)}.${'abcdefgh-'.repeat(5)}.sig`), true, 'a segment with no digit (no encoded-value rule can read it)');
+  assert.equal(redactValue(`${plain(600)}.${'abcdefgh-'.repeat(5)}.sig`), WITHHELD);
+  // webhook: a host name of any length
   assert.ok(rule('webhook path').test(j('hooks.', 'a'.repeat(253), '/services/', 'abcdefghijkl')));
-  // connection pairs: up to 256 characters after any boundary; any length after a semicolon, a space or the start
+  assert.ok(rule('webhook path').test(j('hooks.', 'a'.repeat(260), '/services/', 'abcdefghijkl')), 'a host of 260 characters (the DNS limit is 253)');
+  // connection pairs: any length after any boundary
   const pair = (n) => j('Server', '=', 'x'.repeat(n), ';');
   assert.ok(rule('connection pairs').test(`(${pair(256)}`), '256 characters after a bracket');
-  assert.equal(rule('connection pairs').test(`(${pair(257)}`), false, '257 characters after a bracket are beyond the first form, and the second needs a space, a semicolon or the start');
+  assert.equal(rule('connection pairs').test(`(${pair(257)}`), true, '257 characters after a bracket (round 7 pinned this as false)');
+  assert.equal(rule('connection pairs').test(`(${pair(5000)}`), true, '5000 characters after a bracket');
+  assert.equal(rule('connection pairs').test(j('x,host=', 'srv'.repeat(100), ';')), true, 'after a comma, with a value of 300 characters');
   assert.ok(rule('connection pairs').test(pair(20000 - 9)), 'any length at the start of the text');
   assert.ok(rule('connection pairs').test(`a ${pair(5000)}`) && rule('connection pairs').test(`a;${pair(5000)}`), 'and after a space or a semicolon');
-  // url token: names of up to 64 characters around the key word
+  // url token: a parameter name of any length around the key word
   assert.ok(rule('url token').test(j('?', 'a'.repeat(64), 'token', 'b'.repeat(64), '=abc')));
-  assert.equal(rule('url token').test(j('?', 'a'.repeat(65), 'token=abc')), false);
-  // key block: a label of up to 64 characters
+  assert.equal(rule('url token').test(j('?', 'a'.repeat(65), 'token=abc')), true, 'a name of 65 characters before the key word (round 7 pinned this as false; a real value was shown)');
+  assert.equal(rule('url token').test(j('?token', 'a'.repeat(65), '=abc')), true, 'and after it');
+  assert.equal(rule('url token').test(j('?', 'a'.repeat(3000), 'token', 'b'.repeat(3000), '=abc')), true, 'and 3000 on both sides');
+  // key block: a label of any length
   assert.ok(rule('key block').test(j('-----BEGIN ', 'A'.repeat(64), '-----')));
+  assert.equal(rule('key block').test(j('-----BEGIN ', 'A'.repeat(65), '-----')), true, 'a label of 65 characters (round 7 pinned this as false)');
+  assert.equal(rule('key block').test(j('-----BEGIN ', 'OPENSSH PRIVATE KEY '.repeat(4), '-----')), true, 'and of 80');
+  // the dotted MAC: a letter after the address, anywhere in the same run
+  assert.equal(rule('MAC address (dotted)').test('2026.1114.0900.beef'), true, 'a letter after the address (round 7 let this one through)');
+  assert.equal(rule('MAC address (dotted)').test(j('0123.4567.8901.', '0'.repeat(3000), 'a')), true, 'a letter 3000 characters after the address');
+  assert.equal(rule('MAC address (dotted)').test('2026.1114.0900'), false, 'all digits and nothing after it is a version, not an address');
+  assert.equal(rule('MAC address (dotted)').test('2026.1114.0900 beef'), false, 'a letter after a space is not in the same run');
 });
 
 // ===========================================================================================================================
@@ -200,9 +208,15 @@ test('AC12 [r7] the budget is per ENTITY: two entities each read their whole bud
     assert.ok(typeof item.attributes.a === 'string' && item.attributes.a !== WITHHELD, 'every exported row still has its first text');
     assert.ok(typeof item.attributes.e === 'string' && item.attributes.e !== WITHHELD, 'and its fifth: the export reset the budget for each row');
   }
-  // a state that is a long text draws on the same budget as the attributes (the state is read last)
+  // a state that is a long text draws on the same budget as the attributes. Review round 8: it is charged and read FIRST (round 7 read it last, so that the state of an entity whose attributes used the budget was withheld,
+  // and the headline of the row was lost): now the state is read and shown, and it is the attributes past the budget that are withheld
   const t = snap((states) => { states['sensor.ecco_intel_budget_three'] = mkState('sensor.ecco_intel_budget_three', filler(200), { ...big('three'), a: filler(19900), b: filler(19900), c: filler(19900), d: filler(19900), e: filler(19900), f: filler(19900) }); });
-  assert.equal(byEntity(t, 'sensor.ecco_intel_budget_three').stateText, WITHHELD, 'the state of an entity whose attributes used the budget is withheld, not read');
+  const three = byEntity(t, 'sensor.ecco_intel_budget_three');
+  assert.equal(three.stateText, filler(200), 'the state of an entity whose attributes used the budget is read first, and shown');
+  assert.equal(three.redacted.f, WITHHELD, 'and the attribute past the budget is withheld');
+  // a state that LOOKS secret is withheld wherever it is read (the order changed what is charged first, not what is withheld)
+  const u = snap((states) => { states['sensor.ecco_intel_budget_four'] = mkState('sensor.ecco_intel_budget_four', j('gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'), { ...big('four') }); });
+  assert.equal(byEntity(u, 'sensor.ecco_intel_budget_four').stateText, WITHHELD, 'a state that looks like a token is withheld although it is read first');
 });
 
 test('AC12 [r7] key names are read within the budget too: 600 keys of about 107 characters in nested dicts are read until the budget is gone, then every key is shown as withheld and its value is withheld', () => {
@@ -327,27 +341,35 @@ test('AC10 [r7] LONG SWEEP, the row paths: a long kind in an attribute and in a 
   const pick = (len, total) => [...new Set([0, 1, 2999, 3000, 3001, 4000 - Math.ceil(len / 2), total - len - 1, total - len].filter((s) => s >= 0 && s + len <= total))];
   const cases = [...longCases([4500, 20000], pick)];
   assert.ok(cases.length >= 100, `${cases.length}`);
-  const s = snap((states) => {
-    for (const c of cases) {
-      states[`sensor.ecco_intel_lg_${c.id}`] = mkState(`sensor.ecco_intel_lg_${c.id}`, 'ok', { long_note: c.text, friendly_name: `Long ${c.id}` });
-      states[`sensor.ecco_intel_lgstate_${c.id}`] = mkState(`sensor.ecco_intel_lgstate_${c.id}`, c.text, { friendly_name: `Long state ${c.id}` });
-    }
-  });
-  const byId = new Map(s.rows.map((r) => [r.entity_id, r]));
+  // review round 8: a snapshot reads at most LIMITS.snapshotChars characters across all its entities, and these cases are several million characters, so they are read in snapshots of 30 cases (60 entities, under a
+  // million characters each): the snapshot budget is not what is under test here, and every assertion is made on every batch, with every probe looked for in every batch
+  const BATCH = 30;
+  const probes = [...new Set(cases.map((c) => c.probe))];
   const failures = [];
-  for (const c of cases) {
-    if (byId.get(`sensor.ecco_intel_lg_${c.id}`).redacted.long_note !== WITHHELD) failures.push(`${c.label}: attribute`);
-    if (byId.get(`sensor.ecco_intel_lgstate_${c.id}`).stateText !== WITHHELD) failures.push(`${c.label}: state`);
+  for (let from = 0; from < cases.length; from += BATCH) {
+    const batch = cases.slice(from, from + BATCH);
+    const s = snap((states) => {
+      for (const c of batch) {
+        states[`sensor.ecco_intel_lg_${c.id}`] = mkState(`sensor.ecco_intel_lg_${c.id}`, 'ok', { long_note: c.text, friendly_name: `Long ${c.id}` });
+        states[`sensor.ecco_intel_lgstate_${c.id}`] = mkState(`sensor.ecco_intel_lgstate_${c.id}`, c.text, { friendly_name: `Long state ${c.id}` });
+      }
+    });
+    assert.equal(s.counts.unread, 0, `batch ${from}: the snapshot budget is not used up`);
+    const byId = new Map(s.rows.map((r) => [r.entity_id, r]));
+    for (const c of batch) {
+      if (byId.get(`sensor.ecco_intel_lg_${c.id}`).redacted.long_note !== WITHHELD) failures.push(`${c.label}: attribute`);
+      if (byId.get(`sensor.ecco_intel_lgstate_${c.id}`).stateText !== WITHHELD) failures.push(`${c.label}: state`);
+    }
+    const everything = JSON.stringify(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText, r.title]));
+    const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+    for (const probe of probes) {
+      assert.ok(!everything.includes(probe), 'a row carries a piece of a long secret');
+      assert.ok(!exported.includes(probe), 'an export carries a piece of a long secret');
+      assert.equal(searchRows(s.rows, probe.toLowerCase()).length, 0);
+    }
+    for (const k of LONG_KINDS) assert.ok(!everything.includes(k.value) && !exported.includes(k.value), `${k.label}: the whole secret is nowhere`);
   }
   assert.deepEqual(failures.slice(0, 8), []);
-  const everything = JSON.stringify(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText, r.title]));
-  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
-  for (const probe of new Set(cases.map((c) => c.probe))) {
-    assert.ok(!everything.includes(probe), 'a row carries a piece of a long secret');
-    assert.ok(!exported.includes(probe), 'an export carries a piece of a long secret');
-    assert.equal(searchRows(s.rows, probe.toLowerCase()).length, 0);
-  }
-  for (const k of LONG_KINDS) assert.ok(!everything.includes(k.value) && !exported.includes(k.value), `${k.label}: the whole secret is nowhere`);
   // the control: the same carrier with filler where the secret was is shown whole, up to the display cap
   const clean = filler(4500);
   const s2 = snap((states) => { states['sensor.ecco_intel_lg_control'] = mkState('sensor.ecco_intel_lg_control', 'ok', { long_note: clean }); });

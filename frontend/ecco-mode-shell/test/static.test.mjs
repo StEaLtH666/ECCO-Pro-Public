@@ -8,6 +8,8 @@ import path from 'node:path';
 import { cardDir, CARD_PATH, cardUrl } from './helpers.mjs';
 import { ALERT_TOKEN, MODE_TOKEN, parseSheet, pinProblems, stripProblems, reachesStripStrict, compounds, STRIP_ALLOWLIST, THEME_VARS } from './css-guard.mjs';
 import { ariaProblems, attributeCalls, stateKeys, withoutStyle, ARIA_PIN, FORBIDDEN } from './aria-guard.mjs';
+import { expressionAccesses, doorsIn, skeleton } from './member-guard.mjs';
+import { TRIPWIRE_NAMES } from './minidom.mjs';
 
 const src = readFileSync(CARD_PATH, 'utf8');
 const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
@@ -1113,10 +1115,14 @@ test('redaction path [r7]: planted cuts in each function of the path are each re
 
 // the number of UNBOUNDED quantifiers (a star, a plus, or {n,}) of each rule, outside character classes and escapes. Each is linear by construction: the text after an at sign or a dotted suffix is read once from
 // the one start; a tail after the match is complete; a run that no other start can enter (a run of characters that the start itself is not); a bounded count of starts times a bounded run.
+// Review round 8: six of these numbers CHANGED, on purpose and in the direction the owner asked for. Round 7 bounded some quantifiers ({0,64}, {1,256}, {4,512}, {1,64}, {1,253}, {0,13}) and so lost matches; the six
+// rules are now written with NO bound on any component and still read each run once (a look-behind from the second dot, one start per separator with two look-aheads, a look-behind from the semicolon, a look-behind from
+// /services/, the last letter of a run, and the round-6 key block, which is linear as it stands). jwt 1 -> 2, key block 0 -> 1, url token 1 -> 2, connection pairs 7 -> 4, MAC address (dotted) 0 -> 2, webhook path 2 -> 3.
+// The proof that they lose nothing is test/differential.test.mjs; the proof that they are linear is test/perf.test.mjs (every rule alone, on every near-miss text).
 const UNBOUNDED = {
-  'jwt': 1, 'key block': 0, 'url credentials': 1, 'connection string': 1, 'url token': 1, 'credential pair': 3, 'connection pairs': 7, 'pass pair': 7, 'wifi credentials': 0, 'bearer': 2,
-  'known token': 5, 'email address': 4, 'IPv4 address': 0, 'IPv6 address': 0, 'MAC address': 0, 'MAC address (dotted)': 0, 'MAC address (spaced)': 0, 'coordinates': 4, 'labelled coordinate': 2,
-  'hemisphere coordinates': 5, 'webhook path': 2, 'internal host name': 1, 'private host name': 0,
+  'jwt': 2, 'key block': 1, 'url credentials': 1, 'connection string': 1, 'url token': 2, 'credential pair': 3, 'connection pairs': 4, 'pass pair': 7, 'wifi credentials': 0, 'bearer': 2,
+  'known token': 5, 'email address': 4, 'IPv4 address': 0, 'IPv6 address': 0, 'MAC address': 0, 'MAC address (dotted)': 2, 'MAC address (spaced)': 0, 'coordinates': 4, 'labelled coordinate': 2,
+  'hemisphere coordinates': 5, 'webhook path': 3, 'internal host name': 1, 'private host name': 0,
 };
 const unboundedQuantifiers = (src) => {
   const out = [];
@@ -1183,7 +1189,11 @@ test('scan budget [r7]: the budget is charged where a string is read and where a
   assert.match(rn, /if \(ctx\.scan\.left <= 0\) \{/);
   assert.match(rn, /if \(ctx\.eachItem && depth === 0\) ctx\.scan\.left = LIMITS\.entityChars;/);
   assert.match(code, /redactValue\(\(Array\.isArray\(rows\) \? rows : \[\]\)\.map\(exportRow\), \{ eachItem: true \}\)/);
-  assert.match(code, /const opts = \{ extraKeyPatterns: cat\.extraPatterns, scan: newScan\(\) \};/);
+  // review round 8: the options of the entity carry the count of values visited too (the snapshot charges them), and the attributes are the LAST thing read (the state, the name and the unit are charged first)
+  assert.match(code, /const opts = \{ extraKeyPatterns: cat\.extraPatterns, scan: newScan\(\), work \};/);
+  const pf = topLevel('partsFor');
+  assert.ok(pf.indexOf('redactValue(stateStr, opts)') > 0 && pf.indexOf('redactValue(stateStr, opts)') < pf.indexOf('redactValue(attrsRaw.friendly_name') && pf.indexOf('redactValue(attrsRaw.friendly_name') < pf.indexOf('redactValue(attrsRaw.unit_of_measurement')
+    && pf.indexOf('redactValue(attrsRaw.unit_of_measurement') < pf.indexOf('redactAttributes(attrsRaw, opts)'), 'the order of charging: the state, the name, the unit, then every attribute');
   assert.equal((code.match(/\bnewScan\(\)/g) || []).length, 2, 'a budget is made in partsFor and as the default of a call: nowhere else');
 });
 
@@ -1229,4 +1239,133 @@ test('no Web Animations API [r7]: the planted forms are each refused (negative c
   ];
   assert.deepEqual(dynamicStyleProblems(plainCode), [], 'the real source is clean by these same rules');
   for (const f of forms) assert.notDeepEqual(dynamicStyleProblems(plainCode.replace(anchor, () => `${anchor}\n${f}`)), [], f);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 8 ([r8]). The animation net of round 7 refused the NAME of the Web Animations and stylesheet APIs in the source, and two reviewer mutants passed every node suite all the same: M38 builds the name from pieces
+// (`const fn = 'ani' + 'mate'; ui.strip[fn](...)`), M40b finds it by walking the prototype chain (`Object.getPrototypeOf` and `Object.getOwnPropertyNames`). The class is "a member is reached by something that is not its
+// name", so these pins read the STRUCTURE (test/member-guard.mjs): (1) every computed member access whose key is not a literal is pinned, (2) the prototype chain, descriptors and inherited keys are never touched, (3) no
+// string of the module is the name of a tripwire member. The behavioural net (the tripwires of minidom.mjs, asserted after every element test and step by step in both modes) stands behind them.
+// ---------------------------------------------------------------------------------------------------------------------------
+// every computed member access of the card whose key is not a literal, by receiver and key as written (a count after x). None of them reaches a DOM object by a name that is not written: the lookups in plain tables
+// (status words, icons, severities, the rule table), in plain data (an attribute by its key, a state by its id) and the three of the mode switch (the two buttons of the switch, by mode). A new one is refused until
+// a person has decided it and edited this list in the same commit.
+const COMPUTED_ACCESSES = [
+  'ICON_SHAPES[name]', 'PRETEST[i] x4', 'PRIORITY_RANK[a.priority]', 'PRIORITY_RANK[b.priority]', 'RULES[i]', 'RULE_PRETESTS[reason]', 'SEVERITY_RANK[x.severity]', 'SEVERITY_RANK[y.severity]',
+  'SEVERITY_WORDS[a.severity]', 'STATUS_HELP[s]', 'STATUS_ICON[r.status]', 'STATUS_ICON[s]', 'STATUS_ICON[status]', 'STATUS_VAR[s]', 'STATUS_WORD[f]', 'STATUS_WORD[r.status]', 'STATUS_WORD[s] x3',
+  'STATUS_WORD[status]', 'a[k] x2', 'alertInputs[a.entity_id]', 'attrs[k] x2', 'c[k] x3', 'c[s] x6', 'card[key]', 'counts[r.status]', 'counts[s]', 'input.attributes[when.attribute]', 'input[k] x2',
+  'inputs[a.entity_id]', 'node[k] x2', 'opts[mode]', 'order[(i + 1) % order.length]', 'order[(i + order.length - 1) % order.length]', 'order[order.length - 1]', 'out[k]', 'out[shown]', 'red[top]', 's[k] x2',
+  'st[a.entity_id]', 'st[job.id]', 'states[id] x2', 'this._ui.opts[next]', 'this.filters[name]', 'tokens[i + 1]', 'tokens[i] x3', 'tokens[tokens.length - 1] x3', 'ui.opts[m] x2', 'v[i]', 'v[k] x3',
+  'value[k]', 'value[rest]', 'verdict[i] x2', 'was.flags[i]',
+];
+
+test('computed member access [r8]: every computed access whose key is not a literal is pinned, by receiver and key (reviewer mutant M38: ui.strip[fn](...) with a name built from pieces); the only ones on a DOM object are the buttons of the mode switch', () => {
+  assert.deepEqual(expressionAccesses(plainCode), COMPUTED_ACCESSES);
+  const onDom = COMPUTED_ACCESSES.filter((a) => /(^|\.)(ui|strip|shell|el|root|_root|doc|host|this)\b/.test(a) && !/^(?:this\._ui\.opts|ui\.opts)\[/.test(a) && !/^this\.filters\[/.test(a));
+  assert.deepEqual(onDom, [], 'no computed access on `ui`, the strip, the shell, an element, a root, the document or the host except the switch buttons and the filter table');
+  // a string literal as a key is allowed (it is a written name, and the name rules read it) and there is one
+  assert.equal(computedStringKeys(plainCode), 1);
+});
+
+const computedStringKeys = (text) => [...skeleton(text).matchAll(/[\w$)\]]\s*\[\s*(?:''|"")\s*\]/g)].length;
+
+test('computed member access [r8]: the planted forms are each refused (negative controls: M38 a name built from pieces, a variable key, a key made of a call, a bracket on the strip, the shell, the host, a root, a child and a document)', () => {
+  const anchor = "    ui.geekBody.hidden = mode !== 'geek';";
+  assert.equal(plainCode.split(anchor).length - 1, 1, 'the anchor is found once');
+  const forms = [
+    "    { const fn = 'ani' + 'mate'; if (mode === 'geek' && typeof ui.strip[fn] === 'function') ui.strip[fn]([{ opacity: 0 }], { duration: 1e9 }); }",
+    "    ui.strip['ani' + 'mate']([{ opacity: 0 }], 1);",
+    "    ui.strip[['ani', 'mate'].join('')]([{ opacity: 0 }], 1);",
+    "    const k = 'a'; ui.shell[k + 'nimate']([], 1);",
+    "    this._root[mode]();",
+    "    this[mode + 'x']();",
+    "    ui.geekBody[mode].hidden = true;",
+    "    ui.strip.parentNode[mode]();",
+    "    this.ownerDocument[mode] = [];",
+    "    ui.strip[`${'ani'}mate`]([], 1);",
+    "    const P = ui.strip; P[String.fromCharCode(97)]();",
+  ];
+  assert.deepEqual(expressionAccesses(plainCode), COMPUTED_ACCESSES, 'the real source is the pinned one');
+  for (const f of forms) {
+    const planted = plainCode.replace(anchor, () => `${anchor}\n${f}`);
+    assert.notDeepEqual(expressionAccesses(planted), COMPUTED_ACCESSES, f);
+  }
+  // and the controls: a literal-key bracket is not a computed access with an expression, an array literal is not an access at all, a regular expression and a template text are not code
+  const calm = [
+    "    const a1 = ui.opts['production'];", "    const a2 = [1, 2, 3];", "    for (const q of [1, 2]) void q;", "    const r1 = /[a-z]+/.test('x[y]');", "    const t1 = `a[b] ${mode} [c]`;", "    return [mode];",
+  ];
+  for (const f of calm) assert.deepEqual(expressionAccesses(plainCode.replace(anchor, () => `${anchor}\n${f}`)), COMPUTED_ACCESSES, f);
+});
+
+test('prototype walking [r8]: the prototype chain, property descriptors, inherited keys and a symbol are never touched anywhere in the module; the one use of a prototype is the hasOwn helper (reviewer mutant M40b: Object.getPrototypeOf and Object.getOwnPropertyNames find the animate member)', () => {
+  assert.deepEqual(doorsIn(plainCode), []);
+  assert.deepEqual(doorsIn(code), [], 'and in the whole code, the stylesheet builder included');
+  assert.equal((plainCode.match(/Object\.prototype\.hasOwnProperty\.call/g) || []).length, 1, 'the hasOwn helper is the one place a prototype is named');
+  assert.match(plainCode, /const hasOwn = \(o, k\) => Object\.prototype\.hasOwnProperty\.call\(o, k\);/);
+  assert.doesNotMatch(plainCode, /\bfor\s*\(\s*(?:const|let|var)\s+\w+\s+in\b/, 'no loop over inherited keys');
+  const anchor = "    ui.geekBody.hidden = mode !== 'geek';";
+  const forms = [
+    "    { let P = ui.strip; let k; while (P && !k) { P = Object.getPrototypeOf(P); if (P) k = Object.getOwnPropertyNames(P).find((n) => n.length === 7 && n.startsWith('anim')); } if (mode === 'geek' && k) P[k].call(ui.strip, [], 1); }",
+    "    const P1 = Object.getPrototypeOf(Object.getPrototypeOf(ui.strip));",
+    "    const N1 = Object.getOwnPropertyNames(ui.strip);",
+    "    const D1 = Object.getOwnPropertyDescriptor(ui.strip, 'x');",
+    "    const D2 = Object.getOwnPropertyDescriptors(ui.strip);",
+    "    const S1 = Object.getOwnPropertySymbols(ui.strip);",
+    "    const Q1 = ui.strip.__proto__;",
+    "    const Q2 = ui.strip.constructor.prototype;",
+    "    Object.setPrototypeOf(ui.strip, null);",
+    "    Object.defineProperty(ui.strip, 'x', { value: 1 });",
+    "    for (const k in ui.strip) void k;",
+    "    const R1 = Reflect.ownKeys(ui.strip);",
+    "    const Y1 = Symbol('x');",
+    "    ui.strip.constructor.prototype.animate = null;",
+  ];
+  for (const f of forms) assert.notDeepEqual(doorsIn(plainCode.replace(anchor, () => `${anchor}\n${f}`)), [], f);
+  // a string that says __proto__ is only text (the redactor shows the key as [__proto__]): it is not a door
+  assert.deepEqual(doorsIn(plainCode.replace(anchor, () => `${anchor}\n    const T1 = '__proto__';`)), []);
+});
+
+test('tripwire names [r8]: no string, template or bracket of the module is the name of an animation, style-map or stylesheet member (the names the tripwires of the element tests watch)', () => {
+  for (const name of TRIPWIRE_NAMES) {
+    const quoted = new RegExp(`['"\`]${name}['"\`]`);
+    assert.doesNotMatch(plainCode, quoted, `${name} as a string`);
+    assert.doesNotMatch(plainCode, new RegExp(`\\b${name}\\b`), `${name} as a word`);
+  }
+  const anchor = "    ui.geekBody.hidden = mode !== 'geek';";
+  for (const name of TRIPWIRE_NAMES) {
+    for (const f of [`    const s1 = ui.strip['${name}'];`, `    const s2 = ui.strip.${name};`, `    const s3 = '${name}';`]) {
+      const planted = plainCode.replace(anchor, () => `${anchor}\n${f}`);
+      assert.ok(new RegExp(`\\b${name}\\b`).test(planted), f);
+    }
+  }
+  assert.ok(TRIPWIRE_NAMES.length >= 10);
+});
+
+test('snapshot budget [r8]: the budget is made once per snapshot, charged for every entity that is read, decides before the cache is asked, and an entity that is not read is built with no parts (the wiring, by the source)', () => {
+  assert.match(code, /snapshotChars: 2000000,/);
+  assert.match(code, /nodeChars: 1,/);
+  assert.match(code, /entityBaseChars: 250,/);
+  assert.match(code, /entityIdChars: 255,/);
+  const bs = topLevel('buildSnapshot');
+  assert.equal((bs.match(/const budget = \{ left: LIMITS\.snapshotChars \};/g) || []).length, 1, 'one budget per snapshot, made from the limit');
+  assert.equal((bs.match(/budget\.left -= row\.spent;/g) || []).length, 1, 'charged once per row');
+  assert.match(bs, /makeRow\(src, state, nowMs, cat, job\.order, ledgerKey, isObj\(state\) && budget\.left <= 0\)/, 'the decision is made before the row is made, from the budget as it stands');
+  assert.match(bs, /jobs\.sort\(\(a, b\) => a\.rank - b\.rank \|\| a\.order - b\.order\);/);
+  assert.match(bs, /rank: cat\.alertIds\.has\(src\.entity_id\) \? 0 : src\.priority === 'headline' \? 1 : 2,/);
+  assert.match(bs, /rank: cat\.alertIds\.has\(id\) \? 0 : 3,/);
+  assert.ok(bs.indexOf('jobs.sort') < bs.indexOf('const budget ='), 'the order is fixed before the budget is spent');
+  // the cache: a row that is not to be read never goes through it
+  const mr = topLevel('makeRow');
+  assert.ok(mr.indexOf('if (unread) return buildRow(') > 0 && mr.indexOf('if (unread) return buildRow(') < mr.indexOf('memo.get(holder)'), 'an unread row is made before, and without, the cache');
+  // an entity that is not read has no parts: nothing of it is scanned
+  const br = topLevel('buildRow');
+  assert.match(br, /const parts = present && !unreadHere \? partsFor\(source, state, cat\) : null;/);
+  // what an entity costs is kept with its parts
+  assert.match(topLevel('partsFor'), /const spent = Math\.max\(LIMITS\.entityBaseChars, Math\.min\(LIMITS\.entityChars, LIMITS\.entityChars - opts\.scan\.left\) \+ work\.nodes \* LIMITS\.nodeChars\);/);
+  assert.match(code, /order, unread: unreadHere, spent: parts \? parts\.spent : 0,/);
+  // the id is read for every discovered entity, at most 255 characters, and costs the snapshot nothing
+  assert.match(bs, /const display = job\.id\.length > LIMITS\.entityIdChars \? WITHHELD : redactString\(job\.id, 'note'\);/);
+  // the alerts do not go through the budget: they are built from the raw states
+  assert.match(bs, /alertInputs\[a\.entity_id\] = isObj\(s\)/);
+  assert.ok(!/budget/.test(bs.slice(bs.indexOf('const alertInputs'))), 'the alert inputs are made with no budget in sight');
 });

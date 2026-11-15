@@ -201,14 +201,133 @@ test('AC12 [r7] the cost per character of the worst shape, times the scan budget
 });
 
 test('AC12 [r7] the control: harmless text of the same lengths is read at a small fraction of those bounds, and every harmless text of up to the display cap is still shown whole (no budget effect on ordinary data)', () => {
+  // review round 8: 400 entities of 4200 characters (1.7 million characters) are within the snapshot budget and are all read whole (2000 of them are not: the snapshot says which it did not read)
   const t0 = performance.now();
   const states = miniStates((s) => {
-    for (let i = 0; i < 2000; i += 1) s[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: 'The planner checked the overnight window. '.repeat(100).slice(0, 4200) });
+    for (let i = 0; i < 400; i += 1) s[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: 'The planner checked the overnight window. '.repeat(100).slice(0, 4200) });
   });
   const snap = buildSnapshot(states, validateCatalogue(miniCatalogue()).catalogue, NOW);
   const ms = performance.now() - t0;
-  assert.ok(ms < 4000, `${ms.toFixed(0)} ms for 2000 entities`);
+  assert.ok(ms < 4000, `${ms.toFixed(0)} ms for 400 entities`);
+  assert.equal(snap.counts.unread, 0, 'ordinary data is not touched by the snapshot budget');
   const r = snap.rows.find((x) => x.entity_id === 'sensor.ecco_intel_long_7');
   assert.equal(r.redacted.long_text.startsWith('The planner checked'), true);
   assert.equal(r.attributes.some((a) => a.name.includes('values not read')), false);
+});
+
+// ===========================================================================================================================
+// Review round 8 ([r8]): the SNAPSHOT budget. The entity budget bounds one entity; nothing bounded the total, so the FIRST render of a view with many entities of hostile text took 1 s for 50 of them, 4 s for 200 and
+// 112 s for 5000 (reviewer probes perf8 and perf8n). A snapshot now reads at most LIMITS.snapshotChars across all its entities (budget.test.mjs tests what it does; this tests how long it takes).
+// ===========================================================================================================================
+const SNAPSHOT_FAMILIES = [
+  ['eyJ-', 'a JWT start repeated'], [' .local @ x ', 'a host name suffix and an at sign'], ['0123.', 'a dotted run of digits'], ['0123.4567.8901.a', 'dotted addresses with a letter'], ['?token=', 'a token parameter'], ['?tokentoken', 'key words with no equals sign'],
+  ['a.b@', 'an e-mail local part'], ['a@b.c1.', 'an e-mail domain'], ['host=host=', 'connection pairs with no semicolon'], ['a://u', 'a URL scheme'], ['-----BEGIN ', 'a key block start'], ['hooks.', 'a webhook host'],
+  ['ab:cd:', 'colon groups'], ['pass=', 'a password pair'], ['a-b-', 'hyphen groups'], ['normal words here ', 'ordinary words'],
+];
+const hostileEntities = (n, text) => {
+  const states = {};
+  for (let i = 0; i < n; i += 1) {
+    const id = `sensor.ecco_intel_s${i}`;
+    const a = {};
+    for (let k = 0; k < 5; k += 1) a[`a${k}`] = `${text}${i % 10}`;
+    states[id] = { entity_id: id, state: '1', attributes: a, last_updated: new Date(NOW - 10000).toISOString(), last_changed: new Date(NOW - 10000).toISOString() };
+  }
+  return states;
+};
+const discoverOnly = () => validateCatalogue({ ...miniCatalogue(), sources: [], alerts: [], exceptions: [] }).catalogue;
+
+test('AC12 [r8] THE FIRST SNAPSHOT of 50, 200 and 5000 entities of near-miss text (JWT starts, at signs, host suffixes, dotted digits, token parameters and eleven more families, five attributes of 19999 characters each) stays under a second, and the time does not grow with the number of entities (reviewer probes perf8 and perf8n)', () => {
+  const bound = 1000;
+  let worst = { ms: 0, label: '' };
+  const per = {};
+  for (const [unit, what] of SNAPSHOT_FAMILIES) {
+    const text = textOf(unit, 19999);
+    const t = {};
+    for (const n of [50, 200, 5000]) {
+      const states = hostileEntities(n, text);
+      const cat = discoverOnly();
+      let ms = Infinity;
+      let snapshot = null;
+      for (let trial = 0; trial < 2; trial += 1) {
+        const states2 = trial === 0 ? states : hostileEntities(n, text);
+        const t0 = performance.now();
+        snapshot = buildSnapshot(states2, trial === 0 ? cat : discoverOnly(), NOW);
+        ms = Math.min(ms, performance.now() - t0);
+      }
+      assert.equal(snapshot.rows.length, n, `${what}: a row for every entity`);
+      const read = snapshot.rows.filter((r) => !r.unread).length;
+      assert.ok(read <= 20, `${what} x ${n}: ${read} entities read (each costs the whole entity budget)`);
+      assert.equal(snapshot.counts.unread, n - read);
+      assert.ok(ms < bound, `${what} x ${n}: ${ms.toFixed(0)} ms for the first snapshot (it was ${n === 50 ? 982 : n === 200 ? 3912 : 112856} ms before the snapshot budget)`);
+      t[n] = ms;
+      if (ms > worst.ms) worst = { ms, label: `${what} x ${n}` };
+    }
+    per[unit] = t;
+    // not more than linear in the number of entities: 25 times the entities (200 -> 5000) must not cost more than 25 times the time, and in fact costs about the same, because the budget is fixed
+    assert.ok(t[5000] / Math.max(t[200], 5) <= 25, `${what}: ${t[200].toFixed(0)} ms for 200 entities and ${t[5000].toFixed(0)} ms for 5000 (the snapshot budget makes the time independent of the number of entities)`);
+    assert.ok(t[200] / Math.max(t[50], 5) <= 8, `${what}: ${t[50].toFixed(0)} ms for 50 entities and ${t[200].toFixed(0)} ms for 200`);
+  }
+  console.log(`first snapshot, hostile text: the slowest of ${SNAPSHOT_FAMILIES.length * 3} runs is ${worst.label} at ${worst.ms.toFixed(0)} ms (bound ${bound} ms)`);
+});
+
+test('AC12 [r8] the snapshot budget bounds the work whatever the SHAPE: 5000 entities that each carry twenty thousand small values, 5000 entities with 255-character near-miss ids, and 5000 small ordinary entities (all read) each take well under a second', () => {
+  const cat = () => discoverOnly();
+  // (1) values: 200 keys of lists of 100 numbers, 5000 entities (no characters to speak of; the values are what costs)
+  const heavy = {};
+  for (let k = 0; k < 200; k += 1) heavy[`k${k}`] = Array.from({ length: 100 }, (_, i) => i);
+  const manyValues = {};
+  for (let i = 0; i < 5000; i += 1) manyValues[`sensor.ecco_intel_v${i}`] = { entity_id: `sensor.ecco_intel_v${i}`, state: '1', attributes: { ...heavy, n: i }, last_updated: new Date(NOW - 10000).toISOString() };
+  let t0 = performance.now();
+  const a = buildSnapshot(manyValues, cat(), NOW);
+  const msA = performance.now() - t0;
+  assert.ok(msA < 1000, `${msA.toFixed(0)} ms for 5000 entities of twenty thousand values`);
+  assert.ok(a.rows.filter((r) => !r.unread).length < 200, 'a value costs the snapshot something: far fewer than 5000 entities are read');
+  assert.equal(a.rows.length, 5000);
+  // (2) ids: 5000 entities whose ids are 255 characters of near-miss text (the id of an entity is read whether or not the entity is)
+  const ids = {};
+  for (let i = 0; i < 5000; i += 1) {
+    const id = `sensor.ecco_intel_${textOf('a.b@c1.', 230 - String(i).length)}${i}`;
+    ids[id] = { entity_id: id, state: '1', attributes: {}, last_updated: new Date(NOW - 10000).toISOString() };
+  }
+  t0 = performance.now();
+  const b = buildSnapshot(ids, cat(), NOW);
+  const msB = performance.now() - t0;
+  assert.ok(msB < 1000, `${msB.toFixed(0)} ms for 5000 ids of 255 characters`);
+  assert.equal(b.rows.length, 5000);
+  // (3) ordinary small entities: all read, in a fraction of a second (5000 of them cost the snapshot about 250 characters each: 1.25 million of the 2 million)
+  const small = {};
+  for (let i = 0; i < 5000; i += 1) small[`sensor.ecco_intel_o${i}`] = { entity_id: `sensor.ecco_intel_o${i}`, state: String(i), attributes: { friendly_name: `Sensor ${i}`, unit_of_measurement: 'kW', a: 1, b: 'two', c: true }, last_updated: new Date(NOW - 10000).toISOString() };
+  t0 = performance.now();
+  const c = buildSnapshot(small, cat(), NOW);
+  const msC = performance.now() - t0;
+  assert.ok(msC < 1000, `${msC.toFixed(0)} ms for 5000 small entities`);
+  assert.equal(c.counts.unread, 0, 'ordinary entities are all read: 5000 of them fit in the snapshot budget');
+  assert.equal(c.rows.length, 5000);
+  console.log(`first snapshot: 5000 entities of many values ${msA.toFixed(0)} ms, of long ids ${msB.toFixed(0)} ms, small and ordinary ${msC.toFixed(0)} ms`);
+});
+
+test('AC12 [r8] the cost per unit of the worst shape, times the snapshot budget, is a small part of a second: this is why LIMITS.snapshotChars has the value it has', () => {
+  assert.equal(LIMITS.snapshotChars, 2000000);
+  let worstPerUnit = 0;
+  let worstUnit = '';
+  for (const [unit] of SNAPSHOT_FAMILIES) {
+    const states = hostileEntities(20, textOf(unit, 19999));
+    const cat = discoverOnly();
+    let ms = Infinity;
+    let spent = 0;
+    for (let trial = 0; trial < 3; trial += 1) {
+      const t0 = performance.now();
+      const snapshot = buildSnapshot(trial === 0 ? states : hostileEntities(20, textOf(unit, 19999)), trial === 0 ? cat : discoverOnly(), NOW);
+      ms = Math.min(ms, performance.now() - t0);
+      spent = snapshot.rows.reduce((n, r) => n + r.spent, 0);
+    }
+    assert.ok(spent > 0);
+    if (ms / spent > worstPerUnit) {
+      worstPerUnit = ms / spent;
+      worstUnit = unit;
+    }
+  }
+  const worstSnapshotMs = worstPerUnit * LIMITS.snapshotChars;
+  console.log(`worst shape ${JSON.stringify(worstUnit)}: ${(worstPerUnit * 1e6).toFixed(0)} nanoseconds per unit, so ${worstSnapshotMs.toFixed(0)} ms for a whole snapshot budget of ${LIMITS.snapshotChars}`);
+  assert.ok(worstSnapshotMs < 400, `${worstSnapshotMs.toFixed(0)} ms to read a whole snapshot budget of the worst shape`);
 });

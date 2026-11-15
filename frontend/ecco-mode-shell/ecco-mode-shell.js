@@ -64,6 +64,16 @@ export const LIMITS = Object.freeze({
   stringCap: 4000, // characters of one string SHOWN: the whole text is read first, then cut here, so no part of a secret that crosses the cut can be left in view
   scanBound: 20000, // the most characters of one string, or of one key name, that is read at all: a longer one is withheld whole, never read in part
   entityChars: 100000, // review round 7: the most characters read for secrets across ALL the strings and key names of one entity (its state and every attribute): what follows is withheld, not read. 25 times the largest real Intelligence entity (3927)
+  // review round 8: the SNAPSHOT budget. entityChars bounds one entity, and nothing bounded the total: 5000 discovered entities of 100000 characters each took 112 s to read for the first render. A snapshot reads at most
+  // snapshotChars "characters" across ALL its entities, where an entity costs what it read (its characters, at most entityChars), plus nodeChars for every value it visited, and at least entityBaseChars (its row, its attribute
+  // list and its search text). Past the budget the remaining entities are NOT READ: their values are withheld and the row says so (never shown unread, never invented); alerts read the raw states and are never affected.
+  // Why 2000000: a character of the worst text costs about 50 nanoseconds to read on the development PC (ordinary text 10 to 12), a value visited about 50, and a small entity about 13 microseconds (250 of these
+  // characters), so a snapshot that has used the whole budget has taken about 0.1 s at the worst and 25 ms on ordinary text, and a phone five times slower stays under half a second; it is 65 times the real Intelligence
+  // view (16 entities, at most 3927 characters and a few hundred values each, about 30000 in all), twenty of the largest entities the entity budget allows, and 5000 small ones with room to spare.
+  snapshotChars: 2000000,
+  nodeChars: 1, // what one value visited by the redactor costs a snapshot, in characters (a value is a number, a boolean, a string, a key or a list item)
+  entityBaseChars: 250, // the least an entity costs a snapshot (a row, its attribute rows, its search text, its classification)
+  entityIdChars: 255, // the longest entity id (the Home Assistant limit): a longer one is withheld unread, so the id of any entity is read for at most this much
   dictKeys: 200, // keys of one dict kept
   listItems: 200, // items of one list kept
   attrsPerRow: 200, // attribute rows listed for one entity
@@ -253,15 +263,24 @@ function isSecretKey(key, extra) {
 
 // VALUE rules: [reason, required substring or null, pattern]. The gates keep the common case (short plain strings) cheap.
 const RULES = [
-  ['jwt', 'eyJ', /\beyJ[\w-]{4,512}\.[\w-]{4,4096}\.[\w-]*/],
-  ['key block', '-----', /-----BEGIN [A-Z0-9 ]{1,64}-----/],
+  // review round 8: NO BOUND ON ANY COMPONENT. Round 7 bounded some quantifiers to make the rules linear, and a bounded rule stops matching a secret whose component is longer than the bound (a first segment of 600
+  // characters, a label of 80, a parameter name of 65 were SHOWN). Each rule that was bounded is now written so that it is exact (it matches exactly what the round-6 rule matched, which test/differential.test.mjs
+  // proves against the frozen round-6 rules on a generated corpus) AND linear. The device is the same in each: start the match where only ONE start per run is possible (at the second dot, at a separator, at the
+  // semicolon, at the slash of /services/, at the last letter of a run) and read the rest of the secret BACKWARDS or AHEAD in a look-behind or a look-ahead that stops at the first character that cannot belong to it.
+  // From the second dot of a token, back over the second segment, the dot and the first segment to the eyJ: every segment is read once, whatever its length, and a text of eyJ-eyJ-eyJ-... has no dot to start from.
+  ['jwt', 'eyJ', /(?<=\beyJ[\w-]{4,}\.[\w-]{4,})\./],
+  // the label holds no hyphen, so no other start can lie inside it: the round-6 form is already linear
+  ['key block', '-----', /-----BEGIN [A-Z0-9 ]+-----/],
   // review round 7: the scheme is not read (one character of it, just before the colon, is enough), so a long run of scheme-like text costs one step per start and the user-info that follows (any length) is read once
   ['url credentials', '@', /[a-z0-9+.-]:\/\/[^\s/?#@]*@/i],
   ['connection string', '://', /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?|mqtts?|influxdb|mssql|sqlserver|jdbc|ftps?|sftp|ssh|smb|ldaps?|couchdb)(?::[a-z0-9]+)?:\/\//i],
-  ['url token', '=', /[?&#;][\w.%-]{0,64}(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\w.%-]{0,64}=[^&\s]{3,}/i],
+  // one start per separator (the name holds no separator, so no start lies inside another's name); two look-aheads read the name of ANY length once each: that it ends in an equals sign with three characters of value, and that a key word is in it
+  ['url token', '=', /[?&#;](?=[\w.%-]*=[^&\s]{3})(?=[\w.%-]*?(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key))/i],
   ['credential pair', null, /\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b["']?\s*[:=]\s*["']?[^\s,;"']{3,}/i],
-  // review round 7: two forms. A value of up to 256 characters, after any boundary; or a value of any length, but then the key must stand at the start of the text or after a semicolon or a space, so no start can lie inside the value of another and every character is read once
-  ['connection pairs', ';', /\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]{1,256}\s*;|(?:^|[;\s])(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*;/i],
+  // review round 8: the match starts at the SEMICOLON and reads backwards (the value, the equals sign, the key at a word boundary). Every start lies after a different run of characters (a value holds no semicolon and no space), so a run
+  // such as host=host=host=... is read once from its semicolon, whatever the length of the value and whatever stands before the key (a bracket, a comma, a quote). Round 7 had two forms with bounds ({1,256}, or a key after a space)
+  // and showed a pair with a value of 300 characters after a bracket; this is the round-6 verdict for every text, read once.
+  ['connection pairs', ';', /(?<=\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*);/i],
   // a password written as a pair under a short name: a quoted "pass" or "pw" key, or pass=value and pw=value (not plain prose such as "pass: true"); the same pattern as the Python scanner's PASS_PAIR
   // review round 7: the unquoted form needs no prefix of segments: a prefix such as wifi_ ends at a separator, so the key word is always preceded by a character that is not a letter or digit, and that alone is the test (the same verdicts, read once)
   ['pass pair', null, /["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:pass|pw)=["']?[^\s,;&"']{3,}/i],
@@ -275,8 +294,10 @@ const RULES = [
   ['IPv6 address', ':', /(?:^|[^0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])|(?:^|[^0-9a-zA-Z:])(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-zA-Z:])/],
   ['MAC address', null, /\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/],
   // the dotted form (three groups of four) that network equipment writes; at least one letter, so a version such as 2026.1114.0900 is not taken for one
-  // review round 7: the letter is looked for in the fourteen characters of the address only (a letter further on, as in 2026.1114.0900.beef, is not part of it), so the look-ahead is bounded and not read to the end of the text from every start
-  ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]{0,13}[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i],
+  // review round 8: the round-6 verdict again (a letter ANYWHERE in the run of hex digits and dots that the address starts, so 2026.1114.0900.beef is withheld, as it was), in two alternatives that are each read once.
+  // Round 7 looked for the letter in the fourteen characters of the address only, which showed that text. (1) a letter inside the address: a window of the fourteen characters, as in round 7. (2) a letter after it, in
+  // the same run: the match is the LAST letter of a run (a lazy look-ahead that stops at the next letter, so the whole run is read once over all its letters) and the address is looked for backwards from it, once per run.
+  ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]{0,13}[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b|[a-f](?![0-9a-f.]*?[a-f])(?<=\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b[0-9a-f.]*[a-f])/i],
   // the six bytes with a space between them ("aa bb cc dd ee ff"), as some tools and hex dumps print one (review round 4); at least one letter, so six two-digit numbers
   // are not taken for one. The same pattern as the Python scanner's MAC_SPACED. An all-digit address written this way is indistinguishable from six numbers and stays shown.
   ['MAC address (spaced)', ' ', /(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])/i],
@@ -284,7 +305,8 @@ const RULES = [
   ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
   ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],
   // a webhook: the id in the path IS the credential (the Home Assistant webhook path and the chat services path); the same pattern as the Python scanner's WEBHOOK_PATH
-  ['webhook path', '/', /\/api\/webhook\/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]{1,253}\/services\/[A-Za-z0-9/_-]{12,}/i],
+  // review round 8: no bound on the host (the round-7 {1,253} showed a longer one). The match starts at /services/ and reads the host backwards once; no host holds a slash, so no other start reads the same run.
+  ['webhook path', '/', /\/api\/webhook\/[A-Za-z0-9_-]{8,}|(?<=hooks\.[a-z0-9.-]+)\/services\/[A-Za-z0-9/_-]{12,}/i],
   // review round 7: the scheme is not read here either (see url credentials)
   ['internal host name', '://', /[a-z0-9+.-]:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
   // review round 7: the rule starts at the dot before the suffix (one host-name character before it is enough), so a long dotted text is not walked once per start
@@ -424,15 +446,26 @@ const newCtx = (opts) => ({
   keyCount: 0,
 });
 
+/** Review round 8: the values a call visited are added to opts.work.nodes when the caller keeps count (the snapshot charges them: LIMITS.nodeChars each). */
+function countWork(ctx, opts) {
+  if (opts && isObj(opts.work) && isNum(opts.work.nodes)) opts.work.nodes += Math.min(LIMITS.nodes, LIMITS.nodes - ctx.budget.n);
+}
+
 /** A redacted deep copy of any value. opts.key is the key the value sits under; opts.extraKeyPatterns the catalogue's patterns. */
 export function redactValue(value, opts = {}) {
-  return redactNode(value, isStr(opts.key) ? opts.key : null, newCtx(opts), 0);
+  const ctx = newCtx(opts);
+  const out = redactNode(value, isStr(opts.key) ? opts.key : null, ctx, 0);
+  countWork(ctx, opts);
+  return out;
 }
 
 /** A redacted deep copy of an attribute object. */
 export function redactAttributes(attrs, opts = {}) {
   if (!isObj(attrs)) return {};
-  return redactNode(attrs, null, newCtx(opts), 0);
+  const ctx = newCtx(opts);
+  const out = redactNode(attrs, null, ctx, 0);
+  countWork(ctx, opts);
+  return out;
 }
 
 /** How many withheld markers (values and key names) a redacted structure holds. */
@@ -737,6 +770,8 @@ function prepare(catalogue) {
     discover: { prefixes, group: discoverGroup, exclude: new Set(Array.isArray(d.exclude_entity_ids) ? d.exclude_entity_ids.filter(isStr) : []) },
     extraPatterns: isObj(c.redaction) && Array.isArray(c.redaction.extra_key_patterns) ? c.redaction.extra_key_patterns : [],
     alerts: Array.isArray(c.alerts) ? c.alerts : [], exceptions: Array.isArray(c.exceptions) ? c.exceptions : [],
+    // review round 8: the entities that an alert watches are read FIRST by a snapshot (see buildSnapshot)
+    alertIds: new Set((Array.isArray(c.alerts) ? c.alerts : []).filter((a) => isObj(a) && isStr(a.entity_id)).map((a) => a.entity_id)),
   };
   if (key) PREP.set(key, prepared);
   return prepared;
@@ -841,10 +876,15 @@ function partsFor(source, state, cat) {
   if (hit && hit.cat === cat && hit.ref === ref) return hit;
   STATS.partsBuilt += 1;
   const attrsRaw = isObj(state.attributes) ? state.attributes : {};
-  const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan() }; // one scan budget for the whole entity: its attributes, its state, its unit and its name
-  const red = redactAttributes(attrsRaw, opts);
+  const work = { nodes: 0 };
+  const opts = { extraKeyPatterns: cat.extraPatterns, scan: newScan(), work }; // one scan budget for the whole entity: its state, its name, its unit and its attributes
+  // review round 8: CHARGE ORDER. The state, the unit and the name are what the row shows first, so they are charged and read FIRST, then the attributes: an entity that is over its budget still shows its state, its
+  // unit and its name, honestly, and it is the attributes that are withheld (round 7 read the attributes first, and the headline of an over-budget entity was the part that was withheld).
   const stateStr = state.state === null || state.state === undefined ? '' : String(state.state);
   const stateRed = redactValue(stateStr, opts);
+  const friendly = isStr(attrsRaw.friendly_name) ? redactValue(attrsRaw.friendly_name, { ...opts, key: 'note' }) : '';
+  const unitRaw = isStr(attrsRaw.unit_of_measurement) ? redactValue(attrsRaw.unit_of_measurement, opts) : '';
+  const red = redactAttributes(attrsRaw, opts);
   const declared = source.attributes || [];
   let rows = describeAttributes(red, declared);
   const total = Object.keys(attrsRaw).length;
@@ -855,13 +895,14 @@ function partsFor(source, state, cat) {
   }
   // review round 7: an entity with more text than the scan budget pays for says so: what was not read is withheld, never shown unread
   if (opts.scan.left < 0) rows.push(attrRow('\u2026', '\u2026 values not read', null, 0, null, true, `this entity has more than ${LIMITS.entityChars} characters of text; what is past that is withheld, not read`));
-  const unitRaw = isStr(attrsRaw.unit_of_measurement) ? redactValue(attrsRaw.unit_of_measurement, opts) : '';
-  const friendly = isStr(attrsRaw.friendly_name) ? redactValue(attrsRaw.friendly_name, { ...opts, key: 'note' }) : '';
   const bits = [];
   flattenForSearch(red, bits, { n: LIMITS.searchChars });
+  // what this entity cost the snapshot (see LIMITS.snapshotChars): the characters it read (at most the entity budget), the values it visited, and at least the base cost of a row. Kept with the parts, so a row that is
+  // reused from the cache is charged the same as one that was just read, and the same states always give the same snapshot.
+  const spent = Math.max(LIMITS.entityBaseChars, Math.min(LIMITS.entityChars, LIMITS.entityChars - opts.scan.left) + work.nodes * LIMITS.nodeChars);
   const parts = {
     cat, ref, id: (SEQ.parts += 1), red, stateStr: stateRed, attrRows: rows, attrTotal: total, unit: isStr(unitRaw) && unitRaw !== WITHHELD ? unitRaw : '',
-    friendly: isStr(friendly) ? friendly : '', bits: bits.join(' ').slice(0, LIMITS.searchChars), withheld: countWithheld(red) + (stateRed === WITHHELD ? 1 : 0),
+    friendly: isStr(friendly) ? friendly : '', bits: bits.join(' ').slice(0, LIMITS.searchChars), withheld: countWithheld(red) + (stateRed === WITHHELD ? 1 : 0), spent,
   };
   PARTS.set(state, parts);
   return parts;
@@ -888,7 +929,14 @@ function stillRight(source, state, nowMs, hit) {
   return cls.status === was.status && cls.flags.length === was.flags.length && cls.flags.every((f, i) => f === was.flags[i]);
 }
 
-function makeRow(source, state, nowMs, cat, order, ledgerKey) {
+// review round 8: what a row says about an entity that the snapshot did not read (the budget was used up before it). It is a visible, searchable, exportable fact; no value of the entity is in it.
+export const UNREAD_KEY = '[values not read]';
+const UNREAD_NOTE = 'not read: this view holds more text than one snapshot reads (LIMITS.snapshotChars); the values of this entity were not read';
+const UNREAD_RED = Object.freeze({ [UNREAD_KEY]: UNREAD_NOTE });
+
+function makeRow(source, state, nowMs, cat, order, ledgerKey, unread = false) {
+  // a row that was not read is cheap to make and is never put in the cache (and a row from the cache is never given to an entity that is not to be read)
+  if (unread) return buildRow(source, state, nowMs, cat, order, ledgerKey, true);
   const present = isObj(state);
   const memo = present ? ROWS_BY_STATE : ROWS_BY_SOURCE;
   const holder = present ? state : source;
@@ -902,34 +950,39 @@ function makeRow(source, state, nowMs, cat, order, ledgerKey) {
   return row;
 }
 
-function buildRow(source, state, nowMs, cat, order, ledgerKey) {
+function buildRow(source, state, nowMs, cat, order, ledgerKey, unread = false) {
   STATS.rowsBuilt += 1;
   const present = isObj(state);
   const cls = classifyRow(source, present ? state : null, nowMs);
-  const parts = present ? partsFor(source, state, cat) : null;
+  // an entity that is not to be read has no parts: nothing of its state or its attributes is scanned, shown, searched or exported (what the classification looked at is the words unavailable and unknown, a timestamp and the flags)
+  const unreadHere = unread && present;
+  const parts = present && !unreadHere ? partsFor(source, state, cat) : null;
   const unitFromSource = source.unit || '';
-  const unitText = present && cls.status !== 'UNAVAILABLE' && cls.status !== 'UNKNOWN' ? (unitFromSource || (parts.unit || '')) : '';
+  const unitText = present && cls.status !== 'UNAVAILABLE' && cls.status !== 'UNKNOWN' ? (unitFromSource || (parts ? parts.unit || '' : '')) : '';
   let stateText;
   if (cls.status === 'NOT_MEASURED') stateText = 'Not measured';
   else if (cls.status === 'UNAVAILABLE') stateText = 'Unavailable';
   else if (cls.status === 'UNKNOWN') stateText = 'Unknown';
-  else stateText = parts.stateStr;
+  else stateText = unreadHere ? WITHHELD : parts.stateStr;
   const showUnit = stateText !== WITHHELD ? unitText : '';
-  const attributes = present ? parts.attrRows : EMPTY_ATTRS(source.attributes || []);
+  let attributes;
+  if (unreadHere) attributes = [attrRow('\u2026', '\u2026 values not read', null, 0, null, true, UNREAD_NOTE)];
+  else attributes = present ? parts.attrRows : EMPTY_ATTRS(source.attributes || []);
   const ageText = cls.status === 'NOT_MEASURED' ? 'no data' : formatAge(cls.ageS);
-  const title = source.discovered ? (parts.friendly && parts.friendly !== WITHHELD ? parts.friendly : '') || ledgerKey.display : source.title;
-  const search = [ledgerKey.display, source.id, title, source.description || '', stateText, showUnit, parts ? parts.bits : '', ...attributes.map((a) => a.path)]
+  const title = source.discovered ? (parts && parts.friendly && parts.friendly !== WITHHELD ? parts.friendly : '') || ledgerKey.display : source.title;
+  const search = [ledgerKey.display, source.id, title, source.description || '', stateText, showUnit, parts ? parts.bits : '', unreadHere ? 'not read' : '', ...attributes.map((a) => a.path)]
     .join(' ').toLowerCase();
   return {
     key: ledgerKey.key, id: ledgerKey.id, entity_id: ledgerKey.display, title, description: source.description || '', group: source.group,
     priority: source.priority, unit: source.unit || null, origin: source.origin, discovered: !!source.discovered, status: cls.status, flags: cls.flags,
     ageS: cls.ageS, ageText, lastUpdated: cls.lastUpdatedMs, ageMonitored: cls.ageMonitored, present, stateText, unitText: showUnit,
     expected_update_s: source.expected_update_s === undefined ? null : source.expected_update_s,
-    stale_after_s: source.stale_after_s === undefined ? null : source.stale_after_s, attributes, attrTotal: present ? parts.attrTotal : attributes.length,
-    searchText: search, problem: cls.status !== 'LIVE', redacted: present ? parts.red : {},
-    withheld: (parts ? parts.withheld : 0) + (ledgerKey.display === WITHHELD ? 1 : 0) + (title === WITHHELD ? 1 : 0),
-    sig: [cls.status, cls.flags.join(','), stateText, showUnit, ageText, cls.ageMonitored ? 'm' : 'u', parts ? parts.id : 0, ledgerKey.display].join('\u0001'),
-    order,
+    stale_after_s: source.stale_after_s === undefined ? null : source.stale_after_s, attributes,
+    attrTotal: parts ? parts.attrTotal : unreadHere ? (isObj(state.attributes) ? Object.keys(state.attributes).length : 0) : attributes.length,
+    searchText: search, problem: cls.status !== 'LIVE' || unreadHere, redacted: parts ? parts.red : unreadHere ? UNREAD_RED : {},
+    withheld: (parts ? parts.withheld : 0) + (unreadHere && stateText === WITHHELD ? 1 : 0) + (ledgerKey.display === WITHHELD ? 1 : 0) + (title === WITHHELD ? 1 : 0),
+    sig: [cls.status, cls.flags.join(','), stateText, showUnit, ageText, cls.ageMonitored ? 'm' : 'u', parts ? parts.id : unreadHere ? 'unread' : 0, ledgerKey.display].join('\u0001'),
+    order, unread: unreadHere, spent: parts ? parts.spent : 0,
   };
 }
 
@@ -946,9 +999,17 @@ export function buildSnapshot(states, catalogue, nowMs) {
   const rows = [];
   // every entity id this snapshot read: the shell compares these (and only these) to tell an update it cares about from an unrelated one
   const watch = new Set();
+  // review round 8: THE SNAPSHOT BUDGET. The entities are READ in a fixed order, the cost of each is taken from one budget (LIMITS.snapshotChars), and once it is used up every entity that follows is NOT READ: its row says so, its
+  // values are withheld and nothing of it is scanned, shown, searched or exported. The order (the same states always give the same result, a cached row is charged what it cost when it was read):
+  //   0  the entities an alert of the catalogue watches        (what the owner must be told about is read first)
+  //   1  the catalogue's headline sources, in catalogue order
+  //   2  the other catalogue sources, in catalogue order
+  //   3  the discovered entities, in the order of their ids
+  // Alerts are not read through this budget at all: deriveAlerts works on the raw states (alertInputs, below), so no alert is ever hidden by it.
+  const jobs = [];
   cat.sources.forEach((src, i) => {
     watch.add(src.entity_id);
-    rows.push(makeRow(src, st[src.entity_id], nowMs, cat, i, { key: `src:${src.id}`, id: src.id, display: cleanText(src.entity_id, 200) }));
+    jobs.push({ rank: cat.alertIds.has(src.entity_id) ? 0 : src.priority === 'headline' ? 1 : 2, order: i, src, id: src.entity_id, discovered: false });
   });
   if (cat.discover.prefixes.length) {
     const found = [];
@@ -962,22 +1023,36 @@ export function buildSnapshot(states, catalogue, nowMs) {
       }
     }
     found.sort();
-    let withheldN = 0;
     found.forEach((id, i) => {
       watch.add(id);
-      const state = st[id];
-      const shown = redactString(id, 'note');
-      const display = shown === WITHHELD ? WITHHELD : shown;
+      jobs.push({ rank: cat.alertIds.has(id) ? 0 : 3, order: 1e6 + i, src: null, id, discovered: true });
+    });
+  }
+  jobs.sort((a, b) => a.rank - b.rank || a.order - b.order);
+  const budget = { left: LIMITS.snapshotChars };
+  let withheldN = 0;
+  for (const job of jobs) {
+    const state = st[job.id];
+    let src = job.src;
+    let ledgerKey;
+    if (!job.discovered) ledgerKey = { key: `src:${src.id}`, id: src.id, display: cleanText(src.entity_id, 200) };
+    else {
+      // the id of a discovered entity is read too, whether or not the entity is (it comes from the states, and a hostile one is withheld). It costs the snapshot nothing: an id longer than 255 characters (the Home Assistant
+      // limit) is not an entity id and is withheld unread, so what is read is at most 255 characters per entity (about 12 microseconds), and the entity's own base cost (LIMITS.entityBaseChars) is larger than that
+      const display = job.id.length > LIMITS.entityIdChars ? WITHHELD : redactString(job.id, 'note');
       if (display === WITHHELD) withheldN += 1;
       const tag = display === WITHHELD ? `withheld-${withheldN}` : display;
-      const src = { id: `discovered:${tag}`, entity_id: id, group: cat.discover.group, title: display, description: 'Found by its entity prefix. The catalogue does not describe it yet.',
+      src = { id: `discovered:${tag}`, entity_id: job.id, group: cat.discover.group, title: display, description: 'Found by its entity prefix. The catalogue does not describe it yet.',
         priority: 'normal', unit: null, expected_update_s: null, stale_after_s: null, origin: 'discovered', attributes: [], discovered: true };
-      rows.push(makeRow(src, state, nowMs, cat, 1e6 + i, { key: `disc:${tag}`, id: `discovered:${tag}`, display }));
-    });
+      ledgerKey = { key: `disc:${tag}`, id: `discovered:${tag}`, display };
+    }
+    const row = makeRow(src, state, nowMs, cat, job.order, ledgerKey, isObj(state) && budget.left <= 0);
+    budget.left -= row.spent;
+    rows.push(row);
   }
   rows.sort((a, b) => (cat.groupOrder.has(a.group) ? cat.groupOrder.get(a.group) : 1e6) - (cat.groupOrder.has(b.group) ? cat.groupOrder.get(b.group) : 1e6)
     || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.order - b.order);
-  const counts = { total: rows.length, withheld: 0, discovered: 0, problems: 0 };
+  const counts = { total: rows.length, withheld: 0, discovered: 0, problems: 0, unread: 0 };
   for (const s of STATUSES) counts[s] = 0;
   const byKey = new Map();
   const groups = cat.groups.map((g) => ({ ...g, count: 0, allObscure: true }));
@@ -987,6 +1062,7 @@ export function buildSnapshot(states, catalogue, nowMs) {
     counts.withheld += r.withheld;
     if (r.discovered) counts.discovered += 1;
     if (r.problem) counts.problems += 1;
+    if (r.unread) counts.unread += 1;
     byKey.set(r.key, r);
     const g = groupAt.get(r.group);
     if (g) {
@@ -1089,8 +1165,13 @@ export function summarise(snapshot, alerts) {
     level = 'info';
     text = `${by('info')[0].text}${more(by('info'))}`;
   }
-  const n = snapshot && snapshot.counts ? snapshot.counts.problems : 0;
-  return { level, text, note: n ? `${n} data point${n === 1 ? ' is' : 's are'} stale, unavailable, simulated or unverified. Geek Mode lists them.` : '' };
+  const unread = snapshot && snapshot.counts && isNum(snapshot.counts.unread) ? snapshot.counts.unread : 0;
+  const n = (snapshot && snapshot.counts ? snapshot.counts.problems : 0) - unread;
+  // review round 8: an entity that the snapshot did not read (its budget was used up) is said so, in words, here as well: Production never implies that every value was looked at when one was not
+  const notes = [];
+  if (n > 0) notes.push(`${n} data point${n === 1 ? ' is' : 's are'} stale, unavailable, simulated or unverified. Geek Mode lists them.`);
+  if (unread > 0) notes.push(`${unread} data point${unread === 1 ? ' was' : 's were'} not read: this view holds more data than it reads at once. Geek Mode says which.`);
+  return { level, text, note: notes.join(' ') };
 }
 
 // ===========================================================================
@@ -1735,7 +1816,7 @@ class GeekSurface {
       return seg;
     });
     this.ui.bar.replaceChildren(...segs);
-    this.ui.sub.textContent = `${this.o.fmtTime(snap.nowMs)} \u00b7 ${c.total} data points${c.discovered ? ` (${c.discovered} discovered)` : ''}${snap.contract ? ` \u00b7 ${snap.contract}` : ''}`;
+    this.ui.sub.textContent = `${this.o.fmtTime(snap.nowMs)} \u00b7 ${c.total} data points${c.discovered ? ` (${c.discovered} discovered)` : ''}${c.unread ? ` \u00b7 ${c.unread} not read (too much data for one pass)` : ''}${snap.contract ? ` \u00b7 ${snap.contract}` : ''}`;
   }
 
   _renderTiles() {
