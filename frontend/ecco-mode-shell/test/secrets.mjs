@@ -45,6 +45,26 @@ export const SECRET_VALUES = Object.freeze([
   { label: 'chat services webhook path', value: j('hooks.example', '.test/', 'services/', 'team-alpha/chan-beta/abcdefghijkl') },
 ]);
 
+/**
+ * Review round 3: the shapes the round-three reviewer found shown. They are kept in their own list (not appended to SECRET_VALUES) so that the
+ * round-one and round-two tests, which address SECRET_VALUES by position, keep reading exactly the values they read. hostileAttributes() and
+ * forbiddenStrings() carry them, so every end-to-end hostile test covers them too.
+ */
+export const SECRET_VALUES_R3 = Object.freeze([
+  { label: 'MAC address with no separator', value: j('aabb', 'ccdd', 'eeff') },
+  { label: 'MAC address with no separator, upper case', value: j('A1B2', 'C3D4', 'E5F6') },
+  { label: 'MAC address, dotted (three groups of four)', value: j('aabb', '.', 'ccdd', '.', 'eeff') },
+  { label: 'coordinate pair with three decimals', value: j('51.507', ', ', '-0.127') },
+  { label: 'coordinate pair with three decimals, semicolon', value: j('-33.865', ';', '151.209') },
+  { label: 'Wi-Fi QR text', value: j('WIFI', ':S:', 'Home', ';T:WPA;P:', 'hunter22', ';;') },
+  { label: 'Wi-Fi QR text, lower case', value: j('wifi', ':T:WPA;S:', 'Home', ';P:', 'hunter22', ';;') },
+  { label: 'JSON pair with a pass key', value: j('{"pa', 'ss": "hun', 'ter22"}') },
+  { label: 'JSON pair with a pw key (single quotes)', value: j("{'p", "w': 'hun", "ter22'}") },
+  { label: 'pass equals value', value: j('pa', 'ss=hun', 'ter22x') },
+  { label: 'qualified pass equals value', value: j('wifi_pa', 'ss=hun', 'ter22x') },
+  { label: 'pw equals value, quoted', value: j('db-p', 'w="hun', 'ter22x"') },
+]);
+
 /** Key names that must withhold their value whatever it looks like; each value is a unique marker. */
 export const SECRET_KEYS = Object.freeze([
   'token', 'api_key', 'apiKey', 'password', 'passwd', 'secret', 'authorization', 'bearer', 'credential', 'credentials',
@@ -56,6 +76,9 @@ export const SECRET_KEYS = Object.freeze([
   // ---- review round 2: a login name after a qualifier
   'mqtt_user', 'db_login', 'serviceUser', 'ha-login', 'sftp_users',
 ]);
+
+/** Review round 3: a short password word after a qualifier ("pass"), "pw" anywhere, and the compact forms. Kept apart from SECRET_KEYS for the same reason. */
+export const SECRET_KEYS_R3 = Object.freeze(['wifi_pass', 'mqttPass', 'db-pw', 'pw', 'wifipass', 'wifipw', 'ADMIN_PASS', 'svc_pw_hash']);
 
 export const KEY_MARKER = (k) => `zq7marker-${k.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
@@ -76,6 +99,10 @@ export function hostileAttributes() {
   attrs.tokens = [KEY_MARKER('tokens-list-1'), KEY_MARKER('tokens-list-2')];
   attrs.credentials_dict = { user: KEY_MARKER('creduser'), pw: KEY_MARKER('credpw') };
   attrs.site_owner = KEY_MARKER('siteowner');
+  SECRET_VALUES_R3.forEach((s, i) => {
+    attrs[`note_r3_${i}`] = s.value;
+  });
+  for (const k of SECRET_KEYS_R3) attrs[k] = KEY_MARKER(k);
   attrs.byname = {};
   SECRET_KEY_NAMES.forEach((n) => {
     attrs.byname[n] = 'under-secret-key-name';
@@ -91,9 +118,12 @@ export function forbiddenStrings() {
     if (s.value.length >= 16) out.add(s.value.slice(4, 4 + Math.min(14, s.value.length - 8)));
   }
   for (const k of SECRET_KEYS) out.add(KEY_MARKER(k));
+  for (const s of SECRET_VALUES_R3) out.add(s.value);
+  for (const k of SECRET_KEYS_R3) out.add(KEY_MARKER(k));
   for (const m of ['tokens-list-1', 'tokens-list-2', 'creduser', 'credpw', 'siteowner']) out.add(KEY_MARKER(m));
   for (const n of SECRET_KEY_NAMES) out.add(n);
   out.add('hunter2');
+  out.add('hunter22');
   out.add('s3cr3tvalue');
   out.add('correcthorse');
   out.add(j('192', '.', '168', '.', '77', '.', '23'));

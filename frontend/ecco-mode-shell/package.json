@@ -12,6 +12,8 @@
     "ecco"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "check:browser": "node preview/check-strip.mjs",
+    "check:browser:selftest": "node preview/check-strip.mjs --selftest"
   }
 }

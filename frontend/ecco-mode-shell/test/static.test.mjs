@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { cardDir, CARD_PATH, cardUrl } from './helpers.mjs';
+import { ALERT_TOKEN, MODE_TOKEN, parseSheet, pinProblems, stripProblems, reachesStripStrict, compounds, STRIP_ALLOWLIST, THEME_VARS } from './css-guard.mjs';
 
 const src = readFileSync(CARD_PATH, 'utf8');
 const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
@@ -278,8 +279,8 @@ function clipsToSliver(decls) {
   return clips && decls.some(([p, , sp]) => /^(?:max-)?(?:height|block-size)$/.test(p) && sliver(sp));
 }
 
-const ALERT_TOKEN = /\.alerts?\b|data-ecco-alert-strip|data-alert|role=["']?alert/;
-const MODE_TOKEN = /data-mode|data-ecco-body|data-ecco-mode|data-geek|data-production/;
+// Review round 3: both tokens now live in css-guard.mjs and are CASE-INSENSITIVE (an HTML attribute name in a selector is matched without regard to case, so
+// [DATA-MODE=geek] is a mode selector), and the strip token also names the attributes the strip carries (role, aria-live, aria-label).
 /** The only selectors that may name a mode: the switch thumb slides to the Geek side. Every one is a purely visual flourish of the switch. */
 const MODE_SELECTORS = new Set(['.switch[data-mode="geek"] .thumb']);
 /** The only selector allowed to hide anything: the standard [hidden] attribute rule. */
@@ -543,4 +544,259 @@ test('AC12 [r1] the update pump: one timer slot, one setInterval and one clearIn
   assert.match(code, /_stopTimer\(\) \{[\s\S]*?clearInterval\(/);
   assert.equal((code.match(/\._startTimer\(/g) || []).length >= 2, true);
   assert.doesNotMatch(code, /\bsetTimeout\s*\(/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 3 ([r3]). Rounds 1 and 2 grew a LIST OF WAYS to hide the strip, and each round the reviewer found one more: [DATA-MODE=geek] (attribute names
+// are case-insensitive), [role=region] and [aria-live] (the strip is also picked out by attributes), rotateX, a tiny font-size, scale(.001), a transparent
+// rgba colour, a blur filter and order. This section stops extending the list. Three nets that do not ask "is this a known way to hide it":
+//   1. the PIN: every rule, selector and declaration of the stylesheet is in test/fixtures/style.pin.json; a new or changed one fails until a person
+//      regenerates the file in a reviewed diff (test/style-pin.mjs prints it);
+//   2. the ALLOWLIST: a rule that can reach the strip (it, what contains it, what it contains) may set only the properties on STRIP_ALLOWLIST, each with a
+//      bounded value; a property that is not on the list is refused whatever it does;
+//   3. the READER: it refuses what it cannot judge (a CSS escape, a comment, an @import, an at-rule or condition nobody pinned, a nested rule).
+// The headless-Chrome check (preview/check-strip.mjs) is a fourth net that does not read the stylesheet at all.
+// ---------------------------------------------------------------------------------------------------------------------------
+const PIN = JSON.parse(readFileSync(path.join(cardDir, 'test', 'fixtures', 'style.pin.json'), 'utf8'));
+/** Every net that reads CSS text, in one list of reasons ([] when the stylesheet is acceptable): the round-one and round-two checks and the allowlist. */
+const strictAll = (css) => [...cssViolations(css), ...stripProblems(css, { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS })];
+/** Both nets together: the semantic reader and the pin. */
+const nets = (css) => ({ semantic: strictAll(css), pin: pinProblems(css, PIN) });
+
+test('AC6 [r3] the whole stylesheet is pinned: every rule, selector and declaration is the one a person approved (regenerate the pin only after reading the new rule)', () => {
+  assert.equal(PIN.schema, 'ecco-mode-shell-style-pin/1');
+  assert.ok(Array.isArray(PIN.rules) && PIN.rules.length > 120, `the pin lists ${PIN.rules.length} rules`);
+  const read = parseSheet(STYLE);
+  assert.deepEqual(read.problems, [], 'the reader understands the whole stylesheet');
+  assert.deepEqual(pinProblems(STYLE, PIN), [], 'the stylesheet is the pinned one: a new or changed rule needs a person to regenerate test/fixtures/style.pin.json (node test/style-pin.mjs) and review its diff');
+});
+
+test('AC6 [r3] the pin has teeth: a new selector, a new or changed declaration, a removed, moved or re-conditioned rule, anywhere, is reported', () => {
+  const base = STYLE;
+  const edits = {
+    'a new rule with a harmless selector and declaration': `${base}\n.zz{color:red}`,
+    'a new selector on an existing rule': base.replace('.alerts{display:grid;gap:8px;min-width:0}', '.alerts,.zz{display:grid;gap:8px;min-width:0}'),
+    'a new declaration on an existing rule': base.replace('.alert-head{font-weight:700}', '.alert-head{font-weight:700;letter-spacing:.1px}'),
+    'a changed value (one digit)': base.replace('.alert-head{font-weight:700}', '.alert-head{font-weight:600}'),
+    'a changed colour': base.replace('--ecco-live:#13693b', '--ecco-live:#13693c'),
+    'a changed length': base.replace('.alerts{display:grid;gap:8px;min-width:0}', '.alerts{display:grid;gap:9px;min-width:0}'),
+    'a removed declaration': base.replace('.alert-head{font-weight:700}', '.alert-head{}'),
+    'a removed rule': base.replace('.alert-head{font-weight:700}\n', ''),
+    'a changed media condition': base.replace('@media (prefers-color-scheme: dark)', '@media (prefers-color-scheme: light)'),
+    'a changed container condition': base.replace('@container (max-width:560px)', '@container (max-width:561px)'),
+    'a declaration moved into another rule': base.replace('.alert-head{font-weight:700}', '.alert-head{}').replace('.alert-action{margin:0;', '.alert-action{font-weight:700;margin:0;'),
+    '!important added': base.replace('.alert-head{font-weight:700}', '.alert-head{font-weight:700!important}'),
+    'a property name in another case that is a new property': `${base}\n.alert-head{LETTER-SPACING:1px}`,
+  };
+  for (const [what, css] of Object.entries(edits)) {
+    assert.notEqual(css, base, `the edit changed nothing: ${what}`);
+    assert.notDeepEqual(pinProblems(css, PIN), [], `not caught: ${what}`);
+  }
+  // two adjacent rules swapped: the cascade changes
+  const rules = base.split('\n');
+  const i = rules.findIndex((l) => l.startsWith('.alert-head{'));
+  const swapped = [...rules];
+  [swapped[i], swapped[i + 1]] = [swapped[i + 1], swapped[i]];
+  assert.notDeepEqual(pinProblems(swapped.join('\n'), PIN), [], 'rules in another order');
+  // formatting is free: white space, a trailing semicolon and the case of a property name change nothing
+  assert.deepEqual(pinProblems(base.replace('.alert-head{font-weight:700}', '.alert-head  {  FONT-WEIGHT : 700 ;  }'), PIN), []);
+  assert.deepEqual(pinProblems(`\n\n${base}\n\n`, PIN), []);
+  // every report names the rule, so a reviewer can act on it
+  assert.match(pinProblems(edits['a changed value (one digit)'], PIN).join('\n'), /alert-head/);
+});
+
+test('AC6 [r3] the reader refuses what it cannot judge: escapes, comments, @import and other at-rules, an unpinned condition, nested rules, unbalanced or stray text', () => {
+  assert.deepEqual(parseSheet(STYLE).problems, []);
+  const unreadable = [
+    '.alerts{d\\isplay:none}', '.al\\65rts{display:none}', '.alerts{display:\\6eone}', '.alerts{display/**/:none}', '.alerts{display:none/**/}', '/**/.alerts{display:none}',
+    '.al/**/erts{display:none}', '<!-- .alerts{display:none}', '.alerts{display:none} -->',
+    '@import "x.css";.alerts{display:none}', '@import url(x.css);', '@charset "utf-8";', '@namespace svg "x";', '@font-face{font-family:x}', '@supports (display:grid){.alerts{display:none}}',
+    '@layer x{.alerts{display:none}}', '@scope (.shell){.alerts{display:none}}', '@page{margin:0}', '@property --x{syntax:"<length>";inherits:false;initial-value:0px}',
+    '@media (min-width:1px){.alerts{display:none}}', '@media screen{.alerts{display:none}}', '@container (min-width:1px){.alerts{display:none}}', '@media (prefers-color-scheme: dark) and (min-width:1px){.x{color:red}}',
+    '@keyframes evil{to{display:none}}', '@-webkit-keyframes ecco-pulse{to{box-shadow:none}}',
+    '@media (prefers-color-scheme: dark){@media (min-width:1px){.x{color:red}}}', '@media (prefers-reduced-motion: reduce){@container (min-width:561px){.x{color:red}}}',
+    '.shell{.alerts{display:none}}', '.shell{&>[aria-live]{display:none}}', '.shell{& .alerts{display:none}}', '.x{color:red;.y{color:blue}}', '&.alerts{display:none}',
+    '.alerts{display:none', '.alerts display:none}', '.alerts{display}', '.alerts{:none}', '.alerts{di splay:none}', '.alerts{display:}', '}', '.alerts{display:none}}', 'a;b{color:red}',
+    '.alerts{display:none}\u0000', '{color:red}',
+  ];
+  for (const css of unreadable) {
+    assert.notDeepEqual(parseSheet(css).problems, [], `the reader accepted: ${JSON.stringify(css)}`);
+    assert.notDeepEqual(parseSheet(`${STYLE}\n${css}`).problems, [], `the reader accepted it appended: ${JSON.stringify(css)}`);
+    assert.notDeepEqual(strictAll(`${STYLE}\n${css}`), [], `a stylesheet with it passes the strict net: ${JSON.stringify(css)}`);
+    assert.notDeepEqual(pinProblems(`${STYLE}\n${css}`, PIN), [], `a stylesheet with it passes the pin: ${JSON.stringify(css)}`);
+  }
+  // things that LOOK odd but are plain CSS this reader understands (quotes and brackets protect their contents)
+  for (const css of ['.x::after{content:"}"}', '.x[data-a="a;b"]{color:red}', '.x{font-family:"A, B",Arial}', '.x{background:url(a;b)}', '.x:nth-child(2n+1){color:red}']) {
+    assert.deepEqual(parseSheet(css).problems, [], css);
+  }
+});
+
+test('AC6 [r3] the mode and strip tokens are case-insensitive, and the strip token also names the attributes the strip carries', () => {
+  for (const s of ['.shell[DATA-MODE="geek"]', '.shell[Data-Mode=geek]', '[DATA-ECCO-BODY=geek]', '[data-ecco-body=GEEK]', '.shell[data-mode="GEEK" i]', '[data-geek]', '[DATA-PRODUCTION]', '.geek', '.Production .x',
+    '[data-ecco-mode]', '.shell[*|DATA-MODE=geek]']) assert.match(s, MODE_TOKEN, s);
+  for (const s of ['.shell', '.opt[aria-checked="true"]', '.btn[aria-pressed="true"]', '.production-ish', '.geeky', '[data-status="LIVE"]']) assert.doesNotMatch(s, MODE_TOKEN, s);
+  for (const s of ['.alerts', '.ALERTS', '.Alert', '.alert-head', '[DATA-ECCO-ALERT-STRIP]', '[Data-Alert-Id]', '[data-severity=critical]', '[role=region]', '[ROLE=alert]', '[Role="status"]', '[aria-live]', '[ARIA-LIVE=polite]',
+    '[aria-label^="Safety"]', '[aria-atomic]', '[aria-relevant]', '[*|role]', 'div[role=region]', '.shell>[role=region]', '[role|=region]']) assert.match(s, ALERT_TOKEN, s);
+  for (const s of ['.opt[aria-checked="true"]', '.btn[aria-pressed="true"]', '.gbtn[aria-expanded="false"] .ico', '.row', '[data-status="LIVE"]', '[hidden]']) assert.doesNotMatch(s, ALERT_TOKEN, s);
+  // the old case-sensitive check let these through: they are reported now
+  assert.match(violationText('.shell[DATA-MODE="geek"]>.x{color:red}'), /mode-dependent selector/);
+  assert.match(violationText('.shell[Data-Ecco-Body=geek] .x{color:red}'), /mode-dependent selector/);
+  assert.match(violationText('[ROLE=region]{color:red}'), /not on the pinned list/);
+  assert.match(violationText('[Aria-Live]{color:red}'), /not on the pinned list/);
+  assert.match(violationText('.ALERTS{color:red}'), /not on the pinned list/);
+  assert.match(violationText('.shell[DATA-MODE="geek"] .thumb{color:red}'), /mode-dependent selector/, 'the pinned thumb selector is matched by its exact text only');
+});
+
+test('AC6 [r3] which rules can reach the strip, read strictly: only a class the strip and its neighbours cannot carry rules a selector out', () => {
+  for (const s of ['.alerts', '.alert', '.alert-head', '.alert>.ico', '.alert.quiet>.ico', '.shell', '.shell[data-theme="dark"]', ':host', '*', '*::before', 'div', 'span', 'svg', '[role="region"]', '[aria-live]',
+    '[data-status="LIVE"]', ':focus-visible', '.shell>*', '.shell>div', '.shell .alerts', 'div[aria-live]', '.ico', '.shell::before', '[class~=alerts]', '[class*=lert]', '.shell>[role=region]']) assert.equal(reachesStripStrict(s), true, s);
+  for (const s of ['.row', '.mode-note', '.search>.ico', '.tile .ring', '.ring::after', '.btn:disabled', '.opt[aria-checked="true"]', '.switch[data-mode="geek"] .thumb', '.healthbar>span',
+    '.healthbar>[data-seg="STALE"]', '.chip>.ico', '.gbtn .ico', '.count>.ico', '.panel .tile', '#x', '.row *', '.region .x', '.summary small']) assert.equal(reachesStripStrict(s), false, s);
+  assert.deepEqual(compounds('.shell>.alerts .alert:not(.x)[a="b c"]'), ['.shell', '.alerts', '.alert:not(.x)[a="b c"]']);
+  const rules = parseSheet(STYLE).rules.filter((r) => !r.keyframes);
+  const reaching = rules.filter((r) => r.selectors.some(reachesStripStrict));
+  assert.ok(reaching.length >= 25 && reaching.length <= 40, `${reaching.length} rules of the real stylesheet can reach the strip`);
+  // none of them uses a property the allowlist does not know (the real stylesheet is inside its own allowlist)
+  for (const r of reaching) {
+    if (r.selectors.length === 1 && r.selectors[0] === '[hidden]') continue;
+    for (const d of r.decls) assert.ok(d.prop.startsWith('--') || d.prop === 'width' || d.prop === 'height' || Object.prototype.hasOwnProperty.call(STRIP_ALLOWLIST, d.prop), `${r.selectors[0]}: ${d.prop}`);
+  }
+});
+
+test('AC6 [r3] the real stylesheet passes every net, and the allowlist has no property that can hide, shift, clip, shrink or fade the strip', () => {
+  assert.deepEqual(strictAll(STYLE), []);
+  assert.deepEqual(cssViolations(STYLE), []);
+  assert.ok(THEME_VARS.has('--ecco-surface') && THEME_VARS.has('--ecco-fg') && THEME_VARS.size === 15);
+  for (const p of ['transform', 'rotate', 'scale', 'translate', 'perspective', 'filter', 'backdrop-filter', 'opacity', 'clip', 'clip-path', 'mask', 'mask-image', '-webkit-mask', '-webkit-mask-image', 'mask-clip',
+    'visibility', 'content-visibility', 'contain', 'contain-intrinsic-size', 'position', 'inset', 'inset-inline-start', 'top', 'left', 'right', 'bottom', 'z-index', 'order', 'line-height', 'height', 'width', 'max-height',
+    'min-height', 'block-size', 'inline-size', 'overflow', 'overflow-x', 'overflow-y', 'text-indent', 'letter-spacing', 'word-spacing', 'white-space', 'text-overflow', 'pointer-events', 'zoom', 'content', 'mix-blend-mode',
+    'isolation', 'will-change', 'writing-mode', 'direction', 'text-shadow', '-webkit-text-fill-color', '-webkit-line-clamp', 'appearance', 'float', 'clear', 'vertical-align', 'all', 'float', 'text-transform',
+    'font-variant', 'font-stretch', 'text-decoration', 'transform-origin', 'offset-path', 'anchor-name', 'view-transition-name', 'animation-name', 'animation-duration', 'transition-property', 'box-shadow', 'object-fit',
+    'resize', 'cursor', 'user-select', 'visibility', 'text-size-adjust', 'hyphens', 'tab-size', 'column-count', 'columns', 'grid-template-rows', 'grid-auto-flow', 'justify-content', 'place-items', 'align-self']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(STRIP_ALLOWLIST, p), false, `${p} must not be allowlisted for a rule that reaches the strip`);
+  }
+  // and the properties that ARE on it carry bounded values
+  const rule = (decl) => `.alerts{${decl}}`;
+  for (const [decl, why] of [['font-size:.01px', 'a font that cannot be read'], ['font-size:11px', 'below 12 px'], ['font-size:1px', ''], ['padding:100px', 'a huge padding'], ['margin:30px', 'a big margin'],
+    ['margin:-1px', 'a negative margin'], ['gap:100px', 'a huge gap'], ['color:rgba(0,0,0,0)', 'transparent text'], ['color:rgba(0,0,0,.3)', 'faint text'], ['background:rgba(0,0,0,0)', 'a clear background'],
+    ['color:transparent', ''], ['color:#0000', ''], ['color:#00000000', ''], ['background:transparent', ''], ['border-left-color:rgba(0,0,0,0)', ''], ['display:none', ''], ['display:contents', ''],
+    ['min-width:100vw', ''], ['max-width:0', ''], ['grid-template-columns:0 1fr', ''], ['grid-template-columns:minmax(0,0fr)', ''], ['animation:x 1s', ''], ['transition:all 1s', ''],
+    ['font:1px/1 Arial', ''], ['font:14px/0 Arial', ''], ['font-weight:1', ''], ['border:20px solid red', ''], ['outline:40px solid red', ''], ['border-radius:5000px', '']]) {
+    assert.notDeepEqual(stripProblems(rule(decl), { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }), [], `${decl} ${why}`);
+  }
+  for (const [decl] of [['font-size:.9rem'], ['font-size:14px'], ['padding:4px 10px'], ['margin:0'], ['gap:2px 10px'], ['color:#102030'], ['color:var(--ecco-fg2)'], ['background:var(--ecco-surface)'],
+    ['display:grid'], ['border:1px solid var(--ecco-line)'], ['border-left:6px solid var(--ecco-accent)'], ['border-radius:12px'], ['grid-template-columns:auto minmax(0,1fr)'], ['font-weight:700']]) {
+    assert.deepEqual(stripProblems(rule(decl), { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }), [], decl);
+  }
+});
+
+// The reviewer's mutants R3-C1 to R3-C7 and the variants of each kind of change the reviewer's list names. Every one is a rule that can reach the strip;
+// each must be reported by the semantic net AND by the pin, on its own and appended to the real stylesheet.
+const R3_MUTANTS = Object.freeze({
+  'R3-C1': '.shell[DATA-MODE="geek"]>[role=region]{transform:rotateX(90deg)}',
+  'R3-C2': '.shell[DATA-MODE=geek]>[aria-live]{font-size:.01px}',
+  'R3-C3': 'div[aria-live]{color:rgba(0,0,0,0)}',
+  'R3-C4': '[aria-live]{transform:scale(.001)}',
+  'R3-C5': '.shell[DATA-MODE=geek]>[aria-live]{order:99}',
+  'R3-C6': '.shell:has(> .region:last-child:not([hidden])) .alerts{margin-left:-200vw}',
+  'R3-C7': '[aria-live]{filter:blur(40px)}',
+});
+const HIDING_DECLS = [
+  // transform family
+  'transform:rotateX(90deg)', 'transform:rotate(90deg)', 'transform:rotateY(90deg)', 'transform:scale(.001)', 'transform:scale3d(.01,.01,.01)', 'transform:scaleY(.001)', 'transform:skewX(89deg)',
+  'transform:perspective(1px) rotateX(89deg)', 'transform:translateY(-100vh)', 'transform:translate(0,-9999px)', 'transform:matrix(1,0,0,.001,0,0)', 'transform:none', 'rotate:90deg', 'rotate:x 90deg',
+  'scale:.001', 'scale:0', 'translate:0 -999px', 'translate:0 100vh', 'zoom:.01', 'zoom:0', 'transform-origin:0 0', 'perspective:1px',
+  // paint family
+  'filter:blur(40px)', 'filter:opacity(.01)', 'filter:brightness(0)', 'filter:contrast(0)', 'filter:invert(1)', 'filter:url(#x)', 'backdrop-filter:blur(99px)', 'opacity:.01', 'opacity:0', 'opacity:.5',
+  'mix-blend-mode:difference', 'mix-blend-mode:multiply', 'isolation:isolate', 'will-change:transform',
+  'clip-path:inset(100%)', 'clip-path:circle(0)', 'clip:rect(0,0,0,0)', 'mask:linear-gradient(transparent,transparent)', '-webkit-mask-image:linear-gradient(transparent,transparent)', 'mask-image:none', 'mask-size:0',
+  // colour family
+  'color:rgba(0,0,0,0)', 'color:transparent', 'color:#0000', 'color:#00000000', 'color:rgb(0 0 0 / 0)', 'color:rgba(0,0,0,.2)', 'color:hsl(0 0% 0% / 0)', 'color:var(--zz)', 'color:var(--ecco-nonexistent)',
+  'background:rgba(0,0,0,0)', 'background-color:transparent', 'background:linear-gradient(red,red)', '-webkit-text-fill-color:transparent', 'text-shadow:0 0 9px red', 'border-left-color:rgba(0,0,0,0)',
+  // size family
+  'font-size:.01px', 'font-size:0', 'font-size:1px', 'font-size:var(--s)', 'font:1px/1 Arial', 'line-height:0', 'line-height:.001', 'line-height:0px', 'max-height:0', 'max-height:2px', 'height:0', 'height:1px',
+  'height:100vh', 'width:0', 'max-width:0', 'min-height:5000px', 'min-width:100vw', 'block-size:0', 'inline-size:0', 'padding-top:9999px', 'padding:100vh', 'margin-top:9999px', 'margin:30px',
+  // clipping and overflow
+  'overflow:hidden', 'overflow:clip', 'overflow-y:hidden', 'overflow-x:clip', 'text-overflow:clip', 'white-space:nowrap', 'text-indent:-9999px', 'text-indent:9999px', 'letter-spacing:-1em', 'word-spacing:-9em',
+  '-webkit-line-clamp:1', 'writing-mode:vertical-rl', 'direction:rtl',
+  // visibility and display
+  'visibility:hidden', 'visibility:collapse', 'content-visibility:hidden', 'content-visibility:auto', 'display:none', 'display:contents', 'display:none!important', 'display:block!important', 'contain:size', 'contain:strict',
+  'contain:paint', 'contain:content', 'contain-intrinsic-size:0 0', 'pointer-events:none', 'user-select:none', 'appearance:none',
+  // position and layering
+  'position:absolute;left:-9999px', 'position:absolute;top:-9999px', 'position:fixed;top:-200vh', 'position:relative;left:-30px', 'position:sticky;top:-999px', 'inset:-9999px', 'inset-inline-start:-80vw',
+  'margin-left:-200vw', 'margin-top:-999px', 'margin:-1000px', 'margin-inline-start:-50%', 'z-index:-1', 'position:relative;z-index:-1', 'order:99', 'order:-1', 'float:left', 'grid-row:99', 'grid-column:99',
+  'grid-template-rows:0', 'grid-template-columns:0', 'align-self:end', 'place-self:end', 'animation:x 1s forwards', 'animation-name:x', 'transition:all 1s', 'content:"x"',
+];
+
+test('AC6 [r3] the reviewer mutants R3-C1 to R3-C7 are reported by the semantic net and by the pin, alone and appended to the real stylesheet (negative controls)', () => {
+  for (const [id, css] of Object.entries(R3_MUTANTS)) {
+    for (const text of [css, `${STYLE}\n${css}`]) {
+      const n = nets(text);
+      assert.notDeepEqual(n.semantic, [], `${id}: the semantic net missed it`);
+      assert.notDeepEqual(n.pin, [], `${id}: the pin missed it`);
+    }
+  }
+  // the reasons are the right ones, not an accident
+  assert.match(violationText(R3_MUTANTS['R3-C1']), /mode-dependent selector/);
+  assert.match(stripProblems(R3_MUTANTS['R3-C1'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /not on the allowlist.*transform|names the alert strip/s);
+  assert.match(stripProblems(R3_MUTANTS['R3-C2'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /font-size/);
+  assert.match(stripProblems(R3_MUTANTS['R3-C3'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /color/);
+  assert.match(stripProblems(R3_MUTANTS['R3-C4'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /transform/);
+  assert.match(stripProblems(R3_MUTANTS['R3-C5'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /order/);
+  assert.match(stripProblems(R3_MUTANTS['R3-C7'], { modeSelectors: MODE_SELECTORS, stripSelectors: STRIP_SELECTORS }).join('\n'), /filter/);
+});
+
+test('AC6 [r3] every hiding, shifting, clipping, shrinking, fading or re-ordering declaration, on every selector that can reach the strip, is reported by both nets (negative controls)', () => {
+  const selectors = ['[aria-live]', '.alerts', '.alert', '.alert-head', '.shell', '.shell>*', 'div', '[role=region]', '.shell[DATA-MODE=geek] .alerts', '*', ':host', '.alert>.ico'];
+  let n = 0;
+  for (const decl of HIDING_DECLS) {
+    for (const sel of selectors) {
+      const css = `${sel}{${decl}}`;
+      const semantic = strictAll(css);
+      assert.notDeepEqual(semantic, [], `the semantic net accepted: ${css}`);
+      assert.notDeepEqual(pinProblems(`${STYLE}\n${css}`, PIN), [], `the pin accepted: ${css}`);
+      n += 1;
+    }
+    // appended to the real stylesheet the strict net still reports it (and does not report the real part)
+    assert.notDeepEqual(strictAll(`${STYLE}\n[aria-live]{${decl}}`), [], `not caught when appended: ${decl}`);
+  }
+  assert.ok(n > 1000, `${n} combinations checked`);
+});
+
+test('AC6 [r3] a rule on a class the strip cannot carry is out of the semantic net by design, and the pin still refuses it (the same changes, off the strip)', () => {
+  for (const decl of ['transform:rotateX(90deg)', 'font-size:.01px', 'filter:blur(40px)', 'color:rgba(0,0,0,0)', 'order:99', 'margin-left:-200vw']) {
+    const css = `.row{${decl}}`;
+    assert.notDeepEqual(pinProblems(`${STYLE}\n${css}`, PIN), [], css);
+  }
+  // and the decisions are not blanket refusals: ordinary additions that cannot touch the strip pass the semantic net (and need the pin updated to be allowed)
+  for (const css of ['.row{margin-left:12px}', '.row{transform:rotate(1deg)}', '.tile{filter:none}', '.healthbar>span{min-width:5px}', '.alerts{gap:4px}', '.alert{padding:8px 10px;border-radius:10px}',
+    '.alert-head{font-weight:600}', '.alert[data-severity="critical"]{border-left-color:#a00}', '.alert>.ico{width:24px;height:24px}', '.shell{--ecco-accent:#112233}', ':focus-visible{outline:3px solid #00f}',
+    '@media (prefers-reduced-motion: reduce){*{animation:none!important}}']) {
+    assert.deepEqual(strictAll(css), [], css);
+    assert.notDeepEqual(pinProblems(`${STYLE}\n${css}`, PIN), [], `a new rule always needs a person: ${css}`);
+  }
+});
+
+test('AC6 [r3] colours that are each allowed can still be unreadable together: only the pin and the Chrome check see that (documented limit, not a hole in the pin)', () => {
+  const css = '.shell{--ecco-fg:#ffffff;--ecco-surface:#ffffff}';
+  assert.deepEqual(strictAll(css), [], 'two visible colours are each acceptable to the semantic net');
+  assert.notDeepEqual(pinProblems(`${STYLE}\n${css}`, PIN), [], 'but the pin refuses the new declarations');
+  for (const bad of ['.shell{--ecco-fg:rgba(0,0,0,0)}', '.shell{--ecco-surface:transparent}', '.shell{--ecco-accent:rgba(1,2,3,.01)}', '.shell{--ecco-x:1}', '.shell{--zz:red}', '.shell{--ecco-fg:var(--zz)}',
+    '.shell{--ecco-line:url(x)}', '.shell{--ecco-fg:hsl(0 0% 0% / 0)}']) {
+    assert.notDeepEqual(strictAll(bad), [], bad);
+  }
+});
+
+test('AC6 [r3] the strip element and its alert nodes are built by one literal each: no style, hidden, inert, class or other attribute can be added without changing a pinned line', () => {
+  const once = (text) => assert.equal(code.split(text).length - 1, 1, text);
+  once("mk(doc, 'div', { class: 'alerts', 'data-ecco-alert-strip': '', role: 'region', 'aria-label': 'Safety and status alerts', 'aria-live': 'polite' })");
+  once("mk(doc, 'div', { class: 'alert', 'data-alert-id': a.id, 'data-severity': a.severity, 'data-alert-kind': a.kind, 'data-entity-id': a.entity_id || null, role: critical ? 'alert' : 'status' })");
+  once("mk(doc, 'div', { class: 'alert quiet', 'data-alert-none': '' }, [icon(doc, 'live'), mk(doc, 'span', null, 'No active alerts.')])");
+  once("strip.setAttribute('data-alert-count', String(alerts.length));");
+  // nothing writes a style attribute or the hidden, inert or aria-hidden state of anything in the shell's tree except through the literals the other tests pin
+  assert.doesNotMatch(code, /setAttribute\(\s*'(?:style|inert)'/);
+  assert.doesNotMatch(code, /[{,]\s*(?:'style'|style|inert|'inert')\s*:/);
+  assert.equal((code.match(/\.hidden\s*=/g) || []).length, 4, 'the four places that set hidden: the tiles, the empty note and the two bodies (the strip is none of them)');
+  assert.doesNotMatch(code, /\bstrip\.(?:hidden|style|classList|className|inert)\b/);
+  assert.doesNotMatch(code, /\.(?:alerts|strip)\b[^\n]*\.(?:hidden|style)\b/);
 });

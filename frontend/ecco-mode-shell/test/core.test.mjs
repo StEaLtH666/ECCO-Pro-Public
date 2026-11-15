@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCard, miniCatalogue, miniStates, miniStatesRaw, hostileStatesRaw, statesFrom, mkState, NOW } from './helpers.mjs';
-import { SECRET_VALUES, SECRET_KEYS, SECRET_KEY_NAMES, KEY_MARKER, hostileAttributes, forbiddenStrings } from './secrets.mjs';
+import { SECRET_VALUES, SECRET_VALUES_R3, SECRET_KEYS, SECRET_KEYS_R3, SECRET_KEY_NAMES, KEY_MARKER, hostileAttributes, forbiddenStrings } from './secrets.mjs';
 
 const core = await loadCard('core');
 const {
@@ -1340,4 +1340,84 @@ test('AC10 [r2] the webhook values and the login keys hold on every path: row te
   for (const k of SECRET_KEYS.slice(-5)) {
     assert.ok(!text.includes(KEY_MARKER(k)) && !exported.includes(KEY_MARKER(k)), `${k}: its value leaked`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 3 ([r3])
+// ---------------------------------------------------------------------------------------------------------------------------
+// R3-20: a mutant that read a state_not_in list literally survived every suite, because the one catalogue alert that uses state_not_in (A04) lists neither
+// `unknown` nor `unavailable`. The reading is FAIL-SAFE: an entity that is down (missing, unavailable or unknown) fires the alert, whatever the list says
+// ("alert when the state is not one of these" cannot be answered for a source that is not publishing, and silence would be the wrong answer). A catalogue that
+// lists `unknown` or `unavailable` in state_not_in does not get a quiet strip for a down entity. The Intelligence catalogue has no state_not_in alert, so this
+// matters when the shell is reused on another tab.
+test('AC6 [r3] state_not_in is fail-safe: a down entity (missing, unavailable, unknown) fires the alert even when the list itself names unknown or unavailable', () => {
+  const listed = () => {
+    const c = cat();
+    const a04 = c.alerts.find((a) => a.id === 'A04');
+    assert.ok(Array.isArray(a04.when.state_not_in));
+    a04.when.state_not_in.push('unknown', 'unavailable');
+    return c;
+  };
+  const fires = (mutate, c) => alertsFor(mutate, c).some((x) => x.id === 'A04' && x.kind === 'condition');
+  for (const state of ['unknown', 'unavailable']) {
+    assert.equal(fires((s) => { s['sensor.ecco_intel_status'].state = state; }, listed()), true, `${state}, listed: the alert fires`);
+    assert.equal(fires((s) => { s['sensor.ecco_intel_status'].state = state; }), true, `${state}, not listed: the alert fires`);
+  }
+  assert.equal(fires((s) => { delete s['sensor.ecco_intel_status']; }, listed()), true, 'missing, listed: the alert fires');
+  assert.equal(fires((s) => { delete s['sensor.ecco_intel_status']; }), true, 'missing, not listed: the alert fires');
+  // an entity that is up reads the list as written
+  assert.equal(fires((s) => { s['sensor.ecco_intel_status'].state = 'STARTING'; }, listed()), false, 'a listed state of an entity that is up is quiet');
+  assert.equal(fires((s) => { s['sensor.ecco_intel_status'].state = 'OK'; }), false);
+  assert.equal(fires((s) => { s['sensor.ecco_intel_status'].state = 'SOMETHING_NEW'; }, listed()), true, 'an unlisted state of an entity that is up fires');
+});
+
+test('AC10 [r3] every round-three value is withheld under an innocent key, nested in a list and on its own', () => {
+  assert.ok(SECRET_VALUES_R3.length >= 12);
+  for (const s of SECRET_VALUES_R3) {
+    assert.equal(redactValue(s.value, { key: 'note' }), WITHHELD, s.label);
+    assert.equal(redactValue({ any: [s.value] }).any[0], WITHHELD, `${s.label} nested in a list`);
+    assert.equal(redactValue(s.value), WITHHELD, `${s.label} with no key`);
+  }
+});
+
+test('AC10 [r3] a short password word after a qualifier, pw in any position and the compact forms withhold their value; a bare pass and unrelated words stay visible (reviewer probe)', () => {
+  const out = redactAttributes(Object.fromEntries(SECRET_KEYS_R3.map((k) => [k, KEY_MARKER(k)])));
+  for (const k of SECRET_KEYS_R3) assert.equal(out[k], WITHHELD, k);
+  const shown = { pass: 'visible-pass', passed: 'visible-passed', pass_count: 3, compass: 'visible-compass', bypass_mode: 'visible-bypass', overpass: 'visible-over',
+    pwr: 'visible-pwr', pass_through: 'visible-through', self_test: 'pass', pass_rate: 0.5, friendly_name: 'Probe' };
+  const red = redactAttributes(shown);
+  assert.deepEqual(red, shown, 'none of these is a password name: a bare pass is also a test result, and the others only contain the letters');
+  assert.ok(!JSON.stringify(redactAttributes({ x_pass: 'zq7-1', Y_PW: 'zq7-2', 'a-b-pass': 'zq7-3' })).includes('zq7'));
+});
+
+test('AC10 [r3] the new value rules do not take look-alikes for secrets: a version, a plain number, a short revision under a revision key, prose with the word pass, a coarse pair', () => {
+  const look = {
+    version: '2026.1114.0900', digits12: '123456789012', hex11: 'aabbccddeef', hex13: 'aabbccddeeff1', sentence: 'the self-test pass: true today', passed: 'pass: ok',
+    ratio: '0.125', coarse: '51.5, -0.1', one_decimal_pair: '1.5, 2.5', mixed_pair: '1.250, 3.5', dotted_words: 'abcd.efgh.ijkl', build: 'version 1.2.3',
+    wifi_word: 'wifi: connected', wifi_note: 'the wifi name', passwordless: 'no password needed', field_note: 'the pw field is empty',
+  };
+  const red = redactAttributes(look);
+  for (const [k, v] of Object.entries(look)) assert.equal(red[k], v, `${k}: ${v} is not a secret`);
+  // a short git revision is a public value under a revision key and a MAC-shaped secret anywhere else
+  assert.equal(redactValue('1a2b3c4d5e6f', { key: 'git_sha' }), '1a2b3c4d5e6f');
+  assert.equal(redactValue('1a2b3c4d5e6f', { key: 'commit' }), '1a2b3c4d5e6f');
+  assert.equal(redactValue('1a2b3c4d5e6f', { key: 'note' }), WITHHELD);
+  assert.equal(redactValue('  1a2b3c4d5e6f  ', { key: 'note' }), WITHHELD, 'white space around it does not hide it');
+  assert.equal(redactValue('AABBCCDDEEFF', { key: 'note' }), WITHHELD, 'upper case');
+});
+
+test('AC10 [r3] the round-three values and keys hold on every path: row text, raw attributes, the search index and the export carry none of them', () => {
+  const s = snap((states) => {
+    states['sensor.ecco_intel_hostile'] = mkState('sensor.ecco_intel_hostile', SECRET_VALUES_R3[0].value, hostileAttributes());
+  });
+  const text = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const v of SECRET_VALUES_R3) {
+    for (const f of [v.value, v.value.slice(2, 12)]) {
+      assert.ok(!text.includes(f), `${v.label} leaked into a row`);
+      assert.ok(!exported.includes(f), `${v.label} leaked into the export`);
+    }
+  }
+  for (const k of SECRET_KEYS_R3) assert.ok(!text.includes(KEY_MARKER(k)) && !exported.includes(KEY_MARKER(k)), `${k}: its value leaked`);
+  assert.equal(searchRows(s.rows, 'hunter22').length, 0, 'the search index holds no password text');
 });

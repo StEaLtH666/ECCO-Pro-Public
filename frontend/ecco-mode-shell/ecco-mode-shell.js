@@ -151,11 +151,14 @@ function parseTime(v) {
 const SECRET_TOKENS = new Set(['token', 'tokens', 'password', 'passwords', 'passwd', 'pwd', 'passphrase', 'passcode', 'pincode', 'secret', 'secrets',
   'apikey', 'apikeys', 'authorization', 'auth', 'bearer', 'credential', 'credentials', 'privatekey', 'webhook', 'webhooks', 'cookie', 'cookies',
   'session', 'sessions', 'psk', 'pin', 'dsn', 'otp', 'jwt', 'signature', 'accesskey', 'secretkey', 'signingkey', 'clientsecret', 'connectionstring',
-  'connstr', 'refreshtoken']);
+  'connstr', 'refreshtoken', 'pw', 'wifipass', 'wifipw']);
 // The last word of a compound key name that makes the whole name a key (needs a qualifier before it, so a bare "key" is not withheld).
 const KEY_WORDS = new Set(['key', 'keys']);
 // The same for a person's login name: "mqtt_user", "db_login", "serviceUser" hold an account name (a bare "user" is not withheld: it is too common a word).
 const LOGIN_WORDS = new Set(['user', 'users', 'usr', 'login', 'logins']);
+// And for the short word "pass": "wifi_pass", "mqttPass" hold a password (a bare "pass" stays visible: it is also a test result, as in "pass: true"). "pw" is a
+// secret word in any position, as are the compact "wifipass" and "wifipw".
+const PASS_WORDS = new Set(['pass']);
 const PRIVATE_TOKENS = new Set(['latitude', 'longitude', 'lat', 'lon', 'lng', 'location', 'locations', 'gps', 'coordinates', 'coordinate', 'address',
   'addresses', 'email', 'emails', 'phone', 'postcode', 'postal', 'ssid', 'bssid', 'mac', 'ip', 'hostname', 'serial', 'serialnumber', 'mpan', 'mprn',
   'imei', 'username', 'account', 'accountid', 'meterid']);
@@ -226,6 +229,7 @@ function isSecretKey(key, extra) {
   // a qualifier plus a key word ("encryption_key", "wifiKey", "license_keys"): the value IS a key, however short it is
   if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;
+  if (tokens.length >= 2 && PASS_WORDS.has(tokens[tokens.length - 1])) return true;
   const k = fold(String(key));
   for (const re of extra) if (re.test(k)) return true;
   return false;
@@ -240,13 +244,19 @@ const RULES = [
   ['url token', '=', /[?&#;][\w.%-]*(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\w.%-]*=[^&\s]{3,}/i],
   ['credential pair', null, /\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b["']?\s*[:=]\s*["']?[^\s,;"']{3,}/i],
   ['connection pairs', ';', /\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*;/i],
+  // a password written as a pair under a short name: a quoted "pass" or "pw" key, or pass=value and pw=value (not plain prose such as "pass: true"); the same pattern as the Python scanner's PASS_PAIR
+  ['pass pair', null, /["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:[a-z0-9]+[_-])*(?:pass|pw)=["']?[^\s,;&"']{3,}/i],
+  // the text a phone reads from a Wi-Fi QR code: WIFI:S:<name>;T:<type>;P:<password>;;
+  ['wifi credentials', ':', /\bWIFI:[A-Z]:/i],
   ['bearer', null, /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/i],
   ['known token', null, /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk_(?:live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,})/],
   ['email address', '@', /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/],
   ['IPv4 address', '.', /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/],
   ['IPv6 address', ':', /(?:^|[^0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])|(?:^|[^0-9a-zA-Z:])(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-zA-Z:])/],
   ['MAC address', null, /\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/],
-  ['coordinates', null, /(?:^|[^\d.])-?\d{1,3}\.\d{4,}\s*[,;]\s*-?\d{1,3}\.\d{4,}(?![\d.])/],
+  // the dotted form (three groups of four) that network equipment writes; at least one letter, so a version such as 2026.1114.0900 is not taken for one
+  ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]*[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i],
+  ['coordinates', null, /(?:^|[^\d.])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])/],
   ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
   ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],
   // a webhook: the id in the path IS the credential (the Home Assistant webhook path and the chat services path); the same pattern as the Python scanner's WEBHOOK_PATH
@@ -257,9 +267,11 @@ const RULES = [
 const RE_HEX = /(?:^|[^0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/;
 const RE_B64 = /[A-Za-z0-9+/_-]{32,}={0,2}/g;
 const RE_GIT = /^[0-9a-f]{40}$/i;
+// a MAC address written with no separator: exactly twelve hex digits with at least one letter (twelve plain digits are a number)
+const RE_MAC12 = /^\s*(?=[0-9a-f]*[a-f])[0-9a-f]{12}\s*$/i;
 
 /** Why a string looks secret or private, or null. */
-function valueReason(raw, digestOk) {
+function valueReason(raw, digestOk, digestKey = false) {
   if (raw.length < 6) return null;
   const s = fold(raw);
   if (s.length < 6) return null;
@@ -267,6 +279,8 @@ function valueReason(raw, digestOk) {
     if (gate !== null && !s.includes(gate)) continue;
     if (re.test(s)) return reason;
   }
+  // a revision key (commit, git_sha) may hold a short public git revision, which has the same shape
+  if (!digestKey && RE_MAC12.test(s)) return 'MAC address (no separators)';
   if (s.length >= 32) {
     if (!digestOk && RE_HEX.test(s)) return 'long hex value';
     for (const t of s.match(RE_B64) || []) if (/[A-Z]/.test(t) && /[a-z]/.test(t) && /[0-9]/.test(t)) return 'long encoded value';
@@ -276,14 +290,15 @@ function valueReason(raw, digestOk) {
 
 function redactString(s, key) {
   const k = key === null ? '' : keyTokens(key).join('');
-  const digestOk = DIGEST_KEYS.has(k) && RE_GIT.test(s);
+  const digestKey = DIGEST_KEYS.has(k);
+  const digestOk = digestKey && RE_GIT.test(s);
   let t = s;
   let cut = 0;
   if (t.length > LIMITS.stringCap) {
     cut = t.length - LIMITS.stringCap;
     t = t.slice(0, LIMITS.stringCap);
   }
-  if (valueReason(t, digestOk) !== null) return WITHHELD;
+  if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;
   return cut ? `${cleanText(t, LIMITS.stringCap)}\u2026 [truncated ${cut} more characters]` : cleanText(t, LIMITS.stringCap);
 }
 

@@ -66,9 +66,19 @@ BEARER = re.compile(r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}", re.I)
 CRED_PAIR = re.compile(r"[\"']?\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"'{}]{3,}", re.I)
 WEBHOOK_PATH = re.compile(r"/api/webhook/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]+/services/[A-Za-z0-9/_-]{12,}", re.I)
 
+# review round 3: the card withheld none of these under an innocent key, and no scanner here looked for them either, so a generator that emitted one would have
+# passed this scan: a MAC address written with no separator or in the dotted form, a coordinate pair with three decimals, the text of a Wi-Fi QR code and a
+# password written as a pass / pw pair
+MAC_BARE = re.compile(r"(?<![0-9A-Za-z])(?=[0-9A-Fa-f]*[A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Za-z])")
+MAC_DOTTED = re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]*[A-Fa-f])[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}(?![0-9A-Za-z.])")
+COORD_PAIR = re.compile(r"(?<![\d.])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])")
+WIFI_QR = re.compile(r"\bWIFI:[A-Z]:", re.I)
+PASS_PAIR = re.compile(r"""["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:[a-z0-9]+[_-])*(?:pass|pw)=["']?[^\s,;&"']{3,}""", re.I)
+
 ALL = {"private IPv4": RFC1918, "MAC": MAC, "user path": USER_PATH, "token or key shape": SECRET, "JWT-like": JWT_LOOSE, "IPv4": IPV4,
        "long hex": HEX_BLOB, "long base64": B64_BLOB, "URL with userinfo": URL_USERINFO, "token in a URL": URL_TOKEN_QS, "coordinates": COORD,
-       "bearer or basic credential": BEARER, "credential pair": CRED_PAIR, "webhook path": WEBHOOK_PATH}
+       "bearer or basic credential": BEARER, "credential pair": CRED_PAIR, "webhook path": WEBHOOK_PATH,
+       "MAC without separators": MAC_BARE, "MAC, dotted": MAC_DOTTED, "coordinate pair": COORD_PAIR, "Wi-Fi QR text": WIFI_QR, "pass or pw pair": PASS_PAIR}
 
 
 def hits(text: str, pat: re.Pattern, ok=None) -> list[str]:
@@ -97,6 +107,11 @@ samples = {
     "bearer or basic credential": "Authori" + "zation: Bear" + "er " + "a" * 24,
     "credential pair": '{"' + "tok" + 'en": "' + "abc123" + '"}',
     "webhook path": "https://x.example.invalid/api/" + "webhook/" + "abcdefgh1234",
+    "MAC without separators": "id " + "aabb" + "ccdd" + "eeff",
+    "MAC, dotted": "id " + "aabb" + "." + "ccdd" + "." + "eeff",
+    "coordinate pair": "at " + "51.507" + ", " + "-0.127",
+    "Wi-Fi QR text": "WIFI" + ":S:" + "Home" + ";T:WPA;P:" + "x1y2z3" + ";;",
+    "pass or pw pair": '{"pa' + 'ss": "' + "abc123" + '"}',
 }
 for kind, text in samples.items():
     check(f"the {kind} scanner flags an injected sample", bool(hits(text, ALL[kind])))
@@ -119,6 +134,18 @@ check("[r2] the card's value rule for a webhook path is this scanner's pattern (
       _rule is not None and _rule.group(1).replace("\\/", "/") == WEBHOOK_PATH.pattern, "" if _rule is None else _rule.group(1))
 check("[r2] and the scanner flags the two shapes the card's hostile fixtures use (assembled here from fragments)",
       all(hits(s, WEBHOOK_PATH) for s in ("https://hooks.example.test/api/" + "webhook/" + "abcdef123456", "hooks.example.test/" + "services/" + "team-alpha/chan-beta/abcdefghijkl")))
+# review round 3: the card's rules for a pass / pw pair and for the Wi-Fi QR text are these scanners' patterns, and each scanner flags what the card's hostile fixtures
+# hold and leaves plain prose alone ("pass: true", a version number, twelve plain digits, a coarse pair)
+for _name, _rx, _pat in (("pass pair", r"\['pass pair', null, /(.+)/i\],", PASS_PAIR), ("wifi credentials", r"\['wifi credentials', ':', /(.+)/i\],", WIFI_QR)):
+    _m = re.search(_rx, _card_src)
+    check(f"[r3] the card's value rule '{_name}' is this scanner's pattern (the two sides agree)", _m is not None and _m.group(1) == _pat.pattern, "" if _m is None else _m.group(1))
+check("[r3] the scanners flag the shapes the card's round-three hostile fixtures use (assembled here from fragments)",
+      all(hits(s, pat) for s, pat in (("wifi_pa" + "ss=hun" + "ter22x", PASS_PAIR), ("db-p" + 'w="hun' + 'ter22x"', PASS_PAIR), ("{'p" + "w': 'hun" + "ter22'}", PASS_PAIR),
+                                      ("A1B2" + "C3D4" + "E5F6", MAC_BARE), ("aabb" + ".ccdd" + ".eeff", MAC_DOTTED), ("-33.865" + ";" + "151.209", COORD_PAIR),
+                                      ("wifi" + ":T:WPA;S:" + "Home" + ";P:" + "hunter22" + ";;", WIFI_QR))))
+check("[r3] and they leave look-alikes alone: 'pass: true', a version, twelve plain digits, a coarse pair, a pair with one fine number",
+      not any(hits(s, pat) for s, pat in (("self-test pass: true", PASS_PAIR), ("pass: ok today", PASS_PAIR), ("2026.1114.0900", MAC_DOTTED), ("123456789012", MAC_BARE),
+                                          ("51.5, -0.1", COORD_PAIR), ("1.250, 3.5", COORD_PAIR), ("wifi: connected", WIFI_QR), ("compass=north", PASS_PAIR))))
 
 # ===========================================================================
 print("")
