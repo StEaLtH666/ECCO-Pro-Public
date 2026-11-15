@@ -186,7 +186,8 @@ The proof keeps these, and each has a test on the data side or the card side:
    `stale_after_s`), declared-but-missing (NOT_MEASURED), simulated and unverified each have a word and an icon, never colour alone.
 8. Secrets and private data are never surfaced because they exist: token, password, secret, api key, authorization, bearer,
    credential, private key, webhook, cookie and session keys; JWT-like strings; long hex or base64 blobs; URLs with userinfo or token
-   queries; IP and MAC addresses; latitude, longitude and location keys; connection strings; the catalogue's extra patterns. They are
+   queries; webhook paths (the id is the credential); IP and MAC addresses; latitude, longitude and location keys; login names under a
+   qualified key (`mqtt_user`, `db_login`); connection strings; the catalogue's extra patterns. They are
    withheld in rows, the raw inspector, the search index, copy and export, in nested values, and in key names that look secret.
 9. Data is inert text. No element or attribute is ever created from data; markup, quotes, control and zero-width characters render as
    text.
@@ -209,7 +210,7 @@ which since the merge run against the very same catalogue, ledger and fixtures (
 | AC4 | two shell instances never share or leak a mode | - | two-instance test |
 | AC5 | every interaction makes zero calls; no storage | the catalogue and fixtures are plain data | throwing hass stub; static pin for storage; behavioural test |
 | AC6 | the alert strip shows every alert identically in both modes, over unavailable and unknown | 19 alerts derived from the contract (every status and data-quality state alerted or listed as none, plus the four that mirror what the package watchdog needs); every alert names a catalogued entity; fixtures for each alert state (`stale`, `paused`, `self-test-failed`, `unavailable`, `watchdog-stale`); `test_geek_mode_catalogue.py` [3], `test_geek_mode_fixtures.py` [5] | parametrised over every alert and over unavailable and unknown states |
-| AC7 | same data in Production and Geek | one catalogue, one fixture format | changing-hass test of the one adapter |
+| AC7 | same data in Production and Geek | one catalogue, one fixture format | changing-hass test of the one adapter. Bound (section 14.2): in a burst of more than eight relevant updates in 500 ms the child cards still get every `hass` at once while the shell's snapshot (Geek rows, Production summary, alert strip) is coalesced into one rebuild at the end of the burst, so the two can differ for up to about 500 ms; a reused row may trail its age text by less than one second, never its status |
 | AC8 | coverage: every non-excepted source has a row; every declared attribute is reachable; discovery adds only the prefix | the universe is computed from code; 17 sources, 344 attribute rows, all COVERED; row id rule; every declared path exercised by a fixture; `extras` and `noise` for discovery; `test_geek_mode_coverage.py` [1]-[3], `test_geek_mode_ledger.py` [2], [5] | the same assertions against the same catalogue and fixtures, with the ledger's row ids |
 | AC9 | honesty: unavailable, unknown, stale, NOT_MEASURED and simulated labelled in words and icon; nothing fabricated | timing from the integration's constants; fixtures for unavailable, stale in time (`watchdog-stale`), unknown (`unknown` figures), declared-but-missing (non-OK shapes) and a `simulated` flag (`extras`) | label, icon and never-live tests |
 | AC10 | redaction everywhere (rows, raw, search, copy, export, nested, key names) | the redaction patterns include the integration's own list; the `noise` decoys (token, password, JWT-shaped, webhook, address, coordinates, connection strings, URL token, blobs, nested secrets, key names) and the proof they are committable; `test_geek_mode_privacy.py` | hostile-fixture tests for each surface; the export bytes contain no secret |
@@ -326,6 +327,9 @@ owner:
   round 1); a smaller skew is read as an age of 0. The fixtures are in 2030 and are read at their own reference clock, never the wall clock.
 - The catalogue has no `{unavailable: true}` alert for the data-quality entity, so while that entity is unavailable the strip shows two
   'cannot check' lines for it (blocked and degraded) instead of one 'unavailable' line. Adding that alert is a catalogue text change.
+- "Same data" is not "the same instant" (review round 2, section 14.2): in a burst of more than eight relevant updates in 500 ms the child cards
+  get every `hass` at once while the shell's own snapshot (Geek rows, Production summary, alert strip) is coalesced into one rebuild at the end of the
+  burst, so the two can differ for up to about 500 ms; and a reused row may trail its age text by less than a second, never its status.
 - Nothing ran in a real Home Assistant: the alert automations' live entity ids, the reserve helper's attributes, the real card helpers and
   the real theme are confirmed from code, the one shape listing and headless Chrome only.
 
@@ -517,3 +521,63 @@ The integration steps of section 8 are unchanged by this round except for the tw
 - `test_geek_mode_ledger.py`: the fixtures that exercise the OK advice keys now include `contract-breach` (a copy of the healthy fixture with one attribute changed).
 - `secrets.mjs`: ten hostile values and nine hostile key names were appended (the indices of the existing ones did not move), so every existing hostile
   test now also runs the new shapes.
+
+## 14. Review round 2 (15 Nov 2026): findings and fixes
+
+The second independent review (mutants of the card and of the data side, and probes P8, P9 and P11) found one MAJOR and four smaller
+findings, all in the guards around the proof rather than in the shell's behaviour. Each was reproduced first (the survivor run against the committed suites, or
+a probe), then fixed; each fix has a test that fails without it, and a mutant that undoes it. No assertion was weakened or deleted (section 14.4). Still the same
+rules: new files only for anything pinned or deployed, nothing live, nothing pushed.
+
+### 14.1 The findings and what was done
+
+| # | Severity | Finding | Fix | Proof |
+|---|---|---|---|---|
+| 1 | MAJOR | Reviewer mutant R2-16: a stylesheet rule that picks the Geek body out by position (`.shell:has(> .region:last-child:not([hidden])) .alerts{margin-left:-200vw}`) moved the alert strip off screen in Geek Mode only. The round-1 reader looked for a mode token and for display, visibility, opacity, size, clip and off-screen offsets of three digits: this rule has no mode token and uses a margin, so every suite passed | `static.test.mjs` reads the stylesheet in three layers. (1) The selectors that may NAME the strip or a part of it are an exact pinned list (11 selectors, all in use): a new one fails, however harmless its declarations. (2) No rule but `[hidden]` may use `:has()`, `:is()`, `:where()`, a positional pseudo-class, the hidden attribute (also inside `:not()`) or a sibling combinator. (3) A rule that can reach the strip (it names it, it applies to the shell, or what it applies to has no class to tell it apart: `*`, a tag, an attribute, a bare pseudo-class) may not carry a margin, inset, position offset, `translate` or `transform: translate` that is negative, huge (100 px, 8 rem, 50 % or any viewport or container unit from 50) or cannot be judged (`var()`, `calc()`, `min()` ...), a `display` or size taken from a variable, an animation (and every `@keyframes` rule is checked as reaching), or an `overflow` clip together with a height of a few pixels. Everywhere: a negative `z-index`, `scale: 0`, `zoom: 0`, `filter: opacity(0)` and the logical sizes (`block-size: 0`, `max-inline-size: 0`) join the hiding list | `static.test.mjs`: 4 new tests (the pinned list is exactly what the stylesheet uses; which rules reach the strip; R2-16 and 59 other hostile rules, each also appended to the real stylesheet; the length reader) and 19 harmless rules, several the real stylesheet's own; mutants `AC6-css-*` (8 new, R2-16 itself first) |
+| 2 | MINOR | Reviewer mutant R2-36: removing the `watch.add` for an alert's entity left every suite passing, because on the Intelligence catalogue every alert entity is also a source. On another tab an alert on an entity that is not a source would reach the strip only at the next update more than one second later or at the 15 s tick (probe P8). Reviewer mutant PY2-06: removing the coverage check that every alert names a catalogued source also passed every Python suite and `--check` | an element test with a catalogue whose alert names an entity outside the sources (the strip updates on the next `hass`, in both modes, half a moment after the last rebuild; an unrelated entity still costs nothing) and a core test of `snapshot.watch`; a coverage negative control (an alert on an uncatalogued entity must produce the problem line, and `--check` must fail) | mutant `AC12-alert-entity-not-watched`; `test_geek_mode_coverage.py` fails with the check removed (shown on a temporary edit of the tool, restored) |
+| 3 | MINOR | Reviewer mutant R2-41: when the catalogue is invalid, an `effective` catalogue that kept the valid sources and discovery passed every suite. Probe P9 (one malformed source) then put 16 rows in `el.snapshot` and the Production summary said that ten data points are stale, unavailable, simulated or unverified and that Geek Mode lists them, while Geek Mode shows only the error panel | an element test: with one malformed source the snapshot holds no row (not the valid sources, not a discovered one, not after a later update), the summary has no problem note, and the strip still shows the valid alerts and the catalogue error | mutants `AC16-invalid-catalogue-keeps-sources` and `-keeps-discovery` |
+| 4 | MINOR | Probe P11: a Home Assistant webhook URL under an innocent key and a login name under `mqtt_user` were shown verbatim; the Python strict scanners had a webhook pattern since round 1 and the card had none, so the two sides disagreed | a value rule for a webhook path, the same pattern as the Python scanner's (a privacy test now compares the two texts), and a key whose last word is user, users, usr, login or logins after a qualifier is private (`mqtt_user`, `db_login`, `serviceUser`; a bare `user` stays visible, as a bare `key` does); three webhook values and five login keys are in the hostile fixtures, so every existing hostile test runs them too | 3 new core tests (the two rules with the ordinary cases that stay visible, and every path); the existing hostile tests fail on the card as reviewed; mutants `AC10-no-webhook-rule`, `-webhook-services-form-dropped`, `-login-key-rule-dropped`, `-login-key-needs-no-qualifier` |
+| 5 | NIT | A row built for a state object was reused for up to one second, so it could show LIVE for less than a second after its age passed `stale_after_s` (and Unverified for less than a second after a skewed timestamp stopped being skewed); during a burst of more than eight updates in 500 ms the child cards get every `hass` at once while the shell snapshot is coalesced, so the two can differ for up to about 500 ms | a reused row is re-classified (one `classifyRow`, a few date parses) and is kept only when its status and flags are what a fresh classification gives; the age text may still lag by less than a second. The coalescing bound is documented here, next to AC7 (section 5) and in the README | 3 core tests (a row built 0.4 s before its limit is STALE on time and only that row is rebuilt; 55 age and offset cases around the stale limit and the skew limit equal a fresh classification; a reused row is not reused for ever); mutants `AC9-row-reuse-skips-reclassification` and the round-1 `AC12-row-reuse-ignores-clock` (re-aimed) |
+
+What the mutation proof added to the suite itself: after the first full run two of the new mutants survived. The services-form webhook value I had picked
+(a Slack-like path with capitals and digits) was withheld by the long-encoded-value rule anyway, so removing the webhook rule's second form changed nothing: the
+fixture now has a form no blob rule can reach. And the round-1 mutant `AC12-row-reuse-ignores-clock` stopped being killed by the element tick test (the re-classification now keeps the
+status right on its own) and was found to have been killed in `core.test.mjs` only by accident (a second catalogue object in the test rebuilt every row): a test that keeps the
+catalogue and the state objects and reads them five seconds later now pins the window.
+
+### 14.2 What the owner needs to know
+
+1. **The stylesheet reader is deliberately strict.** A new rule that names the strip, or that uses `:has()`, a positional pseudo-class, a sibling combinator or the
+   hidden attribute, fails `static.test.mjs` even if it is harmless; the person adding it updates the pinned list in the test, which is the point (a decision, in a
+   diff a reviewer reads). The shell's own rules need none of these.
+2. **A negative margin on a class the strip does not carry is fine** (the real `.mode-note` has one); the reach test is on what the rule applies to, not on the
+   property alone. A rule on a bare tag, `*` or an attribute counts as reaching the strip.
+3. **The coalescing bound.** During a burst of more than eight relevant updates in 500 ms the child cards (the existing Intelligence card among them) are handed every
+   `hass` at once, while the shell's strip, summary and Geek rows catch up in one rebuild at the end of the burst: for up to about 500 ms the two can differ. A critical
+   alert is never delayed by more than that, and the 15 s tick re-derives everything. This is bounded and small; it is written next to AC7 so that nobody reads
+   "same data" as "same instant".
+4. **Two more words are private by key** (`user` and `login` after a qualifier): `last_user` or `active_users` would be withheld too. Over-withholding is the safe
+   side; a catalogue that needs such a key shown can say so in `exceptions` once the owner decides.
+5. Nothing else changed for the owner: the integration steps of section 8 are unchanged, no pinned or deployed file was edited.
+
+### 14.3 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 127, element 108, coverage 4, static 27, real-catalogue 157, mutation proof 153) | 576 of 576 pass; 151 of 151 mutants killed (135 before this round) |
+| the new tests run against the card as reviewed (`ECCO_MODE_SHELL_PATH` pointing at a copy of it) | 12 fail there: the five new tests of the reuse, webhook and login rules and the seven existing hostile-value tests that now also run the new shapes; the stylesheet, watch and fail-closed tests are shown by the reviewer's own mutants, each reproduced as a survivor against the round-1 suites and killed now |
+| `python -I -B -X utf8 test/test_example_dashboard.py` | 31 checks pass |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass (110, 112, 52, 102, 137 and 35 checks) |
+| `tools/gen_geek_fixtures.py --check`, `tools/geek_mode_coverage.py --check` | both match a fresh regeneration |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root` `tools/tests`, `ecco_core/tests`, `health/tests`, `intelligence/tests` | 21 of 21, 6 of 6, 2 of 2 and 33 of 33 |
+| `tools/run_offline_tests.py --root` `home-assistant/tests` and `registry/tests` | 18 of 18 and 76 of 78; the two that fail, `test_rtc_policy.py` and `test_fallback_durable_host_compile.py`, need a C++ compiler this PC does not have (`ECCO_CXX`), failed the same way in round 1 and read nothing this change touches |
+
+### 14.4 Changes to existing tests (none weakens an assertion)
+
+- `static.test.mjs`: the stylesheet reader's declaration tuples gained a third element (the value with its spaces kept), `hidingDeclaration` and `cssViolations` were
+  rewritten around the three layers above; every round-1 negative control still passes (each is still reported) and the round-1 assertions are unchanged.
+- `core.test.mjs`: the round-1 test of the hostile edge values takes `SECRET_VALUES.slice(21, 32)` instead of `slice(21)`, so it still checks its eleven values (the three
+  webhook values were appended to the same list); a new test runs the three on every path.
+- `mutations.test.mjs`: the target text of `AC12-row-reuse-ignores-clock` follows the re-aimed guard (the mutant still removes the one-second window).
+- `secrets.mjs`: three hostile values and five hostile key names were appended (the indices of the existing ones did not move).

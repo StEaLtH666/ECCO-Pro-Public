@@ -57,9 +57,11 @@ same `hass` object. Per-state-object caching means a change to one entity recomp
 **Updates.** Home Assistant sends a new `hass.states` for any change anywhere in the house. The shell rebuilds only when something it
 reads changed: the state object of one of the entities of the last snapshot (its sources, its discovered entities, its alert entities)
 or the number of entities. Every row whose state object is unchanged is reused (within one second of the clock it was built at, because
-its age moves). A burst of relevant updates is taken eight at a time per 500 ms; the rest is coalesced into ONE rebuild at the end of the
+its age moves, and only while a fresh classification still gives the status the row carries: a row built just before `stale_after_s` turns
+STALE on time; only its age text may lag, by less than a second). A burst of relevant updates is taken eight at a time per 500 ms; the rest is coalesced into ONE rebuild at the end of the
 burst, by the one timer slot that also runs the 15 s age tick (the slot is re-armed for the flush and goes back to the tick when it fires;
-nothing else is a timer). A theme change is applied at once, whatever the states did.
+nothing else is a timer). During such a burst the child cards still get every `hass` at once while the shell's own snapshot (Geek rows,
+Production summary, alert strip) catches up at the end of the burst: the two can differ for up to about 500 ms. A theme change is applied at once, whatever the states did.
 
 ## Honest inventory
 
@@ -110,7 +112,8 @@ status says ASSISTED, its state is OK and the watchdog is on.
 Replaced by a **withheld marker** (an icon and the word) in rows, raw view, search index, copy and export: values under keys such
 as token, password, secret, api key, authorization, bearer, credential, private key, webhook, cookie, session; latitude,
 longitude, location, address, e-mail, serial, MPAN; a compound key name that ends in a key word (`encryption_key`, `wifi_key`,
-`license_key`, `sshKey`), `pin` and `psk`, even for a short value; JWT-like strings, long hex and base64 blobs, URLs with credentials or
+`license_key`, `sshKey`), a compound key name that ends in a login word (`mqtt_user`, `db_login`, `serviceUser`; a bare `user` is shown),
+`pin` and `psk`, even for a short value; webhook paths (the id in the path is the credential), under any key; JWT-like strings, long hex and base64 blobs, URLs with credentials or
 token query parameters, connection strings, IP and MAC addresses, coordinate pairs, labelled coordinates (`lat 51.5 lon -0.1`) and hemisphere coordinates (`52.1 N 0.12 W`),
 private host names, URLs whose host is one bare word (`ws://homeassistant:8123`), credential pairs also in JSON or Python form
 (`{"token":"..."}`); keys and values are matched on a **folded copy** (invisible and zero-width characters removed, compatibility forms
@@ -212,8 +215,8 @@ python -I -B -X utf8 test\test_example_dashboard.py          # the example wraps
 | `test/element.test.mjs` | AC1-AC14 and AC16 on the element against `test/minidom.mjs` (a node DOM that records every tag, attribute name and style property and **throws on innerHTML**) |
 | `test/coverage.test.mjs` | the card-side coverage check, generic: on the mini fixtures by default; set `ECCO_GEEK_CATALOGUE`, `ECCO_GEEK_STATES` and `ECCO_GEEK_NOW` to run it on any catalogue and fixture |
 | `test/real-catalogue.test.mjs` | the card on the REAL catalogue, ledger and fixtures: AC6 (every alert, every way it can fire, both modes, never silent), AC7, AC8, AC9, AC10 on the noise decoys, AC11, AC12 and AC15 (card and ledger agree) |
-| `test/static.test.mjs` | forbidden APIs absent, `hass` reads pinned, names never computed from data, one adapter / one strip renderer, ASCII-only source, no secret-shaped text in the folder, and the STYLESHEET itself: no mode-dependent selector except the switch thumb and no hiding declaration except the `[hidden]` rule, so no mode can hide the alert strip |
-| `test/mutations.test.mjs` | 135 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed (at least 6 each for AC5, AC6, AC10, AC13) |
+| `test/static.test.mjs` | forbidden APIs absent, `hass` reads pinned, names never computed from data, one adapter / one strip renderer, ASCII-only source, no secret-shaped text in the folder, and the STYLESHEET itself: no mode-dependent selector except the switch thumb; no hiding declaration except the `[hidden]` rule; only the pinned selectors may name the alert strip; no rule but `[hidden]` may use `:has()`, `:is()`, a positional pseudo-class, the hidden attribute or a sibling combinator; and a rule that can reach the strip may not carry a negative, huge or unjudgeable margin, inset, offset or translation, a negative z-index, an animation or a clip to a sliver of height, so no mode can hide, shift or clip the alert strip |
+| `test/mutations.test.mjs` | 151 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed (at least 6 each for AC5, AC6, AC10, AC13) |
 | `tools/tests/test_geek_mode_*.py` | the Python side: catalogue, coverage, ledger, fixtures, privacy, and (`test_geek_mode_example.py`) the example and the documents |
 
 Fixtures are synthetic: the small hand-made `test/fixtures/mini.*` and `hostile.states.json` of the card, and the generated
