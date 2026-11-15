@@ -284,21 +284,109 @@ def _integration_ha_attrs(root: Path, keys: tuple[str, ...]) -> dict:
     return out
 
 
+# The package files the tool models, and the top-level keys of each that it models. A package file is Home Assistant configuration: ANY other
+# top-level key, and any other kind of entity inside a template block, may define a data point (a sensor, a number, a select, a button, an
+# image, a script, a group ...) that the ledger would not account for, so the build FAILS CLOSED on it (review round 4): a new kind of entity
+# has to be modelled here and catalogued (or excepted, with a reason) before the build passes. Nothing is skipped silently.
+PACKAGE_MAIN_REL = "home-assistant/packages/ecco_intelligence.yaml"
+PACKAGE_PREFS_REL = "home-assistant/packages/ecco_intelligence_prefs.yaml"
+PACKAGE_DASHBOARD_REL = "home-assistant/packages/ecco_intelligence_dashboard.yaml"
+PACKAGE_FILES = (PACKAGE_MAIN_REL, PACKAGE_PREFS_REL, PACKAGE_DASHBOARD_REL)
+PACKAGE_MAIN_KEYS = ("input_boolean", "template", "automation")
+PACKAGE_PREFS_KEYS = ("input_number",)
+PACKAGE_DASHBOARD_KEYS = ("lovelace",)  # a dashboard registration: it defines no entity (the file says so; the tool holds it to that)
+TEMPLATE_BLOCK_KEYS = ("binary_sensor",)
+
+
+def _package_doc(root: Path, rel: str, allowed: tuple[str, ...]) -> dict:
+    """The parsed package file, refused when it carries a top-level key the tool does not model."""
+    doc = _yaml(root, rel)
+    if doc is None:
+        doc = {}
+    if not isinstance(doc, dict):
+        raise UniverseError(f"{rel}: not a mapping of Home Assistant configuration keys")
+    extra = sorted(str(k) for k in doc if k not in allowed)
+    if extra:
+        raise UniverseError(f"{rel}: the top-level key(s) {extra} define entities, or configuration, that tools/geek_mode_coverage.py does not model "
+                            f"(it models {list(allowed)}): model and catalogue the new data points, or account for them as exceptions, before the build can pass")
+    return doc
+
+
+def _package_listing(root: Path) -> None:
+    """The ECCO Intelligence package files are exactly the three the tool reads: a fourth file would define entities nobody accounted for."""
+    d = root / "home-assistant" / "packages"
+    found = sorted(f.name for f in d.glob("ecco_intel*")) if d.is_dir() else []
+    known = sorted(Path(r).name for r in PACKAGE_FILES)
+    if found != known:
+        raise UniverseError(f"home-assistant/packages holds the ECCO Intelligence package files {found}, but tools/geek_mode_coverage.py models {known}: "
+                            f"a package file it does not read can define data points the ledger would not account for")
+
+
 def _package_entities(root: Path) -> tuple[list, list]:
-    """(entities defined by the presentation package, entities defined by the prefs package) as [(domain, object id, spec dict)]."""
-    pkg = _yaml(root, "home-assistant/packages/ecco_intelligence.yaml") or {}
-    prefs = _yaml(root, "home-assistant/packages/ecco_intelligence_prefs.yaml") or {}
+    """(entities defined by the presentation package, entities defined by the prefs package) as [(domain, object id, spec dict, name key)].
+
+    Fail closed: every top-level key and every kind of template entity of the three package files is either modelled here or refused with a
+    UniverseError (see PACKAGE_*_KEYS); an entity id that two definitions produce is refused too."""
+    _package_listing(root)
+    pkg = _package_doc(root, PACKAGE_MAIN_REL, PACKAGE_MAIN_KEYS)
+    prefs = _package_doc(root, PACKAGE_PREFS_REL, PACKAGE_PREFS_KEYS)
+    _package_doc(root, PACKAGE_DASHBOARD_REL, PACKAGE_DASHBOARD_KEYS)
+    seen: set[str] = set()
+
+    def spec_of(rel: str, what: str, spec) -> dict:
+        if spec is None:
+            return {}
+        if not isinstance(spec, dict):
+            raise UniverseError(f"{rel}: {what} is not a mapping")
+        return dict(spec)
+
+    def add(bucket: list, rel: str, domain: str, obj, spec: dict, name_key: str) -> None:
+        if not isinstance(obj, str) or not obj:
+            raise UniverseError(f"{rel}: a {domain} entity has no usable name")
+        eid = f"{domain}.{obj}"
+        if eid in seen:
+            raise UniverseError(f"{rel}: {eid} is defined more than once")
+        seen.add(eid)
+        bucket.append((domain, obj, spec, name_key))
+
     main: list = []
-    for key, spec in (pkg.get("input_boolean") or {}).items():
-        main.append(("input_boolean", key, dict(spec or {}), "name"))
-    for block in pkg.get("template") or []:
-        for spec in block.get("binary_sensor") or []:
-            main.append(("binary_sensor", _slug(spec["name"]), dict(spec), "name"))
-    for spec in pkg.get("automation") or []:
-        main.append(("automation", _slug(spec["alias"]), dict(spec), "alias"))
+    ib = pkg.get("input_boolean")
+    if ib is not None and not isinstance(ib, dict):
+        raise UniverseError(f"{PACKAGE_MAIN_REL}: input_boolean is not a mapping of helpers")
+    for key, spec in (ib or {}).items():
+        add(main, PACKAGE_MAIN_REL, "input_boolean", key, spec_of(PACKAGE_MAIN_REL, f"input_boolean.{key}", spec), "name")
+    blocks = pkg.get("template")
+    if blocks is not None and not isinstance(blocks, list):
+        raise UniverseError(f"{PACKAGE_MAIN_REL}: template is not a list of blocks")
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            raise UniverseError(f"{PACKAGE_MAIN_REL}: a template block is not a mapping")
+        extra = sorted(str(k) for k in block if k not in TEMPLATE_BLOCK_KEYS)
+        if extra:
+            raise UniverseError(f"{PACKAGE_MAIN_REL}: the template block key(s) {extra} define entities (sensor, number, select, button, image, weather, a "
+                                f"trigger-based block ...) that tools/geek_mode_coverage.py does not model (it models {list(TEMPLATE_BLOCK_KEYS)})")
+        bs = block.get("binary_sensor")
+        if bs is not None and not isinstance(bs, list):
+            raise UniverseError(f"{PACKAGE_MAIN_REL}: template binary_sensor is not a list")
+        for spec in bs or []:
+            spec = spec_of(PACKAGE_MAIN_REL, "a template binary_sensor", spec)
+            if not isinstance(spec.get("name"), str) or not _slug(spec["name"]):
+                raise UniverseError(f"{PACKAGE_MAIN_REL}: a template binary_sensor has no usable name")
+            add(main, PACKAGE_MAIN_REL, "binary_sensor", _slug(spec["name"]), spec, "name")
+    autos = pkg.get("automation")
+    if autos is not None and not isinstance(autos, list):
+        raise UniverseError(f"{PACKAGE_MAIN_REL}: automation is not a list")
+    for spec in autos or []:
+        spec = spec_of(PACKAGE_MAIN_REL, "an automation", spec)
+        if not isinstance(spec.get("alias"), str) or not _slug(spec["alias"]):
+            raise UniverseError(f"{PACKAGE_MAIN_REL}: an automation has no usable alias")
+        add(main, PACKAGE_MAIN_REL, "automation", _slug(spec["alias"]), spec, "alias")
     pre: list = []
-    for key, spec in (prefs.get("input_number") or {}).items():
-        pre.append(("input_number", key, dict(spec or {}), "name"))
+    inum = prefs.get("input_number")
+    if inum is not None and not isinstance(inum, dict):
+        raise UniverseError(f"{PACKAGE_PREFS_REL}: input_number is not a mapping of helpers")
+    for key, spec in (inum or {}).items():
+        add(pre, PACKAGE_PREFS_REL, "input_number", key, spec_of(PACKAGE_PREFS_REL, f"input_number.{key}", spec), "name")
     return main, pre
 
 

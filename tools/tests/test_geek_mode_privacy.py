@@ -74,11 +74,14 @@ MAC_DOTTED = re.compile(r"(?<![0-9A-Za-z.])(?=[0-9A-Fa-f.]*[A-Fa-f])[0-9A-Fa-f]{
 COORD_PAIR = re.compile(r"(?<![\d.])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])")
 WIFI_QR = re.compile(r"\bWIFI:[A-Z]:", re.I)
 PASS_PAIR = re.compile(r"""["']\s*(?:[a-z0-9_-]*[_-])?(?:pass|pw)\s*["']\s*:\s*["']?[^\s,;"']{3,}|(?<![a-z0-9])(?:[a-z0-9]+[_-])*(?:pass|pw)=["']?[^\s,;&"']{3,}""", re.I)
+# review round 4: a MAC address written with a space between the six bytes (a reviewer's probe found the card showing one); at least one letter, as for the other bare forms
+MAC_SPACED = re.compile(r"(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])", re.I)
 
 ALL = {"private IPv4": RFC1918, "MAC": MAC, "user path": USER_PATH, "token or key shape": SECRET, "JWT-like": JWT_LOOSE, "IPv4": IPV4,
        "long hex": HEX_BLOB, "long base64": B64_BLOB, "URL with userinfo": URL_USERINFO, "token in a URL": URL_TOKEN_QS, "coordinates": COORD,
        "bearer or basic credential": BEARER, "credential pair": CRED_PAIR, "webhook path": WEBHOOK_PATH,
-       "MAC without separators": MAC_BARE, "MAC, dotted": MAC_DOTTED, "coordinate pair": COORD_PAIR, "Wi-Fi QR text": WIFI_QR, "pass or pw pair": PASS_PAIR}
+       "MAC without separators": MAC_BARE, "MAC, dotted": MAC_DOTTED, "coordinate pair": COORD_PAIR, "Wi-Fi QR text": WIFI_QR, "pass or pw pair": PASS_PAIR,
+       "MAC, spaced": MAC_SPACED}
 
 
 def hits(text: str, pat: re.Pattern, ok=None) -> list[str]:
@@ -112,6 +115,7 @@ samples = {
     "coordinate pair": "at " + "51.507" + ", " + "-0.127",
     "Wi-Fi QR text": "WIFI" + ":S:" + "Home" + ";T:WPA;P:" + "x1y2z3" + ";;",
     "pass or pw pair": '{"pa' + 'ss": "' + "abc123" + '"}',
+    "MAC, spaced": "id " + "aa bb" + " cc dd" + " ee ff",
 }
 for kind, text in samples.items():
     check(f"the {kind} scanner flags an injected sample", bool(hits(text, ALL[kind])))
@@ -146,6 +150,12 @@ check("[r3] the scanners flag the shapes the card's round-three hostile fixtures
 check("[r3] and they leave look-alikes alone: 'pass: true', a version, twelve plain digits, a coarse pair, a pair with one fine number",
       not any(hits(s, pat) for s, pat in (("self-test pass: true", PASS_PAIR), ("pass: ok today", PASS_PAIR), ("2026.1114.0900", MAC_DOTTED), ("123456789012", MAC_BARE),
                                           ("51.5, -0.1", COORD_PAIR), ("1.250, 3.5", COORD_PAIR), ("wifi: connected", WIFI_QR), ("compass=north", PASS_PAIR))))
+# review round 4: the card's rule for a MAC address written with spaces is this scanner's pattern, and the scanner flags it and leaves six numbers alone
+_m = re.search(r"\['MAC address \(spaced\)', ' ', /(.+)/i\],", _card_src)
+check("[r4] the card's value rule 'MAC address (spaced)' is this scanner's pattern (the two sides agree)", _m is not None and _m.group(1) == MAC_SPACED.pattern, "" if _m is None else _m.group(1))
+check("[r4] the spaced-MAC scanner flags the shapes the card's round-four fixtures use (assembled from fragments) and leaves six numbers, a short run and long groups alone",
+      all(hits(s, MAC_SPACED) for s in ("AA BB" + " CC DD" + " EE FF", "a1 b2 " + "c3 d4 " + "e5 f6", "seen on aa 1b cc " + "dd e5 07" + " today"))
+      and not any(hits(s, MAC_SPACED) for s in ("10 20 30 40 50 60", "aa bb cc dd ee", "1aa bb cc dd ee ff", "aa bb cc dd ee fff", "aabb ccdd eeff", "at 10 11 12 13 14 15 hours")))
 
 # ===========================================================================
 print("")

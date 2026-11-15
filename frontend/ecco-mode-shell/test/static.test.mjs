@@ -7,6 +7,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { cardDir, CARD_PATH, cardUrl } from './helpers.mjs';
 import { ALERT_TOKEN, MODE_TOKEN, parseSheet, pinProblems, stripProblems, reachesStripStrict, compounds, STRIP_ALLOWLIST, THEME_VARS } from './css-guard.mjs';
+import { ariaProblems, attributeCalls, stateKeys, withoutStyle, ARIA_PIN, FORBIDDEN } from './aria-guard.mjs';
 
 const src = readFileSync(CARD_PATH, 'utf8');
 const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
@@ -793,10 +794,115 @@ test('AC6 [r3] the strip element and its alert nodes are built by one literal ea
   once("mk(doc, 'div', { class: 'alert', 'data-alert-id': a.id, 'data-severity': a.severity, 'data-alert-kind': a.kind, 'data-entity-id': a.entity_id || null, role: critical ? 'alert' : 'status' })");
   once("mk(doc, 'div', { class: 'alert quiet', 'data-alert-none': '' }, [icon(doc, 'live'), mk(doc, 'span', null, 'No active alerts.')])");
   once("strip.setAttribute('data-alert-count', String(alerts.length));");
-  // nothing writes a style attribute or the hidden, inert or aria-hidden state of anything in the shell's tree except through the literals the other tests pin
+  // nothing writes a style attribute or the hidden, inert or aria-hidden state of anything in the shell's tree except through the literals the other tests pin.
+  // (Review round 4: this comment used to say aria-hidden writes were pinned here, but no assertion checked one. They are pinned by the AC6 [r4] tests below:
+  // every setAttribute, toggleAttribute and removeAttribute site, the aria / role / tabindex keys of every literal, and the other doors to an accessibility property.)
   assert.doesNotMatch(code, /setAttribute\(\s*'(?:style|inert)'/);
   assert.doesNotMatch(code, /[{,]\s*(?:'style'|style|inert|'inert')\s*:/);
   assert.equal((code.match(/\.hidden\s*=/g) || []).length, 4, 'the four places that set hidden: the tiles, the empty note and the two bodies (the strip is none of them)');
   assert.doesNotMatch(code, /\bstrip\.(?:hidden|style|classList|className|inert)\b/);
   assert.doesNotMatch(code, /\.(?:alerts|strip)\b[^\n]*\.(?:hidden|style)\b/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 4 (reviewer mutants J2 and J5): what a screen reader gets from the strip. The attribute writes are pinned (test/aria-guard.mjs).
+// ---------------------------------------------------------------------------------------------------------------------------
+const ANCHOR = "    ui.geekBody.hidden = mode !== 'geek';";
+const plant = (snippet) => code.replace(ANCHOR, () => `${ANCHOR}\n    ${snippet}`);
+
+test('AC6 [r4] every attribute the card writes, toggles or removes is written at a pinned site, and nothing else can reach an accessibility property', () => {
+  assert.equal(code.split(ANCHOR).length - 1, 1, 'the anchor of the planted mutants is found once');
+  assert.deepEqual(ariaProblems(code), []);
+  // what the guard reads is what is there: 18 call sites (16 literal-named, the two builders that take the name from the literal object they are given)
+  const calls = attributeCalls(withoutStyle(code));
+  assert.equal(calls.length, ARIA_PIN.sites.length);
+  assert.equal(calls.length, 18);
+  assert.equal(calls.filter((c) => c.first === 'k').length, 2);
+  assert.deepEqual(calls.filter((c) => /aria-|role|hidden|inert/i.test(c.first)).map((c) => `${c.method}(${c.first}) on ${c.receiver}`).sort(),
+    ["setAttribute('aria-checked') on ui.opts[m]", "setAttribute('aria-hidden') on svg", "setAttribute('aria-pressed') on ui.problems"],
+    'the only ARIA state written after the build is the radio option, the Problems-only toggle and the decorative icon: never the strip, the shell or an alert');
+  // the strip's own attributes are written by its one literal (pinned above); aria-live is written in two literals only, the strip and the Geek status line
+  assert.equal(stateKeys(withoutStyle(code))['aria-live'], 2);
+  assert.equal(stateKeys(withoutStyle(code)).role, 10);
+  assert.equal(Object.keys(stateKeys(withoutStyle(code))).filter((k) => /^(?:hidden|inert|style|slot|part|popover|contenteditable)$/.test(k)).length, 0, 'no hidden, inert or style key anywhere');
+  // nothing in the source reaches the strip through a reflection property, a node API or an alias
+  for (const [re, what] of FORBIDDEN) assert.doesNotMatch(withoutStyle(code), re, what);
+});
+
+test('AC6 [r4] the guard has teeth: the reviewer mutants J2 and J5 and every other way of hiding the strip from a screen reader, or muting it, are reported (negative controls)', () => {
+  const planted = {
+    'J2 aria-hidden on the strip in Geek Mode': "ui.strip.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');",
+    'J5 aria-live off in Geek Mode': "ui.strip.setAttribute('aria-live', mode === 'geek' ? 'off' : 'polite');",
+    'aria-live assertive in Geek Mode': "ui.strip.setAttribute('aria-live', mode === 'geek' ? 'assertive' : 'polite');",
+    'aria-hidden on the shell, which holds the strip': "ui.shell.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');",
+    'inert toggled on the strip': "ui.strip.toggleAttribute('inert', mode === 'geek');",
+    'inert set on the shell': "ui.shell.setAttribute('inert', '');",
+    'hidden toggled on the strip': "ui.strip.toggleAttribute('hidden', mode === 'geek');",
+    'aria-live removed in Geek Mode': "if (mode === 'geek') ui.strip.removeAttribute('aria-live');",
+    'role removed': "ui.strip.removeAttribute('role');",
+    'role changed to presentation': "ui.strip.setAttribute('role', mode === 'geek' ? 'presentation' : 'region');",
+    'role changed to none': "ui.strip.setAttribute('role', 'none');",
+    'the label emptied': "ui.strip.setAttribute('aria-label', mode === 'geek' ? '' : 'Safety and status alerts');",
+    'an upper-case attribute name': "ui.strip.setAttribute('ARIA-HIDDEN', 'true');",
+    'a name in a template literal': 'ui.strip.setAttribute(`aria-hidden`, \'true\');',
+    'a name built by concatenation': "ui.strip.setAttribute('aria-' + 'hidden', 'true');",
+    'a name held in a variable': "const nm = 'aria-hidden'; ui.strip.setAttribute(nm, 'true');",
+    'a double-quoted name': 'ui.strip.setAttribute("aria-hidden", "true");',
+    'the strip found by a query': "this._root.querySelector('[data-ecco-alert-strip]').setAttribute('aria-hidden', 'true');",
+    'ariaHidden by the reflection property': "ui.strip.ariaHidden = mode === 'geek' ? 'true' : 'false';",
+    'ariaLive by the reflection property': "ui.strip.ariaLive = 'off';",
+    'ariaLabel by the reflection property': "ui.strip.ariaLabel = '';",
+    'role by the reflection property': "ui.strip.role = 'none';",
+    'a reflection property by bracket': "ui.strip['ariaHidden'] = 'true';",
+    'inert by property': 'ui.strip.inert = true;',
+    'a class added to the strip': "ui.strip.classList.add('row');",
+    'a class name assigned': "ui.strip.className = 'row';",
+    'an attribute node': "ui.strip.setAttributeNode(this.ownerDocument.createAttribute('aria-hidden'));",
+    'a namespaced attribute': "ui.strip.setAttributeNS(null, 'aria-hidden', 'true');",
+    'a named item': "ui.strip.attributes.setNamedItem(x);",
+    'Object.assign onto the strip': "Object.assign(ui.strip, { ariaHidden: 'true' });",
+    'an alias of setAttribute': "const sa = ui.strip.setAttribute; sa.call(ui.strip, 'aria-hidden', 'true');",
+    'setAttribute reached by bracket': "ui.strip['setAttribute']('aria-hidden', 'true');",
+    'setAttribute bound': "ui.strip.setAttribute.bind(ui.strip)('aria-hidden', 'true');",
+    'an extra literal key in a built element': "mk(this.ownerDocument, 'div', { 'aria-hidden': 'true' });",
+    'an extra role key': "mk(this.ownerDocument, 'div', { role: 'presentation' });",
+    'a style key': "mk(this.ownerDocument, 'div', { style: 'display:none' });",
+    'a hidden key': "mk(this.ownerDocument, 'div', { hidden: true });",
+    'a second aria-hidden write on an icon (the pinned site twice)': "const svg = this.ownerDocument.createElement('i'); svg.setAttribute('aria-hidden', 'true');",
+    'an unrelated new attribute write (every new site is a decision)': "ui.summary.setAttribute('data-zz', 'x');",
+  };
+  const names = Object.keys(planted);
+  assert.ok(names.length >= 35, `${names.length} planted breaks`);
+  for (const [what, snippet] of Object.entries(planted)) {
+    assert.notDeepEqual(ariaProblems(plant(snippet)), [], `not reported: ${what}`);
+  }
+  // the report says why, in words a person can act on
+  assert.match(ariaProblems(plant(planted['J2 aria-hidden on the strip in Geek Mode'])).join('\n'), /attribute write not pinned[^:]*: setAttribute\('aria-hidden'\) on ui\.strip/);
+  assert.match(ariaProblems(plant(planted['J5 aria-live off in Geek Mode'])).join('\n'), /attribute write not pinned[^:]*: setAttribute\('aria-live'\) on ui\.strip/);
+  assert.match(ariaProblems(plant(planted['a name in a template literal'])).join('\n'), /not a plain single-quoted literal/);
+  assert.match(ariaProblems(plant(planted['ariaHidden by the reflection property'])).join('\n'), /ARIA reflection property/);
+  assert.match(ariaProblems(plant(planted['an extra literal key in a built element'])).join('\n'), /the key 'aria-hidden' is written 3 time\(s\)/);
+  // each planted break is also reported when it is appended at the end of the module rather than inside _applyMode, so the guard does not depend on the anchor
+  for (const [what, snippet] of Object.entries(planted)) assert.notDeepEqual(ariaProblems(`${code}\n${snippet}\n`), [], `not reported at the end of the module: ${what}`);
+});
+
+test('AC6 [r4] the guard also refuses a changed or removed pinned write, and ignores formatting', () => {
+  const real = ["svg.setAttribute('aria-hidden', 'true');", "ui.problems.setAttribute('aria-pressed', this.filters.problems ? 'true' : 'false');",
+    "ui.opts[m].setAttribute('aria-checked', m === mode ? 'true' : 'false');", "ui.shell.setAttribute('data-theme', hass.themes.darkMode ? 'dark' : 'light');"];
+  for (const text of real) assert.equal(code.split(text).length - 1, 1, `the pinned write is found once: ${text}`);
+  // the receiver changes (the decorative icon's aria-hidden is written on the strip instead), or the attribute name changes, or the write is gone
+  assert.notDeepEqual(ariaProblems(code.replace(real[0], () => "ui.strip.setAttribute('aria-hidden', 'true');")), []);
+  assert.notDeepEqual(ariaProblems(code.replace(real[0], () => "svg.setAttribute('aria-live', 'true');")), []);
+  assert.notDeepEqual(ariaProblems(code.replace(real[0], () => '')), []);
+  assert.notDeepEqual(ariaProblems(code.replace(real[1], () => "ui.strip.setAttribute('aria-pressed', 'true');")), []);
+  assert.notDeepEqual(ariaProblems(code.replace(real[2], () => "ui.shell.setAttribute('aria-checked', 'true');")), []);
+  // formatting and the argument's own text are free: only the method, the name and the receiver are pinned
+  assert.deepEqual(ariaProblems(code.replace(real[1], () => "ui.problems\n      .setAttribute(\n        'aria-pressed' ,\n        this.filters.problems ? 'false' : 'true' );")), []);
+  assert.deepEqual(ariaProblems(code.replace(real[2], () => "ui.opts[m].setAttribute( 'aria-checked', 'true' );")), []);
+  // the guard reads code with its comments stripped (as every test in this file does), so a sentence in a comment is never a write; it does not strip them itself
+  assert.notDeepEqual(ariaProblems(`${code}\n// ui.strip.setAttribute('aria-hidden', 'true')`), [], 'handed a comment as code the guard reports it: strip comments first');
+  assert.equal(code.includes("ui.strip.setAttribute('aria-hidden'"), false, 'the comment-stripped source holds no such write');
+  // the stylesheet is not source: its attribute selectors ([aria-checked="true"], [aria-expanded="false"]) are no write, and the guard reads the card without it
+  assert.ok(code.includes('[aria-checked="true"]') && !withoutStyle(code).includes('[aria-checked="true"]'));
+  assert.deepEqual(ariaProblems(code), []);
 });

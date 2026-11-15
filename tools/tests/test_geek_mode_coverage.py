@@ -205,6 +205,14 @@ try:
                      '\n  - id: "ecco_intel_alert_zz_new"\n    alias: "ECCO Intel - alert: zz new"\n    triggers:\n      - trigger: homeassistant\n'
                      '        event: start\n    actions: []\n')],
                    "UNCATALOGUED source intel.automation.alert_zz_new")
+    # review round 4 (reviewer mutants P3 and P5): an entity of a kind the tool does not model used to be skipped, and the ledger still said 'match a regeneration'
+    PKG = "home-assistant/packages/ecco_intelligence.yaml"
+    mutate_scratch("[r4 P3] an input_number added to the presentation package (a domain the tool does not model)",
+                   [(PKG, "APPEND", '\ninput_number:\n  ecco_intel_zz_probe:\n    name: "ECCO Intel zz probe"\n    min: 0\n    max: 1\n')],
+                   "the top-level key(s) ['input_number'] define entities")
+    mutate_scratch("[r4 P5] a template sensor added to the presentation package (a template kind the tool does not model)",
+                   [(PKG, "\nautomation:\n", '\n  - sensor:\n      - name: "ECCO Intel zz probe"\n        unique_id: "ecco_intel_zz_probe"\n        state: "1"\n\nautomation:\n')],
+                   "the template block key(s) ['sensor'] define entities")
     mutate_scratch("a new contract entity",
                    [(CONTRACT, '"watchdog_fresh": "binary_sensor.ecco_intel_watchdog_fresh",', '"watchdog_fresh": "binary_sensor.ecco_intel_watchdog_fresh",\n    "zz_extra": "sensor.ecco_intel_zz_extra",')],
                    "ENTITY_IDS holds ['zz_extra'] that this tool does not classify")
@@ -324,6 +332,93 @@ try:
     check("after the mutations the texts build the committed catalogue again", G._json_bytes(G.build_catalogue(cu, T), 4) == (ROOT / G.CATALOGUE_REL).read_bytes())
 finally:
     cleanup(S1, O1)
+
+# ===========================================================================
+print("")
+print("[6] review round 4: the three package files fail closed (every top-level key and every template kind is modelled or refused)")
+# ===========================================================================
+main_real, pre_real = G._package_entities(ROOT)
+check("the real packages give 5 presentation entities (pause helper, watchdog, three alert automations) and 1 prefs helper",
+      sorted(f"{d}.{o}" for d, o, _s, _n in main_real) == ["automation.ecco_intel_alert_no_fresh_intelligence_result", "automation.ecco_intel_alert_output_not_recognised",
+                                                          "automation.ecco_intel_alert_self_test_failed", "binary_sensor.ecco_intel_watchdog_fresh", "input_boolean.ecco_intel_paused"]
+      and [f"{d}.{o}" for d, o, _s, _n in pre_real] == ["input_number.ecco_advisory_reserve_raise_pct"], str(main_real)[:200])
+check("the tool names the files and keys it models (the allowlist is data, not a skip list)",
+      G.PACKAGE_MAIN_KEYS == ("input_boolean", "template", "automation") and G.PACKAGE_PREFS_KEYS == ("input_number",) and G.PACKAGE_DASHBOARD_KEYS == ("lovelace",)
+      and G.TEMPLATE_BLOCK_KEYS == ("binary_sensor",) and len(G.PACKAGE_FILES) == 3)
+
+
+def pkg_scratch() -> Path:
+    d = scratch_dir()
+    for rel in G.PACKAGE_FILES:
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_bytes((ROOT / rel).read_bytes())
+    return d
+
+
+def pkg_case(label: str, edits, expect: str | None) -> None:
+    """edits: [(relative path, old, new)] ('APPEND' appends `new`; 'NEWFILE' writes it; 'DELETE' removes the file). expect None means: the walk must pass."""
+    d = pkg_scratch()
+    try:
+        for rel, old, new in edits:
+            f = d / rel
+            if old == "APPEND":
+                f.write_text(f.read_text(encoding="utf-8") + new, encoding="utf-8", newline="\n")
+            elif old == "NEWFILE":
+                f.write_text(new, encoding="utf-8", newline="\n")
+            elif old == "DELETE":
+                f.unlink()
+            elif old == "REPLACEALL":
+                f.write_text(new, encoding="utf-8", newline="\n")
+            else:
+                patch_file(f, old, new)
+        try:
+            G._package_entities(d)
+            ok, detail = expect is None, "no error raised" if expect is not None else ""
+        except G.UniverseError as exc:
+            ok, detail = expect is not None and expect in str(exc), str(exc)[:300]
+        check(f"package case '{label}' " + ("passes" if expect is None else f"is refused with {expect!r}"), ok, detail)
+    finally:
+        cleanup(d)
+
+
+MAIN, PREFS, DASH = G.PACKAGE_MAIN_REL, G.PACKAGE_PREFS_REL, G.PACKAGE_DASHBOARD_REL
+pkg_case("unchanged copy (negative control)", [], None)
+pkg_case("a harmless comment added (negative control)", [(MAIN, "APPEND", "\n# a comment changes nothing\n")], None)
+pkg_case("a further alert automation (a MODELLED kind passes the walk; the ledger then asks for its text)",
+         [(MAIN, "APPEND", '\n  - id: "ecco_intel_alert_zz"\n    alias: "ECCO Intel - alert: zz"\n    triggers: []\n    actions: []\n')], None)
+for key in ("input_number", "input_text", "input_select", "input_datetime", "input_button", "counter", "timer", "script", "sensor", "binary_sensor", "group", "scene",
+            "homeassistant", "utility_meter", "number", "select", "button", "switch", "mqtt", "shell_command", "rest_command", "lovelace"):
+    pkg_case(f"[P3 family] top-level {key} added to the presentation package", [(MAIN, "APPEND", f"\n{key}:\n  ecco_intel_zz_probe:\n    name: zz\n")], f"['{key}'] define entities")
+for kind in ("sensor", "number", "select", "button", "image", "weather", "switch", "light"):
+    pkg_case(f"[P5 family] template {kind} block added", [(MAIN, "\nautomation:\n", f'\n  - {kind}:\n      - name: "ECCO Intel zz probe"\n        state: "1"\n\nautomation:\n')],
+             f"the template block key(s) ['{kind}'] define entities")
+pkg_case("[P5 family] a trigger-based template block (trigger plus sensor) names both keys",
+         [(MAIN, "\nautomation:\n", '\n  - trigger:\n      - trigger: time\n        at: "00:00:00"\n    sensor:\n      - name: "ECCO Intel zz probe"\n        state: "1"\n\nautomation:\n')],
+         "the template block key(s) ['sensor', 'trigger'] define entities")
+pkg_case("a template block that also carries a binary sensor and a sensor is still refused",
+         [(MAIN, "\nautomation:\n", '\n  - binary_sensor:\n      - name: "ECCO Intel zz b"\n        state: "1"\n    sensor:\n      - name: "ECCO Intel zz s"\n        state: "1"\n\nautomation:\n')],
+         "the template block key(s) ['sensor'] define entities")
+pkg_case("the prefs package gains another helper kind", [(PREFS, "APPEND", '\ninput_text:\n  ecco_intel_zz_probe:\n    name: zz\n')], "ecco_intelligence_prefs.yaml: the top-level key(s) ['input_text']")
+pkg_case("the dashboard registration package gains an entity (it must define none)", [(DASH, "APPEND", '\ninput_boolean:\n  ecco_intel_zz_probe:\n    name: zz\n')],
+         "ecco_intelligence_dashboard.yaml: the top-level key(s) ['input_boolean']")
+pkg_case("a fourth ECCO Intelligence package file", [("home-assistant/packages/ecco_intel_zz.yaml", "NEWFILE", 'input_text:\n  ecco_intel_zz_probe:\n    name: zz\n')],
+         "home-assistant/packages holds the ECCO Intelligence package files")
+pkg_case("a fourth package file with another extension", [("home-assistant/packages/ecco_intelligence_zz.yml", "NEWFILE", 'sensor: []\n')],
+         "home-assistant/packages holds the ECCO Intelligence package files")
+pkg_case("a modelled package file removed", [(PREFS, "DELETE", "")], "home-assistant/packages holds the ECCO Intelligence package files")
+pkg_case("an entity id defined twice (two binary sensors with one name)",
+         [(MAIN, "\nautomation:\n", '\n  - binary_sensor:\n      - name: "ECCO Intel Watchdog Fresh"\n        state: "1"\n\nautomation:\n')],
+         "binary_sensor.ecco_intel_watchdog_fresh is defined more than once")
+pkg_case("two names that slug to one entity id", [(MAIN, "\nautomation:\n", '\n  - binary_sensor:\n      - name: "ECCO Intel  Watchdog-Fresh"\n        state: "1"\n\nautomation:\n')],
+         "is defined more than once")
+pkg_case("a package that is a list, not a mapping", [(MAIN, "REPLACEALL", "- a\n- b\n")], "not a mapping of Home Assistant configuration keys")
+pkg_case("template is a mapping, not a list of blocks", [(MAIN, "REPLACEALL", "template:\n  binary_sensor: []\n")], "template is not a list of blocks")
+pkg_case("a template block that is text", [(MAIN, "REPLACEALL", "template:\n  - just text\n")], "a template block is not a mapping")
+pkg_case("a template binary sensor with no name", [(MAIN, "REPLACEALL", "template:\n  - binary_sensor:\n      - state: '1'\n")], "a template binary_sensor has no usable name")
+pkg_case("an automation with no alias", [(MAIN, "REPLACEALL", "automation:\n  - id: ecco_intel_alert_zz\n")], "an automation has no usable alias")
+pkg_case("input_boolean that is a list", [(MAIN, "REPLACEALL", "input_boolean:\n  - ecco_intel_paused\n")], "input_boolean is not a mapping of helpers")
+pkg_case("input_number that is a list", [(PREFS, "REPLACEALL", "input_number:\n  - a\n")], "input_number is not a mapping of helpers")
+pkg_case("an input_boolean spec that is text", [(MAIN, "REPLACEALL", "input_boolean:\n  ecco_intel_paused: yes please\n")], "input_boolean.ecco_intel_paused is not a mapping")
 
 print("")
 if FAILURES:

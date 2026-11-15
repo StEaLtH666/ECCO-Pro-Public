@@ -22,6 +22,7 @@ const sub = (find, replace, all = false) => (s) => {
   return s.split(find).join(replace);
 };
 const chain = (...fs) => (s) => fs.reduce((acc, f) => f(acc), s);
+const GEEK_LINE = "    ui.geekBody.hidden = mode !== 'geek';";
 
 const MUTANTS = [
   // ---- AC1 default Production
@@ -237,6 +238,34 @@ const MUTANTS = [
   { id: 'AC6-css-r3-two-colours-equal', ac: 'AC6', note: 'text and surface get the same colour (each is allowed on its own; the pin sees the change)', f: sub('.alert-action{margin:0;color:var(--ecco-fg2);', '.alert-action{margin:0;color:var(--ecco-surface);') },
   { id: 'AC6-strip-style-attribute', ac: 'AC6', note: 'the strip element gets an inline style attribute', f: sub("'aria-label': 'Safety and status alerts', 'aria-live': 'polite' });", "'aria-label': 'Safety and status alerts', 'aria-live': 'polite', style: 'height:0;overflow:hidden' });") },
   { id: 'AC6-strip-alert-node-inert', ac: 'AC6', note: 'an alert node gets the hidden attribute', f: sub("role: critical ? 'alert' : 'status' })", "role: critical ? 'alert' : 'status', hidden: critical })") },
+  // ---- review round 4: what a screen reader gets from the strip (reviewer mutants J2 and J5, and the ways around the same net). Each is planted after the line that
+  // shows the Geek body, so it runs on every mode change; the first two are the reviewer's own and survived every suite of round 3.
+  { id: 'AC6-aria-r4-J2-strip-aria-hidden-in-geek', ac: 'AC6', note: 'J2: aria-hidden on the strip in Geek Mode (a screen reader gets no safety alert)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');`) },
+  { id: 'AC6-aria-r4-J5-strip-live-off-in-geek', ac: 'AC6', note: 'J5: aria-live off in Geek Mode (new alerts are no longer announced)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-live', mode === 'geek' ? 'off' : 'polite');`) },
+  { id: 'AC6-aria-r4-live-assertive-in-geek', ac: 'AC6', note: 'aria-live changes to assertive in Geek Mode only', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-live', mode === 'geek' ? 'assertive' : 'polite');`) },
+  { id: 'AC6-aria-r4-live-removed-in-geek', ac: 'AC6', note: 'aria-live removed in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') ui.strip.removeAttribute('aria-live');`) },
+  { id: 'AC6-aria-r4-shell-aria-hidden-in-geek', ac: 'AC6', note: 'aria-hidden on the shell (which holds the strip) in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.shell.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');`) },
+  { id: 'AC6-aria-r4-strip-inert-in-geek', ac: 'AC6', note: 'inert toggled on the strip in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.toggleAttribute('inert', mode === 'geek');`) },
+  { id: 'AC6-aria-r4-host-inert-in-geek', ac: 'AC6', note: 'inert on the card element itself in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') this.setAttribute('inert', '');`) },
+  { id: 'AC6-aria-r4-role-none-in-geek', ac: 'AC6', note: 'role presentation on the strip in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('role', mode === 'geek' ? 'presentation' : 'region');`) },
+  { id: 'AC6-aria-r4-label-empty-in-geek', ac: 'AC6', note: 'the strip label emptied in Geek Mode', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-label', mode === 'geek' ? '' : 'Safety and status alerts');`) },
+  { id: 'AC6-aria-r4-reflection-aria-hidden', ac: 'AC6', note: 'aria-hidden through the ariaHidden property (the DOM stand-in sees no attribute: only the source guard can)', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.ariaHidden = mode === 'geek' ? 'true' : 'false';`) },
+  { id: 'AC6-aria-r4-reflection-aria-live', ac: 'AC6', note: 'aria-live through the ariaLive property', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.ariaLive = mode === 'geek' ? 'off' : 'polite';`) },
+  { id: 'AC6-aria-r4-reflection-role', ac: 'AC6', note: 'the role through the role property', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.role = mode === 'geek' ? 'none' : 'region';`) },
+  { id: 'AC6-aria-r4-name-in-template-literal', ac: 'AC6', note: 'the attribute name is a template literal, which a literal-name scan would skip', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute(\`aria-hidden\`, mode === 'geek' ? 'true' : 'false');`) },
+  { id: 'AC6-aria-r4-name-by-concatenation', ac: 'AC6', note: 'the attribute name is built by concatenation', f: sub(GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-' + 'hidden', mode === 'geek' ? 'true' : 'false');`) },
+  { id: 'AC6-aria-r4-alias-of-set-attribute', ac: 'AC6', note: 'setAttribute reached through an alias', f: sub(GEEK_LINE, `${GEEK_LINE}\n    const sa = ui.strip.setAttribute;\n    sa.call(ui.strip, 'aria-hidden', mode === 'geek' ? 'true' : 'false');`) },
+  { id: 'AC6-aria-r4-strip-literal-aria-hidden', ac: 'AC6', note: 'aria-hidden false added to the strip literal (present in both modes)', f: sub("'aria-label': 'Safety and status alerts', 'aria-live': 'polite' });", "'aria-label': 'Safety and status alerts', 'aria-live': 'polite', 'aria-hidden': 'false' });") },
+  { id: 'AC6-aria-r4-strip-literal-live-off', ac: 'AC6', note: 'the strip literal says aria-live off in both modes', f: sub("'aria-label': 'Safety and status alerts', 'aria-live': 'polite' });", "'aria-label': 'Safety and status alerts', 'aria-live': 'off' });") },
+  { id: 'AC6-aria-r4-strip-literal-no-label', ac: 'AC6', note: 'the strip literal loses its label', f: sub("role: 'region', 'aria-label': 'Safety and status alerts', 'aria-live': 'polite' });", "role: 'region', 'aria-live': 'polite' });") },
+  { id: 'AC6-aria-r4-alert-role-presentation', ac: 'AC6', note: 'every alert line is given role presentation', f: sub("role: critical ? 'alert' : 'status' })", "role: 'presentation' })") },
+  { id: 'AC6-aria-r4-alert-node-aria-hidden', ac: 'AC6', note: 'aria-hidden on every alert line', f: sub("role: critical ? 'alert' : 'status' })", "role: critical ? 'alert' : 'status', 'aria-hidden': 'true' })") },
+  // ---- review round 4: a MAC address written with spaces (reviewer probe), and the look-alikes the rule must leave alone
+  { id: 'AC10-mac-spaced-dropped', ac: 'AC10', note: 'a MAC address written with spaces is shown', f: sub("['MAC address (spaced)', ' ',", "['MAC address (spaced)', 'zzzz',") },
+  { id: 'AC10-mac-spaced-takes-numbers', ac: 'AC10', note: 'the spaced-MAC rule needs no letter, so six two-digit numbers are withheld', f: sub('(?=[0-9a-f ]{0,16}[a-f])(?:[0-9a-f]{2} ){5}', '(?:[0-9a-f]{2} ){5}') },
+  { id: 'AC10-mac-spaced-starts-mid-group', ac: 'AC10', note: 'the spaced-MAC rule may start inside a longer group of digits', f: sub('(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])', '(?=[0-9a-f ]{0,16}[a-f])') },
+  { id: 'AC10-mac-spaced-ends-mid-group', ac: 'AC10', note: 'the spaced-MAC rule may end inside a longer group of digits', f: sub('(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])/i]', '(?:[0-9a-f]{2} ){5}[0-9a-f]{2}/i]') },
+  { id: 'AC6-aria-r4-render-strip-aria-hidden', ac: 'AC6', note: 'the one strip renderer hides the strip from assistive technology on every render, in both modes', f: sub("strip.setAttribute('data-alert-count', String(alerts.length));", "strip.setAttribute('data-alert-count', String(alerts.length));\n  strip.setAttribute('aria-hidden', 'true');") },
 ];
 
 const MIN = { AC5: 6, AC6: 6, AC10: 6, AC13: 6 };

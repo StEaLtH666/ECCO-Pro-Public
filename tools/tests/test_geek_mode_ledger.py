@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import ROOT, cleanup, copy_outputs, run_tool, scratch_dir  # noqa: E402
+from _geek_scratch import ROOT, cleanup, copy_outputs, copy_read_set, run_tool, scratch_dir  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -221,6 +221,35 @@ check("the OK advice keys of the export event are exercised only where the item 
 check("last_good is exercised by the stale fixture only (history under a null-rule status)", rows["intel.status#last_good.values"]["seen_in"] == ["stale"])
 check("a row id is `<source id>` or `<source id>#<attribute name>` (the rule the card's coverage test uses)",
       all(r["id"] == (r["id"].split("#")[0] if r["kind"] == "source" else f"{r['id'].split('#')[0]}#{r['path']}") for r in led["rows"]))
+
+# ===========================================================================
+print("")
+print("[6] review round 4: a package entity of a kind the tool does not model can no longer pass --check (reviewer mutants P3 and P5)")
+# ===========================================================================
+PKG_REL = "home-assistant/packages/ecco_intelligence.yaml"
+P3_ADD = '\ninput_number:\n  ecco_intel_zz_probe:\n    name: "ECCO Intel zz probe"\n    min: 0\n    max: 1\n'
+P5_ADD = '\n  - sensor:\n      - name: "ECCO Intel zz probe"\n        unique_id: "ecco_intel_zz_probe"\n        state: "1"\n\nautomation:\n'
+for label, edit, expect in (
+        ("P3 an input_number in the presentation package", lambda t: t + P3_ADD, "['input_number']"),
+        ("P5 a template sensor 'ECCO Intel zz probe'", lambda t: t.replace("\nautomation:\n", P5_ADD, 1), "the template block key(s) ['sensor']")):
+    sd, so = scratch_dir(), scratch_dir()
+    try:
+        copy_read_set(sd)
+        copy_outputs(so)
+        f = sd / PKG_REL
+        before = f.read_text(encoding="utf-8")
+        f.write_text(edit(before), encoding="utf-8", newline="\n")
+        check(f"{label}: the mutation changed the scratch package", f.read_text(encoding="utf-8") != before)
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: --check exits 1, names the unmodelled kind, and no longer says the files match a fresh regeneration",
+              rc == 1 and expect in out and "match a fresh regeneration" not in out and "FINDING" in out, out[-400:])
+        rc, out = run_tool("geek_mode_coverage.py", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: writing the ledger is refused too (exit 1), so no ledger is produced from a package the tool cannot account for", rc == 1 and "FINDING" in out, out[-300:])
+        f.write_text(before, encoding="utf-8", newline="\n")
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(sd), "--out-root", str(so))
+        check(f"{label}: with the package restored --check passes again (negative control)", rc == 0 and "match a fresh regeneration" in out, out[-300:])
+    finally:
+        cleanup(sd, so)
 
 print("")
 if FAILURES:

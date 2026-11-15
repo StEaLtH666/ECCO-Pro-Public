@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadCard, miniCatalogue, miniStates, miniStatesRaw, hostileStatesRaw, statesFrom, mkState, NOW } from './helpers.mjs';
-import { SECRET_VALUES, SECRET_VALUES_R3, SECRET_KEYS, SECRET_KEYS_R3, SECRET_KEY_NAMES, KEY_MARKER, hostileAttributes, forbiddenStrings } from './secrets.mjs';
+import { SECRET_VALUES, SECRET_VALUES_R3, SECRET_VALUES_R4, SECRET_KEYS, SECRET_KEYS_R3, SECRET_KEY_NAMES, KEY_MARKER, hostileAttributes, forbiddenStrings } from './secrets.mjs';
 
 const core = await loadCard('core');
 const {
@@ -1420,4 +1420,41 @@ test('AC10 [r3] the round-three values and keys hold on every path: row text, ra
   }
   for (const k of SECRET_KEYS_R3) assert.ok(!text.includes(KEY_MARKER(k)) && !exported.includes(KEY_MARKER(k)), `${k}: its value leaked`);
   assert.equal(searchRows(s.rows, 'hunter22').length, 0, 'the search index holds no password text');
+});
+
+// Review round 4 ([r4]): a MAC address written with spaces between the six bytes (reviewer probe: shown)
+test('AC10 [r4] a MAC address written with spaces is withheld under an innocent key, nested in a list, on its own and inside a sentence', () => {
+  assert.ok(SECRET_VALUES_R4.length >= 3);
+  for (const s of SECRET_VALUES_R4) {
+    assert.equal(redactValue(s.value, { key: 'note' }), WITHHELD, s.label);
+    assert.equal(redactValue({ any: [s.value] }).any[0], WITHHELD, `${s.label} nested in a list`);
+    assert.equal(redactValue(s.value), WITHHELD, `${s.label} with no key`);
+  }
+  assert.equal(redactValue('  aa bb cc dd ee ff  ', { key: 'note' }), WITHHELD, 'white space around it does not hide it');
+  assert.equal(redactValue('AA BB CC DD EE FF 11 22', { key: 'note' }), WITHHELD, 'a longer run of bytes contains one');
+  assert.equal(redactValue('aa bb cc dd ee ff', { key: 'git_sha' }), WITHHELD, 'a revision key does not excuse a spaced MAC (a revision has no spaces)');
+});
+
+test('AC10 [r4] the spaced-MAC rule takes no look-alike for one: six numbers, five or seven-digit groups, a run of the wrong length, a version, prose', () => {
+  const look = {
+    six_numbers: '10 20 30 40 50 60', six_numbers_b: '12 34 56 78 90 12', five_bytes: 'aa bb cc dd ee', one_digit_end: 'aa bb cc dd ee f', three_digit_start: '1aa bb cc dd ee ff',
+    three_digit_end: 'aa bb cc dd ee fff', four_char_groups: 'aabb ccdd eeff', words: 'a bad cab fed bee dad', version: 'version 2026 11 14 09 00 00', hours: 'at 10 11 12 13 14 15 hours',
+    sentence: 'the strip was clear for six days in a row',
+  };
+  const red = redactAttributes(look);
+  for (const [k, v] of Object.entries(look)) assert.equal(red[k], v, `${k}: ${v} is not a MAC address`);
+});
+
+test('AC10 [r4] the spaced MAC addresses hold on every path: row text, raw attributes, the search index and the export carry none of them', () => {
+  const s = snap((states) => {
+    states['sensor.ecco_intel_hostile'] = mkState('sensor.ecco_intel_hostile', SECRET_VALUES_R4[0].value, hostileAttributes());
+  });
+  const text = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const v of SECRET_VALUES_R4) {
+    for (const f of [v.value, v.value.slice(2, 14)]) {
+      assert.ok(!text.includes(f), `${v.label} leaked into a row`);
+      assert.ok(!exported.includes(f), `${v.label} leaked into the export`);
+    }
+  }
 });

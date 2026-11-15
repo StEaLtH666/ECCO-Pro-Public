@@ -53,15 +53,20 @@ test('compositing: a half-transparent colour over another, and the colour behind
 
 // ---- a healthy synthetic measurement, and the ways it can go wrong ----
 const R = (x, y, width, height) => ({ x, y, width, height });
+// review round 4: the accessibility attributes the page measures (an absent attribute is null)
+const NO_A11Y = { role: null, 'aria-hidden': null, 'aria-live': null, 'aria-label': null, 'aria-atomic': null, 'aria-relevant': null, 'aria-busy': null, inert: null, hidden: null };
+const STRIP_A11Y = { ...NO_A11Y, role: 'region', 'aria-live': 'polite', 'aria-label': 'Safety and status alerts' };
 const NEUTRAL_NODE = { tag: 'div', cls: '', isHost: false, display: 'grid', visibility: 'visible', contentVisibility: 'visible', opacity: 1, transform: 'none', rotate: 'none', scale: 'none', translate: 'none',
-  filter: 'none', clipPath: 'none', maskImage: 'none', backdropFilter: 'none', overflowX: 'visible', overflowY: 'visible', contain: 'none', rect: R(12, 12, 390, 400) };
+  filter: 'none', clipPath: 'none', maskImage: 'none', backdropFilter: 'none', overflowX: 'visible', overflowY: 'visible', contain: 'none', rect: R(12, 12, 390, 400), a11y: NO_A11Y };
 function healthy(over = {}) {
-  const line = (id, quiet = false) => ({ id, quiet, part: 'head', text: quiet ? 'No active alerts.' : 'Critical: The self-test failed.', textBox: R(60, 90, 200, 20), fontSize: '14px', lineHeight: '20px',
+  const line = (id, quiet = false) => ({ id, quiet, severity: quiet ? null : 'critical', role: quiet ? null : 'alert', lineA11y: { ...NO_A11Y, role: quiet ? null : 'alert' }, part: 'head',
+    text: quiet ? 'No active alerts.' : 'Critical: The self-test failed.', textBox: R(60, 90, 200, 20), fontSize: '14px', lineHeight: '20px',
     color: 'rgb(27, 35, 48)', textFill: 'rgb(27, 35, 48)', bgLayers: ['rgb(255, 255, 255)', 'rgba(0, 0, 0, 0)'], hit: { inside: true, tag: 'div.alert' }, icon: { color: 'rgb(168, 32, 26)', rect: R(24, 88, 22, 22) } });
   return {
     id: 'alerts|light|ha|production|w390|v1084', scenario: 'alerts', theme: 'light', vars: 'ha', mode: 'production', width: 390, expectAlerts: null, viewport: { w: 1084, h: 1500 },
     host: R(12, 12, 390, 400), shell: { mode: 'production' },
-    strip: { present: true, rect: R(12, 80, 390, 60), chain: [{ ...NEUTRAL_NODE, tag: 'div', cls: 'alerts', rect: R(12, 80, 390, 60) }, { ...NEUTRAL_NODE, tag: 'div', cls: 'shell' }, { ...NEUTRAL_NODE, tag: 'ecco-mode-shell', isHost: true, display: 'block' }] },
+    strip: { present: true, rect: R(12, 80, 390, 60), a11y: STRIP_A11Y,
+      chain: [{ ...NEUTRAL_NODE, tag: 'div', cls: 'alerts', rect: R(12, 80, 390, 60), a11y: STRIP_A11Y }, { ...NEUTRAL_NODE, tag: 'div', cls: 'shell' }, { ...NEUTRAL_NODE, tag: 'ecco-mode-shell', isHost: true, display: 'block' }] },
     alerts: [line('a1'), { ...line('a1'), part: 'action', text: 'What to do: wait.', icon: null, textBox: R(60, 112, 200, 20) }],
     bodies: { production: { shown: true, rect: R(12, 150, 390, 200) }, geek: { shown: false, rect: R(0, 0, 0, 0) } },
     ...over,
@@ -128,6 +133,67 @@ test('a strip that is hidden, moved, shrunk, faded, filtered, clipped, covered o
   // the expected alerts count is checked when the data calls for a number
   assert.deepEqual(failing({ ...healthy(), expectAlerts: 1, alerts: [{ ...healthy().alerts[0] }] }), []);
   assert.notDeepEqual(failing({ ...healthy(), expectAlerts: 3 }), []);
+});
+
+test('review round 4: a strip that is hidden from, or muted for, assistive technology fails whichever way it was done, and the two modes are compared on it (negative controls; reviewer mutants J2, J5)', () => {
+  const withA11y = (patch) => { const m = healthy(); const a = { ...m.strip.a11y, ...patch }; m.strip = { ...m.strip, a11y: a, chain: [{ ...m.strip.chain[0], a11y: a }, ...m.strip.chain.slice(1)] }; return m; };
+  const withAncestor = (i, patch) => { const m = healthy(); m.strip.chain = m.strip.chain.map((c, k) => (k === i ? { ...c, a11y: { ...c.a11y, ...patch } } : c)); return m; };
+  const cases = {
+    'J2 aria-hidden true on the strip': withA11y({ 'aria-hidden': 'true' }),
+    'aria-hidden false on the strip (present at all)': withA11y({ 'aria-hidden': 'false' }),
+    'J5 aria-live off': withA11y({ 'aria-live': 'off' }),
+    'aria-live removed': withA11y({ 'aria-live': null }),
+    'aria-live assertive': withA11y({ 'aria-live': 'assertive' }),
+    'role presentation': withA11y({ role: 'presentation' }),
+    'role none': withA11y({ role: 'none' }),
+    'role removed': withA11y({ role: null }),
+    'label empty': withA11y({ 'aria-label': '' }),
+    'label removed': withA11y({ 'aria-label': null }),
+    'label of one letter': withA11y({ 'aria-label': 'x' }),
+    'inert on the strip': withA11y({ inert: '' }),
+    'hidden on the strip': withA11y({ hidden: '' }),
+    'aria-busy on the strip': withA11y({ 'aria-busy': 'true' }),
+    'aria-relevant on the strip': withA11y({ 'aria-relevant': 'removals' }),
+    'aria-hidden on the shell': withAncestor(1, { 'aria-hidden': 'true' }),
+    'inert on the shell': withAncestor(1, { inert: '' }),
+    'aria-hidden on the host': withAncestor(2, { 'aria-hidden': 'true' }),
+    'inert on the host': withAncestor(2, { inert: '' }),
+    'an ancestor that was not measured': (() => { const m = healthy(); m.strip.chain = m.strip.chain.map((c, k) => (k === 1 ? { ...c, a11y: undefined } : c)); return m; })(),
+    'the strip that was not measured': { ...healthy(), strip: { ...healthy().strip, a11y: undefined } },
+    'an alert line with role presentation': withLine({ role: 'presentation', lineA11y: { ...NO_A11Y, role: 'presentation' } }),
+    'a critical alert that is only a status': withLine({ role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } }),
+    'an alert line with aria-hidden': withLine({ lineA11y: { ...NO_A11Y, role: 'alert', 'aria-hidden': 'true' } }),
+    'an alert line with inert': withLine({ lineA11y: { ...NO_A11Y, role: 'alert', inert: '' } }),
+    'an alert line whose role was not measured': withLine({ role: undefined }),
+  };
+  assert.ok(Object.keys(cases).length >= 25);
+  for (const [what, m] of Object.entries(cases)) assert.notDeepEqual(failing(m), [], `the check accepted: ${what}`);
+  assert.ok(failing(cases['J2 aria-hidden true on the strip']).some((n) => /not shut out/.test(n)));
+  assert.ok(failing(cases['J5 aria-live off']).some((n) => /announced politely/.test(n)));
+  assert.ok(failing(cases['a critical alert that is only a status']).some((n) => /its role is alert/.test(n)));
+  // the quiet line is plain text: a role on it is a change too
+  const quiet = healthy();
+  quiet.alerts = [{ ...quiet.alerts[0], id: 'quiet', quiet: true, severity: null, role: null, lineA11y: NO_A11Y, text: 'No active alerts.' }];
+  assert.deepEqual(failing(quiet), []);
+  assert.notDeepEqual(failing({ ...quiet, alerts: [{ ...quiet.alerts[0], role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } }] }), []);
+  // the two modes are compared: each state alone could be acceptable, but they must be identical (a label that changes with the mode, a role that does, an ancestor that does)
+  const p = healthy();
+  const geekOf = (patch) => healthy({ mode: 'geek', shell: { mode: 'geek' }, ...patch });
+  assert.deepEqual(compareModes(p, geekOf({})).filter((c) => !c.ok), []);
+  const stripA = (patch) => ({ ...p.strip, a11y: { ...p.strip.a11y, ...patch } });
+  for (const [what, g] of Object.entries({
+    'J2 aria-hidden in Geek Mode': geekOf({ strip: stripA({ 'aria-hidden': 'true' }) }),
+    'J5 aria-live off in Geek Mode': geekOf({ strip: stripA({ 'aria-live': 'off' }) }),
+    'a different label in Geek Mode': geekOf({ strip: stripA({ 'aria-label': 'Safety alerts' }) }),
+    'a different role in Geek Mode': geekOf({ strip: stripA({ role: 'group' }) }),
+  })) assert.ok(compareModes(p, g).some((c) => !c.ok && /same accessibility attributes/.test(c.name)), `the pair was accepted: ${what}`);
+  const shellHidden = geekOf({ strip: { ...p.strip, chain: p.strip.chain.map((c, k) => (k === 1 ? { ...c, a11y: { ...c.a11y, 'aria-hidden': 'true' } } : c)) } });
+  assert.ok(compareModes(p, shellHidden).some((c) => !c.ok && /everything around the strip/.test(c.name)));
+  const lineRole = geekOf({ alerts: p.alerts.map((a) => ({ ...a, role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } })) });
+  assert.ok(compareModes(p, lineRole).some((c) => !c.ok && /every alert line/.test(c.name)));
+  // a measurement from before round 4 (no accessibility attributes at all) is not a pass
+  const old = healthy({ strip: { ...p.strip, a11y: undefined, chain: p.strip.chain.map(({ a11y, ...rest }) => rest) } });
+  assert.ok(compareModes(old, old).some((c) => !c.ok), 'both modes unmeasured is not a pass');
 });
 
 test('Geek Mode: the Geek body must be shown and below the strip; a strip pushed below it fails', () => {

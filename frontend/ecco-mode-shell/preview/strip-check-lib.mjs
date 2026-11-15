@@ -66,6 +66,10 @@ const px = (s) => {
 /** What an ancestor (or the strip) may not do to the strip. Each is the browser's computed value: "none" is a computed value, not an absence. */
 const NEUTRAL = Object.freeze({ transform: 'none', rotate: 'none', scale: 'none', translate: 'none', filter: 'none', clipPath: 'none', maskImage: 'none', backdropFilter: 'none' });
 
+/** Attributes that shut a subtree out of the accessibility tree, whatever their value (aria-hidden="false" is still a decision nobody made). */
+const A11Y_BLOCKERS = Object.freeze(['aria-hidden', 'inert', 'hidden']);
+const present = (v) => v !== null && v !== undefined;
+
 /**
  * The checks for one measured state. A state is { id, scenario, theme, vars, mode, width, viewport, host, shell, strip, alerts, bodies }, as built by
  * strip-check.html. Returns [{ name, ok, detail }] (every check is reported, so a pass shows what was looked at).
@@ -104,6 +108,17 @@ export function evaluateState(m) {
   const contained = bad((c) => c.contain && c.contain !== 'none' && /size|paint|strict|content/.test(c.contain));
   add('no size or paint containment on the strip or its ancestors', contained.length === 0, contained.join(', '));
 
+  // review round 4 (reviewer mutants J2 and J5): what a screen reader gets. An attribute that is absent is null; a chain entry with no `a11y` was not measured, which fails.
+  const unmeasured = bad((c) => !c.a11y);
+  const shutOut = bad((c) => c.a11y && A11Y_BLOCKERS.some((k) => present(c.a11y[k])));
+  add('assistive technology is not shut out: no aria-hidden, inert or hidden attribute (of any value) on the strip or on any ancestor, in the shell, the host or the page',
+    unmeasured.length === 0 && shutOut.length === 0, unmeasured.length ? `not measured: ${unmeasured.join(', ')}` : shutOut.map((x) => `${x} hides it`).join(', '));
+  const sa = s.a11y || null;
+  add('the strip is a labelled region announced politely: role region, aria-live polite, a label of at least 5 characters',
+    sa && sa.role === 'region' && sa['aria-live'] === 'polite' && typeof sa['aria-label'] === 'string' && sa['aria-label'].trim().length >= 5,
+    `role ${sa && sa.role}, aria-live ${sa && sa['aria-live']}, label ${JSON.stringify(sa && sa['aria-label'])}`);
+  add('the strip is not muted by aria-busy or aria-relevant', sa && !present(sa['aria-busy']) && !present(sa['aria-relevant']), `aria-busy ${sa && sa['aria-busy']}, aria-relevant ${sa && sa['aria-relevant']}`);
+
   const al = m.alerts || [];
   add('the strip shows at least one line (an alert or the quiet "no active alerts" line)', al.length >= 1, 'the strip is empty');
   if (m.expectAlerts !== undefined && m.expectAlerts !== null) add(`the strip shows ${m.expectAlerts} alert line(s) (the alerts the data calls for)`, al.filter((a) => !a.quiet).length === m.expectAlerts, `${al.filter((a) => !a.quiet).length} shown`);
@@ -135,6 +150,13 @@ export function evaluateState(m) {
     }
     add(`${who}: nothing covers it (the element at its centre is inside the strip)`, a.hit && a.hit.inside === true, `the top element there is ${a.hit && a.hit.tag}`);
     add(`${who}: it has text`, typeof a.text === 'string' && a.text.trim().length >= 3, `text ${JSON.stringify(a.text)}`);
+    if (a.part === 'head') {
+      // a critical alert is role alert, any other alert is role status, the quiet line is plain text; none of them is hidden from assistive technology
+      const want = a.quiet ? null : a.severity === 'critical' ? 'alert' : 'status';
+      const got = a.role === undefined ? undefined : a.role;
+      add(`${who}: its role is ${want === null ? 'none (the quiet line is plain text)' : want} and it is not hidden from assistive technology`,
+        got !== undefined && got === want && a.lineA11y && !A11Y_BLOCKERS.some((k) => present(a.lineA11y[k])), `role ${JSON.stringify(got)}, attributes ${JSON.stringify(a.lineA11y)}`);
+    }
   }
   const b = m.bodies || {};
   if (m.mode === 'geek') {
@@ -159,6 +181,14 @@ export function compareModes(prod, geek) {
   const ga = geek.alerts || [];
   add('the strip shows the same lines in both modes (count and text)', pa.length === ga.length && pa.every((a, i) => a.text === ga[i].text && a.id === ga[i].id), `Production ${pa.length}, Geek ${ga.length}`);
   add('and each line is the same box in both modes', pa.length === ga.length && pa.every((a, i) => a.textBox && ga[i].textBox && same(a.textBox, ga[i].textBox)), 'a line moved or changed size between the modes');
+  // review round 4: the accessibility attributes are identical in both modes, on the strip, on everything around it and on every line (so a mode-dependent aria-hidden,
+  // aria-live, role or label is a failure even where each mode alone looks acceptable)
+  const ps = prod.strip || {};
+  const gs = geek.strip || {};
+  const js = (v) => JSON.stringify(v === undefined ? null : v);
+  add('the strip carries the same accessibility attributes in both modes (role, aria-live, label, aria-hidden, inert, hidden ...)', ps.a11y !== undefined && js(ps.a11y) === js(gs.a11y), `Production ${js(ps.a11y)}, Geek ${js(gs.a11y)}`);
+  add('and so does everything around the strip (the shell, the host, the page)', Array.isArray(ps.chain) && js((ps.chain || []).map((c) => c.a11y)) === js((gs.chain || []).map((c) => c.a11y)), 'an ancestor of the strip has other accessibility attributes in the other mode');
+  add('and every alert line has the same role and attributes in both modes', pa.length === ga.length && pa.every((a, i) => a.role === ga[i].role && js(a.lineA11y) === js(ga[i].lineA11y)), 'a line has another role or attributes in the other mode');
   return out;
 }
 

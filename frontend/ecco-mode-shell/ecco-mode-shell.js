@@ -256,6 +256,9 @@ const RULES = [
   ['MAC address', null, /\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/],
   // the dotted form (three groups of four) that network equipment writes; at least one letter, so a version such as 2026.1114.0900 is not taken for one
   ['MAC address (dotted)', '.', /\b(?=[0-9a-f.]*[a-f])[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b/i],
+  // the six bytes with a space between them ("aa bb cc dd ee ff"), as some tools and hex dumps print one (review round 4); at least one letter, so six two-digit numbers
+  // are not taken for one. The same pattern as the Python scanner's MAC_SPACED. An all-digit address written this way is indistinguishable from six numbers and stays shown.
+  ['MAC address (spaced)', ' ', /(?<![0-9a-f])(?=[0-9a-f ]{0,16}[a-f])(?:[0-9a-f]{2} ){5}[0-9a-f]{2}(?![0-9a-f])/i],
   ['coordinates', null, /(?:^|[^\d.])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])/],
   ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
   ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],

@@ -444,6 +444,116 @@ test('AC6 the strip ages with the clock: a stale source raises nothing by itself
   assert.equal(el.snapshot.rows.find((r) => r.id === 'S01').status, 'STALE', 'an hour later the status sensor is stale');
 });
 
+// ---- review round 4 (reviewer mutants J2 and J5): what a screen reader gets from the strip is the same in both modes ----
+// The mode switch is a presentation toggle; a safety alert must stay announced and reachable in BOTH. aria-hidden, inert, hidden, role presentation or none, an
+// aria-live that is not polite and an empty label would each silence or remove the strip for assistive technology while the pixels look right.
+const A11Y_NAME = /^(?:role|aria-.+|hidden|inert|style|class|slot|tabindex|contenteditable|popover)$/i;
+const attrMap = (n, only = null) => Object.fromEntries([...n.attrs].filter(([k]) => !only || only.test(k)).sort(([a], [b]) => (a < b ? -1 : 1)));
+function stripAccess(el) {
+  const strip = q(el, '[data-ecco-alert-strip]');
+  const chain = [];
+  for (let n = strip.parentNode; n && n.nodeType === 1; n = n.parentNode) chain.push({ tag: n.tagName, a11y: attrMap(n, A11Y_NAME) });
+  chain.push({ tag: 'host', a11y: attrMap(el, A11Y_NAME) });
+  const sub = [];
+  const walk = (n) => {
+    for (const c of n.childNodes) {
+      if (c.nodeType !== 1) continue;
+      sub.push({ tag: c.tagName, a11y: attrMap(c, A11Y_NAME) });
+      walk(c);
+    }
+  };
+  walk(strip);
+  const lines = qa(el, '[data-ecco-alert-strip] .alert').map((n) => ({ id: n.getAttribute('data-alert-id'), severity: n.getAttribute('data-severity'), role: n.getAttribute('role') }));
+  return { strip: attrMap(strip), chain, sub, lines };
+}
+/** What must hold for a person using a screen reader, in either mode. */
+function expectAccessible(s, where) {
+  assert.equal(s.strip.role, 'region', `${where}: the strip is a region`);
+  assert.equal(s.strip['aria-live'], 'polite', `${where}: the strip is announced politely`);
+  assert.ok(typeof s.strip['aria-label'] === 'string' && s.strip['aria-label'].trim().length >= 5, `${where}: the strip has a label`);
+  for (const bad of ['aria-hidden', 'inert', 'hidden', 'style']) assert.equal(bad in s.strip, false, `${where}: ${bad} on the strip`);
+  assert.equal(s.strip['data-alert-count'] !== undefined, true, `${where}: the strip carries its count`);
+  for (const c of s.chain) {
+    for (const bad of ['aria-hidden', 'inert', 'hidden', 'style', 'role', 'aria-live', 'aria-label']) assert.equal(bad in c.a11y, false, `${where}: ${bad} on ${c.tag}, which holds the strip`);
+  }
+  for (const n of s.sub) {
+    for (const bad of ['inert', 'hidden', 'style']) assert.equal(bad in n.a11y, false, `${where}: ${bad} inside the strip (${n.tag})`);
+    if ('aria-hidden' in n.a11y) assert.ok(n.tag === 'svg' && n.a11y['aria-hidden'] === 'true', `${where}: aria-hidden inside the strip only on a decorative icon, not on ${n.tag}`);
+    assert.ok(!['presentation', 'none'].includes(n.a11y.role), `${where}: ${n.tag} loses its role`);
+    assert.equal('aria-live' in n.a11y, false, `${where}: aria-live inside the strip (${n.tag})`);
+  }
+  assert.ok(s.lines.length >= 1, `${where}: the strip has a line`);
+  for (const l of s.lines) assert.equal(l.role, l.id ? (l.severity === 'critical' ? 'alert' : 'status') : null, `${where}: the role of ${l.id || 'the quiet line'}`);
+}
+
+test('AC6 [r4] a screen reader gets the strip the same way in both modes: role, aria-live, label, no aria-hidden or inert on it or around it, the same roles on every line (reviewer mutants J2, J5)', () => {
+  const scenarios = { healthy: undefined, 'critical, warning and notice together': (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); }, ...Object.fromEntries(Object.entries(TRIGGER)) };
+  assert.ok(Object.keys(scenarios).length >= 9);
+  for (const [name, mutate] of Object.entries(scenarios)) {
+    const el = mount({ states: miniStates(mutate) });
+    const p0 = stripAccess(el);
+    expectAccessible(p0, `${name}, Production`);
+    geek(el);
+    const g0 = stripAccess(el);
+    expectAccessible(g0, `${name}, Geek`);
+    assert.deepEqual(g0, p0, `${name}: the strip's attributes, its ancestors' and its lines' differ between Production and Geek Mode`);
+    // an update, a clock tick and a theme change in Geek Mode, then back, then again: still the same, still accessible
+    el.hass = makeHass(miniStates(mutate), { themes: { darkMode: true } });
+    el._tick();
+    const g1 = stripAccess(el);
+    expectAccessible(g1, `${name}, Geek after an update`);
+    assert.deepEqual(g1, p0, `${name}: after an update`);
+    production(el);
+    assert.deepEqual(stripAccess(el), p0, `${name}: back in Production`);
+    geek(el);
+    production(el);
+    geek(el);
+    assert.deepEqual(stripAccess(el), p0, `${name}: after switching again`);
+    el.hass = makeHass(miniStates(), { themes: { darkMode: false } });
+    expectAccessible(stripAccess(el), `${name}, after the condition cleared`);
+  }
+});
+
+test('AC6 [r4] the accessibility check has teeth: each way of hiding or muting the strip, planted on a live element, is reported (negative controls)', () => {
+  expectAccessible(stripAccess(mount({ states: miniStates(TRIGGER.A01) })), 'control: the untouched card passes');
+  const plants = {
+    'aria-hidden on the strip': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('aria-hidden', 'true'),
+    'aria-hidden false on the strip': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('aria-hidden', 'false'),
+    'aria-live off': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('aria-live', 'off'),
+    'aria-live removed': (e) => q(e, '[data-ecco-alert-strip]').removeAttribute('aria-live'),
+    'aria-live assertive': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('aria-live', 'assertive'),
+    'role presentation': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('role', 'presentation'),
+    'role removed': (e) => q(e, '[data-ecco-alert-strip]').removeAttribute('role'),
+    'label emptied': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('aria-label', ''),
+    'label removed': (e) => q(e, '[data-ecco-alert-strip]').removeAttribute('aria-label'),
+    'inert on the strip': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('inert', ''),
+    'hidden on the strip': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('hidden', ''),
+    'a style attribute on the strip': (e) => q(e, '[data-ecco-alert-strip]').setAttribute('style', 'height:0'),
+    'aria-hidden on the shell': (e) => q(e, '[data-ecco-shell]').setAttribute('aria-hidden', 'true'),
+    'inert on the shell': (e) => q(e, '[data-ecco-shell]').setAttribute('inert', ''),
+    'role presentation on the shell': (e) => q(e, '[data-ecco-shell]').setAttribute('role', 'presentation'),
+    'aria-hidden on the host': (e) => e.setAttribute('aria-hidden', 'true'),
+    'inert on the host': (e) => e.setAttribute('inert', ''),
+    'hidden on an alert line': (e) => qa(e, '[data-ecco-alert-strip] .alert')[0].setAttribute('hidden', ''),
+    'aria-hidden on an alert line': (e) => qa(e, '[data-ecco-alert-strip] .alert')[0].setAttribute('aria-hidden', 'true'),
+    'a critical alert that is only a status': (e) => qa(e, '[data-ecco-alert-strip] [data-severity="critical"]')[0].setAttribute('role', 'status'),
+    'an alert line with no role': (e) => qa(e, '[data-ecco-alert-strip] .alert')[0].removeAttribute('role'),
+    'aria-hidden on the alert text': (e) => qa(e, '[data-ecco-alert-strip] .alert-head')[0].setAttribute('aria-hidden', 'true'),
+    'aria-live inside the strip': (e) => qa(e, '[data-ecco-alert-strip] .alert')[0].setAttribute('aria-live', 'off'),
+  };
+  for (const [what, plant] of Object.entries(plants)) {
+    const e = mount({ states: miniStates(TRIGGER.A01) });
+    plant(e);
+    assert.throws(() => expectAccessible(stripAccess(e), what), undefined, `not reported: ${what}`);
+  }
+  // a change that leaves each state acceptable on its own (a different label, still a label) is caught by the comparison between the modes
+  const e = mount({ states: miniStates(TRIGGER.A01) });
+  const p = stripAccess(e);
+  geek(e);
+  q(e, '[data-ecco-alert-strip]').setAttribute('aria-label', 'Safety and status alert');
+  assert.notDeepEqual(stripAccess(e), p, 'a changed label, still a label, differs between the modes');
+});
+
 // ---------------------------------------------------------------------------------------------------------------------------
 // AC7: one snapshot for everything
 // ---------------------------------------------------------------------------------------------------------------------------

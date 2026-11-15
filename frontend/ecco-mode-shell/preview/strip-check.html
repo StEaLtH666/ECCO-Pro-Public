@@ -85,6 +85,10 @@ async function main() {
   const shadowHost = (n) => { const r = n.getRootNode && n.getRootNode(); return r && r.host ? r.host : null; };
   const up = (n) => n.parentElement || shadowHost(n);
   const cs = (n) => getComputedStyle(n);
+  // review round 4: the attributes that decide whether assistive technology gets the strip (a reviewer's mutants hid it with aria-hidden and muted it with aria-live off
+  // while every pixel stayed right). null = the attribute is absent. The browser's own accessibility tree is not reachable from a --dump-dom page, so the attributes are the evidence.
+  const A11Y = ['role', 'aria-hidden', 'aria-live', 'aria-label', 'aria-atomic', 'aria-relevant', 'aria-busy', 'inert', 'hidden'];
+  const a11yOf = (n) => Object.fromEntries(A11Y.map((k) => [k, n.getAttribute(k)]));
 
   function measure(el, spec) {
     const root = el.shadowRoot;
@@ -100,10 +104,11 @@ async function main() {
     if (!strip) return m;
     m.strip.rect = rectOf(strip.getBoundingClientRect());
     m.strip.count = strip.getAttribute('data-alert-count');
+    m.strip.a11y = a11yOf(strip);
     m.strip.chain = [];
     for (let n = strip; n; n = up(n)) {
       const c = cs(n);
-      m.strip.chain.push({ tag: n.localName, cls: typeof n.className === 'string' ? n.className : '', isHost: n === el, display: c.display, visibility: c.visibility, contentVisibility: c.contentVisibility,
+      m.strip.chain.push({ tag: n.localName, cls: typeof n.className === 'string' ? n.className : '', isHost: n === el, a11y: a11yOf(n), display: c.display, visibility: c.visibility, contentVisibility: c.contentVisibility,
         opacity: Number(c.opacity), transform: c.transform, rotate: c.rotate, scale: c.scale, translate: c.translate, filter: c.filter, clipPath: c.clipPath, maskImage: c.maskImage || c.webkitMaskImage || 'none',
         backdropFilter: c.backdropFilter, overflowX: c.overflowX, overflowY: c.overflowY, contain: c.contain, rect: rectOf(n.getBoundingClientRect()) });
     }
@@ -125,7 +130,8 @@ async function main() {
         const stack = root.elementsFromPoint ? root.elementsFromPoint(cx, cy) : [];
         const top = stack[0] || null;
         const ic = icon ? cs(icon) : null;
-        m.alerts.push({ id: line.getAttribute('data-alert-id') || 'quiet', quiet, part: part === head ? 'head' : 'action', text: part.textContent, textBox: rectOf(tb), fontSize: c.fontSize, lineHeight: c.lineHeight,
+        m.alerts.push({ id: line.getAttribute('data-alert-id') || 'quiet', quiet, severity: line.getAttribute('data-severity'), role: line.getAttribute('role'), lineA11y: a11yOf(line),
+          part: part === head ? 'head' : 'action', text: part.textContent, textBox: rectOf(tb), fontSize: c.fontSize, lineHeight: c.lineHeight,
           color: c.color, textFill: c.webkitTextFillColor, bgLayers: layers, hit: { inside: Boolean(top && strip.contains(top)), tag: top ? top.localName + (top.className && typeof top.className === 'string' ? `.${top.className}` : '') : null },
           icon: part === head && icon ? { color: ic.color, rect: rectOf(icon.getBoundingClientRect()) } : null });
       }

@@ -2,7 +2,7 @@
 //
 //   node preview/check-strip.mjs                          check the card as it is
 //   node preview/check-strip.mjs --card <file>            check a copy of ecco-mode-shell.js instead
-//   node preview/check-strip.mjs --selftest               prove the check is not vacuous: it must PASS the card and FAIL each of 25 deliberately broken copies
+//   node preview/check-strip.mjs --selftest               prove the check is not vacuous: it must PASS the card and FAIL each of the deliberately broken copies (31 since round 4)
 //   node preview/check-strip.mjs --json                   print the full report as JSON
 //   node preview/check-strip.mjs --require                exit 3, not 0, when no browser is found (for a pipeline that must not skip silently)
 //   ECCO_CHROME=<path to chrome.exe or msedge.exe>        use this browser
@@ -117,6 +117,7 @@ async function check(browser, port, useCard) {
 }
 
 /** The deliberately broken copies of the card for --selftest: [id, text to find in the stylesheet or the source, replacement]. Each one must make the check FAIL. */
+const GEEK_LINE = "    ui.geekBody.hidden = mode !== 'geek';";
 const ANCHOR = '.alert-head{font-weight:700}';
 const css = (rule) => [ANCHOR, `${ANCHOR}\n${rule}`];
 export const BROKEN = Object.freeze([
@@ -145,6 +146,13 @@ export const BROKEN = Object.freeze([
   ['an inline style on the strip', "'aria-label': 'Safety and status alerts', 'aria-live': 'polite' });", "'aria-label': 'Safety and status alerts', 'aria-live': 'polite', style: 'height:0;overflow:hidden' });"],
   ['the strip hidden by the code in Geek Mode', "    ui.geekBody.hidden = mode !== 'geek';", "    ui.geekBody.hidden = mode !== 'geek';\n    ui.strip.hidden = mode === 'geek';"],
   ['only the first alert shown in Geek Mode', "    ui.geekBody.hidden = mode !== 'geek';", "    ui.geekBody.hidden = mode !== 'geek';\n    renderAlertStrip(this.ownerDocument, ui.strip, mode === 'geek' ? this._alerts.slice(0, 1) : this._alerts);"],
+  // review round 4: the ARIA attributes that pixels cannot show (reviewer mutants J2 and J5 survived every offline suite and the round 3 browser check, which looked only at the pixels)
+  ['J2 aria-hidden on the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');`],
+  ['J5 aria-live off in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('aria-live', mode === 'geek' ? 'off' : 'polite');`],
+  ['aria-hidden on the shell that holds the strip, in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    ui.shell.setAttribute('aria-hidden', mode === 'geek' ? 'true' : 'false');`],
+  ['inert on the card element in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') this.setAttribute('inert', '');`],
+  ['role presentation on the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('role', mode === 'geek' ? 'presentation' : 'region');`],
+  ['every alert line given role presentation (both modes)', "role: critical ? 'alert' : 'status' })", "role: 'presentation' })"],
 ]);
 
 async function main() {

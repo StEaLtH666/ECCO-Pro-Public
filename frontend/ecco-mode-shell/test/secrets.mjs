@@ -65,6 +65,16 @@ export const SECRET_VALUES_R3 = Object.freeze([
   { label: 'pw equals value, quoted', value: j('db-p', 'w="hun', 'ter22x"') },
 ]);
 
+/**
+ * Review round 4: a MAC address written with spaces between the six bytes (the shape a reviewer's probe found shown). Its own list for the same reason as
+ * SECRET_VALUES_R3: the older tests address the earlier lists by position. hostileAttributes() and forbiddenStrings() carry it.
+ */
+export const SECRET_VALUES_R4 = Object.freeze([
+  { label: 'MAC address with spaces, upper case', value: j('AA BB', ' CC DD', ' EE FF') },
+  { label: 'MAC address with spaces, lower case', value: j('a1 b2 ', 'c3 d4 ', 'e5 f6') },
+  { label: 'MAC address with spaces inside a sentence', value: j('seen on aa 1b cc ', 'dd e5 07', ' today') },
+]);
+
 /** Key names that must withhold their value whatever it looks like; each value is a unique marker. */
 export const SECRET_KEYS = Object.freeze([
   'token', 'api_key', 'apiKey', 'password', 'passwd', 'secret', 'authorization', 'bearer', 'credential', 'credentials',
@@ -103,6 +113,9 @@ export function hostileAttributes() {
     attrs[`note_r3_${i}`] = s.value;
   });
   for (const k of SECRET_KEYS_R3) attrs[k] = KEY_MARKER(k);
+  SECRET_VALUES_R4.forEach((s, i) => {
+    attrs[`note_r4_${i}`] = s.value;
+  });
   attrs.byname = {};
   SECRET_KEY_NAMES.forEach((n) => {
     attrs.byname[n] = 'under-secret-key-name';
@@ -119,6 +132,7 @@ export function forbiddenStrings() {
   }
   for (const k of SECRET_KEYS) out.add(KEY_MARKER(k));
   for (const s of SECRET_VALUES_R3) out.add(s.value);
+  for (const s of SECRET_VALUES_R4) out.add(s.value);
   for (const k of SECRET_KEYS_R3) out.add(KEY_MARKER(k));
   for (const m of ['tokens-list-1', 'tokens-list-2', 'creduser', 'credpw', 'siteowner']) out.add(KEY_MARKER(m));
   for (const n of SECRET_KEY_NAMES) out.add(n);
