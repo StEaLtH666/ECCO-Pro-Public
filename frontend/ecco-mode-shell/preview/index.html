@@ -5,21 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ECCO Mode Shell preview</title>
 <!--
-  Development preview for ecco-mode-shell.js. It runs the real card against a stand-in `hass` object that holds only
-  `states`, `locale` and `themes`, built from the SYNTHETIC test fixtures read in place (../test/fixtures). The card has no
-  write path, so there is nothing to log or reject. The two child cards on this page are demo stand-ins defined below: the
-  "advice" card only reads hass.states, the "pause" tile is a local no-op that stands in for the dashboard's real pause
-  tile (it never touches hass).
+  Development preview for ecco-mode-shell.js. It runs the REAL card against the REAL Intelligence catalogue
+  (../catalogue/intelligence.catalogue.json) and the SYNTHETIC state fixtures written for it (../test/fixtures/intelligence.states.*.json,
+  noise.states.json, hostile.states.json), all read in place and never copied. The card is given a stand-in `hass` object that holds only
+  `states`, `locale` and `themes`. The card has no write path, so there is nothing to log or reject.
 
-  Browsers refuse ES module imports and fetches from file:// pages, so serve the REPOSITORY ROOT (the fixtures live in the
-  card folder) on the loopback address, then open the preview:
+  The always-visible child is the REAL ECCO Intelligence card (../../ecco-intelligence-card/ecco-intelligence-card.js) with the same
+  entity map as the dashboard. Two things are demo stand-ins because Home Assistant's own cards do not exist offline: the "Watchdog and
+  status" entities card and the pause tile (a local no-op that never touches hass).
+
+  Fixture timestamps are fictional (2030). The preview moves every timestamp of a fixture by one constant so that the fixture is read
+  "now" the way its reference clock reads it (its ages are kept), which lets the real Intelligence card and the shell agree on the time.
+  Ages then grow while the page stays open, exactly as live data would, so a healthy fixture turns stale after twenty minutes.
+
+  Browsers refuse ES module imports and fetches from file:// pages, so serve the REPOSITORY ROOT on the loopback address, then open the preview:
 
       python -m http.server 8765 --bind 127.0.0.1
-      http://127.0.0.1:8765/frontend/ecco-mode-shell/preview/?s=normal&theme=dark
+      http://127.0.0.1:8765/frontend/ecco-mode-shell/preview/?s=healthy&theme=dark
 
-  Query: s = scenario (normal, stale, down, alert, large, hostile, invalid, nocatalogue), theme = dark | light, w = card width
-  in px, mode = geek (clicks the Geek button after load, as a user would), expand = an entity id to open, raw = 1 to open its raw
-  view, q = text to type into the search, chrome = 0 hides the option panel (for screenshots). No network, no CDN, no fonts.
+  Query: s = scenario (healthy, mixed, stale, unavailable, self-test-failed, paused, watchdog-stale, extras, alerts, decoys, large, hostile,
+  invalid, nocatalogue), theme = dark | light, w = card width in px, mode = geek (clicks the Geek button after load, as a user would),
+  expand = an entity id to open, raw = 1 to open its raw view, q = text to type into the search, chrome = 0 hides the option panel (for
+  screenshots). No network, no CDN, no fonts.
 -->
 <style>
   :root { color-scheme: dark; }
@@ -35,12 +42,12 @@
   #stage { margin: 0 12px; display: grid; gap: 12px; }
   #log { margin: 10px 12px 0; font: 12px/1.4 ui-monospace, Consolas, monospace; opacity: 0.85; white-space: pre-wrap; }
   #err { margin: 12px; color: #ff8a80; white-space: pre-wrap; }
-  ecco-demo-advice, ecco-demo-pause { display: block; }
+  ecco-demo-status, ecco-demo-pause { display: block; }
 </style>
 </head>
 <body class="dark">
 <div class="wrap">
-  <div class="panel" id="scen" role="group" aria-label="Scenario"><span>Scenario (synthetic)</span></div>
+  <div class="panel" id="scen" role="group" aria-label="Scenario"><span>Scenario (real catalogue, synthetic fixtures)</span></div>
   <div class="panel" id="opts" role="group" aria-label="Options"><span>Options</span></div>
   <div id="stage"></div>
   <div id="log" aria-live="polite"></div>
@@ -48,51 +55,57 @@
 </div>
 <script type="module">
 import '../ecco-mode-shell.js';
+import { DEFAULT_ENTITIES } from '../../ecco-intelligence-card/ecco-intelligence-card.js'; // registers the REAL card
 
 const FX = '../test/fixtures/';
-const SCENARIOS = ['normal', 'stale', 'down', 'alert', 'large', 'hostile', 'invalid', 'nocatalogue'];
+const CATALOGUE_URL = '../catalogue/intelligence.catalogue.json';
+// scenario -> the fixture it starts from (the names are those of intelligence.states.meta.json) and what it changes
+const SCENARIOS = {
+  healthy: { fixture: 'healthy' }, mixed: { fixture: 'mixed' }, stale: { fixture: 'stale' }, unavailable: { fixture: 'unavailable' },
+  'self-test-failed': { fixture: 'self-test-failed' }, paused: { fixture: 'paused' }, 'watchdog-stale': { fixture: 'watchdog-stale' },
+  extras: { fixture: 'extras' }, alerts: { fixture: 'healthy' }, decoys: { fixture: 'healthy' }, large: { fixture: 'healthy' },
+  hostile: { fixture: 'healthy' }, invalid: { fixture: 'healthy' }, nocatalogue: { fixture: 'healthy' },
+};
 const q = new URLSearchParams(location.search);
 const state = {
-  s: SCENARIOS.includes(q.get('s')) ? q.get('s') : 'normal',
+  s: Object.prototype.hasOwnProperty.call(SCENARIOS, q.get('s')) ? q.get('s') : 'healthy',
   theme: q.get('theme') === 'light' ? 'light' : 'dark',
   w: Number(q.get('w')) || 0,
 };
 if (q.get('chrome') === '0') { document.getElementById('scen').hidden = true; document.getElementById('opts').hidden = true; }
 const log = (t) => { document.getElementById('log').textContent = t; };
 
-// ---- two demo child cards (stand-ins for the real Intelligence card and its pause tile) ----
-class DemoAdvice extends HTMLElement {
+// ---- two demo stand-ins for Home Assistant's own cards (the real ECCO Intelligence card is used as it is) ----
+class DemoStatus extends HTMLElement {
   setConfig(c) { this._c = c; }
   set hass(h) {
     const s = h && h.states ? h.states : {};
-    const v = (id) => (s[id] && s[id].state !== 'unavailable' && s[id].state !== 'unknown' ? s[id].state : 'not available');
     const box = this.shadowRoot || this.attachShadow({ mode: 'open' });
     box.replaceChildren();
     const st = document.createElement('style');
-    st.textContent = '.c{padding:14px 16px;border-radius:16px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);display:grid;gap:6px}'
-      + '.h{font-weight:700}.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}.f{display:grid}.f b{font-size:1.5rem}.f small{opacity:.75}.b{font-size:.8rem;opacity:.8}';
+    st.textContent = '.c{padding:12px 16px;border-radius:16px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);display:grid;gap:4px}'
+      + '.h{font-weight:700}.r{display:flex;justify-content:space-between;gap:10px;font-size:.9rem}.r span:last-child{opacity:.8}.b{font-size:.75rem;opacity:.7}';
     const c = document.createElement('div');
     c.className = 'c';
     const head = document.createElement('div');
     head.className = 'h';
-    head.textContent = 'ECCO Intelligence (SHADOW, advice only)';
-    const g = document.createElement('div');
-    g.className = 'g';
-    for (const [label, id, unit] of [['Charge target', 'sensor.ecco_intel_charge_target', '%'], ['Solar tomorrow', 'sensor.ecco_intel_pv_tomorrow', ' kWh'], ['Status', 'sensor.ecco_intel_status', '']]) {
-      const f = document.createElement('div');
-      f.className = 'f';
-      const b = document.createElement('b');
-      const val = v(id);
-      b.textContent = val === 'not available' ? 'not available' : `${val}${unit}`;
-      const sm = document.createElement('small');
-      sm.textContent = label;
-      f.append(b, sm);
-      g.appendChild(f);
+    head.textContent = 'Watchdog and status';
+    c.appendChild(head);
+    for (const [label, id] of [['Watchdog (fresh, recognised result)', 'binary_sensor.ecco_intel_watchdog_fresh'], ['Integration reports fresh', 'binary_sensor.ecco_intel_fresh'],
+      ['Status', 'sensor.ecco_intel_status'], ['Data quality', 'sensor.ecco_intel_data_quality']]) {
+      const r = document.createElement('div');
+      r.className = 'r';
+      const a = document.createElement('span');
+      a.textContent = label;
+      const b = document.createElement('span');
+      b.textContent = s[id] ? s[id].state : 'not available';
+      r.append(a, b);
+      c.appendChild(r);
     }
     const note = document.createElement('div');
     note.className = 'b';
-    note.textContent = 'Demo stand-in for the real Intelligence card. Advice only: nothing is applied.';
-    c.append(head, g, note);
+    note.textContent = 'Demo stand-in for the dashboard\'s entities card.';
+    c.appendChild(note);
     box.append(st, c);
   }
 }
@@ -118,52 +131,76 @@ class DemoPause extends HTMLElement {
     box.append(st, b);
   }
 }
-customElements.define('ecco-demo-advice', DemoAdvice);
+customElements.define('ecco-demo-status', DemoStatus);
 customElements.define('ecco-demo-pause', DemoPause);
 
-// ---- the mock hass ----
+// ---- the mock hass: a fixture read in place, its timestamps moved by one constant so that it is read "now" at its reference clock ----
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const iso = (ms) => new Date(ms).toISOString();
-function statesFrom(raw, now, mutate) {
+function shift(v, delta) {
+  if (typeof v === 'string') return ISO.test(v) ? iso(Date.parse(v) + delta) : v;
+  if (Array.isArray(v)) return v.map((x) => shift(x, delta));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shift(x, delta)]));
+  return v;
+}
+/** A fixture file is {entity_id: {state, attributes, last_changed, last_updated}} (or {state, attributes, age_s} for the small hostile one). */
+function statesFrom(raw, delta, now) {
   const out = {};
   for (const [id, e] of Object.entries(raw)) {
     if (id.startsWith('_')) continue;
-    out[id] = { entity_id: id, state: e.state, attributes: structuredClone(e.attributes || {}), last_changed: iso(now - (e.age_s || 0) * 1000), last_updated: iso(now - (e.age_s || 0) * 1000) };
+    const at = (key) => (typeof e[key] === 'string' ? iso(Date.parse(e[key]) + delta) : iso(now - (e.age_s || 0) * 1000));
+    out[id] = { entity_id: id, state: e.state, attributes: shift(structuredClone(e.attributes || {}), delta), last_changed: at('last_changed'), last_updated: at('last_updated') };
   }
-  if (mutate) mutate(out, now);
   return out;
 }
-const age = (s, id, secs, now) => { s[id].last_updated = iso(now - secs * 1000); s[id].last_changed = s[id].last_updated; };
 
-let cache = null;
-async function load() {
-  if (cache) return cache;
-  const [cat, st, hostile] = await Promise.all(['mini.catalogue.json', 'mini.states.json', 'hostile.states.json'].map(async (n) => (await fetch(FX + n)).json()));
-  cache = { cat, st, hostile };
-  return cache;
-}
+const cache = new Map();
+const get = async (url) => {
+  if (!cache.has(url)) cache.set(url, fetch(url).then((r) => { if (!r.ok) throw new Error(`${url}: ${r.status}`); return r.json(); }));
+  return cache.get(url);
+};
 
 async function build(name) {
-  const { cat, st, hostile } = await load();
+  const sc = SCENARIOS[name];
+  const [cat, meta] = await Promise.all([get(CATALOGUE_URL), get(`${FX}intelligence.states.meta.json`)]);
+  const m = meta.fixtures[sc.fixture];
+  const raw = await get(FX + m.file);
   const now = Date.now();
+  const delta = now - Date.parse(m.reference_now);
+  const states = statesFrom(raw, delta, now);
   let catalogue = structuredClone(cat);
-  let states = statesFrom(st, now);
-  if (name === 'stale') for (const id of Object.keys(states)) if (id.includes('ecco_intel_') && st[id].age_s < 1000) age(states, id, 1200 + (id.length % 7) * 400, now);
-  if (name === 'down') { states['sensor.ecco_intel_status'].state = 'unavailable'; states['sensor.ecco_intel_charge_target'].state = 'unknown'; delete states['binary_sensor.ecco_intel_watchdog_fresh']; }
-  if (name === 'alert') { states['sensor.ecco_intel_status'].state = 'SELF_TEST_FAILED'; states['binary_sensor.ecco_intel_watchdog_fresh'].state = 'off'; states['input_boolean.ecco_intel_paused'].state = 'on'; }
+  let note = `${m.what}`;
+  if (name === 'alerts') {
+    states['sensor.ecco_intel_status'].state = 'SELF_TEST_FAILED';
+    states['sensor.ecco_intel_status'].attributes.pause_control = 'MISSING';
+    states['binary_sensor.ecco_intel_watchdog_fresh'].state = 'off';
+    states['sensor.ecco_intel_data_quality'].state = 'DEGRADED';
+    note = 'The healthy fixture with a failed self-test, a missing pause control, the watchdog off and degraded data quality: one alert of each severity.';
+  }
+  if (name === 'decoys') {
+    Object.assign(states, statesFrom(await get(`${FX}noise.states.json`), delta, now));
+    catalogue.discover.entity_prefixes = ['sensor.synthetic_decoy_', 'device_tracker.synthetic_decoy_'];
+    note = 'The healthy fixture plus 300+ unrelated entities (never shown) and the secret-looking decoys, which the card is told to discover so that you can see them withheld.';
+  }
   if (name === 'large') {
     for (let i = 0; i < 5000; i += 1) {
       const id = `sensor.ecco_intel_synth_${String(i).padStart(5, '0')}`;
       states[id] = { entity_id: id, state: String(i), attributes: { friendly_name: `Synthetic ${i}`, unit_of_measurement: 'kWh', advice: { a: i, b: 'text' } }, last_changed: iso(now - 30000), last_updated: iso(now - 30000) };
     }
+    note = 'The healthy fixture plus 5000 generated ecco_intel_ entities: one page of rows at a time.';
   }
-  if (name === 'hostile') Object.assign(states, statesFrom(hostile, now));
-  if (name === 'invalid') { catalogue.sources[2].entity_id = 5; }
-  if (name === 'nocatalogue') catalogue = undefined;
-  return { catalogue, states };
+  if (name === 'hostile') {
+    Object.assign(states, statesFrom(await get(`${FX}hostile.states.json`), delta, now));
+    note = 'The healthy fixture plus markup, control characters and long text in names and values: all of it must stay inert text.';
+  }
+  if (name === 'invalid') { catalogue.sources[2].entity_id = 5; note = 'A corrupted catalogue: Geek Mode fails closed and says why, while the alert strip still works.'; }
+  if (name === 'nocatalogue') { catalogue = undefined; note = 'No catalogue at all.'; }
+  return { catalogue, states, note, fixture: sc.fixture, delta };
 }
 
 let el = null;
 let current = null;
+const hassOf = (states) => ({ states, locale: { language: 'en-GB' }, themes: { darkMode: state.theme === 'dark' } });
 async function show() {
   document.body.className = state.theme;
   const stage = document.getElementById('stage');
@@ -173,8 +210,9 @@ async function show() {
   current = await build(state.s);
   el = document.createElement('ecco-mode-shell');
   el.setConfig({ type: 'custom:ecco-mode-shell', view_id: 'intelligence', title: 'ECCO Intelligence', catalogue: current.catalogue, page_size: 25,
-    always: [{ type: 'custom:ecco-demo-advice' }], production: [{ type: 'custom:ecco-demo-pause' }] });
-  el.hass = { states: current.states, locale: { language: 'en-GB' }, themes: { darkMode: state.theme === 'dark' } };
+    always: [{ type: 'custom:ecco-intelligence-card', title: 'ECCO Intelligence', entities: { ...DEFAULT_ENTITIES } }, { type: 'custom:ecco-demo-status' }],
+    production: [{ type: 'custom:ecco-demo-pause' }] });
+  el.hass = hassOf(current.states);
   stage.appendChild(el);
   window.__eccoShell = el;
   // the same clicks a user would make
@@ -191,10 +229,10 @@ async function show() {
       if (rb) rb.click();
     }
   }
-  log(`Scenario ${state.s}: the card gets ${Object.keys(current.states).length} states and reads only hass.states, hass.locale and hass.themes.`);
+  log(`Scenario ${state.s}: ${current.note}\nThe card gets ${Object.keys(current.states).length} states (fixture ${current.fixture}, its timestamps moved so that it reads as now) and reads only hass.states, hass.locale and hass.themes.`);
 }
 
-function buttons(host, items, key, label) {
+function buttons(host, items, key) {
   for (const it of items) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -205,7 +243,7 @@ function buttons(host, items, key, label) {
     host.appendChild(b);
   }
 }
-buttons(document.getElementById('scen'), SCENARIOS, 's');
+buttons(document.getElementById('scen'), Object.keys(SCENARIOS), 's');
 const opts = document.getElementById('opts');
 buttons(opts, ['dark', 'light'], 'theme');
 const change = document.createElement('button');
@@ -214,10 +252,10 @@ change.textContent = 'simulate a data change';
 change.addEventListener('click', () => {
   const s = { ...current.states };
   const id = 'sensor.ecco_intel_pv_tomorrow';
-  if (s[id]) s[id] = { ...s[id], state: (Number(s[id].state) + 1).toFixed(1), last_updated: iso(Date.now()), last_changed: iso(Date.now()) };
+  if (s[id] && Number.isFinite(Number(s[id].state))) s[id] = { ...s[id], state: (Number(s[id].state) + 1).toFixed(1), last_updated: iso(Date.now()), last_changed: iso(Date.now()) };
   current.states = s;
-  el.hass = { states: s, locale: { language: 'en-GB' }, themes: { darkMode: state.theme === 'dark' } };
-  log('hass.states replaced: Solar tomorrow changed. The summary, tiles, rows and the demo advice card all follow the same snapshot.');
+  el.hass = hassOf(s);
+  log('hass.states replaced: Solar tomorrow changed. The summary, tiles, rows and the real Intelligence card all follow the same snapshot.');
 });
 opts.appendChild(change);
 function fail(e) { const p = document.getElementById('err'); p.hidden = false; p.textContent = String(e && e.stack ? e.stack : e); }

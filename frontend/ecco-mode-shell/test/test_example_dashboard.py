@@ -11,12 +11,17 @@ WITHOUT changing them.
       write-capable card type, no entities row of a writable domain (this mirrors validateChildCards)
   [4] the only write action anywhere in the example is the existing pause tile's toggle, and it is in `production`
   [5] the shell card carries no service call, script or perform-action of its own
+  [6] the example's `!include` points at the REAL catalogue of this repository (a relative path that stays inside the repository), the
+      file is what Home Assistant would load (a YAML loader that resolves the include reads exactly what a JSON loader reads), and it is
+      the catalogue of this view (schema, view id, a source for every entity the wrapped cards use)
 
 Test-only, no network, no Node. I/O: reads two repository files.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -25,6 +30,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 EXISTING = ROOT / "home-assistant" / "dashboards" / "ecco_intelligence.yaml"
 EXAMPLE = ROOT / "frontend" / "ecco-mode-shell" / "examples" / "intelligence-modes.yaml"
+CATALOGUE = ROOT / "frontend" / "ecco-mode-shell" / "catalogue" / "intelligence.catalogue.json"
 
 FAILURES: list[str] = []
 
@@ -46,6 +52,48 @@ Loader.add_constructor("!include", lambda loader, node: f"!include {loader.const
 
 def load(path: Path):
     return yaml.load(path.read_text(encoding="utf-8"), Loader=Loader)  # noqa: S506 - SafeLoader subclass
+
+
+def resolve_include(spec: str, base: Path) -> Path:
+    """Where Home Assistant looks for `!include <spec>`: relative to the YAML file that holds the tag."""
+    return (base.parent / spec[len("!include "):]).resolve()
+
+
+def make_including_loader(base: Path):
+    """A safe loader that RESOLVES `!include` the way Home Assistant does (the included file is read by the same YAML loader)."""
+
+    class Including(yaml.SafeLoader):
+        pass
+
+    def construct(loader, node):
+        target = resolve_include("!include " + loader.construct_scalar(node), base)
+        return yaml.load(target.read_text(encoding="utf-8"), Loader=Including)  # noqa: S506 - SafeLoader subclass
+
+    Including.add_constructor("!include", construct)
+    return Including
+
+
+def entity_ids_used(cards) -> set[str]:
+    """Every entity id a wrapped card names: the Intelligence card's map, entities rows, tile, and the text fallback's template."""
+    out: set[str] = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "entity" and isinstance(v, str):
+                    out.add(v)
+                elif k == "entities" and isinstance(v, dict):
+                    out.update(x for x in v.values() if isinstance(x, str))
+                elif k == "content" and isinstance(v, str):
+                    out.update(re.findall(r"(?:sensor|binary_sensor|input_boolean).ecco_intel_[a-z_]+", v))
+                    out.update(re.findall(r"'((?:sensor|binary_sensor|input_boolean).ecco_intel_[a-z_]+)'", v))
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(cards)
+    return out
 
 
 SAFE_ACTIONS = {"none", "more-info", "navigate"}
@@ -121,6 +169,28 @@ def main() -> int:
     print("[5] the shell has no write path of its own")
     check("no service, perform_action or script key on the shell", not any(k in shell for k in ("service", "perform_action", "script", "tap_action", "hold_action")))
     check("the only keys the shell is given are the documented ones", set(shell) == {"type", "view_id", "title", "catalogue", "always", "production"}, str(sorted(shell)))
+
+    print("[6] the include points at the real catalogue")
+    spec = shell["catalogue"]
+    target = resolve_include(spec, EXAMPLE)
+    check("the include is a relative path (no absolute path, no drive, no URL)",
+          not spec.split(" ", 1)[1].startswith(("/", "\\")) and "://" not in spec and ":" not in spec.split(" ", 1)[1], spec)
+    check("it resolves to frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json, inside the repository",
+          target == CATALOGUE.resolve() and ROOT.resolve() in target.parents, str(target))
+    check("the included file exists and is a regular file", target.is_file() and not target.is_symlink())
+    real = json.loads(CATALOGUE.read_text(encoding="utf-8"))
+    resolved = yaml.load(EXAMPLE.read_text(encoding="utf-8"), Loader=make_including_loader(EXAMPLE))  # noqa: S506 - SafeLoader subclass
+    included = resolved["views"][0]["cards"][0]["catalogue"]
+    check("a YAML loader that resolves the include reads exactly what a JSON loader reads (JSON is YAML here)", included == real)
+    check("the resolved catalogue is the agreed schema and this view's", included["schema"] == "ecco-geek-catalogue/1" and included["view_id"] == shell["view_id"])
+    check("the shell's own title and view id match the catalogue's view", shell["view_id"] == "intelligence")
+    sources = {x["entity_id"] for x in real["sources"]}
+    used = entity_ids_used(resolved["views"][0]["cards"])
+    check("the wrapped cards name at least the thirteen entities of the Intelligence card", len(used) >= 13, str(sorted(used)))
+    check("every entity a wrapped card uses is a source of the catalogue (so Geek Mode shows everything Production uses)",
+          used <= sources, str(sorted(used - sources)))
+    check("the resolved cards are still equal to the existing dashboard's (the include changed nothing else)",
+          resolved["views"][0]["cards"][0]["always"] == [intel, entities] and resolved["views"][0]["cards"][0]["production"] == [tile])
 
     print()
     if FAILURES:

@@ -13,7 +13,7 @@ import { cardDir } from './helpers.mjs';
 
 const nested = process.env.ECCO_MODE_SHELL_PATH !== undefined || process.env.ECCO_SKIP_MUTATIONS === '1';
 const REAL = path.join(cardDir, 'ecco-mode-shell.js');
-const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs'].map((f) => path.join(cardDir, 'test', f));
+const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs', 'real-catalogue.test.mjs'].map((f) => path.join(cardDir, 'test', f));
 
 /** sub(find, replace[, all]): replace the one occurrence of `find` (or every occurrence with all = true). */
 const sub = (find, replace, all = false) => (s) => {
@@ -119,6 +119,15 @@ const MUTANTS = [
   { id: 'AC16-invalid-catalogue-shows-inventory', ac: 'AC16', note: 'an invalid catalogue still builds the inventory', f: sub('catalogueOk: this._cat.ok,', 'catalogueOk: true,') },
   { id: 'AC16-shell-alerts-dropped', ac: 'AC16', note: 'the shell own alerts are not shown', f: sub('this._alerts = [...deriveAlerts(this._snap, cat), ...this._shellAlerts];', 'this._alerts = [...deriveAlerts(this._snap, cat)];') },
   { id: 'AC16-schema-not-checked', ac: 'AC16', note: 'an unknown schema is accepted', f: sub('const schemaOk = input.schema === CATALOGUE_SCHEMA;', 'const schemaOk = true;') },
+  // ---- integration with the real catalogue (the card and the data side must agree: real-catalogue.test.mjs)
+  { id: 'AC6-bool-in-list-rejected', ac: 'AC6', note: 'an alert whose in-list holds a boolean is dropped as invalid (the critical applies_nothing alert)', f: sub("w.in.every((x) => isStr(x) || typeof x === 'boolean')", 'w.in.every(isStr)') },
+  { id: 'AC6-listed-down-state-silent', ac: 'AC6', note: 'a listed unknown state does not fire its own alert', f: sub("  if (when.state_in && input.present && when.state_in.includes(input.state)) return 'active';\n", '') },
+  { id: 'AC6-unavailable-fires-on-unknown', ac: 'AC6', note: 'an unknown state raises the critical unavailable alert', f: sub("return !input.present || input.state === 'unavailable' ? 'active' : input.state === 'unknown' ? 'unknown' : 'clear';", "return down ? 'active' : 'clear';") },
+  { id: 'AC6-unavailable-ignores-missing', ac: 'AC6', note: 'a missing declared entity does not fire the unavailable alert', f: sub("return !input.present || input.state === 'unavailable' ? 'active' :", "return input.present && input.state === 'unavailable' ? 'active' :") },
+  { id: 'AC6-redundant-lines-kept', ac: 'AC6', note: 'a listed unknown state does not silence the cannot-check lines for that entity', f: sub(" || (a.when.state_in && (input.state === 'unavailable' || input.state === 'unknown')))) downActive.add(a.entity_id);", ')) downActive.add(a.entity_id);') },
+  { id: 'AC8-rows-capped-low', ac: 'AC8', note: 'only twenty attribute rows are listed for an entity', f: sub('attrsPerRow: 200,', 'attrsPerRow: 20,') },
+  { id: 'AC8-declared-subrows-dropped', ac: 'AC8', note: 'declared first-level paths of a present dict are not listed', f: sub('      subs.push(attrRow(a.name, rest, top, rest.split(\'.\').length, a, has, has ? value[rest] : undefined));', '') },
+  { id: 'AC10-extra-patterns-not-prepared', ac: 'AC10', note: 'the catalogue extra key patterns never reach the redactor', f: sub('const opts = { extraKeyPatterns: cat.extraPatterns };', 'const opts = { extraKeyPatterns: [] };') },
   { id: 'AC16-nested-cards-not-walked', ac: 'AC16', note: 'the guard does not look inside nested cards', f: sub("    if (v !== null && typeof v === 'object') walkCard(v, `${path}.${k}`, bad, seen, depth + 1);", '') },
 ];
 

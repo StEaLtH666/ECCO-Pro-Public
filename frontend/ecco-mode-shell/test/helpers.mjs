@@ -29,14 +29,15 @@ export function mkState(id, state, attributes = {}, { ageS = 30, changedAgeS = n
   };
 }
 
-/** hass.states from a fixture object {entity_id: {state, attributes, age_s}} (keys starting with _ are notes). */
+/** hass.states from a fixture object {entity_id: {state, attributes, age_s}} or {state, attributes, last_changed, last_updated} (keys starting with _ are notes). */
 export function statesFrom(raw, now = NOW) {
   const out = {};
   for (const [id, e] of Object.entries(raw)) {
     if (id.startsWith('_')) continue;
     out[id] = {
       entity_id: id, state: e.state, attributes: structuredClone(e.attributes || {}),
-      last_changed: iso(now - (e.age_s || 0) * 1000), last_updated: iso(now - (e.age_s || 0) * 1000),
+      last_changed: typeof e.last_changed === 'string' ? e.last_changed : iso(now - (e.age_s || 0) * 1000),
+      last_updated: typeof e.last_updated === 'string' ? e.last_updated : iso(now - (e.age_s || 0) * 1000),
     };
   }
   return out;
@@ -133,6 +134,39 @@ export const textOf = (n) => n.textContent.replace(/\s+/g, ' ').trim();
 export function coverageInputs() {
   const c = process.env.ECCO_GEEK_CATALOGUE;
   const s = process.env.ECCO_GEEK_STATES;
-  if (c && s) return { source: 'env', catalogue: JSON.parse(readFileSync(path.resolve(c), 'utf8')), statesRaw: JSON.parse(readFileSync(path.resolve(s), 'utf8')) };
-  return { source: 'mini', catalogue: miniCatalogue(), statesRaw: miniStatesRaw() };
+  // ECCO_GEEK_NOW (an ISO time) is the clock to read the states at; without it the tests' own clock is used.
+  const now = process.env.ECCO_GEEK_NOW ? Date.parse(process.env.ECCO_GEEK_NOW) : NOW;
+  if (c && s) return { source: 'env', now, catalogue: JSON.parse(readFileSync(path.resolve(c), 'utf8')), statesRaw: JSON.parse(readFileSync(path.resolve(s), 'utf8')) };
+  return { source: 'mini', now: NOW, catalogue: miniCatalogue(), statesRaw: miniStatesRaw() };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The REAL Intelligence catalogue, ledger and synthetic state fixtures (written by the catalogue workstream, tools/geek_mode_coverage.py
+// and tools/gen_geek_fixtures.py). A fixture file is a map entity_id -> {state, attributes, last_changed, last_updated} as hass.states holds
+// it; intelligence.states.meta.json names each fixture's reference clock.
+// ---------------------------------------------------------------------------------------------------------------------------
+export const catalogueDir = path.join(cardDir, 'catalogue');
+const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
+export const realCataloguePath = path.join(catalogueDir, 'intelligence.catalogue.json');
+export const realLedgerPath = path.join(catalogueDir, 'intelligence.ledger.json');
+export const fixturePath = (name) => path.join(here, 'fixtures', name);
+export const realCatalogue = () => readJson(realCataloguePath);
+export const realLedger = () => readJson(realLedgerPath);
+export const intelMeta = () => fx('intelligence.states.meta.json');
+export const intelFixtureNames = () => Object.keys(intelMeta().fixtures);
+
+/** hass.states for one named fixture (a fresh deep copy, entity_id filled in) and the clock to read it at. */
+export function intelStates(name) {
+  const m = intelMeta().fixtures[name];
+  if (!m) throw new Error(`no fixture ${name}`);
+  const states = fx(m.file);
+  for (const [id, s] of Object.entries(states)) s.entity_id = id;
+  return { states, now: Date.parse(m.reference_now), meta: m };
+}
+
+/** The noise fixture as hass.states (300+ unrelated entities and the secret-looking decoys), read at the healthy fixture's clock. */
+export function noiseStates() {
+  const states = fx('noise.states.json');
+  for (const [id, s] of Object.entries(states)) s.entity_id = id;
+  return states;
 }

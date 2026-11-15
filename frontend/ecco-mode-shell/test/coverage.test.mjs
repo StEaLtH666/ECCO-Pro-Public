@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import { installDom } from './minidom.mjs';
 
 installDom();
-const { loadCard, coverageInputs, statesFrom, makeHass, NOW } = await import('./helpers.mjs');
+const { loadCard, coverageInputs, statesFrom, makeHass } = await import('./helpers.mjs');
 const { EccoModeShell, validateCatalogue, classifyRow, catalogueItemIds, buildSnapshot } = await loadCard('coverage');
 
-const { source, catalogue, statesRaw } = coverageInputs();
-const states = statesFrom(statesRaw);
+const { source, catalogue, statesRaw, now: NOW } = coverageInputs();
+const states = statesFrom(statesRaw, NOW);
 const v = validateCatalogue(catalogue);
 const live = new Set();
 afterEach(() => {

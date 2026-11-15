@@ -359,7 +359,9 @@ function validWhen(w) {
   if (w.unavailable === true) return { unavailable: true };
   if (Array.isArray(w.state_in) && w.state_in.every(isStr)) return { state_in: w.state_in.slice(0, 50) };
   if (Array.isArray(w.state_not_in) && w.state_not_in.every(isStr)) return { state_not_in: w.state_not_in.slice(0, 50) };
-  if (isStr(w.attribute) && w.attribute !== '' && Array.isArray(w.in) && w.in.every(isStr)) return { attribute: w.attribute, in: w.in.slice(0, 50) };
+  // the `in` list may mix booleans and texts (the generated catalogue lists a flag as false, "false" and "False"): both are kept, and a value matches
+  // when it equals an entry strictly or as text (see evaluate)
+  if (isStr(w.attribute) && w.attribute !== '' && Array.isArray(w.in) && w.in.every((x) => isStr(x) || typeof x === 'boolean')) return { attribute: w.attribute, in: w.in.slice(0, 50) };
   return null;
 }
 
@@ -791,14 +793,18 @@ const SEVERITY_WORDS = Object.freeze({ critical: 'Critical', warning: 'Warning',
 
 function evaluate(when, input) {
   const down = !input.present || input.state === 'unavailable' || input.state === 'unknown';
-  if (when.unavailable === true) return down ? 'active' : 'clear';
+  // `unavailable` means the state is `unavailable` or the entity is missing (the catalogue's reading). An `unknown` state is not that: it is reported as
+  // a condition that cannot be checked (never as silence, and never as the critical "not publishing" line a restart would otherwise raise).
+  if (when.unavailable === true) return !input.present || input.state === 'unavailable' ? 'active' : input.state === 'unknown' ? 'unknown' : 'clear';
   if (when.state_not_in) return down || !when.state_not_in.includes(input.state) ? 'active' : 'clear';
+  // a listed state that IS the state fires, even when that state is `unknown` or `unavailable` (the catalogue may list it on purpose)
+  if (when.state_in && input.present && when.state_in.includes(input.state)) return 'active';
   if (down) return 'unknown';
   if (when.state_in) return when.state_in.includes(input.state) ? 'active' : 'clear';
   if (when.attribute) {
     const v = input.attributes[when.attribute];
     if (v === undefined || v === null) return 'unknown';
-    return when.in.includes(String(v)) ? 'active' : 'clear';
+    return when.in.some((x) => x === v || String(x) === String(v)) ? 'active' : 'clear';
   }
   return 'unknown';
 }
@@ -817,7 +823,8 @@ export function deriveAlerts(snapshot, catalogue) {
   const verdict = list.map((a) => {
     const input = hasOwn(inputs, a.entity_id) ? inputs[a.entity_id] : { present: false, state: null, attributes: {} };
     const v = evaluate(a.when, input);
-    if (v === 'active' && a.when.unavailable === true) downActive.add(a.entity_id);
+    // an alert that already says the entity is down (unavailable, or a listed `unknown` / `unavailable` state) makes the "cannot check" lines for it redundant
+    if (v === 'active' && (a.when.unavailable === true || (a.when.state_in && (input.state === 'unavailable' || input.state === 'unknown')))) downActive.add(a.entity_id);
     return v;
   });
   list.forEach((a, i) => {

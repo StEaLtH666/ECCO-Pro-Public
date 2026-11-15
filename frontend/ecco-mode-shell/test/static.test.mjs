@@ -154,7 +154,12 @@ test('the folder: no private layout, address, key block or personal identifier i
     assert.doesNotMatch(t, /\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b/i, `${f}: MAC`);
     assert.doesNotMatch(t, /-----BEGIN [A-Z ]*KEY-----/, `${f}: key block`);
     assert.doesNotMatch(t, /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,})/, `${f}: token`);
-    assert.doesNotMatch(t, /\b[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com)[A-Za-z0-9-]+\.[A-Za-z]{2,}\b/, `${f}: e-mail address`);
+    // The one text that may look like an e-mail to this scan is the catalogue workstream's two connection-string decoys in noise.states.json
+    // (scheme://synthetic:decoy@name.invalid): userinfo on a reserved .invalid host. They are exempt by that exact shape and nothing else is;
+    // every other URL with userinfo, anywhere in the folder, still fails the credentials assertion below.
+    const withoutDecoys = t.replace(/\b[a-z][a-z0-9+.-]*:\/\/synthetic:decoy@[a-z0-9.-]+\.invalid\b/g, '');
+    assert.doesNotMatch(withoutDecoys, /\b[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com)[A-Za-z0-9-]+\.[A-Za-z]{2,}\b/, `${f}: e-mail address`);
+    assert.doesNotMatch(withoutDecoys, /[a-z][a-z0-9+.-]*:\/\/[^\s/@"']+@/i, `${f}: a URL with credentials`);
     assert.doesNotMatch(t, /[A-Za-z]:\\Users\\|\/Users\/[A-Za-z]/, `${f}: workstation path`);
   }
 });
