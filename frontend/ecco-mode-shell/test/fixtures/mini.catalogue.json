@@ -178,5 +178,5 @@
     { "id": "X2", "what": "Home location", "reason": "privacy", "note": "Latitude and longitude are not shown." },
     { "id": "X3", "what": "Inverter register dump", "reason": "unsupported_source", "note": "Not exposed as Home Assistant states." }
   ],
-  "redaction": { "extra_key_patterns": ["^site_owner$"] }
+  "redaction": { "extra_key_patterns": ["site_owner"] }
 }

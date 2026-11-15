@@ -61,7 +61,8 @@ export const STATUSES = Object.freeze(['LIVE', 'STALE', 'UNAVAILABLE', 'UNKNOWN'
 export const TICK_MS = 15000;
 export const LIMITS = Object.freeze({
   value: 300, // characters of one value shown in a row
-  stringCap: 4000, // characters of one string kept at all (the rest is dropped before any scan)
+  stringCap: 4000, // characters of one string SHOWN: the whole text is read first, then cut here, so no part of a secret that crosses the cut can be left in view
+  scanBound: 20000, // the most characters of one string, or of one key name, that is read at all: a longer one is withheld whole, never read in part
   dictKeys: 200, // keys of one dict kept
   listItems: 200, // items of one list kept
   attrsPerRow: 200, // attribute rows listed for one entity
@@ -197,74 +198,40 @@ function keyTokens(key) {
 }
 
 const EXTRA_CACHE = new WeakMap();
-/** The most characters of a key that one catalogue pattern is ever run on (a longer key is read from both ends), so a pattern's work is bounded by this. */
+/** The most characters of a key that one fragment is searched in at one time: a longer key is read in overlapping windows of this size, so the work of one search is bounded and every part of the key is still read. */
 const EXTRA_KEY_CAP = 200;
-/** The most unbounded repeats (* + {n,}) one catalogue pattern may hold: with the key cap, the work of a pattern is at most polynomial of a low degree. */
-const EXTRA_MAX_REPEATS = 3;
+/** The longest fragment, and the most fragments, a catalogue may declare. */
+export const EXTRA_FRAGMENT_MAX = 80;
+export const EXTRA_FRAGMENTS_MAX = 40;
+/** Review round 6: a catalogue key pattern is a PLAIN FRAGMENT (lower-case letters, digits and underscore) and nothing else. It is matched as a part of the key name; no regular expression is ever built from catalogue data, so there is nothing that can run for long and nothing to screen. */
+const EXTRA_FRAGMENT = /^[a-z0-9_]{1,80}$/;
+const isFragment = (f) => isStr(f) && EXTRA_FRAGMENT.test(f);
 
-/**
- * True when a catalogue pattern has a shape that can make a backtracking engine take exponential or high-degree polynomial time: a group that is
- * repeated (* + {n}) and itself holds a repeat or a choice between alternatives, such as (a|aa)*c or (x+x+)+y, an unbalanced group, a character class
- * that is never closed, or more than EXTRA_MAX_REPEATS repeats. Escapes and character classes are skipped, so a literal parenthesis or bar is no group.
- * This is a reader of the pattern text, not of what it matches: it errs on the side of refusing.
- */
-function riskyPattern(src) {
-  const stack = [];
-  let cur = { alt: false, rep: false };
-  let repeats = 0;
-  for (let i = 0; i < src.length; i += 1) {
-    const ch = src[i];
-    if (ch === '\\') {
-      i += 1;
-    } else if (ch === '[') {
-      i += 1;
-      while (i < src.length && src[i] !== ']') i += src[i] === '\\' ? 2 : 1;
-      if (i >= src.length) return true;
-    } else if (ch === '(') {
-      stack.push(cur);
-      cur = { alt: false, rep: false };
-      if (src[i + 1] === '?') i += 1; // (?: (?= (?! (?<= (?<name> : the ? belongs to the group syntax, it is not a repeat
-    } else if (ch === ')') {
-      if (stack.length === 0) return true;
-      const inner = cur;
-      cur = stack.pop();
-      const next = src[i + 1];
-      const repeated = next === '*' || next === '+' || next === '{';
-      if (repeated && (inner.alt || inner.rep)) return true;
-      cur.alt = cur.alt || inner.alt;
-      cur.rep = cur.rep || inner.rep || repeated || next === '?';
-    } else if (ch === '|') {
-      cur.alt = true;
-    } else if (ch === '*' || ch === '+' || ch === '{') {
-      cur.rep = true;
-      repeats += 1;
-    } else if (ch === '?') {
-      cur.rep = true;
-    }
-  }
-  return stack.length !== 0 || repeats > EXTRA_MAX_REPEATS;
-}
-
-/** Catalogue extra_key_patterns -> safe RegExps. A pattern that is too long, shaped for catastrophic backtracking (see riskyPattern) or invalid is ignored. */
+/** Catalogue extra_key_patterns -> the plain fragments among them (at most EXTRA_FRAGMENTS_MAX). Anything else is ignored here; validateCatalogue reports each one as a catalogue error. */
 function compileExtra(list) {
   if (!Array.isArray(list)) return [];
   if (EXTRA_CACHE.has(list)) return EXTRA_CACHE.get(list);
   const out = [];
-  for (const src of list.slice(0, 40)) {
-    if (!isStr(src) || src.length === 0 || src.length > 80) continue;
-    if (/\([^)]*[+*][^)]*\)\s*[+*{]/.test(src) || /\\[1-9]/.test(src)) continue;
-    if (riskyPattern(src)) continue;
-    try {
-      out.push(new RegExp(src, 'i'));
-    } catch {
-      // an invalid pattern is ignored, never fatal
-    }
-  }
+  for (const f of list.slice(0, EXTRA_FRAGMENTS_MAX)) if (isFragment(f)) out.push(f);
   EXTRA_CACHE.set(list, out);
   return out;
 }
 
+/** True when any fragment is a part of the key, anywhere in it (case does not matter). The key is read in windows of EXTRA_KEY_CAP characters that overlap by one less than the longest fragment, so a fragment that crosses a window edge is still found. */
+function keyHasFragment(whole, fragments) {
+  if (fragments.length === 0) return false;
+  const lower = whole.toLowerCase();
+  const step = EXTRA_KEY_CAP - (EXTRA_FRAGMENT_MAX - 1);
+  for (let i = 0; i < lower.length; i += step) {
+    const w = lower.slice(i, i + EXTRA_KEY_CAP);
+    for (const f of fragments) if (w.includes(f)) return true;
+  }
+  return false;
+}
+
 function isSecretKey(key, extra) {
+  // a key name this long is not one any source declares, and it is not read in part: its value is withheld
+  if (String(key).length > LIMITS.scanBound) return true;
   const tokens = keyTokens(key);
   for (let i = 0; i < tokens.length; i += 1) {
     if (SECRET_TOKENS.has(tokens[i]) || PRIVATE_TOKENS.has(tokens[i])) return true;
@@ -279,15 +246,7 @@ function isSecretKey(key, extra) {
   if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;
   if (tokens.length >= 2 && PASS_WORDS.has(tokens[tokens.length - 1])) return true;
-  const whole = fold(String(key));
-  // a catalogue pattern never sees more than EXTRA_KEY_CAP characters at once: a longer key is read from its start and from its end
-  const k = whole.length > EXTRA_KEY_CAP ? whole.slice(0, EXTRA_KEY_CAP) : whole;
-  for (const re of extra) if (re.test(k)) return true;
-  if (k !== whole) {
-    const tail = whole.slice(-EXTRA_KEY_CAP);
-    for (const re of extra) if (re.test(tail)) return true;
-  }
-  return false;
+  return keyHasFragment(fold(String(key)), extra);
 }
 
 // VALUE rules: [reason, required substring or null, pattern]. The gates keep the common case (short plain strings) cheap.
@@ -322,6 +281,15 @@ const RULES = [
   ['internal host name', '://', /\b[a-z][a-z0-9+.-]*:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
   ['private host name', '.', /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i],
 ];
+// Review round 6: a PRE-TEST is a cheap, linear test that every match of a rule must pass (a necessary condition, so the verdict is the same). A text is now read whole up to LIMITS.scanBound, and
+// three of the rules above read ahead from every start position, so a long text that only LOOKS like the start of one of them (a dotted run of letters, a long run of ab- groups) was walked once per start:
+// about a quarter of a second for one 20000-character text. The pre-test is a table of its own so that the rules above stay exactly as the Python scanner's patterns are.
+const RULE_PRETESTS = {
+  'pass pair': /(?:pass|pw)(?:\s*["']|=)/i,
+  'MAC address (dotted)': /[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}/i,
+  'private host name': /\.(?:local|lan|internal|home\.arpa|localdomain)\b/i,
+};
+const PRETEST = RULES.map(([reason]) => RULE_PRETESTS[reason]);
 const RE_HEX = /(?:^|[^0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/;
 const RE_B64 = /[A-Za-z0-9+/_-]{32,}={0,2}/g;
 const RE_GIT = /^[0-9a-f]{40}$/i;
@@ -333,8 +301,10 @@ function valueReason(raw, digestOk, digestKey = false) {
   if (raw.length < 6) return null;
   const s = fold(raw);
   if (s.length < 6) return null;
-  for (const [reason, gate, re] of RULES) {
+  for (let i = 0; i < RULES.length; i += 1) {
+    const [reason, gate, re] = RULES[i];
     if (gate !== null && !s.includes(gate)) continue;
+    if (PRETEST[i] !== undefined && !PRETEST[i].test(s)) continue;
     if (re.test(s)) return reason;
   }
   // a revision key (commit, git_sha) may hold a short public git revision, which has the same shape
@@ -350,14 +320,13 @@ function redactString(s, key) {
   const k = key === null ? '' : keyTokens(key).join('');
   const digestKey = DIGEST_KEYS.has(k);
   const digestOk = digestKey && RE_GIT.test(s);
-  let t = s;
-  let cut = 0;
-  if (t.length > LIMITS.stringCap) {
-    cut = t.length - LIMITS.stringCap;
-    t = t.slice(0, LIMITS.stringCap);
-  }
+  // review round 6: the WHOLE text is read first (up to a hard bound; a longer one is not read in part, it is withheld), and only then cut at the display cap,
+  // so no part of a secret can be left before the cut and nothing past the cut can hide one
+  if (s.length > LIMITS.scanBound) return WITHHELD;
+  const t = s;
   if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;
-  return cut ? `${cleanText(t, LIMITS.stringCap)}\u2026 [truncated ${cut} more characters]` : cleanText(t, LIMITS.stringCap);
+  const cut = t.length > LIMITS.stringCap ? t.length - LIMITS.stringCap : 0;
+  return cut ? `${cleanText(t.slice(0, LIMITS.stringCap), LIMITS.stringCap)}\u2026 [truncated ${cut} more characters]` : cleanText(t, LIMITS.stringCap);
 }
 
 function redactNode(v, key, ctx, depth) {
@@ -605,8 +574,15 @@ export function validateCatalogue(input) {
     });
   } else if (input.exceptions !== undefined) err(errors, 'exceptions', 'exceptions must be a list');
   if (isObj(input.redaction) && Array.isArray(input.redaction.extra_key_patterns)) {
-    out.redaction.extra_key_patterns = input.redaction.extra_key_patterns.filter(isStr).slice(0, 40);
-  } else if (input.redaction !== undefined && !isObj(input.redaction)) err(errors, 'redaction', 'redaction must be an object');
+    // review round 6: a pattern is a plain fragment or it is an error, shown on the strip: a refused pattern is never dropped without a word (the owner meant it to withhold something)
+    const list = input.redaction.extra_key_patterns;
+    list.slice(0, EXTRA_FRAGMENTS_MAX).forEach((f, i) => {
+      if (isFragment(f)) out.redaction.extra_key_patterns.push(f);
+      else err(errors, `redaction.extra_key_patterns[${i}]`, `a key pattern must be a plain fragment of 1 to ${EXTRA_FRAGMENT_MAX} lower-case letters, digits or underscores (it is matched as a part of a key name, never as an expression)`);
+    });
+    if (list.length > EXTRA_FRAGMENTS_MAX) err(errors, 'redaction.extra_key_patterns', `at most ${EXTRA_FRAGMENTS_MAX} key fragments are read; the rest would be ignored`);
+  } else if (isObj(input.redaction) && input.redaction.extra_key_patterns !== undefined) err(errors, 'redaction.extra_key_patterns', 'extra_key_patterns must be a list of plain key fragments');
+  else if (input.redaction !== undefined && !isObj(input.redaction)) err(errors, 'redaction', 'redaction must be an object');
   if (schemaOk) out.sources = sources;
   return { ok: errors.length === 0, errors, catalogue: out };
 }
@@ -1479,7 +1455,7 @@ function icon(doc, name) {
 
 /** A value, or the withheld marker (an icon and the word, never colour alone). */
 function valueNode(doc, text) {
-  if (text === WITHHELD) return mk(doc, 'span', { class: 'withheld', 'data-withheld': '', title: 'This value looks secret or private, so it is not shown.' }, [icon(doc, 'withheld'), 'Withheld']);
+  if (text === WITHHELD) return mk(doc, 'span', { class: 'withheld', 'data-withheld': '', title: 'This value is not shown: it looks secret or private, or it is too long to be checked.' }, [icon(doc, 'withheld'), 'Withheld']);
   return doc.createTextNode(text);
 }
 

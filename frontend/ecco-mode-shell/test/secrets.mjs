@@ -223,3 +223,74 @@ export function beyondCap(value) {
   const text = `${filler(4099)} ${value} ${filler(150)}`;
   return { text, probe: value };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 6: the SWEEP. Round 5 placed each kind at four offsets and the round-6 reviewer showed that four offsets are an instance, not the class: a reader that skips the first
+// character of a long text (S01), reads the last 3999 characters (S02), or reads the text in chunks of 500 or 1000 characters with no overlap (S06, S07) passes all four. The class is "the
+// card reads every character of a string, whatever the scan looks like", so the fixtures below put every kind at EVERY offset that matters (and the others at a stride), in carriers of
+// every length that matters, and the tests run them on every path. A prefix, suffix, window, chunk, per-line, split-at-space or off-by-one reader fails at least one of them.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/** Carrier lengths: 1500 (the reviewer's), 3999 and 4000 (just under and at the display cap), 4500 (over it: the text is cut for display, and the secret may cross the cut), 12000 and 20000 (the hard bound of what is read). */
+export const SWEEP_CARRIERS = Object.freeze([1500, 3999, 4000, 4500]);
+export const SWEEP_LONG_CARRIERS = Object.freeze([12000, 20000]);
+
+/** Offsets at which a naive window or chunk would end or begin: the powers of two near the buffer sizes people use, the round numbers of the reviewer's chunks, the display cap and its neighbours. */
+export const SWEEP_BOUNDARIES = Object.freeze([0, 1, 2, 255, 256, 257, 499, 500, 501, 511, 512, 513, 999, 1000, 1001, 1023, 1024, 1025, 2047, 2048, 2049, 3990, 3999, 4000, 4001]);
+
+/** Two kinds that a per-line reader or a split-at-spaces reader misses: the secret itself holds a newline, or spaces, between its words. */
+export const SPLIT_KINDS = Object.freeze([
+  { label: 'password pair across a newline', value: j('pass', 'word', '=\n', 'plumbus4242'), probe: j('plumbus', '4242') },
+  { label: 'password pair with spaces around the equals sign', value: j('pass', 'word', ' = ', 'plumbus4242'), probe: j('plumbus', '4242') },
+]);
+
+/** Every kind of the sweep: the eight of round 5, its two short ones, and the two split ones. */
+export const SWEEP_KINDS = Object.freeze([...POSITIONED_KINDS, ...SHORT_KINDS, ...SPLIT_KINDS]);
+
+/** A kind of 24 characters or fewer is "short": it is swept at EVERY offset (stride one), the others at the boundaries and a stride of 37. */
+export const isShortKind = (k) => k.value.length <= 24;
+
+/** A text of exactly `total` characters: filler, then `value` starting at exactly `start`, then filler. A space sits on each side of the secret when there is room, so no word-boundary rule is helped or hindered. */
+export function carrier(value, start, total) {
+  const end = start + value.length;
+  if (!(start >= 0 && end <= total)) throw new Error(`a carrier of ${total} cannot hold ${value.length} characters at ${start}`);
+  const head = start > 0 ? `${filler(start - 1)} ` : '';
+  const tail = total - end > 0 ? ` ${filler(total - end - 1)}` : '';
+  const text = `${head}${value}${tail}`;
+  if (text.length !== total || text.slice(start, end) !== value) throw new Error(`carrier(${start}, ${total}) is wrong`);
+  return text;
+}
+
+/**
+ * The start offsets of one kind in one carrier. dense: every offset. Otherwise: every start at which the secret ends before, ends at, crosses, begins at or begins after each boundary (three
+ * either side), a stride of 37 across the whole carrier, and the last four starts that fit (the secret ends at the end of the text).
+ */
+export function sweepStarts(valueLength, total, { dense = false, stride = 37 } = {}) {
+  const maxStart = total - valueLength;
+  const out = new Set();
+  if (dense) for (let s = 0; s <= maxStart; s += 1) out.add(s);
+  else {
+    for (let s = 0; s <= maxStart; s += stride) out.add(s);
+    for (const b of SWEEP_BOUNDARIES) for (let s = b - valueLength - 3; s <= b + 3; s += 1) out.add(s);
+    for (let s = maxStart - 3; s <= maxStart; s += 1) out.add(s);
+  }
+  return [...out].filter((s) => s >= 0 && s <= maxStart).sort((a, b) => a - b);
+}
+
+/** A reduced set for the paths that build whole rows (a snapshot, a DOM): at each of a few boundaries, the starts at which the secret ends just before, ends at, crosses and begins at it, plus both ends. */
+export function pathStarts(valueLength, total, bounds = [0, 256, 500, 1000, 1024, 2048, 3990, 4000]) {
+  const maxStart = total - valueLength;
+  const out = new Set([0, 1, maxStart - 1, maxStart]);
+  for (const b of bounds) for (const s of [b - valueLength - 1, b - valueLength, b - Math.ceil(valueLength / 2), b - 1, b, b + 1]) out.add(s);
+  return [...out].filter((s) => s >= 0 && s <= maxStart).sort((a, b) => a - b);
+}
+
+/** Every swept case of the given carriers, one at a time (a generator: the dense sweep is over a hundred thousand texts of several thousand characters): { kind, label, text, probe, value, start, total, id }. `pick` chooses the starts of a kind in a carrier. */
+export function* sweepCases(carriers, pick) {
+  for (let ki = 0; ki < SWEEP_KINDS.length; ki += 1) {
+    const k = SWEEP_KINDS[ki];
+    for (const total of carriers) {
+      for (const start of pick(k, total)) yield { id: `${ki}_${total}_${start}`, kind: k.label, label: `${k.label}, in ${total} characters, at offset ${start}`, text: carrier(k.value, start, total), probe: k.probe, value: k.value, start, total };
+    }
+  }
+}

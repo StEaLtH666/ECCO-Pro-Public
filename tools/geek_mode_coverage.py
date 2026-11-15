@@ -65,7 +65,10 @@ HONESTY_STATES = ("LIVE", "STALE", "UNAVAILABLE", "UNKNOWN", "NOT_MEASURED", "SI
 ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 SOURCE_ID_RE = re.compile(r"^[a-z0-9_.]+$")
 ATTR_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?$")
-PATTERN_RE = re.compile(r"^[a-z0-9_]+$")
+# review round 6: a catalogue key pattern is a PLAIN FRAGMENT, the same rule as the card's (frontend/ecco-mode-shell/ecco-mode-shell.js EXTRA_FRAGMENT): 1 to 80 lower-case letters, digits or
+# underscores, at most 40 of them, matched as a part of a key name and never as an expression. Match it with fullmatch: a Python "$" also accepts a newline at the end ("token\n").
+PATTERN_RE = re.compile(r"[a-z0-9_]{1,80}")
+PATTERN_MAX_COUNT = 40
 PREFIX_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+_$")
 
 # HA entity domains whose entities carry a state a reader can show; the prefix `ecco_intel_` in each is discovered automatically
@@ -329,6 +332,13 @@ def _package_listing(root: Path) -> None:
 # still said the ledger matched. This reads the CONTENT of every other YAML file under home-assistant/ (packages, dashboards, prototypes) and refuses what defines or names
 # one. A file that does not even spell ecco_intel is not parsed (it cannot define one), so the cost is a text search per file and a parse of the few that mention it.
 HA_DIR_REL = "home-assistant"
+# Review round 6 (reviewer mutant N-L11): whether a file is a DASHBOARD (where a `name:` is only a label, so the name check is skipped) is decided by where the file is, never by what it holds: a package that
+# carries a `views:` key must not be taken for one. A dashboard is a file under home-assistant/dashboards/, one of the files named below, or the file the dashboard registration points at (see
+# _registered_dashboard_files). A `views:` key in any file under home-assistant/packages/ is refused.
+DASHBOARD_DIR_REL = "home-assistant/dashboards/"
+PACKAGES_DIR_REL = "home-assistant/packages/"
+PROTOTYPE_DASHBOARD_RELS = ("home-assistant/prototypes/intelligence-v1/ecco_intelligence_v1_prototype_dashboard.yaml",)
+VIEWS_KEY_RE = re.compile(r"^views[ \t]*:", re.MULTILINE)
 INTEL_OBJECT_RE = re.compile(r"^(?:[a-z_]+\.)?ecco_intel(?:_|$)")   # an object id, or a full entity id, in the ecco_intel family (not ecco_intelligence_*)
 INTEL_MENTION_RE = re.compile(r"ecco[\W_]*intel", re.IGNORECASE)    # the cheap test: can this text spell such a name at all
 DEFINING_VALUE_KEYS = ("unique_id", "object_id", "default_entity_id")  # their value IS (or becomes) an object id
@@ -356,6 +366,31 @@ def _intel_hits(node, path: str, dashboard: bool, non_entity: bool, hits: list) 
             _intel_hits(x, f"{path}[{i}]", dashboard, non_entity, hits)
 
 
+def _registered_dashboard_files(root: Path) -> set[str]:
+    """The repository files that the dashboard registration (lovelace: dashboards: <name>: filename:) points at: the deployed path `ecco/dashboards/x.yaml` is the repository file
+    `home-assistant/dashboards/x.yaml`. A registration that points into home-assistant/packages/ is refused: a package cannot be a dashboard."""
+    out: set[str] = set()
+    reg = root / PACKAGE_DASHBOARD_REL
+    if not reg.is_file():
+        return out
+    doc = _yaml(root, PACKAGE_DASHBOARD_REL)
+    dashboards = (doc.get("lovelace") or {}).get("dashboards") if isinstance(doc, dict) and isinstance(doc.get("lovelace"), dict) else None
+    for entry in (dashboards.values() if isinstance(dashboards, dict) else []):
+        name = entry.get("filename") if isinstance(entry, dict) else None
+        if not isinstance(name, str):
+            continue
+        norm = name.replace("\\", "/").lstrip("/")
+        if not norm.startswith("ecco/"):
+            continue
+        rel = HA_DIR_REL + "/" + norm[len("ecco/"):]
+        if ".." in rel.split("/"):
+            raise UniverseError(f"{PACKAGE_DASHBOARD_REL}: the dashboard file name {name!r} leaves the repository")
+        if rel.startswith(PACKAGES_DIR_REL):
+            raise UniverseError(f"{PACKAGE_DASHBOARD_REL}: the dashboard registration points at {rel}, which is a package file: a package cannot be a dashboard (dashboards live under {DASHBOARD_DIR_REL})")
+        out.add(rel)
+    return out
+
+
 def _foreign_definitions(root: Path) -> tuple[int, list[str]]:
     """Refuse (UniverseError) any YAML file under home-assistant/ OTHER than the three modelled package files that defines or names an `ecco_intel_` data point: a key
     (a helper, a legacy template sensor, a customize entry), a `unique_id`, `object_id` or `default_entity_id`, or, in a package, a `name` or `alias` whose slug is one.
@@ -365,6 +400,7 @@ def _foreign_definitions(root: Path) -> tuple[int, list[str]]:
     if not base.is_dir():
         return 0, []
     modelled = set(PACKAGE_FILES)
+    dashboards = set(PROTOTYPE_DASHBOARD_RELS) | _registered_dashboard_files(root)
     scanned = 0
     parsed: list[str] = []
     problems: list[str] = []
@@ -377,6 +413,8 @@ def _foreign_definitions(root: Path) -> tuple[int, list[str]]:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise UniverseError(f"cannot read {rel}: {exc}") from None
+        if rel.startswith(PACKAGES_DIR_REL) and VIEWS_KEY_RE.search(text):
+            raise UniverseError(f"{rel}: a package file carries a top-level `views:` key, which only a dashboard has: a dashboard lives under {DASHBOARD_DIR_REL}, and what a file holds does not make it one")
         if not INTEL_MENTION_RE.search(text):
             continue
         try:
@@ -384,7 +422,9 @@ def _foreign_definitions(root: Path) -> tuple[int, list[str]]:
         except yaml.YAMLError as exc:
             raise UniverseError(f"{rel} spells ecco_intel but does not parse as YAML, so the tool cannot tell whether it defines a data point: {exc}") from None
         parsed.append(rel)
-        dashboard = any(isinstance(d, dict) and "views" in d for d in docs)
+        dashboard = rel.startswith(DASHBOARD_DIR_REL) or rel in dashboards   # by location (review round 6), never by a `views` key
+        if rel.startswith(PACKAGES_DIR_REL) and any(isinstance(d, dict) and "views" in d for d in docs):
+            raise UniverseError(f"{rel}: a package file carries a top-level `views` key, which only a dashboard has: a dashboard lives under {DASHBOARD_DIR_REL}")
         hits: list[str] = []
         for d in docs:
             _intel_hits(d, "", dashboard, False, hits)
@@ -1122,8 +1162,15 @@ def validate_catalogue(cat, strict: bool = True) -> list[str]:
     r = cat.get("redaction")
     if _keys(r, {"extra_key_patterns"}, set(), "redaction", errs, strict):
         p = r.get("extra_key_patterns")
-        if not isinstance(p, list) or not all(isinstance(x, str) and PATTERN_RE.match(x) for x in p):
-            errs.append("redaction.extra_key_patterns: a list of lower-case key fragments (a-z, 0-9, _)")
+        if not isinstance(p, list):
+            errs.append("redaction.extra_key_patterns: a list of plain lower-case key fragments (1 to 80 characters of a-z, 0-9, _)")
+        else:
+            for i, x in enumerate(p):
+                if not (isinstance(x, str) and PATTERN_RE.fullmatch(x)):
+                    errs.append(f"redaction.extra_key_patterns[{i}]: a plain lower-case key fragment of 1 to 80 characters of a-z, 0-9 and _ "
+                                f"(the card matches it as a part of a key name, never as an expression)")
+            if len(p) > PATTERN_MAX_COUNT:
+                errs.append(f"redaction.extra_key_patterns: at most {PATTERN_MAX_COUNT} fragments (the card reads no more, so the rest would be ignored)")
     return errs
 
 

@@ -945,3 +945,100 @@ test('shadow roots [r5]: attachShadow is written once, as this.attachShadow in t
   assert.doesNotMatch(code, /\b(?!this\b)\w+\.attachShadow\b/);
   assert.doesNotMatch(code, /\[\s*['"`]attach/);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 6 ([r6]). Reviewer mutant P07 wrote `this.o.container.parentNode.style['setProperty']('--ecco-fg', 'transparent')` next to the pinned bar-segment call. The round-5 pin counted `.style.setProperty(`
+// (two, so unchanged), read only the two literal sites, and scanned `.style.name` (the bracket form is not one), so every node suite passed; only the browser check failed it. The class is "something writes the
+// inline style of an element other than at the two pinned sites", so this pins the STRUCTURE, not a spelling: the word `style` is a property of exactly two calls (the only other uses are the card's one <style> element and its stylesheet text), and no other way of writing a style exists.
+// ---------------------------------------------------------------------------------------------------------------------------
+const plainCode = withoutStyle(code);
+// the three statements that build the card's one <style> element from its stylesheet text are the only other place the word appears
+const STYLE_BUILDER = ["const style = mk(doc, 'style');", 'style.textContent = STYLE;', 'this._root.replaceChildren(style, shell);'];
+const styleWordsLeft = (text) => {
+  let rest = text;
+  for (const b of STYLE_BUILDER) rest = rest.replace(b, '');
+  rest = rest.replace(/\b(?:seg|ringEl)\.style\.setProperty\(/g, '');
+  return [...rest.matchAll(/\bstyle\b/gi)].map((m) => rest.slice(Math.max(0, m.index - 12), m.index + 20).replace(/\s+/g, ' '));
+};
+const styleProblems = (text) => {
+  const bad = [];
+  const left = styleWordsLeft(text);
+  if (left.length) bad.push(`the word style is used outside the two pinned calls and the stylesheet builder: ${JSON.stringify(left)}`);
+  if ((text.match(/\.style\.setProperty\(/g) || []).length !== 2) bad.push('not two direct setProperty calls');
+  if ((text.match(/\bsetProperty\b/g) || []).length !== 2) bad.push('setProperty is not written twice');
+  if (/\.style\s*\??\.?\s*\[/.test(text) || /\[\s*(['"`])[^'"`\]]*style[^'"`\]]*\1\s*\]/i.test(text)) bad.push('computed access on a style');
+  if (/\[\s*(['"`])[^'"`\]]*(?:setProperty|cssText|Property)[^'"`\]]*\1\s*\]/.test(text)) bad.push('a style method reached by bracket');
+  if (/\bcssText\b/.test(text)) bad.push('cssText');
+  if (/['"`]\s*(?:sty|styl|st|s)['"`]\s*\+|\+\s*['"`]\s*(?:le|yle|tyle)['"`]|['"`]set['"`]\s*\+|\+\s*['"`]Property['"`]/.test(text) || /\$\{\s*['"`](?:le|Property|yle)['"`]\s*\}/.test(text)) bad.push('a name built from pieces');
+  return bad;
+};
+
+test('inline style [r6]: the word style appears in the code (outside the stylesheet text) only as the receiver of the two pinned setProperty calls; no computed member access, alias, destructuring, key, string or built name reaches a style (reviewer mutant P07)', () => {
+  for (const b of STYLE_BUILDER) assert.equal(plainCode.split(b).length - 1, 1, `the builder statement is written once: ${b}`);
+  assert.equal([...plainCode.matchAll(/\bstyle\b/gi)].length, 7, 'two pinned calls and the five words of the three builder statements');
+  assert.deepEqual(styleWordsLeft(plainCode), []);
+  assert.deepEqual(styleProblems(plainCode), []);
+  assert.equal((plainCode.match(/\bremoveProperty\b|\bgetPropertyValue\b|\bgetPropertyPriority\b|\bsetPropertyValue\b/g) || []).length, 0);
+  assert.doesNotMatch(plainCode, /\bfromCharCode\b|\batob\b|\bbtoa\b|\bdecodeURIComponent\b|\bunescape\b|\bString\s*\.\s*raw\b/, 'no way of spelling a name from pieces');
+  // every other door to a style or a stylesheet: cssText, Object.assign onto a style, the CSSOM, adoptedStyleSheets, a stylesheet or a style element made from code, the dataset and class reflections
+  for (const re of [/\bcssText\b/, /\battributeStyleMap\b/, /\badoptedStyleSheets\b/, /\binsertRule\b/, /\bdeleteRule\b/, /\breplaceSync\b/, /\bCSSStyleSheet\b/, /\bstyleSheets\b/, /\bgetComputedStyle\b/,
+    /\bcssRules\b/, /\bsetAttribute\(\s*['"`]style['"`]/, /\bcreateElement\(\s*['"`]style['"`]/, /\bcreateElementNS\([^)]*['"`]style['"`]/, /\bsheet\b/, /\bCSS\s*\./,
+    /\.dataset\b/, /\bclassList\b/, /\bclassName\b/]) assert.doesNotMatch(plainCode, re, String(re));
+});
+
+test('inline style [r6]: the receiver of each pinned call is a bare local variable (seg, ringEl): nothing is walked up to an ancestor of the strip, a shell or the host first', () => {
+  const receivers = [...plainCode.matchAll(/([A-Za-z_$][\w$.]*(?:\[[^\]]*\])*(?:\([^)]*\))*)\.style\.setProperty\(/g)].map((m) => m[1]);
+  assert.deepEqual(receivers, ['seg', 'ringEl']);
+  for (const r of receivers) assert.match(r, /^[A-Za-z_$][\w$]*$/, `receiver ${r}`);
+  // and the two locals are made once, each by the builder, and never assigned again (the round-5 pin; this closes on it)
+  assert.equal((plainCode.match(/\bconst seg = mk\(/g) || []).length, 1);
+  assert.equal((plainCode.match(/\bconst ringEl = mk\(/g) || []).length, 1);
+  assert.equal((plainCode.match(/(?<![\w$.-])(?:seg|ringEl)\s*=(?!=)/g) || []).length, 2);
+});
+
+test('inline style [r6]: the planted forms are each refused by the structure (negative controls: bracket call, alias, computed key, cssText, Object.assign, a property, a third call, a built name)', () => {
+  const anchor = "      seg.style.setProperty('--ecco-w', String(c[s]));";
+  assert.equal(plainCode.split(anchor).length - 1, 1, 'the anchor of the planted forms is found once');
+  const forms = [
+    "      this.o.container.parentNode.style['setProperty']('--ecco-fg', 'transparent');",
+    "      const st = this.o.container.parentNode.style; st.setProperty('--ecco-fg', 'transparent');",
+    "      this.o.container.parentNode['style'].setProperty('--ecco-fg', 'transparent');",
+    "      this.o.container.parentNode.style.cssText = '--ecco-fg:transparent';",
+    "      Object.assign(this.o.container.parentNode.style, { color: 'transparent' });",
+    "      this.o.container.parentNode.style.color = 'transparent';",
+    "      this.o.container.parentNode.style.setProperty('--ecco-fg', 'transparent');",
+    "      const { style } = this.o.container.parentNode; void style;",
+    "      this.o.container.parentNode[`sty${'le'}`].color = 'transparent';",
+    "      this.o.container.parentNode.style[`set${'Property'}`]('--ecco-fg', 'transparent');",
+    "      this.o.container.parentNode[['sty', 'le'].join('')].color = 'transparent';",
+  ];
+  assert.deepEqual(styleProblems(plainCode), [], 'the real source is clean by these same rules');
+  for (const f of forms) {
+    const planted = plainCode.replace(anchor, () => `${anchor}\n${f}`);
+    const bad = styleProblems(planted);
+    // the last form spells the word only in pieces: the structural rule is that no string ends in 'sty' and no join builds a name; that one is refused by the static source rules below
+    if (f.includes(".join('')")) assert.ok(bad.length > 0 || /\bjoin\(\s*['"`]{2}\s*\)/.test(planted), f);
+    else assert.notDeepEqual(bad, [], f);
+  }
+});
+
+// Review round 6 ([r6]), reviewer mutant K02 and the finding NIT-1: a catalogue is data, and a pattern in it was code. The rule is now that no expression is ever built from catalogue data at all.
+test('catalogue key patterns [r6]: no regular expression is built from data (the one RegExp constructor is the fixed list of read-only domains); the fragment rule is one literal, and its numbers agree with the exported limits', async () => {
+  const mod = await import(cardUrl);
+  assert.equal((code.match(/\bRegExp\b/g) || []).length, 1, 'RegExp is named once in the code: no alias, no second constructor, no .test on a built expression');
+  const line = code.split('\n').find((l) => /\bRegExp\b/.test(l));
+  assert.match(line, /^const MORE_INFO_ID = new RegExp\(`\^\(\?:\$\{MORE_INFO_DOMAINS\.join\('\|'\)\}\)/, 'and it is the one built from the constant list of domains');
+  assert.equal((code.match(/const EXTRA_FRAGMENT = \/\^\[a-z0-9_\]\{1,80\}\$\/;/g) || []).length, 1, 'the fragment rule is one literal');
+  assert.equal(mod.EXTRA_FRAGMENT_MAX, 80);
+  assert.equal(mod.EXTRA_FRAGMENTS_MAX, 40);
+  assert.match(code, /const EXTRA_KEY_CAP = 200;/);
+  assert.match(code, /const step = EXTRA_KEY_CAP - \(EXTRA_FRAGMENT_MAX - 1\);/, 'the windows overlap by one less than the longest fragment');
+  assert.equal(mod.LIMITS.scanBound, 20000);
+  assert.equal(mod.LIMITS.stringCap, 4000);
+  // the one place a string is read for secrets cuts nothing before it reads: the read comes first, the cut after, and a text over the bound is withheld without being read
+  const fn = code.slice(code.indexOf('function redactString('), code.indexOf('function redactNode('));
+  const order = ['if (s.length > LIMITS.scanBound) return WITHHELD;', 'if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;', 'const cut = t.length > LIMITS.stringCap'].map((x) => fn.indexOf(x));
+  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `bound, then read, then cut: ${order}`);
+  assert.equal((fn.match(/\.slice\(/g) || []).length, 1, 'redactString slices once, for the display, after the read');
+  assert.ok(fn.indexOf('.slice(') > order[1], 'and that slice is after the read');
+});

@@ -506,6 +506,42 @@ foreign_case("a package name 'ECCO Intelligence zz' (the slug is ecco_intelligen
              {PK + "ecco_zz.yaml": "template:\n  - sensor:\n      - name: 'ECCO Intelligence zz'\n        state: '1'\n"}, None)
 foreign_case("an entity of another family whose name merely contains ecco_intel later on", {PK + "ecco_zz.yaml": "input_boolean:\n  my_ecco_intel_flag:\n    name: 'x'\n"}, None)
 
+# ===========================================================================
+print("")
+print("[8] review round 6: a dashboard is decided by WHERE the file is, never by what it holds (reviewer mutant N-L11)")
+# ===========================================================================
+REG = G.PACKAGE_DASHBOARD_REL
+PROTO = "home-assistant/prototypes/intelligence-v1/"
+NL11 = "views: []\ntemplate:\n  - sensor:\n      - name: 'ECCO Intel zz probe'\n        state: '1'\n"
+foreign_case("[N-L11] a new package file with a top-level views key and a template sensor named 'ECCO Intel zz probe'", {PK + "ecco_zz_views.yaml": NL11}, "carries a top-level `views:` key")
+foreign_case("[N-L11] the same with the views key last", {PK + "ecco_zz_views.yaml": NL11.split("\n", 1)[1] + "views: []\n"}, "carries a top-level `views:` key")
+foreign_case("[N-L11] the views key in flow style (a text search for a line start cannot see it; the parsed file can)",
+             {PK + "ecco_zz_views.yaml": "{views: [], template: [{sensor: [{name: 'ECCO Intel zz probe', state: '1'}]}]}\n"}, "carries a top-level `views` key")
+foreign_case("a views key in a package that does not even spell ecco_intel is refused too (a package is not a dashboard)", {PK + "ecco_zz_views.yaml": "views: []\n"}, "carries a top-level `views:` key")
+foreign_case("a views key in an indented position is not a top-level key of the package (negative control)", {PK + "ecco_zz_views.yaml": "input_boolean:\n  zz:\n    name: zz\n    views: []\n"}, None)
+foreign_case("a package with no views key and a name that slugs to ecco_intel_ is still refused (the control of N-L11)",
+             {PK + "ecco_zz_views.yaml": NL11.split("\n", 1)[1]}, "(a name whose entity id is ecco_intel_...)")
+foreign_case("a file in a prototype folder that is not on the list, with a views key and a name that slugs to ecco_intel_, is checked as what it is (not a dashboard)",
+             {"home-assistant/prototypes/zz/dash.yaml": NL11}, "(a name whose entity id is ecco_intel_...)")
+foreign_case("the listed prototype dashboard may carry the label (it is on the list, by its path)",
+             {PROTO + "ecco_intelligence_v1_prototype_dashboard.yaml": "title: x\nviews:\n  - cards:\n      - type: tile\n        entity: sensor.ecco_intel_status\n        name: 'ECCO Intel status'\n"}, None)
+foreign_case("a file under dashboards/ with no views key at all is still a dashboard (by where it is): a label is only a label",
+             {DB + "ecco_zz.yaml": "cards:\n  - type: tile\n    entity: sensor.ecco_intel_status\n    name: 'ECCO Intel status'\n"}, None)
+REGISTRATION = "lovelace:\n  dashboards:\n    ecco-zz:\n      mode: yaml\n      title: zz\n      filename: \"%s\"\n"
+foreign_case("the real registration points at the real dashboard (negative control: nothing changes)", {}, None)
+foreign_case("a registration that points at a file the registration names makes that file a dashboard (a label there is a label)",
+             {REG: REGISTRATION % "ecco/prototypes/zz/registered.yaml", "home-assistant/prototypes/zz/registered.yaml": "cards:\n  - type: tile\n    name: 'ECCO Intel status'\n"}, None)
+foreign_case("the same file with no registration is checked as what it is (the control of the line above)",
+             {"home-assistant/prototypes/zz/registered.yaml": "cards:\n  - type: tile\n    name: 'ECCO Intel status'\n"}, "(a name whose entity id is ecco_intel_...)")
+foreign_case("a registration that points into packages/ is refused: a package cannot be a dashboard", {REG: REGISTRATION % "ecco/packages/ecco_zz.yaml"}, "a package cannot be a dashboard")
+foreign_case("a registration that leaves the repository is refused", {REG: REGISTRATION % "ecco/../../x.yaml"}, "leaves the repository")
+foreign_case("a registration with a file name that is not under ecco/ is ignored (nothing to read)", {REG: REGISTRATION % "elsewhere/x.yaml"}, None)
+check("the location table is data: dashboards/ and the one prototype dashboard", G.DASHBOARD_DIR_REL == "home-assistant/dashboards/" and G.PROTOTYPE_DASHBOARD_RELS == (PROTO + "ecco_intelligence_v1_prototype_dashboard.yaml",))
+check("the real registration resolves to the real dashboard file", G._registered_dashboard_files(ROOT) == {"home-assistant/dashboards/ecco_intelligence.yaml"}, str(G._registered_dashboard_files(ROOT)))
+check("every file the tool would take for a dashboard exists on disk (a stale list entry is an error)", all((ROOT / r).is_file() for r in G.PROTOTYPE_DASHBOARD_RELS))
+check("no file under home-assistant/packages/ holds a top-level views key (the real tree)",
+      not any(G.VIEWS_KEY_RE.search(p.read_text(encoding="utf-8")) for p in (ROOT / "home-assistant" / "packages").glob("*.y*ml")))
+
 print("")
 if FAILURES:
     print(f"{len(FAILURES)} check(s) FAILED:")

@@ -138,11 +138,38 @@ CASES = [
     ("an exception with an unknown reason", lambda c: c["exceptions"][0].__setitem__("reason", "inconvenient"), "reason: must be one of"),
     ("an unjustified exception (empty note)", lambda c: c["exceptions"][0].__setitem__("note", ""), "every exception is justified"),
     ("a redaction pattern in capitals", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["Token"]), "extra_key_patterns"),
+    # review round 6: a pattern is a PLAIN FRAGMENT (the card matches it as a part of a key name and builds no expression from it); each of these is refused, by place, as the card refuses it
+    ("a redaction pattern that is an anchored expression", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["^site_owner$"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a group and a repeat", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["(site|home)+_owner"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a wildcard", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["a.b"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a space", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["a b"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a hyphen", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["a-b"]), "extra_key_patterns[0]"),
+    ("an empty redaction pattern", lambda c: c["redaction"].__setitem__("extra_key_patterns", [""]), "extra_key_patterns[0]"),
+    ("a redaction pattern of 81 characters", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["a" * 81]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a trailing newline (a Python $ would accept it)", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["token\n"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a leading newline", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["\ntoken"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with an accented letter", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["caf\u00e9"]), "extra_key_patterns[0]"),
+    ("a redaction pattern with a full-width letter", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["\uff41bc"]), "extra_key_patterns[0]"),
+    ("a redaction pattern that is not text", lambda c: c["redaction"].__setitem__("extra_key_patterns", [5]), "extra_key_patterns[0]"),
+    ("a second pattern that is refused is named by its own place", lambda c: c["redaction"].__setitem__("extra_key_patterns", ["fine_one", "Bad"]), "extra_key_patterns[1]"),
+    ("forty-one redaction patterns (the card reads forty)", lambda c: c["redaction"].__setitem__("extra_key_patterns", [f"frg{i}z" for i in range(41)]), "at most 40 fragments"),
+    ("extra_key_patterns that is not a list", lambda c: c["redaction"].__setitem__("extra_key_patterns", "token"), "extra_key_patterns: a list of plain"),
     ("a catalogue that is not an object", lambda c: None, None),
 ]
 for name, fn, expect in CASES[:-1]:
     check(f"refused: {name}", has(mutated(fn), expect), "; ".join(G.validate_catalogue(mutated(fn))[:3]))
 check("refused: a catalogue that is not an object", G.validate_catalogue([]) != [] and G.validate_catalogue(None) != [])
+# the plain fragments that ARE accepted (and the limits themselves)
+for label, patterns in (("a one-character fragment", ["a"]), ("an underscore and digits", ["_", "0", "a_0"]), ("an 80-character fragment", ["a" * 80]),
+                        ("forty fragments", [f"frg{i}z" for i in range(40)]), ("no fragment at all", [])):
+    check(f"accepted: {label}", not any("extra_key_patterns" in e for e in G.validate_catalogue(mutated(lambda c, p=patterns: c["redaction"].__setitem__("extra_key_patterns", p)))),
+          "; ".join(G.validate_catalogue(mutated(lambda c, p=patterns: c["redaction"].__setitem__("extra_key_patterns", p)))[:3]))
+check("the limits of the rule are the card's: 1 to 80 characters, at most 40 fragments", G.PATTERN_RE.pattern == "[a-z0-9_]{1,80}" and G.PATTERN_MAX_COUNT == 40)
+check("the rule is applied with fullmatch, so a trailing newline is not a fragment", G.PATTERN_RE.fullmatch("token\n") is None and G.PATTERN_RE.match("token\n") is not None)
+check("the card holds the same numbers (a mirror, read from its source)",
+      "const EXTRA_FRAGMENT = /^[a-z0-9_]{1,80}$/;" in (ROOT / "frontend/ecco-mode-shell/ecco-mode-shell.js").read_text(encoding="utf-8")
+      and "export const EXTRA_FRAGMENTS_MAX = 40;" in (ROOT / "frontend/ecco-mode-shell/ecco-mode-shell.js").read_text(encoding="utf-8"))
+check("the committed catalogue's patterns are all plain fragments", all(G.PATTERN_RE.fullmatch(x) for x in cat["redaction"]["extra_key_patterns"]) and len(cat["redaction"]["extra_key_patterns"]) <= G.PATTERN_MAX_COUNT)
 check("the card may tolerate unknown keys: only strict mode refuses them (non-strict accepts the extra top-level key)",
       not has(mutated(lambda c: c.__setitem__("zz", 1)), "unknown key", strict=False))
 check("a wrong schema is refused even in non-strict mode", has(mutated(lambda c: c.__setitem__("schema", "x")), "catalogue.schema", strict=False))

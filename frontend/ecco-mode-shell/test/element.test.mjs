@@ -1002,7 +1002,7 @@ test('AC12 performance: the DOM never holds more rows than the page, whatever th
 });
 
 test('AC12 caps: a huge attribute is truncated with a marker in the DOM too', () => {
-  const states = miniStates((s) => { s['sensor.ecco_intel_new_diagnostic'].attributes.huge = 'z'.repeat(300000); });
+  const states = miniStates((s) => { s['sensor.ecco_intel_new_diagnostic'].attributes.huge = 'z'.repeat(LIMITS.scanBound - 1); });
   const el = mount({ states });
   geek(el);
   const r = rowFor(el, 'sensor.ecco_intel_new_diagnostic');
@@ -1828,4 +1828,137 @@ test('AC10 [r5] every kind at every offset holds on every DOM path: the rows, th
   } finally {
     clip.restore();
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 6 ([r6]): the sweep on the DOM paths. The core test (core.test.mjs) puts every kind at every offset through the redactor and the snapshot; this one takes the starts that matter most
+// (the start, the crossing of 500 and of 1000, the display cap, the very end) of every kind in every carrier and checks what a person can SEE or take away: the rows, the open attribute lists, the raw
+// view, the search box, the copy of everything and of one row, and both downloads.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC10 [r6] SWEEP on every DOM path: every kind at the start, across 500 and 1000, across the display cap and at the very end of 1500, 3999, 4000 and 4500 characters is in no row, no raw view, no search result, no copy and no download', async () => {
+  const { SWEEP_CARRIERS, sweepCases, benignControl, BENIGN_MARKERS } = await import('./secrets.mjs');
+  const starts = (k, total) => [...new Set([0, 500 - Math.ceil(k.value.length / 2), 1000 - Math.ceil(k.value.length / 2), 4000 - Math.ceil(k.value.length / 2), total - k.value.length])]
+    .filter((s) => s >= 0 && s + k.value.length <= total);
+  const all = [...sweepCases(SWEEP_CARRIERS, starts)];
+  assert.ok(all.length >= 200, `${all.length} cases`);
+  const clip = installClipboardAndDownload();
+  try {
+    for (let from = 0; from < all.length; from += 70) {
+      const cases = all.slice(from, from + 70);
+      const states = miniStates();
+      for (const c of cases) states[`sensor.ecco_intel_sw_${c.id}`] = mkState(`sensor.ecco_intel_sw_${c.id}`, 'ok', { sweep_note: c.text, friendly_name: `Sweep ${c.id}` });
+      if (from === 0) states['sensor.ecco_intel_sw_control'] = mkState('sensor.ecco_intel_sw_control', 'ok', { sweep_note: benignControl(), friendly_name: 'Sweep control' });
+      const el = mount({ states });
+      geek(el);
+      assert.ok(rows(el).length >= cases.length, `every swept entity is a row (${rows(el).length} of ${cases.length})`);
+      openEverything(el);
+      const text = allText(root(el));
+      const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+      for (const c of cases) {
+        assert.ok(!text.includes(c.probe), `${c.label}: the DOM carries ${c.probe.slice(0, 8)}`);
+        assert.ok(!text.includes(c.value), `${c.label}: the DOM carries the whole secret`);
+      }
+      assert.ok((raw.match(/"sweep_note": "\[withheld\]"/g) || []).length >= cases.length, 'the raw view says withheld for every one of them');
+      if (from === 0) for (const m of BENIGN_MARKERS) assert.ok(raw.includes(m), `the raw view of the harmless long text reaches ${m}`);
+      for (const probe of new Set(cases.map((c) => c.probe))) {
+        typeSearch(el, probe);
+        assert.equal(rows(el).length, 0, `a search for ${probe.slice(0, 8)} finds a row`);
+      }
+      if (from === 0) {
+        for (const m of BENIGN_MARKERS) {
+          typeSearch(el, m);
+          assert.equal(rows(el).length, 1, `the search reaches ${m} in the harmless long text`);
+        }
+      }
+      typeSearch(el, '');
+      const c0 = clip.clips.length;
+      const b0 = clip.blobs.length;
+      q(el, '[data-inspector-copy]').click();
+      await tick();
+      q(el, '[data-inspector-export="json"]').click();
+      q(el, '[data-inspector-export="csv"]').click();
+      for (const id of [`sensor.ecco_intel_sw_${cases[0].id}`, `sensor.ecco_intel_sw_${cases[cases.length - 1].id}`]) {
+        rowFor(el, id).querySelector('[data-inspector-copy="row"]').click();
+        await tick();
+      }
+      const outputs = [...clip.clips.slice(c0), ...(await Promise.all(clip.blobs.slice(b0).map((b) => b.text())))];
+      assert.equal(outputs.length, 5, 'one copy of every row, two row copies and two downloads');
+      for (const bytes of outputs) {
+        assert.ok(bytes.length > 100);
+        for (const c of cases) {
+          assert.ok(!bytes.includes(c.probe), `${c.label}: an output carries ${c.probe.slice(0, 8)}`);
+          assert.ok(!bytes.includes(c.value), `${c.label}: an output carries the whole secret`);
+        }
+      }
+      el.disconnectedCallback();
+    }
+  } finally {
+    clip.restore();
+  }
+});
+
+// Review round 6 ([r6]), reviewer mutant P07 (an extra inline custom property set on the shell by a bracket call next to the bar-segment call): the static pin now reads structure (static.test.mjs), and this
+// is the same net by what the code DOES, whatever its spelling: in both modes the only elements that ever carry an inline custom property are the bar segments (--ecco-w) and the tile rings (--ecco-p).
+test('AC6 [r6] inline style by behaviour: in both modes, after every kind of update, the only elements that carry an inline custom property are the bar segments (--ecco-w) and the rings (--ecco-p); the host, the shell, the strip and every ancestor carry none (reviewer mutant P07)', () => {
+  const el = mount();
+  const carriers = (where) => {
+    const seen = { seg: 0, ring: 0 };
+    const walk = (n) => {
+      if (n.nodeType !== 1) return;
+      const props = [...n._props.keys()];
+      if (props.length) {
+        if (n.getAttribute('data-seg') !== null) {
+          assert.deepEqual(props, ['--ecco-w'], `${where}: a bar segment`);
+          seen.seg += 1;
+        } else if ((n.getAttribute('class') || '').split(' ').includes('ring')) {
+          assert.deepEqual(props, ['--ecco-p'], `${where}: a ring`);
+          seen.ring += 1;
+        } else assert.fail(`${where}: <${n.tagName}> carries ${props.join(', ')}`);
+      }
+      n.childNodes.forEach(walk);
+    };
+    walk(root(el));
+    assert.deepEqual([...el._props.keys()], [], `${where}: the host element carries none`);
+    return seen;
+  };
+  const production0 = carriers('Production, first render');
+  geek(el);
+  const geek0 = carriers('Geek Mode, first render');
+  assert.ok(geek0.seg >= 1, 'the health bar has segments, so the net looks at something');
+  el.hass = makeHass(miniStates((s) => { s['sensor.ecco_intel_status'].state = 'unavailable'; }));
+  carriers('Geek Mode, after an update');
+  production(el);
+  carriers('Production, after switching back');
+  assert.ok(production0.seg + production0.ring + geek0.seg + geek0.ring > 0);
+  // negative control: the planted forms are each seen (a property written on the shell, on the strip and on the host, with the bar's own call)
+  for (const target of ['[data-ecco-alert-strip]', '.shell']) {
+    const node = q(el, target);
+    node.style.setProperty('--ecco-fg', 'transparent');
+    assert.throws(() => carriers(`planted on ${target}`), /carries --ecco-fg/);
+    node._props.clear();
+  }
+  el._props.set('--ecco-fg', 'transparent');
+  assert.throws(() => carriers('planted on the host'), /host element carries none/);
+  el._props.clear();
+  carriers('clean again');
+});
+
+// Review round 6 ([r6]): a text longer than LIMITS.scanBound is withheld whole, and the marker says why in words that are true for both causes (it is not necessarily secret).
+test('AC10 [r6] a value too long to be checked is withheld in the row, in the open attribute list and in the raw view, and the marker says "secret or private, or too long to be checked"', () => {
+  const states = miniStates((st) => { st['sensor.ecco_intel_new_diagnostic'].attributes.huge = 'q'.repeat(LIMITS.scanBound + 1); });
+  const el = mount({ states });
+  geek(el);
+  rowFor(el, 'sensor.ecco_intel_new_diagnostic').querySelector('[data-row-toggle]').click();
+  rowFor(el, 'sensor.ecco_intel_new_diagnostic').querySelector('[data-raw-toggle]').click();
+  const marks = qa(el, '[data-withheld]');
+  assert.ok(marks.length >= 1, 'the marker is shown');
+  for (const m of marks) {
+    assert.match(m.getAttribute('title'), /secret or private/);
+    assert.match(m.getAttribute('title'), /too long to be checked/);
+    assert.match(textOf(m), /Withheld/);
+  }
+  const text = allText(root(el));
+  assert.ok(!text.includes('q'.repeat(100)), 'nothing of the long text is anywhere in the DOM');
+  const raw = qa(el, '[data-inspector-raw]').map((n) => n.textContent).join('\n');
+  assert.match(raw, /"huge": "\[withheld\]"/);
 });

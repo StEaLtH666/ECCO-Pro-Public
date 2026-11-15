@@ -18,7 +18,7 @@ const snap = (mutate = null, catalogue = cat()) => buildSnapshot(miniStates(muta
 const row = (s, id) => s.rows.find((r) => r.id === id);
 const byEntity = (s, eid) => s.rows.find((r) => r.entity_id === eid);
 const dump = (v) => JSON.stringify(v);
-const EXTRA = { extraKeyPatterns: ['^site_owner$'] };
+const EXTRA = { extraKeyPatterns: ['site_owner'] };
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // the exports
@@ -256,7 +256,7 @@ test('AC10 redactAttributes: key NAMES that look secret are replaced by a marker
 });
 
 test('AC10 redactAttributes: the catalogue extra_key_patterns are honoured; a bad or dangerous pattern is ignored, never thrown', () => {
-  const out = redactAttributes({ site_owner: 'zq-owner', other: 'fine' }, { extraKeyPatterns: ['^site_owner$'] });
+  const out = redactAttributes({ site_owner: 'zq-owner', other: 'fine' }, { extraKeyPatterns: ['site_owner'] });
   assert.equal(out.site_owner, WITHHELD);
   assert.equal(out.other, 'fine');
   assert.doesNotThrow(() => redactAttributes({ a: 'b' }, { extraKeyPatterns: ['(', '[', '(a+)+$', 5, null, 'x'.repeat(500)] }));
@@ -288,7 +288,7 @@ test('AC10 redaction: a git revision is shown only under a revision key and only
 });
 
 test('AC10 redaction: huge values and structures are capped, with a marker, never an exception', () => {
-  const big = 'x'.repeat(200000);
+  const big = 'x'.repeat(LIMITS.scanBound - 1); // review round 6: the longest text the card reads; a longer one is withheld whole (the [r6] tests)
   const out = redactAttributes({ big, wide: Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`k${i}`, i])), long: Array.from({ length: 5000 }, (_, i) => i) });
   assert.ok(out.big.length < LIMITS.stringCap + 200);
   assert.match(out.big, /truncated/);
@@ -869,7 +869,7 @@ test('AC12 performance: updating one entity recomputes one row, the rest come fr
 });
 
 test('AC12 caps: an attribute far larger than the cap is truncated with a marker in the row, the raw text and the export', () => {
-  const huge = 'q'.repeat(600000);
+  const huge = 'q'.repeat(LIMITS.scanBound - 1); // review round 6: the longest text the card reads; a longer one is withheld whole (the [r6] tests)
   const s = snap((states) => {
     states['sensor.ecco_intel_new_diagnostic'].attributes.huge = huge;
     states['sensor.ecco_intel_new_diagnostic'].attributes.many = Array.from({ length: 9000 }, (_, i) => `item ${i}`);
@@ -1511,16 +1511,24 @@ test('AC10 [r5] the control: the same strings with the secret replaced by filler
   }
 });
 
-test('AC10 [r5] a secret wholly beyond the cap is dropped before the text is read, and the cut is said (nothing past the cap is kept, so nothing past it can leak)', () => {
+// Review round 6 (design section 18, finding NIT-2): a string is now READ WHOLE (up to LIMITS.scanBound) and cut at the display cap only afterwards. Round 5 cut first and read the kept part, so a
+// secret wholly beyond the cap was "dropped" and the text came out truncated and shown; now the secret is found where it lies and the whole text is withheld. The round-5 assertions about what
+// the output holds (no part of the secret, the cut said, bounded length) are kept below, for the same text WITHOUT the secret (the control); the one assertion that said the text with a secret
+// beyond the cap is not withheld is turned round, by owner direction ("redact first, then truncate").
+test('AC10 [r5] a secret wholly beyond the cap withholds the whole text (read before the cut, round 6); the same text without the secret is cut at the cap and the cut is said (nothing past the cap is kept)', () => {
   for (const k of [...POSITIONED_KINDS, ...SHORT_KINDS]) {
     const o = beyondCap(k.value);
     assert.ok(o.text.length > POSITION_CAP + 100);
     const r = redactValue(o.text, { key: 'note' });
-    assert.equal(typeof r, 'string');
-    assert.notEqual(r, WITHHELD, `${k.label}: the secret lies past the cap, so there is nothing in the kept text to withhold`);
-    assert.ok(!r.includes(k.probe), `${k.label}: the kept text holds no part of it`);
-    assert.match(r, /\[truncated \d+ more characters\]$/, `${k.label}: the cut is said`);
-    assert.ok(r.length < POSITION_CAP + 60);
+    assert.equal(r, WITHHELD, `${k.label}: the secret lies past the cap and is found there, so the whole text is withheld`);
+    const harmless = o.text.replace(k.value, filler(k.value.length));
+    assert.equal(harmless.length, o.text.length);
+    const c = redactValue(harmless, { key: 'note' });
+    assert.equal(typeof c, 'string');
+    assert.notEqual(c, WITHHELD, `${k.label}: without the secret there is nothing to withhold`);
+    assert.ok(!c.includes(k.probe), `${k.label}: the kept text holds no part of it`);
+    assert.match(c, /\[truncated \d+ more characters\]$/, `${k.label}: the cut is said`);
+    assert.ok(c.length < POSITION_CAP + 60);
   }
 });
 
@@ -1560,42 +1568,176 @@ test('AC10 [r5] every kind at every offset holds on every path of the core: row 
 });
 
 // Review round 5, NIT: the catalogue's extra key patterns are the one place where a catalogue (data) can make the page run an expression of its own.
-test('AC10 [r5] a catalogue pattern that repeats a group holding an alternation or a repeat, or repeats too much, is refused (ignored, never thrown); sound patterns still work (reviewer probe probe-redos)', () => {
+// Review round 6 (design section 18): a pattern is now a PLAIN FRAGMENT (^[a-z0-9_]{1,80}$), matched as a part of the key name, and no RegExp is ever built from catalogue data. The round-5 reader of
+// expressions (riskyPattern) is gone, because nothing is an expression any more: every pattern the round-5 tests refused is still refused (now because it is not a fragment), every one they
+// accepted as "sound" is written below as the fragment it meant, and each refusal is also a catalogue error, never a silent drop.
+const catWith = (patterns) => ({ ...miniCatalogue(), redaction: { extra_key_patterns: patterns } });
+const PATTERN_PATH = 'redaction.extra_key_patterns[0]';
+
+test('AC10 [r5] a catalogue pattern that is an expression (a repeated group, an alternation, anchors, repeats) is refused: ignored, never thrown, and a catalogue error; plain fragments still work (reviewer probe probe-redos)', () => {
   const refused = [['(a|aa)*c', 'aac'], ['(a|a?)+$', 'aaa'], ['((a|b))*c', 'abc'], ['(?:a|aa)+c', 'aac'], ['(x+x+)+y', 'xxy'], ['(a*)*b', 'ab'], ['(a|b){2,}c', 'abc'],
-    ['(a?)+b', 'ab'], ['((a+))+b', 'aab'], ['(?:(?:a+))+b', 'aab'], ['((a)?)+b', 'ab'], ['a*a*a*a*b', 'aaab'], ['.*.*.*.*x', 'ax'], ['a+a+a+a+b', 'aaaab']];
+    ['(a?)+b', 'ab'], ['((a+))+b', 'aab'], ['(?:(?:a+))+b', 'aab'], ['((a)?)+b', 'ab'], ['a*a*a*a*b', 'aaab'], ['.*.*.*.*x', 'ax'], ['a+a+a+a+b', 'aaaab'],
+    // the "sound" expressions of round 5 are expressions too: refused by the plain-fragment rule (their fragments are accepted below)
+    ['^site_owner$', 'site_owner'], ['^(?:foo|bar)_zzkey$', 'bar_zzkey'], ['^[a-z]+_(?:zztok|zzsec)$', 'cloud_zzsec'], ['^zz(?:ab|cd)?x$', 'zzcdx'], ['a*b*c*d', 'aabbccd'],
+    ['^[(|]+$', '(|('], ['\\(a|b\\)*c', 'zzb)c'],
+    // and the two that the round-6 reviewer used (a catalogue is hand-made data)
+    ['a*a*a*b', 'aaab'], ['(site|home)+_owner', 'home_owner']];
   for (const [pattern, key] of refused) {
     assert.equal(redactAttributes({ [key]: 'visible' }, { extraKeyPatterns: [pattern] })[key], 'visible', `${pattern} is ignored, so a key it would match is not withheld by it`);
     assert.ok(new RegExp(pattern, 'i').test(key), `${pattern} does match ${key} (the control: ignoring it is a decision of the card, not a typo here)`);
+    const v = validateCatalogue(catWith([pattern]));
+    assert.equal(v.ok, false, `${pattern} makes the catalogue invalid (the owner is told)`);
+    assert.deepEqual(v.errors.map((e) => e.path), [PATTERN_PATH], `${pattern}: one error, at the place of the pattern`);
   }
-  const sound = [['^site_owner$', 'site_owner'], ['^(?:foo|bar)_key$', 'bar_key'], ['owner', 'my_owner_name'], ['^[a-z]+_(?:token|secret)$', 'cloud_secret'], ['^zz(?:ab|cd)?x$', 'zzcdx'],
-    ['a*b*c*d', 'aabbccd'], ['^[(|]+$', '(|('], ['\\(a|b\\)*c', 'zzb)c']];
-  for (const [pattern, key] of sound) assert.equal(redactAttributes({ [key]: 'hidden' }, { extraKeyPatterns: [pattern] })[key], WITHHELD, `${pattern} withholds ${key}`);
-  // the work: a key that made the old reader run for a third of a second at 36 characters (and for minutes at 60) costs nothing now
+  // the plain fragments the round-5 "sound" patterns meant
+  const sound = [['site_owner', 'site_owner'], ['bar_zzkey', 'bar_zzkey'], ['bar_key', 'bar_key'], ['owner', 'my_owner_name'], ['cloud_zzsec', 'cloud_zzsec'], ['cloud_secret', 'cloud_secret'], ['zzcdx', 'zzcdx'], ['aabbccd', 'aabbccd'], ['home_owner', 'home_owner']];
+  for (const [pattern, key] of sound) {
+    assert.equal(redactAttributes({ [key]: 'hidden' }, { extraKeyPatterns: [pattern] })[key], WITHHELD, `${pattern} withholds ${key}`);
+    assert.equal(validateCatalogue(catWith([pattern])).ok, true, `${pattern} is a valid catalogue pattern`);
+  }
+  // the work: a key that made the round-4 reader run for a third of a second at 36 characters (and for minutes at 60) costs nothing now
   const t0 = performance.now();
   for (const n of [36, 60, 5000]) redactAttributes({ [`${'a'.repeat(n)}`]: 1 }, { extraKeyPatterns: ['(a|aa)*c', '(x+x+)+y', '(a|a?)+$'] });
   assert.ok(performance.now() - t0 < 250, `${(performance.now() - t0).toFixed(0)} ms`);
 });
 
-test('AC10 [r5] a catalogue pattern is never run on more than 200 characters of a key: a longer key is read from both ends, so a name hidden at the end of a long key is still found', () => {
-  const seen = [];
-  const original = RegExp.prototype.test;
-  RegExp.prototype.test = function spy(s) {
-    if (this.source === '^zzhead' || this.source === 'zzmark$' || this.source === 'zzshort') seen.push(String(s).length);
-    return original.call(this, s);
-  };
-  let out;
-  try {
-    out = redactAttributes({ [`zzhead${'k'.repeat(5000)}zzmark`]: 'v-long', zzshortkey: 'v-short', other: 'v-other' }, { extraKeyPatterns: ['^zzhead', 'zzmark$', 'zzshort'] });
-  } finally {
-    RegExp.prototype.test = original;
+test('AC10 [r6] a key pattern is a plain fragment, and nothing else: what is accepted, what is refused, and that every refusal is a catalogue error at its own place that echoes nothing (finding NIT-1: the home_owner pattern was dropped without a word)', () => {
+  const good = ['a', '_', '0', 'token', 'config_hash', 'a'.repeat(80), 'x9_y', 'zz_0', '__'];
+  for (const f of good) {
+    const v = validateCatalogue(catWith([f]));
+    assert.equal(v.ok, true, `${f.slice(0, 12)} is a fragment`);
+    assert.deepEqual(v.catalogue.redaction.extra_key_patterns, [f]);
+    assert.deepEqual(Object.values(redactAttributes({ [`pre_${f}_post`]: 'v' }, { extraKeyPatterns: [f] })), [WITHHELD], `${f.slice(0, 12)} withholds a key it is a part of`);
   }
-  assert.ok(seen.length >= 5, `the patterns were run (${seen.length} times)`);
-  assert.ok(Math.max(...seen) <= 200, `longest text a pattern was run on: ${Math.max(...seen)}`);
-  assert.deepEqual(Object.values(out).sort(), [WITHHELD, WITHHELD, 'v-other'].sort(), 'the long key is withheld through its start OR its end, the short one as before, the other is shown');
-  const endOnly = redactAttributes({ [`${'k'.repeat(5000)}zzmark`]: 'v' }, { extraKeyPatterns: ['zzmark$'] });
-  assert.deepEqual(Object.values(endOnly), [WITHHELD], 'a pattern that matches only the END of a 5000-character key still withholds');
-  const startOnly = redactAttributes({ [`zzhead${'k'.repeat(5000)}`]: 'v' }, { extraKeyPatterns: ['^zzhead'] });
-  assert.deepEqual(Object.values(startOnly), [WITHHELD], 'and one that matches only the START');
+  const bad = [['Zzmark', 'zzmark'], ['ZZMARK', 'zzmark'], ['zz mark', 'zz mark'], ['zz-mark', 'zz-mark'], ['zz.mark', 'zz-mark'], ['^zzmark', 'zzmark'], ['zzmark$', 'zzmark'], ['zzmark*', 'zzmark'],
+    ['(zzmark)', 'zzmark'], ['[zzmark]', 'z'], ['zz|mark', 'mark'], ['zzmark\n', 'zzmark'], ['\nzzmark', 'zzmark'], [' zzmark', 'zzmark'], ['zzmark ', 'zzmark'], ['', 'zzmark'], ['a'.repeat(81), 'a'.repeat(81)],
+    ['zzmérk', 'zzmerk'], ['zzｍark', 'zzmark'], ['zzмark', 'zzmark'], ['zz\u0000mark', 'zzmark'], ['zz\\d', 'zz1'], ['zz?', 'zz'], ['zz{2}', 'zzzz']];
+  for (const [f, key] of bad) {
+    const v = validateCatalogue(catWith([f]));
+    assert.equal(v.ok, false, `${JSON.stringify(f).slice(0, 20)} is refused`);
+    assert.deepEqual(v.errors.map((e) => e.path), [PATTERN_PATH]);
+    assert.ok(!JSON.stringify(v.errors).includes(f) || f.length < 4, 'the error never echoes the pattern');
+    assert.deepEqual(Object.values(redactAttributes({ [key]: 'visible' }, { extraKeyPatterns: [f] })), ['visible'], `${JSON.stringify(f).slice(0, 20)} withholds nothing`);
+  }
+  // not a string at all
+  for (const f of [5, null, undefined, {}, ['a'], true]) {
+    const v = validateCatalogue(catWith([f]));
+    assert.equal(v.ok, false);
+    assert.deepEqual(v.errors.map((e) => e.path), [PATTERN_PATH]);
+    assert.doesNotThrow(() => redactAttributes({ zzmark: 'v' }, { extraKeyPatterns: [f] }));
+  }
+  // each refused pattern has its own error, at its own index, among valid ones
+  const mixed = validateCatalogue(catWith(['aa_ok', 'Bad', 'bb_ok', '^x', 'cc_ok']));
+  assert.deepEqual(mixed.errors.map((e) => e.path), ['redaction.extra_key_patterns[1]', 'redaction.extra_key_patterns[3]']);
+  assert.deepEqual(mixed.catalogue.redaction.extra_key_patterns, ['aa_ok', 'bb_ok', 'cc_ok'], 'the sanitised copy keeps only the fragments');
+  // at most 40 are read, and the rest is not dropped in silence
+  const forty = Array.from({ length: 40 }, (_, i) => `frg${i}z`);
+  assert.equal(validateCatalogue(catWith(forty)).ok, true);
+  const over = validateCatalogue(catWith([...forty, 'frg40z']));
+  assert.equal(over.ok, false);
+  assert.deepEqual(over.errors.map((e) => e.path), ['redaction.extra_key_patterns']);
+  assert.equal(over.catalogue.redaction.extra_key_patterns.length, 40);
+  assert.equal(redactAttributes({ pre_frg39z_post: 'v', pre_frg40z_post: 'v' }, { extraKeyPatterns: [...forty, 'frg40z'] }).pre_frg40z_post, 'v', 'the forty-first is not read');
+  assert.equal(redactAttributes({ pre_frg39z_post: 'v' }, { extraKeyPatterns: [...forty, 'frg40z'] }).pre_frg39z_post, WITHHELD, 'the fortieth is');
+  // a list of a hundred thousand bad patterns makes forty-one errors, not a hundred thousand: each of the first forty by its place, then the one that says the list is too long
+  const hostile = validateCatalogue(catWith(Array.from({ length: 100000 }, () => 'Bad')));
+  assert.equal(hostile.ok, false);
+  assert.equal(hostile.errors.length, 41);
+  assert.deepEqual(hostile.errors.slice(-2).map((e) => e.path), ['redaction.extra_key_patterns[39]', 'redaction.extra_key_patterns']);
+  // a list that is not a list
+  for (const bogus of ['token', 5, {}, null]) {
+    const v = validateCatalogue({ ...miniCatalogue(), redaction: { extra_key_patterns: bogus } });
+    assert.equal(v.ok, false);
+    assert.deepEqual(v.errors.map((e) => e.path), ['redaction.extra_key_patterns']);
+  }
+  // and a catalogue with no redaction block, or an empty one, is fine
+  assert.equal(validateCatalogue({ ...miniCatalogue(), redaction: {} }).ok, true);
+  assert.equal(validateCatalogue({ ...miniCatalogue(), redaction: { extra_key_patterns: [] } }).ok, true);
+});
+
+// A fragment is looked for in a key in windows of at most 200 characters that overlap by one less than the longest fragment, so the work of one search is bounded and every part of the key is read.
+const KEY_FRAGMENTS = Object.freeze({ one: 'z', short: 'zzmarker', long: `zq${'k'.repeat(78)}` });
+const keyWith = (len, at, frag) => `${'k'.repeat(at)}${frag}${'k'.repeat(len - at - frag.length)}`;
+// the starts at which a fragment of length L crosses, or touches, the edge of a 200-character window of a key of length len (windows start every 121 characters): the first six windows, the last
+// four, and every 23rd between, each with the start of the window and the starts that end just before, at and after the window's end; plus the two ends of the key
+const STEP_EDGES = (len, L) => {
+  const out = new Set();
+  const windows = Math.ceil(len / 121);
+  for (let i = 0; i <= windows; i += 1) {
+    if (!(i < 6 || i > windows - 4 || i % 23 === 0)) continue;
+    const end = i * 121 + 200;
+    for (let st = end - L - 2; st <= end + 2; st += 1) out.add(st);
+    for (let st = i * 121 - 2; st <= i * 121 + 2; st += 1) out.add(st);
+  }
+  for (let st = 0; st <= 3; st += 1) out.add(st);
+  for (let st = len - L - 3; st <= len - L; st += 1) out.add(st);
+  return [...out].filter((st) => st >= 0 && st + L <= len);
+};
+
+test('AC10 [r6] a key fragment is found wherever it lies in a key of any length up to the bound: every offset of keys up to 260 characters, the window edges of longer ones, and the key as long as the card reads', () => {
+  assert.equal(LIMITS.scanBound, 20000);
+  for (const [name, frag] of Object.entries(KEY_FRAGMENTS)) {
+    const patterns = [frag];
+    const lengths = [];
+    for (let len = frag.length; len <= 260; len += 1) lengths.push(len);
+    for (const len of lengths) {
+      for (let at = 0; at + frag.length <= len; at += 1) {
+        const key = keyWith(len, at, frag);
+        assert.deepEqual(Object.values(redactAttributes({ [key]: 'v' }, { extraKeyPatterns: patterns })), [WITHHELD], `${name}: key of ${len} with the fragment at ${at}`);
+      }
+    }
+    for (const len of [261, 320, 321, 399, 400, 401, 442, 443, 520, 1200, 1201, 5000, 19999, LIMITS.scanBound]) {
+      for (const at of STEP_EDGES(len, frag.length)) {
+        const key = keyWith(len, at, frag);
+        const out = redactAttributes({ [key]: 'v' }, { extraKeyPatterns: patterns });
+        assert.deepEqual(Object.values(out), [WITHHELD], `${name}: key of ${len} with the fragment at ${at}`);
+      }
+    }
+    // the control: the same keys without the fragment show their value, so the withholding above is the fragment and not the length of the key
+    for (const len of [1, 80, 200, 201, 400, 1200, 5000, LIMITS.scanBound]) {
+      const key = 'k'.repeat(len);
+      assert.deepEqual(Object.values(redactAttributes({ [key]: 'v' }, { extraKeyPatterns: patterns })), ['v'], `${name}: a key of ${len} without it`);
+    }
+  }
+  // case does not matter, and a name split by nothing is still a part of the key
+  assert.equal(redactAttributes({ Pre_ZZMarker_Post: 'v' }, { extraKeyPatterns: ['zzmarker'] }).Pre_ZZMarker_Post, WITHHELD);
+});
+
+test('AC10 [r6] a key longer than the bound is not read in part: its value is withheld; the whole key is read up to the bound (finding K02: the work of a search is bounded, never skipped)', () => {
+  const longest = 'k'.repeat(LIMITS.scanBound);
+  assert.deepEqual(Object.values(redactAttributes({ [longest]: 'v' })), ['v'], 'a key at the bound is read, and nothing in it is secret');
+  assert.deepEqual(Object.values(redactAttributes({ [`${longest}k`]: 'v' })), [WITHHELD], 'one character more and it is not read at all, so its value is withheld');
+  assert.deepEqual(Object.values(redactAttributes({ [`${longest}k`]: 'v' }, { extraKeyPatterns: ['zzmarker'] })), [WITHHELD]);
+  assert.deepEqual(Object.values(redactAttributes({ ['k'.repeat(100000)]: 'v' })), [WITHHELD]);
+});
+
+test('AC10 [r6] a fragment is never searched in more than 200 characters of a key at one time, and the whole key is still read (reviewer mutant K02: the whole key, and an unbounded slice)', () => {
+  const seen = [];
+  const original = String.prototype.includes;
+  const names = Object.values(KEY_FRAGMENTS);
+  const results = {};
+  // eslint-disable-next-line no-extend-native
+  String.prototype.includes = function spy(x, ...rest) {
+    if (names.includes(x)) seen.push(String(this).length);
+    return original.call(this, x, ...rest);
+  };
+  try {
+    for (const [name, frag] of Object.entries(KEY_FRAGMENTS)) {
+      // one call for each key: two long keys that differ only past the 120 characters shown would share a displayed name
+      results[name] = [keyWith(5000, 2500, frag), keyWith(5000, 0, frag), keyWith(5000, 5000 - frag.length, frag), keyWith(1200, 600, frag), 'other']
+        .map((key) => Object.values(redactAttributes({ [key]: 'v' }, { extraKeyPatterns: [frag] }))[0]);
+    }
+  } finally {
+    String.prototype.includes = original;
+  }
+  assert.ok(seen.length >= 150, `the fragments were searched (${seen.length} times)`);
+  assert.ok(Math.max(...seen) <= 200, `longest text a fragment was searched in: ${Math.max(...seen)}`);
+  for (const [name, values] of Object.entries(results)) assert.deepEqual(values, [WITHHELD, WITHHELD, WITHHELD, WITHHELD, 'v'], `${name}: found in the middle, at the head, at the tail and in a key of 1200; the other key is shown`);
+  // the work with many fragments and a long key: forty fragments of eighty characters against keys of 1200 and of the bound cost next to nothing
+  const many = Array.from({ length: 40 }, (_, i) => `${String.fromCharCode(97 + (i % 20))}${'k'.repeat(77)}${i % 10}x`);
+  const t0 = performance.now();
+  for (const n of [1200, LIMITS.scanBound]) for (let rep = 0; rep < 20; rep += 1) redactAttributes({ [`${'k'.repeat(n)}`]: 1 }, { extraKeyPatterns: many });
+  assert.ok(performance.now() - t0 < 1000, `${(performance.now() - t0).toFixed(0)} ms for 40 fragments against 40 keys of 1200 and 20000 characters`);
 });
 
 test('AC16 [r5] validateConfig reports every problem with a path and a fixed message, and echoes no value (the strip line is built from these)', () => {
@@ -1605,4 +1747,259 @@ test('AC16 [r5] validateConfig reports every problem with a path and a fixed mes
   assert.ok(bad.errors.every((e) => typeof e.message === 'string' && e.message.length > 10 && !e.message.includes('"x"')));
   assert.deepEqual(bad.production, []);
   assert.equal(validateConfig(undefined).errors.length, 1);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 6 ([r6]): THE SWEEP. Round 5 put each kind of secret at four offsets; the reviewer's mutants S01 (skip the first character of a long text), S02 (read the last 3999 characters) and S06 and
+// S07 (read in chunks of 500 and 1000 with no overlap) survived all of them. The class is "every character is read, whatever shape the scan has", so the tests below close the class and not the four
+// instances: every kind at every offset (short kinds) or at every boundary and a stride (the others), in carriers of 1500, 3999, 4000 and 4500 characters (12000 and 20000 sparsely), on every path.
+// Design section 18 says what each closes. Round 6 also reads a string whole BEFORE it is cut at the display cap (so a secret that crosses the cap cannot leave a part of itself in view), up to a hard
+// bound (LIMITS.scanBound), and withholds a longer string whole.
+// ---------------------------------------------------------------------------------------------------------------------------
+import { SWEEP_CARRIERS, SWEEP_LONG_CARRIERS, SWEEP_BOUNDARIES, SWEEP_KINDS, SPLIT_KINDS, isShortKind, carrier, sweepStarts, pathStarts, sweepCases } from './secrets.mjs';
+
+const DENSE = (k, total) => sweepStarts(k.value.length, total, { dense: isShortKind(k) });
+const PATHS = (k, total) => pathStarts(k.value.length, total);
+const SPARSE_LONG = (k, total) => sweepStarts(k.value.length, total, { stride: 997 });
+
+test('AC10 [r6] the sweep fixtures are what they say: twelve kinds, the pinned carriers and boundaries, every offset for the short kinds, the boundary neighbourhoods for the rest, every text exactly its length with the secret exactly where it was put', () => {
+  assert.equal(SWEEP_KINDS.length, 12);
+  assert.deepEqual(SPLIT_KINDS.map((k) => k.label), ['password pair across a newline', 'password pair with spaces around the equals sign']);
+  assert.ok(SPLIT_KINDS[0].value.includes('\n') && SPLIT_KINDS[1].value.includes(' '));
+  assert.deepEqual([...SWEEP_CARRIERS], [1500, 3999, 4000, 4500]);
+  assert.deepEqual([...SWEEP_LONG_CARRIERS], [12000, 20000]);
+  assert.deepEqual([...SWEEP_BOUNDARIES], [0, 1, 2, 255, 256, 257, 499, 500, 501, 511, 512, 513, 999, 1000, 1001, 1023, 1024, 1025, 2047, 2048, 2049, 3990, 3999, 4000, 4001]);
+  assert.deepEqual(SWEEP_KINDS.filter(isShortKind).map((k) => k.label).sort(), ['email', 'email (short)', 'ipv4', 'ipv4 (short)', 'mac', 'password pair', 'password pair across a newline',
+    'password pair with spaces around the equals sign']);
+  for (const k of SWEEP_KINDS) {
+    const len = k.value.length;
+    assert.equal(filler(30000).includes(k.probe), false, `${k.label}: the filler cannot hold the probe`);
+    assert.ok(k.value.includes(k.probe));
+    for (const total of [...SWEEP_CARRIERS, ...SWEEP_LONG_CARRIERS]) {
+      const max = total - len;
+      const starts = sweepStarts(len, total, { dense: isShortKind(k) });
+      assert.equal(starts[0], 0);
+      assert.equal(starts[starts.length - 1], max, `${k.label}: the last start puts the secret at the very end of ${total}`);
+      assert.equal(new Set(starts).size, starts.length);
+      if (isShortKind(k)) assert.equal(starts.length, max + 1, `${k.label}: every offset of ${total}`);
+      const have = new Set(sweepStarts(len, total));
+      for (const b of SWEEP_BOUNDARIES) for (let s = b - len - 3; s <= b + 3; s += 1) if (s >= 0 && s <= max) assert.ok(have.has(s), `${k.label}: start ${s} (boundary ${b}) in ${total}`);
+      for (let s = 0; s <= max; s += 37) assert.ok(have.has(s), `${k.label}: the stride reaches ${s}`);
+      for (const s of [starts[0], starts[Math.floor(starts.length / 2)], max]) {
+        const text = carrier(k.value, s, total);
+        assert.equal(text.length, total);
+        assert.equal(text.slice(s, s + len), k.value);
+        assert.equal(text.split(k.probe).length - 1, 1, `${k.label}: the probe occurs once`);
+      }
+    }
+  }
+  assert.throws(() => carrier('abc', 99, 100), /cannot hold/);
+  let dense = 0;
+  let reduced = 0;
+  for (const k of SWEEP_KINDS) {
+    for (const total of SWEEP_CARRIERS) {
+      dense += DENSE(k, total).length;
+      reduced += PATHS(k, total).length;
+    }
+  }
+  assert.ok(dense >= 100000 && dense < 140000, `${dense} cases in the core sweep`);
+  assert.ok(reduced >= 1500 && reduced < 2500, `${reduced} cases on the row paths`);
+});
+
+test('AC10 [r6] SWEEP: every kind is withheld at every offset of a text of 1500, 3999, 4000 and 4500 characters (every offset for the short kinds, the boundaries and a stride of 37 for the rest): a reader of a prefix, a suffix, a window, chunks, lines or words fails here (reviewer mutants S01, S02, S06, S07)', () => {
+  let n = 0;
+  const failures = [];
+  for (const c of sweepCases(SWEEP_CARRIERS, DENSE)) {
+    n += 1;
+    if (redactValue(c.text, { key: 'note' }) !== WITHHELD) failures.push(c.label);
+  }
+  assert.ok(n >= 100000, `${n} cases`);
+  assert.deepEqual(failures.slice(0, 8), [], `${failures.length} of ${n} cases show the secret`);
+});
+
+test('AC10 [r6] SWEEP: and in texts of 12000 and 20000 characters (the longest the card reads), at the boundaries, a stride of 997 and both ends', () => {
+  let n = 0;
+  const failures = [];
+  for (const c of sweepCases(SWEEP_LONG_CARRIERS, SPARSE_LONG)) {
+    n += 1;
+    if (redactValue(c.text, { key: 'note' }) !== WITHHELD) failures.push(c.label);
+  }
+  assert.ok(n >= 5000, `${n} cases`);
+  assert.deepEqual(failures.slice(0, 8), [], `${failures.length} of ${n} cases show the secret`);
+});
+
+test('AC10 [r6] SWEEP: every door of the core, not only a bare string under a key: no key, a dict value, a list item, an attribute object, at the boundary starts of every carrier', () => {
+  const failures = [];
+  let n = 0;
+  for (const c of sweepCases([...SWEEP_CARRIERS, ...SWEEP_LONG_CARRIERS], PATHS)) {
+    n += 1;
+    const doors = [redactValue(c.text), redactValue({ a: { b: [c.text] } }).a.b[0], redactValue({ [`k_${c.id}`]: c.text })[`k_${c.id}`], redactAttributes({ sweep_note: c.text }).sweep_note,
+      redactValue([c.text, 'x'])[0], redactValue(c.text, { key: 'git_sha' }), redactValue(c.text, { key: 'note', extraKeyPatterns: ['site_owner'] })];
+    if (doors.some((d) => d !== WITHHELD)) failures.push(c.label);
+  }
+  assert.ok(n >= 2500, `${n} cases`);
+  assert.deepEqual(failures.slice(0, 8), [], `${failures.length} cases show the secret`);
+});
+
+test('AC10 [r6] the control: the same carriers with the secret replaced by filler are shown whole up to the display cap, and cut there with the cut said above it; so the withholding of the sweep is the secret, not the length of the text', () => {
+  const cap = LIMITS.stringCap;
+  const expected = (clean) => (clean.length > cap ? `${clean.slice(0, cap)}… [truncated ${clean.length - cap} more characters]` : clean);
+  let n = 0;
+  for (const c of sweepCases(SWEEP_CARRIERS, PATHS)) {
+    const clean = c.text.slice(0, c.start) + filler(c.value.length) + c.text.slice(c.start + c.value.length);
+    assert.equal(clean.length, c.total);
+    assert.equal(redactValue(clean, { key: 'note' }), expected(clean), `${c.label}: without the secret`);
+    n += 1;
+  }
+  assert.ok(n >= 600);
+  for (const total of [1500, 3999, 4000, 4001, 4500, 12000, 19999, LIMITS.scanBound]) {
+    const clean = filler(total);
+    assert.equal(redactValue(clean, { key: 'note' }), expected(clean), `harmless text of ${total}`);
+  }
+  assert.equal(redactValue(filler(4000), { key: 'note' }).length, 4000, 'a text exactly at the cap is whole, with no marker');
+  assert.match(redactValue(filler(4001), { key: 'note' }), /… \[truncated 1 more characters\]$/);
+});
+
+test('AC10 [r6] a secret that CROSSES the display cap is never partly shown (design 17.2, the finding NIT-2): the text is read whole and then cut, so every start from 3 characters before a secret would end at the cap to 3 after the cap withholds the whole text', () => {
+  const failures = [];
+  let n = 0;
+  for (const k of SWEEP_KINDS) {
+    for (const total of [4001, 4004, 4500, 5000, 8000, 19999, LIMITS.scanBound]) {
+      for (let s = 4000 - k.value.length - 3; s <= 4003; s += 1) {
+        if (s < 0 || s + k.value.length > total) continue;
+        n += 1;
+        const r = redactValue(carrier(k.value, s, total), { key: 'note' });
+        if (r !== WITHHELD) failures.push(`${k.label} at ${s} of ${total}: ${typeof r === 'string' ? r.slice(Math.max(0, s - 5), 4010) : r}`);
+      }
+    }
+  }
+  assert.ok(n >= 400, `${n} cases`);
+  assert.deepEqual(failures.slice(0, 5), [], `${failures.length} cases leave a part of the secret in view`);
+  // the reviewer's picture of the gap: a ten-character address that starts five characters before the cap, in a text that goes on
+  const ip = ['10', '20', '30', '4'].join('.');
+  const t = `${filler(3994)} ${ip} ${filler(600)}`;
+  assert.equal(t.indexOf(ip), 3995);
+  assert.equal(redactValue(t, { key: 'note' }), WITHHELD, 'it used to come out as "...10.2" before the cut mark');
+});
+
+test('AC10 [r6] a text longer than LIMITS.scanBound is not read in part: it is withheld whole, with or without a secret; a text of exactly the bound is read and cut as before', () => {
+  assert.equal(LIMITS.scanBound, 20000);
+  assert.equal(LIMITS.stringCap, 4000);
+  assert.equal(redactValue(filler(LIMITS.scanBound + 1), { key: 'note' }), WITHHELD);
+  assert.equal(redactValue(filler(LIMITS.scanBound + 1)), WITHHELD, 'with no key');
+  assert.equal(redactValue('x'.repeat(200000)), WITHHELD);
+  assert.equal(redactValue('q'.repeat(600000), { key: 'note' }), WITHHELD);
+  assert.equal(redactValue({ a: [filler(LIMITS.scanBound + 1)] }).a[0], WITHHELD, 'nested in a list in a dict');
+  assert.equal(typeof redactValue(filler(LIMITS.scanBound), { key: 'note' }), 'string');
+  assert.notEqual(redactValue(filler(LIMITS.scanBound), { key: 'note' }), WITHHELD);
+  assert.match(redactValue(filler(LIMITS.scanBound), { key: 'note' }), /\[truncated 16000 more characters\]$/);
+  // a public git revision is still shown under a revision key, and a longer hex text is not
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  assert.equal(redactValue(sha, { key: 'git_sha' }), sha);
+  assert.equal(redactValue(sha + 'a'.repeat(LIMITS.scanBound), { key: 'git_sha' }), WITHHELD);
+  // the work: a huge text costs a length test, not a scan
+  const t0 = performance.now();
+  const z = 'z'.repeat(1000000);
+  for (let i = 0; i < 50; i += 1) redactValue(z, { key: 'note' });
+  assert.ok(performance.now() - t0 < 100, `${(performance.now() - t0).toFixed(0)} ms`);
+  // through a snapshot: the huge attribute is withheld in the row, in the raw attributes, in the search text and in both exports, and says so
+  const huge = 'q'.repeat(600000);
+  const s = snap((states) => { states['sensor.ecco_intel_new_diagnostic'].attributes.huge = huge; });
+  const r = byEntity(s, 'sensor.ecco_intel_new_diagnostic');
+  const a = r.attributes.find((x) => x.path === 'huge');
+  assert.equal(r.redacted.huge, WITHHELD);
+  assert.equal(a.withheld, true);
+  assert.ok(r.withheld >= 1);
+  const exported = exportRows([r], 'json', { nowMs: NOW }) + exportRows([r], 'csv', { nowMs: NOW });
+  assert.ok(exported.length < 100000 && !exported.includes('q'.repeat(100)), 'nothing of it is exported');
+  assert.ok(!r.searchText.includes('q'.repeat(100)));
+});
+
+test('AC10 [r6] SWEEP, row paths: every kind at the boundary starts of every carrier is withheld in the row text, the redacted raw attributes, the search index, the state and both exports; the harmless control is whole', () => {
+  const cases = [...sweepCases(SWEEP_CARRIERS, PATHS)];
+  assert.ok(cases.length >= 1500);
+  const s = snap((states) => {
+    for (const c of cases) {
+      states[`sensor.ecco_intel_sw_${c.id}`] = mkState(`sensor.ecco_intel_sw_${c.id}`, 'ok', { sweep_note: c.text, friendly_name: `Sweep ${c.id}` });
+      states[`sensor.ecco_intel_swstate_${c.id}`] = mkState(`sensor.ecco_intel_swstate_${c.id}`, c.text, { friendly_name: `Sweep state ${c.id}` });
+    }
+    states['sensor.ecco_intel_sw_control'] = mkState('sensor.ecco_intel_sw_control', 'ok', { sweep_note: filler(3999) });
+  });
+  const byId = new Map(s.rows.map((r) => [r.entity_id, r]));
+  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_sw')).length, 2 * cases.length + 1, 'every swept entity is a row');
+  const failures = [];
+  for (const c of cases) {
+    const attrRow = byId.get(`sensor.ecco_intel_sw_${c.id}`);
+    const stateRow = byId.get(`sensor.ecco_intel_swstate_${c.id}`);
+    if (attrRow.redacted.sweep_note !== WITHHELD) failures.push(`${c.label}: attribute`);
+    if (stateRow.stateText !== WITHHELD) failures.push(`${c.label}: the state`);
+    if (attrRow.attributes.every((x) => !x.withheld)) failures.push(`${c.label}: the row does not say withheld`);
+  }
+  assert.deepEqual(failures.slice(0, 8), []);
+  const all = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText, r.title]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const probe of new Set(cases.map((c) => c.probe))) {
+    assert.ok(!all.includes(probe), `a row carries ${probe.slice(0, 8)}`);
+    assert.ok(!exported.includes(probe), `an export carries ${probe.slice(0, 8)}`);
+    assert.equal(searchRows(s.rows, probe).length, 0, `a search for ${probe.slice(0, 8)} finds a row`);
+  }
+  for (const k of SWEEP_KINDS) assert.ok(!all.includes(k.value) && !exported.includes(k.value), `${k.label}: the whole secret is nowhere`);
+  assert.ok(s.counts.withheld >= 2 * cases.length, 'each withheld value is counted');
+  assert.equal(byId.get('sensor.ecco_intel_sw_control').redacted.sweep_note, filler(3999), 'the harmless control is whole');
+  assert.equal(searchRows(s.rows, 'planner checked').filter((r) => r.entity_id === 'sensor.ecco_intel_sw_control').length, 1, 'and found');
+});
+
+test('AC10 [r6] a secret inside a long KEY NAME is never shown: at every offset of a 300-character key, for every kind (the name is read whole, and only its first 120 characters are ever shown)', () => {
+  const failures = [];
+  let n = 0;
+  for (const k of SWEEP_KINDS) {
+    for (let s = 0; s + k.value.length <= 300; s += 1) {
+      const out = redactAttributes({ [carrier(k.value, s, 300)]: 'v' });
+      const shown = Object.keys(out)[0];
+      n += 1;
+      if (shown.includes(k.value.slice(0, 6)) || shown.includes(k.probe)) failures.push(`${k.label} at ${s}: ${shown.slice(0, 40)}`);
+    }
+  }
+  assert.ok(n >= 3000, `${n} keys`);
+  assert.deepEqual(failures.slice(0, 5), []);
+  // and the control: the same keys with filler shown as they are (cut at 120, with the cut said)
+  const plain = redactAttributes({ [filler(300)]: 'v' });
+  assert.deepEqual(Object.keys(plain), [`${filler(120)}… [truncated 180 more characters]`]);
+});
+
+test('AC12 [r6] reading every string whole keeps the budgets: two thousand entities with a harmless 4500-character text snapshot in well under a few seconds, and the three read-ahead rules are not walked once per start (a 20000-character text that only looks like the start of a host name, a MAC address or a pass pair)', () => {
+  const text = filler(4500);
+  const t0 = performance.now();
+  const s = snap((states) => {
+    for (let i = 0; i < 2000; i += 1) states[`sensor.ecco_intel_long_${i}`] = mkState(`sensor.ecco_intel_long_${i}`, 'ok', { long_text: text });
+  });
+  const ms = performance.now() - t0;
+  assert.equal(s.rows.filter((r) => r.entity_id.startsWith('sensor.ecco_intel_long_')).length, 2000);
+  assert.equal(byEntity(s, 'sensor.ecco_intel_long_7').redacted.long_text, `${text.slice(0, 4000)}… [truncated 500 more characters]`);
+  assert.ok(ms < 4000, `${ms.toFixed(0)} ms for 2000 entities of 4500 characters`);
+  // shapes that made the host-name, dotted-MAC and pass-pair rules quadratic when read whole at 20000 characters (about 700 ms between them without the pre-tests, about 1 ms with)
+  const shapes = ['a.'.repeat(10000), 'xy-'.repeat(6666), `${'a-'.repeat(9990)}.x`, 'abc.'.repeat(4999), `${'x-'.repeat(9990)}pass`];
+  const t1 = performance.now();
+  for (const shape of shapes) {
+    assert.ok(shape.length <= LIMITS.scanBound);
+    assert.notEqual(redactValue(shape, { key: 'note' }), WITHHELD, 'harmless text');
+  }
+  assert.ok(performance.now() - t1 < 150, `${(performance.now() - t1).toFixed(0)} ms for five 20000-character texts`);
+});
+
+test('AC10 [r6] the pre-tests of the three read-ahead rules are necessary conditions: every shape the rules matched before is still withheld, in any case, alone and in a long text; the near misses are shown', () => {
+  const join = (...p) => p.join('');
+  const suffixes = ['local', 'lan', 'internal', 'home.arpa', 'localdomain'];
+  const hosts = suffixes.flatMap((x) => [join('nas', '.', x), join('NAS', '.', x.toUpperCase()), join('a-b.c1', '.', x), join('see ', 'nas', '.', x, ' now')]);
+  const macs = [join('aabb', '.', 'ccdd', '.', 'eeff'), join('AABB', '.', 'CCDD', '.', 'EEFF'), join('aAbB', '.', 'cCdD', '.', 'eEfF'), join('at ', 'a1b2', '.', 'c3d4', '.', 'e5f6', ' today')];
+  const passes = [join('"pa', 'ss": "hun', 'ter22"'), join("'p", "w' : 'hun", "ter22'"), join('"db_pa', 'ss"\t:\t"hun', 'ter22"'), join('pa', 'ss=hun', 'ter22'), join('P', 'W=hun', 'ter22'),
+    join('Wifi-Pa', 'ss=hun', 'ter22'), join('x ', '"PA', 'SS" : hun', 'ter22')];
+  for (const text of [...hosts, ...macs, ...passes]) {
+    assert.equal(redactValue(text, { key: 'note' }), WITHHELD, text);
+    assert.equal(redactValue(`${filler(2000)} ${text} ${filler(2000)}`, { key: 'note' }), WITHHELD, `in a long text: ${text}`);
+  }
+  assert.equal(hosts.length, 20);
+  for (const text of ['nas.localhost', 'a.landing', 'x.internalsystem', 'x.home.arpas', 'version 2026.1114.0900', 'abc.abc.abc', 'compass=north', 'bypass: true', 'the pass was easy', 'pw is short', 'a.b.c.d.e']) {
+    assert.notEqual(redactValue(text, { key: 'note' }), WITHHELD, text);
+  }
 });
