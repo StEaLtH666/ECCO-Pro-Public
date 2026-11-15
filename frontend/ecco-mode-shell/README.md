@@ -136,6 +136,11 @@ source is excluded on purpose. What it does NOT catch is listed honestly in sect
 degrees-minutes-seconds position, a phone number, a post code, a chat-bot token inside a URL path, a compact word such as `wifipassword`, a prose sentence such as
 `mqtt pass hunter22`, `p@ss: hunter22`, a `0x` hex literal of a MAC address and an all-digit MAC address written with spaces, which cannot be told from six numbers).
 
+Every string is read **whole**, up to a cap of 4000 characters: a longer one is cut before it is read and says so, so nothing past the cap is kept (the tests place each kind of secret at
+offsets 100, 1500, 3990 and 4000 of such a text, section 17.2 of the design document; a secret that straddles the cap may leave the few characters before it, section 17.2). The catalogue's
+key patterns are code that a catalogue (data) supplies, so they are screened: a pattern that repeats a group holding a repeat or an alternation, is unbalanced or holds more than three unbounded
+repeats is ignored, and a pattern is never run on more than 200 characters of a key (a longer key is read from both ends), section 17.4.
+
 ## Use
 
 ```yaml
@@ -215,27 +220,27 @@ read-only `mode` getter (assigning it throws).
 ```
 cls
 cd frontend\ecco-mode-shell
-node --test test/*.test.mjs                                  # everything, including the mutation proof (about five minutes)
+node --test test/*.test.mjs                                  # everything, including the mutation proof (about six minutes)
 $env:ECCO_SKIP_MUTATIONS = "1"; node --test test/*.test.mjs  # everything but the mutation proof (about half a minute)
 python -I -B -X utf8 test\test_example_dashboard.py          # the example wraps the existing cards unchanged and includes the real catalogue
 ```
 
 | File | What it proves |
 |---|---|
-| `test/core.test.mjs` | controller, catalogue validation, classification, redaction (hostile secrets assembled in code), snapshot, alerts, search, windowing, export, the child guard, performance |
-| `test/element.test.mjs` | AC1-AC14 and AC16 on the element against `test/minidom.mjs` (a node DOM that records every tag, attribute name and style property and **throws on innerHTML**) |
+| `test/core.test.mjs` | controller, catalogue validation, classification, redaction (hostile secrets assembled in code; since review round 5 also each kind of secret hidden at four offsets of a 4000-character text, and the screening of the catalogue's key patterns), snapshot, alerts, search, windowing, export, the child guard, performance |
+| `test/element.test.mjs` | AC1-AC14 and AC16 on the element against `test/minidom.mjs` (a node DOM that records every tag, attribute name and style property and **throws on innerHTML**; every element can take a shadow root, so a break that gives one to the strip is seen); since round 5 also where the strip sits in the shell in both modes, the configuration warning, and the positioned secrets on every DOM path |
 | `test/coverage.test.mjs` | the card-side coverage check, generic: on the mini fixtures by default; set `ECCO_GEEK_CATALOGUE`, `ECCO_GEEK_STATES` and `ECCO_GEEK_NOW` to run it on any catalogue and fixture |
 | `test/real-catalogue.test.mjs` | the card on the REAL catalogue, ledger and fixtures: AC6 (every alert, every way it can fire, both modes, never silent), AC7, AC8, AC9, AC10 on the noise decoys, AC11, AC12 and AC15 (card and ledger agree) |
-| `test/static.test.mjs` | forbidden APIs absent, `hass` reads pinned, names never computed from data, one adapter / one strip renderer, ASCII-only source, no secret-shaped text in the folder, and the STYLESHEET itself: no mode-dependent selector except the switch thumb; no hiding declaration except the `[hidden]` rule; only the pinned selectors may name the alert strip; no rule but `[hidden]` may use `:has()`, `:is()`, a positional pseudo-class, the hidden attribute or a sibling combinator; and a rule that can reach the strip may not carry a negative, huge or unjudgeable margin, inset, offset or translation, a negative z-index, an animation or a clip to a sliver of height, so no mode can hide, shift or clip the alert strip. Review round 3 added three nets that do not ask "is this a known way to hide it": the PIN (every rule, selector and declaration of the stylesheet is in `test/fixtures/style.pin.json`; any new or changed one fails until a person regenerates it with `node test/style-pin.mjs` and the diff is reviewed), the ALLOWLIST (a rule that can reach the strip may set only the properties on `STRIP_ALLOWLIST`, each with a bounded value) and a strict READER that refuses CSS escapes, comments, `@import`, unpinned at-rules and nested rules; mode and strip tokens are case-insensitive |
+| `test/static.test.mjs` | forbidden APIs absent, `hass` reads pinned, names never computed from data, one adapter / one strip renderer, ASCII-only source, no secret-shaped text in the folder, and the STYLESHEET itself: no mode-dependent selector except the switch thumb; no hiding declaration except the `[hidden]` rule; only the pinned selectors may name the alert strip; no rule but `[hidden]` may use `:has()`, `:is()`, a positional pseudo-class, the hidden attribute or a sibling combinator; and a rule that can reach the strip may not carry a negative, huge or unjudgeable margin, inset, offset or translation, a negative z-index, an animation or a clip to a sliver of height, so no mode can hide, shift or clip the alert strip. Review round 3 added three nets that do not ask "is this a known way to hide it": the PIN (every rule, selector and declaration of the stylesheet is in `test/fixtures/style.pin.json`; any new or changed one fails until a person regenerates it with `node test/style-pin.mjs` and the diff is reviewed), the ALLOWLIST (a rule that can reach the strip may set only the properties on `STRIP_ALLOWLIST`, each with a bounded value) and a strict READER that refuses CSS escapes, comments, `@import`, unpinned at-rules and nested rules; mode and strip tokens are case-insensitive. Review round 5 pinned the two inline-style calls by receiver, name and value, and `attachShadow` to its one call in the constructor of the card |
 | `test/aria-guard.mjs` (used by `static.test.mjs`) | review round 4: every `setAttribute`, `toggleAttribute` and `removeAttribute` call of the card is written at one of 18 pinned sites (method, attribute, receiver), the name is always a plain literal, the `role` / `aria-*` / `tabindex` keys of every built element are counted, and no other door to an accessibility property exists (ARIA reflection properties, attribute-node and named-item APIs, `classList`, `className`, `inert`, `Object.assign`, an alias or a bracket call of the three methods). A new write is a decision for a person, who edits the pin in the same commit |
 | `test/strip-check.test.mjs` | the logic of the browser check, offline: colour and contrast arithmetic, a healthy measurement passes, measurements of a strip hidden in 40 ways, or hidden from or muted for a screen reader in 25 ways, fail, the two modes are compared (pixels and accessibility attributes), the browser search order, and the self-test table cannot rot |
-| `test/mutations.test.mjs` | 213 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed (at least 6 each for AC5, AC6, AC10, AC13) |
-| `tools/tests/test_geek_mode_*.py` | the Python side: catalogue, coverage, ledger, fixtures, privacy, and (`test_geek_mode_example.py`) the example and the documents |
+| `test/mutations.test.mjs` | 244 deliberate breaks on scratch copies of the card, run against the other suites; every one must be killed by the node suites alone (at least 6 each for AC5, AC6, AC10, AC13). Where Chrome or Edge is installed, the five that only the browser check used to catch are also handed to it (`preview/check-strip.mjs --require --card`), as a second opinion; with no browser that layer is skipped and says so |
+| `tools/tests/test_geek_mode_*.py` | the Python side: catalogue, coverage, ledger, fixtures, privacy, and (`test_geek_mode_example.py`) the example and the documents. Since review round 5 the coverage tool also refuses an `ecco_intel_` data point defined or named in ANY other YAML file under `home-assistant/` (design document, section 17.3) |
 
 Fixtures are synthetic: the small hand-made `test/fixtures/mini.*` and `hostile.states.json` of the card, and the generated
 `intelligence.states.*.json`, `noise.states.json` and `intelligence.states.meta.json` of the data side. No house image, layout, site
 entity id, location or real measured value appears in any file. The hostile **secret** values of the card tests are assembled from
-fragments in `test/secrets.mjs`; the noise decoys are below the repository's secret-scanner thresholds.
+fragments in `test/secrets.mjs` (since review round 5 also hidden at four offsets of a 4000-character text, among harmless prose); the noise decoys are below the repository's secret-scanner thresholds.
 
 ## Preview
 
@@ -274,7 +279,9 @@ node preview\check-strip.mjs --card C:\path\to\a-copy-of-ecco-mode-shell.js
 It looks for Chrome and then Edge in the standard install places (`ECCO_CHROME` overrides). With no browser it prints **SKIPPED** in a banner on both output streams and
 exits 0 (3 with `--require`), so a skipped run cannot be mistaken for a pass. It serves the folder on the loopback address only, read only, writes nothing but a temporary
 browser profile it deletes, and makes no network request. The judging half (`preview/strip-check-lib.mjs`) is tested offline in `test/strip-check.test.mjs` with synthetic
-measurements of strips hidden in every way found so far. The static net stays the mandatory one; this one is run by a person.
+measurements of strips hidden in every way found so far. The static net stays the mandatory one; this one is run by a person. Since review round 5 the node suites also kill, with no
+browser, the five mutants that only this check used to catch (the strip moved inside the shell, an inline custom property set on the shell, a shadow root on the strip), and the mutation runner
+hands those five to this check as an extra layer when Chrome or Edge is installed.
 
 ## Known limit: a child card shares the shell's style scope
 

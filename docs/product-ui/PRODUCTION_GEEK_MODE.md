@@ -779,7 +779,8 @@ tool now holds it to that) and `TEMPLATE_BLOCK_KEYS` (`binary_sensor`). It raise
 
 A kind the tool models (another alert automation with an `ecco_intel_` id, for example) passes the walk and is then caught by the coverage check as an uncatalogued source, as before. To add a new kind of
 entity to a package file, model it in `_package_entities`, give it catalogue texts (or an exception with a reason from the fixed list), and the ledger is regenerated. Other package files
-(`ecco_pro.yaml` and the rest) are not read; a data point defined in one of those is outside this ledger and would have to be discovered at run time (the card discovers `ecco_intel_` entities without a hand-designed card).
+(`ecco_pro.yaml` and the rest) are not modelled; a data point defined in one of those is outside this ledger and would have to be discovered at run time (the card discovers `ecco_intel_` entities without a hand-designed card).
+(Review round 5 changed what "not read" meant: every other YAML file under `home-assistant/` is now read, to refuse an `ecco_intel_` data point defined or named in it, so one cannot appear there unaccounted for: section 17.3.)
 
 ### 16.4 What is still shown, and the child cards' style scope
 
@@ -833,3 +834,94 @@ or run the browser check with that card mounted. This was found by reading the c
 - `preview/strip-check.html`, `strip-check-lib.mjs`, `check-strip.mjs`: the page measures the attributes, the judge checks them, the self-test table has six more entries; no existing check was changed.
 - `tools/geek_mode_coverage.py`: `_package_entities` was rewritten to fail closed (output unchanged on the real packages: `--check` passes against the committed ledger).
 - `test_geek_mode_coverage.py`, `test_geek_mode_ledger.py`, `test_geek_mode_privacy.py`: checks were appended (a block [6] in the first two, a scanner and two checks in the third); one ledger-suite import gained a name.
+
+## 17. Review round 5 (15 Nov 2026): findings and fixes
+
+The fifth review found one MAJOR finding, one MINOR finding in the node tests, one MINOR finding in the Python tool and two NIT findings. Every one of the MAJOR and MINOR findings is a hole in the
+**test net**: the card behaved correctly on every input the reviewer tried, and the shipped code changed in only two small places (both NITs). The same rules held: nothing pinned, sealed or deployed was
+edited, nothing is live, nothing was pushed. Each finding was reproduced first, by running the reviewer's own mutants and probes against the committed round-4 tree (they survived or misbehaved as
+reported); then closed by tests that fail without the behaviour, shown by running the new suites against the round-4 card and by mutants that undo each fix. No assertion was weakened or deleted (section 17.7).
+
+### 17.1 The findings and what was done
+
+| # | Severity | Finding | Fix | Proof |
+|---|---|---|---|---|
+| 1 | MAJOR | Reviewer mutants R14, R15 and R16 (read only the first 64, 300 or 1000 characters of a string for secrets) survived all five node suites: every hostile value of rounds 1 to 4 sits near the start of its string, so nothing pinned that the card reads a string whole. The probe `probe-r14.mjs` (110 characters of prose, then a secret) showed all five kinds of secret in rows, search, raw view and export under R14 | `test/secrets.mjs` gains the fixtures of section 17.2: eight secret kinds (JWT, IPv4, `password=value`, MAC, e-mail, bearer token, 64-digit hex blob, URL with user info) and two short ones, each placed in a string of at most 4000 characters (the longest the card keeps whole) at four offsets (starts at 100, starts at 1500, ends at 3990, ends at 4000), plus a fifth for the short ones (starts at 3990): 42 texts, with a control (the same strings with the secret replaced by filler are shown whole) and a secret wholly beyond the cap (dropped, and the cut is said). They run on every path: `redactValue`, the snapshot row text, the redacted raw attributes, the search index, the state, both exports (core), and the DOM rows, the open attribute lists, the raw view, the search box, copy and both downloads (element) | 5 new tests in `core.test.mjs`, 1 in `element.test.mjs`; 9 new mutants: R14, R15, R16 as the reviewer wrote them, R17 (last 64), R18 (last 1000), R19 (first 3900), R20 (first 3999), a scan of the middle only, and a raised cap. run against the round-4 suites, seven of the nine survived (R14, R15, R16, R18, R19, R20 and the middle-only scan; R17 and the raised cap were already killed), and the new fixtures pass on the round-4 card, as they must (the card is correct); against these suites all nine are killed, the seven by the three positioned-secret tests (R17 by 13 tests, as before) |
+| 2 | MINOR | Five mutants (J13, J14, J20, J21, AR08) were caught only by the opt-in headless-browser check, which prints SKIPPED and exits 0 on a machine with no Chrome: J14 and J20 move the strip inside the shell in Geek Mode, J13 and J21 swap the receiver and name of a pinned `style.setProperty` so that `--ecco-fg` or `--ecco-accent` goes transparent on the shell, AR08 calls `attachShadow` on the strip | Element tests: the strip is a direct child of the shell, the shell's children are exactly title, note, strip, always, Production body, Geek body in both modes through nine scenarios and seven steps each, and the strip has no shadow root (13 planted moves, wraps and duplicates are each reported). The DOM stand-in now lets any element take a shadow root, so AR08 is also seen as behaviour. Static tests: the two `setProperty` calls are pinned by receiver, name and value (`seg`, `--ecco-w`, `String(c[s])`; `ringEl`, `--ecco-p`, `String(ring.pct)`), the receivers are declared once and never reassigned or walked up, and each property is read once by the stylesheet; `attachShadow` is written exactly once, as `this.attachShadow` in the constructor of the card, and no other element may take one | 2 new tests in `element.test.mjs` (the place, and its teeth), 2 in `static.test.mjs`; 12 new mutants (J13, J14, J20, J21, AR08 and 7 variants); run against the round-4 suites 10 of the 12 survived (killed before: a third inline property, and the strip moved into the always region). All five reviewer mutants are killed by the node suites alone. The mutation runner also hands the five to `preview/check-strip.mjs --require --card` when a browser is installed, as a second opinion: all five fail it (120, 204, 48, 12 and 672 checks); where there is no browser that layer is skipped and says so |
+| 3 | MINOR | `tools/geek_mode_coverage.py` read only the three `ecco_intel*` package files: mutant L05 (an `input_text` `ecco_intel_zz_probe` in `ecco_dump_limits.yaml`) and L06 (a new package file `ecco_zz_probe.yaml` with a legacy template sensor `ecco_intel_zz_probe`) passed `--check`, `gen_geek_fixtures.py --check` and all six Python suites. The fail-closed fix of round 4 covered the three named files only | `_foreign_definitions` (section 17.3) reads every other YAML file under `home-assistant/` (packages, dashboards, prototypes) and raises a `UniverseError` that names the file and the path for an `ecco_intel_` object id that it defines or names | 32 checks in `test_geek_mode_coverage.py` block [7] (L05 and L06 among 18 refused shapes, 8 shapes that must pass, a negative control and the real tree), 8 in `test_geek_mode_ledger.py` block [7] (L05 and L06 end to end: `--check`, the writer, restored, and a scratch repository with every real YAML file); the reviewer's `ledger_mutants.py` now reports L05 and L06 KILLED by `coverage --check`, `fixtures --check`, the ledger, coverage and fixture suites |
+| 4 | NIT | `compileExtra` refused nested quantifiers only: `(a\|aa)*c` was accepted, and a 36-character key of the letter a took 274 ms in `isSecretKey` (time doubles with each character) | Two changes: a pattern reader (`riskyPattern`) refuses a repeated group (`*`, `+`, `{`) that holds an alternation or a repeat, an unbalanced group, an unclosed character class and more than three unbounded repeats; and a catalogue pattern is never run on more than 200 characters of a key (a longer key is read from both ends, so a name at the end of a long key is still found) | 2 new tests in `core.test.mjs` (the reviewer's pattern and 13 others are ignored, 8 sound ones still work, 36, 60 and 5000-character keys cost under 250 ms in all; a spy on `RegExp.prototype.test` sees no run on more than 200 characters, and a name hidden at either end of a 5000-character key is found); 8 new mutants. Against the round-4 card the same probe takes 288 ms at 36 characters; now 0 ms |
+| 5 | NIT | `validateConfig` collected `cfg.errors` and nothing showed them: `production` given as text became an empty list and the pause tile vanished with no notice | `setConfig` adds a `shell:config-invalid` warning to the strip, built from the fixed path and message of the first three problems and a count (no value from the configuration is echoed); it goes through the same renderer as the other shell warnings, so the strip itself is unchanged and unconditional | 1 element test (8 kinds of bad configuration, `setConfig` of `undefined`, `null`, a number and text, five problems at once with the catalogue warning beside it, a later good `setConfig` clears it and returns to Production; the strip's accessibility and place checks pass under the warning), 1 core test (the paths and messages); 2 new mutants |
+
+### 17.2 The positioned secrets, and what they do and do not show
+
+Why these offsets: `LIMITS.stringCap` is 4000 and a longer string is cut **before** it is read, so 4000 characters is the longest text the card reads. The four placements are the owner's 100 and 1500,
+and the two ends of that range: the secret **ends** at offset 3990 (so the last ten characters are filler), and at 4000 (the last characters of a 4000-character text). A secret cannot *start* at 3990 and fit, except the
+two that are ten characters or fewer (a dotted address of ten characters and an e-mail address of eight, both assembled from fragments in `secrets.mjs`), which also start at 3990. A space (or the end of the text) sits on each side, so the word-boundary rules of the card are not helped or hindered. The filler is
+prose with no digit, address or key, and every fixture is assembled from fragments like the earlier ones (no committed file holds a secret-shaped text; the privacy suite and the folder scan pass).
+
+The control matters as much as the cases: a redactor that withholds every long text would pass them. The same 42 strings with the secret replaced by filler of the same length must come out whole, and a harmless long text with
+four marker words (at 100, 1500, 3950 and the end) must be found by search at every offset and appear whole in the raw view, the copy and the exports: so a search that finds nothing for a secret is the withholding, not a short index.
+
+Still shown, found while writing this and **not changed**: a secret that **straddles** the cap. The card keeps the first 4000 characters and reads those; the part of the secret inside them is shown if it no longer matches a rule
+(`someone@ex`, `eyJhbGciOi`, `password=p`, `172.16.88.`, `de:ad:be:e`, `Bearer zyx`, `b3a1c0de5e`; a URL with user info is still withheld). That is at most the ten or so characters before the cap. Reading a little past the cap
+before cutting would close it, at the price of withholding a text whose secret lies in the part that is dropped anyway; that is a decision for the owner and is not made here.
+
+### 17.3 The package scan reads content, not names
+
+Round 4 made the three Intelligence package files fail closed, and refused a fourth file whose NAME starts with `ecco_intel`. L05 and L06 are the other way in: an entity in a file that has a different name. `_foreign_definitions`
+(called from `_package_listing`, so by every build, `--check`, the writer and the fixture tool) reads every `.yaml` and `.yml` file under `home-assistant/` except the three modelled ones, and refuses:
+
+- a mapping **key** at any depth that is an `ecco_intel` object id, with or without a domain (`input_text.ecco_intel_zz`: a helper, a legacy template sensor, a script, a group, a customize entry);
+- a `unique_id`, `object_id` or `default_entity_id` value that is one;
+- in a package (not in a dashboard, where `name:` is only a label), a `name` or `alias` whose slug is one (`ECCO Intel zz probe`).
+
+It passes: a reference (an `entity_id:` value, a template, a card's `entity:`), a dashboard label, the other family (`ecco_intelligence_*`, the prototype mock package), and a key under `button_card_templates` or
+`decluttering_templates` (the prototype dashboard's own template library `ecco_intel_block`, the one false positive the real tree had). A file that does not spell `ecco`, an optional separator and `intel` is **not parsed**
+(it cannot define such a name), so the cost is a text search per file and a parse of the five files that mention it: 21 files, 0.22 s on this PC. A file that does spell it and does not parse is refused too. What it cannot
+see: a name built by a template or spelled with YAML escapes, a definition made outside `home-assistant/` (the integration's own entities are read from code), and any file that is not YAML.
+
+When the scan refuses, the message says what to do: model the file (add it to `PACKAGE_FILES` and read it in `_package_entities`) and catalogue it, or, for something that is not an entity, add its parent key to `NON_ENTITY_PARENT_KEYS`.
+
+### 17.4 The catalogue's key patterns
+
+`redaction.extra_key_patterns` are written by the catalogue's owner (the Intelligence ones are plain lower-case fragments), but a catalogue is data and a pattern is code, so the card screens them. A pattern is **ignored**, never
+thrown, when `riskyPattern` refuses it: that is the same outcome as the earlier rules (too long, a back-reference, nested repeats, invalid), and means a key it was meant to withhold is not withheld by it. The reader skips
+escapes and character classes (so `^[(|]+$` is fine), tracks groups, and refuses a repeated group that holds a repeat or an alternation (`(a|aa)*c`, `(x+x+)+y`, `((a+))+b`, `(a|b){2,}c`), an unbalanced pattern, and more
+than three unbounded repeats (`a*a*a*a*b` is polynomial, of a high degree). With the 200-character cap that bounds the work of any accepted pattern: at most a cubic in 200, a few milliseconds. It errs towards refusing:
+`(ab?)+` is refused too. An owner who needs one of these shapes should write the keys out instead.
+
+### 17.5 What the owner needs to know
+
+1. **Nothing the owner has to do.** No pinned, sealed or deployed file was edited, and no integration step of section 8 changed.
+2. The shipped card changed in two places only, both small: the strip warning for a bad card configuration (a view whose `production` list was silently empty now says so on the strip, in both modes) and the screening of catalogue key patterns.
+3. `tools/geek_mode_coverage.py` is now stricter: a new `ecco_intel_` entity in **any** Home Assistant YAML file stops the ledger build until it is modelled. That is the intended behaviour, as in round 4.
+4. The strip's place in the shell, its two inline-style sites and the single `attachShadow` are now pinned by the node suites: a person who changes one edits the pin in the same commit. The browser check stays the extra layer, and the mutation runner uses it when there is a browser.
+5. The straddling-secret limit of 17.2 is a decision for the owner (read past the cap, or accept at most the characters before it).
+
+### 17.6 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 143, element 114, coverage 4, static 43, real-catalogue 157, strip-check 11, mutation proof 252) | 724 of 724 pass in 331 s; 244 of 244 mutants killed by the node suites (213 before this round: 31 new); the mutation proof also hands five of them to the browser check on this PC (Chrome is installed) and all five fail it |
+| the five reviewer mutants of the finding 2 (J13, J14, J20, J21, AR08) and R14, R15, R16, run against the round-4 suites and the round-4 card | all eight SURVIVED (the reviewer's reproduction, repeated here); L05 and L06 against the round-4 tool: `--check` exit 0, "match a fresh regeneration"; the reviewer's `probe-redos.mjs`: 288 ms at 36 characters |
+| the 31 new mutants against the round-4 suites, then against these | of the 21 that can be applied to the round-4 card (the other 10 undo code that did not exist: the pattern reader, the cap, the configuration warning) 17 SURVIVED the round-4 suites (7 of the 9 that read part of a string, 10 of the 12 that move the strip or change an inline property or a shadow root); all 31 are KILLED by the node suites alone, with no browser |
+| the new tests run against the round-4 card (`ECCO_MODE_SHELL_PATH` at a copy of it) | 3 fail there: the two NIT-1 tests in `core.test.mjs` (the pattern reader, the 200-character cap) and the NIT-2 test in `element.test.mjs` (the configuration warning); the positioned-secret, placement and pin tests pass there, as they must (the round-4 card is correct): they are shown by the mutants |
+| `node preview/check-strip.mjs`, `--selftest` | PASS: 3192 of 3192 checks (unchanged: the strip, its places and attributes are as before); SELFTEST PASS: the card passes and 31 of 31 broken copies fail |
+| `python -I -B -X utf8 frontend/ecco-mode-shell/test/test_example_dashboard.py` | all example-dashboard checks pass |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass (110, 200, 68, 102, 149 and 35 checks; coverage gained 32, ledger 8) |
+| `tools/geek_mode_coverage.py --check`, `tools/gen_geek_fixtures.py --check` | both match a fresh regeneration (the ledger, the catalogue, the shape and the fixtures are byte-identical to before: the tool's walk changed, not its output) |
+| the reviewer's `ledger_mutants.py` L05 and L06 | KILLED (before: SURVIVED): `coverage --check`, `fixtures --check`, the ledger, coverage and fixture suites fail; the privacy suite does not (it reads fixtures, not packages) |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root` `tools/tests`, `ecco_core/tests`, `health/tests`, `intelligence/tests`, `home-assistant/tests` | 21 of 21, 6 of 6, 2 of 2, 33 of 33 and 18 of 18 |
+| `tools/run_offline_tests.py --root registry/tests` | 76 of 78 pass in 1104 s; the two failures are `test_fallback_durable_host_compile.py` and `test_rtc_policy.py`, each with the single check "a C++ compiler is available" (this PC has no C++ compiler; the check fails rather than skips). Both fail identically on a copy of the round-4 tree, and they read nothing this change touches (rounds 1 and 2: the same two) |
+
+### 17.7 Changes to existing tests and files (none weakens an assertion)
+
+- `core.test.mjs`: an import line and eight tests were appended; nothing else changed. `element.test.mjs`: four tests and helpers were appended. `static.test.mjs`: two tests were appended. `mutations.test.mjs`: 31 mutants, two constants, the import of
+  `findBrowser`, and the optional browser layer were added; nothing was removed or changed, and the anchors of the existing mutants are untouched (the new code was written around the lines they target).
+- `secrets.mjs`: the positioned-secret fixtures were appended (nothing existing changed; `hostileAttributes()` and `forbiddenStrings()` are unchanged, so no existing test sees the new values).
+- `minidom.mjs`: `attachShadow` is now a method of every element (before, only the card's host had it). No existing test was affected.
+- `ecco-mode-shell.js`: `riskyPattern`, `EXTRA_KEY_CAP`, `EXTRA_MAX_REPEATS`, `configProblemText`, the 200-character screening in `isSecretKey` and the `shell:config-invalid` alert (existing lines are unchanged; the old nested-repeat test in `compileExtra` is kept and the new reader is in addition to it).
+- `tools/geek_mode_coverage.py`: `_package_listing` calls the new `_foreign_definitions`; its output on the real tree is unchanged (`--check` passes against the committed ledger and catalogue, byte for byte).
+- `test_geek_mode_coverage.py`, `test_geek_mode_ledger.py`: a block [7] was appended to each. `tools/tests/_geek_scratch.py`: a comment only.
+- **No pin and no fixture was regenerated** (`style.pin.json` and the generated catalogue, ledger, shape and fixtures are byte-identical to round 4; the card's stylesheet and its 18-site attribute pin did not change).
