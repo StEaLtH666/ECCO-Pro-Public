@@ -48,7 +48,7 @@ function check(label, run, abs) {
   return { t10, t20, ratio };
 }
 
-test('AC12 [r7] the table of rules is the one the card scans with: 23 rules, each with a reason, a gate or null, a pattern, and a pre-test or null; the near-miss family is wide enough to mean something', () => {
+test('[wall-clock] AC12 [r7] the table of rules is the one the card scans with: 23 rules, each with a reason, a gate or null, a pattern, and a pre-test or null; the near-miss family is wide enough to mean something', () => {
   assert.equal(SCAN_RULES.length, 23);
   assert.ok(Object.isFrozen(SCAN_RULES));
   for (const r of SCAN_RULES) {
@@ -63,7 +63,7 @@ test('AC12 [r7] the table of rules is the one the card scans with: 23 rules, eac
   for (const u of UNITS) assert.equal(textOf(u, 20000).length, 20000);
 });
 
-test('AC12 [r7] EVERY rule alone (no gate, no pre-test) is linear on every near-miss text: under an absolute bound at 20000 characters, and time at 20000 over time at 10000 under 3.5', () => {
+test('[wall-clock] AC12 [r7] EVERY rule alone (no gate, no pre-test) is linear on every near-miss text: under an absolute bound at 20000 characters, and time at 20000 over time at 10000 under 3.5', () => {
   const worst = { ms: 0, label: '' };
   let growth = 0;
   let measured = 0;
@@ -85,7 +85,7 @@ test('AC12 [r7] EVERY rule alone (no gate, no pre-test) is linear on every near-
   console.log(`rules alone: ${measured} measurements; the slowest is ${worst.label} at ${worst.ms.toFixed(2)} ms for 20000 characters; the largest growth of a rule above 0.3 ms is ${growth.toFixed(2)}`);
 });
 
-test('AC12 [r7] the amplified check: a rule that takes measurable time on a text is also linear from 20000 to 80000 characters (a pattern is not bounded by the scan bound, so a quadratic one shows here at 16 times, not 4)', () => {
+test('[wall-clock] AC12 [r7] the amplified check: a rule that takes measurable time on a text is also linear from 20000 to 80000 characters (a pattern is not bounded by the scan bound, so a quadratic one shows here at 16 times, not 4)', () => {
   let n = 0;
   for (const unit of UNITS) {
     const t20 = textOf(unit, 20000);
@@ -105,7 +105,7 @@ test('AC12 [r7] the amplified check: a rule that takes measurable time on a text
   assert.ok(n >= 5, `${n} amplified measurements (the family has texts that take measurable time)`);
 });
 
-test('AC12 [r7] the WHOLE read (gates open, every pre-test passed, the tail rules too) is linear on every near-miss text: redactValue of 10000 and of 20000 characters, bare and under a key', () => {
+test('[wall-clock] AC12 [r7] the WHOLE read (gates open, every pre-test passed, the tail rules too) is linear on every near-miss text: redactValue of 10000 and of 20000 characters, bare and under a key', () => {
   // an opener that passes every gate and every pre-test and matches no rule
   const opener = ' @ . : ; = / - ? # + pass= eyJ ';
   assert.notEqual(redactValue(opener, { key: 'note' }), WITHHELD, 'the opener is harmless text');
@@ -120,7 +120,7 @@ test('AC12 [r7] the WHOLE read (gates open, every pre-test passed, the tail rule
   console.log(`whole read: the slowest of ${UNITS.length * 2} texts takes ${worst.toFixed(2)} ms for 20000 characters`);
 });
 
-test('AC12 [r7] the reviewer\'s own probe: one entity with 200 attributes of a 19990-character near-miss text (a space, .local, @, then 0123. repeated) used to take 37941 ms; now it takes a few milliseconds and says what it did not read', () => {
+test('[wall-clock] AC12 [r7] the reviewer\'s own probe: one entity with 200 attributes of a 19990-character near-miss text (a space, .local, @, then 0123. repeated) used to take 37941 ms; now it takes a few milliseconds and says what it did not read', () => {
   const text = (' .local @ x ' + '0123.'.repeat(4000)).slice(0, 19990);
   assert.equal(text.length, 19990);
   const attrs = {};
@@ -143,7 +143,7 @@ test('AC12 [r7] the reviewer\'s own probe: one entity with 200 attributes of a 1
   assert.ok(row.attributes.some((a) => a.name.includes('values not read')), 'and the attribute list says that values were not read');
 });
 
-test('AC12 [r7] the whole entity, whatever its shape, is bounded: the reviewer\'s four hostile shapes each take well under a second (a text of every near-miss unit, a list of 200 near-miss items under one 20000-character key, 200 keys of 20000 characters, a dict of 5000 short near-miss strings)', () => {
+test('[wall-clock] AC12 [r7] the whole entity, whatever its shape, is bounded: the reviewer\'s four hostile shapes each take well under a second (a text of every near-miss unit, a list of 200 near-miss items under one 20000-character key, 200 keys of 20000 characters, a dict of 5000 short near-miss strings)', () => {
   const bound = 1500;
   const timeOf = (label, attrs) => {
     const t0 = performance.now();
@@ -183,7 +183,7 @@ test('AC12 [r7] the whole entity, whatever its shape, is bounded: the reviewer\'
   assert.ok(json.length > 1000 && csv.length > 1000);
 });
 
-test('AC12 [r7] the cost per character of the worst shape, times the scan budget, is a small part of a second: this is why LIMITS.entityChars has the value it has', () => {
+test('[wall-clock] AC12 [r7] the cost per character of the worst shape, times the scan budget, is a small part of a second: this is why LIMITS.entityChars has the value it has', () => {
   assert.equal(LIMITS.entityChars, 100000);
   let worstPerChar = 0;
   let worstUnit = '';
@@ -200,7 +200,7 @@ test('AC12 [r7] the cost per character of the worst shape, times the scan budget
   assert.ok(worstEntityMs < 500, `${worstEntityMs.toFixed(0)} ms to read a whole budget of the worst shape`);
 });
 
-test('AC12 [r7] the control: harmless text of the same lengths is read at a small fraction of those bounds, and every harmless text of up to the display cap is still shown whole (no budget effect on ordinary data)', () => {
+test('[wall-clock] AC12 [r7] the control: harmless text of the same lengths is read at a small fraction of those bounds, and every harmless text of up to the display cap is still shown whole (no budget effect on ordinary data)', () => {
   // review round 8: 400 entities of 4200 characters (1.7 million characters) are within the snapshot budget and are all read whole (2000 of them are not: the snapshot says which it did not read)
   const t0 = performance.now();
   const states = miniStates((s) => {
@@ -236,7 +236,7 @@ const hostileEntities = (n, text) => {
 };
 const discoverOnly = () => validateCatalogue({ ...miniCatalogue(), sources: [], alerts: [], exceptions: [] }).catalogue;
 
-test('AC12 [r8] THE FIRST SNAPSHOT of 50, 200 and 5000 entities of near-miss text (JWT starts, at signs, host suffixes, dotted digits, token parameters and eleven more families, five attributes of 19999 characters each) stays under a second, and the time does not grow with the number of entities (reviewer probes perf8 and perf8n)', () => {
+test('[wall-clock] AC12 [r8] THE FIRST SNAPSHOT of 50, 200 and 5000 entities of near-miss text (JWT starts, at signs, host suffixes, dotted digits, token parameters and eleven more families, five attributes of 19999 characters each) stays under a second, and the time does not grow with the number of entities (reviewer probes perf8 and perf8n)', () => {
   const bound = 1000;
   let worst = { ms: 0, label: '' };
   const per = {};
@@ -270,7 +270,7 @@ test('AC12 [r8] THE FIRST SNAPSHOT of 50, 200 and 5000 entities of near-miss tex
   console.log(`first snapshot, hostile text: the slowest of ${SNAPSHOT_FAMILIES.length * 3} runs is ${worst.label} at ${worst.ms.toFixed(0)} ms (bound ${bound} ms)`);
 });
 
-test('AC12 [r8] the snapshot budget bounds the work whatever the SHAPE: 5000 entities that each carry twenty thousand small values, 5000 entities with 255-character near-miss ids, and 5000 small ordinary entities (all read) each take well under a second', () => {
+test('[wall-clock] AC12 [r8] the snapshot budget bounds the work whatever the SHAPE: 5000 entities that each carry twenty thousand small values, 5000 entities with 255-character near-miss ids, and 5000 small ordinary entities (all read) each take well under a second', () => {
   const cat = () => discoverOnly();
   // (1) values: 200 keys of lists of 100 numbers, 5000 entities (no characters to speak of; the values are what costs)
   const heavy = {};
@@ -306,7 +306,7 @@ test('AC12 [r8] the snapshot budget bounds the work whatever the SHAPE: 5000 ent
   console.log(`first snapshot: 5000 entities of many values ${msA.toFixed(0)} ms, of long ids ${msB.toFixed(0)} ms, small and ordinary ${msC.toFixed(0)} ms`);
 });
 
-test('AC12 [r8] the cost per unit of the worst shape, times the snapshot budget, is a small part of a second: this is why LIMITS.snapshotChars has the value it has', () => {
+test('[wall-clock] AC12 [r8] the cost per unit of the worst shape, times the snapshot budget, is a small part of a second: this is why LIMITS.snapshotChars has the value it has', () => {
   assert.equal(LIMITS.snapshotChars, 2000000);
   let worstPerUnit = 0;
   let worstUnit = '';

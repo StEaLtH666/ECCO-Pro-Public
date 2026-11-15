@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cardDir, loadCard } from './helpers.mjs';
-import { parseColour, over, luminance, contrastRatio, effectiveBackground, evaluateState, compareModes, evaluateAll } from '../preview/strip-check-lib.mjs';
+import { parseColour, over, luminance, contrastRatio, effectiveBackground, evaluateState, compareModes, compareSettled, evaluateAll } from '../preview/strip-check-lib.mjs';
 import { findBrowser, BROKEN } from '../preview/check-strip.mjs';
 import { pinProblems, stripProblems } from './css-guard.mjs';
 
@@ -233,6 +233,75 @@ test('evaluateAll pairs each Production state with its Geek twin and counts what
   assert.ok(lone.failed > 0, 'a Production state with no Geek twin is a failure, not a pass');
   const bad = evaluateAll([p, { ...g, strip: { ...g.strip, rect: R(12, 80, 390, 0) } }]);
   assert.ok(bad.failed > 0);
+});
+
+// ---- review round 9: the strip must be the same strip once everything the card scheduled has run (reviewer mutants E05 and E08 hid it a moment AFTER the switch and passed a check that measured in the same task)
+const settledTwin = (m, patch = {}) => ({ ...m, id: `${m.id}|settled`, phase: 'settled', ...patch });
+
+test('review round 9: the same strip a moment later passes, and a strip that is emptied, hidden, moved, re-worded, muted or re-ordered once everything scheduled has run fails whichever way it was done (negative controls)', () => {
+  const p = healthy();
+  assert.deepEqual(compareSettled(p, settledTwin(p)).filter((c) => !c.ok), [], 'the same measurement twice is the same strip');
+  assert.ok(compareSettled(p, settledTwin(p)).length >= 8, 'the report names what was looked at');
+  const g = healthy({ mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  assert.deepEqual(compareSettled(g, settledTwin(g)).filter((c) => !c.ok), []);
+  const later = (patch) => settledTwin(p, patch);
+  const withStripLater = (patch) => later({ strip: { ...p.strip, ...patch } });
+  const cases = {
+    'no strip any more': later({ strip: { present: false } }),
+    'emptied (no lines: E05, E07, E08)': later({ alerts: [] }),
+    'only the first line left': later({ alerts: p.alerts.slice(0, 1) }),
+    'a line re-worded': later({ alerts: p.alerts.map((a) => ({ ...a, text: `${a.text}.` })) }),
+    'a line given another id': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, id: 'other' } : a)) }),
+    'lines moved': later({ alerts: p.alerts.map((a) => ({ ...a, textBox: R(60, 400, 200, 20) })) }),
+    'the strip box shrunk to nothing': withStripLater({ rect: R(12, 80, 390, 0) }),
+    'the strip box moved down': withStripLater({ rect: R(12, 400, 390, 60) }),
+    'the count says another number': withStripLater({ count: '0' }),
+    'aria-hidden on the strip': withStripLater({ a11y: { ...p.strip.a11y, 'aria-hidden': 'true' } }),
+    'aria-live off': withStripLater({ a11y: { ...p.strip.a11y, 'aria-live': 'off' } }),
+    'role presentation': withStripLater({ a11y: { ...p.strip.a11y, role: 'presentation' } }),
+    'inert on an ancestor': later({ strip: { ...p.strip, chain: p.strip.chain.map((c, i) => (i === 1 ? { ...c, a11y: { ...c.a11y, inert: '' } } : c)) } }),
+    'a line given role presentation': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, role: 'presentation' } : a)) }),
+    'a line hidden from assistive technology': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, lineA11y: { ...a.lineA11y, 'aria-hidden': 'true' } } : a)) }),
+    'the mode changed by itself': later({ shell: { mode: 'geek' } }),
+    'the Production body hidden after the fact': later({ bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: false, rect: R(0, 0, 0, 0) } } }),
+  };
+  for (const [what, m] of Object.entries(cases)) assert.ok(compareSettled(p, m).some((c) => !c.ok), `the check accepted: ${what}`);
+  // and a strip that was already wrong in the first measurement is not made right by the second
+  assert.ok(compareSettled(p, withStripLater({ present: true })).every((c) => c.ok), 'a harmless difference in an unchecked field is not a failure');
+});
+
+test('review round 9: evaluateAll pairs every measurement with the one made after everything scheduled had run, and a page that did not wait (or lost one of the two) cannot pass', () => {
+  const prodNow = healthy();
+  const geekNow = healthy({ id: 'alerts|light|ha|geek|w390|v1084', mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  const prodLater = settledTwin(prodNow);
+  const geekLater = settledTwin(geekNow);
+  const ok = evaluateAll([prodNow, geekNow, prodLater, geekLater], { requireSettled: true });
+  assert.equal(ok.failed, 0, JSON.stringify(ok.pairs.flatMap((p) => p.checks.filter((c) => !c.ok).map((c) => `${p.id}: ${c.name}`))));
+  assert.equal(ok.states.length, 4);
+  assert.equal(ok.pairs.length, 4, 'Production against Geek twice (immediately, later) and each mode against its own later self');
+  assert.ok(ok.pairs.some((x) => /immediately against after everything scheduled has run/.test(x.id)));
+  // without the second measurement a run that requires it fails; a run that does not require it (the older, synthetic callers) still passes
+  assert.ok(evaluateAll([prodNow, geekNow], { requireSettled: true }).failed > 0, 'no measurement after everything had run: a failure when it is required');
+  assert.equal(evaluateAll([prodNow, geekNow]).failed, 0, 'and still the older behaviour when it is not');
+  // one of the two later measurements missing, or a later one with no first one
+  assert.ok(evaluateAll([prodNow, geekNow, prodLater], { requireSettled: true }).failed > 0);
+  assert.ok(evaluateAll([prodNow, prodLater, geekLater], { requireSettled: true }).failed > 0);
+  // a Geek strip emptied a moment later: the second measurement alone shows an empty strip, and the pair with the first fails too
+  const emptied = settledTwin(geekNow, { alerts: [] });
+  const bad = evaluateAll([prodNow, geekNow, prodLater, emptied], { requireSettled: true });
+  assert.ok(bad.failed > 0);
+  assert.ok(bad.pairs.some((x) => /immediately against/.test(x.id) && x.checks.some((c) => !c.ok)), 'the pair of the first and the later measurement reports it');
+  assert.ok(bad.pairs.some((x) => /Production against Geek/.test(x.id) && x.id.includes('settled') && x.checks.some((c) => !c.ok)), 'and so does the pair of the modes, later');
+});
+
+test('review round 9: the self-test table has the copies that hide the strip a moment AFTER the switch (a microtask, a promise continuation, an async function, a timer of zero, an observer callback, in the renderer; an animation frame is left to the node suites, because a headless run has too few frames to rely on)', () => {
+  const names = BROKEN.map((b) => b[0]);
+  for (const id of ['E04', 'E05 ', 'E05c', 'E07', 'E08', 'E09', 'E14']) assert.ok(names.some((n) => n.startsWith(id)), `no broken copy ${id}`);
+  const real = readFileSync(path.join(cardDir, 'ecco-mode-shell.js'), 'utf8');
+  for (const [id, find, repl] of BROKEN.filter((b) => /^E\d\d/.test(b[0]))) {
+    assert.equal(real.split(find).length - 1, 1, `${id}: found once`);
+    assert.ok(/Promise|async|setTimeout|queueMicrotask|requestAnimationFrame|MutationObserver/.test(repl), `${id}: it defers the change`);
+  }
 });
 
 test('the browser search: ECCO_CHROME first, then the standard places; none means null (the caller prints SKIPPED)', () => {

@@ -252,7 +252,7 @@ test('AC12 [r7] key names are read within the budget too: 600 keys of about 107 
   assert.equal(Object.keys(out.group_0).filter((k) => k.startsWith('[withheld key')).length, 0, 'the first group is read whole');
 });
 
-test('AC12 [r7] a list of 200 items under ONE key is not read through that key 200 times: the key is looked at once (the reviewer\'s list-under-a-long-key shape)', () => {
+test('[wall-clock] AC12 [r7] a list of 200 items under ONE key is not read through that key 200 times: the key is looked at once (the reviewer\'s list-under-a-long-key shape)', () => {
   const longKey = `${'ab_'.repeat(6600)}x`;
   assert.ok(longKey.length < LIMITS.scanBound);
   const items = Array.from({ length: 200 }, (_, i) => `item ${i}`);

@@ -192,10 +192,42 @@ export function compareModes(prod, geek) {
   return out;
 }
 
-/** Group a flat list of measured states into the report: { states: [{ id, checks }], pairs: [{ id, checks }], failed: n, total: n }. */
-export function evaluateAll(measured) {
+/**
+ * Review round 9: the strip must be the same strip once everything the card scheduled has run. `first` was measured in the same task as the switch or the render, `later` after a zero-delay timer and two animation
+ * frames (strip-check.html). A card that hides, empties, moves or mutes the strip a moment later (a promise continuation, an async function, a timer, a frame, an observer callback: reviewer mutants E05 and E08) passes
+ * every check on `first` and fails here. Returns [{ name, ok, detail }].
+ */
+export function compareSettled(first, later) {
+  const out = [];
+  const add = (name, ok, detail = '') => out.push({ name, ok: Boolean(ok), detail: ok ? '' : String(detail) });
+  const same = (a, b) => ['x', 'y', 'width', 'height'].every((k) => Math.abs(a[k] - b[k]) <= TOL);
+  const js = (v) => JSON.stringify(v === undefined ? null : v);
+  const f = first.strip || {};
+  const s = later.strip || {};
+  add('once everything scheduled has run, the strip is still there', f.present === true && s.present === true, `before ${f.present}, after ${s.present}`);
+  add('the strip is the same box once everything scheduled has run (position and size)', f.rect && s.rect && same(f.rect, s.rect), `before ${js(f.rect)}, after ${js(s.rect)}`);
+  const fa = first.alerts || [];
+  const sa = later.alerts || [];
+  add('the strip shows the same lines once everything scheduled has run (count, id and text)', fa.length === sa.length && fa.every((a, i) => a.text === sa[i].text && a.id === sa[i].id && a.part === sa[i].part), `before ${fa.length} lines, after ${sa.length}`);
+  add('and each line is the same box', fa.length === sa.length && fa.every((a, i) => a.textBox && sa[i].textBox && same(a.textBox, sa[i].textBox)), 'a line moved or changed size');
+  add('the strip says the same number of alerts (data-alert-count)', f.count === s.count, `before ${f.count}, after ${s.count}`);
+  add('the strip carries the same accessibility attributes once everything scheduled has run (role, aria-live, label, aria-hidden, inert, hidden ...)', f.a11y !== undefined && js(f.a11y) === js(s.a11y), `before ${js(f.a11y)}, after ${js(s.a11y)}`);
+  add('and so does everything around the strip (the shell, the host, the page)', Array.isArray(f.chain) && js((f.chain || []).map((c) => c.a11y)) === js((s.chain || []).map((c) => c.a11y)), 'an ancestor of the strip has other accessibility attributes later');
+  add('and every alert line has the same role and attributes', fa.length === sa.length && fa.every((a, i) => a.role === sa[i].role && js(a.lineA11y) === js(sa[i].lineA11y)), 'a line has another role or attributes later');
+  add('the same mode is shown, with the same bodies shown and hidden', first.shell && later.shell && first.shell.mode === later.shell.mode && js(first.bodies && Object.fromEntries(Object.entries(first.bodies).map(([k, b]) => [k, b && b.shown]))) === js(later.bodies && Object.fromEntries(Object.entries(later.bodies).map(([k, b]) => [k, b && b.shown]))), `before ${js(first.shell)}, after ${js(later.shell)}`);
+  return out;
+}
+
+const phaseOf = (m) => (m && m.phase === 'settled' ? 'settled' : 'immediate');
+
+/**
+ * Group a flat list of measured states into the report: { states: [{ id, checks }], pairs: [{ id, checks }], failed: n, total: n }. Production is paired with Geek (in each phase), and, from round 9, every
+ * measurement made in the same task as the action is paired with its twin made after everything scheduled had run. With `requireSettled`, a measurement without its twin (or no twin at all) is a failure: a page that
+ * forgot to wait cannot pass.
+ */
+export function evaluateAll(measured, { requireSettled = false } = {}) {
   const states = measured.map((m) => ({ id: m.id, checks: evaluateState(m) }));
-  const key = (m) => [m.scenario, m.theme, m.vars, m.width, m.viewport.w].join('|');
+  const key = (m) => [m.scenario, m.theme, m.vars, m.width, m.viewport.w, phaseOf(m)].join('|');
   const prod = new Map();
   const geek = new Map();
   for (const m of measured) (m.mode === 'geek' ? geek : prod).set(key(m), m);
@@ -205,6 +237,18 @@ export function evaluateAll(measured) {
     pairs.push({ id: `${k} (Production against Geek)`, checks: g ? compareModes(p, g) : [{ name: 'the other mode was measured', ok: false, detail: 'missing' }] });
   }
   for (const k of geek.keys()) if (!prod.has(k)) pairs.push({ id: `${k} (Production against Geek)`, checks: [{ name: 'the other mode was measured', ok: false, detail: 'missing' }] });
+  // the same strip once everything scheduled has run
+  const modeKey = (m) => [m.scenario, m.theme, m.vars, m.width, m.viewport.w, m.mode].join('|');
+  const first = new Map();
+  const later = new Map();
+  for (const m of measured) (phaseOf(m) === 'settled' ? later : first).set(modeKey(m), m);
+  if (requireSettled || later.size > 0) {
+    for (const [k, a] of first) {
+      const b = later.get(k);
+      pairs.push({ id: `${k} (immediately against after everything scheduled has run)`, checks: b ? compareSettled(a, b) : [{ name: 'the strip was measured again after everything scheduled had run', ok: false, detail: 'missing' }] });
+    }
+    for (const k of later.keys()) if (!first.has(k)) pairs.push({ id: `${k} (immediately against after everything scheduled has run)`, checks: [{ name: 'the strip was measured in the same task as the action', ok: false, detail: 'missing' }] });
+  }
   const all = [...states, ...pairs].flatMap((x) => x.checks);
   return { states, pairs, failed: all.filter((c) => !c.ok).length, total: all.length };
 }

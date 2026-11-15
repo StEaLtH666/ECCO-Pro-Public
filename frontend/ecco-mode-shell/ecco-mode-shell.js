@@ -1052,7 +1052,9 @@ export function buildSnapshot(states, catalogue, nowMs) {
   }
   rows.sort((a, b) => (cat.groupOrder.has(a.group) ? cat.groupOrder.get(a.group) : 1e6) - (cat.groupOrder.has(b.group) ? cat.groupOrder.get(b.group) : 1e6)
     || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.order - b.order);
-  const counts = { total: rows.length, withheld: 0, discovered: 0, problems: 0, unread: 0 };
+  // review round 9: notLive counts the rows whose STATUS is not live (stale, unavailable, unknown, not measured, simulated, unverified), whether or not the snapshot read the entity; unread counts the rows it did not read. The two are
+  // independent (an entity that is past the snapshot budget is classified from its raw state, so it can be both), and Production says each of them in its own sentence. problems is the Problems filter: either.
+  const counts = { total: rows.length, withheld: 0, discovered: 0, problems: 0, unread: 0, notLive: 0 };
   for (const s of STATUSES) counts[s] = 0;
   const byKey = new Map();
   const groups = cat.groups.map((g) => ({ ...g, count: 0, allObscure: true }));
@@ -1063,6 +1065,7 @@ export function buildSnapshot(states, catalogue, nowMs) {
     if (r.discovered) counts.discovered += 1;
     if (r.problem) counts.problems += 1;
     if (r.unread) counts.unread += 1;
+    if (r.status !== 'LIVE') counts.notLive += 1;
     byKey.set(r.key, r);
     const g = groupAt.get(r.group);
     if (g) {
@@ -1165,8 +1168,12 @@ export function summarise(snapshot, alerts) {
     level = 'info';
     text = `${by('info')[0].text}${more(by('info'))}`;
   }
-  const unread = snapshot && snapshot.counts && isNum(snapshot.counts.unread) ? snapshot.counts.unread : 0;
-  const n = (snapshot && snapshot.counts ? snapshot.counts.problems : 0) - unread;
+  // review round 9 (reviewer finding, honesty): the two sentences are counted separately. Round 8 took the problem count as counts.problems minus counts.unread, so an entity that was past the snapshot budget AND unavailable
+  // (or stale) was taken off the problem sentence with the unread ones: five unavailable data points among ten unread were never said to be unavailable. Now the problem sentence counts the rows whose status is not live,
+  // read or not (counts.notLive), and the unread sentence counts the rows that were not read (counts.unread); an entity in both is in both sentences.
+  const counts = snapshot && snapshot.counts ? snapshot.counts : {};
+  const unread = isNum(counts.unread) ? counts.unread : 0;
+  const n = isNum(counts.notLive) ? counts.notLive : 0;
   // review round 8: an entity that the snapshot did not read (its budget was used up) is said so, in words, here as well: Production never implies that every value was looked at when one was not
   const notes = [];
   if (n > 0) notes.push(`${n} data point${n === 1 ? ' is' : 's are'} stale, unavailable, simulated or unverified. Geek Mode lists them.`);

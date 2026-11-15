@@ -663,7 +663,7 @@ test('AC7 one hass object feeds the strip, the Production summary, the Geek rows
 // ===========================================================================================================================
 // AC12: a large collection stays bounded on the real catalogue
 // ===========================================================================================================================
-test('AC12 the real catalogue with 5000 extra ecco_intel_ entities: one page in the DOM, a quick search, one changed entity rebuilds one row', () => {
+test('[wall-clock] AC12 the real catalogue with 5000 extra ecco_intel_ entities: one page in the DOM, a quick search, one changed entity rebuilds one row', () => {
   const f = fixture('healthy');
   const states = { ...f.states };
   const stamp = f.states['sensor.ecco_intel_status'].last_updated;

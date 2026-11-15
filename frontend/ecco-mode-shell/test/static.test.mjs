@@ -1369,3 +1369,32 @@ test('snapshot budget [r8]: the budget is made once per snapshot, charged for ev
   assert.match(bs, /alertInputs\[a\.entity_id\] = isObj\(s\)/);
   assert.ok(!/budget/.test(bs.slice(bs.indexOf('const alertInputs'))), 'the alert inputs are made with no budget in sight');
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 9 ([r9]): THE RUNNER RULE needs to know which tests are about time. A test that asserts how LONG something took can fail under the parallel load of the mutation runner for no fault of the card, so the runner
+// (mutations.test.mjs) runs a mutant whose only failing tests are of that kind again, alone, before it counts it as killed. It knows them by [wall-clock] in the title. This is the check that the tag is kept: every test of
+// perf.test.mjs (the timing file; its helpers read the clock, so the tests do not show it) and every test of any other file whose own text reads the clock carries it.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('test files [r9]: every test that is about time (all of perf.test.mjs, and any test that reads the clock) carries the wall-clock tag in its title, so that the mutation runner can tell a timing failure from a behavioural one', () => {
+  const dir = path.join(cardDir, 'test');
+  const clock = new RegExp(['\\bperformance\\.', 'now\\(\\)|\\bDate\\.', 'now\\(\\)'].join(''));
+  const missing = [];
+  let tagged = 0;
+  let timed = 0;
+  for (const file of readdirSync(dir).filter((x) => x.endsWith('.test.mjs') && x !== 'mutations.test.mjs')) {
+    const text = readFileSync(path.join(dir, file), 'utf8');
+    const starts = [...text.matchAll(/^[ \t]*test(?:\.\w+)?\(/gm)].map((m) => m.index);
+    starts.forEach((at, i) => {
+      const body = text.slice(at, i + 1 < starts.length ? starts[i + 1] : text.length);
+      const first = body.split('\n')[0];
+      const has = first.includes('[wall-clock]');
+      const needs = file === 'perf.test.mjs' || clock.test(body);
+      if (has) tagged += 1;
+      if (needs) timed += 1;
+      if (needs && !has) missing.push(`${file}: ${first.slice(0, 90)}`);
+      if (has && !needs) missing.push(`${file}: tagged but not about time: ${first.slice(0, 90)}`);
+    });
+  }
+  assert.deepEqual(missing, [], 'a test about time is not tagged (or a tag is on a test that is not about time)');
+  assert.ok(tagged >= 15 && tagged === timed, `${tagged} tagged, ${timed} about time`);
+});

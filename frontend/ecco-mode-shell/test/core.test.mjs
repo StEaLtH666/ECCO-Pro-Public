@@ -833,7 +833,7 @@ function bigStates(n) {
   return states;
 }
 
-test('AC12 performance: 5000 synthetic entities snapshot within a generous budget; the search is fast; outside-prefix entities cost nothing', () => {
+test('[wall-clock] AC12 performance: 5000 synthetic entities snapshot within a generous budget; the search is fast; outside-prefix entities cost nothing', () => {
   const c = validateCatalogue(cat()).catalogue;
   const states = bigStates(5000);
   let t = performance.now();
@@ -1574,7 +1574,7 @@ test('AC10 [r5] every kind at every offset holds on every path of the core: row 
 const catWith = (patterns) => ({ ...miniCatalogue(), redaction: { extra_key_patterns: patterns } });
 const PATTERN_PATH = 'redaction.extra_key_patterns[0]';
 
-test('AC10 [r5] a catalogue pattern that is an expression (a repeated group, an alternation, anchors, repeats) is refused: ignored, never thrown, and a catalogue error; plain fragments still work (reviewer probe probe-redos)', () => {
+test('[wall-clock] AC10 [r5] a catalogue pattern that is an expression (a repeated group, an alternation, anchors, repeats) is refused: ignored, never thrown, and a catalogue error; plain fragments still work (reviewer probe probe-redos)', () => {
   const refused = [['(a|aa)*c', 'aac'], ['(a|a?)+$', 'aaa'], ['((a|b))*c', 'abc'], ['(?:a|aa)+c', 'aac'], ['(x+x+)+y', 'xxy'], ['(a*)*b', 'ab'], ['(a|b){2,}c', 'abc'],
     ['(a?)+b', 'ab'], ['((a+))+b', 'aab'], ['(?:(?:a+))+b', 'aab'], ['((a)?)+b', 'ab'], ['a*a*a*a*b', 'aaab'], ['.*.*.*.*x', 'ax'], ['a+a+a+a+b', 'aaaab'],
     // the "sound" expressions of round 5 are expressions too: refused by the plain-fragment rule (their fragments are accepted below)
@@ -1711,7 +1711,7 @@ test('AC10 [r6] a key longer than the bound is not read in part: its value is wi
   assert.deepEqual(Object.values(redactAttributes({ ['k'.repeat(100000)]: 'v' })), [WITHHELD]);
 });
 
-test('AC10 [r6] a fragment is never searched in more than 200 characters of a key at one time, and the whole key is still read (reviewer mutant K02: the whole key, and an unbounded slice)', () => {
+test('[wall-clock] AC10 [r6] a fragment is never searched in more than 200 characters of a key at one time, and the whole key is still read (reviewer mutant K02: the whole key, and an unbounded slice)', () => {
   const seen = [];
   const original = String.prototype.includes;
   const names = Object.values(KEY_FRAGMENTS);
@@ -1882,7 +1882,7 @@ test('AC10 [r6] a secret that CROSSES the display cap is never partly shown (des
   assert.equal(redactValue(t, { key: 'note' }), WITHHELD, 'it used to come out as "...10.2" before the cut mark');
 });
 
-test('AC10 [r6] a text longer than LIMITS.scanBound is not read in part: it is withheld whole, with or without a secret; a text of exactly the bound is read and cut as before', () => {
+test('[wall-clock] AC10 [r6] a text longer than LIMITS.scanBound is not read in part: it is withheld whole, with or without a secret; a text of exactly the bound is read and cut as before', () => {
   assert.equal(LIMITS.scanBound, 20000);
   assert.equal(LIMITS.stringCap, 4000);
   assert.equal(redactValue(filler(LIMITS.scanBound + 1), { key: 'note' }), WITHHELD);
@@ -1982,7 +1982,7 @@ test('AC10 [r6] a secret inside a long KEY NAME is never shown: at every offset 
   assert.deepEqual(Object.keys(plain), [`${filler(120)}… [truncated 180 more characters]`]);
 });
 
-test('AC12 [r6] reading every string whole keeps the budgets: two thousand entities with a harmless 4500-character text snapshot in well under a few seconds, and the three read-ahead rules are not walked once per start (a 20000-character text that only looks like the start of a host name, a MAC address or a pass pair)', () => {
+test('[wall-clock] AC12 [r6] reading every string whole keeps the budgets: two thousand entities with a harmless 4500-character text snapshot in well under a few seconds, and the three read-ahead rules are not walked once per start (a 20000-character text that only looks like the start of a host name, a MAC address or a pass pair)', () => {
   const text = filler(4500);
   // review round 8: 350 entities of 4500 characters (1.6 million characters) fit in the snapshot budget and are all read whole; 2000 of them (nine million) do not, so the snapshot reads the first of them in the order of
   // their ids and says that it did not read the rest (nothing of an entity that was not read is shown). Both are quick.

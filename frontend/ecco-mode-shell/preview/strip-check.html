@@ -81,6 +81,16 @@ async function main() {
   };
   const widths = (q.get('widths') || '390,1000').split(',').map(Number).filter((n) => n > 0);
   const stage = document.getElementById('stage');
+  // review round 9 (reviewer mutants E05 and E08: an alert hidden a moment AFTER the switch passed a check that measured in the same task as the click): after the switch, wait until the browser has run a zero-delay timer, two
+  // animation frames (so a paint has happened in between) and the microtasks and promise continuations they leave, then measure the strip again. The strip must be the very same strip. How many of the two frames the browser really
+  // delivered is counted and reported (framesSeen): measured with the browser this check uses (headless, virtual time), the first frame arrives within a few milliseconds and the second mostly does not, so the wait is given up after
+  // 250 ms of the page's own clock. Everything that is not a frame (a microtask, a promise continuation, an async function, a timer of up to 250 ms, an observer callback) has run either way. A longer delay is not waited for here:
+  // the node scheduler (test/async-net.mjs) runs timers of any delay and animation frames.
+  const settle = () => new Promise((resolve) => {
+    let frames = 0;
+    const giveUp = setTimeout(() => resolve(frames), 250);
+    setTimeout(() => requestAnimationFrame(() => { frames += 1; requestAnimationFrame(() => { frames += 1; setTimeout(() => { clearTimeout(giveUp); resolve(frames); }, 0); }); }), 0);
+  });
   const rectOf = (r) => ({ x: r.x, y: r.y, width: r.width, height: r.height });
   const shadowHost = (n) => { const r = n.getRootNode && n.getRootNode(); return r && r.host ? r.host : null; };
   const up = (n) => n.parentElement || shadowHost(n);
@@ -94,7 +104,7 @@ async function main() {
     const root = el.shadowRoot;
     const strip = root.querySelector('[data-ecco-alert-strip]');
     const shell = root.querySelector('[data-ecco-shell]');
-    const m = { id: `${spec.scenario}|${spec.theme}|${spec.vars}|${spec.mode}|w${spec.width}|v${innerWidth}`, scenario: spec.scenario, theme: spec.theme, vars: spec.vars, mode: spec.mode, width: spec.width,
+    const m = { id: `${spec.scenario}|${spec.theme}|${spec.vars}|${spec.mode}|w${spec.width}|v${innerWidth}${spec.phase === 'settled' ? '|settled' : ''}`, phase: spec.phase === 'settled' ? 'settled' : 'immediate', scenario: spec.scenario, theme: spec.theme, vars: spec.vars, mode: spec.mode, width: spec.width,
       expectAlerts: spec.expectAlerts, viewport: { w: innerWidth, h: innerHeight }, host: rectOf(el.getBoundingClientRect()),
       shell: { mode: shell ? shell.getAttribute('data-mode') : null }, strip: { present: Boolean(strip) }, alerts: [], bodies: {} };
     for (const which of ['production', 'geek']) {
@@ -154,6 +164,10 @@ async function main() {
             stage.appendChild(el);
             if (mode === 'geek') el.shadowRoot.querySelector('[data-mode-option="geek"]').click();
             report.states.push(measure(el, spec));
+            const framesSeen = await settle();
+            const again = measure(el, { ...spec, phase: 'settled' });
+            again.framesSeen = framesSeen;
+            report.states.push(again);
           }
         }
       }

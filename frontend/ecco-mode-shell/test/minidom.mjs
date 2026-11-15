@@ -50,11 +50,23 @@ export class MEvent {
   }
 }
 
+/**
+ * review round 9: INSPECT-SAFE NODES. `assert.equal(node, null)` that FAILS builds its message by inspecting both values with a depth of 1000, no limit on arrays and custom inspection OFF, so a node that carries enumerable
+ * back-references (its parent, its document, its listeners) is walked together with the whole page, the document and every closure: the mutant AC6-strip-inside-production-body (a node where a null was expected) took the
+ * element and real-catalogue suites past 5 GB in two seconds, and the machine with them. The references that lead out of a node are therefore not enumerable (they stay readable and writable), so a failing comparison shows
+ * the node itself (its tag, its attributes, its value) and nothing around it. `test/minidom.mjs` is the only place that builds nodes; `async.test.mjs` asserts that the output stays small.
+ */
+export function quiet(obj, ...names) {
+  for (const n of names) if (Object.hasOwn(obj, n)) Object.defineProperty(obj, n, { value: obj[n], writable: true, configurable: true, enumerable: false });
+  return obj;
+}
+
 export class MText {
   constructor(data) {
     this.nodeType = 3;
     this.data = String(data);
     this.parentNode = null;
+    quiet(this, 'parentNode');
   }
 
   get textContent() {
@@ -94,6 +106,7 @@ export class MElement {
         owner._props.delete(name);
       },
     };
+    quiet(this, 'childNodes', 'parentNode', 'ownerDocument', '_listeners', '_props', 'style');
   }
 
   // ---- attributes ----
@@ -327,6 +340,7 @@ export class MElement {
    */
   attachShadow() {
     this.shadowRoot = new MShadowRoot(this);
+    quiet(this, 'shadowRoot');
     return this.shadowRoot;
   }
 
@@ -348,6 +362,7 @@ export class MShadowRoot extends MElement {
     super('#shadow-root', host.ownerDocument);
     this.host = host;
     this.activeElement = null;
+    quiet(this, 'host', 'activeElement');
   }
 }
 
@@ -357,6 +372,7 @@ export class MDocument {
     this.registry = new Map();
     this.activeElement = null;
     this.body = new MElement('body', this);
+    quiet(this, 'recorded', 'registry', 'body', 'activeElement');
   }
 
   resetRecorded() {
@@ -504,6 +520,7 @@ export class MWindow {
     this._l = new Map();
     this.location = { pathname: '/view-a' };
     this.customCards = undefined;
+    quiet(this, '_l');
   }
 
   addEventListener(t, f) {
@@ -537,6 +554,7 @@ export function installDom() {
 
     attachShadow() {
       this.shadowRoot = new MShadowRoot(this);
+      quiet(this, 'shadowRoot');
       return this.shadowRoot;
     }
   }

@@ -2,14 +2,15 @@
 //
 //   node preview/check-strip.mjs                          check the card as it is
 //   node preview/check-strip.mjs --card <file>            check a copy of ecco-mode-shell.js instead
-//   node preview/check-strip.mjs --selftest               prove the check is not vacuous: it must PASS the card and FAIL each of the deliberately broken copies (31 since round 4)
+//   node preview/check-strip.mjs --selftest               prove the check is not vacuous: it must PASS the card and FAIL each of the deliberately broken copies (31 since round 4, 38 since round 9)
 //   node preview/check-strip.mjs --json                   print the full report as JSON
 //   node preview/check-strip.mjs --require                exit 3, not 0, when no browser is found (for a pipeline that must not skip silently)
 //   ECCO_CHROME=<path to chrome.exe or msedge.exe>        use this browser
 //
 // What it does: serves frontend/ecco-mode-shell on the loopback address (read only, one port the system picks, closed at the end), starts a headless Chrome or
 // Edge against preview/strip-check.html, and reads back what the browser computed for the alert strip in Production and Geek Mode, light and dark, with and
-// without Home Assistant's theme variables, at two widths and in two window sizes. strip-check-lib.mjs judges the numbers: the strip box has a real size, is inside
+// without Home Assistant's theme variables, at two widths and in two window sizes. Since round 9 each state is measured twice: in the same task as the switch, and again after a zero-delay timer and two animation
+// frames, and the strip must be the same strip both times (a card that hides the alert a moment AFTER the switch is caught here; longer delays are the node scheduler's, test/async-net.mjs). strip-check-lib.mjs judges the numbers: the strip box has a real size, is inside
 // the viewport and its card, is fully opaque, is not transformed, filtered, masked or clipped, is not covered, has text at least 12 px with at least 4.5 : 1
 // contrast, and is the SAME box with the same lines in both modes. It never reads the stylesheet: the static net (test/static.test.mjs) stays the mandatory one,
 // and this is the net that does not depend on how a rule is written. No network (loopback only), no write outside a temporary browser profile it deletes.
@@ -88,7 +89,7 @@ async function runBrowser(browser, port, windowSize, widths, card) {
   try {
     const page = `http://127.0.0.1:${port}/frontend/ecco-mode-shell/preview/strip-check.html?widths=${widths}${card ? '&card=/__card/ecco-mode-shell.js' : ''}`;
     const args = ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--disable-component-update',
-      '--disable-background-networking', `--user-data-dir=${profile}`, `--window-size=${windowSize}`, '--virtual-time-budget=20000', '--dump-dom', page];
+      '--disable-background-networking', `--user-data-dir=${profile}`, `--window-size=${windowSize}`, '--virtual-time-budget=600000', '--dump-dom', page];
     const r = await runProcess(browser, args, 120000);
     const m = /<pre id="strip-check-result">([A-Za-z0-9+/=]*)<\/pre>/.exec(r.stdout || '');
     if (!m || !m[1]) return { error: `the page reported nothing (exit ${r.status}${r.timedOut ? ', timed out' : ''}, ${String(r.stdout || '').length} bytes of DOM)`, states: [] };
@@ -113,7 +114,7 @@ async function check(browser, port, useCard) {
     if (r.error) errors.push(`window ${windowSize}: ${r.error}`);
     measured.push(...r.states);
   }
-  return { errors, measured, report: errors.length ? null : evaluateAll(measured) };
+  return { errors, measured, report: errors.length ? null : evaluateAll(measured, { requireSettled: true }) };
 }
 
 /** The deliberately broken copies of the card for --selftest: [id, text to find in the stylesheet or the source, replacement]. Each one must make the check FAIL. */
@@ -153,6 +154,14 @@ export const BROKEN = Object.freeze([
   ['inert on the card element in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek') this.setAttribute('inert', '');`],
   ['role presentation on the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    ui.strip.setAttribute('role', mode === 'geek' ? 'presentation' : 'region');`],
   ['every alert line given role presentation (both modes)', "role: critical ? 'alert' : 'status' })", "role: 'presentation' })"],
+  // review round 9: the strip is hidden AFTER the switch (reviewer mutants E05 and E08 passed every offline suite and this check, which measured in the same task as the click)
+  ['E04 a microtask hides the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    queueMicrotask(() => { ui.strip.hidden = mode === 'geek'; });`],
+  ['E05 a promise continuation empties the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    Promise.resolve().then(() => { if (mode === 'geek') ui.strip.textContent = ''; });`],
+  ['E05c a promise continuation sets aria-hidden on the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    Promise.resolve().then(() => { if (mode === 'geek') ui.strip.setAttribute('aria-hidden', 'true'); });`],
+  ['E07 the renderer empties the strip in a promise continuation while in Geek Mode', '  strip.replaceChildren(...kids);\n}', "  strip.replaceChildren(...kids);\n  Promise.resolve().then(() => { const s = strip.closest('[data-mode]'); if (s && s.getAttribute('data-mode') === 'geek') strip.replaceChildren(); });\n}"],
+  ['E08 an async function awaits and then empties the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    (async () => { await null; if (mode === 'geek') ui.strip.replaceChildren(); })();`],
+  ['E09 a timer of zero hides the strip in Geek Mode', GEEK_LINE, `${GEEK_LINE}\n    setTimeout(() => { ui.strip.hidden = mode === 'geek'; }, 0);`],
+  ['E14 a mutation observer empties the strip once the Geek surface has been built', GEEK_LINE, `${GEEK_LINE}\n    if (typeof MutationObserver === 'function' && mode === 'geek') new MutationObserver(() => { ui.strip.replaceChildren(); }).observe(ui.shell, { childList: true, subtree: true });`],
 ]);
 
 async function main() {
@@ -210,7 +219,8 @@ async function main() {
     if (flag('--json')) {
       process.stdout.write(`${JSON.stringify({ browser, report: r.report, measured: r.measured }, null, 1)}\n`);
     } else {
-      process.stdout.write(`browser: ${browser}\ncard: ${cardFile || path.join(cardDir, 'ecco-mode-shell.js')}\nstates measured: ${r.report.states.length} (${r.report.pairs.length} Production / Geek pairs)\n`);
+      const by = (n) => r.measured.filter((m) => m.phase === 'settled' && m.framesSeen === n).length;
+      process.stdout.write(`browser: ${browser}\ncard: ${cardFile || path.join(cardDir, 'ecco-mode-shell.js')}\nstates measured: ${r.report.states.length} (${r.report.pairs.length} pairs: Production against Geek, and each state against itself after everything scheduled had run)\nthe second measurement waited for a timer of zero, two animation frames and the microtasks between (given up after 250 ms): the browser delivered both frames for ${by(2)} states, one for ${by(1)} and none for ${by(0)}\n`);
       for (const g of [...r.report.states, ...r.report.pairs]) {
         const bad = g.checks.filter((c) => !c.ok);
         process.stdout.write(`  ${bad.length ? 'FAIL' : 'ok  '} ${g.id}  (${g.checks.length - bad.length}/${g.checks.length})\n`);

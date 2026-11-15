@@ -5,7 +5,7 @@
 // AC5, AC6, AC10 and AC13 have at least six mutants each (this file asserts it); the others have at least one.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,8 @@ import { findBrowser } from '../preview/check-strip.mjs';
 
 const nested = process.env.ECCO_MODE_SHELL_PATH !== undefined || process.env.ECCO_SKIP_MUTATIONS === '1';
 const REAL = path.join(cardDir, 'ecco-mode-shell.js');
-const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs', 'real-catalogue.test.mjs', 'scan.test.mjs', 'budget.test.mjs'].map((f) => path.join(cardDir, 'test', f));
+// review round 9: async.test.mjs (the pin of the places where the card may defer work) and cache.test.mjs (warm caches against a cold read) are in the list
+const SUITES = ['core.test.mjs', 'element.test.mjs', 'static.test.mjs', 'coverage.test.mjs', 'real-catalogue.test.mjs', 'scan.test.mjs', 'budget.test.mjs', 'async.test.mjs', 'cache.test.mjs'].map((f) => path.join(cardDir, 'test', f));
 // review round 7: the timing tests take several seconds, so only the mutants about speed (`perf: true`) and the baseline are given them
 const PERF_SUITE = path.join(cardDir, 'test', 'perf.test.mjs');
 // review round 8: the differential gate (test/differential.test.mjs) is heavy too, so it is given only to the mutants about the rules (`diff: true`) and to the baseline
@@ -30,6 +31,10 @@ const sub = (find, replace, all = false) => (s) => {
 const chain = (...fs) => (s) => fs.reduce((acc, f) => f(acc), s);
 const GEEK_LINE = "    ui.geekBody.hidden = mode !== 'geek';";
 const SCAN_LINE = '  if (valueReason(t, digestOk, digestKey) !== null) return WITHHELD;';
+// review round 9
+const gl9 = (code) => sub(GEEK_LINE, `${GEEK_LINE}\n${code}`);
+const IS_GEEK9 = "this._ctl.mode === 'geek' && this._ui";
+const RENDER_END9 = '  strip.replaceChildren(...kids);\n}';
 
 const MUTANTS = [
   // ---- AC1 default Production
@@ -497,21 +502,131 @@ const MUTANTS = [
   { id: 'AC6-r8-computed-key-sheet', ac: 'AC6', note: 'Geek Mode inserts a rule into a stylesheet reached through a key held in a variable', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const k = 'sh' + 'eet'; if (mode === 'geek' && this._root.firstChild && this._root.firstChild[k]) this._root.firstChild[k].insertRule('[data-ecco-alert-strip]{display:none}'); }`) },
   { id: 'AC6-r8-computed-key-adopted', ac: 'AC6', note: 'Geek Mode adopts a stylesheet reached through a key held in a variable', f: sub(GEEK_LINE, `${GEEK_LINE}\n    { const k = ['adopted', 'Style', 'Sheets'].join(''); if (mode === 'geek') this.ownerDocument[k] = []; }`) },
   { id: 'AC6-r8-string-key-animate', ac: 'AC6', note: 'Geek Mode calls animate through a quoted bracket key', f: sub(GEEK_LINE, `${GEEK_LINE}\n    if (mode === 'geek' && typeof ui.strip['animate'] === 'function') ui.strip['animate']([{ opacity: 0 }, { opacity: 0 }], { duration: 1e9, fill: 'forwards' });`) },
+  // ---- review round 9 (design section 21). THE ASYNC-HIDE CLASS (reviewer mutants E05, E07, E08, and the same hide by every other way of deferring work: a microtask, a timer of any delay, an animation frame, an idle callback, an observer callback, a listener, a chain of them, a hide inside
+  // an allowed site). Each is killed by test/async.test.mjs (the pin of the places where the card may defer work), by the scheduler of test/async-net.mjs (element.test.mjs: every AC6 test settles after each step, the afterEach does it for every test, and THE TOUR runs everything that is
+  // scheduled after every step of a session), or by both. `browser: true`: the headless check also measures after a zero-delay timer and two animation frames. THE CACHE CLASS (B11 and its variants, every cache of the card returning a stale, free or wrong-key result): killed by
+  // cache.test.mjs, which compares the snapshot from warm caches with a cold read after every step of a history, and by the Geek surface test of element.test.mjs. THE HONESTY FIX (H): the problem sentence of Production counts the rows whose status is not live, read or not.
+  { id: 'AC6-r9-E04-queuemicrotask-hide', ac: 'AC6', note: 'a microtask hides the strip after the switch to Geek Mode', f: gl9("    queueMicrotask(() => { ui.strip.hidden = mode === 'geek'; });") },
+  { id: 'AC6-r9-E05-promise-then-clear', ac: 'AC6', browser: true, note: 'E05 (reviewer, round 9): a promise continuation empties the strip text one tick after the switch to Geek Mode', f: gl9("    Promise.resolve().then(() => { if (mode === 'geek') ui.strip.textContent = ''; });") },
+  { id: 'AC6-r9-E05b-promise-then-hidden', ac: 'AC6', note: 'a promise continuation hides the strip after the switch', f: gl9("    Promise.resolve().then(() => { ui.strip.hidden = mode === 'geek'; });") },
+  { id: 'AC6-r9-E05c-promise-then-aria-hidden', ac: 'AC6', note: 'a promise continuation sets aria-hidden on the strip after the switch', f: gl9("    Promise.resolve().then(() => { if (mode === 'geek') ui.strip.setAttribute('aria-hidden', 'true'); });") },
+  { id: 'AC6-r9-E07-render-strip-async-clear-in-geek', ac: 'AC6', browser: true, note: 'E07 (reviewer, round 9): the renderer empties the strip in a promise continuation, after every render, while in Geek Mode', f: sub(RENDER_END9, "  strip.replaceChildren(...kids);\n  Promise.resolve().then(() => { const s = strip.closest('[data-mode]'); if (s && s.getAttribute('data-mode') === 'geek') strip.replaceChildren(); });\n}") },
+  { id: 'AC6-r9-E08-applymode-async-fn', ac: 'AC6', browser: true, note: 'E08 (reviewer, round 9): an async function awaits and then empties the strip after the switch (it survived at one process at a time, and was "killed" only by a timing test under load)', f: gl9("    (async () => { await null; if (mode === 'geek') ui.strip.replaceChildren(); })();") },
+  { id: 'AC6-r9-E09-settimeout-0-hide', ac: 'AC6', browser: true, note: 'a timer of zero hides the strip after the switch', f: gl9("    setTimeout(() => { ui.strip.hidden = mode === 'geek'; }, 0);") },
+  { id: 'AC6-r9-E10-settimeout-20s-clear', ac: 'AC6', note: 'a timer of twenty seconds empties the strip (the scheduler runs timers of any delay)', f: gl9("    setTimeout(() => { if (this._ctl.mode === 'geek') ui.strip.replaceChildren(); }, 20000);") },
+  { id: 'AC6-r9-E11-second-interval-hide', ac: 'AC6', note: 'a second interval hides the strip in Geek Mode', f: gl9("    setInterval(() => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; }, 15000);") },
+  { id: 'AC6-r9-E12-raf-guarded-hide', ac: 'AC6', note: 'an animation frame hides the strip (behind a typeof test: dormant in Node without the scheduler of async-net.mjs)', f: gl9("    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; });") },
+  { id: 'AC6-r9-E13-ric-guarded-hide', ac: 'AC6', note: 'an idle callback hides the strip (behind a typeof test)', f: gl9("    if (typeof requestIdleCallback === 'function') requestIdleCallback(() => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; });") },
+  { id: 'AC6-r9-E14-mutationobserver-guarded-clear', ac: 'AC6', browser: true, note: 'a mutation observer empties the strip (behind a typeof test)', f: gl9("    if (typeof MutationObserver === 'function' && mode === 'geek') new MutationObserver(() => { ui.strip.replaceChildren(); }).observe(ui.shell, { childList: true, subtree: true });") },
+  { id: 'AC6-r9-E15-intersectionobserver-guarded-hide', ac: 'AC6', note: 'an intersection observer hides the strip when it reports the strip as not visible (behind a typeof test)', f: gl9("    if (typeof IntersectionObserver === 'function' && mode === 'geek') new IntersectionObserver((entries) => { if (entries.some((e) => !e.isIntersecting)) ui.strip.hidden = true; }).observe(ui.strip);") },
+  { id: 'AC6-r9-E16-resizeobserver-callback-hide', ac: 'AC6', note: 'the resize observer callback (an allowed site) also hides the strip on a normal box in Geek Mode', f: sub('if (r && r.width === 0 && r.height === 0) this._ctl.reset();', `if (r && r.width === 0 && r.height === 0) this._ctl.reset();\n          else if (r && r.width > 0 && ${IS_GEEK9}) this._ui.strip.hidden = true;`) },
+  { id: 'AC6-r9-E17-listener-on-strip-hide', ac: 'AC6', note: 'a click listener on the strip hides it in Geek Mode', f: gl9("    ui.strip.addEventListener('click', () => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; });") },
+  { id: 'AC6-r9-E18-listener-on-window-clear', ac: 'AC6', note: 'a focus listener on the window empties the strip in Geek Mode', f: gl9("    window.addEventListener('focus', () => { if (this._ctl.mode === 'geek') ui.strip.replaceChildren(); });") },
+  { id: 'AC6-r9-E19-window-computed-timeout', ac: 'AC6', note: 'a timer reached through window[name] with the name built from pieces hides the strip (no reader of the source can follow it; the scheduler records it)', f: gl9("    { const k = 'set' + 'Timeout'; if (mode === 'geek' && typeof window[k] === 'function') window[k](() => { ui.strip.hidden = true; }, 0); }") },
+  { id: 'AC6-r9-E20-fourth-render-clears-in-geek', ac: 'AC6', note: 'the fourth render in Geek Mode empties the strip (state that builds up: only a test that renders several times sees it)', f: sub(RENDER_END9, "  strip.replaceChildren(...kids);\n  strip.renders = (strip.renders || 0) + 1;\n  const sh = strip.closest('[data-mode]');\n  if (strip.renders > 3 && sh && sh.getAttribute('data-mode') === 'geek') strip.replaceChildren();\n}") },
+  { id: 'AC6-r9-E21-timer-path-hide', ac: 'AC6', note: 'the timer path hides the strip in Geek Mode, in the task of the tick', f: sub('    if (this._timerMs !== TICK_MS) this._startTimer(TICK_MS);\n    this._tick();\n  }', `    if (this._timerMs !== TICK_MS) this._startTimer(TICK_MS);\n    this._tick();\n    if (${IS_GEEK9}) this._ui.strip.hidden = true;\n  }`) },
+  { id: 'AC6-r9-E22-helpers-then-clears-strip', ac: 'AC6', note: 'the card-helpers continuation (an allowed site) also empties the strip in Geek Mode', f: sub('helpers().then((hp) => attach(hp.createCardElement(cfg)))', `helpers().then((hp) => { attach(hp.createCardElement(cfg)); if (${IS_GEEK9}) this._ui.strip.replaceChildren(); })`) },
+  { id: 'AC6-r9-E23-clipboard-then-clears-strip', ac: 'AC6', note: 'the clipboard continuation (an allowed site) also empties the strip in Geek Mode', f: sub('    clip.writeText(text).then(() => say(', `    clip.writeText(text).then(() => { if (${IS_GEEK9}) this._ui.strip.replaceChildren(); }).then(() => say(`) },
+  { id: 'AC6-r9-E24-deferred-empty-render-in-geek', ac: 'AC6', note: 'a promise continuation after each refresh re-renders the strip with no alerts in Geek Mode', f: sub('    renderAlertStrip(this.ownerDocument, ui.strip, this._alerts);\n    const sum', "    renderAlertStrip(this.ownerDocument, ui.strip, this._alerts);\n    Promise.resolve().then(() => { if (this._ctl.mode === 'geek') renderAlertStrip(this.ownerDocument, ui.strip, []); });\n    const sum") },
+  { id: 'AC6-r9-E25-click-handler-microtask-hide', ac: 'AC6', note: 'a microtask queued by the switch click hides the strip', f: sub("on(b, 'click', () => this._ctl.set(mode));", `on(b, 'click', () => { this._ctl.set(mode); queueMicrotask(() => { if (${IS_GEEK9}) this._ui.strip.hidden = true; }); });`) },
+  { id: 'AC6-r9-E26-deferred-move-of-strip', ac: 'AC6', note: 'a promise continuation moves the strip to the end of the shell in Geek Mode', f: gl9("    Promise.resolve().then(() => { if (mode === 'geek') ui.shell.appendChild(ui.strip); });") },
+  { id: 'AC6-r9-E27-settimeout-aria-hidden', ac: 'AC6', note: 'a timer of zero sets aria-hidden on the strip in Geek Mode', f: gl9("    setTimeout(() => { if (mode === 'geek') ui.strip.setAttribute('aria-hidden', 'true'); }, 0);") },
+  { id: 'AC6-r9-E28-hass-setter-microtask-clear', ac: 'AC6', note: 'a microtask after the hass setter empties the strip in Geek Mode', f: sub('    this._syncTheme();\n    this._refresh(false);\n  }', `    this._syncTheme();\n    this._refresh(false);\n    queueMicrotask(() => { if (${IS_GEEK9}) this._ui.strip.replaceChildren(); });\n  }`) },
+  { id: 'AC6-r9-E29-timer-microtask-frame-chain', ac: 'AC6', note: 'a timer starts a microtask that starts an animation frame that hides the strip (a chain of three)', f: gl9("    setTimeout(() => queueMicrotask(() => requestAnimationFrame(() => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; })), 10);") },
+  { id: 'AC6-r9-E30-age-tick-callback-hides', ac: 'AC6', note: 'the age tick callback (an allowed site) hides the strip in Geek Mode after it has run', f: sub('this._timer = setInterval(() => this._onTimer(), ms);', `this._timer = setInterval(() => { this._onTimer(); if (${IS_GEEK9}) this._ui.strip.hidden = true; }, ms);`) },
+  { id: 'AC6-r9-E31-pagehide-neighbour-listener-hide', ac: 'AC6', note: 'a blur listener on the window, next to the allowed ones, hides the strip in Geek Mode', f: sub("window.addEventListener('pagehide', this._onPageHide);", `window.addEventListener('pagehide', this._onPageHide);\n      window.addEventListener('blur', () => { if (${IS_GEEK9}) this._ui.strip.hidden = true; });`) },
+  { id: 'AC6-r9-E32-on-property-handler-hide', ac: 'AC6', note: 'an onpointerover property handler on the shell hides the strip in Geek Mode', f: gl9("    ui.shell.onpointerover = () => { if (this._ctl.mode === 'geek') ui.strip.hidden = true; };") },
+  { id: 'AC12-r9-B11-cached-parts-free', ac: 'AC12', note: 'B11 (reviewer, round 9): a read reused from the cache is charged nothing, so a later snapshot reads past the snapshot budget', f: sub('  if (hit && hit.cat === cat && hit.ref === ref) return hit;', '  if (hit && hit.cat === cat && hit.ref === ref) return { ...hit, spent: 0 };') },
+  { id: 'AC12-r9-B11b-cached-parts-half-price', ac: 'AC12', note: 'a cached read is charged half what it cost', f: sub('  if (hit && hit.cat === cat && hit.ref === ref) return hit;', '  if (hit && hit.cat === cat && hit.ref === ref) return { ...hit, spent: Math.floor(hit.spent / 2) };') },
+  { id: 'AC12-r9-B11c-parts-ignore-catalogue', ac: 'AC12', note: 'a cached read is reused under another catalogue (stale secret key fragments, stale declared attributes)', f: sub('  if (hit && hit.cat === cat && hit.ref === ref) return hit;', '  if (hit && hit.ref === ref) return hit;') },
+  { id: 'AC12-r9-B11d-parts-keyed-by-entity-id', ac: 'AC12', note: 'the reads are cached by entity id, not by state object (stale after an update)', f: chain(sub('const PARTS = new WeakMap();', 'const PARTS = new Map();'), sub('  const hit = PARTS.get(state);', '  const hit = PARTS.get(state.entity_id);'), sub('  PARTS.set(state, parts);', '  PARTS.set(state.entity_id, parts);')) },
+  { id: 'AC12-r9-B11e-parts-ignore-source', ac: 'AC12', note: 'a cached read is reused for another source (the check on the source is dropped; a defensive duplicate of the catalogue check unless a state is read for two sources)', f: sub('  if (hit && hit.cat === cat && hit.ref === ref) return hit;', '  if (hit && hit.cat === cat) return hit;') },
+  { id: 'AC12-r9-R01-row-reuse-ignores-clock', ac: 'AC12', note: 'a cached row is reused whatever the clock says (a stale age)', f: sub('  if (Math.abs(nowMs - hit.now) >= ROW_REUSE_MS) return false;\n', '') },
+  { id: 'AC12-r9-R02-row-reuse-window-huge', ac: 'AC12', note: 'a cached row is reused for any distance in time', f: sub('const ROW_REUSE_MS = 1000;', 'const ROW_REUSE_MS = 1e12;') },
+  { id: 'AC12-r9-R03-row-reuse-ignores-status-edge', ac: 'AC12', note: 'a cached row is reused across the moment its status changes', f: sub('  return cls.status === was.status && cls.flags.length === was.flags.length && cls.flags.every((f, i) => f === was.flags[i]);', '  return true;') },
+  { id: 'AC12-r9-R04-row-order-stale', ac: 'AC12', note: 'a cached row keeps the place it had when an entity before it appeared', f: sub('    return hit.row.order === order ? hit.row : { ...hit.row, order };', '    return hit.row;') },
+  { id: 'AC12-r9-R05-cached-row-free', ac: 'AC12', note: 'a cached row is returned with a cost of nothing', f: sub('    return hit.row.order === order ? hit.row : { ...hit.row, order };', '    return { ...hit.row, order, spent: 0 };') },
+  { id: 'AC12-r9-R06-row-ignores-catalogue', ac: 'AC12', note: 'a cached row is reused under another catalogue', f: sub('  if (hit && hit.cat === cat && hit.ref === ref && hit.key === ledgerKey.key && (!present || stillRight(source, state, nowMs, hit))) {', '  if (hit && hit.ref === ref && hit.key === ledgerKey.key && (!present || stillRight(source, state, nowMs, hit))) {') },
+  { id: 'AC12-r9-R07-row-ignores-ledger-key', ac: 'AC12', note: 'a cached row is reused for another ledger key', f: sub('hit.ref === ref && hit.key === ledgerKey.key && (!present', 'hit.ref === ref && (!present') },
+  { id: 'AC12-r9-R09-row-cached-for-unread-too', ac: 'AC12', note: 'an entity past the budget gets its row through the cache', f: sub('  if (unread) return buildRow(source, state, nowMs, cat, order, ledgerKey, true);\n', '') },
+  { id: 'AC12-r9-X01-extra-patterns-stale', ac: 'AC12', note: 'the compiled extra key patterns are those of the last catalogue compiled', f: chain(sub('  if (EXTRA_CACHE.has(list)) return EXTRA_CACHE.get(list);', '  if (EXTRA_CACHE.last) return EXTRA_CACHE.last;'), sub('  EXTRA_CACHE.set(list, out);\n  return out;', '  EXTRA_CACHE.set(list, out);\n  EXTRA_CACHE.last = out;\n  return out;')) },
+  { id: 'AC12-r9-X02-prepared-catalogue-stale', ac: 'AC12', note: 'the prepared catalogue is the last one prepared, whichever catalogue is asked for', f: chain(sub('  if (key && PREP.has(key)) return PREP.get(key);', '  if (PREP.last) return PREP.last;'), sub('  if (key) PREP.set(key, prepared);', '  if (key) PREP.set(key, prepared);\n  PREP.last = prepared;')) },
+  { id: 'AC12-r9-X03-key-decisions-shared-across-reads', ac: 'AC12', note: 'the key decisions of one read are kept for the next read (another entity, another catalogue)', f: chain(sub('const newCtx = (opts) => ({', 'const SHARED_KEYS = new Map();\nconst newCtx = (opts) => ({'), sub('  keys: new Map(),\n  keyCount: 0,', '  keys: SHARED_KEYS,\n  keyCount: 0,')) },
+  { id: 'AC12-r9-G01-signature-without-age', ac: 'AC12', note: 'the signature of a row leaves out its age: the Geek surface shows a stale age', f: sub('showUnit, ageText, cls.ageMonitored', 'showUnit, cls.ageMonitored') },
+  { id: 'AC12-r9-G02-signature-without-state', ac: 'AC12', note: 'the signature of a row leaves out its state text', f: sub("cls.flags.join(','), stateText, showUnit", "cls.flags.join(','), showUnit") },
+  { id: 'AC12-r9-G03-signature-without-read-id', ac: 'AC12', note: 'the signature of a row leaves out which read it was made from (a change of attributes is not repainted)', f: sub("parts ? parts.id : unreadHere ? 'unread' : 0, ledgerKey.display]", "parts ? 0 : unreadHere ? 'unread' : 0, ledgerKey.display]") },
+  { id: 'AC12-r9-G04-signature-without-status', ac: 'AC12', note: 'the signature of a row leaves out its status', f: sub("sig: [cls.status, cls.flags.join(','), stateText", "sig: [cls.flags.join(','), stateText") },
+  { id: 'AC12-r9-G05-surface-row-never-rebuilt', ac: 'AC12', note: 'the Geek surface reuses the DOM of a row whatever its signature says', f: sub('      if (hit && hit.sig === sig) {', '      if (hit) {') },
+  { id: 'AC12-r9-G06-surface-signature-without-open', ac: 'AC12', note: 'the Geek surface signature leaves out whether the row is open', f: sub('const sig = `${row.sig}\\u0002${open ? 1 : 0}${raw ? 1 : 0}`;', 'const sig = `${row.sig}\\u0002${raw ? 1 : 0}`;') },
+  { id: 'AC9-r9-H01-problems-minus-unread-again', ac: 'AC9', note: 'H01 (reviewer, round 9): the problem sentence is counted as problems minus unread again: an unread entity that is unavailable or stale is not said', f: sub('  const n = isNum(counts.notLive) ? counts.notLive : 0;', '  const n = (isNum(counts.problems) ? counts.problems : 0) - unread;') },
+  { id: 'AC9-r9-H03-notlive-counts-read-rows-only', ac: 'AC9', note: 'the not-live count leaves out the rows that were not read', f: sub("    if (r.status !== 'LIVE') counts.notLive += 1;", "    if (r.status !== 'LIVE' && !r.unread) counts.notLive += 1;") },
+  { id: 'AC9-r9-H04-notlive-never-counted', ac: 'AC9', note: 'the not-live count is never made', f: sub("    if (r.status !== 'LIVE') counts.notLive += 1;\n", '') },
+  { id: 'AC9-r9-H05-notlive-counts-unread-too', ac: 'AC9', note: 'the not-live count includes every unread row (the problem sentence says that live entities are stale)', f: sub("    if (r.status !== 'LIVE') counts.notLive += 1;", "    if (r.problem) counts.notLive += 1;") },
+  { id: 'AC9-r9-H07-problem-sentence-only-when-all-read', ac: 'AC9', note: 'the problem sentence is dropped whenever something was not read', f: sub('  if (n > 0) notes.push(', '  if (n > 0 && unread === 0) notes.push(') },
+  { id: 'AC9-r9-H08-unread-sentence-only-without-problems', ac: 'AC9', note: 'the unread sentence is dropped whenever there is a problem', f: sub('  if (unread > 0) notes.push(', '  if (unread > 0 && n === 0) notes.push(') },
 ];
 
 const MIN = { AC5: 6, AC6: 6, AC10: 6, AC13: 6 };
 
-function runSuites(file, extra = []) {
+// ---- review round 9: THE RUNNER RULE (reviewer NIT). Some tests assert how LONG something took (they carry [wall-clock] in their title: static.test.mjs checks that every test that reads the clock does). Under the parallel load of this runner
+// such a test can fail for no fault of the card, and a mutant whose ONLY failing tests are of that kind may be "killed" by the load: the reviewer saw E08 killed at four processes at a time and alive at one. So: a mutant whose
+// every failing test is a wall-clock test is run AGAIN, alone, one test file at a time, after the parallel part is over, and counts as killed only if it fails again. (A mutant killed by any test that is not a wall-clock test needs no second run:
+// those tests do not depend on the load.)
+const WALL_CLOCK = '[wall-clock]';
+/** The titles of the tests that failed in a run of `node --test` (spec reporter: a line at the start of a line, the failure mark, the title and the time it took). */
+const failedTitles = (out) => [...new Set([...String(out).matchAll(/^\u2716 (.+?) \(\d+(?:\.\d+)?ms\)\s*$/gm)].map((m) => m[1].trim()))];
+/** True when the run failed and every test that failed is a wall-clock test (a run that failed with no test named, a crash or a file that did not load, is not). */
+const killedOnlyByTiming = (run) => {
+  if (!run || run.code === 0) return false;
+  const titles = failedTitles(run.out);
+  return titles.length > 0 && titles.every((t) => t.includes(WALL_CLOCK));
+};
+/** Killed: the run failed, and if it failed only on timing, it failed again when run alone. */
+const isKilled = (m) => m.run !== null && m.run.code !== 0 && (!m.timingOnly || (m.serial !== undefined && m.serial.code !== 0));
+
+// --test-force-exit: a mutant that leaks a timer (a second interval that nothing clears) must not keep the test process, and with it this whole run, alive for ever once its tests are over.
+// --test-concurrency: review round 9 (two earlier attempts of the round ran the PC out of virtual memory): a bare `node --test` runs as many test files at once as the machine has cores, in every one of the six runs of the pool, so
+// each run is held to two files at a time (one, for the run alone that the runner rule asks for). The heap cap and the per-process memory guard are inherited from the environment of the outer run.
+const CHILD_CONCURRENCY = 2;
+// A time limit for one nested run (review round 9). In one of three full runs of the proof a nested test-file process of a mutant went idle (no CPU, no port) and stayed so for thirty minutes, with every other run long over;
+// the same mutant and file ran clean three times alone, so it was not the card. A run that does not finish is killed (with its whole tree) and run once more alone; a mutant whose run hangs twice is reported by name and counts
+// as killed (a suite that never ends fails any pipeline). The normal nested run takes under a minute (the perf and differential suites a few more).
+const RUN_LIMIT_MS = 300000;
+const BASELINE_LIMIT_MS = 900000;
+const killTree = (child) => {
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  else child.kill('SIGKILL');
+};
+/** The result of a run that may have hung: the first run if it finished; else the second if that finished; else a failed run that says it hung. */
+const resolveHang = (first, again) => {
+  if (!first.timedOut) return first;
+  if (again && !again.timedOut) return { ...again, retried: true };
+  return { code: 1, out: `${first.out}\n${again ? again.out : ''}`, hung: true };
+};
+function runSuites(file, extra = [], { serial = false, limitMs = RUN_LIMIT_MS } = {}) {
   return new Promise((resolve) => {
     // NODE_TEST_CONTEXT is set by the outer test runner; inherited, it would turn the nested `node --test` into a silent no-op.
     const env = { ...process.env, ECCO_MODE_SHELL_PATH: file, ECCO_SKIP_MUTATIONS: '1' };
     delete env.NODE_TEST_CONTEXT;
-    const child = spawn(process.execPath, ['--test', ...SUITES, ...extra], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--test', '--test-force-exit', `--test-concurrency=${serial ? 1 : CHILD_CONCURRENCY}`, ...SUITES, ...extra], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, limitMs);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
-    child.on('close', (code) => resolve({ code, out }));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: timedOut ? 124 : code, out, timedOut });
+    });
   });
+}
+/** One nested run; if it hangs, once more alone (see resolveHang). */
+async function runChecked(file, extra, opts = {}) {
+  const first = await runSuites(file, extra, opts);
+  return first.timedOut ? resolveHang(first, await runSuites(file, extra, { ...opts, serial: true })) : first;
 }
 
 async function pool(items, size, fn) {
@@ -545,8 +660,13 @@ if (nested) {
   });
   const baseFile = path.join(dir, 'baseline.mjs');
   writeFileSync(baseFile, original);
-  const baseline = await runSuites(baseFile, [PERF_SUITE, DIFF_SUITE]);
-  const results = await pool(prepared, 6, async (m) => (m.file ? { ...m, run: await runSuites(m.file, extraSuites(m)) } : { ...m, run: null }));
+  const baseline = await runChecked(baseFile, [PERF_SUITE, DIFF_SUITE], { limitMs: BASELINE_LIMIT_MS });
+  const results = await pool(prepared, 6, async (m) => (m.file ? { ...m, run: await runChecked(m.file, extraSuites(m)) } : { ...m, run: null }));
+  // review round 9, the runner rule: a mutant that failed only on wall-clock tests is run again, alone, before it counts as killed
+  for (const m of results) {
+    m.timingOnly = killedOnlyByTiming(m.run);
+    if (m.timingOnly) m.serial = await runChecked(m.file, extraSuites(m), { serial: true });
+  }
   // The extra layer (review round 5): where Chrome or Edge is installed, the mutants marked browser: true are also given to the headless browser check, one after the other (each starts
   // its own browser). The node suites above must kill every mutant by themselves; this layer only adds a second opinion, and is skipped, loudly, where there is no browser.
   const browserPath = findBrowser();
@@ -583,8 +703,44 @@ if (nested) {
     test(`mutant ${m.id} (${m.ac}): ${m.note}: is killed`, () => {
       assert.equal(m.error, null, m.error);
       assert.notEqual(m.run.code, 0, `SURVIVED: no test failed with this break`);
+      assert.equal(isKilled(m), true, `SURVIVED when run alone: only wall-clock tests failed (${failedTitles(m.run.out).join(' | ').slice(0, 300)}), and they passed on a second run with nothing else running`);
     });
   }
+
+  test('mutation runner [r9]: the rule for a failure of wall-clock tests alone is applied as stated (the logic, on made-up outputs of the test runner)', () => {
+    const fail = (...titles) => ({ code: 1, out: titles.map((t) => `\u2716 ${t} (12.5ms)`).join('\n') });
+    assert.deepEqual(failedTitles(`\u2714 a (1ms)\n\u2716 one (2.25ms)\n  \u2716 indented is not a title (1ms)\n\u2716 two (3ms)\n\u2716 one (2.25ms)`), ['one', 'two'], 'titles of failures at the start of a line, once each');
+    assert.equal(killedOnlyByTiming(fail(`${WALL_CLOCK} AC12 the first snapshot is fast`)), true, 'one wall-clock test');
+    assert.equal(killedOnlyByTiming(fail(`${WALL_CLOCK} a`, `${WALL_CLOCK} b`)), true, 'two');
+    assert.equal(killedOnlyByTiming(fail(`${WALL_CLOCK} a`, 'AC6 the strip is the same')), false, 'one wall-clock test and one behavioural test: the behavioural one kills it');
+    assert.equal(killedOnlyByTiming(fail('AC6 the strip is the same')), false);
+    assert.equal(killedOnlyByTiming({ code: 1, out: 'SyntaxError: nothing named' }), false, 'a crash names no test: it is not a timing failure');
+    assert.equal(killedOnlyByTiming({ code: 0, out: `\u2716 ${WALL_CLOCK} a (1ms)` }), false, 'a passing run is not killed by anything');
+    assert.equal(killedOnlyByTiming(null), false);
+    const timing = { ...{ run: fail(`${WALL_CLOCK} a`) }, timingOnly: true };
+    assert.equal(isKilled(timing), false, 'killed only by timing and not yet run alone: not killed');
+    assert.equal(isKilled({ ...timing, serial: { code: 0, out: '' } }), false, 'and it passed alone: it SURVIVES');
+    assert.equal(isKilled({ ...timing, serial: { code: 1, out: '' } }), true, 'and it failed again alone: killed');
+    assert.equal(isKilled({ run: fail('AC6 x'), timingOnly: false }), true, 'a behavioural failure is a kill at once');
+    assert.equal(isKilled({ run: { code: 0, out: '' }, timingOnly: false }), false);
+    assert.equal(isKilled({ run: null }), false);
+  });
+
+  test('mutation runner [r9]: a nested run that hits the time limit is run again alone; one that finishes the second time counts as that run, one that hangs twice is a failed run that says so (the logic, on made-up results)', () => {
+    const done = { code: 0, out: 'ok', timedOut: false };
+    const failed = { code: 1, out: '\u2716 AC6 x (3ms)', timedOut: false };
+    const hang = { code: 124, out: 'partial', timedOut: true };
+    assert.equal(resolveHang(done, null), done, 'a run that finished is the run');
+    assert.equal(resolveHang(failed, null), failed);
+    assert.deepEqual(resolveHang(hang, done), { ...done, retried: true }, 'a hang, then a pass: the pass counts, and it is said that the first run hung');
+    assert.deepEqual(resolveHang(hang, failed), { ...failed, retried: true }, 'a hang, then a failure: the failure');
+    const twice = resolveHang(hang, hang);
+    assert.equal(twice.hung, true);
+    assert.notEqual(twice.code, 0, 'a mutant whose suites never end is killed, and named');
+    assert.equal(killedOnlyByTiming(twice), false, 'and a hang is never mistaken for a timing failure');
+    assert.equal(isKilled({ run: twice, timingOnly: false }), true);
+    assert.ok(RUN_LIMIT_MS >= 120000 && RUN_LIMIT_MS <= 600000 && BASELINE_LIMIT_MS > RUN_LIMIT_MS);
+  });
 
   if (browserPath) {
     for (const b of browserRuns) {
@@ -603,7 +759,13 @@ if (nested) {
     const per = {};
     for (const m of results) per[m.ac] = (per[m.ac] || 0) + 1;
     for (const [ac, n] of Object.entries(MIN)) assert.ok((per[ac] || 0) >= n, `${ac} has ${per[ac] || 0} mutants, needs ${n}`);
-    const survivors = results.filter((m) => m.error !== null || m.run.code === 0).map((m) => m.id);
+    const survivors = results.filter((m) => m.error !== null || !isKilled(m)).map((m) => m.id);
+    const rerun = results.filter((m) => m.timingOnly).map((m) => `${m.id}: ${m.serial.code !== 0 ? 'killed again alone' : 'SURVIVED alone'}`);
+    if (rerun.length) console.log(`mutants killed only by wall-clock tests, run again alone: ${rerun.join('; ')}`);
+    const retried = results.filter((m) => m.run && m.run.retried).map((m) => m.id);
+    const hung = results.filter((m) => m.run && m.run.hung).map((m) => m.id);
+    if (retried.length) console.log(`mutants whose first run hit the time limit and finished when run again alone: ${retried.join('; ')}`);
+    if (hung.length) console.log(`mutants whose run hit the time limit twice (counted as killed, by name): ${hung.join('; ')}`);
     assert.deepEqual(survivors, []);
     console.log(`mutation score: ${results.length - survivors.length}/${results.length} killed; per case ${JSON.stringify(per)}`);
   });

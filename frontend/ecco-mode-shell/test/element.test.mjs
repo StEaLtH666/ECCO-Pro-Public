@@ -2,12 +2,22 @@
 // reset rules, mode independence, the zero-call guarantee, the alert strip, one snapshot for both modes, coverage and
 // honesty, redaction in every output, search / filter / paging, performance, inert hostile text, accessibility and the
 // fail-closed behaviour.
-import test, { afterEach } from 'node:test';
+import test, { afterEach, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installDom, installResizeObserver, MElement, MEvent, MDocument, MShadowRoot, tripwires, TRIPWIRE_NAMES } from './minidom.mjs';
+import { installScheduler, stripFingerprint, ALLOWED_ASYNC_SITES, siteKey } from './async-net.mjs';
 
 const { registry, doc, win } = installDom(); // BEFORE the card module is evaluated
 const ros = installResizeObserver();
+// review round 9: the scheduler records, and can run on demand, every timer, microtask, promise continuation, animation frame, observer callback and listener the card makes (async-net.mjs). Installed BEFORE the card is evaluated.
+const sched = installScheduler({ resizeObservers: ros });
+after(() => {
+  const p = sched.peak;
+  console.log(`scheduler peaks over the whole file (bounds ${JSON.stringify(sched.stats.bounds)}): work ${p.work}, registrations held ${p.listeners}, listeners alive when events were fired ${p.alive}, sites ${p.records}, waiting ${p.pending}, callbacks in one flush ${p.callbacksPerFlush}, events in one flush ${p.eventsPerFlush}`);
+  sched.uninstall();
+});
+// review round 9: the work counters, the records and the registry of the scheduler are those of ONE test (and a bound that the test before reached has been reported by its own afterEach)
+beforeEach(() => sched.beginTest());
 const { loadCard, miniCatalogue, miniStates, miniStatesRaw, hostileStatesRaw, statesFrom, makeHass, trapHass, installTraps, mkState, NOW, tick, textOf } = await import('./helpers.mjs');
 const { SECRET_VALUES, hostileAttributes, forbiddenStrings, KEY_MARKER } = await import('./secrets.mjs');
 const mod = await loadCard('element');
@@ -51,7 +61,12 @@ function mount({ config = {}, states = null, hass = null, catalogue = miniCatalo
   if (connect) el.connectedCallback();
   return el;
 }
-afterEach(() => {
+afterEach(async () => {
+  // review round 9 (reviewer mutants E05 and E08: an alert hidden a moment AFTER the switch, by a promise, a microtask or a timer): whatever the card left scheduled runs now, of any delay, and the strip of every live
+  // element, in whatever mode the test left it, must be exactly what it was a moment before. (An element with an update still waiting for its flush timer is skipped: its strip is about to change on purpose.)
+  const strips = [...live].map((el) => [el, stripFingerprint(el)]);
+  await sched.flush();
+  for (const [el, fp] of strips) if (!el._pending) assert.equal(stripFingerprint(el), fp, 'the strip changed after the work the card had scheduled ran (an alert hidden after the fact)');
   for (const el of live) el.disconnectedCallback();
   live.clear();
   // review round 8: after EVERY test, in whatever mode it left the element, nothing has read or called a Web Animations, style-map or stylesheet member of any element, shadow root or document (see the tripwires in minidom.mjs)
@@ -376,10 +391,30 @@ function assertStripVisible(el) {
   for (let n = strip; n && n.nodeType === 1; n = n.parentNode) assert.equal(n.hidden, false, `${n.tagName} hides the strip`);
   assert.equal(strip.closest('[data-ecco-body]'), null, 'the strip is outside both switchable bodies');
 }
+/**
+ * review round 9: SETTLE. Let everything the card scheduled run (timers of any delay, every microtask and promise continuation, animation frames, observer callbacks: see async-net.mjs), then the strip must be
+ * EXACTLY what it was in the same task as the action, and visible. An alert that is hidden a moment after a switch, an update or a tick (reviewer mutants E05, E07, E08) is a failure here, not later.
+ */
+async function settled(el, when) {
+  const before = stripFingerprint(el);
+  await sched.flush();
+  assert.equal(stripFingerprint(el), before, `${when}: the strip changed once the scheduled work had run (an alert hidden after the fact)`);
+  assertStripVisible(el);
+}
+/** A negative-control test plants damage on a live element; that element is dropped afterwards, so the afterEach (which checks that a strip does not change once the scheduled work has run) does not see the plant mended by the card's own refresh. */
+const drop = (el) => {
+  el.disconnectedCallback();
+  live.delete(el);
+};
+const geekS = async (el) => { geek(el); await settled(el, 'after switching to Geek Mode'); };
+const productionS = async (el) => { production(el); await settled(el, 'after switching to Production'); };
+const hassS = async (el, hass) => { el.hass = hass; await settled(el, 'after a hass update'); };
+const tickS = async (el) => { el._tick(); await settled(el, 'after a timer tick'); };
 
 for (const a of miniCatalogue().alerts) {
-  test(`AC6 ${a.id} (${a.severity}): shown identically in Production and Geek Mode, with its words and its action`, () => {
+  test(`AC6 ${a.id} (${a.severity}): shown identically in Production and Geek Mode, with its words and its action`, async () => {
     const el = mount({ states: miniStates(TRIGGER[a.id]) });
+    await settled(el, 'after mounting');
     const inProduction = stripSnapshot(el);
     assertStripVisible(el);
     assert.ok(inProduction.some((s) => s.startsWith(`${a.id}|${a.severity}|`)), `${a.id} missing in Production`);
@@ -387,38 +422,45 @@ for (const a of miniCatalogue().alerts) {
     assert.match(textOf(mine), new RegExp(a.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(textOf(mine), new RegExp(a.action.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.ok(mine.querySelector('svg'), 'an icon, not colour alone');
-    geek(el);
+    await geekS(el);
     assertStripVisible(el);
     assert.deepEqual(stripSnapshot(el), inProduction, 'identical in Geek Mode');
-    production(el);
+    await productionS(el);
     assert.deepEqual(stripSnapshot(el), inProduction, 'and again back in Production');
+    await tickS(el);
+    assert.deepEqual(stripSnapshot(el), inProduction, 'and after a timer tick');
   });
 
   for (const how of ['unavailable', 'unknown', 'missing']) {
-    test(`AC6 ${a.id}: ${a.entity_id} ${how}: the strip is not clear and is identical in both modes`, () => {
+    test(`AC6 ${a.id}: ${a.entity_id} ${how}: the strip is not clear and is identical in both modes`, async () => {
       const el = mount({ states: miniStates((s) => { if (how === 'missing') delete s[a.entity_id]; else s[a.entity_id].state = how; }) });
+      await settled(el, 'after mounting');
       const p = stripSnapshot(el);
       assert.ok(p.length > 0);
       assert.ok(qa(el, '[data-ecco-alert-strip] [data-alert-id]').some((n) => n.getAttribute('data-entity-id') === a.entity_id));
-      geek(el);
+      await geekS(el);
       assert.deepEqual(stripSnapshot(el), p);
       assertStripVisible(el);
     });
   }
 }
 
-test('AC6 a calm strip: with no alert both modes show the same quiet line, with an icon and words', () => {
+test('AC6 a calm strip: with no alert both modes show the same quiet line, with an icon and words', async () => {
   const el = mount();
+  await settled(el, 'after mounting');
   const quiet = q(el, '[data-ecco-alert-strip] [data-alert-none]');
   assert.ok(quiet);
   assert.ok(quiet.querySelector('svg'));
   assert.match(textOf(quiet), /No active alerts/);
-  geek(el);
+  await geekS(el);
   assert.match(textOf(q(el, '[data-ecco-alert-strip]')), /No active alerts/);
+  assert.ok(q(el, '[data-ecco-alert-strip] [data-alert-none] svg'), 'the icon of the quiet line is still there in Geek Mode, once everything scheduled has run');
 });
 
-test('AC6 critical alerts are announced as alerts; every severity carries its word', () => {
+test('AC6 critical alerts are announced as alerts; every severity carries its word', async () => {
   const el = mount({ states: miniStates((s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); }) });
+  await geekS(el);
+  await productionS(el);
   const crit = qa(el, '[data-ecco-alert-strip] [data-severity="critical"]')[0];
   assert.equal(crit.getAttribute('role'), 'alert');
   assert.match(textOf(crit), /Critical/);
@@ -426,25 +468,35 @@ test('AC6 critical alerts are announced as alerts; every severity carries its wo
   assert.match(textOf(qa(el, '[data-ecco-alert-strip] [data-severity="info"]')[0]), /Notice/);
 });
 
-test('AC6 the strip follows the data: it updates on a new hass in both modes and clears when the condition clears', () => {
+test('AC6 the strip follows the data: it updates on a new hass in both modes and clears when the condition clears', async () => {
   const el = mount();
+  await settled(el, 'after mounting');
   assert.deepEqual(stripIds(el), []);
-  el.hass = makeHass(miniStates(TRIGGER.A01));
+  await hassS(el, makeHass(miniStates(TRIGGER.A01)));
   assert.ok(stripIds(el).includes('A01'));
-  geek(el);
-  el.hass = makeHass(miniStates());
+  await geekS(el);
+  assert.ok(stripIds(el).includes('A01'), 'still there in Geek Mode, once everything scheduled has run');
+  await hassS(el, makeHass(miniStates()));
   assert.deepEqual(stripIds(el), []);
-  el.hass = makeHass(miniStates(TRIGGER.A03));
+  await hassS(el, makeHass(miniStates(TRIGGER.A03)));
   assert.ok(stripIds(el).includes('A03'));
+  await tickS(el);
+  assert.ok(stripIds(el).includes('A03'), 'and after a timer tick');
+  await productionS(el);
+  assert.ok(stripIds(el).includes('A03'), 'and back in Production');
 });
 
-test('AC6 the strip ages with the clock: a stale source raises nothing by itself, but the tick re-derives everything', () => {
+test('AC6 the strip ages with the clock: a stale source raises nothing by itself, but the tick re-derives everything', async () => {
   const el = mount();
   const s0 = el.snapshot;
   el._now = () => NOW + 3600 * 1000;
-  el._tick();
+  await tickS(el);
   assert.notEqual(el.snapshot, s0, 'a tick builds a fresh snapshot');
   assert.equal(el.snapshot.rows.find((r) => r.id === 'S01').status, 'STALE', 'an hour later the status sensor is stale');
+  await geekS(el);
+  el._now = () => NOW + 7200 * 1000;
+  await tickS(el);
+  assertStripVisible(el);
 });
 
 // ---- review round 4 (reviewer mutants J2 and J5): what a screen reader gets from the strip is the same in both modes ----
@@ -489,30 +541,31 @@ function expectAccessible(s, where) {
   for (const l of s.lines) assert.equal(l.role, l.id ? (l.severity === 'critical' ? 'alert' : 'status') : null, `${where}: the role of ${l.id || 'the quiet line'}`);
 }
 
-test('AC6 [r4] a screen reader gets the strip the same way in both modes: role, aria-live, label, no aria-hidden or inert on it or around it, the same roles on every line (reviewer mutants J2, J5)', () => {
+test('AC6 [r4] a screen reader gets the strip the same way in both modes: role, aria-live, label, no aria-hidden or inert on it or around it, the same roles on every line (reviewer mutants J2, J5)', async () => {
   const scenarios = { healthy: undefined, 'critical, warning and notice together': (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); }, ...Object.fromEntries(Object.entries(TRIGGER)) };
   assert.ok(Object.keys(scenarios).length >= 9);
   for (const [name, mutate] of Object.entries(scenarios)) {
     const el = mount({ states: miniStates(mutate) });
+    await settled(el, `${name}: after mounting`);
     const p0 = stripAccess(el);
     expectAccessible(p0, `${name}, Production`);
-    geek(el);
+    await geekS(el);
     const g0 = stripAccess(el);
     expectAccessible(g0, `${name}, Geek`);
     assert.deepEqual(g0, p0, `${name}: the strip's attributes, its ancestors' and its lines' differ between Production and Geek Mode`);
     // an update, a clock tick and a theme change in Geek Mode, then back, then again: still the same, still accessible
-    el.hass = makeHass(miniStates(mutate), { themes: { darkMode: true } });
-    el._tick();
+    await hassS(el, makeHass(miniStates(mutate), { themes: { darkMode: true } }));
+    await tickS(el);
     const g1 = stripAccess(el);
     expectAccessible(g1, `${name}, Geek after an update`);
     assert.deepEqual(g1, p0, `${name}: after an update`);
-    production(el);
+    await productionS(el);
     assert.deepEqual(stripAccess(el), p0, `${name}: back in Production`);
-    geek(el);
-    production(el);
-    geek(el);
+    await geekS(el);
+    await productionS(el);
+    await geekS(el);
     assert.deepEqual(stripAccess(el), p0, `${name}: after switching again`);
-    el.hass = makeHass(miniStates(), { themes: { darkMode: false } });
+    await hassS(el, makeHass(miniStates(), { themes: { darkMode: false } }));
     expectAccessible(stripAccess(el), `${name}, after the condition cleared`);
   }
 });
@@ -548,6 +601,7 @@ test('AC6 [r4] the accessibility check has teeth: each way of hiding or muting t
     const e = mount({ states: miniStates(TRIGGER.A01) });
     plant(e);
     assert.throws(() => expectAccessible(stripAccess(e), what), undefined, `not reported: ${what}`);
+    drop(e);
   }
   // a change that leaves each state acceptable on its own (a different label, still a label) is caught by the comparison between the modes
   const e = mount({ states: miniStates(TRIGGER.A01) });
@@ -555,6 +609,7 @@ test('AC6 [r4] the accessibility check has teeth: each way of hiding or muting t
   geek(e);
   q(e, '[data-ecco-alert-strip]').setAttribute('aria-label', 'Safety and status alert');
   assert.notDeepEqual(stripAccess(e), p, 'a changed label, still a label, differs between the modes');
+  drop(e);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -962,7 +1017,7 @@ function bigStates(n) {
   return s;
 }
 
-test('AC12 performance: with 5000 entities the first Geek render builds at most one page; a search is quick; one update rebuilds one row', () => {
+test('[wall-clock] AC12 performance: with 5000 entities the first Geek render builds at most one page; a search is quick; one update rebuilds one row', () => {
   const states = bigStates(5000);
   const el = mount({ states, config: { page_size: 25 } });
   let t = performance.now();
@@ -1520,7 +1575,7 @@ test('AC12 [r1] updates of entities the view does not read cost no rebuild: 200 
   assert.equal(rows(el).length, 1, 'a new ecco_intel_ entity is discovered at once');
 });
 
-test('AC12 [r1] a burst of relevant updates is coalesced: a bounded number of rebuilds during the burst, the last value (and a critical alert) shown shortly after it, and a later update is immediate again', async () => {
+test('[wall-clock] AC12 [r1] a burst of relevant updates is coalesced: a bounded number of rebuilds during the burst, the last value (and a critical alert) shown shortly after it, and a later update is immediate again', async () => {
   const states = bigStates(300);
   const el = mount({ states });
   geek(el);
@@ -1582,7 +1637,7 @@ const outsideCatalogue = () => {
   return c;
 };
 
-test('AC6 [r2] an alert on an entity that is not a source is watched too: its change reaches the strip at once, in both modes, even a moment after the last rebuild (reviewer probe P8, mutant R2-36)', () => {
+test('AC6 [r2] an alert on an entity that is not a source is watched too: its change reaches the strip at once, in both modes, even a moment after the last rebuild (reviewer probe P8, mutant R2-36)', async () => {
   const LAMP = 'light.zz_unrelated_lamp';
   const base = { ...miniStates(), [OUTSIDE]: mkState(OUTSIDE, 'good', {}), [LAMP]: mkState(LAMP, 'off', {}) };
   const el = mount({ catalogue: outsideCatalogue(), hass: makeHass(base) });
@@ -1594,11 +1649,13 @@ test('AC6 [r2] an alert on an entity that is not a source is watched too: its ch
   el.hass = makeHass({ ...base, [OUTSIDE]: mkState(OUTSIDE, 'bad', {}) });
   assert.equal(mod.STATS.snapshots - s0, 1, 'the update is relevant, so it is taken at once');
   assert.ok(stripIds(el).includes('A90'), 'the critical line is on the strip now, not at the next tick');
-  geek(el);
+  await settled(el, 'after the update');
+  await geekS(el);
   assert.ok(stripIds(el).includes('A90'), 'and in Geek Mode');
   const cleared = { ...base, [OUTSIDE]: mkState(OUTSIDE, 'good', {}) };
   el.hass = makeHass(cleared);
   assert.ok(!stripIds(el).includes('A90'), 'and it clears at once too');
+  await settled(el, 'after the condition cleared');
   // an update of something the view does not read is still free
   const s1 = mod.STATS.snapshots;
   el.hass = makeHass({ ...cleared, [LAMP]: mkState(LAMP, 'on', {}) });
@@ -1664,26 +1721,27 @@ function expectPlace(p, where) {
   assert.equal(p.shadowOfStrip, true, `${where}: the strip has no shadow root of its own`);
 }
 
-test('AC6 [r5] the strip sits in the shell at the same place in both modes: a direct child, after the title and the note, before the always region, the Production body and the Geek body (reviewer mutants J14, J20)', () => {
+test('AC6 [r5] the strip sits in the shell at the same place in both modes: a direct child, after the title and the note, before the always region, the Production body and the Geek body (reviewer mutants J14, J20)', async () => {
   const scenarios = { healthy: undefined, 'critical, warning and notice together': (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); }, ...Object.fromEntries(Object.entries(TRIGGER)) };
   for (const [name, mutate] of Object.entries(scenarios)) {
     const el = mount({ states: miniStates(mutate), config: { always: [{ type: 'custom:stub-card' }], production: [{ type: 'custom:stub-card' }] } });
+    await settled(el, `${name}: after mounting`);
     const p0 = stripPlace(el);
     expectPlace(p0, `${name}, Production`);
-    geek(el);
+    await geekS(el);
     const g0 = stripPlace(el);
     expectPlace(g0, `${name}, Geek`);
     assert.deepEqual(g0, p0, `${name}: the place of the strip differs between Production and Geek Mode`);
-    el.hass = makeHass(miniStates(mutate), { themes: { darkMode: true } });
-    el._tick();
+    await hassS(el, makeHass(miniStates(mutate), { themes: { darkMode: true } }));
+    await tickS(el);
     assert.deepEqual(stripPlace(el), p0, `${name}: after an update, a tick and a theme change in Geek Mode`);
-    production(el);
+    await productionS(el);
     assert.deepEqual(stripPlace(el), p0, `${name}: back in Production`);
-    geek(el);
-    production(el);
-    geek(el);
+    await geekS(el);
+    await productionS(el);
+    await geekS(el);
     assert.deepEqual(stripPlace(el), p0, `${name}: after switching again`);
-    el.hass = makeHass(miniStates(), { themes: { darkMode: false } });
+    await hassS(el, makeHass(miniStates(), { themes: { darkMode: false } }));
     expectPlace(stripPlace(el), `${name}, after the condition cleared`);
   }
 });
@@ -1718,11 +1776,12 @@ test('AC6 [r5] the placement check has teeth: each way of moving, wrapping or du
     const e = mount({ states: miniStates(TRIGGER.A01) });
     plant(e);
     assert.throws(() => expectPlace(stripPlace(e), what), undefined, `not reported: ${what}`);
+    drop(e);
   }
 });
 
 // Review round 5, NIT: validateConfig collected its errors and nothing showed them (production given as text became an empty list, and the pause tile just vanished).
-test('AC16 [r5] a configuration problem is shown on the strip, in both modes, as a warning with words and an icon: it is never silent (production given as text no longer makes the pause tile vanish unannounced)', () => {
+test('AC16 [r5] a configuration problem is shown on the strip, in both modes, as a warning with words and an icon: it is never silent (production given as text no longer makes the pause tile vanish unannounced)', async () => {
   const tile = { type: 'tile', entity: 'sensor.ecco_intel_status', name: 'Status', tap_action: { action: 'none' } };
   const cases = {
     'production given as text': [{ production: 'pause tile' }, /production/],
@@ -1737,7 +1796,8 @@ test('AC16 [r5] a configuration problem is shown on the strip, in both modes, as
   for (const [name, [patch, path]] of Object.entries(cases)) {
     const el = mount({ config: patch });
     for (const where of ['Production', 'Geek']) {
-      if (where === 'Geek') geek(el);
+      if (where === 'Geek') await geekS(el);
+      else await settled(el, `${name}: after mounting`);
       assert.ok(stripIds(el).includes('shell:config-invalid'), `${name}: no line on the strip in ${where}`);
       const line = qa(el, '[data-ecco-alert-strip] [data-alert-id="shell:config-invalid"]')[0];
       assert.equal(line.getAttribute('data-severity'), 'warning', name);
@@ -1773,7 +1833,7 @@ test('AC16 [r5] a configuration problem is shown on the strip, in both modes, as
   assert.match(line, /page_size: .*; alerts_from: .*; allow_custom_cards\[0\]: .*; and 2 more\)/);
   assert.ok(stripIds(many).includes('shell:catalogue-invalid'), 'the catalogue warning is still there beside it');
   // the strip is the one strip: nothing about the mode changes it, and a later setConfig with a good configuration clears the line
-  geek(many);
+  await geekS(many);
   assert.ok(stripIds(many).includes('shell:config-invalid'));
   many.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue: miniCatalogue(), page_size: 100, always: [], production: [] });
   assert.equal(many.mode, 'production', 'setConfig is an entry: it starts in Production again');
@@ -1902,7 +1962,7 @@ test('AC10 [r6] SWEEP on every DOM path: every kind at the start, across 500 and
 
 // Review round 6 ([r6]), reviewer mutant P07 (an extra inline custom property set on the shell by a bracket call next to the bar-segment call): the static pin now reads structure (static.test.mjs), and this
 // is the same net by what the code DOES, whatever its spelling: in both modes the only elements that ever carry an inline custom property are the bar segments (--ecco-w) and the tile rings (--ecco-p).
-test('AC6 [r6] inline style by behaviour: in both modes, after every kind of update, the only elements that carry an inline custom property are the bar segments (--ecco-w) and the rings (--ecco-p); the host, the shell, the strip and every ancestor carry none (reviewer mutant P07)', () => {
+test('AC6 [r6] inline style by behaviour: in both modes, after every kind of update, the only elements that carry an inline custom property are the bar segments (--ecco-w) and the rings (--ecco-p); the host, the shell, the strip and every ancestor carry none (reviewer mutant P07)', async () => {
   const el = mount();
   const carriers = (where) => {
     const seen = { seg: 0, ring: 0 };
@@ -1924,13 +1984,16 @@ test('AC6 [r6] inline style by behaviour: in both modes, after every kind of upd
     assert.deepEqual([...el._props.keys()], [], `${where}: the host element carries none`);
     return seen;
   };
+  await settled(el, 'after mounting');
   const production0 = carriers('Production, first render');
-  geek(el);
+  await geekS(el);
   const geek0 = carriers('Geek Mode, first render');
   assert.ok(geek0.seg >= 1, 'the health bar has segments, so the net looks at something');
-  el.hass = makeHass(miniStates((s) => { s['sensor.ecco_intel_status'].state = 'unavailable'; }));
+  await hassS(el, makeHass(miniStates((s) => { s['sensor.ecco_intel_status'].state = 'unavailable'; })));
   carriers('Geek Mode, after an update');
-  production(el);
+  await tickS(el);
+  carriers('Geek Mode, after a timer tick');
+  await productionS(el);
   carriers('Production, after switching back');
   assert.ok(production0.seg + production0.ring + geek0.seg + geek0.ring > 0);
   // negative control: the planted forms are each seen (a property written on the shell, on the strip and on the host, with the bar's own call)
@@ -2043,7 +2106,7 @@ test('AC12 [r7] an entity with more text than the scan budget pays for says so i
   el.disconnectedCallback();
 });
 
-test('AC12 [r7] a hostile entity (200 attributes of 19990 characters of near-miss text) does not freeze the card: mounting it, switching to Geek Mode and opening everything takes well under two seconds, and the alert strip is built (it took 38 seconds of the main thread in round 6)', () => {
+test('[wall-clock] AC12 [r7] a hostile entity (200 attributes of 19990 characters of near-miss text) does not freeze the card: mounting it, switching to Geek Mode and opening everything takes well under two seconds, and the alert strip is built (it took 38 seconds of the main thread in round 6)', () => {
   const text = (' .local @ x ' + '0123.'.repeat(4000)).slice(0, 19990);
   const states = miniStates((s) => {
     const a = {};
@@ -2114,32 +2177,172 @@ test('AC6 [r8] the tripwires are armed (negative control for the net): each memb
   assert.equal(doc.recorded.apiCalls, tripwires, 'and the document exposes the record');
 });
 
-test('AC6 [r8] BOTH MODES, EVERY STEP: nothing of the Web Animations, style-map or stylesheet APIs is read or called by the card on mount, on a switch to Geek Mode, on opening every row, on searching, filtering and paging, on a hass update, on a switch back and on disconnecting (the strip and everything else, in both modes)', () => {
-  const check = (where) => assert.deepEqual(tripwires.splice(0), [], where);
+test('AC6 [r8] BOTH MODES, EVERY STEP: nothing of the Web Animations, style-map or stylesheet APIs is read or called by the card on mount, on a switch to Geek Mode, on opening every row, on searching, filtering and paging, on a hass update, on a switch back and on disconnecting (the strip and everything else, in both modes)', async () => {
+  // review round 9: each step is followed by everything the card scheduled (a hide that waits for a promise, a timer or an animation frame touches the same members a moment later), and by the strip check
+  const check = async (where) => {
+    await sched.flush();
+    assert.deepEqual(tripwires.splice(0), [], where);
+  };
   tripwires.splice(0);
   const el = mount({ states: miniStates(TRIGGER.A01) });
-  check('after mount, in Production');
+  await check('after mount, in Production');
   geek(el);
-  check('after the switch to Geek Mode');
+  await check('after the switch to Geek Mode');
   openEverything(el);
-  check('with every group and row open');
+  await check('with every group and row open');
   typeSearch(el, 'status');
-  check('after a search');
+  await check('after a search');
   choose(el, 'status', 'LIVE');
-  check('after a filter');
+  await check('after a filter');
   typeSearch(el, '');
   choose(el, 'status', 'all');
-  check('after clearing both');
+  await check('after clearing both');
   el.hass = makeHass(miniStates((s) => { s['sensor.ecco_intel_status'] = mkState('sensor.ecco_intel_status', 'OK', {}); }));
-  check('after a hass update in Geek Mode');
+  await check('after a hass update in Geek Mode');
+  el._tick();
+  await check('after a timer tick in Geek Mode');
   production(el);
-  check('after the switch back to Production');
+  await check('after the switch back to Production');
   geek(el);
   production(el);
   geek(el);
-  check('after switching back and forth');
+  await check('after switching back and forth');
   el.disconnectedCallback();
-  check('after disconnecting');
+  await check('after disconnecting');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 9 ([r9]): THE TOUR. The owner's rule is that a safety alert is visible in both modes at ALL times, and "at all times" includes the moment AFTER the switch: reviewer mutants E05 (a promise continuation
+// that empties the strip), E07 (the same in the renderer) and E08 (an async function) passed every suite, because every test looked in the same task as the click. The scheduler of async-net.mjs records every timer,
+// microtask, promise continuation, animation frame, idle callback, observer and listener the card creates and RUNS them all, on demand: this test runs them after EVERY step of a full session in both modes and asserts
+// that the strip is the very same strip after each one (its whole subtree, its attributes, its ancestors', what sits before it), and that every place the card scheduled anything from is on the enumerated list.
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC6 [r9] THE TOUR: in both modes, after every step of a full session, everything the card has scheduled (timers of any delay, microtasks, promise continuations, animation frames, observers) and one event of every kind it listens for run, and the strip is the same strip after EACH of them', async () => {
+  const made = [];
+  win.loadCardHelpers = async () => ({ createCardElement: (cfg) => { made.push(cfg); const s = new StubCard(); s.setConfig(cfg); return s; } });
+  const clip = installClipboardAndDownload();
+  try {
+    sched.resetListeners();
+    const from = sched.records.length;
+    const crowd = (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); };
+    const el = mount({ states: miniStates(crowd), config: { always: [{ type: 'tile', entity: 'sensor.ecco_intel_status' }], production: [{ type: 'markdown', content: 'y' }] } });
+    const base = stripFingerprint(el);
+    assert.ok(stripIds(el).length >= 3, 'three alerts to lose');
+    let steps = 0;
+    const same = (what) => {
+      steps += 1;
+      assert.equal(stripFingerprint(el), base, `the strip is not the same strip after ${what}`);
+      assertStripVisible(el);
+    };
+    // (1) Production, fresh: the card helpers' promise has not even attached the children yet
+    await sched.flush({ events: true, after: same });
+    assert.equal(made.length, 2, 'the promise sites ran: both children were made');
+    // (2) Geek Mode, everything open, a copy and both exports (the clipboard's promise), a search, a filter
+    geek(el);
+    same('the switch to Geek Mode');
+    openEverything(el);
+    typeSearch(el, 'status');
+    q(el, '[data-inspector-copy]').click();
+    for (const t of qa(el, '[data-inspector-copy="row"]').slice(0, 2)) t.click();
+    q(el, '[data-inspector-export="json"]').click();
+    same('opening, searching, copying and exporting in Geek Mode');
+    await sched.flush({ events: true, after: same });
+    assert.ok(clip.clips.length >= 1, 'the clipboard promise ran');
+    // (3) updates and ticks, in whichever mode the events left it
+    for (const dark of [true, false, true, false]) {
+      el.hass = makeHass(miniStates(crowd), { themes: { darkMode: dark } });
+      same('a hass update');
+      el._tick();
+      same('a timer tick');
+      await sched.flush({ events: true, after: same });
+    }
+    // (4) both modes explicitly, with the hidden-box observer firing as well
+    for (const mode of ['geek', 'production', 'geek', 'production', 'geek']) {
+      if (el.mode !== mode) q(el, `[data-mode-option="${mode}"]`).click();
+      same(`the switch to ${mode}`);
+      await sched.flush({ events: true, after: same });
+    }
+    const box = ros.find((o) => !o.disconnected && o.targets.includes(el));
+    assert.ok(box, 'the card observes its own box');
+    box.fire(0, 0);
+    same('the card becoming hidden (a 0 x 0 box): the mode returns to Production, the strip does not move');
+    assert.equal(el.mode, 'production');
+    await sched.flush({ events: true, after: same });
+    // the net looked at something: a good many steps, and every kind of scheduling the card does at all was recorded
+    assert.ok(steps >= 100, `${steps} steps`);
+    // and the scheduler stayed far inside its own bounds (a quarter of each): the tour is not a session that only just fits (async.test.mjs has the tests of the bounds themselves)
+    const used = sched.stats;
+    const peaks = sched.peak;
+    assert.ok(used.work * 4 < used.bounds.maxWorkPerTest, `${used.work} units of work of ${used.bounds.maxWorkPerTest}`);
+    assert.ok(used.records * 4 < used.bounds.maxRecords, `${used.records} sites of ${used.bounds.maxRecords}`);
+    assert.ok(peaks.eventsPerFlush * 4 < used.bounds.maxEventsPerFlush, `${peaks.eventsPerFlush} events in one flush of ${used.bounds.maxEventsPerFlush}`);
+    assert.ok(peaks.callbacksPerFlush * 4 < used.bounds.maxCallbacksPerFlush, `${peaks.callbacksPerFlush} callbacks in one flush of ${used.bounds.maxCallbacksPerFlush}`);
+    const mine = sched.records.slice(from);
+    for (const api of ['setInterval', 'ResizeObserver', 'addEventListener', 'then']) assert.ok(mine.some((r) => r.api === api), `the card scheduled nothing through ${api} during the tour, so the net did not look at it`);
+    // every place the card scheduled anything from is on the enumerated list (the dynamic half of the pin in async.test.mjs: a computed name, an alias or a captured reference is seen here whatever it looks like in the source)
+    const allowed = new Set(ALLOWED_ASYNC_SITES.map((a) => `${a.token}\u0000${siteKey(a.line)}`));
+    assert.deepEqual(mine.filter((r) => !allowed.has(`${r.api}\u0000${r.key}`)).map((r) => `${r.api} at line ${r.line}: ${r.key}`), [], 'a place that is not on the list scheduled work');
+    assert.equal(sched.pending > 0, true, 'the age tick is still waiting: the card is alive');
+    el.disconnectedCallback();
+    assert.equal(sched.pending, 0, 'and nothing is left scheduled after it is disconnected');
+  } finally {
+    delete win.loadCardHelpers;
+    clip.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 9 ([r9]): THE CACHE CLASS in the Geek surface. The surface keeps the DOM of a row and rebuilds it only when the row's signature changes; a signature that leaves something out (the age, the state, the
+// attributes read) shows a stale row. After every step of a history (the clock, an update, an entity that goes, one that appears) the rows of an element that has been alive all along must be, character for character,
+// the rows of an element that is mounted fresh at that clock and those states. (The snapshot's own caches are tested the same way in cache.test.mjs.)
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC12 [r9] CACHES in the Geek surface: after a history of clock steps, updates, a removed and a new entity, the rows of a long-lived element are exactly the rows of a fresh one at the same clock and states', async () => {
+  const withAttr = (id, patch) => (st) => ({ ...st, [id]: { ...st[id], attributes: { ...st[id].attributes, ...patch }, last_updated: new Date(NOW + 3700000).toISOString() } });
+  const states0 = miniStates();
+  const steps = [
+    { label: 'a minute later', t: NOW + 61000, states: (st) => st },
+    { label: 'ten minutes later', t: NOW + 600000, states: (st) => st },
+    { label: 'an hour later', t: NOW + 3600000, states: (st) => st },
+    { label: 'an update: a new state, and an attribute that was not there', t: NOW + 3700000, states: (st) => withAttr('sensor.ecco_intel_charge_target', { extra_reading: 42 })({ ...st, 'sensor.ecco_intel_charge_target': { ...st['sensor.ecco_intel_charge_target'], state: '9.9' } }) },
+    // a new state object with the SAME state, the same timestamp (so the same age text) and one more attribute: only the read of the attributes tells the row it is not the one on the screen
+    { label: 'an update of attributes only (the state text and the age text are the same)', t: NOW + 3700000, states: (st) => ({ ...st, 'sensor.ecco_intel_status': { ...st['sensor.ecco_intel_status'], attributes: { ...st['sensor.ecco_intel_status'].attributes, generated_by: 'a later cycle' } } }) },
+    { label: 'an entity goes', t: NOW + 3761000, states: (st) => { const o = { ...st }; delete o['sensor.ecco_intel_pv_tomorrow']; return o; } },
+    { label: 'a new entity appears (a discovered one that sorts before the others)', t: NOW + 3822000, states: (st) => ({ ...st, 'automation.ecco_intel_aaa_first': mkState('automation.ecco_intel_aaa_first', 'on', { friendly_name: 'First' }, { ageS: 5 }) }) },
+    { label: 'two hours later', t: NOW + 7200000, states: (st) => st },
+  ];
+  // the DOM of every row, in order, with the attributes that only count how many elements have been made (an id from a counter) taken out
+  const view = (el) => [qa(el, '[data-inspector-header]').map((n) => allText(n)).join('\n'), ...rows(el).map((r) => allText(r))].join('\n--\n').replace(/\b(?:id|aria-controls|aria-labelledby|aria-describedby|for)=[^\n]*/g, '').replace(/\bdata-focus-key=[^\n]*/g, '');
+  // every row open, raw view on: idempotent (a row that is open is left open), because a row that appears later is a new row
+  const openAll = (el) => {
+    for (const r of rows(el)) {
+      const t = r.querySelector('[data-row-toggle]');
+      if (t.getAttribute('aria-expanded') !== 'true') t.click();
+    }
+    for (const t of qa(el, '[data-raw-toggle]')) if (t.getAttribute('aria-pressed') !== 'true') t.click();
+  };
+  let states = states0;
+  const a = mount({ states, now: NOW });
+  geek(a);
+  openAll(a);
+  const seen = [];
+  for (const step of steps) {
+    states = step.states(states);
+    a._now = () => step.t;
+    a.hass = makeHass(states);
+    a._tick();
+    await settled(a, step.label);
+    openAll(a);
+    const b = mount({ states: structuredClone(states), now: step.t });
+    geek(b);
+    openAll(b);
+    const va = view(a);
+    const vb = view(b);
+    drop(b);
+    assert.ok(va.length > 2000, 'the view is not empty');
+    assert.equal(va, vb, `${step.label}: the Geek rows of the long-lived element are not the rows of a fresh one`);
+    seen.push(va);
+  }
+  assert.ok(new Set(seen).size >= 6, 'the steps differ from each other: the history looks at more than one thing');
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
