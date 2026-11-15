@@ -240,11 +240,19 @@ try:
     def wrong_id(c):
         next(s for s in c["sources"] if s["entity_id"] == "binary_sensor.ecco_intel_fresh")["id"] = "intel.other"
 
+    def alert_on_uncatalogued(c):
+        # review round 2 (reviewer mutant PY2-06): an alert that names an entity no source describes is a hole in the inventory: the strip would read an
+        # entity that Geek Mode cannot show. validate_catalogue says it too; this is the coverage function's own line, and it must not be silently dropped
+        c["alerts"].append({"id": "zz_alert", "severity": "warning", "entity_id": "sensor.ecco_intel_zz_uncatalogued", "when": {"state_in": ["on"]},
+                            "text": "x", "action": "y"})
+
     for label, fn, expect in (("a source dropped", drop_source, "UNCOVERED source sensor.ecco_intel_pv_tomorrow"),
                               ("an attribute dropped", drop_attr, "UNCOVERED attribute sensor.ecco_intel_status pause_control"),
                               ("a nested attribute dropped", drop_nested, "UNCOVERED attribute sensor.ecco_intel_charge_target advice.target_soc_pct"),
                               ("an invented attribute", invent_attr, "UNAVAILABLE attribute sensor.ecco_intel_status invented_value"),
-                              ("a source id changed", wrong_id, "WRONG ID")):
+                              ("a source id changed", wrong_id, "WRONG ID"),
+                              ("[r2] an alert on an uncatalogued entity", alert_on_uncatalogued,
+                               "alert zz_alert names 'sensor.ecco_intel_zz_uncatalogued', which is not a catalogued source")):
         c = copy.deepcopy(cat)
         fn(c)
         probs = G.coverage_problems(c, cu)

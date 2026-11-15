@@ -154,6 +154,8 @@ const SECRET_TOKENS = new Set(['token', 'tokens', 'password', 'passwords', 'pass
   'connstr', 'refreshtoken']);
 // The last word of a compound key name that makes the whole name a key (needs a qualifier before it, so a bare "key" is not withheld).
 const KEY_WORDS = new Set(['key', 'keys']);
+// The same for a person's login name: "mqtt_user", "db_login", "serviceUser" hold an account name (a bare "user" is not withheld: it is too common a word).
+const LOGIN_WORDS = new Set(['user', 'users', 'usr', 'login', 'logins']);
 const PRIVATE_TOKENS = new Set(['latitude', 'longitude', 'lat', 'lon', 'lng', 'location', 'locations', 'gps', 'coordinates', 'coordinate', 'address',
   'addresses', 'email', 'emails', 'phone', 'postcode', 'postal', 'ssid', 'bssid', 'mac', 'ip', 'hostname', 'serial', 'serialnumber', 'mpan', 'mprn',
   'imei', 'username', 'account', 'accountid', 'meterid']);
@@ -223,6 +225,7 @@ function isSecretKey(key, extra) {
   if (SECRET_TOKENS.has(compact) || PRIVATE_TOKENS.has(compact)) return true;
   // a qualifier plus a key word ("encryption_key", "wifiKey", "license_keys"): the value IS a key, however short it is
   if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
+  if (tokens.length >= 2 && LOGIN_WORDS.has(tokens[tokens.length - 1])) return true;
   const k = fold(String(key));
   for (const re of extra) if (re.test(k)) return true;
   return false;
@@ -246,6 +249,8 @@ const RULES = [
   ['coordinates', null, /(?:^|[^\d.])-?\d{1,3}\.\d{4,}\s*[,;]\s*-?\d{1,3}\.\d{4,}(?![\d.])/],
   ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
   ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],
+  // a webhook: the id in the path IS the credential (the Home Assistant webhook path and the chat services path); the same pattern as the Python scanner's WEBHOOK_PATH
+  ['webhook path', '/', /\/api\/webhook\/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]+\/services\/[A-Za-z0-9/_-]{12,}/i],
   ['internal host name', '://', /\b[a-z][a-z0-9+.-]*:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
   ['private host name', '.', /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i],
 ];
@@ -763,13 +768,25 @@ const EMPTY_ATTRS = (declared) => declared.map((a) => attrRow(a.name, a.name.inc
 const ROWS_BY_STATE = new WeakMap();
 const ROWS_BY_SOURCE = new WeakMap();
 
+/**
+ * True when a row built at hit.now is still right at nowMs: within ROW_REUSE_MS of that clock AND the status a fresh classification gives is the one the row
+ * carries. The second part matters at the edges: a row built less than a second before its age passes stale_after_s (or a timestamp that stops being
+ * ahead of the clock) must change on time, not up to ROW_REUSE_MS late. Only the age text may lag, by less than ROW_REUSE_MS.
+ */
+function stillRight(source, state, nowMs, hit) {
+  if (Math.abs(nowMs - hit.now) >= ROW_REUSE_MS) return false;
+  const cls = classifyRow(source, state, nowMs);
+  const was = hit.row;
+  return cls.status === was.status && cls.flags.length === was.flags.length && cls.flags.every((f, i) => f === was.flags[i]);
+}
+
 function makeRow(source, state, nowMs, cat, order, ledgerKey) {
   const present = isObj(state);
   const memo = present ? ROWS_BY_STATE : ROWS_BY_SOURCE;
   const holder = present ? state : source;
   const ref = source.discovered ? DISCOVERED : source;
   const hit = memo.get(holder);
-  if (hit && hit.cat === cat && hit.ref === ref && hit.key === ledgerKey.key && (!present || Math.abs(nowMs - hit.now) < ROW_REUSE_MS)) {
+  if (hit && hit.cat === cat && hit.ref === ref && hit.key === ledgerKey.key && (!present || stillRight(source, state, nowMs, hit))) {
     return hit.row.order === order ? hit.row : { ...hit.row, order };
   }
   const row = buildRow(source, state, nowMs, cat, order, ledgerKey);

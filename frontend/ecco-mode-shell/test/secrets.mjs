@@ -39,6 +39,10 @@ export const SECRET_VALUES = Object.freeze([
   { label: 'internal host name without a suffix', value: j('ws', ':', '//', 'homeassistant', ':', '8123', '/api/websocket') },
   { label: 'internal host name, bare', value: j('http', ':', '//', 'nas', '/share') },
   { label: 'coordinates with hemisphere letters', value: j('home ', '52.1', ' N ', '0.12', ' W') },
+  // ---- review round 2: a webhook (the id in the path is the credential) in its three shapes, each assembled from fragments
+  { label: 'webhook url', value: j('https', ':', '//', 'hooks.example', '.test/api/', 'web', 'hook/', 'abcdef123456') },
+  { label: 'webhook path alone', value: j('/api/', 'web', 'hook/', 'q1w2e3r4t5y6') },
+  { label: 'chat services webhook path', value: j('hooks.example', '.test/', 'services/', 'team-alpha/chan-beta/abcdefghijkl') },
 ]);
 
 /** Key names that must withhold their value whatever it looks like; each value is a unique marker. */
@@ -49,6 +53,8 @@ export const SECRET_KEYS = Object.freeze([
   'ssid', 'connection_string', 'Authorization', 'SessionToken',
   // ---- review round 1: a qualifier plus a key word, and short values
   'encryption_key', 'ssh_key', 'wifi_key', 'license_key', 'pin', 'psk', 'encryptionKey', 'wifi-psk', 'pin_code',
+  // ---- review round 2: a login name after a qualifier
+  'mqtt_user', 'db_login', 'serviceUser', 'ha-login', 'sftp_users',
 ]);
 
 export const KEY_MARKER = (k) => `zq7marker-${k.toLowerCase().replace(/[^a-z0-9]/g, '')}`;

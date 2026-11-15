@@ -957,7 +957,7 @@ test('AC10 [r1] values that look like a private host, a coordinate or a credenti
 });
 
 test('AC10 [r1] the hostile edge values hold on every path: row text, raw attributes, the search index and the export carry none of them', () => {
-  const edge = SECRET_VALUES.slice(21);
+  const edge = SECRET_VALUES.slice(21, 32);
   assert.equal(edge.length, 11, 'eleven review-round edge values');
   const s = snap((states) => {
     states['sensor.ecco_intel_hostile'] = mkState('sensor.ecco_intel_hostile', edge[0].value, hostileAttributes());
@@ -1218,4 +1218,126 @@ test('AC12 [r1] a long attribute VALUE is cut at LIMITS.value in the row, with a
   const e = r.attributes.find((x) => x.path === 'exact_text');
   assert.equal(e.value, 'z'.repeat(LIMITS.value), 'a value exactly at the cap is untouched');
   assert.equal(e.truncated, false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 2 ([r2]): each test below was written to FAIL on the card as reviewed (or on the mutant the reviewer named) and to pass with its fix
+// ---------------------------------------------------------------------------------------------------------------------------
+test('AC12 [r2] the snapshot also names the entity of an alert that is not a source (reviewer probe P8, mutant R2-36): an update of that entity is relevant to the view', () => {
+  const c = cat();
+  c.alerts = [...c.alerts, { id: 'A90', severity: 'critical', entity_id: 'sensor.zz_outside_probe', when: { state_in: ['bad'] }, text: 'The outside probe says bad.', action: 'Check the outside probe.' }];
+  const v = validateCatalogue(c);
+  assert.equal(v.ok, true);
+  const s = buildSnapshot(miniStates(), v.catalogue, NOW);
+  assert.ok(s.watch.includes('sensor.zz_outside_probe'), 'watched');
+  assert.ok(!s.rows.some((r) => r.entity_id === 'sensor.zz_outside_probe'), 'not a row: only the strip reads it');
+  assert.ok(Object.keys(s.alertInputs).includes('sensor.zz_outside_probe'));
+  const states = miniStates();
+  states['sensor.zz_outside_probe'] = mkState('sensor.zz_outside_probe', 'bad', {});
+  assert.ok(deriveAlerts(buildSnapshot(states, v.catalogue, NOW), v.catalogue).some((a) => a.id === 'A90'));
+});
+
+test('AC9 [r2] a row reused within the window is re-classified: built just before stale_after_s it turns STALE on time, not up to a second late', () => {
+  const c = validateCatalogue(cat()).catalogue;
+  const id = 'sensor.ecco_intel_status';
+  const src = c.sources.find((s) => s.entity_id === id);
+  assert.equal(src.stale_after_s, 900);
+  const states = miniStates();
+  states[id] = mkState(id, 'OK', states[id].attributes, { ageS: 899.6 });
+  assert.equal(row(buildSnapshot(states, c, NOW), 'S01').status, 'LIVE', 'at its own clock the row is live');
+  const before = STATS.rowsBuilt;
+  const later = buildSnapshot({ ...states }, c, NOW + 900);
+  assert.equal(row(later, 'S01').status, 'STALE', 'a row reused for a second would still say Live');
+  assert.ok(row(later, 'S01').ageS > 900);
+  assert.equal(STATS.rowsBuilt - before, 1, 'only that row was rebuilt: the others, far from their limits, are still reused');
+});
+
+test('AC9 [r2] at every offset inside the reuse window a row carries the status a fresh classification gives (around the stale limit and around the clock-skew limit)', () => {
+  const c = validateCatalogue(cat()).catalogue;
+  const id = 'sensor.ecco_intel_status';
+  const src = c.sources.find((s) => s.entity_id === id);
+  // an age is how long ago the state was updated: negative is a timestamp ahead of the browser clock (FUTURE_SKEW_MS is 300 s)
+  for (const age of [898.5, 899.0, 899.5, 899.9, 900.0, 900.4, -299.5, -300.0, -300.4, -300.5, -301]) {
+    for (const d of [0, 100, 500, 900, 999]) {
+      const st = miniStates();
+      st[id] = mkState(id, 'OK', st[id].attributes, { ageS: age });
+      buildSnapshot(st, c, NOW); // prime the reuse
+      const r = row(buildSnapshot({ ...st }, c, NOW + d), 'S01');
+      const fresh = classifyRow(src, st[id], NOW + d);
+      assert.equal(r.status, fresh.status, `age ${age} s, +${d} ms`);
+      assert.deepEqual(r.flags, fresh.flags, `age ${age} s, +${d} ms`);
+    }
+  }
+  // and the two cases that matter are really different statuses at the two ends of the window (so the loop above proves something)
+  const ahead = miniStates();
+  ahead[id] = mkState(id, 'OK', ahead[id].attributes, { ageS: -300.5 });
+  assert.equal(classifyRow(src, ahead[id], NOW).status, 'UNVERIFIED');
+  assert.equal(classifyRow(src, ahead[id], NOW + 900).status, 'LIVE');
+  assert.equal(row(buildSnapshot({ ...ahead }, c, NOW), 'S01').status, 'UNVERIFIED');
+  assert.equal(row(buildSnapshot({ ...ahead }, c, NOW + 900), 'S01').status, 'LIVE', 'the skew ended inside the window: not Unverified for another second');
+});
+
+test('AC12 [r2] a reused row is not reused for ever: the same catalogue and the same state objects, read five seconds later, give the later age (the window is what keeps ages moving)', () => {
+  // the older round-1 test builds with a second catalogue object in between, which rebuilds every row by itself; this one keeps the catalogue and the states
+  const c = validateCatalogue(cat()).catalogue;
+  const states = miniStates();
+  const first = buildSnapshot(states, c, NOW);
+  const before = STATS.rowsBuilt;
+  const same = buildSnapshot({ ...states }, c, NOW + 200);
+  assert.equal(STATS.rowsBuilt - before, 0, 'inside the window every row is reused');
+  const later = buildSnapshot({ ...states }, c, NOW + 5000);
+  const aged = first.rows.filter((r) => r.ageS !== null);
+  assert.ok(aged.length >= 10, 'most rows have an age');
+  for (const r of aged) {
+    const l = later.rows.find((x) => x.key === r.key);
+    assert.ok(Math.abs(l.ageS - r.ageS - 5) < 0.01, `${r.key}: ${r.ageS} -> ${l.ageS}`);
+    assert.equal(same.rows.find((x) => x.key === r.key).ageS, r.ageS, 'a reused row keeps its built age inside the window');
+  }
+  assert.ok(STATS.rowsBuilt - before >= aged.length, 'past the window the rows are built again');
+});
+
+test('AC10 [r2] a webhook is withheld wherever it sits, under an innocent key too (the id in its path is the credential); ordinary paths and words are not (reviewer probe P11)', () => {
+  const j = (...p) => p.join('');
+  const secrets = [j('https://hooks.example.test/api/', 'web', 'hook/', 'abcdef123456'), j('/api/', 'web', 'hook/', 'q1w2e3r4t5y6'),
+    j('POST ', '/api/', 'web', 'hook/', 'abcdef-1234_xyz', ' failed'), j('hooks.example.test/', 'services/', 'T00000000/B00000000/abcdefghijkl'),
+    // this form has no digit and no capital, so no blob rule helps: only the webhook rule can withhold it (the mutant that drops the services form shows it)
+    j('hooks.example.test/', 'services/', 'team-alpha/chan-beta/abcdefghijkl'), j('https://HOOKS.EXAMPLE.TEST/API/', 'WEB', 'HOOK/', 'ABCDEF123456')];
+  for (const v of secrets) {
+    assert.equal(redactValue(v, { key: 'note' }), WITHHELD, v);
+    assert.equal(redactValue({ info: { deep: [v] } }).info.deep[0], WITHHELD, `nested: ${v}`);
+    assert.equal(redactAttributes({ friendly_name: 'Probe', last_call: v }).last_call, WITHHELD, `attribute: ${v}`);
+  }
+  for (const v of ['/api/states/sensor.example', j('/api/', 'web', 'hook/', 'short'), 'the webhook is off', 'hooks.example.test/docs/page', j('hooks.example.test/', 'services/', 'short'), 'a long path /api/config/core']) {
+    assert.notEqual(redactValue(v, { key: 'note' }), WITHHELD, v);
+  }
+});
+
+test('AC10 [r2] a key that ends in user or login after a qualifier is withheld (mqtt_user, db_login, serviceUser); a bare user, a lone login word and unrelated keys are shown (reviewer probe P11)', () => {
+  const red = redactAttributes({
+    mqtt_user: 'svc-account', db_login: 'svc-db', serviceUser: 'svc-one', 'ha-login': 'svc-two', sftp_users: ['svc-a', 'svc-b'], MQTT_USER: 'svc-three',
+    user: 'visible-user', login: 'visible-login', user_count: 3, userland: 'visible-land', logins_today: 7, friendly_name: 'Probe',
+  });
+  for (const k of ['mqtt_user', 'db_login', 'serviceUser', 'ha-login', 'sftp_users', 'MQTT_USER']) assert.equal(red[k], WITHHELD, k);
+  assert.deepEqual([red.user, red.login, red.user_count, red.userland, red.logins_today, red.friendly_name], ['visible-user', 'visible-login', 3, 'visible-land', 7, 'Probe']);
+  assert.ok(!JSON.stringify(red).includes('svc-'), 'none of the account names is anywhere in the result');
+});
+
+test('AC10 [r2] the webhook values and the login keys hold on every path: row text, raw attributes, the search index and the export carry none of them', () => {
+  const hooks = SECRET_VALUES.slice(32);
+  assert.equal(hooks.length, 3, 'three round-two webhook values');
+  assert.ok(SECRET_KEYS.slice(-5).every((k) => /user|login/i.test(k)), 'and the last five hostile keys are the login names');
+  const s = snap((states) => {
+    states['sensor.ecco_intel_hostile'] = mkState('sensor.ecco_intel_hostile', hooks[0].value, hostileAttributes());
+  });
+  const text = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const h of hooks) {
+    for (const f of [h.value, h.value.slice(4, 18)]) {
+      assert.ok(!text.includes(f), `${h.label} leaked into a row`);
+      assert.ok(!exported.includes(f), `${h.label} leaked into the export`);
+    }
+  }
+  for (const k of SECRET_KEYS.slice(-5)) {
+    assert.ok(!text.includes(KEY_MARKER(k)) && !exported.includes(KEY_MARKER(k)), `${k}: its value leaked`);
+  }
 });

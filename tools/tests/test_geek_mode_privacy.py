@@ -111,6 +111,14 @@ check("the private-key block is flagged", bool(hits("-----BEGIN " + "RSA PRIVATE
 check("the entity-id scanner finds ids", ENTITY.findall("x sensor.abc_1 y") == ["sensor.abc_1"])
 check("the date scanner finds a date", bool(DATE.findall("on 2026-11-14 it")))
 check("a clean text has no hit for any scanner", not any(hits("nothing to see: version 0.1.0, 60 s, 80 %", p) for p in ALL.values()) and not email_hits("nothing"))
+# review round 2 (reviewer probe P11): the card withheld a webhook URL only under a key named like a secret, because it had no value rule while this scanner had one:
+# the two sides disagreed. The card's rule is now the same pattern, and this check keeps it so.
+_card_src = (ROOT / "frontend" / "ecco-mode-shell" / "ecco-mode-shell.js").read_text(encoding="utf-8")
+_rule = re.search(r"\['webhook path', '/', /(.+)/i\],", _card_src)
+check("[r2] the card's value rule for a webhook path is this scanner's pattern (the two sides agree)",
+      _rule is not None and _rule.group(1).replace("\\/", "/") == WEBHOOK_PATH.pattern, "" if _rule is None else _rule.group(1))
+check("[r2] and the scanner flags the two shapes the card's hostile fixtures use (assembled here from fragments)",
+      all(hits(s, WEBHOOK_PATH) for s in ("https://hooks.example.test/api/" + "webhook/" + "abcdef123456", "hooks.example.test/" + "services/" + "team-alpha/chan-beta/abcdefghijkl")))
 
 # ===========================================================================
 print("")

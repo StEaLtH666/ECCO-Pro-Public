@@ -1458,3 +1458,63 @@ test('AC12 [r1] a pending flush does not outlive the element: after disconnect n
   await sleep(700);
   assert.equal(mod.STATS.snapshots, s0, 'no rebuild after disconnect');
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 2 ([r2]): each test below was written to FAIL on the mutant the reviewer named and to pass on the card
+// ---------------------------------------------------------------------------------------------------------------------------
+const OUTSIDE = 'sensor.zz_outside_probe';
+const outsideCatalogue = () => {
+  const c = miniCatalogue();
+  c.alerts.push({ id: 'A90', severity: 'critical', entity_id: OUTSIDE, when: { state_in: ['bad'] }, text: 'The outside probe says bad.', action: 'Check the outside probe.' });
+  return c;
+};
+
+test('AC6 [r2] an alert on an entity that is not a source is watched too: its change reaches the strip at once, in both modes, even a moment after the last rebuild (reviewer probe P8, mutant R2-36)', () => {
+  const LAMP = 'light.zz_unrelated_lamp';
+  const base = { ...miniStates(), [OUTSIDE]: mkState(OUTSIDE, 'good', {}), [LAMP]: mkState(LAMP, 'off', {}) };
+  const el = mount({ catalogue: outsideCatalogue(), hass: makeHass(base) });
+  assert.ok(!stripIds(el).includes('A90'));
+  assert.ok(el.snapshot.watch.includes(OUTSIDE), 'the snapshot reads it');
+  assert.ok(!el.snapshot.rows.some((r) => r.entity_id === OUTSIDE), 'it is not a row: only the strip reads it');
+  const s0 = mod.STATS.snapshots;
+  // the same clock as the last rebuild: inside the one-second window in which updates the view does not read are skipped
+  el.hass = makeHass({ ...base, [OUTSIDE]: mkState(OUTSIDE, 'bad', {}) });
+  assert.equal(mod.STATS.snapshots - s0, 1, 'the update is relevant, so it is taken at once');
+  assert.ok(stripIds(el).includes('A90'), 'the critical line is on the strip now, not at the next tick');
+  geek(el);
+  assert.ok(stripIds(el).includes('A90'), 'and in Geek Mode');
+  const cleared = { ...base, [OUTSIDE]: mkState(OUTSIDE, 'good', {}) };
+  el.hass = makeHass(cleared);
+  assert.ok(!stripIds(el).includes('A90'), 'and it clears at once too');
+  // an update of something the view does not read is still free
+  const s1 = mod.STATS.snapshots;
+  el.hass = makeHass({ ...cleared, [LAMP]: mkState(LAMP, 'on', {}) });
+  assert.equal(mod.STATS.snapshots - s1, 0, 'an unrelated entity costs no rebuild');
+});
+
+test('AC16 [r2] fail closed, all the way: with one malformed source the snapshot holds no row, the Production summary carries no problem note, and the strip still shows the valid alerts (reviewer probe P9, mutant R2-41)', () => {
+  const cat = miniCatalogue();
+  delete cat.sources[3].entity_id;
+  const states = miniStates((s) => {
+    TRIGGER.A03(s);
+    s['sensor.ecco_intel_pv_tomorrow'].state = 'unavailable';
+    s['sensor.ecco_intel_overnight_demand'].state = 'unknown';
+  });
+  const el = mount({ catalogue: cat, states });
+  assert.equal(validateCatalogue(cat).ok, false);
+  assert.ok(validateCatalogue(cat).catalogue.sources.length > 0, 'the validator does keep the valid sources (the shell must not use them)');
+  assert.equal(el.snapshot.rows.length, 0, 'no row of the valid sources and no discovered row');
+  assert.equal(el.snapshot.counts.total, 0);
+  assert.equal(el.snapshot.counts.problems, 0);
+  const sum = textOf(q(el, '[data-ecco-summary]'));
+  assert.doesNotMatch(sum, /data points?|Geek Mode lists them|stale, unavailable/, 'no note about data points that are not listed anywhere');
+  assert.ok(stripIds(el).includes('A03'), 'the valid alert still drives the strip');
+  assert.ok(stripIds(el).includes('shell:catalogue-invalid'));
+  geek(el);
+  assert.equal(rows(el).length, 0);
+  assert.ok(q(el, '[data-ecco-catalogue-error]'));
+  // a later update does not bring a row back either
+  el.hass = makeHass(miniStates((s) => { TRIGGER.A03(s); s['sensor.ecco_intel_pv_tomorrow'].state = 'unavailable'; s['sensor.ecco_intel_brand_new_probe'] = mkState('sensor.ecco_intel_brand_new_probe', '1', {}); }));
+  assert.equal(el.snapshot.rows.length, 0, 'not by update, not by discovery');
+  assert.equal(rows(el).length, 0);
+});
