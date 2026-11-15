@@ -75,7 +75,14 @@ export const LIMITS = Object.freeze({
   tiles: 12,
 });
 /** Test hook: counters of work done (not state that affects behaviour). */
-export const STATS = { partsBuilt: 0, snapshots: 0 };
+export const STATS = { partsBuilt: 0, snapshots: 0, rowsBuilt: 0 };
+/** A timestamp this far ahead of the clock is not "just now": it is clock skew, and the value cannot be called live. */
+export const FUTURE_SKEW_MS = 300000;
+/** A built row is reused for the same state object while the clock has moved less than this (the ages shown move in whole seconds). */
+const ROW_REUSE_MS = 1000;
+/** Update pump: this many hass updates are taken back to back, the rest of a burst is coalesced into one rebuild at the end of the window. */
+export const BURST_ALLOWANCE = 8;
+export const BURST_WINDOW_MS = 500;
 
 const PRIORITIES = Object.freeze(['headline', 'normal', 'obscure']);
 const PRIORITY_RANK = Object.freeze({ headline: 0, normal: 1, obscure: 2 });
@@ -88,6 +95,18 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string';
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+/**
+ * The entity domains whose Home Assistant dialog (the more-info dialog) has NO control: a sensor, a binary sensor and an event. The dialog of every
+ * other domain has write controls (a slider, a toggle, a Run or an Install button), so Geek Mode never opens it: it would be an extra write
+ * path that Production does not offer. The shell's one hass-more-info event is guarded by canOpenMoreInfo, and so is the row control.
+ */
+export const MORE_INFO_DOMAINS = Object.freeze(['sensor', 'binary_sensor', 'event']);
+const MORE_INFO_ID = new RegExp(`^(?:${MORE_INFO_DOMAINS.join('|')})\\.[a-z0-9_]+$`);
+/** True only for a well-formed entity id of a read-only domain. */
+export function canOpenMoreInfo(entityId) {
+  return isStr(entityId) && MORE_INFO_ID.test(entityId);
+}
 
 // Control, zero-width, bidirectional and invisible-format characters are shown as visible escapes, never raw. Tab, newline
 // and carriage return are kept (the raw view is pre-wrapped text).
@@ -131,16 +150,45 @@ function parseTime(v) {
 // KEY rules: a key whose words say "secret" or "private" withholds its whole value, whatever the value looks like.
 const SECRET_TOKENS = new Set(['token', 'tokens', 'password', 'passwords', 'passwd', 'pwd', 'passphrase', 'passcode', 'pincode', 'secret', 'secrets',
   'apikey', 'apikeys', 'authorization', 'auth', 'bearer', 'credential', 'credentials', 'privatekey', 'webhook', 'webhooks', 'cookie', 'cookies',
-  'session', 'sessions', 'psk', 'dsn', 'otp', 'jwt', 'signature', 'accesskey', 'secretkey', 'signingkey', 'clientsecret', 'connectionstring',
+  'session', 'sessions', 'psk', 'pin', 'dsn', 'otp', 'jwt', 'signature', 'accesskey', 'secretkey', 'signingkey', 'clientsecret', 'connectionstring',
   'connstr', 'refreshtoken']);
+// The last word of a compound key name that makes the whole name a key (needs a qualifier before it, so a bare "key" is not withheld).
+const KEY_WORDS = new Set(['key', 'keys']);
 const PRIVATE_TOKENS = new Set(['latitude', 'longitude', 'lat', 'lon', 'lng', 'location', 'locations', 'gps', 'coordinates', 'coordinate', 'address',
   'addresses', 'email', 'emails', 'phone', 'postcode', 'postal', 'ssid', 'bssid', 'mac', 'ip', 'hostname', 'serial', 'serialnumber', 'mpan', 'mprn',
   'imei', 'username', 'account', 'accountid', 'meterid']);
 // Keys that hold a public source revision: a 40-hex git object name is shown under these keys only.
 const DIGEST_KEYS = new Set(['gitsha', 'commit', 'commitsha', 'gitcommit']);
 
+// Detection works on a FOLDED copy of a text: invisible, zero-width and format characters removed, compatibility forms folded (NFKC) and look-alike
+// letters of other alphabets turned into the Latin letter they imitate, so a secret cannot hide behind a zero-width character or a Cyrillic "a".
+// What is SHOWN is never the folded copy: cleanText still makes every such character visible. The table is written as code points so that this
+// file stays plain ASCII.
+const CONFUSABLES = new Map([
+  [0x430, 'a'], [0x435, 'e'], [0x43e, 'o'], [0x440, 'p'], [0x441, 'c'], [0x443, 'y'], [0x445, 'x'], [0x456, 'i'], [0x458, 'j'], [0x455, 's'], [0x501, 'd'],
+  [0x4bb, 'h'], [0x4cf, 'l'], [0x43a, 'k'], [0x475, 'v'], [0x51d, 'w'], [0x261, 'g'], [0x251, 'a'],
+  [0x3bf, 'o'], [0x3b1, 'a'], [0x3bd, 'v'], [0x3c1, 'p'], [0x3b9, 'i'], [0x3ba, 'k'], [0x3c5, 'u'], [0x3c7, 'x'],
+  [0x410, 'A'], [0x412, 'B'], [0x415, 'E'], [0x41a, 'K'], [0x41c, 'M'], [0x41d, 'H'], [0x41e, 'O'], [0x420, 'P'], [0x421, 'C'], [0x422, 'T'], [0x425, 'X'], [0x406, 'I'],
+  [0x391, 'A'], [0x392, 'B'], [0x395, 'E'], [0x396, 'Z'], [0x397, 'H'], [0x399, 'I'], [0x39a, 'K'], [0x39c, 'M'], [0x39d, 'N'], [0x39f, 'O'], [0x3a1, 'P'],
+  [0x3a4, 'T'], [0x3a5, 'Y'], [0x3a7, 'X'],
+]);
+const RE_ASCII_PLAIN = /^[\x20-\x7e]*$/;
+/** A copy of `s` for matching only (see above). Plain printable ASCII, the common case, is returned as it is. */
+function fold(s) {
+  if (RE_ASCII_PLAIN.test(s)) return s;
+  let t = s.replace(CTRL, '');
+  try {
+    t = t.normalize('NFKC');
+  } catch {
+    // a text that cannot be normalised is matched as it is
+  }
+  let out = '';
+  for (const ch of t) out += CONFUSABLES.get(ch.codePointAt(0)) || ch;
+  return out;
+}
+
 function keyTokens(key) {
-  return String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return fold(String(key)).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 }
 
 const EXTRA_CACHE = new WeakMap();
@@ -173,7 +221,9 @@ function isSecretKey(key, extra) {
   }
   const compact = tokens.join('');
   if (SECRET_TOKENS.has(compact) || PRIVATE_TOKENS.has(compact)) return true;
-  const k = String(key);
+  // a qualifier plus a key word ("encryption_key", "wifiKey", "license_keys"): the value IS a key, however short it is
+  if (tokens.length >= 2 && KEY_WORDS.has(tokens[tokens.length - 1])) return true;
+  const k = fold(String(key));
   for (const re of extra) if (re.test(k)) return true;
   return false;
 }
@@ -185,7 +235,7 @@ const RULES = [
   ['url credentials', '@', /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*@/i],
   ['connection string', '://', /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?|mqtts?|influxdb|mssql|sqlserver|jdbc|ftps?|sftp|ssh|smb|ldaps?|couchdb)(?::[a-z0-9]+)?:\/\//i],
   ['url token', '=', /[?&#;][\w.%-]*(?:token|secret|passw|pwd|apikey|api[_-]?key|auth|sig|signature|credential|session|bearer|jwt|key)[\w.%-]*=[^&\s]{3,}/i],
-  ['credential pair', null, /\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b\s*[:=]\s*[^\s,;]{3,}/i],
+  ['credential pair', null, /\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b["']?\s*[:=]\s*["']?[^\s,;"']{3,}/i],
   ['connection pairs', ';', /\b(?:server|data source|host|hostname|uid|user ?id|userid|pwd|password|database|initial catalog)\s*=\s*[^;\s]+\s*;/i],
   ['bearer', null, /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/i],
   ['known token', null, /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk_(?:live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|glpat-[A-Za-z0-9_-]{20,})/],
@@ -194,6 +244,9 @@ const RULES = [
   ['IPv6 address', ':', /(?:^|[^0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![0-9a-fA-F:])|(?:^|[^0-9a-zA-Z:])(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![0-9a-zA-Z:])/],
   ['MAC address', null, /\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b/],
   ['coordinates', null, /(?:^|[^\d.])-?\d{1,3}\.\d{4,}\s*[,;]\s*-?\d{1,3}\.\d{4,}(?![\d.])/],
+  ['labelled coordinate', null, /\b(?:lat(?:itude)?|lon(?:g|gitude)?|lng)\b[\s:=]*-?\d{1,3}\.\d{3,}/i],
+  ['hemisphere coordinates', null, /\b\d{1,3}(?:\.\d+)?\s*[NS]\b[\s,;]*\d{1,3}(?:\.\d+)?\s*[EW]\b/],
+  ['internal host name', '://', /\b[a-z][a-z0-9+.-]*:\/\/[a-z0-9-]+(?::\d{1,5})?(?=[/?#\s"']|$)/i],
   ['private host name', '.', /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|localdomain)\b/i],
 ];
 const RE_HEX = /(?:^|[^0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])/;
@@ -201,7 +254,9 @@ const RE_B64 = /[A-Za-z0-9+/_-]{32,}={0,2}/g;
 const RE_GIT = /^[0-9a-f]{40}$/i;
 
 /** Why a string looks secret or private, or null. */
-function valueReason(s, digestOk) {
+function valueReason(raw, digestOk) {
+  if (raw.length < 6) return null;
+  const s = fold(raw);
   if (s.length < 6) return null;
   for (const [reason, gate, re] of RULES) {
     if (gate !== null && !s.includes(gate)) continue;
@@ -334,8 +389,12 @@ function validSource(s, i, groupIds, errors) {
   if (isStr(s.group) && !groupIds.has(s.group)) err(errors, `${path}.group`, 'group is not defined in groups');
   if (!PRIORITIES.includes(s.priority)) err(errors, `${path}.priority`, 'priority must be headline, normal or obscure');
   if (!ORIGINS.includes(s.origin)) err(errors, `${path}.origin`, 'origin must be integration, package or dashboard');
-  for (const k of ['expected_update_s', 'stale_after_s']) {
-    if (s[k] !== null && s[k] !== undefined && !(isNum(s[k]) && s[k] >= 0)) err(errors, `${path}.${k}`, `${k} must be a number >= 0 or null`);
+  if (s.expected_update_s !== null && s.expected_update_s !== undefined && !(isNum(s.expected_update_s) && s.expected_update_s >= 0)) {
+    err(errors, `${path}.expected_update_s`, 'expected_update_s must be a number >= 0 or null');
+  }
+  // a freshness limit of 0 would silently mean "never stale" (classifyRow treats a limit that is not above zero as no limit): refuse it, say null for "not monitored"
+  if (s.stale_after_s !== null && s.stale_after_s !== undefined && !(isNum(s.stale_after_s) && s.stale_after_s > 0)) {
+    err(errors, `${path}.stale_after_s`, 'stale_after_s must be a number above 0, or null for a source whose age is not monitored');
   }
   if (s.unit !== null && s.unit !== undefined && !isStr(s.unit)) err(errors, `${path}.unit`, 'unit must be a string or null');
   const attributes = [];
@@ -359,9 +418,16 @@ function validWhen(w) {
   if (w.unavailable === true) return { unavailable: true };
   if (Array.isArray(w.state_in) && w.state_in.every(isStr)) return { state_in: w.state_in.slice(0, 50) };
   if (Array.isArray(w.state_not_in) && w.state_not_in.every(isStr)) return { state_not_in: w.state_not_in.slice(0, 50) };
+  // state_outside: the state is up and is not one of the listed words (a word the view does not know); a state that is down is "cannot check"
+  if (Array.isArray(w.state_outside) && w.state_outside.length > 0 && w.state_outside.every(isStr)) return { state_outside: w.state_outside.slice(0, 50) };
   // the `in` list may mix booleans and texts (the generated catalogue lists a flag as false, "false" and "False"): both are kept, and a value matches
   // when it equals an entry strictly or as text (see evaluate)
+  if (isStr(w.attribute) && w.attribute !== '' && hasOwn(w, 'in') && hasOwn(w, 'not_in')) return null;
   if (isStr(w.attribute) && w.attribute !== '' && Array.isArray(w.in) && w.in.every((x) => isStr(x) || typeof x === 'boolean')) return { attribute: w.attribute, in: w.in.slice(0, 50) };
+  // not_in: the attribute is present and is not STRICTLY one of the listed values (no text matching: "true" is not true)
+  if (isStr(w.attribute) && w.attribute !== '' && Array.isArray(w.not_in) && w.not_in.length > 0 && w.not_in.every((x) => isStr(x) || typeof x === 'boolean' || isNum(x))) {
+    return { attribute: w.attribute, not_in: w.not_in.slice(0, 50) };
+  }
   return null;
 }
 
@@ -375,7 +441,7 @@ function validAlert(a, i, errors) {
   for (const k of ['id', 'entity_id', 'text', 'action']) if (!isStr(a[k]) || a[k] === '') err(errors, `${path}.${k}`, `${k} must be a non-empty string`);
   if (!SEVERITIES.includes(a.severity)) err(errors, `${path}.severity`, 'severity must be critical, warning or info');
   const when = validWhen(a.when);
-  if (!when) err(errors, `${path}.when`, 'when must be one of unavailable, state_in, state_not_in or attribute + in');
+  if (!when) err(errors, `${path}.when`, 'when must be one of unavailable, state_in, state_not_in, state_outside, attribute + in or attribute + not_in');
   if (errors.length > before) return null;
   return { id: a.id, severity: a.severity, entity_id: a.entity_id, when, text: cleanText(a.text, 300), action: cleanText(a.action, 300) };
 }
@@ -484,16 +550,27 @@ export function validateConfig(config) {
     else err(errors, 'page_size', `page_size must be a whole number from 5 to ${LIMITS.maxPageSize}`);
   }
   if (c.alerts_from !== undefined && c.alerts_from !== 'catalogue') err(errors, 'alerts_from', 'only alerts_from: catalogue is supported');
+  const allowCustom = [];
+  if (c.allow_custom_cards !== undefined) {
+    if (Array.isArray(c.allow_custom_cards)) {
+      c.allow_custom_cards.forEach((name, i) => {
+        if (isStr(name) && CUSTOM_CARD_NAME.test(name)) allowCustom.push(name);
+        else err(errors, `allow_custom_cards[${i}]`, 'must be the name of a custom card, such as custom:my-card');
+      });
+    } else err(errors, 'allow_custom_cards', 'allow_custom_cards must be a list of custom card names');
+  }
   return {
     viewId: isStr(c.view_id) ? cleanText(c.view_id, 80) : null, title: isStr(c.title) ? cleanText(c.title, 120) : null,
-    catalogue: c.catalogue, always: list('always'), production: list('production'), pageSize, errors,
+    catalogue: c.catalogue, always: list('always'), production: list('production'), pageSize, allowCustom, errors,
   };
 }
 
 // ===========================================================================
 // 4. classification and the snapshot (the one adapter)
 // ===========================================================================
-const SIM_RE = /^(?:simulated|synthetic)/i;
+// What counts as a simulated value: an explicit flag, or a provenance / data_source / source_kind that STARTS with one of these words (simulated, simulation,
+// synthetic, fixture, mock, demo, sample, fake, dummy), in any case. Anything else is not guessed at.
+const SIM_RE = /^(?:simulat|synthetic|fixture|mock|demo|sample|fake|dummy)/i;
 const isSimulated = (a) => a.simulated === true || a.is_simulated === true || a.synthetic === true || (isStr(a.provenance) && SIM_RE.test(a.provenance))
   || (isStr(a.data_source) && SIM_RE.test(a.data_source)) || (isStr(a.source_kind) && SIM_RE.test(a.source_kind));
 const isUnverified = (a) => a.verified === false || a.unverified === true || a.provenance_ok === false || (isStr(a.provenance) && /^unverified/i.test(a.provenance));
@@ -508,7 +585,9 @@ export function classifyRow(source, state, nowMs) {
   const src = isObj(source) ? source : {};
   if (!isObj(state)) return { status: 'NOT_MEASURED', flags: ['NOT_MEASURED'], ageS: null, lastUpdatedMs: null, ageMonitored: false };
   const lu = parseTime(state.last_updated) !== null ? parseTime(state.last_updated) : parseTime(state.last_changed);
-  const ageS = lu === null ? null : Math.max(0, (nowMs - lu) / 1000);
+  // a timestamp far ahead of the clock is clock skew, not "just now": it has no age, and the value cannot be called live
+  const skewed = lu !== null && lu - nowMs > FUTURE_SKEW_MS;
+  const ageS = lu === null || skewed ? null : Math.max(0, (nowMs - lu) / 1000);
   const limit = isNum(src.stale_after_s) && src.stale_after_s > 0 ? src.stale_after_s : null;
   const done = (status, flags) => ({ status, flags, ageS, lastUpdatedMs: lu, ageMonitored: limit !== null });
   const sv = state.state === null || state.state === undefined ? 'unknown' : String(state.state);
@@ -517,7 +596,7 @@ export function classifyRow(source, state, nowMs) {
   const attrs = isObj(state.attributes) ? state.attributes : {};
   const stale = limit !== null && ageS !== null && ageS > limit;
   const sim = isSimulated(attrs);
-  const unv = (limit !== null && ageS === null) || isUnverified(attrs);
+  const unv = (limit !== null && ageS === null) || skewed || isUnverified(attrs);
   const flags = STATUSES.filter((s) => (s === 'STALE' && stale) || (s === 'SIMULATED' && sim) || (s === 'UNVERIFIED' && unv));
   if (flags.length === 0) return done('LIVE', ['LIVE']);
   return done(flags[0], flags);
@@ -678,7 +757,28 @@ function partsFor(source, state, cat) {
 const EMPTY_ATTRS = (declared) => declared.map((a) => attrRow(a.name, a.name.includes('.') ? a.name.slice(a.name.indexOf('.') + 1) : a.name,
   a.name.includes('.') ? a.name.split('.')[0] : null, a.name.includes('.') ? 1 : 0, a, false, undefined));
 
+// Built rows, reused while their inputs have not changed (Home Assistant replaces a state object on any change, so an unchanged object is an
+// unchanged row): by state object for a present entity, by source for a missing one. A present row is reused only within ROW_REUSE_MS of the clock
+// it was built at, because its age and its stale test move with the clock.
+const ROWS_BY_STATE = new WeakMap();
+const ROWS_BY_SOURCE = new WeakMap();
+
 function makeRow(source, state, nowMs, cat, order, ledgerKey) {
+  const present = isObj(state);
+  const memo = present ? ROWS_BY_STATE : ROWS_BY_SOURCE;
+  const holder = present ? state : source;
+  const ref = source.discovered ? DISCOVERED : source;
+  const hit = memo.get(holder);
+  if (hit && hit.cat === cat && hit.ref === ref && hit.key === ledgerKey.key && (!present || Math.abs(nowMs - hit.now) < ROW_REUSE_MS)) {
+    return hit.row.order === order ? hit.row : { ...hit.row, order };
+  }
+  const row = buildRow(source, state, nowMs, cat, order, ledgerKey);
+  memo.set(holder, { cat, ref, key: ledgerKey.key, now: nowMs, row });
+  return row;
+}
+
+function buildRow(source, state, nowMs, cat, order, ledgerKey) {
+  STATS.rowsBuilt += 1;
   const present = isObj(state);
   const cls = classifyRow(source, present ? state : null, nowMs);
   const parts = present ? partsFor(source, state, cat) : null;
@@ -719,7 +819,10 @@ export function buildSnapshot(states, catalogue, nowMs) {
   const st = isObj(states) ? states : {};
   const cat = prepare(catalogue);
   const rows = [];
+  // every entity id this snapshot read: the shell compares these (and only these) to tell an update it cares about from an unrelated one
+  const watch = new Set();
   cat.sources.forEach((src, i) => {
+    watch.add(src.entity_id);
     rows.push(makeRow(src, st[src.entity_id], nowMs, cat, i, { key: `src:${src.id}`, id: src.id, display: cleanText(src.entity_id, 200) }));
   });
   if (cat.discover.prefixes.length) {
@@ -736,6 +839,7 @@ export function buildSnapshot(states, catalogue, nowMs) {
     found.sort();
     let withheldN = 0;
     found.forEach((id, i) => {
+      watch.add(id);
       const state = st[id];
       const shown = redactString(id, 'note');
       const display = shown === WITHHELD ? WITHHELD : shown;
@@ -768,12 +872,14 @@ export function buildSnapshot(states, catalogue, nowMs) {
   const alertInputs = {};
   for (const a of cat.alerts) {
     if (!isObj(a) || !isStr(a.entity_id) || hasOwn(alertInputs, a.entity_id)) continue;
+    watch.add(a.entity_id);
     const s = st[a.entity_id];
     alertInputs[a.entity_id] = isObj(s)
       ? { present: true, state: s.state === null || s.state === undefined ? 'unknown' : String(s.state), attributes: isObj(s.attributes) ? s.attributes : {} }
       : { present: false, state: null, attributes: {} };
   }
-  return { schema: 'ecco-geek-snapshot/1', viewId: cat.viewId, title: cat.title, contract: cat.contract, nowMs, rows, byKey, groups, counts, alertInputs, exceptions: cat.exceptions };
+  return { schema: 'ecco-geek-snapshot/1', viewId: cat.viewId, title: cat.title, contract: cat.contract, nowMs, rows, byKey, groups, counts, alertInputs, watch: [...watch],
+    exceptions: cat.exceptions };
 }
 
 /** Every ledger id the card can show for a catalogue: each source id and each declared attribute path (source id # path). */
@@ -801,9 +907,13 @@ function evaluate(when, input) {
   if (when.state_in && input.present && when.state_in.includes(input.state)) return 'active';
   if (down) return 'unknown';
   if (when.state_in) return when.state_in.includes(input.state) ? 'active' : 'clear';
+  // state_outside: a state that is up and is none of the listed words (no case folding: the contract's words are exact)
+  if (when.state_outside) return when.state_outside.includes(input.state) ? 'clear' : 'active';
   if (when.attribute) {
     const v = input.attributes[when.attribute];
     if (v === undefined || v === null) return 'unknown';
+    // not_in is STRICT: the text "true" is not the boolean true (the package watchdog needs the boolean), and nothing is folded or coerced
+    if (when.not_in) return when.not_in.some((x) => x === v) ? 'clear' : 'active';
     return when.in.some((x) => x === v || String(x) === String(v)) ? 'active' : 'clear';
   }
   return 'unknown';
@@ -897,9 +1007,11 @@ function exportRow(r) {
   };
 }
 
+// a plain number is exported exactly (a spreadsheet reads -5 as a number, not a formula); anything else that starts like a formula is neutralised
+const PLAIN_NUMBER = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const csvCell = (v) => {
   let s = v === null || v === undefined ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r]/.test(s) && !PLAIN_NUMBER.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
@@ -931,29 +1043,81 @@ const WRITE_CARD_TYPES = new Set(['button', 'entity-button', 'light', 'thermosta
   'iframe', 'webpage']);
 const WRITABLE_DOMAINS = new Set(['switch', 'light', 'input_boolean', 'fan', 'cover', 'lock', 'climate', 'automation', 'script', 'scene', 'button', 'input_button',
   'select', 'input_select', 'number', 'input_number', 'input_datetime', 'input_text', 'text', 'humidifier', 'valve', 'vacuum', 'water_heater', 'media_player',
-  'siren', 'update', 'remote', 'alarm_control_panel', 'lawn_mower', 'datetime', 'date', 'time']);
+  'siren', 'update', 'remote', 'alarm_control_panel', 'lawn_mower', 'datetime', 'date', 'time', 'counter', 'timer', 'group']);
 const READ_ONLY_ROW_TYPES = new Set(['simple-entity', 'attribute', 'divider', 'section', 'text', 'conditional']);
 const CALL_KEYS = new Set(['service', 'service_data', 'perform_action', 'call-service']);
+// The allowlist of card types for a Geek-visible region. Each of these shows data and, by default, opens the entity's dialog on a tap (the action rules
+// still refuse anything but none, more-info and navigate). The history graph's name is assembled from two pieces so that the static pin that bans any use
+// of the browser history API can keep its plain word pattern.
+const HISTORY_GRAPH = ['hist', 'ory-graph'].join('');
+const ALLOWED_CARD_TYPES = new Set(['markdown', 'entities', 'glance', HISTORY_GRAPH, 'statistics-graph', 'sensor', 'gauge', 'entity', 'heading', 'vertical-stack',
+  'horizontal-stack', 'grid', 'conditional', 'tile']);
+const CONTAINER_TYPES = new Set(['vertical-stack', 'horizontal-stack', 'grid', 'conditional']);
+const ALLOWED_HEADER_FOOTER = new Set(['graph', 'picture']);
+/** Custom cards that are known to be read-only and may sit in a Geek-visible region without being named (the card pinned read-only by tools/tests/test_intelligence_card.py). */
+const DEFAULT_CUSTOM_CARDS = Object.freeze(['custom:ecco-intelligence-card']);
+const CUSTOM_CARD_NAME = /^custom:[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 
 /**
  * Child cards shown in a Geek-visible region (the `always` list) must not be able to write: refuse any action other than
  * none, more-info or navigate, any service-call shaped key, write-capable card types, entities-card rows of a writable
- * domain and tile cards on a writable domain that do not state safe actions. Returns { ok, errors: [{index, path, action?,
+ * domain and tile cards on a writable domain that do not state safe actions. Beyond those rules the CARD TYPE itself must be on an allowlist
+ * (ALLOWED_CARD_TYPES, plus the read-only ECCO Intelligence card and any custom card the dashboard author names in options.allowCustom): many
+ * cards carry an implicit write that no action key shows (a picture-glance card toggles its entities by default, an area card shows toggle buttons,
+ * a custom button card taps to toggle), so "no unsafe action found" is not proof of "cannot write". Returns { ok, errors: [{index, path, action?,
  * message}], allowed: [index...] }. Never throws.
  */
-export function validateChildCards(cards) {
+export function validateChildCards(cards, options = {}) {
   const errors = [];
   const allowed = [];
   if (cards !== undefined && !Array.isArray(cards)) return { ok: false, errors: [{ index: -1, path: 'cards', message: 'the card list must be a list' }], allowed };
+  const custom = new Set(DEFAULT_CUSTOM_CARDS);
+  const named = isObj(options) && Array.isArray(options.allowCustom) ? options.allowCustom : [];
+  for (const name of named) if (isStr(name) && CUSTOM_CARD_NAME.test(name)) custom.add(name);
   (cards || []).forEach((card, index) => {
     const before = errors.length;
     const bad = (path, message, action) => errors.push(action === undefined ? { index, path, message } : { index, path, action, message });
     if (!isObj(card)) bad('card', 'a card configuration must be an object');
     else if (!isStr(card.type) || card.type === '') bad('type', 'a card configuration needs a type');
-    else walkCard(card, 'card', bad, new Set(), 0);
+    else {
+      checkCardType(card, 'card', bad, custom, 0);
+      walkCard(card, 'card', bad, new Set(), 0);
+    }
     if (errors.length === before) allowed.push(index);
   });
   return { ok: errors.length === 0, errors, allowed };
+}
+
+/** The card type allowlist, applied to the card, to the cards inside a stack, grid or conditional, and to a card's header and footer. */
+function checkCardType(card, path, bad, custom, depth) {
+  if (depth > 12) return;
+  if (!isObj(card)) {
+    bad(path, 'a card configuration must be an object');
+    return;
+  }
+  const type = isStr(card.type) ? card.type : '';
+  if (type === '') {
+    bad(`${path}.type`, 'a card configuration needs a type');
+    return;
+  }
+  if (type.startsWith('custom:')) {
+    if (!custom.has(type)) bad(`${path}.type`, `the custom card ${cleanText(type, 60)} is not on the list of cards allowed here (name it in allow_custom_cards once it is known to be read-only)`);
+  } else if (!ALLOWED_CARD_TYPES.has(type)) bad(`${path}.type`, `a ${cleanText(type, 40)} card is not on the list of cards allowed here`);
+  for (const key of ['header', 'footer']) {
+    const hf = card[key];
+    if (isObj(hf) && !ALLOWED_HEADER_FOOTER.has(hf.type)) bad(`${path}.${key}`, `a ${cleanText(isStr(hf.type) ? hf.type : '(no type)', 40)} ${key} can write, so it is not allowed here`);
+  }
+  if (type === 'heading' && Array.isArray(card.badges)) {
+    card.badges.forEach((b, i) => {
+      if (isObj(b) && isStr(b.entity) && WRITABLE_DOMAINS.has(b.entity.split('.')[0]) && !isObj(b.tap_action)) {
+        bad(`${path}.badges[${i}].tap_action`, `a heading badge on ${b.entity.split('.')[0]} must state a safe tap_action`);
+      }
+    });
+  }
+  if (CONTAINER_TYPES.has(type)) {
+    if (Array.isArray(card.cards)) card.cards.forEach((c, i) => checkCardType(c, `${path}.cards[${i}]`, bad, custom, depth + 1));
+    if (card.card !== undefined) checkCardType(card.card, `${path}.card`, bad, custom, depth + 1);
+  }
 }
 
 function walkCard(node, path, bad, seen, depth) {
@@ -1628,10 +1792,19 @@ class GeekSurface {
     const attrs = mk(doc, 'div', { class: 'attrs', role: 'list', 'aria-label': 'Attributes' });
     for (const a of row.attributes) attrs.appendChild(attrNode(doc, a));
     const acts = [];
+    let noOpenNote = null;
     if (row.present && row.entity_id !== WITHHELD) {
-      const openBtn = mk(doc, 'button', { type: 'button', class: 'btn', 'data-open-entity': '', 'data-focus-key': `${key}:o` }, [icon(doc, 'open'), 'Open in Home Assistant']);
-      on(openBtn, 'click', () => this.o.onOpen(row.entity_id));
-      acts.push(openBtn);
+      if (canOpenMoreInfo(row.entity_id)) {
+        const openBtn = mk(doc, 'button', { type: 'button', class: 'btn', 'data-open-entity': '', 'data-focus-key': `${key}:o` }, [icon(doc, 'open'), 'Open in Home Assistant']);
+        on(openBtn, 'click', () => this.o.onOpen(row.entity_id));
+        acts.push(openBtn);
+      } else {
+        // the dialog of this domain has write controls (a slider, a toggle, Run, Install): Geek Mode only shows, so it offers the id to copy instead
+        const idBtn = mk(doc, 'button', { type: 'button', class: 'btn', 'data-copy-entity-id': '', 'data-focus-key': `${key}:i` }, [icon(doc, 'copy'), 'Copy entity id']);
+        on(idBtn, 'click', () => this.o.onCopy(row.entity_id, 'the entity id'));
+        acts.push(idBtn);
+        noOpenNote = mk(doc, 'p', { class: 'fine', 'data-no-open-note': '' }, 'This entity has a control, so its dialog is not opened from Geek Mode: Geek Mode only shows. Use the Production view for its control.');
+      }
     }
     if (row.present) {
       const rawBtn = mk(doc, 'button', { type: 'button', class: 'btn', 'data-raw-toggle': '', 'aria-pressed': raw ? 'true' : 'false', 'data-focus-key': `${key}:r` }, [icon(doc, 'raw'), raw ? 'Hide raw attributes' : 'Raw attributes']);
@@ -1657,6 +1830,7 @@ class GeekSurface {
       mk(doc, 'p', null, row.description || 'No description in the catalogue.'),
       mk(doc, 'div', { class: 'meta' }, meta.map((m) => mk(doc, 'span', null, m))),
       attrs,
+      noOpenNote,
       mk(doc, 'div', { class: 'rowacts' }, acts),
     ]);
     if (raw && row.present) detail.appendChild(mk(doc, 'pre', { class: 'raw', 'data-inspector-raw': '', tabindex: '0', 'aria-label': 'Raw attributes (redacted)' }, rawText(row)));
@@ -1686,7 +1860,12 @@ export class EccoModeShell extends Base {
     this._alerts = [];
     this._kids = [];
     this._gen = 0;
-    this._timer = null;
+    this._timer = null; // the ONE timer slot: the 15 s age tick, or (briefly) the flush of a coalesced burst of updates
+    this._timerMs = 0;
+    this._pending = false; // a hass update was held back and is flushed when the slot fires
+    this._stamps = []; // when the last rebuilds caused by hass updates happened (a real clock), to bound a burst
+    this._watch = null; // [[entity id, state object]] as the last snapshot read them
+    this._keyCount = -1;
     this._entryPath = '';
     this._ro = null;
     this._connected = false;
@@ -1720,6 +1899,8 @@ export class EccoModeShell extends Base {
   }
 
   setConfig(config) {
+    // Home Assistant calls setConfig again, on the same element, when the dashboard configuration changes: that is an entry too, so it starts in Production
+    this._ctl.reset();
     const cfg = validateConfig(config);
     this._config = cfg;
     this._cat = validateCatalogue(cfg.catalogue);
@@ -1730,6 +1911,9 @@ export class EccoModeShell extends Base {
     }
     this._build();
     this._lastStates = null;
+    this._watch = null;
+    this._pending = false;
+    this._stamps = [];
     this._refresh(true);
   }
 
@@ -1748,6 +1932,7 @@ export class EccoModeShell extends Base {
   set hass(hass) {
     this._hass = hass;
     for (const k of this._kids) k.hass = hass;
+    this._syncTheme();
     this._refresh(false);
   }
 
@@ -1771,7 +1956,7 @@ export class EccoModeShell extends Base {
       });
       this._ro.observe(this);
     }
-    if (this._timer === null) this._timer = setInterval(() => this._tick(), TICK_MS);
+    if (this._timer === null) this._startTimer(TICK_MS);
     this._refresh(true);
   }
 
@@ -1788,8 +1973,51 @@ export class EccoModeShell extends Base {
     }
     if (this._ro) this._ro.disconnect();
     this._ro = null;
+    this._stopTimer();
+    this._pending = false;
+  }
+
+  // The ONE timer slot. It runs the 15 s age tick; when a burst of hass updates has used up its allowance it is re-armed for a short flush and goes
+  // back to the age tick as soon as it fires. No other timer exists.
+  _startTimer(ms) {
+    this._stopTimer();
+    this._timerMs = ms;
+    this._timer = setInterval(() => this._onTimer(), ms);
+  }
+
+  _stopTimer() {
     if (this._timer !== null) clearInterval(this._timer);
     this._timer = null;
+    this._timerMs = 0;
+  }
+
+  _onTimer() {
+    if (this._timerMs !== TICK_MS) this._startTimer(TICK_MS);
+    this._tick();
+  }
+
+  /** Burst control: true when a hass update may rebuild now; false when the allowance of BURST_ALLOWANCE per BURST_WINDOW_MS is used up (then the flush is armed). */
+  _admit() {
+    if (!this._connected) return true;
+    const t = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+    const recent = this._stamps.filter((x) => t - x >= 0 && t - x < BURST_WINDOW_MS);
+    if (recent.length < BURST_ALLOWANCE) {
+      recent.push(t);
+      this._stamps = recent;
+      return true;
+    }
+    this._stamps = recent;
+    this._pending = true;
+    if (this._timerMs === TICK_MS || this._timerMs === 0) this._startTimer(Math.max(20, Math.ceil(BURST_WINDOW_MS - (t - recent[0]))));
+    return false;
+  }
+
+  /** True when nothing this view reads has changed: the same state object for every entity of the last snapshot, and no entity added or removed. */
+  _sameWatched(states) {
+    const watch = this._watch;
+    if (watch === null || Object.keys(states).length !== this._keyCount) return false;
+    for (const [id, st] of watch) if (states[id] !== st) return false;
+    return true;
   }
 
   _pathNow() {
@@ -1871,7 +2099,7 @@ export class EccoModeShell extends Base {
 
   _mountChildren(container, configs, guard) {
     const refused = [];
-    const verdict = guard ? validateChildCards(configs) : { allowed: configs.map((_, i) => i), errors: [] };
+    const verdict = guard ? validateChildCards(configs, { allowCustom: this._config.allowCustom }) : { allowed: configs.map((_, i) => i), errors: [] };
     const allowed = new Set(verdict.allowed);
     configs.forEach((cfg, i) => {
       if (!allowed.has(i)) {
@@ -1981,22 +2209,40 @@ export class EccoModeShell extends Base {
     return a && typeof a.getAttribute === 'function' ? a.getAttribute('data-focus-key') : null;
   }
 
+  _syncTheme() {
+    const ui = this._ui;
+    if (!ui) return;
+    const hass = this._hass;
+    if (hass && hass.themes && typeof hass.themes.darkMode === 'boolean') ui.shell.setAttribute('data-theme', hass.themes.darkMode ? 'dark' : 'light');
+    else ui.shell.removeAttribute('data-theme');
+  }
+
   // ---- data flow: one snapshot feeds everything ----
   _refresh(force) {
     const ui = this._ui;
     if (!ui) return;
     const states = this._statesObj();
     const now = this._now();
-    if (!force && states === this._lastStates && now - this._lastNow < 1000) return;
+    if (!force) {
+      if (states === this._lastStates && now - this._lastNow < 1000) return;
+      // Home Assistant sends a new states object for ANY change in the house: when nothing this view reads has changed there is nothing to rebuild
+      if (now - this._lastNow < 1000 && this._sameWatched(states)) {
+        this._lastStates = states;
+        return;
+      }
+      // a burst of relevant updates is taken BURST_ALLOWANCE at a time; the rest is flushed once by the one timer slot
+      if (!this._admit()) return;
+    }
+    this._pending = false;
     this._lastStates = states;
     this._lastNow = now;
     const cat = this._cat.catalogue;
     const effective = this._cat.ok ? cat : { ...cat, sources: [], discover: { entity_prefixes: [], group: 'discovered', exclude_entity_ids: [] } };
     this._snap = buildSnapshot(states, effective, now);
+    this._watch = this._snap.watch.map((id) => [id, states[id]]);
+    this._keyCount = Object.keys(states).length;
     this._alerts = [...deriveAlerts(this._snap, cat), ...this._shellAlerts];
-    const hass = this._hass;
-    if (hass && hass.themes && typeof hass.themes.darkMode === 'boolean') ui.shell.setAttribute('data-theme', hass.themes.darkMode ? 'dark' : 'light');
-    else ui.shell.removeAttribute('data-theme');
+    this._syncTheme();
     renderAlertStrip(this.ownerDocument, ui.strip, this._alerts);
     const sum = summarise(this._snap, this._alerts);
     ui.summary.setAttribute('data-level', sum.level);
@@ -2006,6 +2252,7 @@ export class EccoModeShell extends Base {
 
   // ---- the only three things the shell may do besides read ----
   _openEntity(entityId) {
+    if (!canOpenMoreInfo(entityId)) return;
     if (typeof CustomEvent !== 'function') return;
     this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId } }));
   }

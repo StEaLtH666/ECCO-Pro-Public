@@ -908,3 +908,314 @@ test('hostile fixture text is carried as plain strings (the card escapes by neve
   assert.ok(!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(control.stateText));
   for (const a of control.attributes) assert.ok(!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/.test(a.value), a.path);
 });
+
+// ===========================================================================================================================
+// Review round 1 ([r1]): each test below was written to FAIL on the card as reviewed and to pass with its fix
+// ===========================================================================================================================
+const isoAt = (ms) => new Date(ms).toISOString();
+const ZW = String.fromCharCode(0x200b); // zero-width space
+const CYR_A = String.fromCharCode(0x430); // Cyrillic small a, a homoglyph of Latin a
+const GREEK_O = String.fromCharCode(0x3bf); // Greek small omicron, a homoglyph of Latin o
+
+test('AC10 [r1] a key that ends in a key word after a qualifier withholds even a SHORT value; look-alikes that are not keys pass', () => {
+  for (const k of ['encryption_key', 'ssh_key', 'wifi_key', 'license_key', 'encryptionKey', 'sshKey', 'ENCRYPTION_KEY', 'wifi-psk', 'pin', 'psk', 'pin_code', 'owner.pin']) {
+    assert.equal(redactValue('abc', { key: k }), WITHHELD, k);
+    assert.equal(redactAttributes({ [k]: 'ab' })[k], WITHHELD, `${k} as an attribute`);
+  }
+  for (const k of ['keyboard_layout', 'monkey', 'turkey', 'key_count', 'keystone', 'hotkey', 'friendly_name', 'pinned', 'spin', 'pinball', 'key', 'keys_pressed']) {
+    assert.equal(redactValue('plain', { key: k }), 'plain', k);
+  }
+});
+
+test('AC10 [r1] zero-width characters and homoglyphs in a KEY name do not hide the key word, and the shown key name is escaped', () => {
+  const names = [`pass${ZW}word`, `p${CYR_A}ssword`, `t${GREEK_O}ken`, `api${ZW}_key`, `pa${ZW}ss${ZW}wd`];
+  const out = redactAttributes({ ...Object.fromEntries(names.map((n) => [n, 'plain'])), note: 'plain' });
+  assert.equal(Object.keys(out).length, names.length + 1, 'the five names stay distinct');
+  for (const [k, v] of Object.entries(out)) {
+    if (k === 'note') assert.equal(v, 'plain');
+    else assert.equal(v, WITHHELD, `value under ${JSON.stringify(k)}`);
+  }
+  assert.ok(Object.keys(out).every((k) => !k.includes(ZW)), 'a zero-width character is shown as a visible escape');
+});
+
+test('AC10 [r1] zero-width characters inside a VALUE do not hide a secret: they are stripped before matching, and still shown as escapes elsewhere', () => {
+  const jwt = SECRET_VALUES.find((s) => s.label === 'jwt split by a zero-width character').value;
+  assert.ok(jwt.includes(ZW));
+  assert.equal(redactValue(jwt, { key: 'note' }), WITHHELD);
+  const plain = `a${ZW}b`;
+  assert.equal(redactValue(plain, { key: 'note' }), 'a' + String.fromCharCode(0x2039) + 'U+200B' + String.fromCharCode(0x203a) + 'b', 'a harmless value with a zero-width character is kept, with the character made visible');
+});
+
+test('AC10 [r1] values that look like a private host, a coordinate or a credential only by shape are withheld; ordinary text near those shapes is not', () => {
+  for (const v of ['ws://homeassistant:8123/api/websocket', 'http://nas/share', 'https://intranet', 'home 52.1 N 0.12 W', '51.5074 N, 0.1278 W', "{'token': 'abc123def'}", '{"password":"abc123"}', 'lat 51.5074 lon -0.1278', 'latitude=51.5074', 'LON: -0.12780']) {
+    assert.equal(redactValue(v, { key: 'note' }), WITHHELD, v);
+  }
+  for (const v of ['https://www.example.com:8443/x', 'http://example.com/a', 'latency 12.345 ms', 'plate 51.5074 mm', 'Chat 12.3456', 'ws://', 'the pin is not a secret here', 'a token of thanks',
+    'password protected: no', 'lat 5', 'longitude is a word', 'row 5 N units 3 E apart', 'Plan 5 NE 3 SW', 'N 5 E 3']) {
+    assert.equal(redactValue(v, { key: 'note' }), v, v);
+  }
+});
+
+test('AC10 [r1] the hostile edge values hold on every path: row text, raw attributes, the search index and the export carry none of them', () => {
+  const edge = SECRET_VALUES.slice(21);
+  assert.equal(edge.length, 11, 'eleven review-round edge values');
+  const s = snap((states) => {
+    states['sensor.ecco_intel_hostile'] = mkState('sensor.ecco_intel_hostile', edge[0].value, hostileAttributes());
+  });
+  const text = dump(s.rows.map((r) => [r.stateText, r.attributes, r.redacted, r.searchText]));
+  const exported = exportRows(s.rows, 'json', { nowMs: NOW }) + exportRows(s.rows, 'csv', { nowMs: NOW });
+  for (const e of edge) {
+    for (const f of [e.value, e.value.slice(4, 18)]) {
+      assert.ok(!text.includes(f), `${e.label} leaked into a row`);
+      assert.ok(!exported.includes(f), `${e.label} leaked into the export`);
+    }
+  }
+});
+
+test('AC9 [r1] the age comes from last_updated, never from last_changed: updated just now is live whatever last_changed says; updated long ago is stale', () => {
+  const mk = (changedAgeS, updatedAgeS) => ({ entity_id: 'sensor.t', state: '5', attributes: {}, last_changed: isoAt(NOW - changedAgeS * 1000), last_updated: isoAt(NOW - updatedAgeS * 1000) });
+  const SRC1 = { id: 'T', stale_after_s: 900 };
+  const fresh = classifyRow(SRC1, mk(99999, 10), NOW);
+  assert.equal(fresh.status, 'LIVE', 'changed long ago but updated 10 s ago');
+  assert.equal(fresh.ageS, 10);
+  const old = classifyRow(SRC1, mk(10, 99999), NOW);
+  assert.equal(old.status, 'STALE', 'changed just now but last updated long ago (not a state a real hass produces, but the rule is last_updated)');
+  assert.equal(old.ageS, 99999);
+});
+
+test('AC9 [r1] a timestamp more than a few minutes in the future is UNVERIFIED (clock skew), with no age; a small skew is still age 0 and live', () => {
+  const SRC1 = { id: 'T', stale_after_s: 900 };
+  const NOLIMIT = { id: 'T', stale_after_s: null };
+  const at = (ageS) => ({ entity_id: 'sensor.t', state: '5', attributes: {}, last_changed: isoAt(NOW - ageS * 1000), last_updated: isoAt(NOW - ageS * 1000) });
+  for (const [ageS, want] of [[-30, 'LIVE'], [-120, 'LIVE'], [-299, 'LIVE'], [-301, 'UNVERIFIED'], [-3600, 'UNVERIFIED'], [-86400, 'UNVERIFIED']]) {
+    for (const src of [SRC1, NOLIMIT]) {
+      const r = classifyRow(src, at(ageS), NOW);
+      assert.equal(r.status, want, `${ageS} s with ${src.stale_after_s === null ? 'no limit' : 'a limit'}`);
+      if (want === 'UNVERIFIED') {
+        assert.equal(r.ageS, null, 'no invented age');
+        assert.ok(!r.flags.includes('LIVE'));
+      } else assert.equal(r.ageS, 0);
+    }
+  }
+  assert.equal(formatAge(classifyRow(SRC1, at(-86400), NOW).ageS), 'age unknown');
+});
+
+test('AC9 [r1] a freshness limit of zero is refused by the catalogue validator (it would silently mean "never stale"); null still means not monitored', () => {
+  let c = cat();
+  c.sources[1].stale_after_s = 0;
+  const r = validateCatalogue(c);
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => e.path === 'sources[1].stale_after_s'), dump(r.errors));
+  c = cat();
+  c.sources[1].stale_after_s = null;
+  assert.equal(validateCatalogue(c).ok, true);
+  c = cat();
+  c.sources[1].stale_after_s = 1;
+  assert.equal(validateCatalogue(c).ok, true);
+});
+
+test('AC9 [r1] the simulated vocabulary: provenance, data_source and source_kind that name a fixture, mock, demo, sample, fake or dummy are SIMULATED too', () => {
+  const st = (a) => ({ entity_id: 'sensor.t', state: '5', attributes: a, last_changed: isoAt(NOW - 5000), last_updated: isoAt(NOW - 5000) });
+  for (const w of ['fixture', 'FIXTURE_DATA', 'mock', 'demo', 'sample', 'fake', 'dummy', 'simulation', 'SYNTHETIC_TEST', 'simulated']) {
+    for (const k of ['provenance', 'data_source', 'source_kind']) assert.equal(classifyRow({ id: 'T', stale_after_s: null }, st({ [k]: w }), NOW).status, 'SIMULATED', `${k}=${w}`);
+  }
+  for (const w of ['VERIFIED', 'measured', 'integration', 'sensor', 'prototype']) assert.equal(classifyRow({ id: 'T', stale_after_s: null }, st({ provenance: w }), NOW).status, 'LIVE', w);
+});
+
+test('AC11 [r1] CSV keeps a plain number exact (a negative number is not a formula) and still neutralises a real formula', () => {
+  const s = snap();
+  const base = s.rows.find((r) => r.status === 'LIVE');
+  const csv = (state) => exportRows([{ ...base, stateText: state, unitText: '' }], 'csv', { nowMs: NOW }).split('\n')[1];
+  for (const n of ['-5', '-0.5', '12', '3.25', '-1e3', '+5', '2.5E-3']) {
+    const line = csv(n);
+    assert.ok(line.split(',').includes(n), `${n} is exported exactly: ${line}`);
+    assert.ok(!line.includes(`'${n}`), `${n} has no apostrophe`);
+  }
+  for (const f of ['=1+1', '@SUM(1)', '-5+3', '-A1', '+cmd', '=cmd|calc', '-', '--5', '1-5']) {
+    const line = csv(f);
+    if (/^[=+\-@]/.test(f)) assert.ok(line.includes(`'${f}`), `${f} is neutralised: ${line}`);
+  }
+});
+
+test('AC12 [r1] row reuse: an unchanged hass constructs no row, one changed entity constructs one row, and the order still equals a fresh build', () => {
+  const c = validateCatalogue(cat()).catalogue;
+  const states = bigStates(1500);
+  const first = buildSnapshot(states, c, NOW);
+  assert.ok(Number.isInteger(STATS.rowsBuilt));
+  let before = STATS.rowsBuilt;
+  const again = buildSnapshot({ ...states }, c, NOW + 400);
+  assert.equal(STATS.rowsBuilt - before, 0, 'no row is constructed for objects that did not change');
+  assert.deepEqual(again.rows.map((r) => r.key), first.rows.map((r) => r.key));
+  const id = 'sensor.ecco_intel_synth_00007';
+  const states2 = { ...states, [id]: mkState(id, 'changed', states[id].attributes) };
+  before = STATS.rowsBuilt;
+  const s2 = buildSnapshot(states2, c, NOW + 400);
+  assert.equal(STATS.rowsBuilt - before, 1);
+  assert.equal(byEntity(s2, id).stateText, 'changed');
+  // a new discovered entity that sorts early moves every later discovered row: the reused rows must carry the new position
+  const early = 'sensor.ecco_intel_aaa_first';
+  const states3 = { ...states2, [early]: mkState(early, '1', {}) };
+  const s3 = buildSnapshot(states3, c, NOW + 400);
+  const fresh = buildSnapshot(states3, validateCatalogue(cat()).catalogue, NOW + 400);
+  assert.deepEqual(s3.rows.map((r) => r.key), fresh.rows.map((r) => r.key), 'same order as a build with no reuse at all');
+  // past the one-second window the age-dependent fields are recomputed
+  before = STATS.rowsBuilt;
+  const later = buildSnapshot(states3, c, NOW + 5000);
+  assert.ok(STATS.rowsBuilt - before >= later.rows.length - 1, 'a later clock rebuilds the rows (ages move)');
+  assert.ok(byEntity(later, id).ageS > byEntity(s2, id).ageS);
+});
+
+test('AC12 [r1] the snapshot names every entity it reads (sources, discovered entities and alert inputs), so a caller can tell an unrelated update from a relevant one', () => {
+  const c = validateCatalogue(cat()).catalogue;
+  const s = buildSnapshot(miniStates(), c, NOW);
+  assert.ok(Array.isArray(s.watch));
+  for (const r of s.rows) assert.ok(s.watch.includes(r.entity_id), r.entity_id);
+  for (const a of c.alerts) assert.ok(s.watch.includes(a.entity_id), a.entity_id);
+  assert.ok(!s.watch.includes('light.example_lamp'));
+});
+
+// ---- alert grammar: not_in and state_outside ----
+const withAlerts = (alerts) => {
+  const c = cat();
+  c.alerts = alerts;
+  return validateCatalogue(c);
+};
+const alertIds = (states, catalogue) => deriveAlerts(buildSnapshot(states, catalogue, NOW), catalogue).map((a) => `${a.severity}:${a.id}`);
+const STATUS = 'sensor.ecco_intel_status';
+
+test('AC6 [r1] alert form {attribute, not_in}: validated like the other forms; both in and not_in, an empty list or a non-list is refused', () => {
+  const mkAlert = (when) => ({ id: 'N1', severity: 'critical', entity_id: STATUS, when, text: 't', action: 'a' });
+  assert.equal(withAlerts([mkAlert({ attribute: 'mode', not_in: ['SHADOW'] })]).ok, true);
+  assert.equal(withAlerts([mkAlert({ attribute: 'mode', not_in: ['SHADOW'] })]).catalogue.alerts.length, 1);
+  assert.equal(withAlerts([mkAlert({ attribute: 'a', not_in: [true, false, 'x', 3] })]).ok, true, 'booleans, texts and numbers');
+  for (const bad of [{ attribute: 'mode', in: ['A'], not_in: ['B'] }, { attribute: 'mode', not_in: [] }, { attribute: 'mode', not_in: 'SHADOW' }, { attribute: '', not_in: ['A'] }, { not_in: ['A'] },
+    { attribute: 'mode', not_in: [{}] }, { attribute: 'mode', not_in: [null] }]) {
+    const r = withAlerts([mkAlert(bad)]);
+    assert.equal(r.ok, false, dump(bad));
+    assert.equal(r.catalogue.alerts.length, 0, `${dump(bad)} is dropped, not guessed`);
+  }
+});
+
+test('AC6 [r1] alert form {attribute, not_in}: fires when the value is not STRICTLY one of the list; an absent attribute or a down entity is "cannot check", never silent and never critical', () => {
+  const cc = withAlerts([{ id: 'N1', severity: 'critical', entity_id: STATUS, when: { attribute: 'mode', not_in: ['SHADOW'] }, text: 'mode alert text', action: 'do it' }]).catalogue;
+  const run = (mutate) => alertIds(miniStates(mutate), cc);
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = 'SHADOW'; }), []);
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = 'ASSISTED'; }), ['critical:N1']);
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = 'shadow'; }), ['critical:N1'], 'no case folding: SHADOW is the one word');
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = ''; }), ['critical:N1']);
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = { x: 1 }; }), ['critical:N1']);
+  assert.deepEqual(run((s) => { delete s[STATUS].attributes.mode; }), ['warning:N1:unverifiable']);
+  assert.deepEqual(run((s) => { s[STATUS].attributes.mode = null; }), ['warning:N1:unverifiable']);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'unavailable'; }), ['warning:N1:unverifiable']);
+  assert.deepEqual(run((s) => { delete s[STATUS]; }), ['warning:N1:unverifiable']);
+  const strict = withAlerts([{ id: 'N2', severity: 'critical', entity_id: STATUS, when: { attribute: 'applies_nothing', not_in: [true] }, text: 't', action: 'a' }]).catalogue;
+  const runs = (v) => alertIds(miniStates((s) => { s[STATUS].attributes.applies_nothing = v; }), strict);
+  assert.deepEqual(runs(true), []);
+  for (const v of [false, 0, 1, 'true', 'True', 'yes', 'no', '', [true]]) assert.deepEqual(runs(v), ['critical:N2'], `${JSON.stringify(v)} is not strictly true`);
+});
+
+test('AC6 [r1] alert form {state_outside}: fires for a state that is not listed; an unavailable, unknown or missing entity is "cannot check" (another alert says it is down)', () => {
+  const mkAlert = (when) => ({ id: 'O1', severity: 'warning', entity_id: STATUS, when, text: 'status unknown to this view', action: 'a' });
+  assert.equal(withAlerts([mkAlert({ state_outside: ['OK', 'STALE'] })]).ok, true);
+  for (const bad of [{ state_outside: [] }, { state_outside: 'OK' }, { state_outside: [1] }, { state_outside: ['OK'], state_in: ['x'] }]) {
+    const r = withAlerts([mkAlert(bad)]);
+    if (bad.state_in) assert.equal(r.catalogue.alerts.length, 1, 'the first form wins, as for the other forms');
+    else assert.equal(r.ok, false, dump(bad));
+  }
+  const cc = withAlerts([mkAlert({ state_outside: ['OK', 'STALE'] })]).catalogue;
+  const run = (mutate) => alertIds(miniStates(mutate), cc);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'OK'; }), []);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'STALE'; }), []);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'WEIRD'; }), ['warning:O1']);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'ok'; }), ['warning:O1'], 'no case folding');
+  assert.deepEqual(run((s) => { s[STATUS].state = 'unavailable'; }), ['warning:O1:unverifiable']);
+  assert.deepEqual(run((s) => { s[STATUS].state = 'unknown'; }), ['warning:O1:unverifiable']);
+  assert.deepEqual(run((s) => { delete s[STATUS]; }), ['warning:O1:unverifiable']);
+});
+
+// ---- the child-card guard is an allowlist ----
+const ALLOWED_MINIMAL = {
+  markdown: { type: 'markdown', content: 'x' }, entities: { type: 'entities', entities: ['sensor.x'] }, glance: { type: 'glance', entities: ['sensor.x'] },
+  'history-graph': { type: 'history-graph', entities: ['sensor.x'] }, 'statistics-graph': { type: 'statistics-graph', entities: ['sensor.x'] },
+  sensor: { type: 'sensor', entity: 'sensor.x' }, gauge: { type: 'gauge', entity: 'sensor.x' }, entity: { type: 'entity', entity: 'sensor.x' },
+  heading: { type: 'heading', heading: 'x' }, 'vertical-stack': { type: 'vertical-stack', cards: [{ type: 'markdown', content: 'x' }] },
+  'horizontal-stack': { type: 'horizontal-stack', cards: [{ type: 'markdown', content: 'x' }] }, grid: { type: 'grid', cards: [{ type: 'markdown', content: 'x' }] },
+  conditional: { type: 'conditional', conditions: [], card: { type: 'markdown', content: 'x' } }, tile: { type: 'tile', entity: 'sensor.x' },
+};
+
+test('AC16 [r1] validateChildCards: only an ALLOWLIST of card types may sit in a Geek-visible region (the read-only built-in cards and the ECCO Intelligence card)', () => {
+  for (const [t, cfg] of Object.entries(ALLOWED_MINIMAL)) assert.equal(validateChildCards([cfg]).ok, true, t);
+  assert.equal(validateChildCards([{ type: 'custom:ecco-intelligence-card', entities: { status: 'sensor.x' } }]).ok, true, 'the read-only Intelligence card is on the default list');
+  for (const t of ['picture-glance', 'area', 'picture-entity', 'picture-elements', 'map', 'weather-forecast', 'logbook', 'calendar', 'markdown-but-not', 'light', 'button', 'media-control', 'iframe']) {
+    const r = validateChildCards([{ type: t, entities: ['sensor.x'], entity: 'sensor.x', area: 'kitchen', image: 'x' }]);
+    assert.equal(r.ok, false, t);
+    assert.ok(r.errors.some((e) => /not on the list|allowed|can write/.test(e.message)), `${t}: ${dump(r.errors)}`);
+  }
+});
+
+test('AC16 [r1] validateChildCards: a custom card is refused unless it is on the default list or named in allowCustom; the allowance accepts only well-formed custom names', () => {
+  const btn = { type: 'custom:button-card', entity: 'sensor.x' };
+  for (const name of ['custom:button-card', 'custom:mushroom-entity-card', 'custom:some-other-card', 'custom:ecco-tou-settings-card']) {
+    assert.equal(validateChildCards([{ type: name, entity: 'sensor.x' }]).ok, false, name);
+  }
+  assert.equal(validateChildCards([btn], { allowCustom: ['custom:button-card'] }).ok, true, 'the dashboard author names it');
+  assert.equal(validateChildCards([btn], { allowCustom: ['custom:other-card'] }).ok, false);
+  for (const bad of [['button-card'], ['custom:Button-Card'], ['custom:'], ['custom:x'], [5], [null], 'custom:button-card', undefined, null, {}]) {
+    assert.equal(validateChildCards([btn], { allowCustom: bad }).ok, false, `allowCustom ${dump(bad)} allows nothing`);
+  }
+  // an allowed custom card still passes through the action rules
+  assert.equal(validateChildCards([{ ...btn, tap_action: { action: 'toggle' } }], { allowCustom: ['custom:button-card'] }).ok, false);
+});
+
+test('AC16 [r1] validateChildCards: the allowlist applies inside stacks, grids and conditionals, and to the header and footer of a card', () => {
+  const pg = { type: 'picture-glance', entities: ['sensor.x'], image: 'x' };
+  const btn = { type: 'custom:button-card', entity: 'sensor.x' };
+  for (const wrap of [(c) => ({ type: 'vertical-stack', cards: [c] }), (c) => ({ type: 'horizontal-stack', cards: [{ type: 'markdown' }, c] }), (c) => ({ type: 'grid', cards: [c] }),
+    (c) => ({ type: 'conditional', conditions: [], card: c }), (c) => ({ type: 'vertical-stack', cards: [{ type: 'horizontal-stack', cards: [c] }] })]) {
+    assert.equal(validateChildCards([wrap(pg)]).ok, false, 'picture-glance inside a container');
+    assert.equal(validateChildCards([wrap(btn)]).ok, false, 'a custom card inside a container');
+    assert.equal(validateChildCards([wrap({ type: 'markdown', content: 'x' })]).ok, true);
+  }
+  const base = { type: 'entities', entities: ['sensor.x'] };
+  assert.equal(validateChildCards([{ ...base, footer: { type: 'buttons', entities: [{ entity: 'light.x' }] } }]).ok, false, 'a buttons footer toggles by default');
+  assert.equal(validateChildCards([{ ...base, header: { type: 'picture', image: 'x' } }]).ok, true);
+  assert.equal(validateChildCards([{ ...base, footer: { type: 'graph', entity: 'sensor.x' } }]).ok, true);
+  assert.equal(validateChildCards([{ ...base, footer: { type: 'widgets', entities: [] } }]).ok, false);
+});
+
+test('AC16 [r1] validateChildCards: a heading badge on a writable entity must state a safe tap_action; a read-only badge needs nothing', () => {
+  const heading = (badge) => ({ type: 'heading', heading: 'x', badges: [badge] });
+  assert.equal(validateChildCards([heading({ type: 'entity', entity: 'sensor.x' })]).ok, true);
+  assert.equal(validateChildCards([heading({ type: 'entity', entity: 'input_boolean.x' })]).ok, false);
+  assert.equal(validateChildCards([heading({ type: 'entity', entity: 'input_boolean.x', tap_action: { action: 'toggle' } })]).ok, false);
+  assert.equal(validateChildCards([heading({ type: 'entity', entity: 'input_boolean.x', tap_action: { action: 'more-info' } })]).ok, true);
+  assert.equal(validateChildCards([heading({ type: 'entity', entity: 'input_boolean.x', tap_action: { action: 'none' } })]).ok, true);
+});
+
+test('AC16 [r1] validateConfig: allow_custom_cards is a list of well-formed custom card names; a bad entry is reported and ignored', () => {
+  assert.deepEqual(validateConfig({ allow_custom_cards: ['custom:button-card', 'custom:foo-card'] }).allowCustom, ['custom:button-card', 'custom:foo-card']);
+  assert.deepEqual(validateConfig({}).allowCustom, []);
+  assert.deepEqual(validateConfig({}).errors, []);
+  const r = validateConfig({ allow_custom_cards: ['custom:ok-card', 'bad', 5, 'custom:Bad-Card'] });
+  assert.deepEqual(r.allowCustom, ['custom:ok-card']);
+  assert.ok(r.errors.length >= 1 && r.errors.every((e) => e.path.startsWith('allow_custom_cards')));
+  assert.equal(validateConfig({ allow_custom_cards: 'custom:x-y' }).errors.length, 1);
+  assert.deepEqual(validateConfig({ allow_custom_cards: 'custom:x-y' }).allowCustom, []);
+});
+
+test('AC12 [r1] a long attribute VALUE is cut at LIMITS.value in the row, with a marker that says how much was dropped (the row cap, not only the larger keep cap)', () => {
+  assert.equal(LIMITS.value, 300);
+  const s = snap((states) => {
+    states['sensor.ecco_intel_new_diagnostic'].attributes.long_text = 'y'.repeat(1000);
+    states['sensor.ecco_intel_new_diagnostic'].attributes.exact_text = 'z'.repeat(LIMITS.value);
+  });
+  const r = byEntity(s, 'sensor.ecco_intel_new_diagnostic');
+  const a = r.attributes.find((x) => x.path === 'long_text');
+  assert.ok(a.value.startsWith('y'.repeat(LIMITS.value)));
+  assert.ok(!a.value.includes('y'.repeat(LIMITS.value + 1)), 'nothing beyond the cap is shown');
+  assert.match(a.value, /\[truncated 700 more characters\]$/);
+  assert.equal(a.truncated, true);
+  const e = r.attributes.find((x) => x.path === 'exact_text');
+  assert.equal(e.value, 'z'.repeat(LIMITS.value), 'a value exactly at the cap is untouched');
+  assert.equal(e.truncated, false);
+});

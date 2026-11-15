@@ -115,6 +115,13 @@ CASES = [
     ("an alert with an empty state list", lambda c: c["alerts"][0].__setitem__("when", {"state_in": []}), "non-empty list of texts"),
     ("an alert with unavailable: false", lambda c: c["alerts"][0].__setitem__("when", {"unavailable": False}), "must be true"),
     ("an attribute alert without a list", lambda c: c["alerts"][0].__setitem__("when", {"attribute": "x", "in": "y"}), "when.in"),
+    ("an attribute alert with both in and not_in", lambda c: c["alerts"][0].__setitem__("when", {"attribute": "x", "in": ["y"], "not_in": ["z"]}), "must be exactly one of"),
+    ("an attribute alert with an empty not_in list", lambda c: c["alerts"][0].__setitem__("when", {"attribute": "x", "not_in": []}), "when.not_in"),
+    ("an attribute alert with a not_in that is not a list", lambda c: c["alerts"][0].__setitem__("when", {"attribute": "x", "not_in": "y"}), "when.not_in"),
+    ("an attribute alert with a not_in holding a dict", lambda c: c["alerts"][0].__setitem__("when", {"attribute": "x", "not_in": [{}]}), "when.not_in"),
+    ("a state_outside alert with an empty list", lambda c: c["alerts"][0].__setitem__("when", {"state_outside": []}), "when.state_outside"),
+    ("a state_outside alert with a list of numbers", lambda c: c["alerts"][0].__setitem__("when", {"state_outside": [1]}), "when.state_outside"),
+    ("an alert with state_outside next to state_in", lambda c: c["alerts"][0].__setitem__("when", {"state_outside": ["x"], "state_in": ["y"]}), "must be exactly one of"),
     ("an alert without an owner action", lambda c: c["alerts"][0].__setitem__("action", ""), "action: must be a non-empty text"),
     ("a duplicate alert id", lambda c: c["alerts"][1].__setitem__("id", c["alerts"][0]["id"]), "duplicate"),
     ("an exception with an unknown reason", lambda c: c["exceptions"][0].__setitem__("reason", "inconvenient"), "reason: must be one of"),
@@ -154,6 +161,46 @@ check("a missing pause switch is alerted, by the status attribute and by the hel
       any(a["when"] == {"attribute": "pause_control", "in": ["MISSING"]} for a in cat["alerts"])
       and any(a["entity_id"] == ac.ENTITY_IDS["paused"] and a["when"] == {"unavailable": True} for a in cat["alerts"]))
 check("applies_nothing false is a critical alert", any(a["severity"] == "critical" and a["when"].get("attribute") == "applies_nothing" for a in cat["alerts"]))
+
+# ---- review round 1: the safety facts the package watchdog template depends on are alerted by the status entity itself ----
+by_id = {a["id"]: a for a in cat["alerts"]}
+S_EID = ac.ENTITY_IDS["status"]
+check("[r1] mode_not_shadow: critical, on the status entity, {attribute mode, not_in [SHADOW]}",
+      by_id.get("mode_not_shadow", {}).get("severity") == "critical" and by_id["mode_not_shadow"]["entity_id"] == S_EID
+      and by_id["mode_not_shadow"]["when"] == {"attribute": "mode", "not_in": ["SHADOW"]})
+check("[r1] contract_mismatch: critical, on the status entity, {attribute contract_version, not_in [the contract]}",
+      by_id.get("contract_mismatch", {}).get("severity") == "critical" and by_id["contract_mismatch"]["entity_id"] == S_EID
+      and by_id["contract_mismatch"]["when"] == {"attribute": "contract_version", "not_in": [ac.CONTRACT_VERSION]})
+check("[r1] applies_nothing_not_true: critical, covers every value that is not boolean true and not already named by applies_nothing_false",
+      by_id.get("applies_nothing_not_true", {}).get("severity") == "critical" and by_id["applies_nothing_not_true"]["entity_id"] == S_EID
+      and by_id["applies_nothing_not_true"]["when"] == {"attribute": "applies_nothing", "not_in": [True, False, "false", "False"]}
+      and by_id["applies_nothing_false"]["when"]["in"] == [False, "false", "False"])
+check("[r1] status_unrecognised: a warning for any status word the contract does not define (and only while the status is up)",
+      by_id.get("status_unrecognised", {}).get("severity") == "warning" and by_id["status_unrecognised"]["entity_id"] == S_EID
+      and by_id["status_unrecognised"]["when"] == {"state_outside": sorted(ac.SystemStatus.ALL)})
+check("[r1] the four new alerts are plain words with an owner action (the same length rule as the others)",
+      all(20 <= len(by_id[i]["text"]) <= 220 and 20 <= len(by_id[i]["action"]) <= 300 for i in ("mode_not_shadow", "contract_mismatch", "applies_nothing_not_true", "status_unrecognised")))
+
+# the watchdog template in the package turns OFF for exactly these reasons; each one must have its own alert here (the offline strip must
+# not say 'No active alerts' while the real watchdog is off for a reason the status itself states)
+pkg_text = (ROOT / "home-assistant/packages/ecco_intelligence.yaml").read_text(encoding="utf-8")
+wd = pkg_text[pkg_text.index("ECCO Intel Watchdog Fresh"):]
+wd = wd[:wd.index("automation:")]
+m_status = re.search(r"st in \[([^\]]*)\]", wd)
+healthy_words = set(re.findall(r"'([A-Z_]+)'", m_status.group(1))) if m_status else set()
+m_mode = re.search(r"state_attr\(s, 'mode'\) == '([A-Z_]+)'", wd)
+m_contract = re.search(r"state_attr\(s, 'contract_version'\) == '([^']+)'", wd)
+check("[r1] the watchdog template still reads the way this test parses it (a status list, the mode, the contract, applies_nothing sameas true)",
+      bool(m_status and m_mode and m_contract) and "state_attr(s, 'applies_nothing') is sameas true" in wd, wd[:200])
+check("[r1] the watchdog's mode and contract are the ones the alerts name",
+      m_mode and m_contract and by_id["mode_not_shadow"]["when"]["not_in"] == [m_mode.group(1)] and by_id["contract_mismatch"]["when"]["not_in"] == [m_contract.group(1)])
+check("[r1] the watchdog's healthy status words are all words the catalogue knows, and the statuses it does NOT list have an alert of their own",
+      healthy_words and healthy_words <= set(by_id["status_unrecognised"]["when"]["state_outside"])
+      and all(by_id.get(f"status_{w.lower()}", {}).get("when") == {"state_in": [w]} for w in set(ac.SystemStatus.ALL) - healthy_words - {"OK", "NO_ADVICE"}),
+      str(sorted(healthy_words)))
+check("[r1] strict applies_nothing: the two alerts together fire for every value except the boolean true, and never for the same value twice",
+      set(by_id["applies_nothing_false"]["when"]["in"]) | set(by_id["applies_nothing_not_true"]["when"]["not_in"]) == set(by_id["applies_nothing_not_true"]["when"]["not_in"])
+      and True in by_id["applies_nothing_not_true"]["when"]["not_in"] and not set(by_id["applies_nothing_false"]["when"]["in"]) - set(by_id["applies_nothing_not_true"]["when"]["not_in"]))
 sensible = True
 detail = ""
 for a in cat["alerts"]:
@@ -162,7 +209,7 @@ for a in cat["alerts"]:
     w = a["when"]
     if "attribute" in w and w["attribute"] not in declared:
         sensible, detail = False, f"{a['id']}: attribute {w['attribute']} is not declared"
-    for key in ("state_in", "state_not_in"):
+    for key in ("state_in", "state_not_in", "state_outside"):
         for v in w.get(key, []):
             ok = {"binary_sensor": {"on", "off"}, "input_boolean": {"on", "off"}}.get(a["entity_id"].split(".")[0])
             if a["entity_id"] == ac.ENTITY_IDS["status"]:

@@ -20,6 +20,8 @@ Files written under frontend/ecco-mode-shell/test/fixtures/:
   intelligence.states.self-test-failed.json  the contract's SELF_TEST_FAILED fixture
   intelligence.states.paused.json            the contract's PAUSED fixture, with the pause switch on
   intelligence.states.watchdog-stale.json    a healthy result that stopped being refreshed: the watchdog is off, the alert has fired
+  intelligence.states.contract-breach.json   the healthy result with ONE change: the status entity says mode ASSISTED while its state is OK and the
+                                             watchdog is still on (a case the package watchdog turns off for, and the status strip must name)
   intelligence.states.extras.json            healthy plus things nobody declared: an unknown attribute, new ecco_intel_ entities (to be
                                              discovered), and lookalikes outside the prefix (never to be discovered)
   noise.states.json                          a few hundred unrelated entities with secret-looking DECOYS (to prove redaction)
@@ -302,6 +304,15 @@ def intelligence_fixtures(c: Contract) -> tuple[dict, dict]:
     for eid in look:
         ex[eid] = {"state": "1", "attributes": {"friendly_name": "lookalike (synthetic): must not be discovered"}, "last_changed": stamp,
                    "last_updated": stamp}
+    # the status entity says a mode other than SHADOW, yet its state is OK and the watchdog is on: the offline fixtures used to model only the
+    # cases where the watchdog had already turned off. Built from the healthy fixture with one attribute changed (the contract builders refuse a
+    # non-SHADOW envelope by design, so this one cannot come from them).
+    cb = json.loads(json.dumps(fx["healthy"]))
+    cb["sensor.ecco_intel_status"]["attributes"]["mode"] = "ASSISTED"
+    fx["contract-breach"] = dict(sorted(cb.items()))
+    meta["contract-breach"] = {"reference_now": iso(t0 + timedelta(seconds=30)), "status": "OK",
+                               "what": "The healthy result with one change: the status entity says mode ASSISTED (the contract says SHADOW) while its state is OK and the "
+                                       "watchdog is still on. The strip must raise a critical line for it in both modes."}
     fx["extras"] = dict(sorted(ex.items()))
     meta["extras"] = {"reference_now": iso(t0 + timedelta(seconds=30)), "status": "OK",
                       "what": "Healthy plus: one attribute nobody declared (status.zz_future_attribute), four new ecco_intel_ entities that must be discovered "

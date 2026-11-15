@@ -49,8 +49,15 @@ COORD = re.compile(r"[\"'](?:latitude|longitude|lat|lon|lng)[\"']\s*:\s*-?\d", r
 DATE = re.compile(r"(?<!\d)(?:19|20)\d\d-\d\d-\d\d(?!\d)")
 ENTITY = re.compile(r"(?<![A-Za-z0-9_.])(?:sensor|binary_sensor|input_boolean|input_number|automation|light|switch|climate|device_tracker|update|script|media_player)\.(?!py\b)[a-z0-9_]*[a-z0-9]\b(?!_)")
 
+# review round 1: a bearer / basic credential, a credential pair (plain or JSON quoted) and a webhook path were not scanned for: a generator
+# that emitted one would have passed the privacy scan (only the regeneration drift check and the node suites would have noticed)
+BEARER = re.compile(r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}", re.I)
+CRED_PAIR = re.compile(r"[\"']?\b(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization)\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"'{}]{3,}", re.I)
+WEBHOOK_PATH = re.compile(r"/api/webhook/[A-Za-z0-9_-]{8,}|hooks\.[a-z0-9.-]+/services/[A-Za-z0-9/_-]{12,}", re.I)
+
 ALL = {"private IPv4": RFC1918, "MAC": MAC, "user path": USER_PATH, "token or key shape": SECRET, "JWT-like": JWT_LOOSE, "IPv4": IPV4,
-       "long hex": HEX_BLOB, "long base64": B64_BLOB, "URL with userinfo": URL_USERINFO, "token in a URL": URL_TOKEN_QS, "coordinates": COORD}
+       "long hex": HEX_BLOB, "long base64": B64_BLOB, "URL with userinfo": URL_USERINFO, "token in a URL": URL_TOKEN_QS, "coordinates": COORD,
+       "bearer or basic credential": BEARER, "credential pair": CRED_PAIR, "webhook path": WEBHOOK_PATH}
 
 
 def hits(text: str, pat: re.Pattern, ok=None) -> list[str]:
@@ -76,9 +83,17 @@ samples = {
     "URL with userinfo": "mqtt://" + "user" + ":" + "pw" + "@" + "broker.example.invalid",
     "token in a URL": "https://x.example.invalid/a?" + "token" + "=" + "abc",
     "coordinates": '"' + "latitude" + '": 51.5',
+    "bearer or basic credential": "Authori" + "zation: Bear" + "er " + "a" * 24,
+    "credential pair": '{"' + "tok" + 'en": "' + "abc123" + '"}',
+    "webhook path": "https://x.example.invalid/api/" + "webhook/" + "abcdefgh1234",
 }
 for kind, text in samples.items():
     check(f"the {kind} scanner flags an injected sample", bool(hits(text, ALL[kind])))
+check("[r1] the credential-pair scanner also flags the single-quoted, unquoted and equals-sign shapes, and the bearer scanner the Basic shape",
+      all(hits(s, CRED_PAIR) for s in ("'" + "pass" + "word" + "': 'abc123'", "api" + "_key=abc123", "pass" + "word: abc123"))
+      and bool(hits("Bas" + "ic " + "dXNlcjpwYXNzd29yZA==", BEARER)) and bool(hits("https://hooks.slack" + ".com/services/" + "T00000000/B00000000/abcdefghijkl", WEBHOOK_PATH)))
+check("[r1] ordinary text near those words is not flagged (no hit on 'a token of thanks', 'password protected', 'basic setup', 'the webhook is off')",
+      not any(hits(s, pat) for s in ("a token of thanks", "password protected: no", "a basic setup", "the webhook is off", "bearer of news", "secret: ") for pat in (BEARER, CRED_PAIR, WEBHOOK_PATH)))
 check("the e-mail scanner flags a personal address and accepts a no-reply and an example one",
       bool(email_hits("a " + "someone" + "@" + "gmail" + ".com")) and not email_hits("a noreply" + "@" + "anthropic.com b x" + "@" + "host.example.invalid"))
 check("the private-key block is flagged", bool(hits("-----BEGIN " + "RSA PRIVATE KEY-----", SECRET)))
@@ -97,14 +112,25 @@ STRICT = [CATD / "intelligence.catalogue.json", CATD / "intelligence.ledger.json
 led = json.loads((CATD / "intelligence.ledger.json").read_text(encoding="utf-8"))
 digests = {led["catalogue_sha256"], led["live_shape_sha256"], *led["fixtures_sha256"].values()}
 check("every strict target exists", all(p.is_file() for p in STRICT), str([p.name for p in STRICT if not p.is_file()]))
-for p in STRICT:
-    t = p.read_text(encoding="utf-8")
-    is_ledger = p.name.startswith("intelligence.ledger") or p.name.startswith("GEEK_MODE_COVERAGE_LEDGER")
+def strict_findings(t: str, is_ledger: bool) -> list[str]:
     bad = []
     for kind, pat in ALL.items():
         ok = (lambda h: h in digests) if (is_ledger and kind in ("long hex", "long base64")) else None
         bad += [f"{kind}: {h[:24]}" for h in hits(t, pat, ok)]
     bad += [f"e-mail: {h}" for h in email_hits(t)]
+    return bad
+
+
+_healthy_text = (FXD / "intelligence.states.healthy.json").read_text(encoding="utf-8")
+_anchor = '"mode": "SHADOW"'
+check("[r1] the strict scan reports a value injected into a fixture (a 24-character bearer value, a credential pair, a webhook path): it no longer depends on the drift check",
+      _anchor in _healthy_text and all(strict_findings(_healthy_text.replace(_anchor, _anchor + ', "zz": "' + inj + '"', 1), False)
+                                      for inj in ("Bear" + "er " + "q" * 24, "to" + "ken=" + "abc123def", "https://x.example.invalid/api/" + "webhook/" + "abcdefgh1234"))
+      and not strict_findings(_healthy_text, False))
+for p in STRICT:
+    t = p.read_text(encoding="utf-8")
+    is_ledger = p.name.startswith("intelligence.ledger") or p.name.startswith("GEEK_MODE_COVERAGE_LEDGER")
+    bad = strict_findings(t, is_ledger)
     check(f"{p.name}: no secret-like, private, blob-like, address or coordinate text (ledger: only its own sha256 digests)", not bad, str(bad[:3]))
 catalogue_entities = {s["entity_id"] for s in json.loads((CATD / "intelligence.catalogue.json").read_text(encoding="utf-8"))["sources"]}
 extras_ok = {"sensor.ecco_intel_future_probe", "binary_sensor.ecco_intel_future_flag", "automation.ecco_intel_alert_future_check",

@@ -23,7 +23,7 @@
       python -m http.server 8765 --bind 127.0.0.1
       http://127.0.0.1:8765/frontend/ecco-mode-shell/preview/?s=healthy&theme=dark
 
-  Query: s = scenario (healthy, mixed, stale, unavailable, self-test-failed, paused, watchdog-stale, extras, alerts, decoys, large, hostile,
+  Query: s = scenario (healthy, mixed, stale, unavailable, self-test-failed, paused, watchdog-stale, extras, contract-breach, alerts, decoys, large, hostile,
   invalid, nocatalogue), theme = dark | light, w = card width in px, mode = geek (clicks the Geek button after load, as a user would),
   expand = an entity id to open, raw = 1 to open its raw view, q = text to type into the search, chrome = 0 hides the option panel (for
   screenshots). No network, no CDN, no fonts.
@@ -63,7 +63,7 @@ const CATALOGUE_URL = '../catalogue/intelligence.catalogue.json';
 const SCENARIOS = {
   healthy: { fixture: 'healthy' }, mixed: { fixture: 'mixed' }, stale: { fixture: 'stale' }, unavailable: { fixture: 'unavailable' },
   'self-test-failed': { fixture: 'self-test-failed' }, paused: { fixture: 'paused' }, 'watchdog-stale': { fixture: 'watchdog-stale' },
-  extras: { fixture: 'extras' }, alerts: { fixture: 'healthy' }, decoys: { fixture: 'healthy' }, large: { fixture: 'healthy' },
+  extras: { fixture: 'extras' }, 'contract-breach': { fixture: 'contract-breach' }, alerts: { fixture: 'healthy' }, decoys: { fixture: 'healthy' }, large: { fixture: 'healthy' },
   hostile: { fixture: 'healthy' }, invalid: { fixture: 'healthy' }, nocatalogue: { fixture: 'healthy' },
 };
 const q = new URLSearchParams(location.search);

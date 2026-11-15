@@ -46,6 +46,12 @@
    "status": "OK",
    "what": "A healthy result that stopped being refreshed: its states are 55 minutes old at the reference time, the watchdog turned off 20 minutes after it, and the stale alert automation ran 30 minutes after that."
   },
+  "contract-breach": {
+   "file": "intelligence.states.contract-breach.json",
+   "reference_now": "2030-01-15T21:00:30+00:00",
+   "status": "OK",
+   "what": "The healthy result with one change: the status entity says mode ASSISTED (the contract says SHADOW) while its state is OK and the watchdog is still on. The strip must raise a critical line for it in both modes."
+  },
   "extras": {
    "file": "intelligence.states.extras.json",
    "reference_now": "2030-01-15T21:00:30+00:00",

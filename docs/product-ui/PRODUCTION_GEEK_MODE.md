@@ -108,8 +108,9 @@ fetches nothing. The catalogue is data, never code, and the card must tolerate u
   `advice.target_soc_pct`, `decisions.I-D1`). Deeper levels are shown in the raw (redacted) inspector under the parent and are not
   counted separately. A list attribute (`blockers`, `reason_codes`, `input_ages`) is one row; the keys of its rows are in its
   description.
-- Alert conditions `when` are exactly one of `{state_in: [..]}`, `{state_not_in: [..]}`, `{unavailable: true}`,
-  `{attribute: name, in: [..]}`. The intended meaning of `{unavailable: true}` is: the entity's state is `unavailable`, or the entity
+- Alert conditions `when` are exactly one of `{state_in: [..]}`, `{state_not_in: [..]}`, `{state_outside: [..]}`, `{unavailable: true}`,
+  `{attribute: name, in: [..]}`, `{attribute: name, not_in: [..]}` (the last two forms and `state_outside` were added in review round 1,
+  section 13: `not_in` is STRICT, so the text "true" is not the boolean true; `state_outside` fires only for a state that is up and not listed). The intended meaning of `{unavailable: true}` is: the entity's state is `unavailable`, or the entity
   is missing from `hass.states` (a declared entity that is missing is as bad as an unavailable one; it must not hide an alert).
   An `in` list may mix booleans and texts (`applies_nothing` is listed as false, "false" and "False") so a strict or a stringified
   comparison both match. The shell pins both readings in `frontend/ecco-mode-shell/test/real-catalogue.test.mjs`: the state `unavailable`
@@ -172,8 +173,10 @@ The proof keeps these, and each has a test on the data side or the card side:
    raw view) without a throw, and no storage is touched.
 2. The mode never changes authority. It is not ECCO Manual / Assisted / Automatic; it never writes; it never cancels a session.
 3. IDENTICAL permissions in both modes. Production-only and always-visible child cards are passed through unchanged. A child that
-   is visible in Geek Mode with any write action is rejected (`validateChildCards`). Geek Mode grants no extra write permission,
-   exposes no installer-only write and bypasses no backend confirmation.
+   is visible in Geek Mode with any write action is rejected (`validateChildCards`, an allowlist of card types since review round 1).
+   Geek Mode grants no extra write permission, exposes no installer-only write and bypasses no backend confirmation. The standard
+   `hass-more-info` event is itself a write path for a writable domain (its dialog has a slider, a toggle, Run or Install), so Geek Mode
+   dispatches it only for a sensor, a binary sensor or an event; every other row offers the entity id to copy.
 4. Each tab defaults to Production on entry and on reload; a switch in one view never changes another; if Home Assistant caching or
    navigation keeps a component alive, the mode is reset to Production on entry.
 5. The safety alert strip is derived from the catalogue's alerts, shows every alert condition identically in both modes and cannot
@@ -205,7 +208,7 @@ which since the merge run against the very same catalogue, ledger and fixtures (
 | AC3 | enter, switch to Geek, leave (location-changed, disconnect, hidden, pagehide) and return: Production | - | one test per leave signal |
 | AC4 | two shell instances never share or leak a mode | - | two-instance test |
 | AC5 | every interaction makes zero calls; no storage | the catalogue and fixtures are plain data | throwing hass stub; static pin for storage; behavioural test |
-| AC6 | the alert strip shows every alert identically in both modes, over unavailable and unknown | 15 alerts derived from the contract (every status and data-quality state alerted or listed as none); every alert names a catalogued entity; fixtures for each alert state (`stale`, `paused`, `self-test-failed`, `unavailable`, `watchdog-stale`); `test_geek_mode_catalogue.py` [3], `test_geek_mode_fixtures.py` [5] | parametrised over every alert and over unavailable and unknown states |
+| AC6 | the alert strip shows every alert identically in both modes, over unavailable and unknown | 19 alerts derived from the contract (every status and data-quality state alerted or listed as none, plus the four that mirror what the package watchdog needs); every alert names a catalogued entity; fixtures for each alert state (`stale`, `paused`, `self-test-failed`, `unavailable`, `watchdog-stale`); `test_geek_mode_catalogue.py` [3], `test_geek_mode_fixtures.py` [5] | parametrised over every alert and over unavailable and unknown states |
 | AC7 | same data in Production and Geek | one catalogue, one fixture format | changing-hass test of the one adapter |
 | AC8 | coverage: every non-excepted source has a row; every declared attribute is reachable; discovery adds only the prefix | the universe is computed from code; 17 sources, 344 attribute rows, all COVERED; row id rule; every declared path exercised by a fixture; `extras` and `noise` for discovery; `test_geek_mode_coverage.py` [1]-[3], `test_geek_mode_ledger.py` [2], [5] | the same assertions against the same catalogue and fixtures, with the ledger's row ids |
 | AC9 | honesty: unavailable, unknown, stale, NOT_MEASURED and simulated labelled in words and icon; nothing fabricated | timing from the integration's constants; fixtures for unavailable, stale in time (`watchdog-stale`), unknown (`unknown` figures), declared-but-missing (non-OK shapes) and a `simulated` flag (`extras`) | label, icon and never-live tests |
@@ -283,6 +286,10 @@ owner:
    node tests do not run in CI). `tools/tests/test_geek_mode_example.py` already pins the example, the ledger and these documents.
 10. Decide whether the pause tile may stay hidden in Geek Mode (today it does: Geek Mode only shows, it never offers a control, so the tile
     lives in Production only; the always-visible cards must be read-only and the shell refuses any that is not).
+11. Decide whether a `more-info` action on a WRITABLE entity should be refused in an `always` card, as Geek Mode's own rows now do (the agreed
+    interface allows `more-info`; the dialog of a switch, helper, automation or script has write controls). Nothing in the example does this.
+12. Review the shell's default custom-card list (`custom:ecco-intelligence-card`, read-only and pinned by its own suite). Another custom card,
+    for example another ECCO card, enters an `always` region only if the dashboard names it in `allow_custom_cards` after checking it.
 
 ## 9. Known limits
 
@@ -298,9 +305,10 @@ owner:
   fixtures exercise them. Run the comparison again after any contract change.
 - While the integration is PAUSED it publishes once, so a paused system's entities legitimately age past `stale_after_s` (the
   watchdog accepts a PAUSED status of any age). A Geek row will then be labelled stale with its age; the Paused alert explains why.
-- A contract-version mismatch ("output not recognised") cannot be written as an alert with the agreed `{attribute, in}` form (it
-  would need "not in"). The package's own alert and the Production card's notice cover it; the catalogue alerts on
-  `applies_nothing` being false instead. A `not_in` form would be a schema change.
+- A contract-version mismatch ("output not recognised") could not be written with the first agreed `{attribute, in}` form. Review
+  round 1 added `{attribute, not_in}` and `{state_outside}` to `ecco-geek-catalogue/1` (an addition: no existing form changed), and the
+  catalogue now alerts on a mode other than SHADOW, an `applies_nothing` that is not strictly true, a contract version it does not know
+  and an unrecognised status word (section 13).
 - Attributes deeper than the first nesting level (for example `advice.reserve.*`, `value.baselines.*`) are in the raw inspector only.
   The `self_test` dictionary has check codes as keys, so its keys are data, shown in the raw view, not declared rows.
 - The catalogue is about 90 KB and the ledger about 220 KB: the catalogue is inlined into a card configuration, which is fine for a
@@ -314,8 +322,8 @@ owner:
 - The descriptions were written against the code and its docstrings; where the code is the only source (for example the plan block's
   `precharge_by`), the wording is cautious. Review them with the owner before the proof is shown to normal users.
 
-- A timestamp in the future (clock skew between the browser and Home Assistant) is read as an age of 0 and so as fresh; the shell does not
-  flag it. The fixtures are in 2030 and are read at their own reference clock, never the wall clock.
+- A timestamp more than five minutes in the future (clock skew between the browser and Home Assistant) is UNVERIFIED with no age (review
+  round 1); a smaller skew is read as an age of 0. The fixtures are in 2030 and are read at their own reference clock, never the wall clock.
 - The catalogue has no `{unavailable: true}` alert for the data-quality entity, so while that entity is unavailable the strip shows two
   'cannot check' lines for it (blocked and degraded) instead of one 'unavailable' line. Adding that alert is a catalogue text change.
 - Nothing ran in a real Home Assistant: the alert automations' live entity ids, the reserve helper's attributes, the real card helpers and
@@ -332,7 +340,7 @@ Findings (also in the ledger's section 2 where the tool can compute them):
    with unique id `ecco_intel_alert_watchdog_stale` is `automation.ecco_intel_alert_no_fresh_intelligence_result` live. The catalogue
    uses the live entity id, and the unique id inside the source id.
 3. While PAUSED the integration publishes once, so a paused system's rows legitimately age past `stale_after_s`; see section 9.
-4. The contract-version mismatch cannot be written with the agreed alert conditions; see section 9.
+4. The contract-version mismatch could not be written with the first agreed alert conditions; review round 1 added the forms for it (sections 9 and 13).
 5. The meaning of `{unavailable: true}` and of a mixed-type `in` list is written in section 3.1; the shell now pins both readings (and had
    to be corrected to read them, see section 12).
 6. 42 declared attributes are absent from the live listing, every one a conditional shape (the OK advice keys of the two items that
@@ -393,9 +401,9 @@ exercise every declared attribute (section 12.2).
 
 | Case | Proven on the real catalogue, ledger and fixtures |
 |---|---|
-| AC6 | every one of the 15 alerts fires in Production and in Geek Mode, with its text, its action, its severity and an icon, for every way its condition can hold (20 cases); with each alert's entity unavailable, unknown or missing the strip is never silently clear; each fixture raises exactly the alerts the documented readings give; the strip is outside both bodies and identical in both modes |
+| AC6 | every one of the 15 alerts of that step (19 now, section 13) fires in Production and in Geek Mode, with its text, its action, its severity and an icon, for every way its condition can hold (20 cases); with each alert's entity unavailable, unknown or missing the strip is never silently clear; each fixture raises exactly the alerts the documented readings give; the strip is outside both bodies and identical in both modes |
 | AC7 | one hass object reaches the strip, the Production summary, the Geek rows and the child cards; the Geek rows are the one adapter's rows |
-| AC8 | on all 8 fixtures every source has one row and every declared attribute is reachable; the four new `ecco_intel_` entities of the `extras` fixture are discovered with no new card and the five lookalikes never appear; 300+ noise entities change nothing; every exception is listed with its reason |
+| AC8 | on all 8 fixtures of that step (9 now) every source has one row and every declared attribute is reachable; the four new `ecco_intel_` entities of the `extras` fixture are discovered with no new card and the five lookalikes never appear; 300+ noise entities change nothing; every exception is listed with its reason |
 | AC9 | on all 8 fixtures every row says its status in words and an icon, an unavailable, unknown or missing source shows no value, a stale source is never also Live, the simulated entity is labelled Simulated |
 | AC10 | all 11 decoy entities (token, password, JWT-shaped, webhook, address, coordinates, connection strings, URL token, blobs, nested secrets, key names) are withheld in rows, attributes, raw views, search, copy and both exports; the catalogue's own redaction list withholds `git_sha` and `config_hash` everywhere |
 | AC11 | groups in catalogue order, headline first inside each group, discovered last; search reaches an obscure attribute and an undeclared one |
@@ -407,6 +415,8 @@ of the card's and 8 added for the points above), every one killed. The one delib
 fixture's invented attribute; the keys of `self_test` are data under a declared parent (section 9).
 
 ### 12.3 Results of the runs
+
+The numbers of the join step; the current runs are in section 13.3.
 
 | Run | Result |
 |---|---|
@@ -436,3 +446,73 @@ One per-view mode switch and one adapter (this shell), parameterised by one cata
 the second tab: split `tools/geek_mode_coverage.py` into a generic core and one view module per tab (section 6), decide the pause-tile
 question (section 8, item 10), and review the descriptions with the owner (section 9). The decisions the owner still owns are the integration
 steps of section 8, none of which was done.
+
+## 13. Review round 1 (15 Nov 2026): findings and fixes
+
+An independent review of the proof (the card, the tests and the data side, 40 mutants of its own and seven probes) found two MAJOR findings and
+nine smaller ones. Each was reproduced first (a failing test, or a mutant that no test killed), then fixed, and each fix has a test that fails
+without it (the new tests were run against the card as reviewed: 47 of them failed there, with the hostile-value tests that now also cover the
+new edge shapes) and mutants that undo it (section 13.1). No existing assertion was weakened or removed; the few places where a test had to
+move with the data are listed in section 13.4. Still the same rules: new files only, no pinned or deployed file edited, nothing live.
+
+### 13.1 The findings and what was done
+
+| # | Severity | Finding | Fix | Proof |
+|---|---|---|---|---|
+| 1 | MAJOR | Geek rows offered **Open in Home Assistant** for every domain. The dialog Home Assistant opens for an `input_number` (the reserve slider), an `automation` (enable, disable, Run) and an `input_boolean` (the pause toggle) has write controls that Production does not show, so Geek Mode gave an extra write path, against its own note "Geek Mode only shows". The same held for any future `button.`, `switch.`, `number.`, `select.` and `script.` entity under the discover prefix | the row control and the one `hass-more-info` dispatch both go through `canOpenMoreInfo`: only a sensor, a binary sensor or an event may be opened. Every other row offers **Copy entity id** and says why (`data-no-open-note`) | element test over every domain the real catalogue discovers (19 domains, 36 rows: 15 read-only offer the dialog, 21 others do not and none dispatches); a direct test of the dispatch with 23 malformed or writable ids; mutants `AC16-open-*` (4) |
+| 2 | MAJOR | A stylesheet rule such as `.shell[data-mode=geek] .alerts{display:none}` hid the alert strip in Geek Mode and no test failed: the AC6 tests looked at the hidden attribute and the DOM position, never at the stylesheet (reviewer mutant R10) | `static.test.mjs` now reads the stylesheet itself: the only selector that may name a mode is the switch thumb, and the only hiding declaration (display none, visibility, opacity, zero size, clip, off-screen offset, transparent text) allowed anywhere is the `[hidden]` rule. 24 hostile stylesheets are the reader's negative controls, each also appended to the real stylesheet | `static.test.mjs` (3 tests); mutants `AC6-css-*` (5), including R10 itself |
+| 3 | MINOR | `setConfig` called again on the same element (Home Assistant does this when the dashboard configuration changes) left Geek Mode on | `setConfig` starts with the controller reset; the Geek surface is dropped with it | element test (twice in a row, and the switch still works after); static pin; mutants `AC3-setconfig-*` (including R34 forcing Geek) |
+| 4 | MINOR | The package watchdog template turns OFF when the status entity itself says a mode other than SHADOW, an `applies_nothing` that is not strictly the boolean true, a contract it does not know, or a status word the contract does not define. The offline strip said "No active alerts" and the Production summary "everything looks normal" for those, because the alert grammar had no "not in" form | `ecco-geek-catalogue/1` gained two forms (`{attribute, not_in}`, strict; `{state_outside}`), and the generator emits `mode_not_shadow`, `applies_nothing_not_true`, `contract_mismatch` (critical) and `status_unrecognised` (warning), the values filled from the contract, never typed. `applies_nothing_not_true` lists false, "false" and "False" too, so the two `applies_nothing` alerts partition the values: no value raises both, only the boolean true raises neither. New fixture `contract-breach` (status OK, mode ASSISTED, watchdog on) | 17 scenario tests on the healthy fixture with the watchdog still on (both modes, role alert, summary not "looks normal"); grammar tests; `test_geek_mode_catalogue.py` checks the four alerts against the watchdog template's own text; mutants `AC6-not-in-*`, `AC6-state-outside-*`, `AC6-in-and-not-in-both-accepted` (7) |
+| 5 | MINOR | The child-card guard allowed picture-glance and area cards (toggle by default), any `custom:` card (a button card taps to toggle) and a buttons footer: none carries an explicit `action` key | the guard is an **allowlist** of card types (also inside stacks, grids and conditionals, and for a header or footer), plus the read-only ECCO Intelligence card and any custom card the dashboard author names in the new `allow_custom_cards`; a heading badge on a writable entity must state a safe action; `counter`, `timer` and `group` count as writable domains | `core.test.mjs` (5 tests), `element.test.mjs` (1); mutants `AC16-allowlist-off` and 7 more (8) |
+| 6 | MINOR | Redaction edge gaps: short values under compound key names (`encryption_key`, `wifi_key`, `pin`), a JSON credential pair, labelled coordinates, a secret split by a zero-width character or written with a look-alike Cyrillic or Greek letter, a bare internal host (`ws://homeassistant:8123`) | keys and values are matched on a folded copy (invisible characters removed, NFKC, look-alike letters turned into Latin; what is shown is never the folded copy); a key that ends in a key word after a qualifier, `pin` and `psk` are secret; the credential-pair pattern allows quotes; labelled and hemisphere coordinates (`52.1 N 0.12 W`) and one-word hosts are withheld; hostile fixtures for each, assembled from fragments | `secrets.mjs` (10 values, 9 keys) run through every surface by the existing hostile tests, plus 5 new tests; mutants `AC10-*` (10) |
+| 7 | MINOR | Two reviewer mutants survived: the age read from `last_changed` (R40) and the row cap raised to a billion (R22) | tests with `last_changed` far older than `last_updated`; a 1000-character attribute cut at 300 with its marker | `core.test.mjs`; mutants `AC9-age-from-last-changed`, `AC12-row-value-uncapped` |
+| 8 | MINOR | Every new `hass.states` object (Home Assistant sends one for any change in the house) rebuilt the whole snapshot in both modes with no coalescing | a rebuild happens only when something the view reads changed (state objects of the last snapshot's entities, or the entity count); built rows are reused per state object; a burst beyond eight relevant updates per 500 ms is coalesced into one rebuild at its end by the one timer slot (which also runs the 15 s age tick); a theme change is applied at once | element tests: 200 unrelated updates, no snapshot; 101 relevant updates in a burst, a bounded number of rebuilds, the last value and a critical alert shown after it, the next update immediate again; nothing pending survives disconnect; core test: an unchanged hass constructs no row, one changed entity one row; mutants `AC12-*` (6) and `AC14-theme-not-synced-on-set` |
+| 9 | NIT | A timestamp a day in the future was LIVE, "just now"; `stale_after_s: 0` was accepted and meant "never stale"; only `simulated` and `synthetic` were read as simulated | more than five minutes ahead of the clock is UNVERIFIED with no age; `stale_after_s` must be above 0 or null; a provenance, data source or source kind starting with simulated, simulation, synthetic, fixture, mock, demo, sample, fake or dummy is SIMULATED (documented) | `core.test.mjs` (3 tests); mutants `AC9-*` (4) |
+| 10 | NIT | A numeric state `-5` was exported to CSV as `'-5` | a plain number is exported exactly; anything else that starts like a formula is still neutralised | `core.test.mjs`; mutant `AC11-csv-numbers-guarded` |
+| 11 | NIT | The Python privacy scanners had no bearer, credential-pair or webhook-path pattern: a generator that emitted one would have passed the scan (reviewer mutant PY06) | three scanners with negative controls, and the strict scan as a function proven against a value injected into a copy of the healthy fixture | `test_geek_mode_privacy.py`; with the three scanners removed the injected-value check fails |
+
+### 13.2 What the owner needs to know
+
+1. **The `hass-more-info` event is a write path for a writable domain.** The agreed interface allows it, and for a sensor, binary sensor or event
+   it is read-only, but the dialog of an automation, a helper, a switch, a script, a button, a number, a select or an update has controls. Geek
+   Mode now opens only the read-only domains. The guard for `always` child cards still allows a `more-info` action on any entity (the
+   interface), so a card there that opens a writable entity's dialog would give the same extra path; nothing in the example does. Whether to refuse
+   that too is an owner decision (section 8, item 11). Even a read-only domain's dialog has Home Assistant's own entity Settings tab for
+   administrators: that is Home Assistant's permission model, not an ECCO control, and the shell cannot change it.
+2. **The catalogue schema grew by two condition forms** (`{attribute, not_in}` and `{state_outside}`): an addition, no existing form changed. A
+   card from before this round refuses an alert whose condition it does not know and therefore fails closed (no inventory, a visible error), so the card
+   and the catalogue must be deployed together. Both are part of the same integration steps (section 8).
+3. **The default custom-card list has one entry**, `custom:ecco-intelligence-card`, because it is the only ECCO card whose suite pins it read-only.
+   The other ECCO cards were not reviewed here; a dashboard that wants one inside an `always` region names it in `allow_custom_cards` after the owner has
+   checked it (section 8, item 12).
+4. **Clock skew is now visible.** A browser whose clock is more than five minutes ahead of Home Assistant shows every row as Unverified (no age)
+   rather than "just now"; a clock behind Home Assistant shows older ages. Both are honest, neither is guessed away.
+5. **Two things were left as they are, on purpose.** `token abc123def` (a credential word and a value separated by a space only) is not
+   withheld: that shape is too common in ordinary text to withhold by pattern, and a catalogue `exceptions` entry or a key rule is the right
+   tool. A 34-letter lowercase run is not withheld either (no digit or capital, so it is not an encoded secret by shape).
+
+### 13.3 Results of the runs
+
+| Run | Result |
+|---|---|
+| `node --test test/*.test.mjs` (core 120, element 106, coverage 4, static 23, real-catalogue 157, mutation proof 137) | 547 of 547 pass; 135 of 135 mutants killed (86 before this round) |
+| the new tests run against the card as reviewed (`ECCO_MODE_SHELL_PATH` pointing at a copy of it) | 47 of the new tests fail there, and so do 8 existing tests that now also run the new hostile shapes or pin the new alert count; every one passes with the fixes |
+| `python -I -B -X utf8 test/test_example_dashboard.py` | 31 checks pass (new: every card type in the example's `always` list is on the shell's allowlist) |
+| `tools/tests/test_geek_mode_{catalogue,coverage,ledger,fixtures,privacy,example}.py` | all pass (110, 110, 52, 102, 135 and 35 checks) |
+| `tools/gen_geek_fixtures.py --check`, `tools/geek_mode_coverage.py --check` | both match a fresh regeneration |
+| `tools/validate_repo.py` | PASSED, with no edit to any pinned file |
+| `tools/run_offline_tests.py --root tools/tests`, `ecco_core/tests`, `health/tests` | 21 of 21, 6 of 6 and 2 of 2 |
+| the reviewer's probes P1 to P7, re-run against the fixed card | P1: Production after `setConfig`. P2: no Open button for the reserve helper, the alert automation or the pause helper, no event. P3: a day-ahead timestamp is Unverified with no age; `source_kind: fixture` is Simulated. P4: the compound keys, the JSON pair, the zero-width and homoglyph cases, the bare host and the labelled coordinates are withheld. P5: ASSISTED, `applies_nothing` 0 and "no", contract 2 each raise their critical line, WEIRD a warning. P6: picture-glance, area, a custom card and a heading badge on a writable entity are refused. P7: `-5` is exported exactly |
+
+The integration steps of section 8 are unchanged by this round except for the two new decisions (items 11 and 12); no pinned or deployed file was edited.
+
+### 13.4 Changes to existing tests (none weakens an assertion)
+
+- `real-catalogue.test.mjs`: the pinned alert count 15 became 19 (four alerts were added by design); the helpers that state how each condition form can
+  be triggered and read (`triggers`, `documentedConditionIds`) gained the two new forms; the expected-alerts table gained the new fixture.
+- `element.test.mjs` and `real-catalogue.test.mjs`: the shared `mount` helper opts the test stub card in with `allow_custom_cards`, because custom cards
+  in an `always` region now need a name; a new test proves the same stub is refused without it.
+- `mutations.test.mjs`: the target text of `AC16-guard-off` follows the guard's new argument (the mutant still switches the guard off).
+- `test_geek_mode_ledger.py`: the fixtures that exercise the OK advice keys now include `contract-breach` (a copy of the healthy fixture with one attribute changed).
+- `secrets.mjs`: ten hostile values and nine hostile key names were appended (the indices of the existing ones did not move), so every existing hostile
+  test now also runs the new shapes.

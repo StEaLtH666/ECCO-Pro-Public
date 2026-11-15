@@ -452,6 +452,25 @@ OTHER_ALERTS = [
     {"id": "applies_nothing_false", "severity": "critical", "entity": "status", "when": {"attribute": "applies_nothing", "in": [False, "false", "False"]},
      "text": "ECCO Intelligence reports that it may apply changes. This release is advice only and must never do that.",
      "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."},
+    # The package watchdog template turns OFF when the status entity itself says one of these four things. A watchdog that is off is only a
+    # warning, so without these lines the strip would not name a safety breach that the status states plainly. "@contract_version" and
+    # "@statuses" are placeholders the tool fills from the contract (never typed here, so they cannot drift from the code).
+    {"id": "mode_not_shadow", "severity": "critical", "entity": "status", "when": {"attribute": "mode", "not_in": ["SHADOW"]},
+     "text": "ECCO Intelligence reports a mode other than SHADOW. This release is advice only and must never run in any other mode.",
+     "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."},
+    # Every value that is not the boolean true and is not already named by applies_nothing_false below (false, "false", "False"): the two alerts
+    # together cover every value but the boolean true, and no value raises both.
+    {"id": "applies_nothing_not_true", "severity": "critical", "entity": "status",
+     "when": {"attribute": "applies_nothing", "not_in": [True, False, "false", "False"]},
+     "text": "ECCO Intelligence does not state that it applies nothing. This release is advice only and must always say so.",
+     "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."},
+    {"id": "contract_mismatch", "severity": "critical", "entity": "status", "when": {"attribute": "contract_version", "not_in": ["@contract_version"]},
+     "text": "ECCO Intelligence publishes a data contract this view does not know, so its figures cannot be trusted here.",
+     "action": "Do not rely on the figures shown. Update this dashboard and the ECCO Intelligence package to the same release as the integration, "
+               "then reload."},
+    {"id": "status_unrecognised", "severity": "warning", "entity": "status", "when": {"state_outside": ["@statuses"]},
+     "text": "ECCO Intelligence published a status word this view does not recognise.",
+     "action": "Do not rely on the figures shown. Check that this dashboard and the integration are the same release."},
     {"id": "pause_control_missing", "severity": "warning", "entity": "status", "when": {"attribute": "pause_control", "in": ["MISSING"]},
      "text": "ECCO Intelligence cannot see its pause switch, so it cannot be paused from Home Assistant.",
      "action": "Install the ECCO Intelligence package that defines the pause switch, then reload."},

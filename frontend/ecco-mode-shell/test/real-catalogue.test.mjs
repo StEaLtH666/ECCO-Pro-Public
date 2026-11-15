@@ -58,7 +58,7 @@ function mount({ states, now, config = {}, catalogue = realCatalogue() }) {
   const el = new EccoModeShell();
   live.add(el);
   el._now = () => now;
-  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'ECCO Intelligence', catalogue, page_size: 100, always: [], production: [], ...config });
+  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'ECCO Intelligence', catalogue, page_size: 100, always: [], production: [], allow_custom_cards: ['custom:stub-card'], ...config });
   el.hass = makeHass(states);
   el.connectedCallback();
   return el;
@@ -165,7 +165,7 @@ test('the real catalogue passes the card validator with no error, so no alert an
   assert.equal(VALID.catalogue.exceptions.length, CAT.exceptions.length);
   assert.equal(VALID.catalogue.sources.length, 17);
   assert.equal(VALID.catalogue.sources.reduce((n, s) => n + s.attributes.length, 0), 344);
-  assert.equal(VALID.catalogue.alerts.length, 15);
+  assert.equal(VALID.catalogue.alerts.length, 19, '15 status, quality and wiring alerts plus the four review-round alerts on the status entity');
 });
 
 test('every alert names a catalogued source entity, and every source has a group the catalogue defines', () => {
@@ -237,7 +237,9 @@ function triggers(a) {
   const w = a.when;
   if (w.unavailable === true) return [['state unavailable', (s) => { s[id].state = 'unavailable'; }], ['entity missing', (s) => { delete s[id]; }]];
   if (w.state_in) return w.state_in.map((v) => [`state ${v}`, (s) => { s[id].state = v; }]);
+  if (w.state_outside) return [['an unlisted state', (s) => { s[id].state = 'zz_not_listed'; }]];
   if (w.state_not_in) return [['an unlisted state', (s) => { s[id].state = 'zz_not_listed'; }]];
+  if (w.attribute && w.not_in) return [[`${w.attribute} = an unlisted value`, (s) => { s[id].attributes[w.attribute] = 'zz_not_listed'; }]];
   if (w.attribute) return w.in.map((v) => [`${w.attribute} = ${JSON.stringify(v)}`, (s) => { s[id].attributes[w.attribute] = v; }]);
   throw new Error(`unknown condition form for ${a.id}`);
 }
@@ -296,6 +298,9 @@ function documentedConditionIds(states) {
     let active = false;
     if (w.unavailable === true) active = !s || s.state === 'unavailable';
     else if (w.state_in) active = !!s && w.state_in.includes(s.state);
+    else if (w.state_outside) active = !!s && s.state !== 'unavailable' && s.state !== 'unknown' && !w.state_outside.includes(s.state);
+    else if (w.attribute && w.not_in) active = !!s && s.attributes[w.attribute] !== undefined && s.attributes[w.attribute] !== null
+      && !w.not_in.some((x) => x === s.attributes[w.attribute]);
     else if (w.attribute) active = !!s && s.attributes[w.attribute] !== undefined && s.attributes[w.attribute] !== null
       && w.in.some((x) => x === s.attributes[w.attribute] || String(x) === String(s.attributes[w.attribute]));
     else throw new Error(`the documented reading of ${a.id} is not written down in this test`);
@@ -312,6 +317,7 @@ const EXPECTED_ALERTS = {
   paused: ['status_paused'],
   'watchdog-stale': ['watchdog_off'],
   extras: [],
+  'contract-breach': ['mode_not_shadow'],
 };
 
 for (const name of NAMES) {
@@ -851,4 +857,109 @@ test('AC15 the live comparison: nothing present live is undeclared; the not-pres
 test('the ledger and the catalogue files are the ones the README and the example name', () => {
   assert.ok(readFileSync(realLedgerPath, 'utf8').includes('ecco-geek-ledger/1'));
   assert.ok(readFileSync(realCataloguePath, 'utf8').includes('ecco-geek-catalogue/1'));
+});
+
+// ===========================================================================================================================
+// Review round 1 ([r1]): the safety facts the package watchdog depends on are alerted by the status entity ITSELF
+// ===========================================================================================================================
+// In a real Home Assistant the package watchdog template turns OFF when the status says a mode other than SHADOW, applies_nothing is not
+// strictly true, the contract is not ecco-intel-entities/1, or the status word is not one of the contract's. The offline fixtures did not
+// model that coupling: with the watchdog still ON the strip said "No active alerts" and the Production summary said everything looked normal.
+const ST = 'sensor.ecco_intel_status';
+const WD = 'binary_sensor.ecco_intel_watchdog_fresh';
+const conditionIdsOf = (el) => stripOf(el).filter((n) => n.getAttribute('data-alert-kind') === 'condition')
+  .map((n) => `${n.getAttribute('data-severity')}:${n.getAttribute('data-alert-id')}`).sort();
+const setAttr = (name, value) => (s) => { s[ST].attributes[name] = value; };
+const setState = (value) => (s) => { s[ST].state = value; };
+
+const COUPLING = [
+  ['mode ASSISTED', setAttr('mode', 'ASSISTED'), ['critical:mode_not_shadow']],
+  ['mode AUTONOMOUS', setAttr('mode', 'AUTONOMOUS'), ['critical:mode_not_shadow']],
+  ['mode shadow in lower case', setAttr('mode', 'shadow'), ['critical:mode_not_shadow']],
+  ['mode an empty text', setAttr('mode', ''), ['critical:mode_not_shadow']],
+  ['applies_nothing 0', setAttr('applies_nothing', 0), ['critical:applies_nothing_not_true']],
+  ['applies_nothing the text no', setAttr('applies_nothing', 'no'), ['critical:applies_nothing_not_true']],
+  ['applies_nothing the text true (the watchdog needs the boolean)', setAttr('applies_nothing', 'true'), ['critical:applies_nothing_not_true']],
+  ['applies_nothing the text True', setAttr('applies_nothing', 'True'), ['critical:applies_nothing_not_true']],
+  ['applies_nothing an empty text', setAttr('applies_nothing', ''), ['critical:applies_nothing_not_true']],
+  ['applies_nothing false (one line, not two)', setAttr('applies_nothing', false), ['critical:applies_nothing_false']],
+  ['applies_nothing the text false (one line, not two)', setAttr('applies_nothing', 'false'), ['critical:applies_nothing_false']],
+  ['applies_nothing the text False (one line, not two)', setAttr('applies_nothing', 'False'), ['critical:applies_nothing_false']],
+  ['contract version 2', setAttr('contract_version', 'ecco-intel-entities/2'), ['critical:contract_mismatch']],
+  ['contract version an empty text', setAttr('contract_version', ''), ['critical:contract_mismatch']],
+  ['an unknown status word', setState('WEIRD'), ['warning:status_unrecognised']],
+  ['a status word in lower case', setState('ok'), ['warning:status_unrecognised']],
+  ['mode and contract both wrong', (s) => { setAttr('mode', 'ASSISTED')(s); setAttr('contract_version', 'x/9')(s); }, ['critical:contract_mismatch', 'critical:mode_not_shadow']],
+];
+
+for (const [label, mutate, expected] of COUPLING) {
+  test(`AC6 [r1] ${label}: with the watchdog still ON the strip says so in both modes (${expected.join(', ')})`, () => {
+    const f = fixture('healthy', mutate);
+    assert.equal(f.states[WD].state, 'on', 'the coupling case: the watchdog is still on in this fixture');
+    const el = mount({ states: f.states, now: f.now });
+    assert.deepEqual(conditionIdsOf(el), [...expected].sort());
+    const inProduction = stripSnapshot(el);
+    for (const id of expected) {
+      const node = stripOf(el).find((n) => `${n.getAttribute('data-severity')}:${n.getAttribute('data-alert-id')}` === id);
+      assert.ok(node.querySelector('svg'), 'an icon, not colour alone');
+      assert.match(textOf(node), /What to do:/);
+      if (id.startsWith('critical')) assert.equal(node.getAttribute('role'), 'alert');
+    }
+    const level = q(el, '[data-ecco-summary]').getAttribute('data-level');
+    assert.equal(level, expected.some((e) => e.startsWith('critical')) ? 'critical' : 'attention', 'the Production summary does not say everything looks normal');
+    assert.doesNotMatch(textOf(q(el, '[data-ecco-summary]')), /looks normal/);
+    geek(el);
+    assertStripVisible(el);
+    assert.deepEqual(stripSnapshot(el), inProduction);
+    production(el);
+    assert.deepEqual(stripSnapshot(el), inProduction);
+  });
+}
+
+test('AC6 [r1] the contract-breach fixture: the status is OK and the watchdog is on, yet the status says ASSISTED: a critical line names it in both modes', () => {
+  const f = fixture('contract-breach');
+  assert.equal(f.states[ST].state, 'OK');
+  assert.equal(f.states[WD].state, 'on');
+  assert.equal(f.states[ST].attributes.mode, 'ASSISTED');
+  const el = mount({ states: f.states, now: f.now });
+  assert.deepEqual(conditionIdsOf(el), ['critical:mode_not_shadow']);
+  const p = stripSnapshot(el);
+  geek(el);
+  assert.deepEqual(stripSnapshot(el), p);
+  assertStripVisible(el);
+  assert.equal(q(el, '[data-ecco-summary]').getAttribute('data-level'), 'critical');
+});
+
+test('AC6 [r1] the four review-round alerts are in the catalogue with the right severity, on the status entity, and the strict applies_nothing line never doubles the existing one', () => {
+  const by = Object.fromEntries(CAT.alerts.map((a) => [a.id, a]));
+  for (const [id, sev] of [['mode_not_shadow', 'critical'], ['applies_nothing_not_true', 'critical'], ['contract_mismatch', 'critical'], ['status_unrecognised', 'warning']]) {
+    assert.ok(by[id], id);
+    assert.equal(by[id].severity, sev, id);
+    assert.equal(by[id].entity_id, ST, id);
+  }
+  assert.deepEqual(by.mode_not_shadow.when, { attribute: 'mode', not_in: ['SHADOW'] });
+  assert.deepEqual(by.contract_mismatch.when, { attribute: 'contract_version', not_in: [CAT.contract] });
+  assert.deepEqual(by.status_unrecognised.when.state_outside.slice().sort(), ['BLOCKED', 'INSUFFICIENT_DATA', 'NO_ADVICE', 'OK', 'PAUSED', 'SELF_TEST_FAILED', 'STALE', 'STARTING']);
+  // the two applies_nothing alerts partition the values: no value fires both, and only boolean true fires neither
+  const both = [true, false, 'true', 'false', 'True', 'False', 0, 1, 'no', '', null].filter((v) => {
+    const ids = alertsOf('healthy', setAttr('applies_nothing', v)).map((a) => a.id);
+    return ids.includes('applies_nothing_false') && ids.includes('applies_nothing_not_true');
+  });
+  assert.deepEqual(both, []);
+  const neither = [true, false, 'true', 'false', 'True', 'False', 0, 1, 'no', ''].filter((v) => {
+    const ids = alertsOf('healthy', setAttr('applies_nothing', v)).map((a) => a.id);
+    return !ids.includes('applies_nothing_false') && !ids.includes('applies_nothing_not_true');
+  });
+  assert.deepEqual(neither, [true], 'only the boolean true raises neither');
+});
+
+test('AC6 [r1] with the status entity unavailable, unknown or missing the four new lines add nothing: the one line that says the integration is down stays alone', () => {
+  for (const how of ['unavailable', 'unknown', 'missing']) {
+    const f = fixture('healthy', (s) => { if (how === 'missing') delete s[ST]; else s[ST].state = how; });
+    const el = mount({ states: f.states, now: f.now });
+    const ids = stripOf(el).map((n) => n.getAttribute('data-alert-id'));
+    for (const id of ['mode_not_shadow', 'applies_nothing_not_true', 'contract_mismatch', 'status_unrecognised']) {
+      assert.ok(!ids.includes(id) && !ids.includes(`${id}:unverifiable`), `${id} (${how}): ${ids.join(', ')}`);
+    }
+  }
 });

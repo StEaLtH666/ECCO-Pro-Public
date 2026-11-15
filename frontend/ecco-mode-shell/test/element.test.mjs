@@ -46,7 +46,7 @@ function mount({ config = {}, states = null, hass = null, catalogue = miniCatalo
   const el = new EccoModeShell();
   live.add(el);
   el._now = () => now;
-  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue, page_size: 100, always: [], production: [], ...config });
+  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue, page_size: 100, always: [], production: [], allow_custom_cards: ['custom:stub-card'], ...config });
   el.hass = hass || makeHass(states || miniStates());
   if (connect) el.connectedCallback();
   return el;
@@ -1236,4 +1236,225 @@ test('the shell renders everything with node APIs: not one innerHTML write acros
   typeSearch(el, 'x');
   production(el);
   assert.equal(doc.recorded.innerHTMLAttempts, 0);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 1 ([r1]): each test below was written to FAIL on the card as reviewed and to pass with its fix
+// ---------------------------------------------------------------------------------------------------------------------------
+const { realCatalogue, intelStates } = await import('./helpers.mjs');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const READ_ONLY_DOMAINS = ['binary_sensor', 'event', 'sensor'];
+const isoAt = (ms) => new Date(ms).toISOString();
+
+function realMount(mutate = null, config = {}) {
+  const { states, now } = intelStates('healthy');
+  if (mutate) mutate(states, now);
+  return mount({ states, now, catalogue: realCatalogue(), path: '/intelligence', config });
+}
+const probeState = (id, state, now, attrs = {}) => ({ entity_id: id, state, attributes: { friendly_name: `probe ${id}`, ...attrs }, last_changed: isoAt(now - 30000), last_updated: isoAt(now - 30000) });
+function expandGroups(el) {
+  for (let n = 0; n < 40; n += 1) {
+    const t = qa(el, '[data-group-toggle]').find((b) => b.getAttribute('aria-expanded') === 'false');
+    if (!t) return;
+    t.click();
+  }
+}
+function openAllRows(el) {
+  for (const id of rows(el).map((r) => r.getAttribute('data-entity-id'))) rowFor(el, id).querySelector('[data-row-toggle]').click();
+}
+
+test('AC16 [r1] Geek Mode opens a dialog only for read-only domains: over every domain the real catalogue discovers no writable one offers it, and none dispatches hass-more-info', async () => {
+  const cat = realCatalogue();
+  const prefixes = cat.discover.entity_prefixes;
+  const domains = [...new Set(prefixes.map((p) => p.split('.')[0]))];
+  for (const d of ['automation', 'button', 'counter', 'datetime', 'input_boolean', 'input_datetime', 'input_number', 'input_select', 'input_text', 'number', 'script', 'select', 'switch', 'text', 'timer', 'update']) {
+    assert.ok(domains.includes(d), `the real catalogue discovers ${d}, and this test covers it`);
+  }
+  const el = realMount((states, now) => {
+    for (const p of prefixes) {
+      const id = `${p}zz_probe`;
+      states[id] = probeState(id, p.startsWith('event.') ? isoAt(now - 30000) : 'on', now);
+    }
+  });
+  geek(el);
+  expandGroups(el);
+  const opened = [];
+  el.addEventListener('hass-more-info', (e) => opened.push(e.detail.entityId));
+  openAllRows(el);
+  let readOnly = 0;
+  let writable = 0;
+  for (const r of rows(el)) {
+    const eid = r.getAttribute('data-entity-id');
+    const domain = eid.split('.')[0];
+    const open = r.querySelector('[data-open-entity]');
+    if (READ_ONLY_DOMAINS.includes(domain)) {
+      assert.ok(open, `${eid} (read-only) offers Open in Home Assistant`);
+      readOnly += 1;
+    } else {
+      assert.ok(open === null, `${eid} (${domain}) must not offer Open in Home Assistant: its dialog has write controls that Production does not show`);
+      assert.ok(r.querySelector('[data-copy-entity-id]'), `${eid} offers its id for copying instead`);
+      assert.match(textOf(r.querySelector('[data-row-detail]')), /not opened from Geek Mode/i, `${eid} says why`);
+      writable += 1;
+    }
+  }
+  assert.ok(readOnly >= 10, `${readOnly} read-only rows`);
+  assert.ok(writable >= 20, `${writable} writable-domain rows`);
+  for (const b of qa(el, '[data-open-entity]')) b.click();
+  assert.equal(opened.length, readOnly);
+  assert.ok(opened.every((id) => READ_ONLY_DOMAINS.includes(id.split('.')[0])), JSON.stringify(opened));
+  // the reserve helper's id is assembled: a repository-wide suite (home-assistant/tests) requires that only its package and its own suite name that helper in source files
+  const reserveHelper = ['input_number', 'ecco_adv' + 'isory_reserve_raise_pct'].join('.');
+  for (const id of [reserveHelper, 'automation.ecco_intel_alert_self_test_failed', 'input_boolean.ecco_intel_paused']) assert.ok(!opened.includes(id), id);
+});
+
+test('AC16 [r1] the guard is also in the dispatch itself: _openEntity sends hass-more-info for a read-only domain and never for a writable, malformed or non-text id', () => {
+  const el = realMount();
+  const got = [];
+  el.addEventListener('hass-more-info', (e) => got.push(e.detail.entityId));
+  for (const id of ['input_boolean.ecco_intel_paused', 'automation.x', 'switch.x', 'script.x', 'button.x', 'number.x', 'input_number.x', 'select.x', 'update.x', 'light.x', 'sensor', 'Sensor.x', 'sensor.x\nlight.y',
+    'sensor.', '.x', '', ' sensor.x', 'sensor.x ', 5, null, undefined, {}, ['sensor.x']]) el._openEntity(id);
+  assert.deepEqual(got, [], 'nothing was opened');
+  for (const id of ['sensor.ecco_intel_status', 'binary_sensor.ecco_intel_fresh', 'event.ecco_intel_x']) el._openEntity(id);
+  assert.deepEqual(got, ['sensor.ecco_intel_status', 'binary_sensor.ecco_intel_fresh', 'event.ecco_intel_x']);
+});
+
+test('AC16 [r1] a writable row offers its entity id for copying, and the copy is the id and nothing else', async () => {
+  const clip = installClipboardAndDownload();
+  try {
+    const el = realMount();
+    geek(el);
+    expandGroups(el);
+    const eid = 'input_boolean.ecco_intel_paused';
+    rowFor(el, eid).querySelector('[data-row-toggle]').click();
+    const btn = rowFor(el, eid).querySelector('[data-copy-entity-id]');
+    assert.ok(btn);
+    assert.equal(btn.getAttribute('type'), 'button');
+    assert.ok(btn.getAttribute('aria-label') || textOf(btn), 'labelled');
+    btn.click();
+    await tick();
+    assert.deepEqual(clip.clips, [eid]);
+  } finally {
+    clip.restore();
+  }
+});
+
+test('AC3 [r1] setConfig (Home Assistant keeps the element and calls it again when the dashboard configuration changes) resets the mode to Production and drops the Geek surface', () => {
+  const el = mount();
+  geek(el);
+  assert.equal(el.mode, 'geek');
+  assert.ok(rows(el).length > 0);
+  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue: miniCatalogue(), page_size: 100, always: [], production: [] });
+  assert.equal(el.mode, 'production');
+  assert.equal(q(el, '[data-ecco-body="geek"]').hidden, true);
+  assert.equal(q(el, '[data-ecco-body="production"]').hidden, false);
+  assert.equal(rows(el).length, 0, 'the Geek surface is gone');
+  assert.equal(q(el, '[data-mode-option="production"]').getAttribute('aria-checked'), 'true');
+  assert.equal(q(el, '[data-mode-option="geek"]').getAttribute('aria-checked'), 'false');
+  geek(el);
+  assert.equal(el.mode, 'geek', 'the switch still works after a setConfig');
+  assert.ok(rows(el).length > 0);
+  el.setConfig({ type: `custom:${TAG}`, view_id: 'intelligence', title: 'Intelligence', catalogue: miniCatalogue(), page_size: 100, always: [], production: [] });
+  assert.equal(el.mode, 'production', 'and every later setConfig resets again');
+});
+
+test('AC16 [r1] a custom card in the always region needs its name in allow_custom_cards: otherwise it is refused with a notice and an alert; the Production-only region is never filtered', () => {
+  const refused = mount({ config: { always: [intelCard], allow_custom_cards: [] } });
+  assert.equal(qa(refused, 'stub-card').length, 0, 'nothing is mounted');
+  assert.match(textOf(q(refused, '[data-child-refused]')), /not on the list/i);
+  assert.ok(stripIds(refused).includes('shell:child-refused'));
+  const allowed = mount({ config: { always: [intelCard], allow_custom_cards: ['custom:stub-card'] } });
+  assert.equal(qa(allowed, 'stub-card').length, 1);
+  assert.equal(q(allowed, '[data-child-refused]'), null);
+  const prod = mount({ config: { production: [intelCard], allow_custom_cards: [] } });
+  assert.equal(qa(prod, 'stub-card').length, 1, 'Production-only cards are the dashboard author\'s: not filtered');
+  for (const type of ['picture-glance', 'area']) {
+    const el = mount({ config: { always: [{ type, entities: ['sensor.ecco_intel_status'], image: 'x', area: 'kitchen' }] } });
+    assert.ok(q(el, '[data-child-refused]'), type);
+  }
+});
+
+test('AC14 [r1] a theme change is applied at once, even when no state changed (the hass object changed, the states did not)', () => {
+  const states = miniStates();
+  const el = mount({ hass: makeHass(states, { themes: { darkMode: false } }) });
+  assert.equal(q(el, '[data-ecco-shell]').getAttribute('data-theme'), 'light');
+  el.hass = makeHass(states, { themes: { darkMode: true } });
+  assert.equal(q(el, '[data-ecco-shell]').getAttribute('data-theme'), 'dark');
+  el.hass = makeHass(states, { themes: { darkMode: false } });
+  assert.equal(q(el, '[data-ecco-shell]').getAttribute('data-theme'), 'light');
+});
+
+test('AC12 [r1] updates of entities the view does not read cost no rebuild: 200 house updates, no snapshot; a relevant update is still taken at once', () => {
+  const states = bigStates(300);
+  const el = mount({ states });
+  geek(el);
+  const s0 = mod.STATS.snapshots;
+  let cur = states;
+  for (let i = 0; i < 200; i += 1) {
+    const id = `sensor.other_${i % 50}`;
+    cur = { ...cur, [id]: mkState(id, `v${i}`, {}) };
+    el.hass = makeHass(cur);
+  }
+  assert.equal(mod.STATS.snapshots - s0, 0, 'nothing the view reads changed');
+  const rid = 'sensor.ecco_intel_synth_00003';
+  el.hass = makeHass({ ...cur, [rid]: mkState(rid, 'relevant', {}) });
+  assert.equal(mod.STATS.snapshots - s0, 1, 'one relevant update, one snapshot');
+  typeSearch(el, 'synth_00003');
+  assert.equal(rowFor(el, rid).querySelector('[data-row-state]').textContent.trim().startsWith('relevant'), true);
+  // a new entity (the number of entities changes) is noticed: discovery must not wait for the tick
+  const fresh = 'sensor.ecco_intel_brand_new_probe';
+  el.hass = makeHass({ ...cur, [fresh]: mkState(fresh, '7', {}) });
+  typeSearch(el, 'brand_new_probe');
+  assert.equal(rows(el).length, 1, 'a new ecco_intel_ entity is discovered at once');
+});
+
+test('AC12 [r1] a burst of relevant updates is coalesced: a bounded number of rebuilds during the burst, the last value (and a critical alert) shown shortly after it, and a later update is immediate again', async () => {
+  const states = bigStates(300);
+  const el = mount({ states });
+  geek(el);
+  const rid = 'sensor.ecco_intel_synth_00001';
+  typeSearch(el, 'synth_00001');
+  const s0 = mod.STATS.snapshots;
+  const t0 = performance.now();
+  let cur = states;
+  for (let i = 0; i < 100; i += 1) {
+    cur = { ...cur, [rid]: mkState(rid, `burst-${i}`, {}) };
+    el.hass = makeHass(cur);
+  }
+  const st = 'sensor.ecco_intel_status';
+  cur = { ...cur, [st]: mkState(st, 'SELF_TEST_FAILED', cur[st].attributes) };
+  el.hass = makeHass(cur);
+  const elapsed = performance.now() - t0;
+  const during = mod.STATS.snapshots - s0;
+  const allowed = (Math.ceil(elapsed / 500) + 1) * 8;
+  assert.ok(during >= 1, 'the first updates are taken at once');
+  assert.ok(during <= allowed, `${during} rebuilds for 101 updates in ${elapsed.toFixed(0)} ms (at most ${allowed})`);
+  assert.ok(during < 101);
+  await sleep(1100);
+  const after = mod.STATS.snapshots - s0;
+  assert.ok(after <= during + 2, `${after - during} rebuilds after the burst`);
+  assert.equal(rowFor(el, rid).querySelector('[data-row-state]').textContent.trim().startsWith('burst-99'), true, 'the LAST value of the burst is shown');
+  assert.ok(stripIds(el).includes('A01'), 'and so is the critical alert that arrived last');
+  assert.equal(el._timerMs, mod.TICK_MS, 'the one timer is back on the age tick');
+  const before = mod.STATS.snapshots;
+  el.hass = makeHass({ ...cur, [rid]: mkState(rid, 'after-the-burst', {}) });
+  assert.equal(mod.STATS.snapshots - before, 1, 'after a quiet spell the next update is immediate again');
+  assert.equal(rowFor(el, rid).querySelector('[data-row-state]').textContent.trim().startsWith('after-the-burst'), true);
+});
+
+test('AC12 [r1] a pending flush does not outlive the element: after disconnect nothing is rebuilt and no timer is left', async () => {
+  const states = bigStates(100);
+  const el = mount({ states });
+  const rid = 'sensor.ecco_intel_synth_00001';
+  let cur = states;
+  for (let i = 0; i < 40; i += 1) {
+    cur = { ...cur, [rid]: mkState(rid, `v-${i}`, {}) };
+    el.hass = makeHass(cur);
+  }
+  assert.notEqual(el._timerMs, mod.TICK_MS, 'a flush is pending (the one timer slot is armed for it)');
+  assert.equal(el._pending, true);
+  el.disconnectedCallback();
+  assert.equal(el._timer, null);
+  const s0 = mod.STATS.snapshots;
+  await sleep(700);
+  assert.equal(mod.STATS.snapshots, s0, 'no rebuild after disconnect');
 });

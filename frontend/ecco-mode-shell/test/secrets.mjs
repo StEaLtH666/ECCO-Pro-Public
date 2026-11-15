@@ -27,6 +27,18 @@ export const SECRET_VALUES = Object.freeze([
   { label: 'private host', value: j('homeassistant', '.', 'local') },
   { label: 'key block', value: j('-----BEGIN ', 'PRIVATE', ' KEY-----') },
   { label: 'coordinates', value: '12.34567, -45.67891' },
+  // ---- review round 1: edge shapes (every one is assembled from fragments, so no committed file holds a secret-shaped text)
+  { label: 'json credential pair (double quotes)', value: j('{"to', 'ken":"abc', '123def"}') },
+  { label: 'python credential pair (single quotes)', value: j("{'api_", "key': 'abc", "123def'}") },
+  { label: 'coordinates separated by words', value: j('lat ', '51.5074', ' lon ', '-0.1278') },
+  { label: 'latitude word and one number', value: j('latitude: ', '51.5074') },
+  { label: 'jwt split by a zero-width character', value: j('eyJhbGciOiJI', '\u200b', 'UzI1NiJ9.', 'eyJzdWIiOiJ0ZXN0LXVzZXIifQ.', 'c2lnbmF0dXJlLXNpZw') },
+  { label: 'password split by a zero-width character', value: j('pass', '\u200b', 'word', '=', 'correcthorse') },
+  { label: 'password with a homoglyph letter', value: j('p', '\u0430', 'ssword', '=', 'correcthorse') },
+  { label: 'token with a Greek omicron', value: j('t', '\u03bf', 'ken', ': ', 'abc123def456') },
+  { label: 'internal host name without a suffix', value: j('ws', ':', '//', 'homeassistant', ':', '8123', '/api/websocket') },
+  { label: 'internal host name, bare', value: j('http', ':', '//', 'nas', '/share') },
+  { label: 'coordinates with hemisphere letters', value: j('home ', '52.1', ' N ', '0.12', ' W') },
 ]);
 
 /** Key names that must withhold their value whatever it looks like; each value is a unique marker. */
@@ -35,6 +47,8 @@ export const SECRET_KEYS = Object.freeze([
   'private_key', 'webhook_url', 'cookie', 'session_id', 'access_token', 'client_secret', 'refresh_token', 'x-api-key',
   'latitude', 'longitude', 'lat', 'lon', 'location', 'gps', 'ip_address', 'mac_address', 'email', 'serial_number', 'mpan',
   'ssid', 'connection_string', 'Authorization', 'SessionToken',
+  // ---- review round 1: a qualifier plus a key word, and short values
+  'encryption_key', 'ssh_key', 'wifi_key', 'license_key', 'pin', 'psk', 'encryptionKey', 'wifi-psk', 'pin_code',
 ]);
 
 export const KEY_MARKER = (k) => `zq7marker-${k.toLowerCase().replace(/[^a-z0-9]/g, '')}`;

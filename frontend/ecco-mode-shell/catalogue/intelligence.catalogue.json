@@ -663,6 +663,39 @@
    "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."
   },
   {
+   "id": "applies_nothing_not_true",
+   "severity": "critical",
+   "entity_id": "sensor.ecco_intel_status",
+   "when": {
+    "attribute": "applies_nothing",
+    "not_in": [true, false, "false", "False"]
+   },
+   "text": "ECCO Intelligence does not state that it applies nothing. This release is advice only and must always say so.",
+   "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."
+  },
+  {
+   "id": "contract_mismatch",
+   "severity": "critical",
+   "entity_id": "sensor.ecco_intel_status",
+   "when": {
+    "attribute": "contract_version",
+    "not_in": ["ecco-intel-entities/1"]
+   },
+   "text": "ECCO Intelligence publishes a data contract this view does not know, so its figures cannot be trusted here.",
+   "action": "Do not rely on the figures shown. Update this dashboard and the ECCO Intelligence package to the same release as the integration, then reload."
+  },
+  {
+   "id": "mode_not_shadow",
+   "severity": "critical",
+   "entity_id": "sensor.ecco_intel_status",
+   "when": {
+    "attribute": "mode",
+    "not_in": ["SHADOW"]
+   },
+   "text": "ECCO Intelligence reports a mode other than SHADOW. This release is advice only and must never run in any other mode.",
+   "action": "Do not rely on its output. Disable the ECCO Intelligence integration and report this."
+  },
+  {
    "id": "status_self_test_failed",
    "severity": "critical",
    "entity_id": "sensor.ecco_intel_status",
@@ -722,6 +755,16 @@
    },
    "text": "The last ECCO Intelligence result is out of date, so no advice figures are shown.",
    "action": "Check that the ECCO Intelligence integration is loaded (Settings, Devices and services). Nothing on your system was changed."
+  },
+  {
+   "id": "status_unrecognised",
+   "severity": "warning",
+   "entity_id": "sensor.ecco_intel_status",
+   "when": {
+    "state_outside": ["BLOCKED", "INSUFFICIENT_DATA", "NO_ADVICE", "OK", "PAUSED", "SELF_TEST_FAILED", "STALE", "STARTING"]
+   },
+   "text": "ECCO Intelligence published a status word this view does not recognise.",
+   "action": "Do not rely on the figures shown. Check that this dashboard and the integration are the same release."
   },
   {
    "id": "watchdog_off",

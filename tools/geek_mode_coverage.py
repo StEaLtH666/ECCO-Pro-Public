@@ -52,7 +52,7 @@ LEDGER_JSON_REL = "frontend/ecco-mode-shell/catalogue/intelligence.ledger.json"
 LEDGER_MD_REL = "docs/product-ui/GEEK_MODE_COVERAGE_LEDGER_intelligence.md"
 SHAPE_REL = "frontend/ecco-mode-shell/catalogue/live-shape.intelligence.json"
 FIXTURE_DIR_REL = "frontend/ecco-mode-shell/test/fixtures"
-FIXTURE_NAMES = ("healthy", "mixed", "stale", "unavailable", "self-test-failed", "paused", "watchdog-stale", "extras")
+FIXTURE_NAMES = ("healthy", "mixed", "stale", "unavailable", "self-test-failed", "paused", "watchdog-stale", "extras", "contract-breach")
 
 PRIORITIES = ("headline", "normal", "obscure")
 ORIGINS = ("integration", "package", "dashboard")
@@ -663,6 +663,16 @@ def build_catalogue(u: Universe, T) -> dict:
     if set(T.DQ_ALERTS) & set(T.NO_ALERT_DQ) or dq_ids != set(u.dq_values):
         problems.append(f"the data-quality states are {sorted(u.dq_values)} but the alert texts cover {sorted(dq_ids)}")
     ent_of = {e.key: e.entity_id for e in u.entities}
+
+    def resolve_when(when: dict) -> dict:
+        """The texts file carries two placeholders (the contract version and the list of statuses); the values come from the code."""
+        out = json.loads(json.dumps(when))
+        if out.get("state_outside") == ["@statuses"]:
+            out["state_outside"] = sorted(u.status_values)
+        if out.get("not_in") == ["@contract_version"]:
+            out["not_in"] = [u.contract_version]
+        return out
+
     for status, (sev, text, action) in sorted(T.STATUS_ALERTS.items()):
         alerts.append({"id": f"status_{status.lower()}", "severity": sev, "entity_id": ent_of["status"],
                        "when": {"state_in": [status]}, "text": text, "action": action})
@@ -673,7 +683,7 @@ def build_catalogue(u: Universe, T) -> dict:
         if row["entity"] not in ent_of:
             problems.append(f"alert {row['id']} names the unknown entity key {row['entity']!r}")
             continue
-        alerts.append({"id": row["id"], "severity": row["severity"], "entity_id": ent_of[row["entity"]], "when": row["when"],
+        alerts.append({"id": row["id"], "severity": row["severity"], "entity_id": ent_of[row["entity"]], "when": resolve_when(row["when"]),
                        "text": row["text"], "action": row["action"]})
     sev_rank = {s: i for i, s in enumerate(SEVERITIES)}
     alerts.sort(key=lambda a: (sev_rank[a["severity"]], a["id"]))
@@ -911,20 +921,22 @@ def validate_catalogue(cat, strict: bool = True) -> list[str]:
                 errs.append(f"{w}.when: must be an object")
             else:
                 shape = tuple(sorted(when))
-                if shape in (("state_in",), ("state_not_in",)):
+                if shape in (("state_in",), ("state_not_in",), ("state_outside",)):
                     v = when[shape[0]]
                     if not isinstance(v, list) or not v or not all(isinstance(x, str) for x in v):
                         errs.append(f"{w}.when.{shape[0]}: a non-empty list of texts")
                 elif shape == ("unavailable",):
                     if when["unavailable"] is not True:
                         errs.append(f"{w}.when.unavailable: must be true")
-                elif shape == ("attribute", "in"):
+                elif shape in (("attribute", "in"), ("attribute", "not_in")):
                     if not isinstance(when["attribute"], str) or not when["attribute"]:
                         errs.append(f"{w}.when.attribute: must be an attribute name")
-                    if not isinstance(when["in"], list) or not when["in"] or not all(isinstance(x, (str, bool, int, float)) for x in when["in"]):
-                        errs.append(f"{w}.when.in: a non-empty list of plain values")
+                    listed = when[shape[1]]
+                    if not isinstance(listed, list) or not listed or not all(isinstance(x, (str, bool, int, float)) for x in listed):
+                        errs.append(f"{w}.when.{shape[1]}: a non-empty list of plain values")
                 else:
-                    errs.append(f"{w}.when: must be exactly one of {{state_in}}, {{state_not_in}}, {{unavailable: true}}, {{attribute, in}}")
+                    errs.append(f"{w}.when: must be exactly one of {{state_in}}, {{state_not_in}}, {{state_outside}}, {{unavailable: true}}, "
+                                f"{{attribute, in}}, {{attribute, not_in}}")
     exc_ids: set = set()
     if not isinstance(cat.get("exceptions"), list):
         errs.append("catalogue.exceptions: must be a list")

@@ -145,6 +145,13 @@ for name, states in fx.items():
     undeclared = [(e, a) for e, r in states.items() if e in by_eid for a in r["attributes"] if a not in declared[e]]
     check(f"{name}: no entity carries an attribute that the catalogue does not declare", not undeclared, str(undeclared[:3]))
     check(f"{name}: every one of the 17 catalogued sources is present", set(by_eid) <= set(states) and len(states) == 17, str(sorted(set(by_eid) - set(states))))
+cb = fx["contract-breach"]
+S = ac.ENTITY_IDS["status"]
+check("[r1] contract-breach: the healthy fixture with EXACTLY one change, the status entity's mode, which says ASSISTED; the status is still OK and the watchdog still on",
+      {e: r for e, r in cb.items() if e != S} == {e: r for e, r in fx["healthy"].items() if e != S}
+      and {k: v for k, v in cb[S]["attributes"].items() if k != "mode"} == {k: v for k, v in fx["healthy"][S]["attributes"].items() if k != "mode"}
+      and cb[S]["attributes"]["mode"] == "ASSISTED" and cb[S]["state"] == "OK" and cb[ac.ENTITY_IDS["watchdog_fresh"]]["state"] == "on"
+      and meta["fixtures"]["contract-breach"]["status"] == "OK" and "ASSISTED" in meta["fixtures"]["contract-breach"]["what"])
 ex = fx["extras"]
 check("extras: the ONLY undeclared attribute on a catalogued entity is the deliberate status.zz_future_attribute",
       [(e, a) for e, r in ex.items() if e in by_eid for a in r["attributes"] if a not in declared[e]] == [("sensor.ecco_intel_status", "zz_future_attribute")])

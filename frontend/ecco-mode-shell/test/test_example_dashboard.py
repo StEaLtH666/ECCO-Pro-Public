@@ -97,6 +97,10 @@ def entity_ids_used(cards) -> set[str]:
 
 
 SAFE_ACTIONS = {"none", "more-info", "navigate"}
+# the card types the shell lets into a Geek-visible region (mirror of ALLOWED_CARD_TYPES and the default custom cards in ecco-mode-shell.js)
+ALLOWED_CARD_TYPES = {"markdown", "entities", "glance", "history-graph", "statistics-graph", "sensor", "gauge", "entity", "heading", "vertical-stack",
+                      "horizontal-stack", "grid", "conditional", "tile"}
+DEFAULT_CUSTOM_CARDS = {"custom:ecco-intelligence-card"}
 WRITE_TYPES = {"button", "entity-button", "light", "thermostat", "humidifier", "media-control", "alarm-panel", "shopping-list", "todo-list", "iframe", "webpage"}
 WRITABLE_DOMAINS = {"switch", "light", "input_boolean", "fan", "cover", "lock", "climate", "automation", "script", "scene", "button", "input_button", "select",
                     "input_select", "number", "input_number", "input_datetime", "input_text", "text", "humidifier", "valve", "vacuum", "water_heater",
@@ -156,6 +160,12 @@ def main() -> int:
     check("no write finding in always", findings == [], "; ".join(findings))
     check("the Intelligence card's configuration has no action of any kind", "action" not in repr(shell["always"][0]).replace("tap_action", ""))
     check("the negative control: the pause tile WOULD be refused in always", write_findings([tile]) != [])
+    types = [c.get("type") for c in shell["always"]]
+    check("every card type in always is on the shell's allowlist (a type the shell does not know is refused, so the example must not use one)",
+          all(t in ALLOWED_CARD_TYPES or t in DEFAULT_CUSTOM_CARDS for t in types), str(types))
+    check("the example needs no allow_custom_cards: its one custom card is on the default list", "allow_custom_cards" not in shell and "custom:ecco-intelligence-card" in types)
+    check("the negative control: a picture-glance, an area and a custom button card are not on the allowlist",
+          not any(t in ALLOWED_CARD_TYPES or t in DEFAULT_CUSTOM_CARDS for t in ("picture-glance", "area", "custom:button-card")))
 
     print("[4] the only write action is the existing pause tile's toggle, in production")
     check("the pause tile toggles input_boolean.ecco_intel_paused",

@@ -163,3 +163,154 @@ test('the folder: no private layout, address, key block or personal identifier i
     assert.doesNotMatch(t, /[A-Za-z]:\\Users\\|\/Users\/[A-Za-z]/, `${f}: workstation path`);
   }
 });
+
+// ===========================================================================================================================
+// Review round 1 ([r1])
+// ===========================================================================================================================
+// A reviewer mutant added `.shell[data-mode=geek] .alerts{display:none}` to the stylesheet and no test failed, because every AC6 test
+// looked at the hidden ATTRIBUTE and the DOM position, never at the stylesheet. These tests read the stylesheet itself.
+const { STYLE } = await import(cardUrl);
+
+/** A small CSS reader: every style rule as { selector, at, decls: [[property, value]] }, nested at-rules (media, container, keyframes) included. */
+function cssRules(css, at = []) {
+  const out = [];
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf('{', i);
+    if (open === -1) break;
+    let depth = 1;
+    let j = open + 1;
+    while (j < css.length && depth > 0) {
+      if (css[j] === '{') depth += 1;
+      else if (css[j] === '}') depth -= 1;
+      j += 1;
+    }
+    const prelude = css.slice(i, open).replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    const body = css.slice(open + 1, j - 1);
+    if (prelude.startsWith('@') || body.includes('{')) out.push(...cssRules(body, prelude.startsWith('@') ? [...at, prelude] : at));
+    else {
+      const decls = body.split(';').map((d) => d.trim()).filter(Boolean).map((d) => {
+        const k = d.indexOf(':');
+        return [d.slice(0, k).trim().toLowerCase(), d.slice(k + 1).replace(/!important/i, '').replace(/\s+/g, '').toLowerCase()];
+      });
+      out.push({ selector: prelude.replace(/\s+/g, ' '), at, decls });
+    }
+    i = j;
+  }
+  return out;
+}
+
+/** True when one declaration hides, collapses, clips, dims to nothing or moves off screen whatever it is applied to. */
+function hidingDeclaration(prop, v) {
+  const num = (x) => Number.parseFloat(x);
+  if (prop === 'display') return v === 'none';
+  if (prop === 'visibility') return v === 'hidden' || v === 'collapse';
+  if (prop === 'content-visibility') return v === 'hidden';
+  if (prop === 'opacity') return num(v) <= 0.1;
+  if (prop === 'font-size') return num(v) === 0;
+  if (['width', 'height', 'max-width', 'max-height'].includes(prop)) return /^0(px|em|rem|%|vh|vw)?$/.test(v) || (num(v) <= 1 && /^(\d+(\.\d+)?)px$/.test(v));
+  if (prop === 'clip' || prop === 'clip-path') return v !== 'none' && v !== 'auto';
+  if (prop === 'transform') return /scale\(0\)|scale\(0,|scale3d\(0/.test(v);
+  if (['left', 'right', 'top', 'bottom', 'text-indent'].includes(prop)) return /^-\d{3,}/.test(v);
+  if (prop === 'color' || prop === '-webkit-text-fill-color') return v === 'transparent';
+  return false;
+}
+
+const ALERT_TOKEN = /\.alerts?\b|data-ecco-alert-strip|data-alert|role=["']?alert/;
+const MODE_TOKEN = /data-mode|data-ecco-body|data-ecco-mode|data-geek|data-production/;
+/** The only selectors that may name a mode: the switch thumb slides to the Geek side. Every one is a purely visual flourish of the switch. */
+const MODE_SELECTORS = new Set(['.switch[data-mode="geek"] .thumb']);
+/** The only selector allowed to hide anything: the standard [hidden] attribute rule. */
+const HIDING_SELECTORS = new Set(['[hidden]']);
+
+/** Every way a stylesheet could hide the alert strip (or anything else) in a mode. [] when it cannot. */
+function cssViolations(css) {
+  const bad = [];
+  for (const r of cssRules(css)) {
+    const sels = r.selector.split(',').map((s) => s.trim());
+    const hides = r.decls.filter(([p, v]) => hidingDeclaration(p, v)).map(([p, v]) => `${p}:${v}`);
+    for (const s of sels) {
+      if (MODE_TOKEN.test(s) && !MODE_SELECTORS.has(s)) bad.push(`mode-dependent selector: ${s}`);
+      if (ALERT_TOKEN.test(s) && hides.length) bad.push(`hiding declaration on the alert strip: ${s} { ${hides.join('; ')} }`);
+      if (hides.length && !HIDING_SELECTORS.has(s)) bad.push(`hiding declaration outside [hidden]: ${s} { ${hides.join('; ')} }`);
+    }
+  }
+  return [...new Set(bad)];
+}
+
+test('AC6 [r1] the stylesheet cannot hide the alert strip in either mode: no mode-dependent selector except the switch thumb, no hiding declaration except the [hidden] rule', () => {
+  const rules = cssRules(STYLE);
+  assert.ok(rules.length > 120, `the reader found ${rules.length} rules`);
+  assert.ok(rules.some((r) => r.selector === '.alerts') && rules.some((r) => r.selector === '.alert'), 'the reader sees the strip rules');
+  assert.ok(rules.some((r) => r.selector === '[hidden]' && r.decls.some(([p, v]) => p === 'display' && v === 'none')), 'and the [hidden] rule');
+  assert.ok(rules.some((r) => r.selector === '.switch[data-mode="geek"] .thumb'), 'and the one mode selector');
+  assert.deepEqual(cssViolations(STYLE), []);
+  // exactly the declared mode selectors and nothing else name a mode
+  const named = [...new Set(rules.flatMap((r) => r.selector.split(',').map((s) => s.trim())).filter((s) => MODE_TOKEN.test(s)))];
+  assert.deepEqual(named, ['.switch[data-mode="geek"] .thumb']);
+});
+
+test('AC6 [r1] the stylesheet reader has teeth: each way of hiding the strip, in either mode, is reported (negative controls)', () => {
+  const geek = '.shell[data-mode="geek"]';
+  const evil = [
+    `${geek} .alerts{display:none}`,
+    `${geek} .alerts{visibility:hidden}`,
+    `${geek} [data-ecco-alert-strip]{opacity:0}`,
+    `${geek} .alert{height:0;overflow:hidden}`,
+    `${geek} .alerts{clip-path:inset(100%)}`,
+    `${geek} .alerts{position:absolute;left:-9999px}`,
+    `${geek} .alerts{font-size:0}`,
+    `${geek} .alerts{color:transparent}`,
+    `${geek} .alerts{transform:scale(0)}`,
+    `[data-ecco-body="geek"] ~ .alerts{display:none}`,
+    `.shell:has([data-ecco-body="geek"]:not([hidden])) .alerts{display:none}`,
+    `.shell[data-mode="geek"]{display:none}`,
+    `.alerts{display:none}`,
+    `.alert{opacity:0}`,
+    `.alerts{max-height:0}`,
+    `@media (min-width:1px){.alerts{display:none}}`,
+    `@container (max-width:9999px){${geek} .alerts{display:none}}`,
+    `@media (prefers-color-scheme: dark){.alerts{visibility:hidden}}`,
+    `.shell[data-theme="dark"] .alerts{display:none}`,
+    `.alerts[hidden]{display:none}`,
+    `[data-ecco-alert-strip]{display:none!important}`,
+    `.alerts{content-visibility:hidden}`,
+    `.alerts, .other{display:none}`,
+    `.x{width:0} ${geek} .alerts{display:none}`,
+  ];
+  for (const css of evil) assert.notDeepEqual(cssViolations(css), [], `not caught: ${css}`);
+  // a hostile rule appended to the real stylesheet is caught too (the reviewer's own mutant)
+  for (const css of evil) assert.notDeepEqual(cssViolations(`${STYLE}\n${css}`), [], `not caught when appended: ${css}`);
+  // harmless rules pass
+  for (const css of ['.switch[data-mode="geek"] .thumb{transform:translateX(100%)}', '[hidden]{display:none!important}', '.alert{display:grid;border:1px solid red}', '.btn:disabled{opacity:.55}',
+    '@media (prefers-reduced-motion: reduce){*{animation:none!important}}', '.alerts{display:grid;gap:8px;min-width:0}', '.alert.quiet{border-left-color:var(--ecco-live)}', '.shell[data-theme="dark"]{--x:1}']) {
+    assert.deepEqual(cssViolations(css), [], css);
+  }
+});
+
+test('AC6 [r1] the alert strip rules never mention a mode, a body or a hidden state, and the strip has no attribute that could hide it', () => {
+  assert.doesNotMatch(src, /ui\.strip\.hidden|strip\.setAttribute\('hidden'|strip\.style\./);
+  assert.doesNotMatch(src, /\.alerts[^{]*\[hidden\]/);
+  const strip = cssRules(STYLE).filter((r) => ALERT_TOKEN.test(r.selector));
+  assert.ok(strip.length >= 8);
+  for (const r of strip) assert.ok(!MODE_TOKEN.test(r.selector), r.selector);
+});
+
+test('AC16 [r1] opening an entity: one guard function decides, and it guards both the row control and the dispatch', async () => {
+  const mod = await import(cardUrl);
+  assert.equal(typeof mod.canOpenMoreInfo, 'function');
+  assert.deepEqual([...mod.MORE_INFO_DOMAINS].sort(), ['binary_sensor', 'event', 'sensor']);
+  assert.match(code, /_openEntity\(entityId\) \{\s*if \(!canOpenMoreInfo\(entityId\)\) return;/);
+  assert.ok((code.match(/\bcanOpenMoreInfo\(/g) || []).length >= 3, 'definition, the dispatch guard and the row control');
+});
+
+test('AC3 [r1] setConfig resets the mode first (Home Assistant keeps the element when the dashboard configuration changes)', () => {
+  assert.match(code, /setConfig\(config\) \{\s*this\._ctl\.reset\(\);/);
+});
+
+test('AC12 [r1] the update pump: one timer slot, one setInterval and one clearInterval, started and stopped only through the two slot functions', () => {
+  assert.match(code, /_startTimer\(ms\) \{[\s\S]*?setInterval\(/);
+  assert.match(code, /_stopTimer\(\) \{[\s\S]*?clearInterval\(/);
+  assert.equal((code.match(/\._startTimer\(/g) || []).length >= 2, true);
+  assert.doesNotMatch(code, /\bsetTimeout\s*\(/);
+});

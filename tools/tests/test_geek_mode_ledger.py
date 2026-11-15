@@ -205,8 +205,8 @@ check("the richest fixture (healthy) carries every attribute the live entities c
           for k, n in (("status", "tariff"), ("status", "value"), ("status", "plan"), ("charge_target", "engine_comparison"), ("pv_tomorrow", "advice"))))
 check("the non-OK advice shape is exercised by the stale, paused and self-test-failed fixtures",
       {"stale", "paused", "self-test-failed"} <= set(rows["intel.charge_target#advice.status"]["seen_in"]))
-check("the OK advice keys of the export event are exercised only where the item is OK (healthy, watchdog-stale, extras)",
-      set(rows["intel.export_event#advice.export_kwh"]["seen_in"]) == {"healthy", "watchdog-stale", "extras"})
+check("the OK advice keys of the export event are exercised only where the item is OK (healthy, watchdog-stale, extras, contract-breach: the last is the healthy result with one changed attribute)",
+      set(rows["intel.export_event#advice.export_kwh"]["seen_in"]) == {"healthy", "watchdog-stale", "extras", "contract-breach"})
 check("last_good is exercised by the stale fixture only (history under a null-rule status)", rows["intel.status#last_good.values"]["seen_in"] == ["stale"])
 check("a row id is `<source id>` or `<source id>#<attribute name>` (the rule the card's coverage test uses)",
       all(r["id"] == (r["id"].split("#")[0] if r["kind"] == "source" else f"{r['id'].split('#')[0]}#{r['path']}") for r in led["rows"]))
