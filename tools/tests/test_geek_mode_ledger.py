@@ -26,7 +26,18 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import ROOT, check, cleanup, copy_outputs, finish, run_tool, scratch_dir  # noqa: E402
+from _geek_scratch import ROOT, cleanup, copy_outputs, run_tool, scratch_dir  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
 
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))
@@ -211,4 +222,10 @@ check("last_good is exercised by the stale fixture only (history under a null-ru
 check("a row id is `<source id>` or `<source id>#<attribute name>` (the rule the card's coverage test uses)",
       all(r["id"] == (r["id"].split("#")[0] if r["kind"] == "source" else f"{r['id'].split('#')[0]}#{r['path']}") for r in led["rows"]))
 
-finish()
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for f in FAILURES:
+        print(f"  - {f}")
+    sys.exit(1)
+print("all checks passed")

@@ -25,7 +25,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import ROOT, check, finish, run_tool  # noqa: E402
+from _geek_scratch import ROOT, run_tool  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
 
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))
@@ -269,4 +280,10 @@ check("the noise generator is deterministic", a == b and json.dumps(a, sort_keys
 check("the intelligence fixtures are deterministic", F.intelligence_fixtures(c)[0] == F.intelligence_fixtures(c)[0])
 check("the whole fixture folder is small enough to commit (under 400 KB)", sum(p.stat().st_size for p in raw_files) < 400_000, str(sum(p.stat().st_size for p in raw_files)))
 
-finish()
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for f in FAILURES:
+        print(f"  - {f}")
+    sys.exit(1)
+print("all checks passed")

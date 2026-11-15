@@ -26,7 +26,18 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import PY, ROOT, check, finish  # noqa: E402
+from _geek_scratch import PY, ROOT  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
 
 CARD = ROOT / "frontend" / "ecco-mode-shell"
 CAT = CARD / "catalogue"
@@ -130,4 +141,10 @@ pinned = ["deployment/ha-manifest.yaml", "CHANGELOG.md", "VERSION.yaml", "regist
 named = [r for r in pinned if (ROOT / r).is_file() and "mode-shell" in (ROOT / r).read_text(encoding="utf-8", errors="replace")]
 check("no pinned or deployed file names the shell (the integration steps are the owner's)", not named, str(named))
 
-finish()
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for f in FAILURES:
+        print(f"  - {f}")
+    sys.exit(1)
+print("all checks passed")

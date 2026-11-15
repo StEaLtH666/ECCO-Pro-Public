@@ -22,7 +22,18 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import ROOT, check, finish  # noqa: E402
+from _geek_scratch import ROOT  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
 
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))
@@ -278,4 +289,10 @@ short = [f"{s['id']}#{a['name']}" for s in cat["sources"] for a in s["attributes
 check("every attribute description says something (at least 20 characters)", not short, str(short[:5]))
 check("the status source describes itself as advice only", "Advice only" in by_eid[ac.ENTITY_IDS["status"]]["description"])
 
-finish()
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for f in FAILURES:
+        print(f"  - {f}")
+    sys.exit(1)
+print("all checks passed")

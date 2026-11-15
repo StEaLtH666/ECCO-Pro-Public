@@ -25,7 +25,18 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _geek_scratch import ROOT, check, finish  # noqa: E402
+from _geek_scratch import ROOT  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
 
 sys.path.insert(0, str(ROOT / "tools"))
 import geek_mode_coverage as G  # noqa: E402
@@ -243,4 +254,10 @@ check("the privacy suite itself holds no secret-shaped literal (it assembles its
         (ROOT / "tools/tests/test_geek_mode_privacy.py").read_text(encoding="utf-8")))
 print(f"  info  {len(PROOF)} files scanned; ledger digests allowed: {len(digests)}; sha256 of the catalogue {hashlib.sha256((CATD / 'intelligence.catalogue.json').read_bytes()).hexdigest()[:12]}...")
 
-finish()
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for f in FAILURES:
+        print(f"  - {f}")
+    sys.exit(1)
+print("all checks passed")
