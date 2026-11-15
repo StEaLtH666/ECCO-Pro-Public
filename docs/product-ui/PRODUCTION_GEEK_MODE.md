@@ -377,7 +377,7 @@ found was repaired in the card, the test or the data, and each repair has a test
 2. **A listed `unknown` state never fired.** `status_unknown` lists the state `unknown`; the card treated every `unknown` state as unreadable and
    reported "cannot check" instead. A listed state that is the state now fires, whatever it is. (Mutant `AC6-listed-down-state-silent`.)
 3. **`{unavailable: true}` fired on `unknown`.** The catalogue's reading is "unavailable, or missing"; the card also fired the critical "not
-   publishing" alert on an `unknown` state, which every Home Assistant restart produces. An `unknown` state is now reported as a condition that
+   publishing" alert on an `unknown` state, which a Home Assistant restart can produce while the status is still unknown. An `unknown` state is now reported as a condition that
    cannot be checked, never as silence and never as the critical alert. (Mutants `AC6-unavailable-fires-on-unknown`,
    `AC6-unavailable-ignores-missing`.)
 4. **Redundant lines.** One failed entity could raise its own alert and a "cannot check" line for every other alert on it. An alert that already
