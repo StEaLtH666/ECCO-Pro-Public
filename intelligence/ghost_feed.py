@@ -137,9 +137,13 @@ def _empty(status: str, reason: str, notes: list[str], **extra) -> dict:
 def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: SiteConfig, *,
                      import_tariff: TariffResult | None = None, export_tariff: TariffResult | None = None,
                      now: datetime | None = None, days: int = DEFAULT_DAYS, ha_reserve_pct: float | None = None,
-                     max_bytes: int = MAX_BYTES) -> dict:
+                     max_bytes: int = MAX_BYTES, detail: dict | None = None) -> dict:
     """The compact Ghost summary (see the module docstring). Never raises for a data problem: it returns status
-    INSUFFICIENT_HISTORY with the reason; only a programming error (a wrong argument type) raises."""
+    INSUFFICIENT_HISTORY with the reason; only a programming error (a wrong argument type) raises.
+
+    `detail` (default None: no effect on the result): a dict the caller passes to receive the run's internals for a richer
+    reading of the same run (ghost_compare.py): the base report `rep`, the two efficiency runs `sens`, `money`, the
+    period's `starts` and the parsed advice records `advice`. It is filled only when the status is OK."""
     if not isinstance(history, History):
         raise TypeError("history must be a History")
     if not (isinstance(days, int) and 1 <= days <= 60):
@@ -342,6 +346,9 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
            "advice": {"records_in_period": len(in_period), "followed": followed, "not_followed": nf},
            "totals": totals, "days": day_out, "ready_for_assisted_evidence": ready_out, "uncertainty": uncertainty,
            "data_quality": quality}
+    if detail is not None:
+        detail.update({"rep": rep, "sens": sens, "money": money, "starts": starts, "advice": in_period, "reason": reason,
+                       "soc_start_pct": soc0})
     return _fit(out, max_bytes)
 
 

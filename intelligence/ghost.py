@@ -503,6 +503,7 @@ def run_ghost(period: ActualPeriod, advice: Sequence[AdviceRecord], cfg: SiteCon
             "actual_bill_p": a.bill_p, "ghost_bill_p": g.bill_p,
             "actual_throughput_kwh": a.throughput_kwh, "ghost_throughput_kwh": g.throughput_kwh,
             "actual_min_soc_pct": min(a_soc[i] for i in idx), "ghost_min_soc_pct": min(g_soc[i] for i in idx),
+            "actual_end_soc_pct": a_soc[idx[-1]], "ghost_end_soc_pct": g_soc[idx[-1]],
             "actual_closing_stored_kwh": a.closing_stored_kwh, "ghost_closing_stored_kwh": g.closing_stored_kwh,
             "actual_import_kwh": a_imp, "ghost_import_kwh": g_imp,
             "actual_import_avg_p": a_ic / a_imp if a_imp > EPS else None,
