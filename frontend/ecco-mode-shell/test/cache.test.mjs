@@ -268,7 +268,7 @@ test('AC9 [r9] Production counts the problem sentence from the rows whose STATUS
   assert.equal(snap.counts.unread, unreadRows.length);
   assert.equal(snap.counts.problems, unreadRows.length, 'the Problems filter lists the unread ones (they include the six)');
   const sum = summarise(snap, []);
-  assert.match(sum.note, /6 data points are stale, unavailable, simulated or unverified\./, 'the six are said, although none of them was read');
+  assert.match(sum.note, /6 data points are stale, unavailable, unknown, not measured, simulated or unverified\./, 'the six are said, although none of them was read');
   assert.match(sum.note, new RegExp(`${unreadRows.length} data points were not read`), 'and so are the unread ones');
   assert.ok(sum.note.indexOf('6 data points') < sum.note.indexOf('not read'), 'the problem sentence comes first');
   // the same data with every entity small: nothing unread, the same six are said, and the unread sentence is gone
@@ -277,7 +277,7 @@ test('AC9 [r9] Production counts the problem sentence from the rows whose STATUS
   const small = buildSnapshot(smallStates, cat, NOW);
   assert.equal(small.counts.unread, 0);
   assert.equal(small.counts.notLive, 6);
-  assert.match(summarise(small, []).note, /^6 data points are stale, unavailable, simulated or unverified\. Geek Mode lists them\.$/);
+  assert.match(summarise(small, []).note, /^6 data points are stale, unavailable, unknown, not measured, simulated or unverified\. Geek Mode lists them\.$/);
   // one that is live and unread is only in the second sentence; one that is unavailable and read is only in the first
   const live = buildSnapshot(bigStates(N), cat, NOW);
   assert.ok(live.counts.unread >= 8 && live.counts.notLive === 0);
@@ -285,7 +285,7 @@ test('AC9 [r9] Production counts the problem sentence from the rows whose STATUS
   assert.match(summarise(live, []).note, /data points were not read/);
   const readOnly = buildSnapshot({ [bigId(0)]: mkState(bigId(0), 'unavailable', {}, { ageS: 30 }), ...Object.fromEntries(Array.from({ length: 5 }, (_, i) => [bigId(i + 1), mkState(bigId(i + 1), 'ok', {}, { ageS: 30 })])) }, bigCatalogue(6), NOW);
   assert.equal(readOnly.counts.unread, 0);
-  assert.match(summarise(readOnly, []).note, /^1 data point is stale, unavailable, simulated or unverified\. Geek Mode lists them\.$/);
+  assert.match(summarise(readOnly, []).note, /^1 data point is stale, unavailable, unknown, not measured, simulated or unverified\. Geek Mode lists them\.$/);
   assert.doesNotMatch(summarise(readOnly, []).note, /not read/);
   // a snapshot with nothing to say says nothing
   assert.equal(summarise(buildSnapshot(smallStates, cat, NOW), []).note.includes('not read'), false);
@@ -293,4 +293,169 @@ test('AC9 [r9] Production counts the problem sentence from the rows whose STATUS
   assert.equal(summarise(null, []).note, '');
   // the search still finds them by saying so
   assert.ok(searchRows(snap.rows, 'not read').length >= unreadRows.length);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// (4) [r10] THE NOT-LIVE COUNT, every kind of row. The round-9 fix (counts.notLive, one sentence for the rows whose STATUS is not live and one for the rows that were not read) was pinned only for UNAVAILABLE and STALE
+// rows that were also past the budget. Reviewer mutants H01 (the count skips NOT_MEASURED rows), H03 (skips UNKNOWN rows) and H02 (skips discovered rows) survived every suite: the Production sentence undercounted
+// silently. These tests start from a base in which EVERY row is live (so the count is zero and a miscount cannot hide among rows that are not live anyway) and make exactly one row of each kind not live, then all together.
+// ---------------------------------------------------------------------------------------------------------------------------
+const LIVE_IDS = ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => `sensor.ecco_live_${x}`);
+const DISC_IDS = ['sensor.ecco_live_disc_1', 'sensor.ecco_live_disc_2'];
+const liveCatalogue = () => {
+  const sources = LIVE_IDS.map((entity_id, i) => ({
+    id: `L${i}`, entity_id, group: 'g', title: `Live ${i}`, description: '', priority: i < 2 ? 'headline' : 'normal', unit: null, expected_update_s: 300, stale_after_s: 900, origin: 'integration', attributes: [],
+  }));
+  const v = validateCatalogue({
+    schema: 'ecco-geek-catalogue/1', view_id: 'live', title: 'Live', contract: 'live/1', groups: [{ id: 'g', title: 'G', order: 1, description: '' }], sources,
+    discover: { entity_prefixes: ['sensor.ecco_live_disc_'], group: 'g', exclude_entity_ids: [] }, alerts: [], exceptions: [], redaction: { extra_key_patterns: [] },
+  });
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  return v.catalogue;
+};
+const liveStates = (patch = null) => {
+  const s = {};
+  for (const id of [...LIVE_IDS, ...DISC_IDS]) s[id] = mkState(id, '1.5', {}, { ageS: 30 });
+  if (patch) patch(s);
+  return s;
+};
+const SENTENCE_TAIL = 'stale, unavailable, unknown, not measured, simulated or unverified. Geek Mode lists them.';
+const sentence = (n) => `${n} data point${n === 1 ? ' is' : 's are'} ${SENTENCE_TAIL}`;
+const A = LIVE_IDS[2];
+const B = LIVE_IDS[3];
+const C = LIVE_IDS[4];
+const D = DISC_IDS[0];
+const E = DISC_IDS[1];
+/** Each kind of row that is not live, on its own: { patch, statuses: the status counts it adds }. */
+const NOT_LIVE_KINDS = {
+  'one UNKNOWN source (reviewer mutant H03)': { patch: (s) => { s[A] = mkState(A, 'unknown', {}); }, add: { UNKNOWN: 1 } },
+  'one NOT_MEASURED source: declared in the catalogue, no such entity (reviewer mutant H01)': { patch: (s) => { delete s[A]; }, add: { NOT_MEASURED: 1 } },
+  'one UNAVAILABLE discovered entity (reviewer mutant H02)': { patch: (s) => { s[D] = mkState(D, 'unavailable', {}); }, add: { UNAVAILABLE: 1 } },
+  'one UNAVAILABLE source': { patch: (s) => { s[A] = mkState(A, 'unavailable', {}); }, add: { UNAVAILABLE: 1 } },
+  'one STALE source': { patch: (s) => { s[A] = mkState(A, '1.5', {}, { ageS: 5000 }); }, add: { STALE: 1 } },
+  'one SIMULATED source': { patch: (s) => { s[A] = mkState(A, '1.5', { simulated: true }); }, add: { SIMULATED: 1 } },
+  'one UNVERIFIED source': { patch: (s) => { s[A] = mkState(A, '1.5', { verified: false }); }, add: { UNVERIFIED: 1 } },
+  'one UNKNOWN discovered entity': { patch: (s) => { s[D] = mkState(D, 'unknown', {}); }, add: { UNKNOWN: 1 } },
+  'one SIMULATED discovered entity': { patch: (s) => { s[D] = mkState(D, '1.5', { simulated: true }); }, add: { SIMULATED: 1 } },
+  'one UNVERIFIED discovered entity': { patch: (s) => { s[D] = mkState(D, '1.5', { verified: false }); }, add: { UNVERIFIED: 1 } },
+};
+const STATUS_KEYS = ['LIVE', 'STALE', 'UNAVAILABLE', 'UNKNOWN', 'NOT_MEASURED', 'SIMULATED', 'UNVERIFIED'];
+
+test('AC9 [r10] the not-live count on an all-LIVE base: nothing is said when every row is live, and exactly one row of each kind that is not live (an unknown, a missing, an unavailable discovered one, stale, simulated, unverified ...) is counted once and named in the Production sentence (reviewer mutants H01, H02, H03)', () => {
+  const cat = liveCatalogue();
+  const base = buildSnapshot(liveStates(), cat, NOW);
+  assert.equal(base.counts.total, 8, 'six sources and two discovered entities');
+  assert.equal(base.counts.discovered, 2);
+  assert.equal(base.counts.LIVE, 8, 'the base is all live');
+  assert.equal(base.counts.notLive, 0);
+  assert.equal(base.counts.unread, 0);
+  assert.equal(summarise(base, []).note, '', 'an all-live view says nothing about data points');
+  for (const [what, kind] of Object.entries(NOT_LIVE_KINDS)) {
+    const snap = buildSnapshot(liveStates(kind.patch), cat, NOW);
+    assert.equal(snap.counts.notLive, 1, `${what}: counted once`);
+    assert.equal(snap.counts.total, 8, `${what}: the row is still a row`);
+    for (const k of STATUS_KEYS) assert.equal(snap.counts[k], (k === 'LIVE' ? 7 : 0) + (kind.add[k] || 0), `${what}: the count of ${k}`);
+    assert.equal(snap.counts.unread, 0, `${what}: it was read`);
+    assert.equal(summarise(snap, []).note, sentence(1), `${what}: the Production sentence says one data point`);
+  }
+  // all three kinds of the review together: an UNKNOWN source, a NOT_MEASURED source and an UNAVAILABLE discovered entity: exactly three
+  const three = buildSnapshot(liveStates((s) => { s[A] = mkState(A, 'unknown', {}); delete s[B]; s[D] = mkState(D, 'unavailable', {}); }), cat, NOW);
+  assert.equal(three.counts.notLive, 3);
+  assert.deepEqual(STATUS_KEYS.map((k) => three.counts[k]), [5, 0, 1, 1, 1, 0, 0]);
+  assert.equal(summarise(three, []).note, sentence(3), 'the number in the sentence is three');
+  assert.match(summarise(three, []).note, /^3 data points are stale, unavailable, unknown, not measured, simulated or unverified\. Geek Mode lists them\.$/);
+  // and all six kinds of status at once, across sources and discovered entities
+  const six = buildSnapshot(liveStates((s) => { s[A] = mkState(A, '1', {}, { ageS: 5000 }); s[B] = mkState(B, 'unavailable', {}); s[C] = mkState(C, 'unknown', {}); delete s[LIVE_IDS[5]]; s[D] = mkState(D, '1', { simulated: true }); s[E] = mkState(E, '1', { verified: false }); }), cat, NOW);
+  assert.equal(six.counts.notLive, 6);
+  assert.deepEqual(STATUS_KEYS.map((k) => six.counts[k]), [2, 1, 1, 1, 1, 1, 1]);
+  assert.equal(summarise(six, []).note, sentence(6));
+  // two of one kind are two
+  const two = buildSnapshot(liveStates((s) => { s[A] = mkState(A, 'unknown', {}); s[B] = mkState(B, 'unknown', {}); }), cat, NOW);
+  assert.equal(two.counts.notLive, 2);
+  assert.equal(summarise(two, []).note, sentence(2));
+  // the alerts and the other half of the sentence: the numbers are independent
+  assert.equal(summarise(three, [{ id: 'x', severity: 'warning', text: 'A line.', action: 'Do it.' }]).note, sentence(3));
+});
+
+test('AC9 [r10] the Production sentence names EVERY kind of row it counts (stale, unavailable, unknown, not measured, simulated or unverified: the review found that unknown and not measured rows were counted but never named), says one or many, and the number is the count', () => {
+  const words = ['stale', 'unavailable', 'unknown', 'not measured', 'simulated', 'unverified'];
+  const note = summarise({ counts: { notLive: 2, unread: 0 } }, []).note;
+  for (const w of words) assert.ok(note.includes(w), `the sentence names ${w}: ${note}`);
+  // the words are the status words of the Geek surface (the same six, lower case), so what Production says is what Geek Mode lists
+  const statusWords = { STALE: 'stale', UNAVAILABLE: 'unavailable', UNKNOWN: 'unknown', NOT_MEASURED: 'not measured', SIMULATED: 'simulated', UNVERIFIED: 'unverified' };
+  assert.deepEqual(Object.keys(statusWords).sort(), core.STATUSES.filter((s) => s !== 'LIVE').sort(), 'one word for every status that is not live');
+  for (const [s, w] of Object.entries(statusWords)) assert.ok(note.includes(w), `${s} -> ${w}`);
+  assert.equal(note, `2 data points are ${SENTENCE_TAIL}`);
+  assert.equal(summarise({ counts: { notLive: 1, unread: 0 } }, []).note, `1 data point is ${SENTENCE_TAIL}`);
+  assert.equal(summarise({ counts: { notLive: 0, unread: 0 } }, []).note, '');
+  // the number is read from the count and from nothing else: a snapshot that counts 7 says 7, whatever its problems and its unread
+  assert.match(summarise({ counts: { notLive: 7, unread: 3, problems: 99 } }, []).note, /^7 data points are stale/);
+  assert.match(summarise({ counts: { notLive: 7, unread: 3 } }, []).note, /3 data points were not read/);
+});
+
+test('AC9 [r10] COUNTS LEDGER: every field of counts is the number of the rows it counts, on every fixture (total, withheld, discovered, problems, unread, notLive and one count per status), so no field can skip a kind of row', () => {
+  const sets = [];
+  const miniCat = validateCatalogue(miniCatalogue()).catalogue;
+  sets.push(['mini', miniCat, miniStates(), NOW]);
+  sets.push(['mini, one more discovered and unavailable', miniCat, miniStates((s) => { s['sensor.ecco_intel_zz_extra'] = mkState('sensor.ecco_intel_zz_extra', 'unavailable', {}); s['sensor.ecco_intel_zz_extra2'] = mkState('sensor.ecco_intel_zz_extra2', 'unknown', {}); }), NOW]);
+  sets.push(['mini, an hour later', miniCat, miniStates(), NOW + 3600000]);
+  sets.push(['the live base with every kind of row not live', liveCatalogue(), liveStates((s) => { s[A] = mkState(A, 'unknown', {}); delete s[B]; s[D] = mkState(D, 'unavailable', {}); s[C] = mkState(C, '1', { simulated: true }); s[E] = mkState(E, '1', { verified: false }); }), NOW]);
+  const big = bigCatalogue(30);
+  sets.push(['thirty big entities, a third of them past the budget', big, bigStates(30), NOW]);
+  // the same entities as DISCOVERED ones (no source names them): the rows that were not read are discovered rows (reviewer-style mutant O37, the unread count that leaves the discovered rows out, was killed only by a timing test)
+  const discoveredBig = validateCatalogue({
+    schema: 'ecco-geek-catalogue/1', view_id: 'bigd', title: 'BigD', contract: 'bigd/1', groups: [{ id: 'g', title: 'G', order: 1, description: '' }], sources: [{ ...big.sources[0], id: 'Z00', entity_id: 'sensor.ecco_zz_single' }],
+    discover: { entity_prefixes: ['sensor.ecco_big_'], group: 'g', exclude_entity_ids: [] }, alerts: [], exceptions: [], redaction: { extra_key_patterns: [] },
+  });
+  assert.equal(discoveredBig.ok, true, JSON.stringify(discoveredBig.errors));
+  sets.push(['thirty big DISCOVERED entities, a third of them past the budget', discoveredBig.catalogue, bigStates(30), NOW]);
+  sets.push(['the live base with a password in an attribute (a withheld value)', liveCatalogue(), liveStates((s) => { s[A] = mkState(A, '1', { password: 'correct-horse-battery-staple', note: 'harmless words' }); }), NOW]);
+  const cat = validateCatalogue(realCatalogue()).catalogue;
+  const noise = noiseStates();
+  for (const name of intelFixtureNames()) {
+    const { states, now } = intelStates(name);
+    sets.push([`intelligence ${name}`, cat, { ...noise, ...states }, now]);
+  }
+  let withheldSeen = 0;
+  let problemsSeen = 0;
+  let unreadSeen = 0;
+  let discoveredUnreadSeen = 0;
+  for (const [name, catalogue, states, t] of sets) {
+    const snap = buildSnapshot(states, catalogue, t);
+    const rows = snap.rows;
+    const c = snap.counts;
+    assert.equal(c.total, rows.length, `${name}: total`);
+    assert.equal(c.withheld, rows.reduce((n, r) => n + r.withheld, 0), `${name}: withheld`);
+    assert.equal(c.discovered, rows.filter((r) => r.discovered).length, `${name}: discovered`);
+    assert.equal(c.problems, rows.filter((r) => r.problem).length, `${name}: problems`);
+    assert.equal(c.unread, rows.filter((r) => r.unread).length, `${name}: unread`);
+    assert.equal(c.notLive, rows.filter((r) => r.status !== 'LIVE').length, `${name}: notLive`);
+    for (const k of STATUS_KEYS) assert.equal(c[k], rows.filter((r) => r.status === k).length, `${name}: ${k}`);
+    assert.equal(STATUS_KEYS.reduce((n, k) => n + c[k], 0), c.total, `${name}: the statuses add up to the rows`);
+    assert.equal(c.notLive, c.total - c.LIVE, `${name}: not live is everything but live`);
+    // the Production sentence says the number of not-live rows and the number of unread rows, from these counts
+    const note = summarise(snap, []).note;
+    if (c.notLive > 0) assert.ok(note.startsWith(sentence(c.notLive)), `${name}: the sentence says ${c.notLive}: ${note}`);
+    else assert.ok(!/stale, unavailable/.test(note), `${name}: no problem sentence when nothing is not live`);
+    if (c.unread > 0) assert.match(note, new RegExp(`${c.unread} data points? (?:was|were) not read`), `${name}: the unread sentence`);
+    withheldSeen += c.withheld;
+    problemsSeen += c.problems;
+    unreadSeen += c.unread;
+    discoveredUnreadSeen += rows.filter((r) => r.discovered && r.unread).length;
+  }
+  // the control: the fixtures between them have rows of every kind the fields count (an oracle that counts nothing proves nothing)
+  assert.ok(withheldSeen > 0 && problemsSeen > 0 && unreadSeen > 0 && discoveredUnreadSeen > 0, `${withheldSeen} withheld, ${problemsSeen} problems, ${unreadSeen} unread (${discoveredUnreadSeen} of them discovered) over all the fixtures`);
+});
+
+test('AC12 [r10] ROW CACHE KEY: a built row is never reused for another source object, even for a catalogue that validation refuses (buildSnapshot is total: two sources with one id and one entity get a row each, in a warm read, a second warm read and a cold read); the card itself never builds a snapshot from such a catalogue', () => {
+  const c = miniCatalogue();
+  c.sources.push({ ...clone(c.sources[0]), title: 'Twin title', description: 'The twin.' });
+  assert.equal(validateCatalogue(c).ok, false, 'validation refuses a duplicate source id');
+  const states = miniStates();
+  const warm = buildSnapshot(states, c, NOW);
+  const again = buildSnapshot(states, c, NOW);
+  const cold = buildSnapshot(clone(states), clone(c), NOW);
+  for (const [name, snap] of [['warm', warm], ['warm again', again], ['cold', cold]]) {
+    assert.deepEqual(snap.rows.filter((r) => r.id === 'S01').map((r) => r.title), ['Status', 'Twin title'], `${name}: one row for each source object`);
+  }
 });

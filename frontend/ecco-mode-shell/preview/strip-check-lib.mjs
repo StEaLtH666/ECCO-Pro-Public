@@ -193,8 +193,8 @@ export function compareModes(prod, geek) {
 }
 
 /**
- * Review round 9: the strip must be the same strip once everything the card scheduled has run. `first` was measured in the same task as the switch or the render, `later` after a zero-delay timer and two animation
- * frames (strip-check.html). A card that hides, empties, moves or mutes the strip a moment later (a promise continuation, an async function, a timer, a frame, an observer callback: reviewer mutants E05 and E08) passes
+ * Review round 9: the strip must be the same strip once everything the card scheduled has run. `first` was measured in the same task as the switch or the render, `later` after a zero-delay timer, the microtasks it leaves and up to two animation
+ * frames (strip-check.html; in a headless run the frames mostly do not come, round 10). A card that hides, empties, moves or mutes the strip a moment later (a promise continuation, an async function, a timer, a frame, an observer callback: reviewer mutants E05 and E08) passes
  * every check on `first` and fails here. Returns [{ name, ok, detail }].
  */
 export function compareSettled(first, later) {

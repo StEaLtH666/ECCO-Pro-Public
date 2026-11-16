@@ -5,7 +5,7 @@
 import test, { afterEach, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installDom, installResizeObserver, MElement, MEvent, MDocument, MShadowRoot, tripwires, TRIPWIRE_NAMES } from './minidom.mjs';
-import { installScheduler, stripFingerprint, ALLOWED_ASYNC_SITES, siteKey } from './async-net.mjs';
+import { installScheduler, stripFingerprint, ALLOWED_ASYNC_SITES, ALLOWED_CLOCK_SITES, CLOCK_STEP_MS, siteKey } from './async-net.mjs';
 
 const { registry, doc, win } = installDom(); // BEFORE the card module is evaluated
 const ros = installResizeObserver();
@@ -410,6 +410,8 @@ const geekS = async (el) => { geek(el); await settled(el, 'after switching to Ge
 const productionS = async (el) => { production(el); await settled(el, 'after switching to Production'); };
 const hassS = async (el, hass) => { el.hass = hass; await settled(el, 'after a hass update'); };
 const tickS = async (el) => { el._tick(); await settled(el, 'after a timer tick'); };
+// review round 10: the steps of the card clock, from the moment of a switch: +61 s, +15 min, +2 h, +26 h, +8 d, +40 d (reviewer mutant A04 emptied the strip once the clock was 60 s past the switch)
+const CLOCK_STEPS = Object.freeze([61000, 900000, 7200000, 93600000, 691200000, 3456000000]);
 
 for (const a of miniCatalogue().alerts) {
   test(`AC6 ${a.id} (${a.severity}): shown identically in Production and Geek Mode, with its words and its action`, async () => {
@@ -2262,6 +2264,23 @@ test('AC6 [r9] THE TOUR: in both modes, after every step of a full session, ever
       same(`the switch to ${mode}`);
       await sched.flush({ events: true, after: same });
     }
+    // (5) [r10] THE CLOCKS: the card clock steps +61 s, +15 min, +2 h, +26 h, +8 d and +40 d in Geek Mode and in Production; at every step a tick, a hass update and a flush (which also moves performance.now and Date.now an
+    // hour ahead for the card) run, and the strip is the same strip after each of them (reviewer mutants A04 and A05 emptied it once a clock was a minute, or twenty seconds, past the switch: no test ever moved a clock)
+    for (const mode of ['geek', 'production']) {
+      if (el.mode !== mode) q(el, `[data-mode-option="${mode}"]`).click();
+      same(`the switch to ${mode}, before the clock steps`);
+      const t0 = el._now();
+      for (const dt of CLOCK_STEPS) {
+        if (el.mode !== mode) q(el, `[data-mode-option="${mode}"]`).click();
+        el._now = () => t0 + dt;
+        el._tick();
+        same(`a tick ${dt} ms after the switch to ${mode}`);
+        el.hass = makeHass(miniStates(crowd), { themes: { darkMode: false } });
+        same(`a hass update ${dt} ms after the switch to ${mode}`);
+        await sched.flush({ after: same });
+      }
+      await sched.flush({ events: true, after: same });
+    }
     const box = ros.find((o) => !o.disconnected && o.targets.includes(el));
     assert.ok(box, 'the card observes its own box');
     box.fire(0, 0);
@@ -2279,6 +2298,13 @@ test('AC6 [r9] THE TOUR: in both modes, after every step of a full session, ever
     assert.ok(peaks.callbacksPerFlush * 4 < used.bounds.maxCallbacksPerFlush, `${peaks.callbacksPerFlush} callbacks in one flush of ${used.bounds.maxCallbacksPerFlush}`);
     const mine = sched.records.slice(from);
     for (const api of ['setInterval', 'ResizeObserver', 'addEventListener', 'then']) assert.ok(mine.some((r) => r.api === api), `the card scheduled nothing through ${api} during the tour, so the net did not look at it`);
+    // [r10] the dynamic half of the pin of the clocks: every place where the card READ a clock during the tour is on the list (an alias, a computed name or a captured reference is seen here whatever it looks like in the source)
+    const clockAllowed = new Set(ALLOWED_CLOCK_SITES.map((a) => siteKey(a.line)));
+    const clockSeen = sched.clockSites();
+    assert.deepEqual(clockSeen.filter((r) => !clockAllowed.has(r.key)).map((r) => `${r.api} at line ${r.line}: ${r.key}`), [], 'a place that is not on the list of clocks read a clock');
+    assert.ok(clockSeen.some((r) => r.api === 'performance.now'), 'the burst control read the monotonic clock during the tour, so the net looked at it');
+    assert.ok(used.clockShiftMs >= 20 * CLOCK_STEP_MS, `the scheduler moved the real clocks ${used.clockShiftMs / CLOCK_STEP_MS} hours in the tour`);
+    assert.ok(used.clockShiftMs * 4 < used.bounds.maxClockShiftMs && used.clockReads * 4 < used.bounds.maxClockReads, `the clocks used ${used.clockShiftMs} ms of ${used.bounds.maxClockShiftMs} and ${used.clockReads} reads of ${used.bounds.maxClockReads}`);
     // every place the card scheduled anything from is on the enumerated list (the dynamic half of the pin in async.test.mjs: a computed name, an alias or a captured reference is seen here whatever it looks like in the source)
     const allowed = new Set(ALLOWED_ASYNC_SITES.map((a) => `${a.token}\u0000${siteKey(a.line)}`));
     assert.deepEqual(mine.filter((r) => !allowed.has(`${r.api}\u0000${r.key}`)).map((r) => `${r.api} at line ${r.line}: ${r.key}`), [], 'a place that is not on the list scheduled work');
@@ -2405,4 +2431,396 @@ test('AC12 [r8] the DOM says what was not read: Geek Mode counts them in the hea
   q(el, '[data-inspector-filter="problems"]').click();
   typeSearch(el, 'not read');
   assert.equal(rows(el).length, unread);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Review round 10 ([r10]): THE CLOCK CLASS, THE LATE-CONTINUATION CLASS and THE KEY COUNT. The reviewer's mutants A04 (the strip is emptied once the card's own clock is a minute past the moment the Geek surface was
+// built), A05 (the same on performance.now, twenty seconds) and A09 (attach() empties the strip when it runs in Geek Mode, after Home Assistant has built a child late) survived every suite, although the card itself is right:
+// every test kept the clocks still, and no test let a child, a rejection or a clipboard answer arrive AFTER the switch to Geek Mode. The tests below move the clocks and let the late answers arrive, and ask after every step
+// whether the strip is the very same strip a card mounted fresh at that clock reads. (The scheduler also moves performance.now and Date.now forward by an hour at every flush: async-net.mjs.)
+// ---------------------------------------------------------------------------------------------------------------------------
+const CROWD = (s) => { TRIGGER.A01(s); TRIGGER.A03(s); TRIGGER.A05(s); };
+
+test('AC6 [r10] THE CLOCKS: in Production and in Geek Mode, with three alerts, with none and with a missing source, the card clock steps +61 s, +15 min, +2 h, +26 h, +8 d and +40 d and after EVERY step (a tick, a hass update, everything scheduled, which also moves the real clocks an hour) the strip is the strip a card mounted fresh at that clock reads: its content, its visibility, its position and its ancestors (reviewer mutants A04 and A05)', async () => {
+  assert.deepEqual([...CLOCK_STEPS], [61000, 900000, 7200000, 93600000, 691200000, 3456000000], 'a minute, a quarter of an hour, two hours, a day and two hours, eight days, forty days');
+  const scenarios = { 'three alerts': CROWD, 'no alert': undefined, 'an alert on a missing entity': (s) => { delete s['sensor.ecco_intel_status']; } };
+  let checks = 0;
+  for (const [name, mutate] of Object.entries(scenarios)) {
+    for (const mode of ['production', 'geek']) {
+      const el = mount({ states: miniStates(mutate) });
+      const base = stripFingerprint(el);
+      if (mode === 'geek') await geekS(el);
+      assert.equal(el.mode, mode);
+      for (const dt of CLOCK_STEPS) {
+        const at = NOW + dt;
+        el._now = () => at;
+        // a card that is mounted fresh at that clock, in Production, with no history: the strip it reads is what the strip must be
+        const cold = mount({ states: miniStates(mutate), now: at });
+        const ref = stripFingerprint(cold);
+        drop(cold);
+        assert.equal(ref, base, `${name}: the strip does not depend on the clock`);
+        const same = (what) => {
+          checks += 1;
+          assert.equal(stripFingerprint(el), ref, `${name}, ${mode} Mode: the strip is not the strip a fresh card reads ${what} (${dt} ms after the start)`);
+          assertStripVisible(el);
+        };
+        el._tick();
+        same('right after a tick');
+        el.hass = makeHass(miniStates(mutate));
+        same('right after a hass update');
+        await sched.flush({ after: same });
+        same('after everything scheduled has run');
+      }
+      assert.equal(el.mode, mode, 'the clock steps never change the mode');
+    }
+  }
+  assert.ok(checks >= 3 * 2 * 6 * 3, `${checks} checks`);
+  assert.ok(sched.clock.shiftMs >= 3 * 2 * 6 * CLOCK_STEP_MS, `the scheduler moved the real clocks ${sched.clock.shiftMs / CLOCK_STEP_MS} hours in this test`);
+  assert.ok(sched.clockSites('performance.now').length >= 1, 'and the card read the monotonic clock while they moved (the burst control), so the real clock was looked at too');
+});
+
+test('AC6 [r10] THE PAGE STATE: a hidden tab, a window without focus, a browser that is offline and a narrow media query change nothing about the strip, in either mode: visibility, focus, the connection and a media query are not gates (the strip is the same strip, after a tick, a hass update and everything scheduled)', async () => {
+  const el = mount({ states: miniStates(CROWD) });
+  const base = stripFingerprint(el);
+  const saved = [];
+  const put = (o, k, v) => {
+    saved.push([o, k, Object.getOwnPropertyDescriptor(o, k)]);
+    Object.defineProperty(o, k, { value: v, configurable: true, writable: true });
+  };
+  try {
+    let checks = 0;
+    for (const mode of ['production', 'geek']) {
+      if (el.mode !== mode) q(el, `[data-mode-option="${mode}"]`).click();
+      for (const [vis, hidden, focus, online, media] of [['hidden', true, false, false, true], ['visible', false, true, true, false], ['prerender', true, false, true, true]]) {
+        put(doc, 'visibilityState', vis);
+        put(doc, 'hidden', hidden);
+        put(doc, 'hasFocus', () => focus);
+        put(win, 'matchMedia', () => ({ matches: media, addEventListener() {}, removeEventListener() {} }));
+        put(globalThis, 'navigator', { onLine: online });
+        const same = (what) => {
+          checks += 1;
+          assert.equal(stripFingerprint(el), base, `${mode} Mode, tab ${vis}, focus ${focus}, online ${online}: the strip changed ${what}`);
+          assertStripVisible(el);
+        };
+        for (const type of ['blur', 'focus', 'offline', 'online', 'resize']) win.dispatchEvent(new MEvent(type));
+        same('after the window events');
+        el._tick();
+        same('after a tick');
+        el.hass = makeHass(miniStates(CROWD));
+        same('after a hass update');
+        await sched.flush({ after: same });
+      }
+    }
+    assert.ok(checks >= 2 * 3 * 4, `${checks} checks`);
+  } finally {
+    for (const [o, k, d] of saved.reverse()) {
+      if (d) Object.defineProperty(o, k, d);
+      else delete o[k];
+    }
+  }
+});
+
+/** Home Assistant's card helpers, built by hand: nothing is made until `release` (or `refuse`) is called, as in a slow first load. */
+function deferredHelpers() {
+  let resolve;
+  let reject;
+  const gate = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return {
+    loadCardHelpers: () => gate,
+    release: () => resolve({ createCardElement: (cfg) => { const s = new StubCard(); s.setConfig(cfg); return s; } }),
+    releaseBroken: () => resolve({ createCardElement: () => { throw new Error('the helpers could not make this card'); } }),
+    refuse: (message) => reject(new Error(message)),
+  };
+}
+const LATE_CONFIG = { always: [{ type: 'tile', entity: 'sensor.ecco_intel_status' }], production: [{ type: 'markdown', content: 'y' }, { type: 'markdown', content: 'z' }] };
+
+for (const [name, run] of Object.entries({
+  'Geek Mode is switched on, then the children arrive': async (el, d, same) => { await geekS(el); d.release(); await sched.flush({ events: false, after: same }); },
+  'Geek Mode with every row open and a search, then the children arrive': async (el, d, same) => { await geekS(el); openEverything(el); typeSearch(el, 'status'); d.release(); await sched.flush({ events: false, after: same }); },
+  'Geek Mode, back to Production, then the children arrive': async (el, d, same) => { await geekS(el); await productionS(el); d.release(); await sched.flush({ events: false, after: same }); },
+  'the children arrive while the switch is being flipped (Geek, Production, Geek) with updates and ticks in between': async (el, d, same) => {
+    await geekS(el);
+    el._tick();
+    same('a tick');
+    d.release();
+    await productionS(el);
+    await geekS(el);
+    el.hass = makeHass(miniStates(CROWD));
+    same('a hass update');
+    await sched.flush({ events: false, after: same });
+  },
+  'Production only (the control: the children arrive and nothing else happens)': async (el, d, same) => { d.release(); await sched.flush({ events: false, after: same }); },
+})) {
+  test(`AC6 [r10] LATE CHILDREN: ${name}: the strip is the very same strip before, while and after the children are attached (reviewer mutant A09: attach() empties the strip when it runs in Geek Mode)`, async () => {
+    const d = deferredHelpers();
+    win.loadCardHelpers = d.loadCardHelpers;
+    try {
+      const el = mount({ states: miniStates(CROWD), config: LATE_CONFIG });
+      const base = stripFingerprint(el);
+      assert.equal(qa(el, 'stub-card').length, 0, 'no child has been built yet: Home Assistant has not answered');
+      const same = (what) => {
+        assert.equal(stripFingerprint(el), base, `the strip is not the same strip after ${what}`);
+        assertStripVisible(el);
+      };
+      await run(el, d, same);
+      assert.equal(qa(el, 'stub-card').length, 3, 'the three children arrived (one always, two Production-only)');
+      assert.ok(qa(el, 'stub-card').every((k) => k.hassSeen.length >= 1), 'and each was given hass when it came');
+      same('the children arrived');
+      assert.equal(q(el, '[data-child-error]'), null);
+    } finally {
+      delete win.loadCardHelpers;
+    }
+  });
+}
+
+for (const [name, how] of Object.entries({
+  'the helpers promise is REJECTED after the switch to Geek Mode': (d) => d.refuse('Home Assistant could not load its card helpers'),
+  'the helpers promise resolves and the helpers THROW when they are asked for a card (the rejection of the continuation itself)': (d) => d.releaseBroken(),
+})) {
+  for (const path of ['geek', 'geek, production, geek', 'production']) {
+    test(`AC6 [r10] LATE FAILURE: ${name} (${path}): every child says why it could not be shown, the strip is the very same strip before, while and after (the fail variant of reviewer mutant A09)`, async () => {
+      const d = deferredHelpers();
+      win.loadCardHelpers = d.loadCardHelpers;
+      try {
+        const el = mount({ states: miniStates(CROWD), config: LATE_CONFIG });
+        const base = stripFingerprint(el);
+        const same = (what) => {
+          assert.equal(stripFingerprint(el), base, `the strip is not the same strip after ${what}`);
+          assertStripVisible(el);
+        };
+        if (path.startsWith('geek')) await geekS(el);
+        if (path === 'geek, production, geek') {
+          await productionS(el);
+          await geekS(el);
+        }
+        how(d);
+        await sched.flush({ events: false, after: same });
+        assert.equal(qa(el, '[data-child-error]').length, 3, 'a notice in the place of each of the three children');
+        assert.match(textOf(qa(el, '[data-child-error]')[0]), /Card could not be shown: /);
+        assert.equal(qa(el, 'stub-card').length, 0);
+        same('the failure arrived');
+        if (path !== 'production') {
+          await productionS(el);
+          await geekS(el);
+        }
+        assert.ok(stripIds(el).includes('A01') && stripIds(el).includes('A03') && stripIds(el).includes('A05'), 'and all three alerts are on it');
+      } finally {
+        delete win.loadCardHelpers;
+      }
+    });
+  }
+}
+
+/** A clipboard whose promise is settled by hand. */
+function installDeferredClipboard() {
+  const pending = [];
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: (t) => new Promise((resolve, reject) => { pending.push({ text: t, resolve, reject }); }) } }, configurable: true, writable: true });
+  return {
+    pending,
+    restore() {
+      if (nav) Object.defineProperty(globalThis, 'navigator', nav);
+      else delete globalThis.navigator;
+    },
+  };
+}
+
+for (const [name, run] of Object.entries({
+  'the copy is ANSWERED while Geek Mode is open': async (el, c, same) => { c.pending[0].resolve(); await sched.flush({ after: same }); assert.match(allText(root(el)), /Copied /); },
+  'the copy is REFUSED by the browser while Geek Mode is open': async (el, c, same) => { c.pending[0].reject(new Error('blocked')); await sched.flush({ after: same }); assert.match(allText(root(el)), /The browser blocked the copy/); },
+  'the copy is answered after the switch BACK to Production (the surface that asked is gone)': async (el, c, same) => { await productionS(el); c.pending[0].resolve(); await sched.flush({ after: same }); },
+  'the copy is refused after the switch back to Production': async (el, c, same) => { await productionS(el); c.pending[0].reject(new Error('blocked')); await sched.flush({ after: same }); },
+  'the copy is answered after Production and Geek again (a NEW surface is there to say it)': async (el, c, same) => { await productionS(el); await geekS(el); c.pending[0].resolve(); await sched.flush({ after: same }); },
+  'two copies, answered in the other order, one after a tick and a hass update': async (el, c, same) => {
+    q(el, '[data-inspector-copy]').click();
+    assert.equal(c.pending.length, 2, 'two copies are waiting');
+    el._tick();
+    same('a tick');
+    c.pending[1].reject(new Error('blocked'));
+    el.hass = makeHass(miniStates(CROWD));
+    same('a hass update');
+    c.pending[0].resolve();
+    await sched.flush({ after: same });
+  },
+})) {
+  test(`AC6 [r10] LATE CLIPBOARD: ${name}: the strip is the very same strip before, while and after the answer (the say variant of reviewer mutant A09)`, async () => {
+    const c = installDeferredClipboard();
+    try {
+      const el = mount({ states: miniStates(CROWD) });
+      const base = stripFingerprint(el);
+      const same = (what) => {
+        assert.equal(stripFingerprint(el), base, `the strip is not the same strip after ${what}`);
+        assertStripVisible(el);
+      };
+      await geekS(el);
+      q(el, '[data-inspector-copy]').click();
+      assert.ok(c.pending.length >= 1, 'the copy asked the clipboard, and nothing has answered yet');
+      same('the click on copy');
+      await sched.flush({ after: same });
+      await run(el, c, same);
+      same('the answer');
+      assert.ok(c.pending.every((p) => p.text.length > 10), 'what was copied is a text');
+    } finally {
+      c.restore();
+    }
+  });
+}
+
+test('AC6 [r10] NO CLIPBOARD: a browser with no clipboard says so at once, in Geek Mode, and the strip is the very same strip (the third way to reach say)', async () => {
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
+  try {
+    const el = mount({ states: miniStates(CROWD) });
+    const base = stripFingerprint(el);
+    await geekS(el);
+    q(el, '[data-inspector-copy]').click();
+    assert.equal(stripFingerprint(el), base, 'in the task of the click');
+    assert.match(allText(root(el)), /Copy is not available in this browser context/);
+    await settled(el, 'after the click');
+    assert.equal(stripFingerprint(el), base);
+  } finally {
+    if (nav) Object.defineProperty(globalThis, 'navigator', nav);
+    else delete globalThis.navigator;
+  }
+});
+
+test('AC12 [r10] KEY COUNT: a new ecco_intel_ entity that arrives within one second of the last rebuild, in an update where every other state object is the very same object, is discovered AT ONCE (not at the next tick): the row, the counts, the Production sentence and the Geek list; and so is one that goes, with and without alerts on the strip (reviewer mutant K06)', () => {
+  for (const [name, mutate] of [['no alert', undefined], ['three alerts on the strip', CROWD]]) {
+    const states = miniStates(mutate);
+    const el = mount({ states });
+    const c0 = { ...el.snapshot.counts };
+    const s0 = mod.STATS.snapshots;
+    const NEW = 'sensor.ecco_intel_zz_arrived';
+    const next = { ...states, [NEW]: mkState(NEW, 'unavailable', {}, { ageS: 5 }) };
+    for (const k of Object.keys(states)) assert.equal(next[k], states[k], `${k} is the very same object`);
+    assert.equal(Object.keys(next).length, Object.keys(states).length + 1, 'one key more: the only difference');
+    el.hass = makeHass(next);
+    assert.equal(mod.STATS.snapshots - s0, 1, `${name}: a new entity under a prefix the view discovers is a relevant update: one snapshot, at once`);
+    const snap = el.snapshot;
+    assert.equal(snap.counts.total, c0.total + 1, `${name}: total`);
+    assert.equal(snap.counts.discovered, c0.discovered + 1, `${name}: discovered`);
+    assert.equal(snap.counts.notLive, c0.notLive + 1, `${name}: the new entity is unavailable, so one more is not live`);
+    assert.equal(snap.counts.UNAVAILABLE, c0.UNAVAILABLE + 1);
+    const row = snap.rows.find((r) => r.entity_id === NEW);
+    assert.ok(row && row.discovered && row.status === 'UNAVAILABLE', `${name}: the discovered row`);
+    assert.match(q(el, '[data-ecco-summary]').textContent, new RegExp(`${snap.counts.notLive} data points are stale`), `${name}: the Production sentence has the new number`);
+    geek(el);
+    typeSearch(el, 'zz_arrived');
+    assert.equal(rows(el).length, 1, `${name}: the Geek list shows it`);
+    assert.equal(qa(el, '[data-ecco-alert-strip] [data-alert-id]').length > 0, mutate !== undefined);
+    // and one that goes again, in the same second and with every other object the same
+    const gone = makeHass(states);
+    el.hass = gone;
+    assert.equal(mod.STATS.snapshots - s0, 2, `${name}: an entity that goes is a relevant update too`);
+    assert.equal(el.snapshot.counts.total, c0.total, `${name}: total again`);
+    assert.equal(el.snapshot.rows.some((r) => r.entity_id === NEW), false);
+    // an entity outside every prefix and every alert costs nothing, as before
+    const s2 = mod.STATS.snapshots;
+    el.hass = makeHass({ ...states, 'light.example_lamp': mkState('light.example_lamp', 'off', {}) });
+    assert.equal(mod.STATS.snapshots - s2, 0, `${name}: an update of an unrelated entity that was already there is still free`);
+  }
+});
+
+test('AC12 [r10] KEY COUNT, a disclosed limit: ONE update that removes an unrelated entity and adds a discovered one (the number of entities does not change), inside the one-second window, waits for the next tick for its row (at most 15 s); a tick shows it, and nothing wrong is ever shown (this test pins the limit of section 22.5: a change that fixes it fails here and must update the document)', () => {
+  const states = miniStates();
+  const el = mount({ states });
+  const NEW = 'sensor.ecco_intel_zz_swapped';
+  const swapped = { ...states, [NEW]: mkState(NEW, '1', {}) };
+  delete swapped['sensor.ecco_unrelated'];
+  assert.equal(Object.keys(swapped).length, Object.keys(states).length, 'the number of entities is the same');
+  const s0 = mod.STATS.snapshots;
+  el.hass = makeHass(swapped);
+  assert.equal(mod.STATS.snapshots - s0, 0, 'the update looks like one of nothing the view reads');
+  assert.equal(el.snapshot.rows.some((r) => r.entity_id === NEW), false, 'the row is not there yet');
+  el._tick();
+  assert.equal(el.snapshot.rows.some((r) => r.entity_id === NEW), true, 'the tick shows it');
+});
+
+test('AC12 [r10] AGE WINDOW: an update of something the view does not read is free only within a second of the last rebuild; after that it is taken, so the ages and the statuses follow the clock on a busy house (the tick is the fallback, not the only way)', () => {
+  const states = miniStates();
+  const el = mount({ states });
+  const lamp = (on) => makeHass({ ...states, 'light.example_lamp': mkState('light.example_lamp', on ? 'on' : 'off', {}) });
+  const s0 = mod.STATS.snapshots;
+  el._now = () => NOW + 500;
+  el.hass = lamp(false);
+  assert.equal(mod.STATS.snapshots - s0, 0, 'half a second after the last rebuild: free');
+  el._now = () => NOW + 5000;
+  el.hass = lamp(true);
+  assert.equal(mod.STATS.snapshots - s0, 1, 'five seconds after: taken');
+  assert.equal(el.snapshot.nowMs, NOW + 5000, 'at the clock of the update');
+  el._now = () => NOW + 5400;
+  el.hass = lamp(false);
+  assert.equal(mod.STATS.snapshots - s0, 1, 'inside the new window: free again');
+  el._now = () => NOW + 3600000;
+  el.hass = lamp(true);
+  assert.equal(mod.STATS.snapshots - s0, 2, 'an hour after: taken');
+  assert.equal(el.snapshot.rows.find((r) => r.id === 'S01').status, 'STALE', 'and the status sensor is stale by then, with no tick');
+});
+
+test('AC12 [r10] WATCHED SET, a seeded history of 80 updates inside the one-second window (an entity discovered, one that goes, one that changes, an unrelated one that comes and goes, a source that changes; never two keys at once): after every step the card that has lived through them shows exactly the rows and the counts of a card mounted fresh on the same states', () => {
+  let seed = 20261116;
+  const rnd = (n) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return Math.floor(seed / 65536) % n;
+  };
+  const DISC = Array.from({ length: 6 }, (_, i) => `sensor.ecco_intel_h_${i}`);
+  const OTHER = Array.from({ length: 6 }, (_, i) => `sensor.zz_unrelated_${i}`);
+  const SOURCES = ['sensor.ecco_intel_status', 'sensor.ecco_intel_charge_target', 'sensor.ecco_intel_pv_tomorrow'];
+  let states = miniStates();
+  const el = mount({ states });
+  const project = (snap) => ({ rows: snap.rows.map((r) => [r.key, r.status, r.stateText, r.discovered]), counts: snap.counts });
+  const seen = new Set();
+  for (let step = 0; step < 80; step += 1) {
+    const next = { ...states };
+    const op = rnd(6);
+    const pick = (list) => list[rnd(list.length)];
+    if (op === 0) {
+      const id = pick(DISC);
+      if (!(id in next)) next[id] = mkState(id, String(step), {}, { ageS: 5 });
+    } else if (op === 1) {
+      const id = pick(DISC);
+      delete next[id];
+    } else if (op === 2) {
+      const id = pick(DISC);
+      if (id in next) next[id] = mkState(id, step % 2 ? 'unavailable' : String(step), {}, { ageS: 5 });
+    } else if (op === 3) {
+      const id = pick(OTHER);
+      if (!(id in next)) next[id] = mkState(id, String(step), {});
+    } else if (op === 4) {
+      const id = pick(OTHER);
+      delete next[id];
+    } else {
+      const id = pick(SOURCES);
+      next[id] = mkState(id, `v${step}`, next[id].attributes, { ageS: 5 });
+    }
+    seen.add(op);
+    // the burst control (at most a few rebuilds in half a second, the rest coalesced by the flush timer) is not what this test is about: its history is forgotten before each step, and the age tick is NOT run (it would rebuild everything and hide a missed update)
+    el._stamps = [];
+    el.hass = makeHass(next);
+    states = next;
+    const fresh = mount({ states: structuredClone(states) });
+    const want = project(fresh.snapshot);
+    drop(fresh);
+    assert.deepEqual(project(el.snapshot), want, `step ${step} (operation ${op}): the long-lived card is not the fresh card`);
+  }
+  assert.equal(seen.size, 6, 'every kind of step happened');
+});
+
+test('AC12 [r10] THE SAME STATES OBJECT AGAIN: when an update of something the view does not read was skipped, the very same states object arriving again in the same second is recognised at once, without comparing the watched set a second time (the skip path remembers the object: a cost, not a result, so it is asserted by counting the comparisons)', () => {
+  const states = miniStates();
+  const el = mount({ states });
+  let compared = 0;
+  const original = el._sameWatched.bind(el);
+  el._sameWatched = (s) => {
+    compared += 1;
+    return original(s);
+  };
+  const next = { ...states, 'light.example_lamp': mkState('light.example_lamp', 'off', {}) };
+  const s0 = mod.STATS.snapshots;
+  el.hass = makeHass(next);
+  assert.equal(compared, 1, 'a new states object: the watched set is compared once');
+  el.hass = makeHass(next);
+  el.hass = makeHass(next, { themes: { darkMode: true } });
+  assert.equal(compared, 1, 'the same object again, twice: not compared again');
+  assert.equal(mod.STATS.snapshots - s0, 0, 'and nothing was rebuilt');
 });

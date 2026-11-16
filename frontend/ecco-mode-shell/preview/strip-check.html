@@ -81,11 +81,12 @@ async function main() {
   };
   const widths = (q.get('widths') || '390,1000').split(',').map(Number).filter((n) => n > 0);
   const stage = document.getElementById('stage');
-  // review round 9 (reviewer mutants E05 and E08: an alert hidden a moment AFTER the switch passed a check that measured in the same task as the click): after the switch, wait until the browser has run a zero-delay timer, two
-  // animation frames (so a paint has happened in between) and the microtasks and promise continuations they leave, then measure the strip again. The strip must be the very same strip. How many of the two frames the browser really
-  // delivered is counted and reported (framesSeen): measured with the browser this check uses (headless, virtual time), the first frame arrives within a few milliseconds and the second mostly does not, so the wait is given up after
-  // 250 ms of the page's own clock. Everything that is not a frame (a microtask, a promise continuation, an async function, a timer of up to 250 ms, an observer callback) has run either way. A longer delay is not waited for here:
-  // the node scheduler (test/async-net.mjs) runs timers of any delay and animation frames.
+  // review round 9 (reviewer mutants E05 and E08: an alert hidden a moment AFTER the switch passed a check that measured in the same task as the click): after the switch, wait until the browser has run a zero-delay timer and the
+  // microtasks and promise continuations it leaves, and ask for two animation frames, then measure the strip again. The strip must be the very same strip. REVIEW ROUND 10 (the measured behaviour, which this comment first
+  // got wrong): in the headless, virtual-time run this check uses, animation frames are in practice NOT delivered (a real `check-strip --require` run reported both frames for 0 of its 48 settled measurements, one frame for 1 and none for
+  // 47), so the wait is given up after 250 ms of the page's own clock and the second measurement is made then. What this layer covers is therefore microtasks, promise continuations, async functions and timers of up to 250 ms
+  // (and an observer callback that one of them causes). An animation frame, a longer timer and a hide that waits for time to pass are NOT covered here: they are covered only by the node scheduler (test/async-net.mjs),
+  // which runs frames and timers of any delay and moves the clocks the card sees. How many frames the browser really delivered is counted and reported (framesSeen).
   const settle = () => new Promise((resolve) => {
     let frames = 0;
     const giveUp = setTimeout(() => resolve(frames), 250);

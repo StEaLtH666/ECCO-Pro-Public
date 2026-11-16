@@ -1176,7 +1176,9 @@ export function summarise(snapshot, alerts) {
   const n = isNum(counts.notLive) ? counts.notLive : 0;
   // review round 8: an entity that the snapshot did not read (its budget was used up) is said so, in words, here as well: Production never implies that every value was looked at when one was not
   const notes = [];
-  if (n > 0) notes.push(`${n} data point${n === 1 ? ' is' : 's are'} stale, unavailable, simulated or unverified. Geek Mode lists them.`);
+  // review round 10 (reviewer, wording): the count has always included the rows that are unknown and the rows that are not measured (a declared source with no entity), but the sentence never named them; it names all six now,
+  // so what Production says is what the Geek surface lists under the same six status words
+  if (n > 0) notes.push(`${n} data point${n === 1 ? ' is' : 's are'} stale, unavailable, unknown, not measured, simulated or unverified. Geek Mode lists them.`);
   if (unread > 0) notes.push(`${unread} data point${unread === 1 ? ' was' : 's were'} not read: this view holds more data than it reads at once. Geek Mode says which.`);
   return { level, text, note: notes.join(' ') };
 }

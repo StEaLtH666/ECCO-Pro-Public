@@ -9,6 +9,14 @@
 //      reader of the source can follow), is executed by the test the moment it is asked to, with no real waiting;
 //   3. a FINGERPRINT of the strip (stripFingerprint): its whole subtree and everything around it, in a form that two moments can be compared by. "Identical before and after the scheduled work ran" is the assertion.
 // The tests are element.test.mjs (every AC6 test settles after each switch, hass update and timer step; the afterEach does it for every test) and async.test.mjs (the pin, the full tour, the negative controls).
+//
+// Review round 10 ([r10]) adds three more parts to the same net (the reviewer's survivors A04, A05 and A09: a hide that is gated on the CLOCK, and a hide inside the BODY of a continuation):
+//   4. THE CLOCKS: the scheduler moves the card's own readings of performance.now() and Date.now() forward at every flush (a ratchet of one hour: time never goes back), so a hide that waits for a minute, an hour or a
+//      day to pass cannot hide behind a frozen clock; every place the card reads a clock is recorded with its line, and a static pin (CLOCK_TOKENS, ALLOWED_CLOCK_SITES) lists the only places where the card may read a
+//      clock or a page state (Date, performance, visibilityState, hidden, hasFocus ...): anything new fails until a person decides. The shift, the number of shifts and the number of reads each have a hard bound that throws.
+//   5. THE BODIES: the bodies of the functions that the deferred work runs (attach, fail, say and the two they call) may use only the names on a documented list (CONTINUATION_BODIES): the strip, the shell, the Production
+//      or Geek body and the host are not on it, so a continuation that touches them fails the pin until a person decides.
+//   (The scheduler cannot move `new Date()` with no argument, because the card has none: the pin refuses a new one.)
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -227,19 +235,19 @@ export const ALLOWED_ASYNC_SITES = Object.freeze([
     why: 'the clipboard answers asynchronously; the continuation only writes one status line in the Geek surface.' },
 ]);
 
-/** The occurrences of every token in the source: [{ token, line (1-based), key }]. */
-export function asyncOccurrences(src) {
+/** The occurrences of every token in the source: [{ token, line (1-based), key }]. (Review round 10: `tokens` can be another table, the clocks of CLOCK_TOKENS.) */
+export function asyncOccurrences(src, tokens = ASYNC_TOKENS) {
   const out = [];
   scanLines(src).forEach((l, idx) => {
-    for (const [token, re] of Object.entries(ASYNC_TOKENS)) if (re.test(l.blank)) out.push({ token, line: idx + 1, key: siteKey(l.plain) });
+    for (const [token, re] of Object.entries(tokens)) if (re.test(l.blank)) out.push({ token, line: idx + 1, key: siteKey(l.plain) });
   });
   return out;
 }
 
 /** The pin: { unlisted: occurrences that are not on the list (or are more than the list allows), missing: list entries that are not found as often as they say }. */
-export function asyncSiteProblems(src, allowed = ALLOWED_ASYNC_SITES) {
+export function asyncSiteProblems(src, allowed = ALLOWED_ASYNC_SITES, tokens = ASYNC_TOKENS) {
   const found = new Map();
-  for (const o of asyncOccurrences(src)) {
+  for (const o of asyncOccurrences(src, tokens)) {
     const k = `${o.token}\u0000${o.key}`;
     if (!found.has(k)) found.set(k, []);
     found.get(k).push(o);
@@ -260,6 +268,121 @@ export function asyncSiteProblems(src, allowed = ALLOWED_ASYNC_SITES) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
+// 2b. [r10] THE CLOCKS: every place where the card reads a clock or a state of the page that a hide could be gated on
+// ---------------------------------------------------------------------------------------------------------------------------
+/**
+ * What counts as a clock or a page-state gate. Reviewer mutants A04 and A05 (round 10) emptied the strip when the card's own clock, or performance.now(), was a minute (twenty seconds) past the moment the Geek surface
+ * was built: both survived every suite, because every test kept the clock still. The class is "a hide that waits for something to change that the test never changes": time (Date, performance, a timestamp, the
+ * card's own clock `_now`), visibility (visibilityState, document.hidden), focus (hasFocus), the connection (onLine) and a media query (matchMedia). A token is matched on the blanked code (never inside a string or a comment).
+ */
+export const CLOCK_TOKENS = Object.freeze({
+  Date: /\bDate\b/,
+  performance: /\bperformance\b/,
+  Temporal: /\bTemporal\b/,
+  hrtime: /\bhrtime\b/,
+  getTime: /\bgetTime\b/,
+  timeStamp: /\btimeStamp\b/,
+  visibilityState: /\bvisibilityState\b/,
+  'document.hidden': /\b(?:document|ownerDocument|doc)\s*\.\s*hidden\b/,
+  hasFocus: /\bhasFocus\b/,
+  onLine: /\bonLine\b/,
+  matchMedia: /\bmatchMedia\b/,
+  'the card clock': /\b_now\b/,
+});
+
+/**
+ * THE LIST of the places where the card reads a clock (round 10). Each entry is one line of the card as written, the token it holds, how many times that line may appear, where it is and why it exists. The strings are
+ * the plain text of the line, so a change to the line itself is also a decision. `new Date(ms)` with an argument is a conversion of a time that is already known (the clock is not read); the only readings of a clock are
+ * Date.now() in the card's own clock (`_now`, which the tests replace) and performance.now() in the burst control.
+ */
+export const ALLOWED_CLOCK_SITES = Object.freeze([
+  { token: 'Date', line: 'const t = Date.parse(v);', count: 1, where: 'the time reader', why: 'turns a timestamp TEXT that Home Assistant gave (last_updated, an attribute) into milliseconds: no clock is read, the same text always gives the same number.' },
+  { token: 'Date', line: 'unit: r.unitText ? r.unitText : null, age_s: isNum(r.ageS) ? Math.round(r.ageS) : null, last_updated: isNum(r.lastUpdated) ? new Date(r.lastUpdated).toISOString() : null,', count: 1, where: 'exportRow()',
+    why: 'writes the last update of a row (milliseconds already known) as text in the copy and the download: a conversion, not a clock.' },
+  { token: 'Date', line: "const doc = { schema: EXPORT_SCHEMA, view_id: isStr(m.viewId) ? cleanText(m.viewId, 80) : '', generated_at: isNum(m.nowMs) ? new Date(m.nowMs).toISOString() : null,", count: 1, where: 'buildExport()',
+    why: 'writes the time of the snapshot (milliseconds already known) as text in the copy and the download: a conversion, not a clock.' },
+  { token: 'Date', line: 'this._now = () => Date.now();', count: 1, where: 'constructor()', why: 'THE card clock: the one place that reads the wall clock for the snapshot (ages, staleness). Tests replace it with a function they step.' },
+  { token: 'the card clock', line: 'this._now = () => Date.now();', count: 1, where: 'constructor()', why: 'the definition of the card clock (above).' },
+  { token: 'Date', line: "const t = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();", count: 1, where: '_admit()',
+    why: 'the burst control: how many rebuilds the last BURST_WINDOW_MS held. It reads the monotonic clock (or the wall clock where there is none) and decides ONLY whether a rebuild waits for the flush timer; it touches no alert.' },
+  { token: 'performance', line: "const t = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();", count: 1, where: '_admit()', why: 'the monotonic clock of the burst control (above).' },
+  { token: 'Date', line: 'return new Intl.DateTimeFormat(lang, { dateStyle: \'short\', timeStyle: \'medium\' }).format(new Date(ms));', count: 1, where: '_fmtTime()', why: 'writes a time already known (the snapshot time) for the Geek header, in the language of Home Assistant: a conversion, not a clock.' },
+  { token: 'Date', line: 'return new Date(ms).toISOString();', count: 1, where: '_fmtTime()', why: 'the fallback of the line above where Intl is not available: a conversion, not a clock.' },
+  { token: 'the card clock', line: 'const now = this._now();', count: 1, where: '_refresh()', why: 'the ONE read of the card clock per rebuild: every age, every status and the burst window of the snapshot come from it.' },
+  { token: 'Date', line: "const stamp = new Date(snap ? snap.nowMs : this._now()).toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');", count: 1, where: '_download()',
+    why: 'the time in the name of a downloaded file: the snapshot time (or the card clock when there is none yet): a conversion plus one read of the card clock.' },
+  { token: 'the card clock', line: "const stamp = new Date(snap ? snap.nowMs : this._now()).toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');", count: 1, where: '_download()', why: 'the read of the card clock for the file name (above).' },
+]);
+
+/** The pin of the clocks, in the same form as the pin of the deferrals: { unlisted, missing }. */
+export const clockSiteProblems = (src, allowed = ALLOWED_CLOCK_SITES) => asyncSiteProblems(src, allowed, CLOCK_TOKENS);
+export const clockOccurrences = (src) => asyncOccurrences(src, CLOCK_TOKENS);
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// 2c. [r10] THE BODIES of the functions that deferred work runs
+// ---------------------------------------------------------------------------------------------------------------------------
+/**
+ * The functions that a continuation (the card helpers' promise, its rejection, the clipboard's promise) reaches: the body of each may use only the names listed here, as a variable or as a member. The alert strip, the
+ * shell, `ui`, the host, the shadow root, a selector, a parent and the renderer of the strip are NOT names on any list, so a continuation that touches the strip (reviewer mutant A09, and its variants in fail and say)
+ * is refused by the pin until a person adds the name and the reason. `header` is the line the body starts at (found exactly once); the body ends where its braces close.
+ */
+export const CONTINUATION_BODIES = Object.freeze([
+  { name: 'attach', header: 'const attach = (el) => {', where: '_mountChild()', vocabulary: ['attach', 'el', 'gen', 'this', '_gen', 'wrap', 'appendChild', '_kids', 'push', '_hass', 'null', 'undefined', 'hass'],
+    why: 'runs when Home Assistant has built a child card: it puts the child into ITS OWN wrapper (wrap), remembers it to feed it hass, and gives it the current hass. It never reaches the strip, the shell or a mode.' },
+  { name: 'fail', header: 'const fail = (message) => {', where: '_mountChild()', vocabulary: ['fail', 'message', 'gen', 'this', '_gen', 'wrap', 'appendChild', '_notice'],
+    why: 'runs when a child card could not be made (also from the rejection of the helpers promise): it adds one notice to the child\'s own wrapper. It never reaches the strip, the shell or a mode.' },
+  { name: '_notice', header: '_notice(flag, text) {', where: 'EccoModeShell', vocabulary: ['_notice', 'flag', 'text', 'doc', 'this', 'ownerDocument', 'mk', 'class', 'role', 'cleanText'],
+    why: 'builds the text node of a notice (the one thing fail makes). It returns a node and touches nothing else.' },
+  { name: 'say', header: 'const say = (m) => {', where: '_copy()', vocabulary: ['say', 'm', 'this', '_geek'],
+    why: 'runs when the clipboard answers (or at once where there is no clipboard): it hands one status line to the Geek surface, if there is one. It never reaches the strip, the shell or a mode.' },
+  { name: 'GeekSurface.say', header: 'say(text) {', where: 'GeekSurface', vocabulary: ['say', 'text', 'this', 'ui', 'status_line', 'textContent'],
+    why: 'writes one status line inside the Geek surface\'s own list of nodes (this.ui is the surface\'s own, not the shell\'s).' },
+]);
+const KEYWORDS_IGNORED = new Set(['const', 'let', 'var', 'return', 'if', 'else']);
+const BODY_LINES_MAX = 40; // a body of more than 40 lines is not one of these (and the search for its end stops there)
+
+/** The problems of the bodies: a header not found exactly once, a body that does not close, a name that is not on the list. */
+export function continuationProblems(src, specs = CONTINUATION_BODIES) {
+  const lines = scanLines(src);
+  const problems = [];
+  for (const spec of specs) {
+    const at = [];
+    lines.forEach((l, i) => {
+      if (siteKey(l.plain) === siteKey(spec.header)) at.push(i);
+    });
+    if (at.length !== 1) {
+      problems.push(`${spec.name}: the header line "${spec.header}" is found ${at.length} times (exactly once is required)`);
+      continue;
+    }
+    let depth = 0;
+    let started = false;
+    let end = -1;
+    for (let i = at[0]; i < lines.length && i < at[0] + BODY_LINES_MAX; i += 1) {
+      for (const ch of lines[i].blank) {
+        if (ch === '{') {
+          depth += 1;
+          started = true;
+        } else if (ch === '}') depth -= 1;
+      }
+      if (started && depth <= 0) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) {
+      problems.push(`${spec.name}: the body does not close within ${BODY_LINES_MAX} lines`);
+      continue;
+    }
+    const allowed = new Set(spec.vocabulary);
+    const text = lines.slice(at[0], end + 1).map((l) => l.blank).join('\n');
+    const bad = new Set();
+    for (const m of text.matchAll(/[A-Za-z_][\w$]*|\$[\w$]+/g)) if (!KEYWORDS_IGNORED.has(m[0]) && !allowed.has(m[0])) bad.add(m[0]);
+    for (const w of bad) problems.push(`${spec.name}: the name "${w}" is not on its list (${[...allowed].join(', ')})`);
+  }
+  return problems;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
 // 3. the scheduler (BOUNDED: it cannot run away)
 // ---------------------------------------------------------------------------------------------------------------------------
 /**
@@ -277,7 +400,13 @@ export const BOUNDS = Object.freeze({
   maxEventsPerFlush: 2000, // events that ONE flush fires
   maxRounds: 6, // rounds of one flush: a card whose timers still wait after the last round does not settle
   maxWorkPerTest: 200000, // everything above added up (a record, a registration, a callback, an event, a flush), per test
+  // review round 10: the clocks the card sees (performance.now and Date.now) are moved forward at every flush; each of these throws when it is reached
+  maxClockStepMs: 86400000, // the largest step ONE flush may move the clocks (a day); a larger or a negative or a non-numeric one throws
+  maxClockShiftMs: 7200000000, // the largest total the clocks may have been moved in one test (2000 hours)
+  maxClockReads: 200000, // readings of a clock by the card (or, in the scope of a test of the scheduler, by its caller) in one test: a card that reads the clock in a loop is stopped
 });
+/** How far one flush moves the clocks the card sees, unless the flush says otherwise: an hour (time only goes forward). */
+export const CLOCK_STEP_MS = 3600000;
 
 /** The error of a bound that was reached. `which` is the name of the bound, `seen` the number that was reached, `limit` the bound. */
 export class SchedulerBound extends Error {
@@ -307,7 +436,8 @@ const inside = (dir, file) => {
  * Which calls are the scheduler's business: those made by the card, and those made by the test files (the DEFERRALS of async.test.mjs, the waits of element.test.mjs). A timer that only Node's own test runner
  * made is left alone: not recorded, never run early.
  */
-export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, bounds: boundsOverride = {} } = {}) {
+export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, bounds: boundsOverride = {}, clockScope: clockScopeDefault = 'card' } = {}) {
+  if (clockScopeDefault !== 'card' && clockScopeDefault !== 'tracked') throw new RangeError(`clockScope is 'card' or 'tracked', not ${String(clockScopeDefault)}`);
   const source = readFileSync(cardFile, 'utf8');
   const lines = scanLines(source);
   let bounds = { ...BOUNDS, ...boundsOverride };
@@ -320,7 +450,7 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
   };
   const records = []; // one per site: { api, line, key, count, ... }
   const recordAt = new Map();
-  const peak = { work: 0, listeners: 0, alive: 0, records: 0, pending: 0, callbacksPerFlush: 0, eventsPerFlush: 0 }; // the largest each number has been in any test so far (a calibration, printed by the tests)
+  const peak = { work: 0, listeners: 0, alive: 0, records: 0, pending: 0, callbacksPerFlush: 0, eventsPerFlush: 0, clockShiftMs: 0, clockReads: 0, clockSteps: 0 }; // the largest each number has been in any test so far (a calibration, printed by the tests)
   const timers = new Map(); // handle -> { kind, fn, args, ms }
   const frames = new Map();
   const idles = new Map();
@@ -544,6 +674,58 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
     return real.winAdd.call(this, type, fn);
   };
 
+  // ---- the clocks (review round 10). The card reads performance.now() (the burst control) and Date.now() (its own clock, which the tests replace). Reviewer mutants A04 and A05 emptied the strip when a clock was
+  // a minute (twenty seconds) past the moment the Geek surface was built, and survived because no test ever moved a clock. Now every reading of a clock BY THE CARD is recorded (with its line of the card: the dynamic
+  // half of the pin of the clocks), and is moved forward by `clockShift`, which every flush raises by a step (an hour): time only goes forward, so a hide that waits for a minute, an hour or a day to pass is
+  // triggered by the first flush after it was armed. Test code and Node's own code read the real clocks (a test that measures how long something took is not disturbed). `scope: 'tracked'` also moves the readings of the
+  // test files (for the tests of the scheduler itself, whose synthetic cards live in a test file).
+  const realClock = { perfDesc: Object.getOwnPropertyDescriptor(performance, 'now'), perfNow: performance.now, dateNow: Date.now };
+  let clockShift = 0;
+  let clockReads = 0;
+  let clockSteps = 0;
+  let clockScope = clockScopeDefault;
+  const clockRecords = [];
+  const clockAt = new Map();
+  const readClock = (api, real, self) => {
+    const raw = real.call(self);
+    const who = whoCalls();
+    const mine = clockScope === 'tracked' ? who.tracked : who.line !== null;
+    if (!mine) return raw;
+    if (failure !== null) throw failure;
+    clockReads += 1;
+    if (clockReads > peak.clockReads) peak.clockReads = clockReads;
+    if (clockReads > bounds.maxClockReads) bound('maxClockReads', clockReads, api);
+    if (who.line !== null) {
+      const at = `${api}\u0000${who.line}`;
+      const seen = clockAt.get(at);
+      if (seen) seen.count += 1;
+      else {
+        if (clockRecords.length >= bounds.maxRecords) bound('maxRecords', clockRecords.length + 1, api);
+        const rec = { api, line: who.line, key: lines[who.line - 1] ? siteKey(lines[who.line - 1].plain) : '?', count: 1 };
+        clockRecords.push(rec);
+        clockAt.set(at, rec);
+      }
+    }
+    return raw + clockShift;
+  };
+  performance.now = function now() {
+    return readClock('performance.now', realClock.perfNow, this);
+  };
+  Date.now = function now() {
+    return readClock('Date.now', realClock.dateNow, this);
+  };
+  /** Move the clocks the card sees forward by `stepMs` (a bounded, finite, non-negative number; the total is bounded too). */
+  const stepClock = (stepMs) => {
+    if (failure !== null) throw failure;
+    if (typeof stepMs !== 'number' || !Number.isFinite(stepMs) || stepMs < 0) bound('maxClockStepMs', stepMs, 'a clock step must be a finite number of milliseconds, zero or more');
+    if (stepMs > bounds.maxClockStepMs) bound('maxClockStepMs', stepMs);
+    if (clockShift + stepMs > bounds.maxClockShiftMs) bound('maxClockShiftMs', clockShift + stepMs);
+    clockShift += stepMs;
+    clockSteps += 1;
+    if (clockShift > peak.clockShiftMs) peak.clockShiftMs = clockShift;
+    if (clockSteps > peak.clockSteps) peak.clockSteps = clockSteps;
+  };
+
   // a browser's window HAS these (window.setTimeout is setTimeout): the stand-in window gets the same recording functions, so a card that reaches them through the window, by a name built at run time, is recorded and run too
   const WINDOW_NAMES = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame', 'requestIdleCallback', 'cancelIdleCallback'];
   const win = globalThis.window;
@@ -562,7 +744,7 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
     records,
     /** The numbers the scheduler is bounding, now (a test prints them, and the tour asserts that it stays under a fraction of each bound). */
     get stats() {
-      return { work, records: records.length, listeners: pairs, pending: timers.size + frames.size + idles.size, bounds: { ...bounds } };
+      return { work, records: records.length, listeners: pairs, pending: timers.size + frames.size + idles.size, clockShiftMs: clockShift, clockReads, clockSteps, bounds: { ...bounds } };
     },
     /** The largest each of the bounded numbers has been in any test so far. */
     get peak() {
@@ -575,6 +757,25 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
     /** The bound that was reached in this test, or null. A flush raises it again, so a card that caught the error in its own handler cannot hide it. */
     get failure() {
       return failure;
+    },
+    /** The clocks the card sees: how far they have been moved (milliseconds), how many times, and how often the card read one, in this test. */
+    get clock() {
+      return { shiftMs: clockShift, steps: clockSteps, reads: clockReads, scope: clockScope };
+    },
+    /** The places (API and line of the card) where the card read a clock in this test: [{ api, line, key, count }]. */
+    clockSites(api = null) {
+      return clockRecords.filter((r) => api === null || r.api === api);
+    },
+    /** Run `fn` with the clocks of other callers moved as well ('tracked': the test files too) or only the card's ('card'), then put the scope back. */
+    withClockScope(scope, fn) {
+      if (scope !== 'card' && scope !== 'tracked') throw new RangeError(`clockScope is 'card' or 'tracked', not ${String(scope)}`);
+      const old = clockScope;
+      clockScope = scope;
+      try {
+        return fn();
+      } finally {
+        clockScope = old;
+      }
     },
     /** Raise the bound that was reached, if any. */
     check() {
@@ -601,13 +802,23 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
       failure = null;
       records.length = 0;
       recordAt.clear();
+      clockShift = 0;
+      clockReads = 0;
+      clockSteps = 0;
+      clockScope = clockScopeDefault;
+      clockRecords.length = 0;
+      clockAt.clear();
       sched.resetListeners();
       sched.clearAll();
     },
     /** Run `fn` (async) with other bounds, then put the old ones back: for the tests of the bounds themselves. The bounds that `fn` reached are forgotten afterwards, with everything it left waiting. */
-    async withBounds(overrides, fn) {
+    async withBounds(overrides, fn, { clockScope: scope = null } = {}) {
       const old = bounds;
       bounds = { ...bounds, ...overrides };
+      if (scope !== null) {
+        if (scope !== 'card' && scope !== 'tracked') throw new RangeError(`clockScope is 'card' or 'tracked', not ${String(scope)}`);
+        clockScope = scope;
+      }
       try {
         return await fn();
       } finally {
@@ -627,9 +838,10 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
      * `after(what)` is called after each step, so a test can assert its invariant (the strip) after EVERY step, not only at the end.
      * It throws SchedulerBound (and does not loop) when a bound is reached or when timers, frames or idle callbacks still wait after the last round (the card keeps re-arming them).
      */
-    async flush({ rounds = bounds.maxRounds, events = false, after = null } = {}) {
+    async flush({ rounds = bounds.maxRounds, events = false, after = null, clockStepMs = CLOCK_STEP_MS } = {}) {
       sched.check();
       charge(1);
+      stepClock(clockStepMs);
       const step = (what) => {
         if (after) after(what);
       };
@@ -735,6 +947,9 @@ export function installScheduler({ resizeObservers = [], cardFile = CARD_PATH, b
       restore('ResizeObserver', real.ResizeObserver);
       MElement.prototype.addEventListener = real.elAdd;
       MWindow.prototype.addEventListener = real.winAdd;
+      Date.now = realClock.dateNow;
+      if (realClock.perfDesc) Object.defineProperty(performance, 'now', realClock.perfDesc);
+      else delete performance.now;
       if (win) {
         for (const [n, d] of winSaved) {
           if (d) Object.defineProperty(win, n, d);
@@ -770,5 +985,12 @@ export function stripFingerprint(el) {
   const before = siblings.slice(0, siblings.indexOf(strip)).map((c) => (c.nodeType === 1 ? `${c.tagName} ${attrsOf(c, ['data-mode', 'data-theme'])}` : '#text'));
   return JSON.stringify({ strip: serialise(strip), chain, before });
 }
+
+/**
+ * The two ways the card reads a clock, as functions the tests call (a test body must not read a clock itself unless it is a [wall-clock] test: static.test.mjs). A call from a test file is moved by the scheduler only in the
+ * scope 'tracked' (sched.withClockScope, sched.withBounds with clockScope): these are for the tests of the scheduler itself and of its synthetic cards.
+ */
+export const readPerformanceNow = () => performance.now();
+export const readDateNow = () => Date.now();
 
 export { tick, MEvent };

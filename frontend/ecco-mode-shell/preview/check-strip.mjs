@@ -9,8 +9,9 @@
 //
 // What it does: serves frontend/ecco-mode-shell on the loopback address (read only, one port the system picks, closed at the end), starts a headless Chrome or
 // Edge against preview/strip-check.html, and reads back what the browser computed for the alert strip in Production and Geek Mode, light and dark, with and
-// without Home Assistant's theme variables, at two widths and in two window sizes. Since round 9 each state is measured twice: in the same task as the switch, and again after a zero-delay timer and two animation
-// frames, and the strip must be the same strip both times (a card that hides the alert a moment AFTER the switch is caught here; longer delays are the node scheduler's, test/async-net.mjs). strip-check-lib.mjs judges the numbers: the strip box has a real size, is inside
+// without Home Assistant's theme variables, at two widths and in two window sizes. Since round 9 each state is measured twice: in the same task as the switch, and again after a zero-delay timer and the microtasks it leaves (it also asks for two animation
+// frames, but in a headless run they are in practice not delivered and the wait is given up after 250 ms), and the strip must be the same strip both times (a card that hides the alert a moment AFTER the switch is caught here if a microtask,
+// a promise or a timer of up to 250 ms does it; animation frames, longer delays and a hide that waits for time to pass are the node scheduler's, test/async-net.mjs). strip-check-lib.mjs judges the numbers: the strip box has a real size, is inside
 // the viewport and its card, is fully opaque, is not transformed, filtered, masked or clipped, is not covered, has text at least 12 px with at least 4.5 : 1
 // contrast, and is the SAME box with the same lines in both modes. It never reads the stylesheet: the static net (test/static.test.mjs) stays the mandatory one,
 // and this is the net that does not depend on how a rule is written. No network (loopback only), no write outside a temporary browser profile it deletes.

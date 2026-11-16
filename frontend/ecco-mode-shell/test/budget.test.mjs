@@ -289,7 +289,7 @@ test('AC12 [r8] Production says so too: the summary names the data points that w
   const s = buildSnapshot(bigStates(N), bigCatalogue(N), NOW);
   const sum = summarise(s, []);
   assert.match(sum.note, new RegExp(`${s.counts.unread} data points were not read`));
-  assert.ok(!/stale, unavailable, simulated or unverified/.test(sum.note), 'an unread entity is not counted as stale or unavailable');
+  assert.ok(!/stale, unavailable, simulated or unverified/.test(sum.note) && !/stale, unavailable, unknown, not measured, simulated or unverified/.test(sum.note), 'an unread entity is not counted as stale or unavailable (the sentence of round 9 and the sentence of round 10 are both absent)');
   assert.ok(!summarise(snap(), []).note.includes('not read'), 'ordinary data: nothing of the kind');
   const one = buildSnapshot(bigStates(21), bigCatalogue(21), NOW);
   assert.equal(one.counts.unread, 1);
