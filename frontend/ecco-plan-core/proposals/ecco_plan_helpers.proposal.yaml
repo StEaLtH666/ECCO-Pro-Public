@@ -1,0 +1,133 @@
+# PROPOSAL ONLY. Not installed and not loaded by any tool: it lives outside home-assistant/packages and is not in
+# deployment/ha-manifest.yaml. Turning it into a real package is a separate step that needs the owner's authorisation.
+#
+# What this is: Home Assistant HELPER ENTITIES only. They hold three things and nothing else:
+#   1. the owner's override limits (expiry minimum, defaults, caps, power-cut reserve), the policy inputs of
+#      frontend/ecco-plan-core/src/overridePolicy.ts, with min / max / step equal to that validator's bounds;
+#   2. the durable plan revision counter (a counter only: no PlanSettings value is copied here, so there is still exactly one
+#      canonical plan, the one the existing Free Power, Dump to Grid and TOU helpers feed);
+#   3. the active-override records: one start and one expiry per kind (plus the reserve for Prepare for power cut). One entity
+#      pair per kind means at most one active override per kind, by construction.
+#
+# What this is NOT: no script, no automation, no service call, no entity of the inverter or the dongle. Nothing here can write
+# the inverter or the native time-of-use table, stop a running session or lower a reserve. Enforcement belongs to the existing
+# guarded paths, which would have to be changed separately (see the plan-core README, "Stage 3 preparation").
+#
+# No helper has an `initial:`. Home Assistant then restores the last value (or starts a new number at its minimum), so the
+# proposed values are never applied by creating the helpers: the owner types each value in and then turns the confirmation
+# switch on. The switch starts off, and while it is off or unreadable the limits are unusable and every start is refused.
+#
+# All numbers are minutes unless stated. An override record is active only while its expiry is in the future. A record that was
+# never started holds the 1970 default and is therefore expired.
+
+input_boolean:
+  ecco_plan_overrides_enabled:
+    name: ECCO plan, override limits reviewed and confirmed
+
+input_number:
+  ecco_plan_revision:
+    name: ECCO plan revision (counter, written only by the guarded path)
+    min: 0
+    max: 1000000000
+    step: 1
+    mode: box
+
+  ecco_plan_policy_min_expiry:
+    name: ECCO plan, shortest allowed override
+    min: 5
+    max: 60
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_hold_default:
+    name: ECCO plan, Hold battery default length
+    min: 5
+    max: 4320
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_hold_cap:
+    name: ECCO plan, Hold battery longest length
+    min: 5
+    max: 4320
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_skip_cap:
+    name: ECCO plan, Skip tonight longest length
+    min: 5
+    max: 2160
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_default:
+    name: ECCO plan, Prepare for power cut default length
+    min: 5
+    max: 10080
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_cap:
+    name: ECCO plan, Prepare for power cut longest length
+    min: 5
+    max: 10080
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_reserve:
+    name: ECCO plan, Prepare for power cut reserve
+    min: 10
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+
+  ecco_plan_override_prepare_power_cut_reserve:
+    name: ECCO plan, reserve of the running Prepare for power cut
+    min: 10
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+
+input_datetime:
+  ecco_plan_policy_skip_until:
+    name: ECCO plan, Skip tonight ends at (local time of day, 03:00 to 23:55)
+    has_date: false
+    has_time: true
+
+  ecco_plan_override_hold_battery_start:
+    name: ECCO plan, Hold battery started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_hold_battery_expires:
+    name: ECCO plan, Hold battery expires
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_skip_tonight_start:
+    name: ECCO plan, Skip tonight started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_skip_tonight_expires:
+    name: ECCO plan, Skip tonight expires
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_prepare_power_cut_start:
+    name: ECCO plan, Prepare for power cut started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_prepare_power_cut_expires:
+    name: ECCO plan, Prepare for power cut expires
+    has_date: true
+    has_time: true

@@ -3,6 +3,7 @@ export * from "./time.ts";
 export * from "./settings.ts";
 export * from "./tou.ts";
 export * from "./overrides.ts";
+export * from "./overridePolicy.ts";
 export * from "./chargePlanner.ts";
 export * from "./tomorrow.ts";
 export * from "./guards.ts";

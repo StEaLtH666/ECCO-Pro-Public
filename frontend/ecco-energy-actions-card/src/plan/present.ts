@@ -1,8 +1,9 @@
 // Presentation model for the read-only plan views: turns a PlanSnapshot into plain strings, chips and rows. Pure (no Lit, no DOM,
 // no clock), so every wording and every state mapping is unit-tested. Nothing here can call a service.
-import { FIELD_DEFS, fmt, span } from "../../../ecco-plan-core/src/index.ts";
-import type { NativeSlot, SlotReport } from "../../../ecco-plan-core/src/index.ts";
+import { EXPIRY_CEILING_MIN, FIELD_DEFS, OVERRIDE_LABELS, PROPOSED_DEFAULTS, fmt, formatDurationMin, span } from "../../../ecco-plan-core/src/index.ts";
+import type { NativeSlot, OverrideConfig, OverrideKind, SlotReport } from "../../../ecco-plan-core/src/index.ts";
 import type { ChipState, FieldInfo, PlanSnapshot } from "./adapter.ts";
+import type { HelperSnapshot } from "./helpers.ts";
 
 export type ChipKind = ChipState | "UNKNOWN";
 
@@ -29,6 +30,12 @@ export const STATUS_LINE =
 
 export const OVERRIDES_LINE_NONE =
   "Quick overrides: none active. Shown as status only; starting one needs a plan helper that does not exist yet.";
+
+export const OVERRIDES_LINE_NONE_HELPER =
+  "Quick overrides: none active. Shown as status only; starting one needs the guarded start path, which is not installed.";
+
+export const OVERRIDES_STATUS_NOTE =
+  "Status only: nothing in this view starts, cancels or enforces an override. An override can only hold back a start or raise a reserve; it never writes the inverter's table and never stops a running session.";
 
 export interface FigureVM {
   key: string;
@@ -78,6 +85,33 @@ export interface TouVM {
   mismatchCount: number;
 }
 
+export interface OverrideRowVM {
+  kind: OverrideKind;
+  label: string;
+  /** "until 2026-11-17 07:00" in the helper's local time. */
+  untilText: string;
+  /** "ends in 3 h 20 min". */
+  countdownText: string;
+  /** What the override is meant to do, in plain words (not a claim that anything enforces it yet). */
+  effectText: string;
+}
+
+export interface OverrideBlockVM {
+  policyOk: boolean;
+  /** One sentence: the limits in force, or why none are usable. */
+  policyLine: string;
+  reasons: string[];
+  warnings: string[];
+  /** Proposed entities that were not found. */
+  missing: string[];
+  /** The proposed defaults, shown only while the limits are not usable. They are never applied. */
+  proposed: string[];
+  revisionText: string;
+  rows: OverrideRowVM[];
+  problems: string[];
+  note: string;
+}
+
 export interface PlanVM {
   statusLine: string;
   adviceNote: string | null;
@@ -86,6 +120,8 @@ export interface PlanVM {
   settings: SettingRowVM[];
   tou: TouVM;
   overridesLine: string;
+  /** Present only when the proposed plan helper entities exist; null leaves the view exactly as it was. */
+  overrideBlock: OverrideBlockVM | null;
 }
 
 const CONFIDENCE_TEXT: Record<string, string> = { HIGH: "High", MEDIUM: "Medium", LOW: "Low", INSUFFICIENT: "Insufficient evidence" };
@@ -174,7 +210,67 @@ function touVM(snap: PlanSnapshot): TouVM {
   return { readable: true, headline, statusText: STATUS_TEXT[c.status] ?? c.status, reasons, slots, mismatchCount };
 }
 
-export function presentPlan(snap: PlanSnapshot): PlanVM {
+const EFFECT_TEXT: Record<OverrideKind, (reserve: number | undefined) => string> = {
+  hold_battery: () => "Intended: no export starts and no discretionary rate edits; charging and the inverter table are untouched.",
+  skip_tonight: () => "Intended: tonight's export is held; charging continues.",
+  prepare_power_cut: (reserve) => `Intended: the reserve is raised to ${reserve ?? "?"} % (never lowered) and export starts are held.`,
+};
+
+function proposedLines(): string[] {
+  const show = (key: string, v: number): string => (key === "skipUntilMin" ? fmt(v) : key === "cutReservePct" ? `${v} %` : formatDurationMin(v));
+  const names: Record<string, string> = {
+    minExpiryMin: "Shortest allowed override",
+    holdDefaultMin: "Hold battery default",
+    holdCapMin: "Hold battery maximum",
+    skipUntilMin: "Skip tonight ends at",
+    skipCapMin: "Skip tonight maximum",
+    cutDefaultMin: "Prepare for power cut default",
+    cutCapMin: "Prepare for power cut maximum",
+    cutReservePct: "Power-cut reserve",
+  };
+  return PROPOSED_DEFAULTS.map((p) => `${names[p.key] ?? p.key}: ${show(p.key, p.value)}. ${p.why}`);
+}
+
+function limitsLine(c: OverrideConfig): string {
+  const fmtCap = (m: number): string => formatDurationMin(m);
+  return (
+    `Limits set by you: ${OVERRIDE_LABELS.hold_battery} default ${fmtCap(c.holdDefaultMin)}, up to ${fmtCap(c.holdCapMin)}; ` +
+    `${OVERRIDE_LABELS.skip_tonight} until ${fmt(c.skipUntilMin)}, up to ${fmtCap(c.skipCapMin)}; ` +
+    `${OVERRIDE_LABELS.prepare_power_cut} default ${fmtCap(c.cutDefaultMin)}, up to ${fmtCap(c.cutCapMin)}, reserve ${c.cutReservePct} %. ` +
+    `Hard ceilings no setting can exceed: ${fmtCap(EXPIRY_CEILING_MIN.hold_battery)}, ${fmtCap(EXPIRY_CEILING_MIN.skip_tonight)}, ${fmtCap(EXPIRY_CEILING_MIN.prepare_power_cut)}.`
+  );
+}
+
+function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
+  const policy = h.policy;
+  const rows: OverrideRowVM[] = h.active.map((r) => ({
+    kind: r.override.kind,
+    label: r.label,
+    untilText: `until ${r.expiresText}`,
+    countdownText: `ends in ${formatDurationMin(r.remainingMin)}`,
+    effectText: EFFECT_TEXT[r.override.kind](r.override.reservePct),
+  }));
+  const revisionText = !h.revision.known
+    ? `Plan revision: unknown (${h.revision.reason})`
+    : h.revision.value === 0
+      ? "Plan revision: none recorded yet."
+      : `Plan revision ${h.revision.value} (stored in the plan helper).`;
+  return {
+    policyOk: policy.ok,
+    policyLine: policy.ok ? limitsLine(policy.config) : "The override limits are not usable, so no override can be started. Nothing falls back to proposed values.",
+    reasons: policy.ok ? [] : [...policy.reasons],
+    warnings: policy.ok ? [...policy.warnings] : [],
+    missing: [...h.missing],
+    proposed: policy.ok ? [] : proposedLines(),
+    revisionText,
+    rows,
+    problems: [...h.problems],
+    note: OVERRIDES_STATUS_NOTE,
+  };
+}
+
+export function presentPlan(snap: PlanSnapshot & { helpers?: HelperSnapshot | null }): PlanVM {
+  const helpers = snap.helpers ?? null;
   const t = snap.tomorrow;
   const figure = (key: string, label: string, item: { known: true; value: number; state: ChipState; simulated: boolean } | { known: false; reason: string }, fmtv: (v: number) => string): FigureVM => {
     if (!item.known) return { key, label, known: false, text: "Unknown", reason: item.reason, note: "", chip: CHIPS.UNKNOWN };
@@ -199,6 +295,13 @@ export function presentPlan(snap: PlanSnapshot): PlanVM {
     why: t.why.map((w) => ({ origin: w.origin, text: w.text })),
     settings: snap.fields.map(settingRow),
     tou: touVM(snap),
-    overridesLine: snap.overrides.length === 0 ? OVERRIDES_LINE_NONE : `Quick overrides active: ${snap.overrides.map((o) => o.kind).join(", ")} (status only).`,
+    overridesLine: helpers
+      ? snap.overrides.length === 0
+        ? OVERRIDES_LINE_NONE_HELPER
+        : `Quick overrides active: ${snap.overrides.map((o) => OVERRIDE_LABELS[o.kind]).join(", ")} (status only).`
+      : snap.overrides.length === 0
+        ? OVERRIDES_LINE_NONE
+        : `Quick overrides active: ${snap.overrides.map((o) => o.kind).join(", ")} (status only).`,
+    overrideBlock: helpers ? overrideBlockVM(helpers) : null,
   };
 }

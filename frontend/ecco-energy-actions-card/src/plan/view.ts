@@ -2,10 +2,10 @@
 // no button and no service call in this file: the views only display. See present.ts for every wording.
 import { css, html, nothing } from "lit";
 import type { TemplateResult } from "lit";
-import { buildPlanSnapshot } from "./adapter.ts";
 import type { StatesLike } from "./adapter.ts";
+import { buildPlanSnapshotWithHelpers } from "./helpers.ts";
 import { presentPlan } from "./present.ts";
-import type { Chip, FigureVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
+import type { Chip, FigureVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
 
 function chip(c: Chip): TemplateResult {
@@ -34,6 +34,41 @@ function settingRow(r: SettingRowVM): TemplateResult {
       ${chip(r.chip)}
       ${r.known ? r.remarks.map((m) => html`<span class="plan-reason">${m}</span>`) : html`<span class="plan-reason">${r.reason}</span>`}
     </li>
+  `;
+}
+
+function overrideRow(r: OverrideRowVM): TemplateResult {
+  return html`
+    <li class="plan-setting" data-override=${r.kind}>
+      <span class="plan-setting-label">${r.label}</span>
+      <span class="plan-setting-value">${r.untilText}</span>
+      <span class="plan-note">${r.countdownText}</span>
+      <span class="plan-reason">${r.effectText}</span>
+    </li>
+  `;
+}
+
+/** Shown only when the proposed plan helper entities exist: the override limits, the stored revision and any active override. */
+function overrideBlock(b: OverrideBlockVM): TemplateResult {
+  return html`
+    <div class="plan-override-block" data-block="overrides">
+      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}
+      <p class="plan-reason" data-override-policy=${b.policyOk ? "ok" : "unusable"}>${b.policyLine}</p>
+      ${b.reasons.length ? html`<ul class="plan-reasons">${b.reasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
+      ${b.warnings.length ? html`<ul class="plan-reasons">${b.warnings.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
+      ${b.problems.length ? html`<ul class="plan-reasons" data-override-problems>${b.problems.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
+      ${b.missing.length ? html`<p class="plan-reason">Plan helper entities not found: ${b.missing.join(", ")}.</p>` : nothing}
+      ${b.proposed.length
+        ? html`
+            <details class="plan-why">
+              <summary>Proposed values (not in use)</summary>
+              <ul>${b.proposed.map((p) => html`<li>${p}</li>`)}</ul>
+            </details>
+          `
+        : nothing}
+      <p class="plan-reason">${b.revisionText}</p>
+      <p class="plan-reason">${b.note}</p>
+    </div>
   `;
 }
 
@@ -72,7 +107,7 @@ export function renderPlanVM(vm: PlanVM): TemplateResult {
           <summary>Planned settings</summary>
           <ul class="plan-settings">${vm.settings.map(settingRow)}</ul>
         </details>
-        <p class="plan-overrides">${vm.overridesLine}</p>
+        <p class="plan-overrides">${vm.overridesLine}</p>${vm.overrideBlock ? overrideBlock(vm.overrideBlock) : nothing}
       </div>
 
       <div class="plan-block" data-block="tou">
@@ -96,9 +131,11 @@ export function renderPlanVM(vm: PlanVM): TemplateResult {
  * The card's entry point. Returns `nothing` unless the config flag is exactly `true`; in that case it does not touch hass at all,
  * so a card with the flag off reads no extra entity and renders exactly as before.
  */
-export function renderPlanSection(config: EccoEnergyActionsCardConfig | undefined, states: StatesLike | undefined): TemplateResult | typeof nothing {
+export function renderPlanSection(config: EccoEnergyActionsCardConfig | undefined, states: StatesLike | undefined, nowMs?: number): TemplateResult | typeof nothing {
   if (!config || config.show_plan !== true) return nothing;
-  const vm = presentPlan(buildPlanSnapshot(config, states ?? {}));
+  // The clock is read only here, in the entry point, to judge stored override expiries; the card passes nothing, tests pass a moment.
+  const at = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now();
+  const vm = presentPlan(buildPlanSnapshotWithHelpers(config, states ?? {}, Math.floor(at / 60000)));
   return renderPlanVM(vm);
 }
 
