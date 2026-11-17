@@ -248,3 +248,11 @@ card and the dump schedule package.
   package, the guarded start package, their suites and the card's control sources and tests.
 
 No firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte changes, and no new Modbus operation.
+
+## What epc3 changed
+
+`epc3` (`registry/tests/_epc3_scope.py`) declares only added files: the Gentle Smart Charging controller model in the plan-core package
+(`src/gentleController.ts`), its closed-loop battery simulator (`test/support/batterySim.ts`) and its suite (`test/gentleController.test.ts`).
+The plan-core `README.md` and `src/index.ts` it also touches are epc1 added files, so no reverter or checkpoint is needed. No firmware,
+Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, there is no Modbus operation and no service call: the
+model returns data and says `actuationSupported: false`.

@@ -124,6 +124,7 @@ import _hd1_scope as _hd1  # noqa: E402
 import _isp1_scope as _isp1  # noqa: E402
 import _epc1_scope as _epc1  # noqa: E402
 import _epc2_scope as _epc2  # noqa: E402
+import _epc3_scope as _epc3  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1317,7 +1318,22 @@ EPC2 = Entry(
          "(script.turn_on on the guarded scripts only) and its rebuilt bundle, and the manifest stanzas of the two packages: ZERO firmware, "
          "registry data, Intelligence or ecco_core change, ZERO Modbus operation",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, EPC1, EPC2)
+# epc3 (the Gentle Smart Charging controller MODEL: read only, offline, nothing installed or actuated; _epc3_scope.py): made on the export
+# after epc2. ADDED files only: the pure controller model in the plan-core package, its closed-loop battery simulator and its suite. No
+# frozen or chain-pinned edit (the plan-core README and index are epc1 added files). Measured, not declared: no reverter, no delta, no op
+# path; ZERO firmware, Home Assistant package, deployment, registry, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation;
+# no service call and no write: the model returns data labelled "model, not a command" with actuationSupported false.
+EPC3 = Entry(
+    id="epc3", pr="EPC3", commit="unmerged",
+    added_files=_epc3.ADDED_FILES,
+    # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
+    fingerprint="1fdfe7d8d8275e0c2e5b0e403a82b15b3f527fdb10979e3f424098951f34cb82",
+    note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
+         "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
+         "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "
+         "Home Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, EPC1, EPC2, EPC3)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -10,6 +10,7 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Gentle Smart Charging controller model (offline, read only; nothing installed, nothing actuated)**: `frontend/ecco-plan-core/src/gentleController.ts`, a pure model that turns SOC, remaining time and the smallest known safe power ceiling into a recommended charge-power setpoint (lowest 100 W step that reaches the target, 100 % included, by the finish-early deadline; assumed BMS taper; hysteresis, dwell and a changes budget), labelled "model, not a command" with `actuationSupported: false` (today's firmware fixes the Free Power rate at START). A closed-loop battery simulator and 400 seeded scenarios test it; post-export entry `epc3`.
 - **ECCO plan overrides, stage 3 (offline; nothing installed)**: the guarded Hold battery / Skip tonight / Prepare for power cut overrides.
   `home-assistant/packages/ecco_plan_helpers.yaml` (the owner's limits, seeded once with the accepted starting values; the plan revision; the
   override records; two guarded scripts that enforce the validator's rules server-side with stable refusal codes and write only these

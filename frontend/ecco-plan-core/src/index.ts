@@ -7,3 +7,4 @@ export * from "./overridePolicy.ts";
 export * from "./chargePlanner.ts";
 export * from "./tomorrow.ts";
 export * from "./guards.ts";
+export * from "./gentleController.ts";
