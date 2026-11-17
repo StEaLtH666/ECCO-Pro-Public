@@ -4,7 +4,9 @@ What it touches in Home Assistant (the complete list; the runtime boundary suite
 
   * hass.states.get(...)                     read the mapped entities and the pause helper (never a write)
   * recorder get_instance(hass).async_add_executor_job(statistics_during_period, ...)   read statistics, recorder executor
-  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop
+  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop;
+                                             and, only when the diagnostics are downloaded, the Ghost block (read-only,
+                                             one job at a time, with a time budget: runtime/ghost_link.py)
   * hass.async_add_import_executor_job(...)  in __init__.py: this module (and through it most of the vendored engine) is
                                              imported in the import executor, never on the event loop
   * hass.loop.call_soon(...)                 the release of each executor job above (__init__.release_after_step): a job
@@ -186,7 +188,7 @@ import logging
 import math
 import time as time_mod
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
@@ -200,6 +202,7 @@ from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from intelligence import ghost_compare
 from intelligence.advisory_contract import (ENTITY_IDS, INTEGRATION_ENTITY_KEYS, AdvisoryEnvelope, ItemStatus, SystemStatus,
                                             Versions, envelope_summary, paused_envelope, self_test_failed_envelope,
                                             stale_from, starting_envelope, to_entity_payloads, with_last_good,
@@ -214,7 +217,7 @@ from .const import (CPU_WINDOW_S, CYCLE_TASK_NAME, DOMAIN, INTEGRATION_VERSION, 
                     PROPOSED_RECORDER_RETRY_S, PROPOSED_REFRESH_FLOOR_S, PROPOSED_RESULT_MAX_AGE_S,
                     PROPOSED_STALE_BACKOFF_S, PROPOSED_STARTUP_GRACE_S, PROPOSED_TICK_MARGIN_S, PROPOSED_TIME_BUDGET_S,
                     REFRESH_MARGIN_S, SCHEDULE_DAILY_LOCAL, SITE_TZ, SUBMIT_COOLDOWN_S, TICK_JOB_NAME, TICK_S)
-from .runtime import engine_link, gates, history_source, sources
+from .runtime import engine_link, gates, ghost_link, history_source, sources
 from .runtime import store as rstore
 from .runtime.selftest import FAIL, PASS, WARN, SelfTest
 
@@ -464,6 +467,8 @@ class EccoIntelCoordinator:
         self._history_reuse = engine_link.HistoryReuse()  # the parsed history, reused while the statistics are unchanged
         self._metrics: Any = None
         self._metrics_ok = False
+        self._ghost_job: engine_link.EngineJob | None = None   # the last cycle's job without its rows (the Ghost block, diagnostics)
+        self._ghost_busy = False                          # a Ghost block job is running (one at a time)
         self._entity_mismatch: dict[str, str] = {}
         self._entities_seen: set[str] = set()
         self._closed = False
@@ -537,6 +542,7 @@ class EccoIntelCoordinator:
             self._task.cancel()
         self._listeners.clear()
         self._hist = None
+        self._ghost_job = None
         self._history_reuse.clear()
         self.store.close()
 
@@ -1328,6 +1334,7 @@ class EccoIntelCoordinator:
                 previous=None if self._last_computed is None else envelope_summary(self._last_computed),
                 versions=self.versions, config_liveness_at=config_liveness_at,
                 history_reuse=self._history_reuse)
+            self._ghost_job = replace(job, statistics=None, history_reuse=None, previous=None)   # a reference copy, no rows
             t0 = time_mod.perf_counter()
             env, diag, history = await self._bounded(
                 self._submit(self.hass.async_add_executor_job, engine_link.compute, job, self._run_cycle), deadline)
@@ -1478,3 +1485,34 @@ class EccoIntelCoordinator:
                                    "PROPOSED_HISTORY_ROW_CAP": history_source.PROPOSED_HISTORY_ROW_CAP,
                                    "PROPOSED_HISTORY_LOOKBACK_DAYS": history_source.PROPOSED_HISTORY_LOOKBACK_DAYS},
         }
+
+    async def async_ghost_diagnostics(self) -> dict:
+        """The Ghost block of the diagnostics download (runtime/ghost_link.py): the existing schedule against Intelligence's
+        advice, a read-only simulation computed only now, in the executor, from the last cycle's inputs and the cached recorder
+        rows. One job at a time (a request while one runs, or one that outlived its time budget, gets BUSY), at most
+        PROPOSED_GHOST_BUDGET_S of waiting (then TIME_BUDGET; the thread, which only reads, runs to its end and its result is
+        discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state."""
+        try:
+            job, hist = self._ghost_job, self._hist
+            if self._closed or job is None:
+                return ghost_link.unavailable(ghost_compare.R_NO_CYCLE)
+            stats = None if hist is None else hist.get("stats")
+            if stats is None:
+                return ghost_link.unavailable(ghost_compare.R_NO_STATISTICS)
+            if self._ghost_busy:
+                return ghost_link.unavailable(ghost_compare.R_BUSY)
+            fut = self._submit(self.hass.async_add_executor_job, ghost_link.ghost_block, replace(job, statistics=stats), self.store)
+            self._ghost_busy = True                      # only once the job exists (a submit that raises leaves it free)
+            fut.add_done_callback(self._ghost_done)
+            try:
+                return await asyncio.wait_for(asyncio.shield(fut), ghost_link.PROPOSED_GHOST_BUDGET_S)
+            except asyncio.TimeoutError:
+                return ghost_link.unavailable(ghost_compare.R_BUDGET)
+        except Exception as exc:  # noqa: BLE001 - the download never fails for the Ghost; only the class name is kept
+            return ghost_compare.error_block(exc)
+
+    def _ghost_done(self, fut: asyncio.Future) -> None:
+        """The Ghost job's thread has ended (also after its wait timed out): one job at a time is free again."""
+        self._ghost_busy = False
+        if not fut.cancelled():
+            fut.exception()                              # retrieved, so it is never logged as unhandled

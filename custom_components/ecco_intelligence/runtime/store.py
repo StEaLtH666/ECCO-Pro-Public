@@ -43,6 +43,7 @@ SITE_PARTS = ("ecco", "intelligence", "site.local.json")
 STATE_PARTS = ("ecco", "intelligence", "state")
 SCORECARD_FILE = "scorecard.sqlite3"
 META_FILE = "store_meta.json"
+ADVICE_ROWS_LIMIT = 5000                      # a safety cap on the advice rows one read returns (the newest are kept)
 SLOTS_DDL = ("CREATE TABLE IF NOT EXISTS ecco_intel_slots (slot_utc TEXT PRIMARY KEY, run_id INTEGER NOT NULL, "
              "recorded_utc TEXT NOT NULL)")
 UTC = timezone.utc
@@ -307,6 +308,31 @@ class RuntimeStateStore:
         cn = sum(int(r["n"]) for r in cov_rows)
         cov = (sum(float(r["coverage"]) * int(r["n"]) for r in cov_rows) / cn) if cn else None
         return OutcomeMetrics(mae, cov, n)
+
+    def advice_rows(self, start: datetime, end: datetime, limit: int = ADVICE_ROWS_LIMIT) -> list[dict]:
+        """READ-ONLY (SQLite mode=ro; nothing is created, altered or written, not even when the store is closed): the logged
+        advice issued in [start, end), oldest first, at most the newest `limit` rows, as the dicts of
+        ghost.AdviceRecord.from_dict (the mapping of Scorecard.advice_records and tools/advice_export.py; a test pins that the
+        three agree). [] when there is no scorecard file or no advice_log table (nothing logged yet); raises sqlite3.Error /
+        OSError when the file cannot be read, so the caller can tell 'nothing logged' from 'unreadable'."""
+        path = self._root / SCORECARD_FILE
+        if not path.is_file():
+            return []
+        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='advice_log'").fetchone() is None:
+                return []
+            got = con.execute("SELECT * FROM advice_log WHERE issued_utc >= ? AND issued_utc < ? "
+                              "ORDER BY issued_utc DESC, advice_id DESC LIMIT ?", (_iso(start), _iso(end), int(limit))).fetchall()
+        finally:
+            con.close()
+        return [{"kind": r["kind"], "status": r["status"], "issued_at": r["issued_utc"], "window_start": r["window_start_utc"],
+                 "window_end": r["window_end_utc"], "target_soc_pct": r["target_soc_pct"], "export_kwh": r["export_kwh"],
+                 "export_kw": r["export_kw_avg"], "effective_reserve_pct": r["effective_reserve_pct"],
+                 "conservative_fallback": bool(r["conservative_fallback"]),
+                 "dump_advisable": True if r["dump_advisable"] is None else bool(r["dump_advisable"]),
+                 "advice_id": f"advice_log:{r['advice_id']}"} for r in reversed(got)]
 
     def counts(self) -> dict:
         """Row counts (tests and diagnostics)."""

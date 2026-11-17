@@ -545,7 +545,8 @@ network. It writes:
 What goes into the kit:
 
 - **The vendor set:** the AST import closure, module level and function level, of `intelligence.shadow_cycle`,
-  `intelligence.scorecard`, `intelligence.history` and `ecco_core.bridge`, plus the package `__init__` files.
+  `intelligence.scorecard`, `intelligence.history`, `intelligence.ghost_compare` (the Ghost's read-only diagnostics block) and
+  `ecco_core.bridge`, plus the package `__init__` files.
 - **Import rewriting:** every absolute `intelligence.` / `ecco_core.` import is rewritten to a package-relative one, at any
   depth, in the vendored modules and in the integration files. Examples:
   - `bridge.py`'s lazy import becomes `from ..intelligence.inputs import ...`;

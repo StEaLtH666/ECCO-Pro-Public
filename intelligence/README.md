@@ -69,11 +69,13 @@ house over a short period: evidence, not proof.
 `python intelligence/tools/ghost_diag_report.py <downloaded file>` prints the compact comparison (`--json` prints the block). The tool
 accepts the whole download, a file with a `ghost` key, or the block.
 
-**Status.** Offline only; nothing is deployed. The integration wiring (coordinator, diagnostics, `runtime/ghost_link.py`,
-`RuntimeStateStore.advice_rows`) is delivered as `custom_components/ecco_intelligence/tests/ghost_diag_wiring.patch`, not applied: it
-adds `intelligence.ghost_compare` to the kit's vendor roots (`tools/build_ha_integration.py` ROOT_MODULES), which two pinned tests list
-(`test_runtime_build.py` ROOTS and `test_runtime_import_without_ha.py`'s runtime module list), so applying it is an owner-approved re-pin.
-`tests/test_runtime_ghost_diag.py` applies the patch to a temporary copy and proves the wiring there.
+**Status.** Offline only; nothing is deployed and nothing is installed. The integration wiring (coordinator, diagnostics,
+`runtime/ghost_link.py`, `RuntimeStateStore.advice_rows`) is APPLIED to this branch (owner approval of 17 Nov): it adds
+`intelligence.ghost_compare` to the kit's vendor roots (`tools/build_ha_integration.py` ROOT_MODULES) and the two pinned tests that list
+them were re-pinned in the same step (`test_runtime_build.py` ROOTS and `test_runtime_import_without_ha.py`'s runtime module list). The
+block is computed only when the diagnostics are downloaded; the eleven-entity contract is unchanged. A kit built from this branch is
+deployed only after the Intelligence acceptance run, the M2 scan and the staged approvals. `tests/test_runtime_ghost_diag.py` runs the
+wired scenarios (`tests/_ghost_diag_l2.py`) against this tree; `tests/ghost_diag_wiring.patch` stays as the record of the wiring.
 
 Run the tests (each is a plain script, same convention as `health/tests`):
 
