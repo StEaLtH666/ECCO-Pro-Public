@@ -5,6 +5,7 @@ import { buildPlanSnapshot, readTouTable } from "../src/plan/adapter.ts";
 import type { FieldInfo } from "../src/plan/adapter.ts";
 import { BASE_CONFIG, P } from "./support/fixtures.ts";
 import { ADVICE, PLAN_CONFIG, TABLE, planConfig, planStates, slotEntity, withTable } from "./support/planFixtures.ts";
+import { ADAPTER_BANS } from "./support/staticBans.ts";
 
 const field = (fields: FieldInfo[], path: string): FieldInfo => {
   const f = fields.find((x) => x.path === path);
@@ -247,7 +248,7 @@ test("the adapter is read only and pure: it imports only the plan core and types
   const src = readFileSync(new URL("../src/plan/adapter.ts", import.meta.url), "utf8");
   const imports = [...src.matchAll(/^import[^;]*?from\s+"([^"]+)";/gms)].map((m) => m[1]);
   assert.deepEqual([...new Set(imports)].sort(), ["../../../ecco-plan-core/src/index.ts", "../config"]);
-  for (const bad of [/callService/, /hass/, /Date/, /localStorage/, /fetch/, /document/, /window/, /innerHTML/, /from "lit/, /Math.random/]) {
+  for (const bad of ADAPTER_BANS) {
     assert.ok(!bad.test(src), "adapter must not contain " + bad);
   }
 });
