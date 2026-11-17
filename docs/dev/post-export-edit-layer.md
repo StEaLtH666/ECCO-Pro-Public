@@ -232,3 +232,19 @@ Overview's one flow card, 2D or 3D, to read the time-to-reserve sensor and to un
 the shared bundle and plans no resource change for it. The dashboard-only plan and the read-only resource prerequisite (which the
 plan does not check) are in `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md` section 7. `ovw3` changed no firmware, Home Assistant
 package, deployment, registry, Intelligence or ecco_core file, and adds no service call.
+
+## What epc1 and epc2 changed
+
+`epc1` and `epc2` (`registry/tests/_epc1_scope.py`, `_epc2_scope.py`) declare the two-master-card energy-control work on the Energy Actions
+card and the dump schedule package.
+
+- `epc1` (stage 2, read-only plan views): the card's `README.md`, `src/config.ts` and `src/ecco-energy-actions-card.ts`, all frozen, and
+  the files it adds (the plan sources and their tests, the plan-core package and its tests). The card's `tsconfig.json` is left at its export
+  state: enrolling it would need an owner decision (an O3 amendment and two pin assertions), so the strict type check of the card with the
+  plan core lives in `frontend/ecco-plan-core/tsconfig.card.json` instead.
+- `epc2` (stage 3, guarded overrides): the same three card files again, the rebuilt `dist/ecco-energy-actions-card.js` (it was stale since
+  the export: the rebuild also carries every source change since), the scheduled Dump to Grid package (frozen: refuses during an override,
+  raises the Stop SOC to the effective reserve) and, chain-pinned, the deployment manifest (two package stanzas). Added: the plan helper
+  package, the guarded start package, their suites and the card's control sources and tests.
+
+No firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte changes, and no new Modbus operation.

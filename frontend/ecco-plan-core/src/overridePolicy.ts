@@ -2,18 +2,20 @@
 // that overrides.ts takes. Pure data in, data out; it cannot write anything.
 //
 // Rules (each has tests):
-//   * Every number is checked: finite, whole, on its step, inside the bounds below. The bounds are ALSO the bounds of the proposed
-//     Home Assistant helpers (proposals/ecco_plan_helpers.proposal.yaml), so a helper cannot hold a value this module refuses.
+//   * Every number is checked: finite, whole, on its step, inside the bounds below. The bounds are ALSO the bounds of the Home Assistant
+//     helpers (home-assistant/packages/ecco_plan_helpers.yaml), so a helper cannot hold a value this module refuses. The guarded scripts of
+//     that package apply the same rules server-side; test/parity/override_parity_cases.json proves both give the same answers.
 //   * HARD CEILINGS: no helper value can lift a cap above EXPIRY_CEILING_MIN, so no override is open-ended or longer than that.
 //   * FAIL CLOSED: a missing, unconfirmed or invalid configuration returns reasons and NO configuration. Nothing here substitutes
-//     the proposed defaults; they exist only as data for the owner to review (proposedOverrideConfig) and are never applied.
+//     the accepted defaults; they exist only as data to show and compare (proposedOverrideConfig). The package's first-run seed writes
+//     them into the helpers once, and the owner's confirmation switch must still be on.
 //   * The power-cut reserve is inside LIMITS.reserveMin..reserveMax and never below the current backup reserve (raise-only).
 //   * "Until local time X" choices use the plan core's clock-change aware elapsed-minute arithmetic (23 h and 25 h days).
 import { DAY_MIN, elapsedMinutes, fmt, span } from "./time.ts";
 import type { ClockDay } from "./time.ts";
 import { LIMITS } from "./settings.ts";
 import { OVERRIDE_KINDS, startOverride } from "./overrides.ts";
-import type { OverrideKind, OverridePolicy, StartResult } from "./overrides.ts";
+import type { OverrideKind, OverridePolicy, RefusalCode, StartResult } from "./overrides.ts";
 
 // The bounds of every owner-set value, one place. The block between the markers is strict JSON (a Python test reads it and checks
 // the proposed helpers against it), so it carries no comment and no trailing comma.
@@ -77,7 +79,11 @@ export interface OverrideConfig {
   readonly cutReservePct: number;
 }
 
-export type OverrideConfigResult = { ok: true; config: OverrideConfig; warnings: string[] } | { ok: false; reasons: string[] };
+/**
+ * A failure carries its reasons in words and, in order, the stable codes of the first problems: "POLICY_UNCONFIRMED" when the owner has
+ * not confirmed the limits, then "POLICY_INVALID" when any limit is unusable. The guarded Home Assistant script answers the same way.
+ */
+export type OverrideConfigResult = { ok: true; config: OverrideConfig; warnings: string[] } | { ok: false; reasons: string[]; codes?: RefusalCode[] };
 
 interface FieldSpec {
   readonly key: Exclude<keyof OverrideConfigRaw, "confirmed">;
@@ -153,7 +159,7 @@ export interface ConfigContext {
  */
 export function validateOverrideConfig(raw: OverrideConfigRaw | null | undefined, ctx: ConfigContext = {}): OverrideConfigResult {
   if (raw === null || raw === undefined || typeof raw !== "object") {
-    return { ok: false, reasons: ["No override limits are configured, so no override can be started."] };
+    return { ok: false, reasons: ["No override limits are configured, so no override can be started."], codes: ["POLICY_UNCONFIRMED"] };
   }
   const reasons: string[] = [];
   const warnings: string[] = [];
@@ -184,7 +190,12 @@ export function validateOverrideConfig(raw: OverrideConfigRaw | null | undefined
     warnings.push("The current backup reserve is not known, so the power-cut reserve cannot be compared with it here. An override can only raise a reserve.");
   }
 
-  if (reasons.length > 0) return { ok: false, reasons };
+  if (reasons.length > 0) {
+    const codes: RefusalCode[] = [];
+    if (raw.confirmed !== true) codes.push("POLICY_UNCONFIRMED");
+    if (reasons.length > codes.length) codes.push("POLICY_INVALID");
+    return { ok: false, reasons, codes };
+  }
   const config: OverrideConfig = Object.freeze({
     minExpiryMin: v.minExpiryMin as number,
     holdDefaultMin: v.holdDefaultMin as number,
@@ -300,22 +311,22 @@ export function startConfiguredOverride(
 ): StartResult {
   if (!result || result.ok !== true || !result.config) {
     const why = result && result.ok === false && result.reasons.length ? " " + result.reasons.join(" ") : "";
-    return { ok: false, error: "The override limits are not valid, so no override can be started." + why };
+    return { ok: false, error: "The override limits are not valid, so no override can be started." + why, code: (result && result.ok === false && result.codes && result.codes[0]) || "POLICY_INVALID" };
   }
   const cfg = result.config;
-  if (!OVERRIDE_KINDS.includes(kind)) return { ok: false, error: "Unknown override." };
+  if (!OVERRIDE_KINDS.includes(kind)) return { ok: false, error: "Unknown override.", code: "UNKNOWN_KIND" };
   if (expiryMin !== null && expiryMin !== undefined && (typeof expiryMin !== "number" || !Number.isInteger(expiryMin))) {
-    return { ok: false, error: "The expiry must be a whole number of minutes." };
+    return { ok: false, error: "The expiry must be a whole number of minutes.", code: "EXPIRY_NOT_WHOLE" };
   }
   if (kind === "prepare_power_cut") {
     const cur = ctx.currentReservePct;
-    if (typeof cur !== "number" || !Number.isFinite(cur)) return { ok: false, error: "The current backup reserve is not known, so it cannot be shown that the power-cut reserve raises it." };
-    if (cfg.cutReservePct < cur) return { ok: false, error: "The power-cut reserve (" + cfg.cutReservePct + " %) is below the current backup reserve (" + cur + " %); an override never lowers a reserve." };
+    if (typeof cur !== "number" || !Number.isFinite(cur)) return { ok: false, error: "The current backup reserve is not known, so it cannot be shown that the power-cut reserve raises it.", code: "RESERVE_UNKNOWN" };
+    if (cfg.cutReservePct < cur) return { ok: false, error: "The power-cut reserve (" + cfg.cutReservePct + " %) is below the current backup reserve (" + cur + " %); an override never lowers a reserve.", code: "RESERVE_BELOW_CURRENT" };
   }
   const r = startOverride(kind, nowMin, expiryMin, overridePolicyAt(cfg, ctx.clock));
   if (!r.ok) return r;
   const length = r.override.expiresAtMin - r.override.startedAtMin;
-  if (!(length > 0) || !(length <= EXPIRY_CEILING_MIN[kind])) return { ok: false, error: "The expiry is beyond the hard ceiling of " + formatDurationMin(EXPIRY_CEILING_MIN[kind]) + "." };
+  if (!(length > 0) || !(length <= EXPIRY_CEILING_MIN[kind])) return { ok: false, error: "The expiry is beyond the hard ceiling of " + formatDurationMin(EXPIRY_CEILING_MIN[kind]) + ".", code: "EXPIRY_ABOVE_CEILING" };
   return r;
 }
 
@@ -327,7 +338,8 @@ export interface ProposedValue {
   readonly why: string;
 }
 
-// BEGIN PROPOSED DEFAULTS: proposals for the owner to review and set in the helpers. Not read by any validator or starter.
+// BEGIN PROPOSED DEFAULTS: the starting limits the owner ACCEPTED on 17 Nov 2026 (the package's first-run seed writes exactly these into the
+// helpers; the owner changes them there, within the bounds). Not read by any validator or starter.
 const PROPOSED_LIST: ProposedValue[] = [
   { key: "minExpiryMin", value: 15, why: "Under a quarter hour is almost certainly a mis-tap and would make the plan flicker." },
   { key: "holdDefaultMin", value: 240, why: "Covers an evening of extra use (cooking, guests) without outliving it." },

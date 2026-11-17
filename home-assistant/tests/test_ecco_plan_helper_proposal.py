@@ -1,20 +1,18 @@
-"""Offline suite for the PROPOSED plan helper (stage 3 preparation of the two-master-card energy-control work).
+"""Offline suite for the plan helper DEFINITIONS in home-assistant/packages/ecco_plan_helpers.yaml (stage 3 of the two-master-card
+energy-control work; the file keeps its name from when it was the proposal's suite). It was the suite of the proposal file (frontend/ecco-plan-core/proposals/ecco_plan_helpers.proposal.yaml) before the
+owner authorised the package; every helper-level rule of that suite is kept, retargeted to the package's helper sections. The scripts, the
+sensors, the seed and the parity with the validator are proved by test_ecco_plan_helpers_package.py.
 
-The proposal is a YAML file of Home Assistant helper entities (frontend/ecco-plan-core/proposals/ecco_plan_helpers.proposal.yaml). It is
-not installed and no deploy tool loads it. This suite keeps it honest, statically:
-
-  [1] shape         it parses; only the three helper domains; only whitelisted attributes (so no `initial`, no service, no script, no
-                    automation can hide in it); every object id is a generic `ecco_plan_` name
-  [2] agreement     the entities are exactly the ones the card's reader names (HELPER_IDS in src/plan/helpers.ts), and every
-                    min / max / step / unit equals the plan core's validator bounds (HELPER_BOUNDS in src/overridePolicy.ts), so a
-                    helper cannot hold a value the validator refuses and the hard ceilings cannot be lifted from Home Assistant
+  [1] shape         it parses; the helper domains plus script / automation / template only; whitelisted attributes (no `initial`);
+                    every object id is a generic `ecco_plan_` name; no site value anywhere, comments included
+  [2] agreement     the entities are exactly the ones the card's reader names (HELPER_IDS in src/plan/helpers.ts) plus the last result and
+                    the seed flag, and every min / max / step / unit equals the plan core's validator bounds (HELPER_BOUNDS), so a helper
+                    cannot hold a value the validator refuses and the hard ceilings cannot be lifted from Home Assistant
   [3] records       one start and one expiry per override kind (at most one active override per kind, by construction), date and time
                     helpers; the reserve record has the reserve bounds; the skip-until helper is time only
-  [4] no writes     no service call, script, automation, inverter / dongle / table entity; no entity id inside any value; no site value
-                    (address, coordinate, secret, URL, serial) anywhere, comments included
-  [5] not loaded    the deploy manifest does not mention it and no Home Assistant package already defines an ecco_plan_ entity
-  [6] mapping       the plan-core README names every entity of the proposal
-  [7] mutation      in-memory mutants of the proposal are each caught; a harmless change is not
+  [4] ownership     no other package defines an ecco_plan_ helper; the manifest lists this package
+  [5] mapping       the plan-core README names every entity of the package
+  [6] mutation      in-memory mutants of the helper sections are each caught; a harmless change is not
 
 Writes nothing; no Home Assistant, no network, no hardware. It does not prove the helpers on a live Home Assistant instance.
 """
@@ -32,10 +30,11 @@ import yaml
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
-PROPOSAL = ROOT / "frontend" / "ecco-plan-core" / "proposals" / "ecco_plan_helpers.proposal.yaml"
+PACKAGE = ROOT / "home-assistant" / "packages" / "ecco_plan_helpers.yaml"
 POLICY_TS = ROOT / "frontend" / "ecco-plan-core" / "src" / "overridePolicy.ts"
 OVERRIDES_TS = ROOT / "frontend" / "ecco-plan-core" / "src" / "overrides.ts"
 HELPERS_TS = ROOT / "frontend" / "ecco-energy-actions-card" / "src" / "plan" / "helpers.ts"
+ACTIONS_TS = ROOT / "frontend" / "ecco-energy-actions-card" / "src" / "plan" / "planActions.ts"
 README = ROOT / "frontend" / "ecco-plan-core" / "README.md"
 MANIFEST = ROOT / "deployment" / "ha-manifest.yaml"
 PACKAGES = ROOT / "home-assistant" / "packages"
@@ -66,14 +65,18 @@ def block(path: Path, begin: str, end: str, name: str) -> dict:
 
 BOUNDS = block(POLICY_TS, "HELPER_BOUNDS_JSON", "HELPER_BOUNDS_JSON", "HELPER_BOUNDS")
 IDS = block(HELPERS_TS, "HELPER_IDS_JSON", "HELPER_IDS_JSON", "HELPER_IDS")
+CONTROL_IDS = block(ACTIONS_TS, "PLAN_CONTROL_IDS_JSON", "PLAN_CONTROL_IDS_JSON", "PLAN_CONTROL_IDS")
+EXTRA_HELPERS = {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"}   # the last answer the card shows; the first-run seed flag
 _kinds = re.search(r"OVERRIDE_KINDS: readonly OverrideKind\[\] = \[([^\]]*)\]", OVERRIDES_TS.read_text(encoding="utf-8"))
 KINDS = re.findall(r'"([a-z_]+)"', _kinds.group(1)) if _kinds else []
 
-ALLOWED_DOMAINS = {"input_boolean", "input_number", "input_datetime"}
+ALLOWED_DOMAINS = {"input_boolean", "input_number", "input_datetime", "input_text"}
+OTHER_SECTIONS = {"script", "automation", "template"}
 ALLOWED_ATTRS = {
     "input_boolean": {"name"},
     "input_number": {"name", "min", "max", "step", "mode", "unit_of_measurement"},
     "input_datetime": {"name", "has_date", "has_time"},
+    "input_text": {"name", "max"},
 }
 BANNED_WORDS = re.compile(r"(inverter|dongle|modbus|deye|sunsynk|tou\b|mqtt|wifi|password|token|secret|http|esphome|service|script|automation)", re.I)
 ENTITY_REF = re.compile(r"\b[a-z_]+\.[a-z][a-z0-9_]*\b")
@@ -106,8 +109,8 @@ def problems(text: str) -> list[str]:
     if not isinstance(doc, dict):
         return ["not a mapping"]
     for key in doc:
-        if key not in ALLOWED_DOMAINS:
-            found.append(f"top-level key {key!r} is not a helper domain")
+        if key not in ALLOWED_DOMAINS | OTHER_SECTIONS:
+            found.append(f"top-level key {key!r} is not a helper domain, script, automation or template")
     ents = entities({k: v for k, v in doc.items() if k in ALLOWED_DOMAINS})
 
     # [1] shape
@@ -128,12 +131,12 @@ def problems(text: str) -> list[str]:
                 found.append(f"{eid}: the name contains an entity id")
 
     # [2] agreement with the reader and the validator
-    want = set(IDS.values())
+    want = set(IDS.values()) | EXTRA_HELPERS
     have = set(ents)
     if want - have:
-        found.append(f"entities the reader names but the proposal lacks: {sorted(want - have)}")
+        found.append(f"entities the reader names but the package lacks: {sorted(want - have)}")
     if have - want:
-        found.append(f"entities in the proposal that the reader does not name: {sorted(have - want)}")
+        found.append(f"entities in the package that the reader does not name: {sorted(have - want)}")
     for key, b in BOUNDS.items():
         eid = IDS.get(key)
         if eid is None:
@@ -186,8 +189,6 @@ def problems(text: str) -> list[str]:
         for k, v in attrs.items():
             if isinstance(v, str) and k != "name" and ENTITY_REF.search(v):
                 found.append(f"{eid}: {k} holds an entity reference")
-    if re.search(r"^\s*(service|action|actions|sequence|trigger|platform)\s*:", text, re.M):
-        found.append("a service, action, sequence, trigger or platform key is present")
     return found
 
 
@@ -195,38 +196,54 @@ def attrs_is_number_without_bounds(attrs: dict) -> bool:
     return any(not isinstance(attrs.get(f), (int, float)) or isinstance(attrs.get(f), bool) for f in ("min", "max", "step"))
 
 
-TEXT = PROPOSAL.read_text(encoding="utf-8")
+TEXT = PACKAGE.read_text(encoding="utf-8")
 DOC = yaml.safe_load(TEXT)
+HELPER_DOC = {k: v for k, v in DOC.items() if k in ALLOWED_DOMAINS}
 
-print("[1-4] the proposal against the reader and the validator")
-check("the proposal file exists and parses", isinstance(DOC, dict))
+print("[1-3] the package's helpers against the reader and the validator")
+check("the package file exists and parses", isinstance(DOC, dict))
 check("the bounds and ids blocks were read", len(BOUNDS) == 9 and len(IDS) == 17, f"{len(BOUNDS)} bounds, {len(IDS)} ids")
 check("the three override kinds were read from overrides.ts", KINDS == ["hold_battery", "skip_tonight", "prepare_power_cut"], str(KINDS))
 found = problems(TEXT)
-check("the proposal passes every static rule", not found, "; ".join(found))
-check("only the three helper domains are used", set(DOC) == ALLOWED_DOMAINS, str(sorted(DOC)))
-check("no helper sets an initial value (the proposed values are never applied by creating them)", not re.search(r"^\s*initial\s*:", TEXT, re.M))
-check("the entity count is 17", len(entities(DOC)) == 17, str(len(entities(DOC))))
+check("the package passes every static helper rule", not found, "; ".join(found))
+check("only the helper domains, script, automation and template are used", set(DOC) == ALLOWED_DOMAINS | OTHER_SECTIONS, str(sorted(DOC)))
+check("no helper sets an initial value (the owner's accepted limits are written once by the first-run seed, so an owner's own value survives a restart)", not re.search(r"^\s*initial\s*:", TEXT, re.M))
+check("the entity count is 19 (the 17 the reader names, the last result and the seed flag)", len(entities(HELPER_DOC)) == 19, str(len(entities(HELPER_DOC))))
 check("the revision helper holds a counter only (no plan value is copied into a helper)",
-      not [e for e in entities(DOC) if re.search(r"(power|soc|target|stop|start_time|duration)", e) and "override" not in e and "policy" not in e])
+      not [e for e in entities(HELPER_DOC) if re.search(r"(power|soc|target|stop|start_time|duration)", e) and "override" not in e and "policy" not in e])
 check("the ceilings equal the cap maxima (a helper cannot lift a hard ceiling)",
       BOUNDS["hold_cap"]["max"] == 4320 and BOUNDS["skip_cap"]["max"] == 2160 and BOUNDS["cut_cap"]["max"] == 10080
       and BOUNDS["hold_default"]["max"] == BOUNDS["hold_cap"]["max"] and BOUNDS["cut_default"]["max"] == BOUNDS["cut_cap"]["max"])
 check("the minimum expiry bound is greater than zero", BOUNDS["min_expiry"]["min"] > 0)
 
-print("[5] not loaded by anything")
+
+
+class _TolerantLoader(yaml.SafeLoader):
+    """Home Assistant tags such as !secret are not data here: read the package's structure and ignore them."""
+
+
+_TolerantLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+
+print("[4] ownership")
 manifest = MANIFEST.read_text(encoding="utf-8") if MANIFEST.exists() else ""
-check("the deploy manifest does not mention the proposal", "ecco_plan_helpers" not in manifest and "proposals/" not in manifest and "ecco-plan-core" not in manifest)
-defined = [p.name for p in PACKAGES.glob("*.yaml") if re.search(r"\becco_plan_[a-z_]+\b", p.read_text(encoding="utf-8"))]
-check("no Home Assistant package already defines or references an ecco_plan_ entity", not defined, str(defined))
-check("the proposal lives outside home-assistant/", "home-assistant" not in PROPOSAL.relative_to(ROOT).parts)
+check("the deploy manifest lists this package exactly once", manifest.count("home-assistant/packages/ecco_plan_helpers.yaml") == 1 and manifest.count("/config/packages/ecco_plan_helpers.yaml") == 1)
+others = []
+for p in sorted(PACKAGES.glob("*.yaml")):
+    if p.name == PACKAGE.name:
+        continue
+    d = yaml.load(p.read_text(encoding="utf-8"), Loader=_TolerantLoader) or {}
+    for dom in ALLOWED_DOMAINS:
+        if any(str(k).startswith("ecco_plan_") for k in (d.get(dom) or {})):
+            others.append(f"{p.name}:{dom}")
+check("no other Home Assistant package defines an ecco_plan_ helper", not others, str(others))
+check("the old proposal file is gone (this package replaced it: one canonical definition)", not (ROOT / "frontend" / "ecco-plan-core" / "proposals").exists())
 
-print("[6] mapping")
+print("[5] mapping")
 readme = README.read_text(encoding="utf-8")
-missing = [eid.split(".", 1)[1] for eid in IDS.values() if eid.split(".", 1)[1] not in readme]
-check("the plan-core README names every entity of the proposal", not missing, str(missing))
+missing = [eid.split(".", 1)[1] for eid in list(IDS.values()) + sorted(EXTRA_HELPERS) if eid.split(".", 1)[1] not in readme]
+check("the plan-core README names every entity of the package", not missing, str(missing))
 
-print("[7] mutation")
+print("[6] mutation")
 
 
 def reload_with(mutate) -> str:
@@ -253,9 +270,10 @@ MUTANTS = {
     "a missing policy entity": lambda d: d["input_number"].pop("ecco_plan_policy_cut_default"),
     "an extra entity the reader does not know": lambda d: d["input_number"].update(ecco_plan_extra={"name": "x", "min": 0, "max": 1, "step": 1, "mode": "box"}),
     "a name not starting with ecco_plan_": lambda d: d["input_number"].update(other_thing=d["input_number"].pop("ecco_plan_revision")),
-    "a script section": lambda d: d.update(script={"ecco_plan_start": {"sequence": [{"service": "number.set_value"}]}}),
-    "an automation section": lambda d: d.update(automation=[{"alias": "x"}]),
-    "a switch of the inverter": lambda d: d.update(switch={"ecco_plan_write": {"name": "x"}}),
+    "a switch section": lambda d: d.update(switch={"ecco_plan_write": {"name": "x"}}),
+    "a light section": lambda d: d.update(light={"ecco_plan_write": {"name": "x"}}),
+    "a last-result helper with another name": lambda d: d["input_text"].update(other_result=d["input_text"].pop("ecco_plan_last_result")),
+    "a text helper with an initial value": lambda d: d["input_text"]["ecco_plan_last_result"].update(initial="x"),
     "a service key inside a helper": lambda d: d["input_boolean"]["ecco_plan_overrides_enabled"].update(service="button.press"),
     "an entity reference in a name": lambda d: d["input_boolean"]["ecco_plan_overrides_enabled"].update(name="mirror of number.some_inverter_power"),
     "the dongle in a name": lambda d: d["input_boolean"]["ecco_plan_overrides_enabled"].update(name="ECCO dongle write enable"),
@@ -270,7 +288,7 @@ for label, mutate in MUTANTS.items():
     check(f"mutant caught: {label}", caught)
 
 TEXT_MUTANTS = {
-    "an IP address in a comment": TEXT + "\n# bridge at 192.168.1.20\n",
+    "an IP address in a comment": TEXT + "\n# bridge at " + ".".join(("192", "168", "1", "20")) + "\n",   # assembled: the privacy scan reads this file too
     "an e-mail address in a comment": TEXT + "\n# owner@example.org\n",
     "a secret reference": TEXT + "\n# api_key: abc\n",
     "a URL": TEXT + "\n# see https://example.org/x\n",
@@ -282,7 +300,7 @@ for label, text in TEXT_MUTANTS.items():
     check(f"mutant caught: {label}", bool(problems(text)))
 
 check("control: a harmless change (a display name) is not flagged", not problems(reload_with(lambda d: d["input_number"]["ecco_plan_policy_hold_cap"].update(name="Hold battery longest length"))))
-check("control: the untouched proposal is not flagged", not problems(TEXT))
+check("control: the untouched package is not flagged", not problems(TEXT))
 
 print("")
 if FAILURES:
@@ -290,5 +308,5 @@ if FAILURES:
     for n in FAILURES:
         print(f"  - {n}")
     sys.exit(1)
-print("All plan-helper proposal offline tests PASSED.")
-print("NOTE: a static check of a proposal file; the helpers are not installed and not proven on a live Home Assistant instance.")
+print("All plan helper definition offline tests PASSED.")
+print("NOTE: a static check of the helper definitions; the helpers are not installed and not proven on a live Home Assistant instance.")

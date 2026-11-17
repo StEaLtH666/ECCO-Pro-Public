@@ -97,6 +97,10 @@ class Run:
         w.set(ARMED, "off")
         w.set(LAST, "")
         w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+        # PLAN (stage 3): the scheduled start reads the plan's two sensors and fails closed without them. Here no override runs and the
+        # effective reserve is below every Stop SOC of this suite; the plan cases are proved by test_ecco_plan_enforcement.py.
+        w.set("sensor.ecco_plan_export_hold", "clear")
+        w.set("sensor.ecco_plan_effective_reserve", "20")
         self.start_ts = S.parse_local(start)
         self.end_ts = self.start_ts + duration * 60
         self.ha.start()
@@ -699,7 +703,9 @@ check("dgs1's fingerprint is the pinned value, linked to rsv1's",
       DGS1.fingerprint == DGS1_FINGERPRINT == _pex.fingerprint(DGS1) and _pex.record(DGS1)["parent"] == RSV1_FINGERPRINT)   # PEX: hash link
 check("undone exactly, the package is its fps1 state byte for byte (press at +2 s, one retry after 12 s, no alert)",
       G.sha(OLD_TEXT).startswith(BEFORE_SHA) and 'delay: "00:00:12"' in OLD_TEXT and "persistent_notification" not in OLD_TEXT)
-check("the dgs1 pair round-trips (applying it to the fps1 text gives the live package)", G.add_dgs1_package(OLD_TEXT) == PKG_TEXT)
+import _epc2_scope as _epc2  # noqa: E402  (PEX: epc2 edits the schedule package after dgs1; its reverter is exact, sha256-checked by test_pex_transition.py)
+check("the dgs1 pair round-trips (applying it to the fps1 text gives the package as of dgs1: the live package with epc2's edits undone)",
+      G.add_dgs1_package(OLD_TEXT) == _epc2.pre_epc2_dump_schedule(PKG_TEXT))   # PEX (epc2): was `== PKG_TEXT`; a later entry now edits the live package
 
 # ======================================================================================================================
 print("")

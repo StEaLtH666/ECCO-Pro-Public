@@ -58,6 +58,9 @@ import {
 import { formatCountdown, formatLocalTimestamp, formatWeekdayDateTime, parseLocalTimestamp } from "./utils/time";
 import { formatDurationMinutes, formatPercent, formatPower, toBoolean, toNumber } from "./utils/format";
 import { planStyles, renderPlanSection } from "./plan/view.ts";
+import { controlStyles, renderPlanControls } from "./plan/controls.ts";
+import { guardedDumpStartCall, isPlanServiceCall } from "./plan/planActions.ts";
+import type { PlanServiceCall } from "./plan/planActions.ts";
 
 // Minimal shape of the pieces of `hass` this card actually reads/calls -
 // same pattern as the sibling ecco-energy-flow-card, avoiding a dependency
@@ -428,11 +431,32 @@ export class EccoEnergyActionsCard extends LitElement {
   }
 
   /**
-   * Read-only plan views (Tomorrow's Plan, six-slot TOU timeline). `nothing` unless the config has `show_plan: true`; the views
-   * display only and make no service call. See src/plan/.
+   * Plan views (Tomorrow's Plan, six-slot TOU timeline). `nothing` unless the config has `show_plan: true`. The views display only; with
+   * the plan helper entities configured the section also carries start and cancel controls, which can call ONLY the guarded scripts
+   * (src/plan/planActions.ts, checked again in _callPlanService). See src/plan/.
    */
   private _renderPlan() {
-    return renderPlanSection(this._config, this.hass?.states);
+    return renderPlanSection(this._config, this.hass?.states, undefined, renderPlanControls((call) => this._callPlanService(call)));
+  }
+
+  /** The only way the plan section reaches Home Assistant: a call that is not exactly one of the guarded scripts is dropped. */
+  private _callPlanService(call: PlanServiceCall): void {
+    if (!isPlanServiceCall(call, this._config?.dump_to_grid?.guarded_start)) return;
+    this._callService(call.domain, call.service, call.data as Record<string, unknown>);
+  }
+
+  /**
+   * Manual Dump to Grid Start. With `dump_to_grid.guarded_start` the ONLY call is that guarded script (it refuses during an override or
+   * below the effective reserve, then presses the start button itself); a guarded_start that is not a script id does nothing (fails
+   * closed). Without it the start button is pressed directly, as before.
+   */
+  private _pressDumpStart(dump: NonNullable<EccoEnergyActionsCardConfig["dump_to_grid"]>): void {
+    if (dump.guarded_start !== undefined && dump.guarded_start !== "") {
+      const guarded = guardedDumpStartCall(dump.guarded_start);
+      if (guarded) this._callPlanService(guarded);
+      return;
+    }
+    this._callService("button", "press", { entity_id: dump.start });
   }
 
   // ---------------------------------------------------------------------
@@ -1571,7 +1595,7 @@ export class EccoEnergyActionsCard extends LitElement {
         <button
           class="start-button"
           ?disabled=${!canStart}
-          @click=${() => this._callService("button", "press", { entity_id: ctx.dump.start })}
+          @click=${() => this._pressDumpStart(ctx.dump)}
         >
           <ha-icon icon="mdi:play-circle-outline"></ha-icon>
           Start Now
@@ -1896,7 +1920,7 @@ export class EccoEnergyActionsCard extends LitElement {
   // Styles
   // ---------------------------------------------------------------------
 
-  static styles = [planStyles, css`
+  static styles = [planStyles, controlStyles, css`
     :host {
       /* Container query, not a viewport media query: this card is often
          docked in a narrow dashboard column on an otherwise-wide desktop

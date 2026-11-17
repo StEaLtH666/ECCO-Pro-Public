@@ -1,9 +1,11 @@
-// Read-only plan views (Lit). Every value reaches the DOM through a Lit text binding, never innerHTML. There is no event handler,
-// no button and no service call in this file: the views only display. See present.ts for every wording.
+// Plan views (Lit). Every value reaches the DOM through a Lit text binding, never innerHTML. There is no event handler, no button and no
+// service call in this file: the views only display. The start and cancel controls are built elsewhere (controls.ts) and handed in by the
+// card as a renderer; with none given the section is exactly the read-only view of stage 2. See present.ts for every wording.
 import { css, html, nothing } from "lit";
 import type { TemplateResult } from "lit";
 import type { StatesLike } from "./adapter.ts";
 import { buildPlanSnapshotWithHelpers } from "./helpers.ts";
+import type { PlanSnapshotWithHelpers } from "./helpers.ts";
 import { presentPlan } from "./present.ts";
 import type { Chip, FigureVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
@@ -44,6 +46,7 @@ function overrideRow(r: OverrideRowVM): TemplateResult {
       <span class="plan-setting-value">${r.untilText}</span>
       <span class="plan-note">${r.countdownText}</span>
       <span class="plan-reason">${r.effectText}</span>
+      ${r.belowReserve ? html`<span class="plan-reason plan-below-reserve" data-below-reserve role="note">${r.belowReserve}</span>` : nothing}
     </li>
   `;
 }
@@ -87,12 +90,17 @@ function slot(s: SlotVM): TemplateResult {
   `;
 }
 
-/** The whole read-only section for a plan view model. */
-export function renderPlanVM(vm: PlanVM): TemplateResult {
+/** The section's start and cancel controls, built by the card (controls.ts) from the snapshot the section was built from. */
+export type ControlsRenderer = (ctx: { snap: PlanSnapshotWithHelpers; states: StatesLike; nowMs: number }) => TemplateResult | typeof nothing;
+
+/** Everything inside the section. Kept apart so the read-only section's markup stays byte for byte what it was before the controls existed. */
+function planBody(vm: PlanVM, controls: TemplateResult | typeof nothing, guarded: boolean): TemplateResult {
   const tou = vm.tou;
+  const badge = guarded
+    ? html`<span class="plan-badge"><ha-icon icon="mdi:shield-check-outline" aria-hidden="true"></ha-icon>Guarded controls</span>`
+    : html`<span class="plan-badge"><ha-icon icon="mdi:eye-outline" aria-hidden="true"></ha-icon>Read only</span>`;
   return html`
-    <section class="plan-section" aria-label="Plan, read only">
-      <h2 class="plan-title">Plan <span class="plan-badge"><ha-icon icon="mdi:eye-outline" aria-hidden="true"></ha-icon>Read only</span></h2>
+      <h2 class="plan-title">Plan ${badge}</h2>
       <p class="plan-statusline" role="status"><ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon><span>${vm.statusLine}</span></p>
 
       <div class="plan-block" data-block="tomorrow">
@@ -107,7 +115,7 @@ export function renderPlanVM(vm: PlanVM): TemplateResult {
           <summary>Planned settings</summary>
           <ul class="plan-settings">${vm.settings.map(settingRow)}</ul>
         </details>
-        <p class="plan-overrides">${vm.overridesLine}</p>${vm.overrideBlock ? overrideBlock(vm.overrideBlock) : nothing}
+        <p class="plan-overrides">${vm.overridesLine}</p>${vm.overrideBlock ? overrideBlock(vm.overrideBlock) : nothing}${controls}
       </div>
 
       <div class="plan-block" data-block="tou">
@@ -123,7 +131,18 @@ export function renderPlanVM(vm: PlanVM): TemplateResult {
             `
           : nothing}
       </div>
-    </section>
+    `;
+}
+
+/** The whole section for a plan view model; `controls` is only passed when the plan helpers are configured and the card supplied them. */
+export function renderPlanVM(vm: PlanVM, controls: TemplateResult | typeof nothing = nothing): TemplateResult {
+  if (controls !== nothing) {
+    return html`
+    <section class="plan-section" aria-label="Plan, with guarded controls">${planBody(vm, controls, true)}</section>
+  `;
+  }
+  return html`
+    <section class="plan-section" aria-label="Plan, read only">${planBody(vm, nothing, false)}</section>
   `;
 }
 
@@ -131,12 +150,13 @@ export function renderPlanVM(vm: PlanVM): TemplateResult {
  * The card's entry point. Returns `nothing` unless the config flag is exactly `true`; in that case it does not touch hass at all,
  * so a card with the flag off reads no extra entity and renders exactly as before.
  */
-export function renderPlanSection(config: EccoEnergyActionsCardConfig | undefined, states: StatesLike | undefined, nowMs?: number): TemplateResult | typeof nothing {
+export function renderPlanSection(config: EccoEnergyActionsCardConfig | undefined, states: StatesLike | undefined, nowMs?: number, controls?: ControlsRenderer): TemplateResult | typeof nothing {
   if (!config || config.show_plan !== true) return nothing;
   // The clock is read only here, in the entry point, to judge stored override expiries; the card passes nothing, tests pass a moment.
   const at = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now();
-  const vm = presentPlan(buildPlanSnapshotWithHelpers(config, states ?? {}, Math.floor(at / 60000)));
-  return renderPlanVM(vm);
+  const snap = buildPlanSnapshotWithHelpers(config, states ?? {}, Math.floor(at / 60000));
+  const vm = presentPlan(snap);
+  return renderPlanVM(vm, controls ? controls({ snap, states: states ?? {}, nowMs: at }) : nothing);
 }
 
 export const planStyles = css`

@@ -12,10 +12,8 @@
     "skipLibCheck": true,
     "declaration": false,
     "sourceMap": true,
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
     "outDir": "dist-ts-check",
-    "rootDir": ".."
+    "rootDir": "src"
   },
-  "include": ["src/**/*.ts", "../ecco-plan-core/src/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

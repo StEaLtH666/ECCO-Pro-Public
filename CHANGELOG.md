@@ -10,6 +10,14 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **ECCO plan overrides, stage 3 (offline; nothing installed)**: the guarded Hold battery / Skip tonight / Prepare for power cut overrides.
+  `home-assistant/packages/ecco_plan_helpers.yaml` (the owner's limits, seeded once with the accepted starting values; the plan revision; the
+  override records; two guarded scripts that enforce the validator's rules server-side with stable refusal codes and write only these
+  helpers; the export-hold and effective-reserve sensors), `ecco_dump_to_grid_guarded_start.yaml` (the card's manual Dump to Grid start,
+  behind the same two checks) and the scheduled Dump to Grid start refusing during an override and raising its Stop SOC to the effective
+  reserve. Prepare for power cut raises a protected reserve and never charges. The Energy Actions card gains start and cancel controls that
+  can call only those scripts. One parity table runs against the validator and against the script. Post-export entries `epc1` (stage 2 views)
+  and `epc2` (stage 3). The dongle's own Start button entity stays unbound (a firmware gate is a separate approval).
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently (while the policy is deliberately aside, `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the one-run override; the pin stays); `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment, checks in memory that it will succeed (including the post-condition), and on a re-run into the same `--out` deploys the applied file already there or fails when that file is not `apply`'s output ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with

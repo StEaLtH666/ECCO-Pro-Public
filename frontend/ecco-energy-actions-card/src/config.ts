@@ -142,6 +142,13 @@ export interface DumpToGridEntities {
   recovery_state?: string;
   /** Optional - omit to hide the NOW/LATER scheduling UI for Dump to Grid. */
   schedule?: DumpScheduleEntities;
+  /**
+   * script (optional) - the guarded manual start (home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml). When set, the Start
+   * button calls ONLY this script, which refuses while a Hold battery / Skip tonight / Prepare for power cut is active or the staged Stop
+   * SOC is below the effective reserve, and otherwise presses `start` itself. When omitted, Start presses `start` directly, as before
+   * (then no override binds the manual start from this card).
+   */
+  guarded_start?: string;
 }
 
 /**
@@ -153,6 +160,8 @@ export interface PlanConfig {
   entity_prefix?: string;
   /** input_number - the backup reserve in percent (read only). */
   reserve?: string;
+  /** sensor - the battery level in percent (read only). Default: dump_to_grid.battery_soc. Only used to say when a raised reserve is not reached. */
+  battery_soc?: string;
   /** Grid-loss lock state: only an explicit "off" counts as unlocked; absent or anything else is treated as locked (fail-safe). */
   control_lock?: string;
   /** Overrides for the Intelligence advice entity ids (default: the contract's generic ids). */
@@ -178,8 +187,10 @@ export interface EccoEnergyActionsCardConfig {
    */
   layout?: "side-by-side" | "tabbed";
   /**
-   * Default false. When exactly `true` the card also shows read-only plan views (Tomorrow's Plan and the six-slot TOU timeline).
-   * Absent, false or any other value: the card renders exactly as before. The views display only; they make no service call.
+   * Default false. When exactly `true` the card also shows the plan views (Tomorrow's Plan and the six-slot TOU timeline), which only
+   * display. When the plan helper entities (home-assistant/packages/ecco_plan_helpers.yaml) are also configured, the plan section adds
+   * start and cancel controls for Hold battery, Skip tonight and Prepare for power cut; they call ONLY the package's two guarded scripts.
+   * Absent, false or any other value: the card renders exactly as before.
    */
   show_plan?: boolean;
   plan?: PlanConfig;

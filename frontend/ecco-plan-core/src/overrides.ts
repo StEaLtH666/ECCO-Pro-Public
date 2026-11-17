@@ -26,20 +26,38 @@ export interface ActiveOverride {
   reservePct?: number;
 }
 
-export type StartResult = { ok: true; override: ActiveOverride } | { ok: false; error: string };
+/**
+ * A stable reason for a refused start. The guarded Home Assistant scripts (home-assistant/packages/ecco_plan_helpers.yaml) answer with the
+ * SAME codes, and a parity table (test/parity/override_parity_cases.json) proves both sides give the same answer for the same case.
+ */
+export type RefusalCode =
+  | "POLICY_UNCONFIRMED"
+  | "POLICY_INVALID"
+  | "UNKNOWN_KIND"
+  | "EXPIRY_NOT_WHOLE"
+  | "RESERVE_UNKNOWN"
+  | "RESERVE_BELOW_CURRENT"
+  | "TIME_UNKNOWN"
+  | "EXPIRY_MISSING"
+  | "EXPIRY_BELOW_MIN"
+  | "EXPIRY_ABOVE_CAP"
+  | "POWER_CUT_RESERVE_RANGE"
+  | "EXPIRY_ABOVE_CEILING";
+
+export type StartResult = { ok: true; override: ActiveOverride } | { ok: false; error: string; code: RefusalCode };
 
 export function startOverride(kind: OverrideKind, nowMin: number, expiryMin: number | null | undefined, policy: OverridePolicy): StartResult {
-  if (!OVERRIDE_KINDS.includes(kind)) return { ok: false, error: "Unknown override." };
-  if (!Number.isFinite(nowMin)) return { ok: false, error: "The current time is unknown; an override cannot be started without it." };
+  if (!OVERRIDE_KINDS.includes(kind)) return { ok: false, error: "Unknown override.", code: "UNKNOWN_KIND" };
+  if (!Number.isFinite(nowMin)) return { ok: false, error: "The current time is unknown; an override cannot be started without it.", code: "TIME_UNKNOWN" };
   const expiry = expiryMin ?? policy.defaultExpiryMin[kind];
-  if (typeof expiry !== "number" || !Number.isFinite(expiry)) return { ok: false, error: "An override needs an expiry; there is no open-ended override." };
-  if (expiry < policy.minExpiryMin) return { ok: false, error: "The expiry must be at least " + policy.minExpiryMin + " minutes." };
+  if (typeof expiry !== "number" || !Number.isFinite(expiry)) return { ok: false, error: "An override needs an expiry; there is no open-ended override.", code: "EXPIRY_MISSING" };
+  if (expiry < policy.minExpiryMin) return { ok: false, error: "The expiry must be at least " + policy.minExpiryMin + " minutes.", code: "EXPIRY_BELOW_MIN" };
   const cap = policy.maxExpiryMin[kind];
-  if (expiry > cap) return { ok: false, error: "The expiry can be at most " + cap + " minutes for this override." };
+  if (expiry > cap) return { ok: false, error: "The expiry can be at most " + cap + " minutes for this override.", code: "EXPIRY_ABOVE_CAP" };
   const o: ActiveOverride = { kind, startedAtMin: nowMin, expiresAtMin: nowMin + expiry };
   if (kind === "prepare_power_cut") {
     const r = policy.powerCutReservePct;
-    if (!Number.isFinite(r) || r < LIMITS.reserveMin || r > LIMITS.reserveMax) return { ok: false, error: "The power-cut reserve must be " + LIMITS.reserveMin + "-" + LIMITS.reserveMax + " %." };
+    if (!Number.isFinite(r) || r < LIMITS.reserveMin || r > LIMITS.reserveMax) return { ok: false, error: "The power-cut reserve must be " + LIMITS.reserveMin + "-" + LIMITS.reserveMax + " %.", code: "POWER_CUT_RESERVE_RANGE" };
     o.reservePct = r;
   }
   return { ok: true, override: o };

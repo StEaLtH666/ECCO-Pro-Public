@@ -85,6 +85,11 @@ export interface TouVM {
   mismatchCount: number;
 }
 
+/** The sentence shown when Prepare for power cut has raised a reserve the battery has not reached. The owner's own words. */
+export function belowReserveSentence(socPct: number, reservePct: number): string {
+  return "The battery is at " + Math.round(socPct) + " percent, below the " + Math.round(reservePct) + " percent reserve. Nothing is charging. Use Charge Battery if you want it filled.";
+}
+
 export interface OverrideRowVM {
   kind: OverrideKind;
   label: string;
@@ -92,8 +97,10 @@ export interface OverrideRowVM {
   untilText: string;
   /** "ends in 3 h 20 min". */
   countdownText: string;
-  /** What the override is meant to do, in plain words (not a claim that anything enforces it yet). */
+  /** What the override is meant to do, in plain words (the guarded scripts enforce it on the server). */
   effectText: string;
+  /** Prepare for power cut only: set while the battery is below the reserve it raised. It raises a floor; it never charges. */
+  belowReserve: string | null;
 }
 
 export interface OverrideBlockVM {
@@ -249,6 +256,10 @@ function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
     untilText: `until ${r.expiresText}`,
     countdownText: `ends in ${formatDurationMin(r.remainingMin)}`,
     effectText: EFFECT_TEXT[r.override.kind](r.override.reservePct),
+    belowReserve:
+      r.override.kind === "prepare_power_cut" && typeof r.override.reservePct === "number" && h.socPct !== null && h.socPct < r.override.reservePct
+        ? belowReserveSentence(h.socPct, r.override.reservePct)
+        : null,
   }));
   const revisionText = !h.revision.known
     ? `Plan revision: unknown (${h.revision.reason})`

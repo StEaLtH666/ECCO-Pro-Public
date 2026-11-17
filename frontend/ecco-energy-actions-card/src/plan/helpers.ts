@@ -1,6 +1,6 @@
-// Plan helper reader (stage 3 preparation, READ ONLY): when the PROPOSED plan helper entities exist (see
-// frontend/ecco-plan-core/proposals/ecco_plan_helpers.proposal.yaml), turn them into the plan core's override policy, the stored plan
-// revision and the active override records. When none of them exists the card behaves exactly as before (no policy, no records).
+// Plan helper reader (READ ONLY): when the plan helper entities exist (home-assistant/packages/ecco_plan_helpers.yaml), turn them into
+// the plan core's override policy, the stored plan revision and the active override records. When none of them exists the card behaves
+// exactly as before (no policy, no records).
 // Pure: no DOM, no Lit, no clock (the caller passes the minute), no service call. It cannot write anything.
 //
 // Honesty rules (each has a test):
@@ -16,8 +16,8 @@ import { buildPlanSnapshot, stateNumber, stateText } from "./adapter.ts";
 import type { PlanSnapshot, StatesLike } from "./adapter.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
 
-// Every entity the proposal defines, generic ecco_plan_* names with no site value. The block between the markers is strict JSON
-// (a Python test reads it and checks the proposal file defines exactly these entities).
+// Every entity the helper package defines for the plan, generic ecco_plan_* names with no site value. The block between the markers is
+// strict JSON (a Python test reads it and checks the package defines exactly these entities).
 // BEGIN HELPER_IDS_JSON
 export const HELPER_IDS = {
   "confirmed": "input_boolean.ecco_plan_overrides_enabled",
@@ -63,6 +63,13 @@ export interface HelperSnapshot {
   confirmed: boolean | null;
   /** Fail-closed: ok only with a complete, confirmed, in-bounds policy. Carries reasons otherwise and never a configuration. */
   policy: OverrideConfigResult;
+  /**
+   * The same limits validated WITHOUT the current reserve: what a start of Hold battery or Skip tonight needs. Only Prepare for power cut
+   * is refused when its reserve is below the current one (that is checked when it starts), as the guarded script does.
+   */
+  startPolicy: OverrideConfigResult;
+  /** The battery level, %, as the card reads it (null when unreadable). Only used to say plainly when a raised reserve is not reached. */
+  socPct: number | null;
   revision: RevisionInfo;
   active: ActiveOverrideRow[];
   /** Stored records that cannot be read or are malformed, in plain words. They are not shown as active. */
@@ -161,7 +168,7 @@ function readRevision(states: StatesLike): RevisionInfo {
  * Read the proposed plan helpers. Returns null when none of them exists (the card then shows exactly what it showed before).
  * `nowMin` is the current instant in epoch minutes; `currentReservePct` the backup reserve the card already reads (or null).
  */
-export function readOverrideHelpers(states: StatesLike, nowMin: number | null, currentReservePct: number | null): HelperSnapshot | null {
+export function readOverrideHelpers(states: StatesLike, nowMin: number | null, currentReservePct: number | null, socPct: number | null = null): HelperSnapshot | null {
   const ids = Object.values(HELPER_IDS) as string[];
   const missing = ids.filter((id) => states[id] === undefined);
   if (missing.length === ids.length) return null;
@@ -179,16 +186,19 @@ export function readOverrideHelpers(states: StatesLike, nowMin: number | null, c
     cutReservePct: stateNumber(states, HELPER_IDS.cut_reserve),
   };
   const policy = validateOverrideConfig(raw, { currentReservePct });
+  const startPolicy = validateOverrideConfig(raw);
   const problems: string[] = [];
   const active = readRecords(states, nowMin, problems);
-  return { missing, confirmed, policy, revision: readRevision(states), active, problems, nowMin };
+  return { missing, confirmed, policy, startPolicy, socPct, revision: readRevision(states), active, problems, nowMin };
 }
 
 /** The stage-2 snapshot plus, when the proposed helpers exist, the policy, the stored revision and the active overrides. */
 export function buildPlanSnapshotWithHelpers(config: EccoEnergyActionsCardConfig, states: StatesLike, nowMin: number | null): PlanSnapshotWithHelpers {
   const snap = buildPlanSnapshot(config, states);
   const reserve = snap.fields.find((f) => f.path === "reserve.backupPct");
-  const helpers = readOverrideHelpers(states, nowMin, reserve && reserve.known ? reserve.value : null);
+  const socId = config.plan?.battery_soc ?? config.dump_to_grid?.battery_soc;
+  const soc = socId ? stateNumber(states, socId) : null;
+  const helpers = readOverrideHelpers(states, nowMin, reserve && reserve.known ? reserve.value : null, soc);
   if (!helpers) return { ...snap, helpers: null };
   return { ...snap, overrides: helpers.active.map((r) => r.override), helpers };
 }
