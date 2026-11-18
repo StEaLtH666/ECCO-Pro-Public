@@ -10,6 +10,11 @@ home_assistant_packages:
     destination: /config/packages/ecco_runtime_config.yaml
     method: ssh_file_copy
     restart_required: true
+  # R9 (r9; scheduled Charge Battery, not live-proven): a missed scheduled run is never started after a Home Assistant restart.
+  # Install this package with a FULL Home Assistant restart, not a package or YAML reload. The captured Home Assistant start time
+  # is written only on the start event, so after a reload it is unknown and every guard fails closed: the schedule watchdog then
+  # will NOT rescue a lost start. A restart that happens after the planned start time never starts that run; it is recorded as
+  # missed (MISSED - not started after a Home Assistant restart), notified and disarmed.
   - source: home-assistant/packages/ecco_free_power_schedule.yaml
     destination: /config/packages/ecco_free_power_schedule.yaml
     method: ssh_file_copy
@@ -17,6 +22,11 @@ home_assistant_packages:
   # Manual Dump-to-Grid V1 scheduler (NOT live-proven). Only meaningful
   # alongside the Dump-to-Grid firmware; its arm validation also reads
   # ecco_free_power_schedule.yaml's helpers for the schedule-overlap check.
+  # R9 (r9; scheduled Export to Grid, not live-proven): a missed scheduled run is never started after a Home Assistant restart.
+  # Install this package with a FULL Home Assistant restart, not a package or YAML reload. The captured Home Assistant start time
+  # is written only on the start event, so after a reload it is unknown and every guard fails closed: the schedule watchdog then
+  # will NOT rescue a lost start. A restart that happens after the planned start time never starts that run; it is recorded as
+  # missed (MISSED - not started after a Home Assistant restart), notified and disarmed.
   - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
     destination: /config/packages/ecco_dump_to_grid_schedule.yaml
     method: ssh_file_copy

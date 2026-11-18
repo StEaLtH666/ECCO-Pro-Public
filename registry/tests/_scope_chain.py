@@ -1261,14 +1261,21 @@ ISP1 = Entry(
 )
 # r9 (no automatic start of a missed scheduled run after a Home Assistant restart; _r9_scope.py): the owner's requirement of 12 Nov 2026
 # (docs/dev/grid-loss-interlock-spec.md section 5 R9), made on the export after isp1. FROZEN edits (PEX): the Export to Grid and the Charge
-# Battery schedule packages (_r9_scope.FROZEN_REVERTERS); as of isp1 each is the isp1-state blob byte for byte. Each package gains a
+# Battery schedule packages (_r9_scope.FROZEN_REVERTERS); as of isp1 each is the isp1-state blob byte for byte. CHAIN-PINNED edit (owner
+# decision of 18 Nov 2026, R9 first as its own pull request): the deployment manifest, COMMENTS ONLY, two short blocks above the two package
+# stanzas stating that R9 needs a FULL Home Assistant restart, not a reload (_r9_scope.PINNED_REVERTERS), declared exactly as acfg1's and
+# isp1's manifest edits are. Each package gains a
 # captured-Home-Assistant-start helper written only by a new capture automation on the `homeassistant` start event, a fail-closed guard
 # (`missed_run`) on both start paths (the schedule watchdog and the startup recovery), and a record / notification / disarm of a missed run in
-# place of its start; future occurrences and the on-time start are unchanged. Measured, not declared: no chain-pinned reverter, no checkpoint,
-# no delta, no op path; ZERO firmware, registry, deployment manifest (the packages are already deployed), dashboard or card byte; no register
+# place of its start; future occurrences and the on-time start are unchanged. Measured, not declared: no delta, no op path; ZERO firmware,
+# registry, dashboard or card byte and no manifest byte other than those two comment blocks (no stanza, key, value or order moves); no register
 # and no dongle entity written that was not written before (the one new service call is input_datetime.set_datetime on the package's own helper).
 R9 = Entry(
     id="r9", pr="R9", commit="unmerged",
+    reverts=dict(_r9.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after r9 (the FULL-restart comment blocks)
+        HA_MANIFEST: "0d844bf7f2c904b5f2db6e91f071657a3073edc97a05bc5bf28467ce24930d8f",
+    },
     added_files=_r9.ADDED_FILES,
     frozen_reverts=dict(_r9.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after r9
@@ -1278,12 +1285,13 @@ R9 = Entry(
         _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
     },
     # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
-    fingerprint="4c24efd41b708e48e17ee60f7531dbf3e366140034ed024fd4e3e6a9c5a97f21",
+    fingerprint="e7f4a184a62207ff4b751aa637c2399355bb46608b9a7d98e51ca284dd0e8492",
     note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
          "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
          "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "
-         "disarmed instead of started, future occurrences and the on-time start unchanged: ZERO firmware, registry, deployment, "
-         "dashboard or card change, no new inverter or dongle write",
+         "disarmed instead of started, future occurrences and the on-time start unchanged; the deployment manifest gains comments "
+         "only (the FULL Home Assistant restart requirement on both package stanzas): ZERO firmware, registry, dashboard or card "
+         "change, no new inverter or dongle write",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9)
 

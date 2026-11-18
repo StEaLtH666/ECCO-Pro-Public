@@ -1,9 +1,11 @@
 """r9 (no automatic start of a missed scheduled run after a Home Assistant restart) change scope: exactly what r9 changes in the two
-frozen schedule packages (and the two frozen suites whose pins they move), as exact (before, after) pairs, and their exact inverse.
+frozen schedule packages (and the two frozen suites whose pins they move) and, as comments only, in the chain-pinned deployment manifest,
+as exact (before, after) pairs, and their exact inverse.
 
 Same technique as the earlier post-export scope modules (_fps1_scope, _dgs1_scope): every verbatim edit is held HERE as the single source of
 truth, round-trip-checked, and each reverter raises unless each of its edits is present exactly once. The post-export chain entry `r9`
-(registry/tests/_scope_chain.py POST_EXPORT_ENTRIES, appended after isp1; registry/tests/_pex.py) carries two frozen reverters.
+(registry/tests/_scope_chain.py POST_EXPORT_ENTRIES, appended after isp1; registry/tests/_pex.py) carries four frozen reverters (the two
+packages and the two suites) and one chain-pinned reverter (the deployment manifest).
 
 WHAT r9 IS. The owner's requirement of 12 Nov 2026 (docs/dev/grid-loss-interlock-spec.md, section 5 R9 and 6.4): a missed scheduled Charge Battery
 (ecco_free_power_schedule.yaml) or Export to Grid (ecco_dump_to_grid_schedule.yaml) session must not start automatically after a Home Assistant
@@ -14,8 +16,15 @@ records, notifies and disarms a missed run, the `not missed_run` condition on th
 replaced by the same record, notification and disarm (and a branch that leaves a start between the Home Assistant start and the recovery's
 evaluation to the normal triggers). Status text `MISSED - not started after a Home Assistant restart` (the status sensor already maps MISSED to
 FAILED). It makes starts only more conservative: no new service other than input_datetime.set_datetime on its own helper, no register, no
-dongle entity written that was not written before. ZERO firmware, registry data, manifest (the packages are already deployed), dashboard or
-card byte. Offline only; not installed.
+dongle entity written that was not written before. ZERO firmware, registry data, dashboard or card byte. Offline only; not installed.
+
+THE MANIFEST NOTE (owner decision of 18 Nov 2026: R9 goes first, as its own pull request). The two packages are already listed in
+deployment/ha-manifest.yaml (restart_required: true), but nothing there said that R9 needs a FULL Home Assistant restart. The manifest gains
+a short YAML comment block above each of the two stanzas (MANIFEST_EDITS): R9 needs a full restart, not a package or YAML reload; after a
+reload the captured start is unknown and the watchdog will not rescue a lost start; a restart after the planned start time never starts that
+run (it is recorded as missed). Comments only: no key, value, order or indentation of any stanza moves, and no number, entity id, address or
+site value is spelled. The manifest is chain-pinned (_scope_chain.PINNED), so the edit is declared here as exact pairs with an exact reverter
+(PINNED_REVERTERS) and its result hash is the r9 checkpoint of the manifest in _scope_chain.py; the r9 fingerprint is re-sealed over it.
 
 This module imports no other scope module, not _scope_chain (the chain imports it) and not _pex. No I/O.
 """
@@ -738,6 +747,41 @@ FREE_EDITS = (
 )
 
 
+# ---- (chain-pinned edit) deployment/ha-manifest.yaml: comments only -------------------------------------------------------------
+MANIFEST_REL = "deployment/ha-manifest.yaml"
+MANIFEST_0_OLD = _blk(r"""
+    restart_required: true
+  - source: home-assistant/packages/ecco_free_power_schedule.yaml
+""")
+MANIFEST_0_NEW = _blk(r"""
+    restart_required: true
+  # R9 (r9; scheduled Charge Battery, not live-proven): a missed scheduled run is never started after a Home Assistant restart.
+  # Install this package with a FULL Home Assistant restart, not a package or YAML reload. The captured Home Assistant start time
+  # is written only on the start event, so after a reload it is unknown and every guard fails closed: the schedule watchdog then
+  # will NOT rescue a lost start. A restart that happens after the planned start time never starts that run; it is recorded as
+  # missed (MISSED - not started after a Home Assistant restart), notified and disarmed.
+  - source: home-assistant/packages/ecco_free_power_schedule.yaml
+""")
+MANIFEST_1_OLD = _blk(r"""
+  # ecco_free_power_schedule.yaml's helpers for the schedule-overlap check.
+  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
+""")
+MANIFEST_1_NEW = _blk(r"""
+  # ecco_free_power_schedule.yaml's helpers for the schedule-overlap check.
+  # R9 (r9; scheduled Export to Grid, not live-proven): a missed scheduled run is never started after a Home Assistant restart.
+  # Install this package with a FULL Home Assistant restart, not a package or YAML reload. The captured Home Assistant start time
+  # is written only on the start event, so after a reload it is unknown and every guard fails closed: the schedule watchdog then
+  # will NOT rescue a lost start. A restart that happens after the planned start time never starts that run; it is recorded as
+  # missed (MISSED - not started after a Home Assistant restart), notified and disarmed.
+  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
+""")
+
+MANIFEST_EDITS = (
+    (MANIFEST_0_OLD, MANIFEST_0_NEW),
+    (MANIFEST_1_OLD, MANIFEST_1_NEW),
+)
+
+
 def _mk(name, edits, label):
     def undo(text: str) -> str:
         return _revert(text, edits, label)
@@ -750,6 +794,7 @@ pre_r9_dump_package = _mk("dump_package", DUMP_EDITS, "Dump package")
 pre_r9_free_package = _mk("free_package", FREE_EDITS, "Free Power package")
 pre_r9_package_test = _mk("package_test", PKGTEST_EDITS, "Dump package suite")
 pre_r9_shadow_test = _mk("shadow_test", SHADOW_EDITS, "shadow check suite")
+pre_r9_manifest = _mk("manifest", MANIFEST_EDITS, "deployment/ha-manifest.yaml")   # the chain reverter of entry r9 for the pinned manifest
 
 
 def add_r9_dump_package(text: str) -> str:
@@ -768,11 +813,18 @@ def add_r9_shadow_test(text: str) -> str:
     return _apply(text, SHADOW_EDITS, "shadow check suite")
 
 
+def add_r9_manifest(text: str) -> str:
+    """Applies r9's deployment/ha-manifest.yaml comment edits to the text as of isp1 (the round trip)."""
+    return _apply(text, MANIFEST_EDITS, "deployment/ha-manifest.yaml")
+
+
 FROZEN_REVERTERS = {
     DUMP_REL: pre_r9_dump_package,
     FREE_REL: pre_r9_free_package,
     PKGTEST_REL: pre_r9_package_test,
     SHADOW_REL: pre_r9_shadow_test,
 }
-# r9 edits no chain-pinned file (the packages are already deployed: no manifest stanza).
-PINNED_REVERTERS: dict = {}
+# The chain-pinned file r9 edits (comments only: the FULL-restart note on the two package stanzas), with its reverter (the chain entry's reverts).
+PINNED_REVERTERS = {
+    MANIFEST_REL: pre_r9_manifest,
+}
