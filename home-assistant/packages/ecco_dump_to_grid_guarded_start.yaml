@@ -8,8 +8,11 @@
 # Prepare for power cut (and the effective reserve) bound only the scheduled start. This script applies the same two checks before it
 # presses the SAME button, and only then:
 #   - sensor.ecco_plan_export_hold must read clear (held = an override is active; unknown = a record cannot be read: refused);
-#   - sensor.ecco_plan_effective_reserve must be known, and the Stop SOC staged on the dongle must be at least that reserve (below it
-#     is refused, not changed: the owner sees and sets the staged value, so nothing here writes it).
+#   - sensor.ecco_plan_effective_reserve must be a finite number from 0 to 100 (one that cannot be read is refused as RESERVE_UNKNOWN,
+#     any other value that is not such a number, nan and infinity included, as RESERVE_INVALID), and the Stop SOC staged on the dongle
+#     must be a finite number from 0 to 100 (otherwise STOP_SOC_UNREADABLE) and at least that reserve (below it is refused, not changed:
+#     the owner sees and sets the staged value, so nothing here writes it). Both are tested as positive ranges, so a bad reading fails
+#     closed: nothing is pressed.
 # A refusal presses nothing, writes the last-result text (input_text.ecco_plan_last_result) and raises ONE persistent notification.
 # It calls exactly one dongle service: the same start button press the card made before. The firmware still owns every start
 # interlock (two-step arm, snapshot, bus, limits), so this script adds checks and removes none.
@@ -24,16 +27,30 @@ script:
     alias: "ECCO - Start Dump to Grid (guarded by the plan overrides and the effective reserve)"
     description: >-
       Presses the Dump to Grid start button only while no Hold battery, Skip tonight or Prepare for power cut is active and the
-      staged Stop SOC is at least the effective reserve. Fails closed when either cannot be read.
+      staged Stop SOC is at least the effective reserve. Fails closed when either cannot be read or is not a finite number from 0 to 100.
     mode: single
     sequence:
       - variables:
           plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
-          plan_reserve: "{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}"
-          staged_stop_soc: "{{ states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) }}"
+          # The reserve and the staged Stop SOC must each be a finite number from 0 to 100, tested as a positive range: a comparison with nan
+          # is always false, and float() also accepts nan, inf and -inf (inf cannot be rounded, and the offline interpreter keeps nan and inf
+          # as text, so every comparison then raises). A value outside the range is replaced here by a negative code, so nothing below
+          # compares or prints a bad number: plan_reserve -1 = cannot be read, or below 0 (RESERVE_UNKNOWN); plan_reserve -2 = not a finite
+          # number from 0 to 100 (RESERVE_INVALID); staged_stop_soc -1 = cannot be read, or not a finite number from 0 to 100
+          # (STOP_SOC_UNREADABLE).
+          plan_reserve: >-
+            {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+            {%- if r >= 0 and r <= 100 -%}{{ r }}
+            {%- elif r < 0 -%}-1
+            {%- else -%}-2
+            {%- endif -%}
+          staged_stop_soc: >-
+            {%- set s = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) -%}
+            {{ s if (s >= 0 and s <= 100) else -1 }}
           refusal: >-
             {%- if plan_hold == 'held' -%}OVERRIDE_ACTIVE|A Hold battery, Skip tonight or Prepare for power cut is active, so Dump to Grid was not started.
             {%- elif plan_hold != 'clear' -%}OVERRIDE_UNREADABLE|The override records cannot be read, so Dump to Grid was not started (it fails closed).
+            {%- elif plan_reserve == -2 -%}RESERVE_INVALID|The effective reserve is not a number from 0 to 100, so Dump to Grid was not started (it fails closed).
             {%- elif plan_reserve < 0 -%}RESERVE_UNKNOWN|The effective reserve cannot be read, so Dump to Grid was not started (it fails closed).
             {%- elif staged_stop_soc < 0 -%}STOP_SOC_UNREADABLE|The staged Stop SOC cannot be read, so Dump to Grid was not started.
             {%- elif staged_stop_soc < plan_reserve -%}STOP_SOC_BELOW_RESERVE|The staged Stop SOC ({{ staged_stop_soc | round(0) | int }} %) is below the effective reserve ({{ plan_reserve | round(0) | int }} %); raise the Stop SOC, then start again.

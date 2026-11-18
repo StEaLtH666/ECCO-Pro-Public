@@ -1438,7 +1438,9 @@ input_boolean:
 #   - while a Hold battery, Skip tonight or Prepare for power cut is active (sensor.ecco_plan_export_hold reads held), and while that
 #     cannot be read (unknown, unavailable or the entity missing: it fails closed);
 #   - while the effective reserve (sensor.ecco_plan_effective_reserve: the larger of the owner's reserve and a running power-cut reserve)
-#     cannot be read, or leaves no room under the 90 % Stop SOC limit;
+#     cannot be read (reason RESERVE_UNKNOWN), is not a finite number from 0 to 100 (reason RESERVE_INVALID), or leaves no room under
+#     the 90 % Stop SOC limit (reason RESERVE_TOO_HIGH). The reserve passes only as a finite number from 0 to 100, tested as a positive
+#     range: nan, infinity and anything else is refused before anything is staged, so a bad reading fails closed;
 # and it raises the Stop SOC it stages to at least the effective reserve (rounded up), never lowers it. The scheduled start is the
 # trusted backend: the dashboard and the card are not what keeps an override.
 
@@ -1451,7 +1453,17 @@ input_boolean:
      _blk(r"""
           # The plan's hold and reserve, read once at the start of the run (a later change ends the NEXT start, not this one).
           plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
-          plan_reserve: "{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}"
+          # The reserve must be a finite number from 0 to 100, tested as a positive range: a comparison with nan is always false, so a test
+          # that only refused a too-big value would let nan through, and float() also accepts nan, inf and -inf (inf cannot be rounded, and
+          # the offline interpreter keeps nan and inf as text, so every comparison then raises). A value outside the range is therefore
+          # replaced here by a negative code, and nothing below ever compares, rounds or stages a bad reserve:
+          # -1 = cannot be read, or below 0 (RESERVE_UNKNOWN); -2 = not a finite number from 0 to 100 (RESERVE_INVALID).
+          plan_reserve: >-
+            {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+            {%- if r >= 0 and r <= 100 -%}{{ r }}
+            {%- elif r < 0 -%}-1
+            {%- else -%}-2
+            {%- endif -%}
           requested_stop_soc_raw: "{{ stop_soc | int(25) }}"
           # Raise-only: at least the effective reserve, rounded up; never below what the owner asked for.
           requested_stop_soc: "{{ [stop_soc | int(25), (plan_reserve | round(0, 'ceil') | int) if plan_reserve >= 0 else 0] | max }}"
@@ -1490,7 +1502,8 @@ input_boolean:
                   value: >-
                     BLOCKED - the plan override records cannot be read ({{ plan_hold }}); nothing started (reason OVERRIDE_UNREADABLE).
                     Check that the ECCO plan helper package is installed and its helpers are available.
-          # PLAN: no known effective reserve: fail closed.
+          # PLAN: no known effective reserve, or one that is not a finite number from 0 to 100: fail closed (plan_reserve is negative for
+          # both, so this one branch refuses both; the text says which).
           - conditions:
               - condition: template
                 value_template: "{{ plan_reserve < 0 }}"
@@ -1499,7 +1512,10 @@ input_boolean:
                 target:
                   entity_id: input_text.ecco_dump_to_grid_schedule_last_result
                 data:
-                  value: "BLOCKED - the effective reserve cannot be read; nothing started (reason RESERVE_UNKNOWN)"
+                  value: >-
+                    {%- if plan_reserve == -2 -%}BLOCKED - the effective reserve is not a number from 0 to 100; nothing started (reason RESERVE_INVALID)
+                    {%- else -%}BLOCKED - the effective reserve cannot be read; nothing started (reason RESERVE_UNKNOWN)
+                    {%- endif -%}
           # PLAN: the reserve the Stop SOC must respect leaves no room under the 90 % limit.
           - conditions:
               - condition: template

@@ -16,6 +16,11 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
   [3] manual      the guarded start: the same two checks, then the SAME button press; below-reserve staged Stop SOC refused, not changed
   [4] end to end  an override started through the guarded override script holds the scheduled start and the manual start; cancelling frees them
   [5] mutation    in-memory mutants of the two start scripts are each caught
+  [6] reserve     the effective reserve must be a finite number from 0 to 100; anything else is refused before anything is staged, armed or
+                  pressed (RESERVE_INVALID for nan, infinity and a value above 100; RESERVE_UNKNOWN and RESERVE_TOO_HIGH keep their cases), on the
+                  scheduled start and the guarded start, with the guarded start's staged Stop SOC read-back held to the same range; a valid
+                  reserve behaves as before
+  [7] mutation    in-memory mutants of that validation (removed, too-big-only, a bound moved, the new refusal or text dropped) are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -315,6 +320,225 @@ for which, label, old, new in MUTANTS:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS)} mutants, all caught", killed == len(MUTANTS), f"{killed}/{len(MUTANTS)}")
 check("a harmless rewrite of a result text survives", problems(DUMP_TEXT.replace("nothing started", "nothing was started"), GUARD_TEXT) == [])
+
+# ================================================================================================================================
+print("[6] effective reserve: only a finite number from 0 to 100 passes; anything else is refused before anything is staged, armed or pressed")
+# ================================================================================================================================
+# New with RESERVE_INVALID. float() also accepts nan, inf and -inf, a comparison with nan is always False, inf cannot be rounded, and this interpreter
+# keeps such a result as TEXT, so a reserve of nan or inf used to reach a comparison or the rounding as a string and abort the start script before
+# any refusal was recorded (the old script was run through this interpreter; Home Assistant's own parsing is not tested here). The producer sensor never publishes such a value (it checks its inputs), so the sensor is forced to the text below,
+# through the interpreter's own `template_entities` map (nothing in a simulator is edited), the way the composition suite forces it.
+# Codes: a reserve that cannot be read or is below 0 (-inf included) keeps RESERVE_UNKNOWN; 91..100 keeps RESERVE_TOO_HIGH on the scheduled start; a
+# reserve that is not a finite number (nan, inf, 1e999) or is above 100 is RESERVE_INVALID. The guarded start also refuses a staged Stop SOC that is
+# not a finite number from 0 to 100 (STOP_SOC_UNREADABLE, the existing code).
+SCHED_REFUSED = (("nan", "RESERVE_INVALID"), ("NaN", "RESERVE_INVALID"), ("inf", "RESERVE_INVALID"), ("-inf", "RESERVE_UNKNOWN"),
+                 ("1e999", "RESERVE_INVALID"), ("-5", "RESERVE_UNKNOWN"), ("101", "RESERVE_INVALID"), ("150", "RESERVE_INVALID"),
+                 ("abc", "RESERVE_UNKNOWN"), ("", "RESERVE_UNKNOWN"), ("unknown", "RESERVE_UNKNOWN"), ("unavailable", "RESERVE_UNKNOWN"),
+                 ("91", "RESERVE_TOO_HIGH"), ("100", "RESERVE_TOO_HIGH"))
+SCHED_STARTED = (("0", 25, 25), ("0.0", 25, 25), ("20", 25, 25), ("62.4", 25, 63), ("62.0", 25, 62), ("90", 25, 90))   # (reserve, asked, staged)
+GUARD_REFUSED = (("nan", "RESERVE_INVALID"), ("NaN", "RESERVE_INVALID"), ("inf", "RESERVE_INVALID"), ("-inf", "RESERVE_UNKNOWN"),
+                 ("1e999", "RESERVE_INVALID"), ("-5", "RESERVE_UNKNOWN"), ("101", "RESERVE_INVALID"), ("150", "RESERVE_INVALID"),
+                 ("abc", "RESERVE_UNKNOWN"), ("", "RESERVE_UNKNOWN"), ("unknown", "RESERVE_UNKNOWN"), ("unavailable", "RESERVE_UNKNOWN"),
+                 ("91", "STOP_SOC_BELOW_RESERVE"), ("100", "STOP_SOC_BELOW_RESERVE"))                                   # staged Stop SOC 30
+GUARD_PRESSED = (("0", 30), ("0.0", 30), ("20", 30), ("62.4", 63), ("62.0", 62), ("90", 90))                              # (reserve, staged)
+STAGED_REFUSED = ("nan", "NaN", "inf", "-inf", "1e999", "101", "150", "-5", "", "unknown", "unavailable", "abc")           # reserve 20
+
+
+class _Stop(Exception):
+    pass
+
+
+def forced_world(txt, dump_text, guard_text, **kw):
+    pw, d = world(dump_text, guard=guard_text, **kw)
+    pw.w.template_entities[EFF] = txt
+    return pw, d
+
+
+def reserve_cases(dump_text: str, guard_text: str, first_only: bool = False, parts=("sched", "guard", "staged")) -> list:
+    """Every reserve-validation case on the given package texts: [(label, ok, detail)]. `first_only` stops at the first failing case (the mutants)."""
+    rows: list = []
+
+    def add(label, ok, detail=""):
+        rows.append((label, bool(ok), detail))
+        if first_only and not ok:
+            raise _Stop()
+
+    def attempt(label, fn):
+        try:
+            ok, detail = fn()
+        except _Stop:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a start script that raises (nothing recorded) is a failed proof
+            ok, detail = False, f"raised {type(exc).__name__}: {str(exc)[:110]}"
+        add(label, ok, detail)
+
+    def sched(txt, asked=25):
+        pw, d = forced_world(txt, dump_text, guard_text)
+        d.arm = True                                       # the write enable left ON beforehand: its OFF at the end is the script's own last step
+        pw.w.set(D.D_ARM, "on")
+        d.soc = 95.0                                       # the model's gate refuses a Stop SOC at or above the battery SOC
+        n0 = len(pw.w.service_log)
+        run_scheduled(pw, d, stop_soc=asked)
+        return pw, d, n0
+
+    def guard(txt, staged_txt="30", staged_num=30):
+        pw, d = forced_world(txt, dump_text, guard_text, owner=20)
+        pw.w.set(D.D_SOC, staged_txt)
+        d.stop_soc = staged_num
+        d.arm = True
+        n0 = len(pw.w.service_log)
+        pw.run_script("ecco_dump_to_grid_start_guarded", {}, seconds=20)
+        return pw, d, n0
+
+    try:
+        if "sched" in parts:
+            for txt, code in SCHED_REFUSED:
+                def refused(txt=txt, code=code):
+                    pw, d, n0 = sched(txt)
+                    last = pw.state(LAST)
+                    alerts = [n for n in pw.w.notification_log if n[1] == "create" and n[2] == NOTE]
+                    ok = (pw.state(EFF) == txt and last.startswith("BLOCKED - the effective reserve") and last.endswith(f"(reason {code})") and len(last) <= 255
+                          and untouched(pw, d, n0) and pw.state(D.D_ARM) == "off" and d.arm is False
+                          and len(alerts) == 1 and last in pw.w.notifications.get(NOTE, {}).get("message", ""))
+                    return ok, f"{last[:90]!r} presses={d.presses} staged={d.number_log} switch={pw.state(D.D_ARM)} alerts={len(alerts)}"
+                attempt(f"scheduled start, reserve {txt!r}: {code}, nothing staged, armed or pressed, one alert, write enable (left ON) reads OFF", refused)
+            for txt, asked, want in SCHED_STARTED:
+                def started(txt=txt, asked=asked, want=want):
+                    pw, d, n0 = sched(txt, asked)
+                    last = pw.state(LAST)
+                    staged = [v for _t, e, v in d.number_log if e == D.D_SOC]
+                    ok = (d.presses and d.presses[0][1] == "PASSED" and staged == [want] and last.startswith("STARTED OK") and f"Stop SOC {want}%" in last
+                          and not any(n[1] == "create" and n[2] == NOTE for n in pw.w.notification_log) and pw.state(D.D_ARM) == "off" and d.arm is False)
+                    return ok, f"{last[:90]!r} staged={staged} presses={d.presses}"
+                attempt(f"scheduled start, reserve {txt!r}, asked {asked}: starts, Stop SOC {want} staged (unchanged behaviour), write enable reads OFF", started)
+        if "guard" in parts:
+            for txt, code in GUARD_REFUSED:
+                def g_refused(txt=txt, code=code):
+                    pw, d, n0 = guard(txt)
+                    last = pw.state(PLAN_LAST)
+                    ok = (pw.state(EFF) == txt and d.press_log == [] and last.startswith(f"REFUSED {code} - ") and len(last) <= 255 and GNOTE in pw.w.notifications
+                          and not any(s.startswith(("number.", "switch.", "button.")) for s, _e, _d in pw.services(n0)) and pw.state(D.D_SOC) == "30")
+                    return ok, f"{last[:90]!r} presses={d.press_log}"
+                attempt(f"guarded start, reserve {txt!r}, staged 30: refused {code}, nothing pressed, nothing staged or armed, one notification", g_refused)
+            for txt, staged in GUARD_PRESSED:
+                def g_pressed(txt=txt, staged=staged):
+                    pw, d, n0 = guard(txt, str(staged), staged)
+                    presses = [(s, e) for s, e, _d in pw.services(n0) if s == "button.press"]
+                    ok = presses == [("button.press", START_BTN)] and len(d.press_log) == 1 and pw.state(PLAN_LAST) == "" and GNOTE not in pw.w.notifications
+                    return ok, f"{pw.state(PLAN_LAST)[:90]!r} presses={presses}"
+                attempt(f"guarded start, reserve {txt!r}, staged {staged}: the one start-button press, nothing refused (unchanged behaviour)", g_pressed)
+        if "staged" in parts:
+            for stxt in STAGED_REFUSED:
+                def s_refused(stxt=stxt):
+                    pw, d, n0 = guard("20", stxt, 30)
+                    last = pw.state(PLAN_LAST)
+                    ok = (d.press_log == [] and last.startswith("REFUSED STOP_SOC_UNREADABLE - ") and GNOTE in pw.w.notifications
+                          and not any(s.startswith(("number.", "switch.", "button.")) for s, _e, _d in pw.services(n0)))
+                    return ok, f"{last[:90]!r} presses={d.press_log}"
+                attempt(f"guarded start, reserve 20, staged Stop SOC read back as {stxt!r}: refused STOP_SOC_UNREADABLE, nothing pressed", s_refused)
+            def s_edges():
+                pw, d, n0 = guard("20", "100", 100)
+                pw2, d2, n2 = guard("0", "0", 0)
+                return len(d.press_log) == 1 and len(d2.press_log) == 1, f"{d.press_log} {d2.press_log}"
+            attempt("guarded start, a staged Stop SOC of 100 (reserve 20) and of 0 (reserve 0) is inside the range: pressed", s_edges)
+    except _Stop:
+        pass
+    return rows
+
+
+def refusal_order_problems(dump_text: str, guard_text: str) -> list[str]:
+    """Static: the invalid-reserve text is in the SAME branch as the unreadable-reserve text (index 2, ahead of the too-high, power and Stop SOC
+    branches); in the guarded start RESERVE_INVALID precedes RESERVE_UNKNOWN, STOP_SOC_UNREADABLE and STOP_SOC_BELOW_RESERVE."""
+    bad: list[str] = []
+    d = yaml.safe_load(dump_text)
+    top = next(a for a in d["script"]["ecco_dump_to_grid_start_scheduled"]["sequence"] if "choose" in a)["choose"]
+    cond, val = str(top[2]["conditions"]), top[2]["sequence"][0]["data"]["value"]
+    if "plan_reserve < 0" not in cond or "RESERVE_INVALID" not in val or "RESERVE_UNKNOWN" not in val:
+        bad.append("the third branch no longer refuses both an unreadable and an invalid reserve")
+    if "RESERVE_TOO_HIGH" not in str(top[3]) or "RESERVE_INVALID" in str(top[3]):
+        bad.append("the fourth branch is not the too-high refusal")
+    g = yaml.safe_load(guard_text)["script"]["ecco_dump_to_grid_start_guarded"]["sequence"][0]["variables"]["refusal"]
+    at = [g.find(c) for c in ("OVERRIDE_UNREADABLE", "RESERVE_INVALID", "RESERVE_UNKNOWN", "STOP_SOC_UNREADABLE", "STOP_SOC_BELOW_RESERVE")]
+    if -1 in at or at != sorted(at):
+        bad.append(f"guarded start refusal order {at}")
+    return bad
+
+
+check("the invalid-reserve refusal shares the unreadable-reserve branch (scheduled, index 2) and precedes STOP_SOC_UNREADABLE (guarded): "
+      "the refusal order is unchanged and every refusal still sits ahead of any staging", refusal_order_problems(DUMP_TEXT, GUARD_TEXT) == [],
+      str(refusal_order_problems(DUMP_TEXT, GUARD_TEXT)))
+check("both packages test the reserve as a positive range (`r >= 0 and r <= 100`) and no bare `| float(-1)` read of the reserve is left",
+      DUMP_TEXT.count("{%- if r >= 0 and r <= 100 -%}{{ r }}") == 1 and GUARD_TEXT.count("{%- if r >= 0 and r <= 100 -%}{{ r }}") == 1
+      and "{{ s if (s >= 0 and s <= 100) else -1 }}" in GUARD_TEXT
+      and not re.search(r"plan_reserve:\s*\"\{\{ states\('sensor\.ecco_plan_effective_reserve'\) \| float\(-1\) \}\}\"", DUMP_TEXT + GUARD_TEXT))
+ROWS6 = reserve_cases(DUMP_TEXT, GUARD_TEXT)
+for _label, _ok, _detail in ROWS6:
+    check(_label, _ok, _detail)
+check(f"all {len(ROWS6)} reserve-validation cases above ran (both start paths, every value of the table)", len(ROWS6) == len(SCHED_REFUSED) + len(SCHED_STARTED)
+      + len(GUARD_REFUSED) + len(GUARD_PRESSED) + len(STAGED_REFUSED) + 1, str(len(ROWS6)))
+
+print("[7] mutation: each way of weakening the reserve validation is caught by a running case above")
+_SD = """          plan_reserve: >-
+            {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+            {%- if r >= 0 and r <= 100 -%}{{ r }}
+            {%- elif r < 0 -%}-1
+            {%- else -%}-2
+            {%- endif -%}
+"""
+_ONE = "          plan_reserve: \"{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}\"\n"
+_IF3 = """            {%- if r >= 0 and r <= 100 -%}{{ r }}
+            {%- elif r < 0 -%}-1
+            {%- else -%}-2
+"""
+_GS = """          staged_stop_soc: >-
+            {%- set s = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) -%}
+            {{ s if (s >= 0 and s <= 100) else -1 }}
+"""
+_GONE = "          staged_stop_soc: \"{{ states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) }}\"\n"
+MUTANTS6 = [
+    ("dump", "scheduled: the validation removed (the reserve is read with float() alone)", _SD, _ONE),
+    ("dump", "scheduled: a too-big-only check (refuse only above 100: nan, always False, goes through)",
+     _IF3, "            {%- if r > 100 -%}-2\n            {%- elif r < 0 -%}-1\n            {%- else -%}{{ r }}\n"),
+    ("dump", "scheduled: the ceil step unprotected (only a negative reserve is set aside, so inf and nan reach the rounding)",
+     _IF3, "            {%- if r < 0 -%}-1\n            {%- else -%}{{ r }}\n"),
+    ("dump", "scheduled: the upper bound moved to 101", "{%- if r >= 0 and r <= 100 -%}{{ r }}", "{%- if r >= 0 and r <= 101 -%}{{ r }}"),
+    ("dump", "scheduled: the upper bound lowered to below 100", "{%- if r >= 0 and r <= 100 -%}{{ r }}", "{%- if r >= 0 and r < 100 -%}{{ r }}"),
+    ("dump", "scheduled: the lower bound made exclusive (a reserve of 0 refused)", "{%- if r >= 0 and r <= 100 -%}{{ r }}", "{%- if r > 0 and r <= 100 -%}{{ r }}"),
+    ("dump", "scheduled: an invalid reserve reported as an unreadable one (no RESERVE_INVALID text)", "{%- if plan_reserve == -2 -%}BLOCKED", "{%- if false -%}BLOCKED"),
+    ("guard", "guarded: the reserve validation removed", _SD, _ONE),
+    ("guard", "guarded: a too-big-only reserve check", _IF3, "            {%- if r > 100 -%}-2\n            {%- elif r < 0 -%}-1\n            {%- else -%}{{ r }}\n"),
+    ("guard", "guarded: the reserve ceiling removed (only a negative reserve is set aside)", _IF3, "            {%- if r < 0 -%}-1\n            {%- else -%}{{ r }}\n"),
+    ("guard", "guarded: the reserve upper bound moved to 101", "{%- if r >= 0 and r <= 100 -%}{{ r }}", "{%- if r >= 0 and r <= 101 -%}{{ r }}"),
+    ("guard", "guarded: the reserve lower bound made exclusive (a reserve of 0 refused)", "{%- if r >= 0 and r <= 100 -%}{{ r }}", "{%- if r > 0 and r <= 100 -%}{{ r }}"),
+    ("guard", "guarded: no RESERVE_INVALID refusal (an invalid reserve falls to RESERVE_UNKNOWN)",
+     "            {%- elif plan_reserve == -2 -%}RESERVE_INVALID|The effective reserve is not a number from 0 to 100, so Dump to Grid was not started (it fails closed).\n", ""),
+    ("guard", "guarded: the staged Stop SOC read-back is not validated", _GS, _GONE),
+    ("guard", "guarded: the staged Stop SOC read-back has no upper bound (150 and inf pass)", "{{ s if (s >= 0 and s <= 100) else -1 }}", "{{ s if s >= 0 else -1 }}"),
+    ("guard", "guarded: the staged Stop SOC accepts up to 101", "{{ s if (s >= 0 and s <= 100) else -1 }}", "{{ s if (s >= 0 and s <= 101) else -1 }}"),
+]
+caught6 = 0
+for which, label, old, new in MUTANTS6:
+    src = DUMP_TEXT if which == "dump" else GUARD_TEXT
+    if src.count(old) != 1:
+        check(f"mutant anchor: {label}", False, f"anchor found {src.count(old)}x")
+        continue
+    mutated = src.replace(old, new)
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    d_text, g_text = (mutated, GUARD_TEXT) if which == "dump" else (DUMP_TEXT, mutated)
+    rows = reserve_cases(d_text, g_text, first_only=True, parts=("sched",) if which == "dump" else ("guard", "staged"))
+    bad = [r for r in rows if not r[1]]
+    if bad:
+        caught6 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {bad[0][0][:75]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS6)} reserve-validation mutants, all caught by a running case", caught6 == len(MUTANTS6), f"{caught6}/{len(MUTANTS6)}")
+check("control: the unmutated packages pass the same cases", all(ok for _l, ok, _d in ROWS6))
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

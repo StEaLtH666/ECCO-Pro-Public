@@ -36,6 +36,11 @@ virtual clock. Every Jinja condition is the package's own text, rendered by that
                   presses nothing
   [12] mutation   in-memory mutants of the gaps above (the final write-enable OFF removed, an unavailable hold let through, only `unknown` refused, round
                   instead of ceil, the pre-press check against the raw request, the recovery's write-enable OFF removed) are each caught
+  [13] reserve    a reserve that is not a finite number from 0 to 100 (nan, infinity, out of range, junk) is refused with its own reason (RESERVE_INVALID,
+                  RESERVE_UNKNOWN or RESERVE_TOO_HIGH) on the on-time start, the watchdog's rescue and after a restart that does not miss the start: nothing
+                  staged, armed or pressed, the write enable left ON reads OFF, the schedule disarmed, alerted; after a missed run the recovery and the
+                  watchdog still record MISSED; a valid reserve (0, 0.0, 20, 90) behaves as before
+  [14] mutation   in-memory mutants of that validation (removed, too-big-only, the ceil step unprotected, a bound moved, the new text dropped) are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a live
 Home Assistant restart (the capture on the `homeassistant` start event, the restored helper states), the dongle or the inverter.
@@ -744,6 +749,152 @@ for name, mut, scen in (("the final write-enable OFF removed from the start scri
                         ("the startup recovery no longer turns a write enable left ON off", m_recovery_keeps_arm, scen_recovery_arm)):
     check(f"control: unmutated, the scenario of the mutant '{name}' passes", scen(None))
     check(f"mutant caught: {name}", not scen(mut))
+
+# ======================================================================================================================
+print("\n[13] a reserve that is not a finite number from 0 to 100 refuses (RESERVE_INVALID and its neighbours): on-time start, watchdog rescue, recovery")
+# ======================================================================================================================
+# float() also accepts nan, inf and -inf, a comparison with nan is always False, inf cannot be rounded, and this interpreter keeps such a result as
+# text, so a reserve of nan or inf used to abort the start script before any refusal was recorded (Home Assistant's own parsing is not tested here).
+# The producer sensor never publishes such a value, so the sensor is forced (force() above; the interpreter's own template_entities map). A reserve
+# that cannot be read or is below 0 (-inf included) keeps RESERVE_UNKNOWN; 91..100 keeps RESERVE_TOO_HIGH; a value that is not a finite number, or is
+# above 100, is RESERVE_INVALID.
+def case(label: str, fn) -> None:
+    """One running case: a start script that raises (nothing recorded, nothing refused) is a FAILED case, never an aborted suite."""
+    try:
+        ok, detail = fn()
+    except Exception as exc:  # noqa: BLE001
+        ok, detail = False, f"raised {type(exc).__name__}: {str(exc)[:110]}"
+    check(label, ok, detail)
+
+
+BAD_RESERVES = (("nan", "RESERVE_INVALID"), ("NaN", "RESERVE_INVALID"), ("inf", "RESERVE_INVALID"), ("-inf", "RESERVE_UNKNOWN"),
+                ("1e999", "RESERVE_INVALID"), ("-5", "RESERVE_UNKNOWN"), ("101", "RESERVE_INVALID"), ("150", "RESERVE_INVALID"),
+                ("abc", "RESERVE_UNKNOWN"), ("", "RESERVE_UNKNOWN"), ("unknown", "RESERVE_UNKNOWN"), ("unavailable", "RESERVE_UNKNOWN"),
+                ("91", "RESERVE_TOO_HIGH"), ("100", "RESERVE_TOO_HIGH"))
+for path, lose in PATHS:
+    for txt, code in BAD_RESERVES:
+        def bad_reserve(lose=lose, txt=txt, code=code):
+            x = Combo(lose=lose)
+            force(x, EFF, txt)
+            x.stale_arm().until(ST - 30)
+            before = x.w.state(D.D_ARM)
+            x.until(ST + 400)
+            ok = (before == "on" and x.w.state(EFF) == txt and x.last().startswith("BLOCKED - the effective reserve") and x.last().endswith(f"(reason {code})")
+                  and x.untouched() and x.write_enable_off() and not x.is_armed() and (len(x.alerts()) == 1 if not lose else len(x.alerts()) >= 1)
+                  and code in x.w.notifications.get(NOTE, {}).get("message", ""))
+            return ok, f"before={before} {x.last()!r} {x.presses()} {x.stop_staged()} {x.is_armed()} {x.alerts()}"
+        case(f"{path}, effective reserve {txt!r}: refused ({code}), nothing staged, armed or pressed, the write enable left ON reads OFF, the schedule disarmed, alerted "
+             "(the watchdog's own missed-start alert comes first, then the script's, under the same id)", bad_reserve)
+GOOD_RESERVES = (("0", 40, 40), ("0.0", 40, 40), ("20", 40, 40), ("90", 40, 90))     # (reserve, requested Stop SOC, staged Stop SOC)
+for path, lose in PATHS:
+    for txt, stop, want in GOOD_RESERVES:
+        def good_reserve(lose=lose, txt=txt, stop=stop, want=want):
+            x = Combo(owner=40.0, stop=stop, lose=lose)
+            force(x, EFF, txt)
+            x.d.soc = 95.0                                # the model's gate refuses a Stop SOC at or above the battery SOC
+            x.until(ST + 400)
+            ok = (x.started() == 1 and x.stop_staged() == [want] and x.last().startswith("STARTED OK") and f"Stop SOC {want}%" in x.last()
+                  and not any("did NOT start" in n[3] for n in x.alerts()) and (x.alerts() == [] if not lose else len(x.alerts()) == 1)
+                  and not x.is_armed() and x.write_enable_off())
+            return ok, f"{x.started()} {x.stop_staged()} {x.last()!r} {x.alerts()}"
+        case(f"{path}, effective reserve {txt!r} (the edge of the accepted range or an ordinary value), request {stop}: unchanged, started with Stop SOC {want}, "
+             "no refusal alert (the watchdog's own missed-start alert is expected), disarmed", good_reserve)
+for nm, mut, lose, stale in (("recovery only", None, ("start", "watchdog"), True), ("watchdog only", drop_automation("_startup_recovery"), (), False)):
+    for txt in ("nan", "inf", "150", "abc"):
+        def missed_bad_reserve(nm=nm, mut=mut, lose=lose, stale=stale, txt=txt):
+            x = Combo(mutate=mut, lose=lose)
+            if stale:                                     # only the startup recovery turns a write enable left ON off (as in [8]); the watchdog's missed branch does not
+                x.stale_arm()
+            x.restart(ST - 120, ST + 30)
+            force(x, EFF, txt).until(ST + DURATION * 60 + 600)
+            ok = x.untouched() and x.last() == MISSED_TEXT and not x.is_armed() and (x.write_enable_off() if stale else True)
+            return ok, f"{x.presses()} {x.last()!r} {x.is_armed()}"
+        case(f"missed run AND the effective reserve reads {txt!r} ({nm}): not started; recorded as MISSED (the missed-run guard answers first), nothing staged or pressed, "
+             f"disarmed{', the write enable left ON reads OFF' if stale else ''}", missed_bad_reserve)
+for txt, code in (("nan", "RESERVE_INVALID"), ("inf", "RESERVE_INVALID"), ("150", "RESERVE_INVALID")):
+    def restart_bad_reserve(txt=txt, code=code):
+        x = Combo().restart(ST - 400, ST - 300)
+        force(x, EFF, txt).until(ST + 400)
+        return x.last().endswith(f"(reason {code})") and x.untouched() and not x.is_armed(), f"{x.last()!r} {x.presses()} {x.is_armed()}"
+    case(f"after a restart that does not miss the start, the effective reserve reads {txt!r}: the on-time start is still refused ({code}), nothing staged or pressed, disarmed",
+         restart_bad_reserve)
+
+# ======================================================================================================================
+print("\n[14] mutation: the reserve validation is load-bearing (each weakening is caught by the running cases of [13])")
+# ======================================================================================================================
+_RES_ONE = "{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}"
+
+
+def _reserve_var(p):
+    return next(a for a in script_seq(p) if "variables" in a)["variables"]
+
+
+def m_res_removed(p):
+    """No validation: the reserve is read with float() alone."""
+    _reserve_var(p)["plan_reserve"] = _RES_ONE
+
+
+def m_res_too_big_only(p):
+    """A too-big-only check: only a reserve above 100 is set aside (nan, whose comparisons are all False, goes through)."""
+    _reserve_var(p)["plan_reserve"] = ("{%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}"
+                                       "{%- if r > 100 -%}-2{%- elif r < 0 -%}-1{%- else -%}{{ r }}{%- endif -%}")
+
+
+def m_res_ceil_unprotected(p):
+    """The ceil step unprotected: only a negative reserve is set aside, so inf and nan reach the comparisons and the rounding."""
+    _reserve_var(p)["plan_reserve"] = ("{%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}"
+                                       "{%- if r < 0 -%}-1{%- else -%}{{ r }}{%- endif -%}")
+
+
+def m_res_bound_101(p):
+    """The upper bound moved to 101."""
+    v = _reserve_var(p)
+    assert v["plan_reserve"].count("r <= 100") == 1
+    v["plan_reserve"] = v["plan_reserve"].replace("r <= 100", "r <= 101")
+
+
+def m_res_text_dropped(p):
+    """The invalid reserve is reported as an unreadable one (the RESERVE_INVALID text is never shown)."""
+    ch = next(a for a in script_seq(p) if "choose" in a)["choose"][2]
+    val = ch["sequence"][0]["data"]["value"]
+    assert val.count("{%- if plan_reserve == -2 -%}") == 1
+    ch["sequence"][0]["data"]["value"] = val.replace("{%- if plan_reserve == -2 -%}", "{%- if false -%}")
+
+
+def scen_bad_reserve(mut) -> bool:
+    for lose in ((), ("start",)):
+        for txt, code in (("nan", "RESERVE_INVALID"), ("inf", "RESERVE_INVALID"), ("150", "RESERVE_INVALID"), ("101", "RESERVE_INVALID"), ("100", "RESERVE_TOO_HIGH"),
+                          ("-inf", "RESERVE_UNKNOWN")):
+            try:
+                x = Combo(mutate=mut, lose=lose)
+                force(x, EFF, txt)
+                x.stale_arm().until(ST + 400)
+                ok = x.last().endswith(f"(reason {code})") and x.untouched() and x.write_enable_off() and not x.is_armed()
+            except Exception:  # noqa: BLE001 - a start script that raises (nothing recorded, nothing refused) is a failed scenario
+                ok = False
+            if not ok:
+                return False
+    for txt, want in (("0", 40), ("20", 40), ("90", 90)):
+        try:
+            x = Combo(owner=40.0, stop=40, mutate=mut)
+            force(x, EFF, txt)
+            x.d.soc = 95.0
+            x.until(ST + 400)
+            ok = x.started() == 1 and x.stop_staged() == [want]
+        except Exception:  # noqa: BLE001
+            ok = False
+        if not ok:
+            return False
+    return True
+
+
+check("control: unmutated, the bad-reserve scenario of the mutants below passes (on-time and watchdog, six refusals, three accepted values)", scen_bad_reserve(None))
+for name, mut in (("the reserve validation removed (float() alone)", m_res_removed),
+                  ("a too-big-only reserve check (nan goes through)", m_res_too_big_only),
+                  ("the ceil step unprotected (only a negative reserve is set aside)", m_res_ceil_unprotected),
+                  ("the upper bound moved to 101", m_res_bound_101),
+                  ("the RESERVE_INVALID text dropped (reported as unreadable)", m_res_text_dropped)):
+    check(f"mutant caught: {name}", not scen_bad_reserve(mut))
 
 check("no helper refused a write (the plan helper range checks of the model)", P.PlanWorld.rejected_all == [], str(P.PlanWorld.rejected_all[:3]))
 
