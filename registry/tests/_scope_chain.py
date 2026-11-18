@@ -1334,7 +1334,7 @@ EPC2 = Entry(
     id="epc2", pr="EPC2", commit="unmerged",
     reverts=dict(_epc2.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after epc2
-        HA_MANIFEST: "58dab82d35315afe5b7bc40d90dcdbbaa3f868599904f3a0668f304b55e2722d",
+        HA_MANIFEST: "b6242191061aa705a3977bea9c4ab219febe614df617f9dfa396030b2ca35392",
     },
     added_files=_epc2.ADDED_FILES,
     frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
@@ -1346,7 +1346,7 @@ EPC2 = Entry(
         _epc2.DUMP_REL: "6e37597fabce60245f02a647611d7bfdb874a98491c5b4fddca035ab4958b75c",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="7d0cbaedf5259f733d014bb5d23fd94adcaa0f376ea9c3868e1d08ce244b4ae4",
+    fingerprint="45ddfab2024818082192664b188e622789008c25ed4778c705104cd74033cbb9",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1363,7 +1363,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="d9b4c1ccf56891110fda73ccd516faaacda1a2ea5ca974371ed24c1e8daec748",
+    fingerprint="0a618c27b331f3930c4b686a13c6ebbeab9e13fd99edc8c15444e991798d3c11",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

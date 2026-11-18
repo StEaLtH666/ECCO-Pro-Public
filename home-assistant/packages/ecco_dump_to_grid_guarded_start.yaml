@@ -1,7 +1,8 @@
 # ECCO Pro - guarded manual Dump to Grid start (stage 3 of the two-master-card energy-control work)
 #
 # NOT INSTALLED, NOT LIVE-PROVEN. Listed in deployment/ha-manifest.yaml for a supervised install; it needs
-# home-assistant/packages/ecco_plan_helpers.yaml installed first (it reads the two sensors that package defines).
+# home-assistant/packages/ecco_plan_helpers.yaml installed in the same deployment, before the one full Home Assistant restart (it
+# reads the two sensors that package defines; the order of the copies does not matter).
 #
 # What it is: the path the Energy Actions card uses for the manual Dump to Grid Start when the card is configured with
 # dump_to_grid.guarded_start. The card used to press the dongle's start button directly, so a running Hold battery, Skip tonight or

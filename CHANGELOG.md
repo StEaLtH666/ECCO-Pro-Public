@@ -30,25 +30,30 @@ Development before the first public release happened in a private repository; se
   declares as added; every file hash, the 28-file count and the folder hash stay pinned.
 - **Stage 3 start scripts refuse an invalid effective reserve (reason `RESERVE_INVALID`; offline, nothing installed)**: the scheduled Dump to Grid
   start and the guarded manual start now accept the effective reserve only as a finite number from 0 to 100, tested as a positive range.
-  `float()` also accepts nan, inf and -inf, a comparison with nan is always false and inf cannot be rounded (the offline interpreter keeps them
-  as text, so every comparison raises), so a reserve of nan or inf was let through or aborted the start script before any refusal was recorded.
-  Both scripts now record the refusal exactly like their other refusals (the last-result text and the persistent notification), with nothing staged, armed or
-  pressed and the dongle write enable ending off: `RESERVE_INVALID` (nan, infinity, anything above 100) beside the existing `RESERVE_UNKNOWN`
-  (cannot be read, or below 0) and `RESERVE_TOO_HIGH` (91 to 100, scheduled start). The guarded start also refuses a staged Stop SOC read-back
-  that is not a finite number from 0 to 100 (`STOP_SOC_UNREADABLE`). A valid reserve behaves as before and no threshold moved; the plan sensor
+  `float()` also accepts nan, inf and -inf and inf cannot be rounded (a bare nan or inf is kept as text by the result parser, in the offline interpreter
+  and, by reading Home Assistant's code, in Home Assistant, so the next comparison raises), so a reserve of nan or inf was not refused cleanly: the start
+  script aborted before any refusal was recorded (nothing staged or pressed), and a comparison with nan is always false.
+  Both scripts now record the refusal exactly like their other refusals (the last-result text and the persistent notification). On the scheduled start
+  nothing is staged, armed or pressed and the dongle write enable ends off; the guarded start presses nothing and never touches the write enable (it calls
+  no switch service, so a write enable the owner had turned on stays as it was after a guarded refusal). The reasons are `RESERVE_INVALID` (nan,
+  infinity, anything above 100) beside the existing `RESERVE_UNKNOWN` (cannot be read, or below 0) and `RESERVE_TOO_HIGH` (91 to 100, scheduled
+  start). The guarded start also refuses a staged Stop SOC read-back that is not a finite number from 0 to 100 (`STOP_SOC_UNREADABLE`). A valid reserve behaves as before and no threshold moved; the plan sensor
   that produces the reserve is unchanged. A finite reserve above 100 used to be reported as `RESERVE_TOO_HIGH` (scheduled start) or
   `STOP_SOC_BELOW_RESERVE` (guarded start); it was refused then and still is, now as `RESERVE_INVALID`. The dongle's own Start button stays
   unbound (unresolved; binding it needs a firmware gate, a separate approval). Added to `test_ecco_plan_enforcement.py` (+74 checks)
   and `test_ecco_r9_stage3_composition.py` (+53 checks); `epc2` and `epc3` were re-sealed.
 - **Deployment manifest wording for Stage 3 (comments only; nothing installed)**: the scheduled Dump to Grid stanza of `deployment/ha-manifest.yaml`
-  now says that the changed package needs `ecco_plan_helpers.yaml` installed with or before it (install the two together, the plan helpers first,
-  one full Home Assistant restart, as R9 already requires) and that until the helpers exist every scheduled start is refused (`OVERRIDE_UNREADABLE`).
-  It also carries the active-override warning: while a Hold battery, Skip tonight or Prepare for power cut override is active, or the plan records
+  now says that the changed package needs `ecco_plan_helpers.yaml` installed in the same deployment, before the one full Home Assistant restart that
+  R9 already requires (the order of the stanzas in the list does not matter: the deploy tool copies every package, checks the configuration and restarts
+  Home Assistant only as a separately approved step), and that until the helpers are installed and Home Assistant has restarted fully every scheduled
+  start is refused (`OVERRIDE_UNREADABLE`) and every guarded start is refused. The plan helpers stanza, the guarded-start stanza and the guarded
+  start package header say the same. It also carries the active-override warning: while a Hold battery, Skip tonight or Prepare for power cut override is active, or the plan records
   cannot be read, or the reserve is invalid, every scheduled and every guarded start is refused, and the owner sees this only at the start time,
   through the blocked alert and the last-result text. The guarded-start stanza states the unresolved limitation in one sentence (the dongle's own
   Start button is not bound by these protections; binding it needs a firmware gate, approved separately) and the manifest never calls the protection
   fully enforced. No key, value, order or indentation moved; the comments are declared in `epc2`'s manifest pairs, and `epc2` and `epc3` were
-  re-sealed. `test_ecco_stage3_limitation.py` now also requires the sentence in the manifest and the notes above the schedule stanza (+14 checks).
+  re-sealed. `test_ecco_stage3_limitation.py` now also requires the sentence in the manifest, the notes above the schedule stanza and the
+  same-deployment wording (no copy-order claim) on the three Stage 3 stanzas and in the guarded start package header (+23 checks).
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently (while the policy is deliberately aside, `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the one-run override; the pin stays); `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment, checks in memory that it will succeed (including the post-condition), and on a re-run into the same `--out` deploys the applied file already there or fails when that file is not `apply`'s output ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with

@@ -16,7 +16,10 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 package headers add comments only
   [4] mutation  each way of losing the text or adding a path is caught by the checks above; the untouched tree is not flagged
   [5] manifest  the deployment manifest states the limitation in one short sentence on the guarded-start stanza (and never claims full enforcement);
-                the scheduled Dump to Grid stanza carries the helper dependency and the active-override warning beside R9's full-restart note
+                the scheduled Dump to Grid stanza carries the helper dependency and the active-override warning beside R9's full-restart note;
+                the three Stage 3 stanzas (plan helpers, scheduled start, guarded start) say the plan helpers go in the SAME deployment, before the
+                ONE full restart, that the order of the stanzas does not matter, and make no copy-order claim (the deploy tool copies every package and
+                restarts only as a separate step); the guarded start package header says the same
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -210,16 +213,28 @@ print("[5] the deployment manifest states the same limitation in one short sente
 # ===========================================================================
 # The manifest is where an installer reads what a package needs and what it does not guarantee, so the unresolved limitation is stated there too, in
 # one short ASCII sentence (no number, entity id, address or site value), on a comment line in the comment block directly above the guarded start's
-# stanza. The manifest never calls the protection fully enforced. The scheduled Dump to Grid stanza carries the helper dependency (install the plan
-# helpers WITH or BEFORE it, one full restart; until they exist every scheduled start is refused) and the active-override warning (while an override
-# is active, the records cannot be read or the reserve is invalid, every scheduled and every guarded start is REFUSED, seen only at the start time).
+# stanza. The manifest never calls the protection fully enforced. The scheduled Dump to Grid stanza carries the helper dependency (the plan helpers go in
+# the SAME deployment, before the ONE full restart; until they are installed and Home Assistant has restarted fully every scheduled start is refused) and
+# the active-override warning (while an override is active, the records cannot be read or the reserve is invalid, every scheduled and every guarded start
+# is REFUSED, seen only at the start time). The ORDER of the copies does not matter (the deploy tool copies every package in the manifest, checks the
+# configuration and restarts Home Assistant only when that is separately requested), so no stanza may say the plan helpers must be copied first; the
+# three stanzas (plan helpers, scheduled start, guarded start) say the same thing.
 MANIFEST = ROOT / "deployment" / "ha-manifest.yaml"
 MANIFEST_LIMITATION = "The dongle's own Start button is not bound by these protections (unresolved; it needs a firmware gate, approved separately)."
 GUARD_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml"
 SCHEDULE_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml"
+HELPERS_STANZA = "  - source: home-assistant/packages/ecco_plan_helpers.yaml"
 SCHEDULE_NOTES = ("FULL Home Assistant restart",                       # R9's note, kept
-                  "ecco_plan_helpers.yaml", "WITH or BEFORE", "the plan helpers first", "OVERRIDE_UNREADABLE",   # the helper dependency
+                  "ecco_plan_helpers.yaml", "OVERRIDE_UNREADABLE",     # the helper dependency (its same-deployment wording: DEPENDENCY_NOTES)
                   "Hold battery, Skip tonight or Prepare for power cut", "REFUSED", "blocked alert", "last-result text")   # the active-override warning
+# What each of the three Stage 3 stanzas says about the helper package, as prose (comment markers dropped, lines joined, so a phrase may wrap).
+DEPENDENCY_NOTES = {
+    "scheduled-start": ("SAME deployment", "ONE full Home Assistant restart", "does not matter", "every scheduled start is refused", "every guarded start is refused"),
+    "guarded-start": ("SAME deployment", "ONE full Home Assistant restart", "does not matter", "every guarded start is refused"),
+    "plan helpers": ("SAME deployment", "ONE full Home Assistant restart", "does not matter"),
+}
+DEPENDENCY_STANZAS = {"scheduled-start": SCHEDULE_STANZA, "guarded-start": GUARD_STANZA, "plan helpers": HELPERS_STANZA}
+COPY_ORDER_CLAIM = re.compile(r"plan helpers first|installed first|WITH or BEFORE|BEFORE the guarded|BEFORE the changed|copied first", re.I)
 FULL_CLAIM = re.compile(r"fully[- ]enforc|full enforcement|fully[- ]protect|completely (?:enforc|protect)", re.I)
 
 
@@ -232,6 +247,20 @@ def block_above(lines: list[str], stanza: str) -> list[str]:
     while k > 0 and lines[k - 1].lstrip().startswith("#"):
         k -= 1
     return lines[k:j]
+
+
+def dependency_problems(lines: list[str]) -> list[str]:
+    """What each Stage 3 stanza says about the helper package: the same deployment, the one full restart, no copy-order claim."""
+    out = []
+    for name, stanza in DEPENDENCY_STANZAS.items():
+        prose = " ".join(ln.lstrip().lstrip("#").strip() for ln in block_above(lines, stanza))
+        lacking = [s for s in DEPENDENCY_NOTES[name] if s not in prose]
+        if lacking:
+            out.append(f"the {name} stanza's comment block lacks {lacking}")
+        claim = COPY_ORDER_CLAIM.search(prose)
+        if claim:
+            out.append(f"the {name} stanza's comment block claims a copy order ({claim.group(0)!r})")
+    return out
 
 
 def manifest_problems(text: str) -> list[str]:
@@ -250,6 +279,7 @@ def manifest_problems(text: str) -> list[str]:
     missing = [s for s in SCHEDULE_NOTES if s not in above]
     if missing:
         out.append(f"the schedule stanza's comment block lacks {missing}")
+    out.extend(dependency_problems(lines))
     return out
 
 
@@ -260,6 +290,8 @@ check("the manifest sentence is ASCII, one line, short, and spells no number, en
 check("the manifest exists and is readable", bool(manifest_text))
 check("the manifest states the limitation exactly once, on a comment line directly above the guarded-start stanza; it never claims full enforcement; the schedule stanza "
       "carries the helper dependency, the active-override warning and R9's full-restart note", not manifest_problems(manifest_text), str(manifest_problems(manifest_text)))
+check("the plan helpers, scheduled-start and guarded-start stanzas each say the plan helpers go in the SAME deployment, before the ONE full restart, that the order of "
+      "the stanzas does not matter, and none claims a copy order", not dependency_problems(manifest_text.split("\n")), str(dependency_problems(manifest_text.split("\n"))))
 check("the manifest names no entity id, address or site value in the notes above the two stanzas (comment lines only)",
       not re.search(r"\b(?:sensor|switch|button|number|input_[a-z]+|binary_sensor)\.[a-z_]+|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
                     "\n".join(block_above(manifest_text.split("\n"), GUARD_STANZA) + block_above(manifest_text.split("\n"), SCHEDULE_STANZA)), re.I))
@@ -272,7 +304,38 @@ check("mutant caught: the manifest sentence moved above another stanza",
 check("mutant caught: the manifest sentence on a line that is not a comment",
       bool(manifest_problems(manifest_text.replace("# " + MANIFEST_LIMITATION, "note: " + MANIFEST_LIMITATION))))
 check("mutant caught: the manifest claims the protection is fully enforced", bool(manifest_problems(manifest_text + "\n# The overrides are fully enforced.")))
-check("mutant caught: the schedule stanza's helper dependency removed", bool(manifest_problems(manifest_text.replace("WITH or BEFORE", "after"))))
+check("mutant caught: the schedule stanza's helper dependency removed", bool(manifest_problems(manifest_text.replace("SAME deployment", "other deployment"))))
+
+
+def caught(mutant: str) -> bool:
+    """A mutant is caught when it really differs from the untouched manifest and the manifest check flags it."""
+    return mutant != manifest_text and bool(manifest_problems(mutant))
+
+
+check("mutant caught: the schedule stanza says the plan helpers go first again", caught(manifest_text.replace(SCHEDULE_STANZA, "  # Install the two together, the plan helpers first.\n" + SCHEDULE_STANZA)))
+check("mutant caught: the plan helpers stanza says BEFORE the guarded start again", caught(manifest_text.replace("the SAME deployment as the guarded start below", "BEFORE the guarded start below", 1)))
+check("mutant caught: the guarded-start stanza says installed first again", caught(manifest_text.replace("installed in the SAME deployment, before the ONE full", "installed first, before the ONE full", 1)))
+check("mutant caught: the guarded-start stanza no longer says every guarded start is refused until the helpers are in",
+      caught(manifest_text.replace("every guarded start\n  # is refused.", "every guarded start\n  # is allowed.", 1)))
+check("mutant caught: the one-full-restart statement removed from the scheduled-start stanza", caught(manifest_text.replace("before the ONE full Home Assistant restart (the R9 note", "before the restart (the R9 note", 1)))
+check("mutant caught: the order-does-not-matter sentence removed from the plan helpers stanza", caught(manifest_text.replace("(the order of the stanzas in this list does not matter): both", "): both", 1)))
+_guard_header = texts["package header: ecco_dump_to_grid_guarded_start.yaml"]
+
+
+def guard_header_problems(text: str) -> list[str]:
+    head = " ".join(ln.lstrip().lstrip("#").strip() for ln in text.split("\n")[:8])
+    out = []
+    if "installed in the same deployment, before the one full Home Assistant restart" not in head:
+        out.append("the header does not say the plan helpers go in the same deployment, before the one full restart")
+    if "installed first" in text:
+        out.append("the header says the plan helpers must be installed first")
+    return out
+
+
+check("the guarded start package header says the plan helpers go in the same deployment, before the one full restart, and claims no copy order",
+      not guard_header_problems(_guard_header), str(guard_header_problems(_guard_header)))
+check("mutant caught: the guarded start package header says installed first again",
+      bool(guard_header_problems(_guard_header.replace("installed in the same deployment, before the one full Home Assistant restart", "installed first"))))
 check("mutant caught: the schedule stanza's active-override warning removed", bool(manifest_problems(manifest_text.replace("last-result text", "result"))))
 check("mutant caught: R9's full-restart note removed from the schedule stanza", bool(manifest_problems(manifest_text.replace("FULL Home Assistant restart", "restart"))))
 check("control: the untouched manifest is not flagged", not manifest_problems(manifest_text))
