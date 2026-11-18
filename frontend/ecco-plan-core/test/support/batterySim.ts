@@ -4,8 +4,9 @@
 // rounding, noise and occasional staleness, delivered power that can dip below the setpoint, minute-by-minute real time (a 23 or 25 hour
 // day included) and the controller called every re-plan interval. The physics here is written independently of the controller's forward
 // model on purpose. Seeded: the same scenario id always gives the same run.
+import { createHash } from "node:crypto";
 import { planGentle, DEFAULT_GENTLE_PARAMS } from "../../src/gentleController.ts";
-import type { GentleDecision, GentleParams, NamedCeiling } from "../../src/gentleController.ts";
+import type { GentleDecision, GentleInput, GentleParams, GentlePolicy, HouseholdInput, NamedCeiling, StepPoint } from "../../src/gentleController.ts";
 import { planGentleCharge } from "../../src/chargePlanner.ts";
 import { elapsedMinutes, norm } from "../../src/time.ts";
 import type { ClockDay } from "../../src/time.ts";
@@ -245,6 +246,281 @@ export function runStatic(sc: Scenario): { rateW: number; reachedTolMin: number 
     soc = physics(sc, soc, rate, t);
   }
   return { rateW: rate, reachedTolMin: null, status: plan.status };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Golden master: the v1 behaviour (no household input) must stay bit-identical. The digest below was computed ONCE from the v1 module
+// (commit a0d34b8) with exactly this function; the suite recomputes it from the current module.
+// ---------------------------------------------------------------------------------------------------------------------------------
+export const V1_KEYS = [
+  "status", "label", "assumptionsLabel", "reasons", "codes", "targetSocPct", "ceilingW", "ceilingName", "neededW", "setpointW", "changeRecommended", "change",
+  "deadlineInMin", "windowEndInMin", "finishInMin", "marginMin", "trajectory", "suggestedBufferMin", "changesUsed", "changesLeft", "nextReplanInMin", "actuationSupported", "actuationReason",
+] as const;
+
+export function pickV1(d: object): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const k of V1_KEYS) o[k] = (d as Record<string, unknown>)[k];
+  return o;
+}
+
+// BEGIN v1Fingerprint
+export function v1Fingerprint(controller: (i: GentleInput) => object): string {
+  const h = createHash("sha256");
+  for (let id = 0; id < 400; id++) {
+    const sc = makeScenario(id);
+    const run = runClosedLoop(sc, controller as typeof planGentle);
+    h.update(JSON.stringify([id, run.ticks.map((tk) => [tk.t, pickV1(tk.decision), tk.appliedBefore, tk.sinceChange, tk.usedBefore]), run.changes, run.reachedTolMin, run.reachedStrictMin, run.finalSocPct, run.peakW, run.firstStatus]));
+  }
+  const rand = rng(424242);
+  const pickN = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
+  const names = ["owner_maximum", "battery_max_charge", "grid_charge_current", "max_grid_charge_power"];
+  for (let n = 0; n < 4000; n++) {
+    const day = pickN([ORDINARY, ORDINARY, SPRING, AUTUMN]);
+    const wall = 5 * (36 + Math.floor(rand() * 85));
+    const start = day.deltaMin === 0 ? 5 * Math.floor(rand() * 288) : norm(120 - 5 * (6 + Math.floor(rand() * (wall / 5 - 12))));
+    const elapsed = Math.floor(rand() * (wall + 30));
+    const cur = rand() < 0.3 ? null : 100 * Math.floor(5 + rand() * 75);
+    const i: GentleInput = {
+      targetSocPct: pickN([10, 50, 80, 90, 95, 100]), bufferMin: 5 * Math.floor(rand() * 25), chargeWindow: { startMin: start, endMin: norm(start + wall), clockDay: day }, elapsedMin: elapsed,
+      socPct: rand() < 0.08 ? null : Math.round(rand() * 1000) / 10, socAgeMin: rand() < 0.1 ? Math.floor(rand() * 40) : Math.floor(rand() * 10),
+      capacityKwh: 10 + rand() * 40, capacityUpPct: Math.floor(rand() * 12), learnedCapacityKwh: rand() < 0.4 ? 10 + rand() * 45 : null,
+      ceilings: names.map((name) => ({ name, watts: rand() < 0.35 ? pickN([null, undefined, NaN, -1]) : 300 + Math.floor(rand() * 9000) })),
+      currentSetpointW: cur, lastChangeElapsedMin: cur === null || rand() < 0.3 ? null : Math.floor(rand() * elapsed), changesUsed: Math.floor(rand() * 9),
+      params: rand() < 0.3 ? { dwellMin: pickN([0, 15, 30, 60]), hysteresisW: pickN([0, 300, 500, 900]), maxChanges: pickN([0, 2, 6]), topHoldMin: pickN([0, 20, 40]), decreaseSlackMin: pickN([0, 15, 30]) } : undefined,
+    };
+    h.update(JSON.stringify(pickV1(controller(i))));
+  }
+  return h.digest("hex");
+}
+// END v1Fingerprint
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Household closed loop (owner directive 18 Nov 2026): the same true battery plus household demand, solar and a PHYSICAL grid import
+// limit that clips the delivered charge power. The true demand and solar differ from what the controller is told (forecast, margin,
+// confidence). The cap model here (capLowW) is derived independently of the controller. Seeded; fictional values only.
+// ---------------------------------------------------------------------------------------------------------------------------------
+const SEG = 60;
+export type DemandKind = "holds" | "within-margin" | "exceeds";
+export type SolarKind = "none" | "below" | "equal" | "above";
+export interface Spike {
+  fromMin: number;
+  toMin: number;
+  watts: number;
+}
+export interface HouseholdSpec {
+  /** holds: true demand below the forecast; within-margin: above it but inside the controller's margin; exceeds: spikes above the margin. */
+  demandKind: DemandKind;
+  /** none: no solar input at all; below: true solar well under the forecast (can be under the confidence-scaled forecast); equal: at the forecast; above: over it. */
+  solarKind: SolarKind;
+  /** Both the limit the controller is told and the physical limit that clips the delivered charge power. */
+  gridLimitW: number;
+  marginPct: number;
+  demandForecast: number[];
+  demandFactor: number[];
+  spikes: Spike[];
+  solarForecast: number[];
+  solarFactor: number[];
+  solarConf: number;
+  noise: number;
+  demandStaleProb: number;
+  forecastPeakW: number;
+  /** A lower bound of the controller's cap derived here: the grid limit minus the margin on the largest demand the controller can see, no solar counted, floored to 100 W. */
+  capLowW: number;
+}
+export interface HouseholdScenario extends Scenario {
+  hh: HouseholdSpec;
+}
+
+const segOf = (t: number) => Math.floor(t / SEG);
+const at = (xs: readonly number[], s: number) => xs[Math.min(s, xs.length - 1)] ?? 0;
+export function trueDemandW(hs: HouseholdSpec, t: number): number {
+  const s = segOf(t);
+  const base = at(hs.demandForecast, s) * at(hs.demandFactor, s);
+  return hs.spikes.reduce((m, k) => (t >= k.fromMin && t < k.toMin ? Math.max(m, k.watts) : m), base);
+}
+export function trueSolarW(hs: HouseholdSpec, t: number): number {
+  const s = segOf(t);
+  return at(hs.solarForecast, s) * at(hs.solarFactor, s);
+}
+
+export function makeHouseholdScenario(id: number): HouseholdScenario {
+  const sc = makeScenario(id);
+  const r = rng(41000 + id);
+  const between = (a: number, b: number) => a + r() * (b - a);
+  const demandKind = (["holds", "within-margin", "exceeds"] as const)[id % 3] as DemandKind;
+  const solarKind = (["none", "below", "equal", "above"] as const)[Math.floor(id / 3) % 4] as SolarKind;
+  const nSeg = Math.ceil(sc.windowRealMin / SEG) + 1;
+  const peakSeg = Math.floor(r() * nSeg);
+  const demandForecast: number[] = [];
+  const demandFactor: number[] = [];
+  const solarForecast: number[] = [];
+  const solarFactor: number[] = [];
+  for (let s = 0; s < nSeg; s++) {
+    demandForecast.push(Math.round(s === peakSeg && r() < 0.6 ? between(2000, 3500) : between(300, 1500)));
+    demandFactor.push(demandKind === "holds" ? between(0.5, 0.95) : demandKind === "within-margin" ? between(1.0, 1.12) : between(0.7, 1.05));
+    solarForecast.push(solarKind === "none" || r() < 0.3 ? 0 : Math.round(between(500, 3500)));
+    solarFactor.push(solarKind === "below" ? between(0.15, 0.6) : solarKind === "equal" ? 1 : solarKind === "above" ? between(1.05, 1.4) : 0);
+  }
+  const forecastPeakW = Math.max(...demandForecast);
+  const noise = between(0, 0.03);
+  const truePeak = Math.max(...demandForecast.map((w, s) => w * (demandFactor[s] as number)));
+  const upper = Math.max(forecastPeakW, truePeak * (1 + noise));
+  const spikes: Spike[] = [];
+  if (demandKind === "exceeds") {
+    const n = 1 + Math.floor(r() * 3);
+    for (let k = 0; k < n; k++) {
+      const from = Math.round(between(0, Math.max(1, sc.windowRealMin - 20)));
+      spikes.push({ fromMin: from, toMin: from + Math.round(between(10, 45)), watts: Math.round(forecastPeakW * between(1.35, 1.9)) });
+    }
+  }
+  const marginPct = 20;
+  const gridLimitW = Math.round(((1 + marginPct / 100) * upper + sc.ceilW * between(0.6, 1.7)) / 100) * 100;
+  const capLowW = Math.max(0, Math.floor((gridLimitW - (1 + marginPct / 100) * upper) / 100 + 1e-9) * 100);
+  const solarConf = [0.5, 0.7, 0.9][Math.floor(r() * 3)] as number;
+  const demandStaleProb = r() < 0.5 ? 0 : 0.15;
+  return { ...sc, hh: { demandKind, solarKind, gridLimitW, marginPct, demandForecast, demandFactor, spikes, solarForecast, solarFactor, solarConf, noise, demandStaleProb, forecastPeakW, capLowW } };
+}
+
+/** What the TRUE battery can do at the highest setpoint the household cap leaves (no controller, no dips, no solar counted). */
+export function feasibilityHH(sc: HouseholdScenario): Feasibility {
+  const s = Math.floor(Math.min(sc.ceilW, sc.hh.capLowW) / 100) * 100;
+  if (s < 500) return "infeasible";
+  const f = trueFinishMin(sc, s);
+  const deadline = sc.windowRealMin - sc.bufferMin;
+  if (f === null || f > sc.windowRealMin) return "infeasible";
+  if (f > deadline) return "buffer";
+  return f + dipLossMin(sc) + 10 <= deadline ? "margin" : "tight";
+}
+
+/** The forecast re-based to "minutes from now" as the controller receives it: the value in force now, then each later change. */
+function rebase(vals: readonly number[], t: number, windowEnd: number): StepPoint[] {
+  const pts: StepPoint[] = [{ fromInMin: 0, watts: at(vals, segOf(t)) }];
+  for (let s = segOf(t) + 1; s * SEG < windowEnd; s++) pts.push({ fromInMin: s * SEG - t, watts: at(vals, s) });
+  return pts;
+}
+
+export interface HouseholdRun extends RunResult {
+  /** Minutes the setpoint in force plus the true demand minus the true solar was above the grid limit (before the physical clip). */
+  overLimitMin: number;
+  /** Minutes the physical grid headroom held the delivered power below what the setpoint and the battery would have taken. */
+  clippedMin: number;
+  maxImportW: number;
+  jumps: number;
+  slewLimited: number;
+  fallbackTicks: number;
+}
+
+export interface HouseholdRunOptions {
+  params?: Partial<GentleParams>;
+  policy?: Partial<GentlePolicy>;
+  staticRateW?: number | null;
+  /** Replace the controller's household input before each call (noise injection, stale data...). */
+  tweak?: (h: HouseholdInput, t: number) => HouseholdInput;
+}
+
+/** The household controller in the loop, an ideal actuator (applies every recommended change at once). */
+export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planGentle = planGentle, opt: HouseholdRunOptions = {}): HouseholdRun {
+  const r = rng(sc.seed);
+  const rh = rng(sc.seed + 777);
+  const hs = sc.hh;
+  const tol = readTolerance(sc);
+  const params: Partial<GentleParams> = { replanMin: sc.replanMin, maxDecreaseStepW: 1000, ...sc.params, ...opt.params };
+  const quant = (x: number) => Math.min(100, Math.max(0, Math.round(x / sc.readStep) * sc.readStep));
+  let soc = sc.startSocPct;
+  let applied: number | null = null;
+  let lastChange: number | null = null;
+  let used = 0;
+  let reading = quant(soc + sc.readNoise * (2 * r() - 1));
+  let readAt = 0;
+  let reachedTol: number | null = null;
+  let reachedStrict: number | null = null;
+  let peak = 0;
+  let overLimit = 0;
+  let clipped = 0;
+  let maxImport = 0;
+  let jumps = 0;
+  let slew = 0;
+  let fallbackTicks = 0;
+  const ticks: TickRecord[] = [];
+  const changes: ChangeRecord[] = [];
+  let firstStatus = "";
+  let done = false;
+  const jitter = (x: number) => Math.max(0, x * (1 + hs.noise * (2 * rh() - 1)));
+  for (let t = 0; t <= sc.windowRealMin; t++) {
+    if (reachedTol === null && soc >= sc.targetSocPct - tol) reachedTol = t;
+    if (reachedStrict === null && soc >= sc.targetSocPct - 1e-9) reachedStrict = t;
+    if (t === sc.windowRealMin) break;
+    if (t % sc.replanMin === 0 && !done) {
+      if (t > 0 && r() >= sc.staleProb) {
+        reading = quant(soc + sc.readNoise * (2 * r() - 1));
+        readAt = t;
+      }
+      const stale = rh() < hs.demandStaleProb;
+      let household: HouseholdInput = {
+        gridImportLimitW: hs.gridLimitW,
+        demandNowW: jitter(trueDemandW(hs, t)), demandAgeMin: stale ? 40 : 0, demandProfile: rebase(hs.demandForecast, t, sc.windowRealMin),
+      };
+      if (hs.solarKind !== "none") household = { ...household, solarNowW: jitter(trueSolarW(hs, t)), solarAgeMin: 0, solarProfile: rebase(hs.solarForecast, t, sc.windowRealMin), solarConfidence: hs.solarConf };
+      if (opt.tweak) household = opt.tweak(household, t);
+      const d = controller({
+        targetSocPct: sc.targetSocPct, bufferMin: sc.bufferMin,
+        chargeWindow: { startMin: sc.windowStartMin, endMin: norm(sc.windowStartMin + sc.windowWallMin), clockDay: sc.clockDay },
+        elapsedMin: t, socPct: reading, socAgeMin: t - readAt, capacityKwh: sc.nominalKwh, capacityUpPct: sc.capacityUpPct,
+        ceilings: sc.ceilings, currentSetpointW: applied, lastChangeElapsedMin: lastChange, changesUsed: used, params,
+        household, policy: opt.policy, staticPlanRateW: opt.staticRateW ?? null,
+      });
+      const { trajectory: _drop, ...rest } = d;
+      ticks.push({ t, decision: rest, appliedBefore: applied, sinceChange: lastChange === null ? null : t - lastChange, usedBefore: used });
+      if (firstStatus === "") firstStatus = d.status;
+      if (d.fallback.applied) fallbackTicks++;
+      if (d.status === "NOTHING_TO_CHARGE") {
+        applied = 0;
+        done = true;
+      }
+      else if (d.changeRecommended && d.setpointW !== null) {
+        const main = d.codes.find((c) => c === "START" || c === "INCREASE_FOR_DEADLINE" || c === "DECREASE_SAVING" || c === "ABOVE_CEILING" || c === "ABOVE_HEADROOM") ?? (d.codes[0] as string);
+        changes.push({ t, kind: d.change as "START" | "INCREASE" | "DECREASE", code: main, fromW: applied, toW: d.setpointW });
+        if (d.jumpForDeadline) jumps++;
+        if (d.codes.includes("SLEW_LIMITED")) slew++;
+        applied = d.setpointW;
+        lastChange = t;
+        used = d.changesUsed;
+      }
+      if (applied !== null && applied > peak) peak = applied;
+    }
+    const dem = trueDemandW(hs, t);
+    const sol = trueSolarW(hs, t);
+    const want = Math.min((applied ?? 0) * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+    const room = Math.max(0, hs.gridLimitW - dem + sol);
+    if (applied !== null && applied > 0 && applied + dem - sol > hs.gridLimitW + 1e-6) overLimit++;
+    if (room < want - 1e-9) clipped++;
+    const delivered = Math.min(want, room);
+    if (delivered + dem - sol > maxImport) maxImport = delivered + dem - sol;
+    soc = Math.min(100, soc + (((delivered / 1000 / 60) * sc.trueEff) / (sc.trueCapacityKwh / 100)));
+  }
+  return { sc, deadlineMin: sc.windowRealMin - sc.bufferMin, reachedTolMin: reachedTol, reachedStrictMin: reachedStrict, finalSocPct: soc, peakW: peak, ticks, changes, firstStatus, overLimitMin: overLimit, clippedMin: clipped, maxImportW: maxImport, jumps, slewLimited: slew, fallbackTicks };
+}
+
+/** The static planner's fixed rate in the household world: no knowledge of the grid limit; the physical limit clips what is delivered. */
+export function runStaticHH(sc: HouseholdScenario): { rateW: number; reachedTolMin: number | null; overLimitMin: number; clippedMin: number } {
+  const st = runStatic(sc);
+  const hs = sc.hh;
+  const tol = readTolerance(sc);
+  let soc = sc.startSocPct;
+  let reached: number | null = null;
+  let over = 0;
+  let clipped = 0;
+  for (let t = 0; t <= sc.windowRealMin; t++) {
+    if (reached === null && soc >= sc.targetSocPct - tol) reached = t;
+    const dem = trueDemandW(hs, t);
+    const sol = trueSolarW(hs, t);
+    const want = Math.min(st.rateW * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+    const room = Math.max(0, hs.gridLimitW - dem + sol);
+    if (st.rateW > 0 && st.rateW + dem - sol > hs.gridLimitW + 1e-6) over++;
+    if (room < want - 1e-9) clipped++;
+    soc = Math.min(100, soc + (((Math.min(want, room) / 1000 / 60) * sc.trueEff) / (sc.trueCapacityKwh / 100)));
+  }
+  return { rateW: st.rateW, reachedTolMin: reached, overLimitMin: over, clippedMin: clipped };
 }
 
 export { DEFAULT_GENTLE_PARAMS };

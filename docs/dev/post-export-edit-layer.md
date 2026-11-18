@@ -256,3 +256,5 @@ No firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte changes
 The plan-core `README.md` and `src/index.ts` it also touches are epc1 added files, so no reverter or checkpoint is needed. No firmware,
 Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, there is no Modbus operation and no service call: the
 model returns data and says `actuationSupported: false`.
+
+Gentle Smart Charging v2 (18 Nov 2026) changes the CONTENT of those same three added files and of the plan-core `README.md` only: no file is added, so `epc3` is not re-sealed and no declaration changes. It stays read only (`actuationSupported: false`, `guarantee: 'NONE'`); no firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, no Modbus operation and no service call.

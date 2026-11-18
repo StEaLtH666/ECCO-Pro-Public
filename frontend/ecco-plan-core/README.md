@@ -15,7 +15,7 @@ rules on the server (stage 3, below). Offline and unreleased: nothing is install
 | `overrides.ts` | Hold battery, Skip tonight, Prepare for power cut: expiry-bound, raise-only reserve, scheduling only, running lease passed through untouched; the stable refusal codes (`RefusalCode`) |
 | `overridePolicy.ts` | the owner's expiry durations, caps and power-cut reserve validated into the `OverridePolicy` (fails closed), hard ceilings, "until local time" expiry choices (clock-change aware), starting under a valid policy, and the owner's accepted limits as data (see "Stage 3") |
 | `chargePlanner.ts` | gentle overnight charge: lowest 100 W step that finishes by window end minus the buffer, stress-tested; "buffer too small" is reported, the target is never lowered; labelled "simulated, not measured" |
-| `gentleController.ts` | read-only controller MODEL for dynamic gentle charging: a recommended charge-power setpoint per tick (see "Gentle charge controller model"); never actuates |
+| `gentleController.ts` | read-only controller MODEL for dynamic gentle charging: a recommended charge-power setpoint per tick, capped by the safe ceiling and, with household inputs, by the grid headroom; safe fallbacks, a slew limit, parameter provenance (see "Gentle charge controller model"); never guarantees the target and never actuates |
 | `tomorrow.ts` | Tomorrow's Plan model; every number comes from the inputs, a missing one is an explicit "unknown" |
 | `guards.ts` | safety checks as functions (Stop SOC, export start under a lock, honest applied claims, compile invariants) |
 
@@ -31,50 +31,107 @@ rules on the server (stage 3, below). Offline and unreleased: nothing is install
 ## Gentle charge controller model (read only, offline, unreleased)
 
 `planGentle(input)` (`src/gentleController.ts`) turns the state at one tick into a recommended charge-power setpoint, as data labelled
-`model, not a command`. It lowers the charge power while there is time and raises it when the deadline needs it, so the battery reaches the
-chosen target (100 % included) by the deadline (window end minus the finish-early buffer, in real minutes across a clock change). The
-setpoint is the **lowest 100 W step** whose forward simulation (pessimistic capacity: the larger of nominal and learned, plus the band; an
-assumed BMS taper; a hold at a 100 % target) reaches the target by the deadline, followed by hysteresis, dwell and a changes budget.
+`model, not a command`. It lowers the charge power while there is time and raises it when the deadline needs it, so the battery is
+planned to reach the chosen target (100 % included) by the deadline (window end minus the finish-early buffer, in real minutes across a clock
+change). The setpoint is the **lowest 100 W step** whose forward simulation (pessimistic capacity: the larger of nominal and learned, plus the
+band; an assumed BMS taper; a hold at a 100 % target) reaches the target by the deadline, followed by hysteresis, dwell, a slew limit and a
+changes budget.
+
+**It does not guarantee the target.** Every decision carries `guarantee: 'NONE'` and the note `NO_GUARANTEE_NOTE`: the target is NOT guaranteed,
+100 percent cannot be reached at a fixed rate because the BMS tapers the charge near full and handles the top of charge itself, and the model is
+read-only. Nothing actuates: `actuationSupported` is `false` everywhere.
 
 - Never lowers the target, never exceeds the smallest KNOWN safe ceiling (owner maximum, battery maximum charge current x voltage, grid-charge
-  current x voltage, configured maximum grid-charge power; none known = `NO_SAFE_CEILING`, no default is guessed), never recommends from
-  unknown or stale SOC (`NO_DATA`).
-- Statuses: `OK`, `NOTHING_TO_CHARGE`, `TARGET_AT_RISK` (the ceiling finishes late, inside the buffer), `TARGET_UNREACHABLE` (not even the ceiling
-  reaches it before the window ends), `NO_DATA`, `NO_SAFE_CEILING`, `DEADLINE_PASSED`, `INVALID`. At risk and unreachable recommend the ceiling and say
-  "Buffer too small" with the shortfall; the target stays.
-- A decrease needs the dwell, a saving of at least the hysteresis and a slack to the deadline; an increase needed for the deadline is never held back by
-  dwell or hysteresis. A safety decrease (the setpoint in force is above a ceiling that fell) is never held back by anything. The START is free; every
-  other change draws on the per-window changes budget (the write budget a real actuator would need).
-- Output carries `actuationSupported: false` with the reason.
+  current x voltage, configured maximum grid-charge power) or the grid-headroom cap below; none known = `NO_SAFE_CEILING`, no default is
+  guessed; unknown or stale SOC = `NO_DATA`.
+- Statuses: `OK`, `NOTHING_TO_CHARGE`, `TARGET_AT_RISK` (the highest safe setpoint finishes late, inside the buffer), `TARGET_UNREACHABLE` (not even
+  that reaches it before the window ends), `NO_DATA`, `NO_SAFE_CEILING`, `DEADLINE_PASSED`, `INVALID`. At risk and unreachable recommend the highest
+  safe setpoint, project the late finish, report the smallest buffer that would absorb it (`suggestedBufferMin`) and say "Buffer too small"
+  and "The target is NOT guaranteed"; the target stays.
+- A decrease needs the dwell, a saving of at least the hysteresis and a slack to the deadline, and goes down by at most the slew limit per change; an
+  increase needed for the deadline is never held back by dwell or hysteresis (a jump over the slew limit is flagged `JUMP_FOR_DEADLINE` and counted).
+  A safety decrease (the setpoint in force is above a limit that fell) is never held back by anything. The START is free; every other change draws
+  on the per-window changes budget (the write budget a real actuator would need).
 
-| Parameter | Default | Meaning | Status |
-|---|---|---|---|
-| `stepW` | 100 W | setpoint granularity (the editor's step) | editor limit |
-| `minW` | 500 W | lowest recommendable setpoint | editor limit |
-| `hardMaxW` | 8000 W | the editor's maximum; an upper bound, never a stand-in for an unknown ceiling | editor limit |
-| `hysteresisW` | 500 W | a decrease must save at least this | owner to confirm |
-| `dwellMin` | 30 min | minimum real minutes between changes (increases ignore it) | owner to confirm |
-| `decreaseSlackMin` | 15 min | a decrease must leave this much slack to the deadline (stops decrease-then-increase flapping) | owner to confirm |
-| `replanMin` | 10 min | re-plan interval, 5 to 15 | owner to confirm |
-| `maxChanges` | 6 | setpoint changes per window after the START | owner to confirm |
-| `maxSocAgeMin` | 15 min | older readings are stale | owner to confirm |
-| `socResolutionPct` | 1 | SOC reading resolution; the plan starts half of it below the reading | ASSUMED (integer sensor) |
-| `chargeEff` | 0.95 | grid side to battery side (as the static planner) | ASSUMED, not measured |
-| `taperStartSocPct` | 90 | BMS taper starts here (full ceiling below) | ASSUMED, not measured |
-| `taperEndFraction` | 0.15 | acceptance at 100 % SOC as a fraction of the ceiling, linear from the start | ASSUMED, not measured |
-| `topHoldMin` | 20 min | extra minutes reserved after reaching a 100 % target (final taper tail, hold) | ASSUMED, not measured |
+### Parameters: value, kind, and what would replace it
+
+One table for every parameter and owner input. Kinds: **PROVISIONAL** = a generic, conservative engineering default, not measured, to be confirmed
+by the owner or by measurement; **OWNER_SET** = comes from the owner's settings; **MEASURED_REQUIRED** = the real value is unknown today and must be
+measured (the BMS taper curve, the real demand profile). `PARAM_PROVENANCE` carries the same table as data and every decision lists the
+provisional ones it used in `provisionalInUse`.
+
+| Parameter | Default | Kind | Meaning | What would replace it |
+|---|---|---|---|---|
+| `stepW` | 100 W | OWNER_SET | setpoint granularity | the editor's step |
+| `minW` | 500 W | OWNER_SET | lowest recommendable setpoint | the editor's minimum |
+| `hardMaxW` | 8000 W | OWNER_SET | the editor's maximum; an upper bound, never a stand-in for an unknown ceiling | the editor's maximum |
+| `hysteresisW` | 500 W | PROVISIONAL | a decrease must save at least this; a recovering safe limit must rise at least this | the owner's confirmation after watching real nights |
+| `dwellMin` | 30 min | PROVISIONAL | minimum real minutes between changes (a deadline increase ignores it) | the owner's confirmation and the actuator's settle time |
+| `decreaseSlackMin` | 15 min | PROVISIONAL | a decrease must leave this much slack to the deadline | the owner's confirmation |
+| `replanMin` | 10 min | PROVISIONAL | re-plan interval, 5 to 15 | the owner's confirmation and the actuator's cadence |
+| `maxChanges` | 6 | PROVISIONAL | setpoint changes per window after the START | the write budget of a proven actuator |
+| `maxSocAgeMin` | 15 min | PROVISIONAL | older SOC readings are stale | the real update rate of the SOC sensor |
+| `socResolutionPct` | 1 | PROVISIONAL | SOC resolution; the plan starts half of it below the reading | the real sensor resolution |
+| `chargeEff` | 0.95 | PROVISIONAL | grid side to battery side (as the static planner) | the measured grid-to-battery energy ratio |
+| `taperStartSocPct` | 90 | MEASURED_REQUIRED | BMS taper starts here (full ceiling below) | the BMS taper curve measured over several full charges |
+| `taperEndFraction` | 0.15 | MEASURED_REQUIRED | acceptance at 100 % SOC as a fraction of the ceiling, linear from the start | the BMS taper curve measured over several full charges |
+| `topHoldMin` | 20 min | MEASURED_REQUIRED | extra minutes reserved after reaching a 100 % target (final taper tail, hold) | the measured time the BMS needs to finish the top of charge |
+| `demandMarginPct` | 20 | PROVISIONAL | percent added to the household demand peak | the measured spread of real demand against its forecast |
+| `assumedDemandW` | 2000 W | MEASURED_REQUIRED | floor of the demand peak when demand over the window is not covered and the policy is ASSUME_PROVISIONAL (`ASSUMED_DEMAND`) | the measured overnight household demand profile (unknown today) |
+| `maxHouseholdAgeMin` | 15 min | PROVISIONAL | demand and solar readings older than this are treated as unknown | the real update rate of those sensors |
+| `maxDecreaseStepW` | 8000 W | PROVISIONAL | slew limit per decrease; 8000 W never binds, which keeps the v1 behaviour; the recommended gentle value is 1000 W (`GENTLE_RECOMMENDED_PARAMS`) | the owner's confirmation |
+| `fallbackPolicy` | KEEP_CURRENT | PROVISIONAL | what to hold when the plan cannot run: `KEEP_CURRENT`, `USE_STATIC_PLAN` or `NONE` | the owner's choice |
+| `unknownDemandPolicy` | ASSUME_PROVISIONAL | PROVISIONAL | unknown demand with a known grid limit: `ASSUME_PROVISIONAL` or `FALLBACK` | the owner's choice |
+| `targetSocPct` | owner setting | OWNER_SET | the charge target, 10-100; never lowered by the model | the owner's setting |
+| `bufferMin` | 60 min | OWNER_SET | finish-early buffer, 0-120 in 5-minute steps (`GENTLE_DEFAULT_BUFFER_MIN` is the default helpers and tests use) | the owner's setting |
+| `gridImportLimitW` | owner setting or unknown | OWNER_SET | the KNOWN safe grid import limit; unknown means no headroom constraint | the owner's or installer's figure |
+
+Unmeasured values are never presented as facts: the decision's `assumptionsLabel` says `assumed, not measured`.
+
+### Household demand, solar and grid headroom (optional)
+
+An optional `household` input group, with `policy` and `staticPlanRateW`. Without it every v1 output is **bit-identical** (a golden-master digest
+over 400 closed-loop runs and 4000 random inputs proves it). The setpoint S is grid-side watts, as in v1; the battery receives `chargeEff x S`.
+Demand is the household load EXCLUDING the charger (the caller subtracts the present charge draw from a meter reading).
+
+- Grid import = `chargeW / chargeEff + demand - solarUsed` (`gridImportW`), which is `S + demand - solarUsed`.
+- The battery-side charge power the grid allows = `chargeEff x (gridLimit - demand + solarUsed)`, never below zero (`batteryHeadroomW`); in setpoint
+  units that is `gridLimit - demand + solarUsed`.
+- Pessimism: demand = the PEAK of the fresh reading and the forecast profile over the remaining window, plus `demandMarginPct`; solarUsed per
+  minute = `min(fresh reading, forecast x confidence)`, and 0 when the reading is unknown or stale, there is no forecast, or no confidence.
+  A reading or forecast older than `maxHouseholdAgeMin` is unknown.
+- The cap on the setpoint is the least headroom over the remaining minutes, rounded down to a step (`headroomCapW`); the setpoint is at most
+  `min(ceiling, cap)` and the decision reports `limitedBy` and the pessimistic `projectedImportW` (never above the limit). The forward projection
+  uses the delivered power per minute, `min(setpoint, ceiling x taper acceptance, headroom at that minute)`, not a constant. (For a setpoint inside the cap the headroom is never the smaller term, because the cap is its least value over the window; the term makes the projection honest for any setpoint outside the cap and is covered by its own tests.)
+- Unknown grid limit: no headroom constraint is applied, the reason says so (`NO_GRID_LIMIT`), the limit is never guessed. A limit that is not a
+  number is `NO_DATA` (`HOUSEHOLD_INVALID`).
+- Unknown demand with a known limit (no forecast from now and no fresh reading): `ASSUME_PROVISIONAL` uses `assumedDemandW` as the floor of the
+  peak (`ASSUMED_DEMAND`, labelled `assumed, not measured`); `FALLBACK` returns `NO_DATA` (`HOUSEHOLD_UNUSABLE`) and applies the fallback policy.
+- Anti-flapping, only in this mode: a highest-safe-setpoint recovery (the cap rises again while the target is already at risk) waits for the
+  hysteresis and the dwell like a saving; an increase the deadline can wait for (a raise to the maximum after the dwell still makes it with the
+  decrease slack) waits out the dwell (`HELD_DWELL`); an increase that cannot wait, and a fall of the cap (`ABOVE_HEADROOM`), are immediate.
+
+### Fallbacks
+
+When the plan cannot run (SOC unknown or stale, ceiling unknown or below the minimum, household input unusable, no setpoint is safe), the status is
+`NO_DATA` or `NO_SAFE_CEILING` as before and `setpointW` stays null: a fallback is never a normal `OK`. `fallback` = `{ applied, policy, setpointW, reason }`:
+`KEEP_CURRENT` holds the setpoint in force only while it is within the ceiling AND the grid cap; `USE_STATIC_PLAN` uses the fixed rate the static planner chose
+(`staticPlanRateW`), lowered to the ceiling and the cap, never raised; `NONE` recommends nothing. A limit that cannot be checked (unknown ceiling, unusable
+household input) means no recommendation, whatever the policy.
 
 **Not supported, and not claimed.** There is no dynamic inverter write. Today's firmware fixes the Free Power rate at START and verifies against it;
 a rate change from outside during a lease would block the automatic restore; chains of short leases are possible but not recommended. Applying a
 recommended change would need a Free Power rate controller on the Dump V1.1 controller pattern (durable intended-value updates before each write, a write
 budget, live proof of the inverter's response, the BMS's live limits and temperature derating, none of which is published). That is out of scope and
-unauthorised; the model only says what such a controller would do. The taper and the capacity band are assumptions, not measurements.
+unauthorised; the model only says what such a controller would do, and the controller stays READ-ONLY until a protected actuator is designed, reviewed
+and proven on hardware. The taper, the efficiency, the demand assumption and the capacity band are assumptions, not measurements.
 
 **Versus the static planner.** `chargePlanner.ts` picks ONE fixed rate and stress-tests it (that is what today's firmware can do). The controller model
 re-plans from the measured SOC, so it follows the real taper and capacity instead of a margin chosen in advance. `test/support/batterySim.ts` is the
-closed-loop simulator (a true battery that differs from the model, rounded and noisy SOC readings, dips, 23 and 25 hour days) and
-`test/gentleController.test.ts` prints the comparison with the static planner; everything is simulated, not measured. The controller stops at the
-**reported** target, so the simulation counts the target as reached within half the reading step plus the noise (the strict count is printed too).
+closed-loop simulator (a true battery that differs from the model, rounded and noisy SOC readings, dips, 23 and 25 hour days; for the household mode also true
+demand and solar that differ from the forecast and a physical grid limit that clips the delivered charge) and `test/gentleController.test.ts` prints the
+comparison with the static planner and the miss rate when the true demand exceeds the forecast; everything is simulated, not measured. The controller
+stops at the **reported** target, so the simulation counts the target as reached within half the reading step plus the noise (the strict count is printed too).
 
 ## Run the tests
 
