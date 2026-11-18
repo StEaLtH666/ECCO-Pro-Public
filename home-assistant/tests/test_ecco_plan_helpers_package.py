@@ -25,6 +25,8 @@ outside the supported subset raises: nothing is guessed.
                   helper's `timestamp` attribute, not the state string: an override ending in the repeated hour of the October clock change stays held
                   to its true expiry second (a 120 minute override from 00:40 BST ends 01:40 GMT), clear from the expiry second; spring-forward and
                   ordinary days agree; a missing or non-numeric attribute is an unreadable record; each read site and the expiry second are mutated
+  [11] rounding   the effective reserve is published rounded UP to a whole percent (62.4 -> 63), for the owner's reserve and the running power cut's, so it is never
+                  below the owner's own value; the floor and half-to-even mutants are caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's logic against a model; it proves nothing about a live
 Home Assistant, the helpers' timestamp attribute on the owner's version, or the dashboard.
@@ -880,6 +882,91 @@ for label, mutated in MUT10:
 check(f"{len(MUT10)} clock-change / expiry-second mutants, all caught by a running case", caught10 == len(MUT10), f"{caught10}/{len(MUT10)}")
 check("control: the unmutated package passes the same running cases", cp == [])
 
+
+# ================================================================================================================================
+print("[11] the effective reserve is published rounded UP: never below the owner's own value (review finding 5)")
+# ================================================================================================================================
+# The sensor published known | max | round(0) | int. Home Assistant's round filter rounds half to even, so an owner reserve of 62.4 (or 62.5) was published as 62,
+# below the owner's value, and the start scripts' rounded-up comparison then accepted a Stop SOC of 62. The helper is whole in the UI, but a service call
+# checks only the helper's min and max. The inputs are now rounded UP to a whole percent before the larger is taken. The same for the running power cut's reserve.
+ROUND_CASES = (  # (owner, running power cut reserve or None, published)
+    (62.4, None, "63"), (62.0, None, "62"), (62.5, None, "63"), (0.2, None, "1"), (80, None, "80"), (0, None, "0"), (100, None, "100"), (99.5, None, "100"),
+    (61.5, None, "62"), (62.6, None, "63"), (0.0, None, "0"), (0.5, None, "1"), (1.0, None, "1"),
+    (40, 62.4, "63"), (40, 62.0, "62"), (40, 62.5, "63"), (40, 80, "80"), (40, 100, "100"), (40, 99.5, "100"), (40, 10.0, "40"),
+    (None, 10.2, "11"), (None, 62.4, "63"), (None, 62.0, "62"), (None, 62.5, "63"), (None, 99.5, "100"), (None, 10.0, "10"),
+    (70, 62.4, "70"), (62.4, 40, "63"), (62.4, 62.4, "63"), (62.1, 62.0, "63"), (62.0, 62.4, "63"), (80, 80, "80"))
+
+
+def round_problems(text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+
+    def add(msg: str) -> None:
+        bad.append(msg)
+        if stop_early:
+            raise _Early()
+
+    try:
+        for owner, cut, want in ROUND_CASES:
+            pw = world(text, owner=owner)
+            if cut is not None:
+                pw.w.set(CUT_RESERVE_E, f"{float(cut)}")
+                pw.set_local(EXPIRES_E["prepare_power_cut"], "2026-11-18 21:30:00")
+            got = pw.state(EFF)
+            if got != want:
+                add(f"owner {owner}, power cut {cut}: published {got}, wanted {want}")
+        # never below the owner's own value and never a whole percent above it: every tenth from 0.0 to 100.0
+        pw = world(text, owner=0)
+        for i in range(0, 1001):
+            s = f"{i / 10:.1f}"
+            pw.w.set(OWNER_RESERVE, s)
+            got = pw.state(EFF)
+            if got != str(-(-i // 10)):
+                add(f"owner {s}: published {got}, wanted {-(-i // 10)}")
+                break
+        # the same for the running power cut's reserve (owner unreadable, so only the cut counts): every tenth from 10.0 to 100.0
+        pw = world(text, owner=None)
+        pw.set_local(EXPIRES_E["prepare_power_cut"], "2026-11-18 21:30:00")
+        for i in range(100, 1001):
+            s = f"{i / 10:.1f}"
+            pw.w.set(CUT_RESERVE_E, s)
+            got = pw.state(EFF)
+            if got != str(-(-i // 10)):
+                add(f"power cut reserve {s}: published {got}, wanted {-(-i // 10)}")
+                break
+    except _Early:
+        pass
+    return bad
+
+
+rp = round_problems(PKG_TEXT)
+check("the effective reserve is rounded UP (62.4 -> 63, 62.0 -> 62, 62.5 -> 63, 0.2 -> 1, 80 -> 80, 99.5 -> 100), for the owner's reserve and the running power cut's, "
+      "and over every tenth never below the input and never a whole percent above it", rp == [], str(rp[:3]))
+
+print("[11] mutation: rounding down, rounding half to even, or rounding only one input up is caught by a running case above")
+CEIL_O = "{%- set o = (o | round(0, 'ceil')) if o is not none else none -%}"
+CEIL_C = "{%- set c = (c | round(0, 'ceil')) if c is not none else none -%}"
+MUT11 = [
+    ("the effective reserve rounds down (floor): the mutant that survived the review", [(CEIL_O, CEIL_O.replace("'ceil'", "'floor'")), (CEIL_C, CEIL_C.replace("'ceil'", "'floor'"))]),
+    ("the effective reserve rounds half to even (the earlier round(0))", [(CEIL_O, CEIL_O.replace("round(0, 'ceil')", "round(0)")), (CEIL_C, CEIL_C.replace("round(0, 'ceil')", "round(0)"))]),
+    ("only the owner's reserve is rounded up", [(CEIL_C, "{%- set c = c -%}")]),
+    ("only the power cut's reserve is rounded up", [(CEIL_O, "{%- set o = o -%}")]),
+    ("the owner's reserve rounds down, the power cut's up", [(CEIL_O, CEIL_O.replace("'ceil'", "'floor'"))]),
+]
+caught11 = 0
+for label, pairs in MUT11:
+    mutated = PKG_TEXT
+    for old, new in pairs:
+        assert mutated.count(old) == 1, (label, old)
+        mutated = mutated.replace(old, new)
+    found = round_problems(mutated, stop_early=True)
+    if found:
+        caught11 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:70]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUT11)} reserve-rounding mutants, all caught by a running case", caught11 == len(MUT11), f"{caught11}/{len(MUT11)}")
+check("control: the unmutated package passes the same running cases", rp == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

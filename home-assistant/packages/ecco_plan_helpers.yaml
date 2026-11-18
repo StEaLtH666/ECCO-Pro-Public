@@ -535,15 +535,20 @@ template:
         state_class: measurement
         # The larger of the owner's own reserve and the running Prepare for power cut reserve (raise-only). An unreadable input is
         # skipped and the larger KNOWN value stands; when none is known the state is unknown and every start that needs it refuses.
+        # Each input is rounded UP to a whole percent before the larger is taken, so the published reserve is never below the owner's own
+        # value: 62.4 is published as 63. (round() alone rounds half to even and published 62, below 62.4, so the start scripts' rounded-up
+        # comparison then accepted a Stop SOC of 62.)
         state: >-
           {%- set n = as_timestamp(now()) -%}
           {%- set o = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
           {%- set o = o if (o is number and o == o and o >= 0 and o <= 100) else none -%}
+          {%- set o = (o | round(0, 'ceil')) if o is not none else none -%}
           {%- set bad = ['unknown', 'unavailable', ''] -%}
           {%- set e = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
           {%- set e = e if (e is number and e == e and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
           {%- set c = states('input_number.ecco_plan_override_prepare_power_cut_reserve') | float(none) -%}
           {%- set c = c if (e is not none and e > n and c is number and c == c and c >= 10 and c <= 100) else none -%}
+          {%- set c = (c | round(0, 'ceil')) if c is not none else none -%}
           {%- set known = [o, c] | reject('none') | list -%}
           {{ (known | max | round(0) | int) if known | length > 0 else 'unknown' }}
         attributes:

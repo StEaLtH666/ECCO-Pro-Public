@@ -28,6 +28,8 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   unreadable or invalid, or a reserve raised above the Stop SOC staged for the run, while it waits for the dongle (busy or offline), ends that run
                   (BLOCKED, the same stable codes, nothing pressed, write enable OFF, never retried); a run with no such change presses once as before; the
                   mutants (no re-read, hold only, reserve only, the start values reused, not terminal, a moved boundary) are each caught
+  [10] rounding   a fractional owner reserve end to end (the real producer sensor): the scheduled start stages it rounded UP and the guarded start refuses a staged
+                  Stop SOC below it (62.4 -> 63); the floor and half-to-even mutants are caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -865,6 +867,66 @@ for label, edits in MUTANTS9:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS9)} press-time recheck mutants, all caught by a running scheduled start", caught9 == len(MUTANTS9) == built9, f"{caught9}/{built9}/{len(MUTANTS9)}")
 check("control: the unmutated package passes the same running cases", pp == [])
+
+# ================================================================================================================================
+print("[10] the owner's fractional reserve end to end: the published reserve is rounded up, so a Stop SOC below it is refused (review finding 5)")
+# ================================================================================================================================
+# The effective reserve sensor published round(0) (half to even), so an owner reserve of 62.4 or 62.5 reached the start scripts as 62 and a Stop SOC of 62 was
+# accepted, below the owner's value. The real producer sensor is used here (nothing forced onto it); the scripts' own rounded-up comparison is unchanged.
+def frac_problems(plan_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+
+    def add(msg: str) -> bool:
+        bad.append(msg)
+        return stop_early
+
+    def guard_run(owner, staged):
+        pw, d = world(plan=plan_text, owner=owner)
+        pw.w.set(D.D_SOC, f"{float(staged)}")
+        d.stop_soc = staged
+        d.arm = True
+        pw.run_script("ecco_dump_to_grid_start_guarded", {}, seconds=20)
+        return pw, d
+
+    try:
+        # guarded start: (owner reserve, staged Stop SOC, pressed?)
+        for owner, staged, pressed in ((62.4, 62, False), (62.4, 63, True), (62.5, 62, False), (62.5, 63, True), (62.0, 62, True), (62.0, 61, False), (0.2, 0, False), (0.2, 1, True)):
+            pw, d = guard_run(owner, staged)
+            last = pw.state(PLAN_LAST)
+            ok = (len(d.press_log) == 1 and last == "") if pressed else (d.press_log == [] and last.startswith("REFUSED STOP_SOC_BELOW_RESERVE"))
+            if not ok and add(f"guarded start, owner reserve {owner}, staged Stop SOC {staged}: {'wanted one press' if pressed else 'wanted STOP_SOC_BELOW_RESERVE'}, got {last[:60]!r} presses={d.press_log}"):
+                return bad
+        # scheduled start: the Stop SOC staged is the owner's reserve rounded UP
+        for owner, want in ((62.4, 63), (62.5, 63), (62.0, 62), (0.2, 25)):
+            pw, d = world(plan=plan_text, owner=owner)
+            d.soc = 95.0
+            run_scheduled(pw, d, stop_soc=25)
+            staged = [v for _t, e, v in d.number_log if e == D.D_SOC]
+            if (staged != [want] or not (d.presses and d.presses[0][1] == "PASSED")) and add(f"scheduled start, owner reserve {owner}: staged {staged}, wanted [{want}]"):
+                return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+fr = frac_problems(PLAN_TEXT)
+check("a fractional owner reserve end to end (the real sensor): the scheduled start stages 63 for 62.4 and 62.5 and 62 for 62.0; the guarded start refuses a staged Stop SOC of 62 "
+      "for 62.4 and 62.5 and presses at 63, refuses 0 for 0.2 and presses at 1", fr == [], str(fr[:3]))
+_CO = "{%- set o = (o | round(0, 'ceil')) if o is not none else none -%}"
+caught10 = 0
+for label, new in (("the sensor rounds the owner's reserve down (floor)", _CO.replace("'ceil'", "'floor'")),
+                   ("the sensor rounds the owner's reserve half to even (the earlier round(0))", _CO.replace("round(0, 'ceil')", "round(0)"))):
+    if PLAN_TEXT.count(_CO) != 1:
+        check(f"mutant anchor: {label}", False, str(PLAN_TEXT.count(_CO)))
+        continue
+    found = frac_problems(PLAN_TEXT.replace(_CO, new), stop_early=True)
+    if found:
+        caught10 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check("2 end-to-end rounding mutants, both caught by a running start", caught10 == 2, f"{caught10}/2")
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
