@@ -54,15 +54,21 @@ Development before the first public release happened in a private repository; se
   fully enforced. No key, value, order or indentation moved; the comments are declared in `epc2`'s manifest pairs, and `epc2` and `epc3` were
   re-sealed. `test_ecco_stage3_limitation.py` now also requires the sentence in the manifest, the notes above the schedule stanza and the
   same-deployment wording (no copy-order claim) on the three Stage 3 stanzas and in the guarded start package header (+23 checks).
-- **Stage 3 export hold follows an override's true expiry through the October clock change (finding 1 of the independent review of 18 Nov 2026; offline, nothing installed)**:
+- **Stage 3 export hold reads an override's expiry from the helper's timestamp attribute, so the repeated hour of the October clock change no longer releases it early in the offline model (finding 1 of the independent review of 18 Nov 2026; offline, nothing installed; one residual, stated below)**:
   the export-hold sensor (its state and its `held_by` attribute), the effective-reserve sensor's power-cut expiry and the cancel script read each override's expiry
-  from the date-and-time helper's `timestamp` attribute (the true instant) instead of parsing its state string, which is local wall-clock time. On the Europe/London
+  from the date-and-time helper's `timestamp` attribute (the true instant in the offline model) instead of parsing its state string, which is local wall-clock time. On the Europe/London
   fall-back day the string parse takes the first of the two equal local times, so an override that ended in the repeated hour (a 120 minute override started at
   00:40 BST ends at 01:40 GMT) was released up to 60 minutes early: the scheduled start then pressed while the card still showed the override as active, and the
   cancel script could refuse a running override as not active. A missing or non-numeric attribute, or an unknown, unavailable or empty state, is an unreadable record
-  exactly as an unparseable state was (the hold reads unknown, which refuses; the reserve skips the record; cancel proceeds). The expiry second is unchanged (held
-  until the second before the expiry, clear from it) and the sensor still notices an expiry within a minute, late and never early. The spring-forward and ordinary days
-  are unaffected. Running checks added to `test_ecco_plan_helpers_package.py` (+22) and `test_ecco_plan_enforcement.py` (+13), with 18 and 9 mutants; the previous
+  (the hold reads unknown, which refuses; the reserve skips the record; cancel proceeds), and stricter than before when the attribute is missing (a valid state with
+  no attribute used to be readable). The expiry second is unchanged (held until the second before the expiry, clear from it) and the sensor still notices an expiry
+  within a minute (late, which keeps the hold; the re-render itself never releases it early). The spring-forward and ordinary days are unaffected. **Residual, not fixed and
+  not proven in real Home Assistant:** the fix relies on the attribute holding the true instant, and the offline models never restore a helper across a restart. As recalled
+  from Home Assistant core (not verified here), a restart restores a date-and-time helper from its state string, which has no offset, so a time in the repeated hour reads
+  as the first of the two: a restart while an override is running whose expiry falls in the repeated hour (01:00 to 01:59 GMT on the fall-back day) would then restore that
+  expiry 60 minutes early, the original failure in a much narrower case. The attribute is not claimed to be preserved across a restart. This is an open owner decision (accept
+  the residual, or have the start script push such an expiry past the repeated hour) and an item for the supervised check (plan-core README, known limitation 19).
+  Running checks added to `test_ecco_plan_helpers_package.py` (+22) and `test_ecco_plan_enforcement.py` (+13), with 18 and 9 mutants; the previous
   package fails them. The helper package is an added file of `epc2`, so no pin changed.
 - **Stage 3 scheduled start reads the hold and the reserve again immediately before the press (finding 2 of the independent review of 18 Nov 2026; offline, nothing installed)**:
   the scheduled Dump to Grid start read the hold and the reserve once, at its start, and then, when the dongle was offline or another write was in progress, waited
@@ -71,10 +77,16 @@ Development before the first public release happened in a private repository; se
   its pre-press check, sanitised exactly as at the start. If the hold is no longer clear (held, or cannot be read), or the reserve can no longer be read or is not a
   finite number from 0 to 100, or the Stop SOC staged for that run is below the rounded-up reserve of that moment, the run ends as a BLOCKED result with the same
   stable codes (`OVERRIDE_ACTIVE`, `OVERRIDE_UNREADABLE`, `RESERVE_UNKNOWN`, `RESERVE_INVALID`, `RESERVE_TOO_HIGH` for the staged Stop SOC) that says it happened while
-  the run was waiting: nothing is pressed, the write enable ends off, the schedule is disarmed, the end-of-run alert raises the notification, and the run is
-  never retried. The staging of that last attempt (three numbers, the write enable on, then off) has happened; the press has not. A run with no plan change behaves
+  the run was waiting: nothing is pressed, the write enable ends off, the schedule is disarmed, the end-of-run alert raises the notification (unless Dump to Grid is
+  found active when the loop ends: see below), and the run is never retried. The staging of that last attempt (three numbers, the write enable on,
+  then off) has happened and stays on the dongle; the press has not. A run with no plan change behaves
   exactly as before (361 old-versus-new runs, including runs that wait, are bit-identical). An override started in the instant between the re-read and the press is
-  not seen, and the dongle's own Start button stays unbound. The plan-core README's enforcement row says so. Running checks added to `test_ecco_plan_enforcement.py`
+  not seen, and the dongle's own Start button stays unbound. The recheck runs on every attempt, the first included, after the staging (up to about six seconds) and
+  before the press, so a "while this run was waiting" text can also come from a change during that staging; it fails closed, so a hold or reserve sensor that is
+  momentarily unknown or unavailable at that moment (a template reload) ends the run as BLOCKED, alerts and disarms the schedule, and that night's scheduled export is
+  lost until the owner arms it again (it is not refused for good); and, because the BLOCKED text is written inside the retry loop, a run whose Dump to Grid is found
+  active when the loop ends (started from the dongle's own Start button, or manually) has its BLOCKED text overwritten with STARTED OK, no alert and the schedule
+  notification dismissed, with nothing pressed by the script (known limitations 20 to 22 of the plan-core README). The plan-core README's enforcement row says so. Running checks added to `test_ecco_plan_enforcement.py`
   (+20) and `test_ecco_r9_stage3_composition.py` (+47), with 16 and 5 mutants; the previous package fails them. No existing check or assertion changed; the scope pairs
   of `epc2` were re-derived, and `epc2` and `epc3` were re-sealed.
 - **Stage 3 effective reserve is published rounded up (finding 5 of the independent review of 18 Nov 2026; offline, nothing installed)**: the effective-reserve sensor
@@ -107,12 +119,32 @@ Development before the first public release happened in a private repository; se
   failure (fail open or fail closed) and what the owner would see: an unreadable input falls back to the other value in the effective reserve; raise-only is compared with
   the owner's reserve only; start and cancel can interleave; the guarded start has no press error handling and no success text; the card's own Start button is unguarded unless
   `guarded_start` is set; an override's start is floored to the minute; the seed marker is a plain helper; the `owner_reserve` attribute rounds half to even; a reserve in
-  (0, 0.0001) reads as unreadable; the schedule packages' start-time reads were not reviewed for the clock-change day; the `timestamp` attribute is modelled, not live-proven;
+  (0, 0.0001) was suspected to read as unreadable (not reproduced: see the bullet below); the schedule packages' start-time reads were not reviewed for the clock-change day; the `timestamp` attribute is modelled, not live-proven;
   the press-time recheck is not atomic; and six smaller ones. The card README points to it. `test_ecco_stage3_limitation.py` has a new section [6] (additive): the corrected
   wording stands at each place that carries it, "protected reserve" (any case) is absent from the card sources, the bundle, both READMEs and the plan helper package, the
   inverter's-own-reserve statement stands in the card text and the plan-core README, the section exists with all its items, and the Stage 3 limitation sentence is still in every
   place; each new check fails on the tree without the change (shown on a scratch copy). Nothing existing was edited or loosened; the card README pointer is a re-derived pair
   of `epc2`, which was re-sealed with `epc3`.
+- **Stage 3 follow-up to the second independent review of the fixes (18 Nov 2026; running checks, comments and documents only, no package logic line; offline, nothing installed)**:
+  the re-review of the four Stage 3 fix commits found the fixes correct in the offline model and asked for honest wording and four more running checks. **Wording:** the
+  comments of `ecco_plan_helpers.yaml` and the CHANGELOG no longer say the helper's `timestamp` attribute is the true instant without a caveat; they state the residual that a
+  restart inside the repeated hour of the autumn clock change may restore an expiry an hour early (as recalled from Home Assistant core, not verified, not modelled), as an open owner
+  decision and a supervised-check item, and the first CHANGELOG bullet above now calls a missing attribute an unreadable record that is stricter than before (a valid state with no
+  attribute used to be readable) instead of calling it the same as an unparseable state. The header comment of `ecco_dump_to_grid_schedule.yaml` says that the press-time recheck runs on every attempt (the first included), that a momentarily
+  unreadable sensor costs that night's scheduled export, that the staging stays on the dongle, and that a run BLOCKED at the press-time recheck whose Dump to Grid is found active when the
+  loop ends has its BLOCKED text overwritten with STARTED OK (no alert, schedule notification dismissed, nothing pressed by the script). The comment text is declared in `epc2`'s header
+  pair, so the pair's `after` text, the epc2 package checkpoint and the `epc2` and `epc3` fingerprints were re-derived and re-sealed with `_pex.sealed`; the epc2 reverter still lands byte for
+  byte on the r9 state. **Known limitations:** the plan-core README section now has 22 items. Item 9 (a reserve in (0, 0.0001)) was written from a task text; run against the current
+  packages and simulators it is NOT a failure (the value reads as a number and is published as 1), and the item now says what was reproduced and what was not examined. Item 10 (the
+  schedule packages' start-time reads on the clock-change day) now says what was read and that the rest was not examined. Item 11 is reworded; new items 19 (the restart inside the repeated
+  hour), 20 (the press-time BLOCKED text overwritten by STARTED OK), 21 (the cost of a momentarily unreadable sensor at press time) and 22 (the leftover staging). `test_ecco_stage3_limitation.py`
+  [6] requires all 22 items by name (never fewer than before), the status wording of items 9, 10 and 19 to 22, and the new comment and CHANGELOG sentences, each shown to fail on a copy
+  without them. **Running checks (tests only):** `test_ecco_plan_enforcement.py` [11] (+10) and `test_ecco_r9_stage3_composition.py` [17] [18] (+61) force the hold sensor and the effective
+  reserve sensor themselves to unavailable, unknown, empty and junk (and nan, inf, 150, -5) during the wait, on the on-time start and the watchdog's rescue, busy and offline: each ends as
+  BLOCKED with the right code and no press; the mutant that survived the review (`h != 'clear'` changed to `h == 'unknown'`) and five more are caught; a running pin, labelled as documenting
+  and not approving, records the STARTED OK overwrite above. `test_ecco_plan_helpers_package.py` [13] (+13) removes the state guard at each of the ten timestamp read sites in turn (the three
+  that survived the review included): each removal is caught by the running check of that site. Nothing existing was edited or loosened (a check label was reworded where a sentence
+  became untrue; its assertion is untouched).
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently (while the policy is deliberately aside, `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the one-run override; the pin stays); `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment, checks in memory that it will succeed (including the post-condition), and on a re-run into the same `--out` deploys the applied file already there or fails when that file is not `apply`'s output ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with

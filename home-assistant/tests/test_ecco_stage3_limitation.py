@@ -26,6 +26,10 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 reserve' (any case) is absent from the card sources, the bundle, both READMEs and the plan helper package; the plan-core README has the
                 'Known limitations (stated, not fixed in this change)' section with all its items, each with its direction of failure; the Stage 3
                 limitation sentence is still in every place; mutants and a control
+  [7] second    (second independent review of the fixes, 18 Nov 2026; additive) the Known limitations section now has 22 items: 9 and 10 say what was shown (item 9 was
+                run and is not a failure; item 10 was only read), 11 is reworded, 19 to 22 are new (restart inside the repeated hour, the overwritten BLOCKED text, a
+                momentary unreadable sensor, the leftover staging); the status wording of each, the helper package comment, the schedule package header and the
+                CHANGELOG caveats are required, the over-claiming sentences must be gone; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -415,6 +419,8 @@ LIMIT_ITEMS = (   # (number, a phrase that must stand in the item's bold title, 
     (11, "timestamp"), (12, "not atomic"),
     # beyond the twelve the review's list names: smaller or informational items
     (13, "input shapes"), (14, "discretionary"), (15, "already staged"), (16, "confirmation switch"), (17, "modelled, not live-proven"), (18, "site mapping"),
+    # the second review of the fixes (18 Nov 2026): a restart inside the repeated hour, the overwritten BLOCKED text, a momentary unreadable sensor, the leftover staging
+    (19, "repeated hour"), (20, "overwritten"), (21, "momentary"), (22, "leftover staging"),
 )
 DIRECTION_RE = re.compile(r"Direction: (?:fail open|fail closed|either way|neutral|informational|unknown|believed fail closed|not applicable|your limits)")
 
@@ -525,7 +531,7 @@ check("nothing claims the overrides are fully enforced (the card sources, the bu
       not [n for n, v in scope_texts.items() if FULL_CLAIM.search(v)], str([n for n, v in scope_texts.items() if FULL_CLAIM.search(v)]))
 check("the Stage 3 limitation sentence is still in every place it was, exactly once (the new section and the new wording did not add or remove a copy)",
       not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
-check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: eighteen numbered items, the review's twelve first, each with its direction "
+check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: twenty-two numbered items (the review's twelve first, six smaller ones, the four of the second review), each with its direction "
       "of failure and what you would see", not limitations_problems(w6["plan-core README"]), str(limitations_problems(w6["plan-core README"])))
 check("the card README points to that section (a one-line pointer)", "Known limitations (stated, not fixed in this change)" in flat(w6["card README"]))
 
@@ -580,6 +586,145 @@ check("mutant caught: an item's 'You would see' removed", bool(limitations_probl
 check("mutant caught: an item's subject reworded (the schedule packages' clock-change reads)", bool(limitations_problems(_lim.replace("clock-change day", "clock change"))))
 check("mutant caught: the items renumbered", bool(limitations_problems(_lim.replace("\n7. **The first-run", "\n8. **The first-run"))))
 check("control: the untouched tree is not flagged by the new checks", not wording_problems(w6) and not old_phrase_problems(scope_texts) and not never_charges_problems(w6) and not limitations_problems(_lim))
+
+# ===========================================================================
+print("")
+print("[7] the second independent review of the fixes (18 Nov 2026; additive): the limitation items say what was shown, and the caveats stand in the comments and the CHANGELOG")
+# ===========================================================================
+# The first version of known limitations 9 and 10 was written from a task text and not run. Item 9 (a reserve in (0, 0.0001)) was run against the current packages and simulators and
+# is NOT a failure there; item 10 (the schedule packages' start-time reads on the clock-change day) was only read. Both now say so. Four items are new: 19 (a restart inside the repeated
+# hour may restore an expiry an hour early: recalled from Home Assistant core, not verified, not modelled), 20 (a press-time BLOCKED text overwritten with STARTED OK when Dump to Grid is
+# active as the loop ends), 21 (a momentarily unreadable sensor at press time costs that night's export) and 22 (the leftover staging). The checks below require the status wording of those
+# items, the four new items by name (LIMIT_ITEMS above, never fewer than before), and the caveats in the helper package comment, the schedule package header and the CHANGELOG; each is shown
+# to fail without it.
+SCHEDULE_PKG = ROOT / "home-assistant" / "packages" / "ecco_dump_to_grid_schedule.yaml"
+CHANGELOG = ROOT / "CHANGELOG.md"
+ITEM_STATUS = {   # item number -> phrases its body must carry (what was reproduced, what was only reasoned or recalled, what was not examined)
+    9: ("NOT reproduced", "Run now against the current packages and simulators", "Reasoned, not examined"),
+    10: ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed"),
+    11: ("modelled, not live-proven", "stricter than the earlier state-string read"),
+    19: ("recalled", "not verified here", "NOT said to be preserved across a restart", "open owner decision", "supervised check"),
+    20: ("Reproduced offline", "does not approve it", "the reason is lost from the record"),
+    21: ("Reproduced offline", "not examined: whether and for how long a real template reload", "lost until the owner arms the schedule again", "every attempt, the first included"),
+    22: ("Reproduced offline", "not examined on a dongle", "no step that restores the earlier values"),
+}
+SCHEDULE_HEADER_WORDING = (
+    "unless Dump to Grid is found active when the loop ends, in which case the result text reads STARTED OK",
+    "It runs on EVERY attempt, the first included",
+    "momentarily unknown or unavailable at that moment",
+    "that night's scheduled export is lost until the owner arms it again",
+    "The staging of that attempt stays on the dongle",
+    "the steps after the loop still run",
+    "only the record of the reason is lost",
+)
+HELPER_COMMENT_WORDING = (
+    "NOT PROVEN, and not claimed",
+    "stays so across a restart",
+    "restores that expiry 60 minutes early",
+    "an open owner decision and an item for the supervised check",
+)
+CHANGELOG_WORDING = (
+    "stricter than before when the attribute is missing",
+    "Residual, not fixed and not proven in real Home Assistant",
+    "The attribute is not claimed to be preserved across a restart",
+)
+OLD_WORDING = (   # the sentences that over-claimed: they must not stand
+    ("the plan helper package comment", "which is the true instant"),
+    ("the CHANGELOG", "exactly as an unparseable state was"),
+    ("the CHANGELOG", "(the true instant) instead of parsing"),
+    ("the CHANGELOG", "late and never early"),
+)
+
+
+def item_bodies(readme: str) -> dict[int, str]:
+    """The Known limitations items of the plan-core README as {number: flat text}; empty when the section is not there exactly once."""
+    if readme.count(LIMITS_HEADING) != 1:
+        return {}
+    start = readme.index(LIMITS_HEADING) + len(LIMITS_HEADING)
+    nxt = re.search(r"(?m)^#{2,3} ", readme[start:])
+    section = readme[start:start + nxt.start()] if nxt else readme[start:]
+    out: dict[int, str] = {}
+    for part in re.split(r"(?m)^(?=\d+\. \*\*)", section)[1:]:
+        out[int(re.match(r"(\d+)\.", part).group(1))] = flat(part)
+    return out
+
+
+def status_problems(readme: str) -> list[str]:
+    bodies = item_bodies(readme)
+    out = []
+    for num, phrases in ITEM_STATUS.items():
+        body = bodies.get(num, "")
+        out.extend(f"item {num} lacks: {p}" for p in phrases if p not in body)
+    return out
+
+
+def comment_problems(helper_text: str, schedule_text: str, changelog: str) -> list[str]:
+    out = []
+    fh, fs, fc = flat_yaml(helper_text), flat_yaml(schedule_text), flat(changelog)
+    out.extend(f"the plan helper package comment lacks: {p}" for p in HELPER_COMMENT_WORDING if p not in fh)
+    out.extend(f"the schedule package header lacks: {p}" for p in SCHEDULE_HEADER_WORDING if p not in fs)
+    out.extend(f"the CHANGELOG lacks: {p}" for p in CHANGELOG_WORDING if p not in fc)
+    for where, phrase in OLD_WORDING:
+        body = {"the plan helper package comment": fh, "the CHANGELOG": fc}[where]
+        if phrase in body:
+            out.append(f"{where} still says: {phrase}")
+    return out
+
+
+def drop_phrase(text: str, phrase: str) -> str:
+    """`text` with every occurrence of `phrase` replaced by 'REMOVED' (whitespace in the phrase may match a line wrap); asserts that it was there."""
+    pat = r"\s+".join(re.escape(w) for w in phrase.split())
+    new, n = re.subn(pat, "REMOVED", text)
+    assert n >= 1, phrase
+    return new
+
+
+def drop_in_item(readme: str, num: int, phrase: str) -> str:
+    """The README with every occurrence of `phrase` removed from limitation item `num` only (the other items are left alone)."""
+    h = readme.index(LIMITS_HEADING)
+    a = readme.index(f"\n{num}. **", h)
+    b = readme.find(f"\n{num + 1}. **", a)
+    if b < 0:
+        b = readme.find("\n### ", a)
+    return readme[:a] + drop_phrase(readme[a:b], phrase) + readme[b:]
+
+
+s2_helper, s2_schedule, s2_changelog = text_of(PLAN_HELPERS_PKG), text_of(SCHEDULE_PKG), text_of(CHANGELOG)
+s2_readme = w6["plan-core README"]
+check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (read, not examined), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
+      "not examined)", not status_problems(s2_readme), str(status_problems(s2_readme)))
+check("the plan-core README has the four items of the second review (19 restart in the repeated hour, 20 overwritten BLOCKED text, 21 momentary unreadable sensor, 22 leftover staging) "
+      "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if n >= 19] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
+      and not limitations_problems(s2_readme), str(limitations_problems(s2_readme)))
+check("the caveats stand: the plan helper package comment says the timestamp attribute is NOT proven and not claimed across a restart (the open decision), the schedule package header says "
+      "what the press-time recheck costs and the STARTED OK overwrite, and the CHANGELOG says stricter-when-missing and the residual; the over-claiming sentences are gone",
+      not comment_problems(s2_helper, s2_schedule, s2_changelog), str(comment_problems(s2_helper, s2_schedule, s2_changelog)))
+_s2_items = " ".join(item_bodies(s2_readme).values())
+check("the limitation items name no address, token or site value, and neither they nor the two package comments claim anything fully enforced",
+      bool(_s2_items) and not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", _s2_items, re.I)
+      and not FULL_CLAIM.search(_s2_items + " " + flat_yaml(s2_helper) + " " + flat_yaml(s2_schedule)))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+_cut = s2_readme.find("\n19. **", s2_readme.find(LIMITS_HEADING))
+_end = s2_readme.find("\n### ", _cut)
+check("mutant caught: the four items of the second review removed (the README back to eighteen items)", _cut > 0 and _end > _cut and bool(limitations_problems(s2_readme[:_cut] + "\n" + s2_readme[_end:])))
+check("mutant caught: item 9 worded as a fact again ('reads as unreadable', starts refused)",
+      bool(status_problems(s2_readme.replace("a failure was suspected and was NOT reproduced", "renders in exponent form and reads as unreadable"))))
+check("mutant caught: item 10 worded as reasoned again", bool(status_problems(drop_in_item(s2_readme, 10, "Not examined: what those reads give"))))
+for num, phrases in ITEM_STATUS.items():
+    for ph in phrases:
+        check(f"mutant caught: item {num} loses '{ph[:48]}'", bool(status_problems(drop_in_item(s2_readme, num, ph))))
+for ph in HELPER_COMMENT_WORDING:   # a comment phrase may wrap across lines behind the comment marker: the prose view (marker dropped) is mutated, and the same function reads it
+    check(f"mutant caught: the plan helper package comment loses '{ph[:48]}'", bool(comment_problems(drop_phrase(flat_yaml(s2_helper), ph), s2_schedule, s2_changelog)))
+for ph in SCHEDULE_HEADER_WORDING:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(comment_problems(s2_helper, drop_phrase(flat_yaml(s2_schedule), ph), s2_changelog)))
+for ph in CHANGELOG_WORDING:
+    check(f"mutant caught: the CHANGELOG loses '{ph[:48]}'", bool(comment_problems(s2_helper, s2_schedule, drop_phrase(s2_changelog, ph))))
+for where, phrase in OLD_WORDING:
+    bad_h, bad_c = (s2_helper + "\n# which is the true instant\n", s2_changelog) if where.startswith("the plan helper") else (s2_helper, s2_changelog + "\n" + phrase + "\n")
+    check(f"mutant caught: {where} says again '{phrase}'", bool(comment_problems(bad_h, s2_schedule, bad_c)))
+check("control: the untouched tree is not flagged by the second-review checks",
+      not status_problems(s2_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog) and not limitations_problems(s2_readme))
 
 print("")
 if FAILURES:

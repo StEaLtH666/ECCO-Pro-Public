@@ -201,7 +201,7 @@ Authorised by the owner on 17 Nov 2026 as offline implementation only: no instal
 |---|---|
 | Limits confirmed and valid; expiry a whole number of minutes between the shortest and the kind's maximum and under the hard ceiling; no open-ended override; Prepare for power cut refused when the current reserve is unknown or above the power-cut reserve; compare-and-set on the plan revision; refusal = last-answer text + ONE persistent notification + a stable code | `script.ecco_plan_override_start` (its template mirrors the validator; the parity table proves it) |
 | Cancel always allowed, ends only its own kind | `script.ecco_plan_override_cancel` |
-| No scheduled Dump to Grid start while Hold battery, Skip tonight or Prepare for power cut is active; none while the records or the reserve cannot be read (fail closed, also when the plan package is missing); none when the reserve is not a finite number from 0 to 100 (`RESERVE_INVALID`: nan, infinity or above 100; `RESERVE_UNKNOWN` when it cannot be read or is below 0); none when the reserve leaves no room under 90 % (`RESERVE_TOO_HIGH`). The hold and the reserve are read at the start AND again immediately before the press, because a run can wait up to 10 minutes for the dongle (offline, or another write in progress): an override started, a record or the reserve becoming unreadable, or a reserve raised above the Stop SOC staged for that run, while it waits, ends that run as BLOCKED with the same codes (`RESERVE_TOO_HIGH` for the staged Stop SOC), nothing pressed, never retried. An override started in the instant between that second read and the press is not seen | `script.ecco_dump_to_grid_start_scheduled` (BLOCKED result; the script's own end-of-run alert raises the notification) |
+| No scheduled Dump to Grid start while Hold battery, Skip tonight or Prepare for power cut is active; none while the records or the reserve cannot be read (fail closed, also when the plan package is missing); none when the reserve is not a finite number from 0 to 100 (`RESERVE_INVALID`: nan, infinity or above 100; `RESERVE_UNKNOWN` when it cannot be read or is below 0); none when the reserve leaves no room under 90 % (`RESERVE_TOO_HIGH`). The hold and the reserve are read at the start AND again immediately before the press, because a run can wait up to 10 minutes for the dongle (offline, or another write in progress): an override started, a record or the reserve becoming unreadable, or a reserve raised above the Stop SOC staged for that run, while it waits, ends that run as BLOCKED with the same codes (`RESERVE_TOO_HIGH` for the staged Stop SOC), nothing pressed, never retried. An override started in the instant between that second read and the press is not seen. Known limitations 20 and 21 state what a press-time BLOCKED result can become and what a momentarily unreadable sensor costs | `script.ecco_dump_to_grid_start_scheduled` (BLOCKED result; the script's own end-of-run alert raises the notification) |
 | The scheduled session's Stop SOC is never below the effective reserve (rounded up; never lowered) | the same script |
 | The card's manual Start: same hold check, same reserve check, then the SAME button press; a staged Stop SOC below the reserve is refused, not changed; a reserve that is not a finite number from 0 to 100 is refused (`RESERVE_INVALID`) and so is a staged Stop SOC read back as anything but a finite number from 0 to 100 (`STOP_SOC_UNREADABLE`) | `script.ecco_dump_to_grid_start_guarded`, called by the card when `dump_to_grid.guarded_start` is set |
 | Effective reserve = the larger of the owner's own reserve and a running Prepare for power cut reserve, each rounded UP to a whole percent (62.4 is published as 63, so with the owner's reserve readable it is never below it); an unreadable input is skipped (the other value stands), none known = unknown. It is the reserve ECCO's own plan uses, not an inverter setting | `sensor.ecco_plan_effective_reserve` |
@@ -295,10 +295,11 @@ That mapping is the owner's own file, so this repository does not change it; it 
 
 ### Known limitations (stated, not fixed in this change)
 
-An independent review on 18 Nov 2026 found the items below. The fixes for the clock-change day, the press-time recheck, the rounded-up reserve and the five
-surviving mutants are in. The items here were NOT fixed; they are written down so that nobody reads more into the overrides than they do. "Fail open" means
-the override protects less than its name suggests; "fail closed" means a start is refused or held. Every item is read from the code and the offline models:
-none was seen on a live Home Assistant. Items 13 to 18 are smaller or informational.
+An independent review on 18 Nov 2026 found the items below, and a second review of the fixes (the same day) added items 19 to 22. The fixes for the clock-change
+day, the press-time recheck, the rounded-up reserve and the five surviving mutants are in. The items here were NOT fixed; they are written down so that nobody
+reads more into the overrides than they do. "Fail open" means the override protects less than its name suggests; "fail closed" means a start is refused or held.
+None was seen on a live Home Assistant. Unless an item says otherwise it was read from the code and the offline models; items 9, 10 and 19 to 22 say, in their
+own text, what was reproduced offline, what was only reasoned or recalled, and what was not examined. Items 13 to 18 are smaller or informational.
 
 1. **An unreadable input falls back to the other value in the effective reserve.** With the owner's reserve unreadable while a power cut runs, the power-cut
    reserve alone stands, which can be lower than the owner's own reserve (never lower than the power cut's own reserve). With the power-cut record unreadable
@@ -327,14 +328,26 @@ none was seen on a live Home Assistant. Items 13 to 18 are smaller or informatio
    invalid case fails closed). You would see: your limits changed back, or refusals saying the policy is invalid until the next restart.
 8. **The reserve sensor's `owner_reserve` attribute rounds half to even.** The state is what consumers read, and the state is rounded up. Direction:
    informational (no effect on a start). You would see: an attribute that can read a whole percent lower than the state.
-9. **A reserve strictly between 0 and 0.0001 renders in exponent form and reads as unreadable.** A pre-existing edge, not changed here. Direction: fail
-   closed. You would see: the effective reserve unknown and starts refused.
-10. **The schedule packages' naive start-time reads were not reviewed for the clock-change day.** R9's direction was reasoned to fail closed, not tested.
-    Direction: believed fail closed, not proven. You would see: possibly a missed or refused scheduled start on the day of a clock change.
-11. **The expiry read uses the helper's `timestamp` attribute, which is modelled, not live-proven.** The offline models treat it as the true instant, also in
-    the repeated hour of the autumn clock change; real Home Assistant was not checked, including how it behaves after a restart inside that repeated hour. A
-    supervised check is needed. Direction: unknown until checked (a missing or non-numeric attribute is read as an unreadable record: the hold reads unknown,
-    which refuses). You would see: with the attribute missing, the hold unknown and starts refused.
+9. **A reserve strictly between 0 and 0.0001 (printed in exponent form): a failure was suspected and was NOT reproduced.** The first version of this item said
+   that such a reserve reads as unreadable and starts are refused; that was written from a task text and had not been run. Run now against the current
+   packages and simulators: the owner's reserve helper set to 5e-05, 1e-05, 0.00005, 0.0001, 1e-300 or 4.9e-324 is read as a number by the effective reserve
+   sensor (`float()` accepts exponent text) and published rounded up as 1; the scheduled start then stages the larger of the asked Stop SOC and 1, and the guarded
+   start presses; the same when 5e-05 is forced onto the effective reserve sensor or onto the staged Stop SOC read-back. The `owner_reserve` attribute reads 0
+   (item 8). Reasoned, not examined: how real Home Assistant renders and parses a tiny number that a template hands on as text. The effective reserve sensor
+   publishes whole numbers only, so a tiny number reaches a script only through a forced test value or a tiny staged Stop SOC on the dongle's own number. Direction:
+   unknown until checked in real Home Assistant (no failure was reproduced offline). You would see: nothing, in the model.
+10. **The schedule packages' naive start-time reads were not examined for the clock-change day.** Shown by reading: the scheduled Dump to Grid package reads its
+    own start time from the helper's local state string with `as_timestamp` (the arm validation, the readiness and watchdog triggers and the missed-run guard: five
+    reads, and the captured Home Assistant start the same way twice), and the Free Power schedule package uses the same pattern (five reads found by search, not
+    read in full). The shared script simulator's local zone is a fixed UTC+1 offset (`_ha_script_sim.py`) and the enforcement and composition suites use the
+    fixed zone Etc/GMT-1, so no running check that was read for this item covers a start time inside the repeated or the skipped hour. Not examined: what those reads give on
+    that day in real Home Assistant, and whether R9's missed-run comparison then fails closed (an earlier version of this item said it was reasoned to; that was
+    not reproduced and is not claimed). Direction: unknown (not examined). You would see: possibly a missed or refused scheduled start on the day of a clock change.
+11. **The expiry read uses the helper's `timestamp` attribute, which is modelled, not live-proven.** The offline models set it from an aware datetime and treat it
+    as the true instant, also in the repeated hour of the autumn clock change; real Home Assistant was not checked (how the attribute is held after a restart is item
+    19). A supervised check is needed. Direction: unknown until checked (a missing or non-numeric attribute is read as an unreadable record: the hold reads
+    unknown, which refuses; that is stricter than the earlier state-string read, which accepted a valid state that had no attribute). You would see: with the
+    attribute missing, the hold unknown and starts refused.
 12. **The press-time recheck is not atomic.** The scheduled start reads the hold and the reserve a moment before the press (the guarded start one action
     before it); an override started in those milliseconds is not seen. Direction: fail open for those milliseconds. You would see: a start that goes through
     although an override began a moment earlier.
@@ -354,6 +367,37 @@ none was seen on a live Home Assistant. Items 13 to 18 are smaller or informatio
     You would see: nothing until a supervised check on the owner's version, which is part of the install.
 18. **What Intelligence does with the effective reserve depends on the owner's own site mapping.** This repository does not change that file and the review
     did not read it; it matters only if the owner maps the reserve. Direction: not applicable. You would see: nothing unless the mapping is set.
+19. **A restart inside the repeated hour of the autumn clock change may restore an override's expiry an hour early (recalled, not verified).** The expiry fix
+    reads the helper's `timestamp` attribute, which the offline model holds as the true instant; no suite restores a helper across a restart. As recalled from
+    Home Assistant core (not verified here), a restart restores a date-and-time helper from its state string, which is local wall-clock time without an offset, and
+    a time in the repeated hour (01:00 to 01:59 on the fall-back day, in Europe/London) then reads as the first of the two. If that is how it behaves, a restart
+    while an override is running whose expiry falls in the repeated hour restores that expiry 60 minutes early, and the hold and the effective reserve release up to
+    60 minutes early: the original failure of the clock-change day, in a much narrower case (one night a year, and only with a restart in that window). Not
+    reproduced, not changed, and not claimed either way: the attribute is NOT said to be preserved across a restart. An open owner decision (accept the residual,
+    or have the start script push an expiry that falls in the repeated hour past it) and an item for the supervised check on the owner's Home Assistant version.
+    Direction: fail open (the override would end early). You would see: after such a restart the override reads as ended up to an hour early and a scheduled start
+    is no longer held by it.
+20. **A press-time BLOCKED result is overwritten with STARTED OK when Dump to Grid is found active as the loop ends.** The BLOCKED text of the press-time recheck is
+    written inside the scheduled start's retry loop, so, unlike the start-time BLOCKED results, the steps after the loop still run. If Dump to Grid is active when
+    the loop ends (started from the dongle's own Start button, which no override binds (RG-ST3), or by a manual start), the step after the loop overwrites the
+    BLOCKED text with "STARTED OK - Dump to Grid is active; this run could not confirm the start as its own ...", the end-of-run alert is skipped and the schedule
+    notifications are dismissed. This script presses nothing in that case; only the record of the reason is lost. Reproduced offline: a running check in
+    `test_ecco_plan_enforcement.py` [11] pins today's behaviour (it documents the limitation and does not approve it). Direction: fail closed for the start (nothing
+    is pressed by the script) but the reason is lost from the record. You would see: a result text that reads STARTED OK although a Hold battery, Skip tonight or
+    Prepare for power cut had just stopped the run, and no alert.
+21. **A momentary unknown or unavailable hold or reserve sensor at press time costs that night's scheduled export.** The press-time recheck fails closed: if the
+    hold sensor or the effective reserve sensor reads unknown, unavailable, empty or junk when it is read just before the press (a template reload or a Home
+    Assistant start may do this for a moment), the run ends as BLOCKED with `OVERRIDE_UNREADABLE` or `RESERVE_UNKNOWN`, the alert is raised and the schedule is
+    disarmed. That night's scheduled export is lost until the owner arms the schedule again; it is not refused for good, because the next armed run reads the sensors
+    afresh. The recheck runs on every attempt, the first included, so a momentary unreadable sensor during the staging (up to about six seconds) has the same effect,
+    and a BLOCKED text that says "while this run was waiting" can come from that staging. Reproduced offline by forcing each state during the wait (`test_ecco_plan_enforcement.py`
+    [11], `test_ecco_r9_stage3_composition.py` [17]); not examined: whether and for how long a real template reload makes these sensors unavailable. Direction: fail
+    closed. You would see: a BLOCKED alert at the start time naming the unreadable plan, a disarmed schedule and no start.
+22. **Leftover staging after a run that the press-time recheck stopped.** The three staged numbers of that run (export power, Stop SOC and duration) stay on the
+    dongle and the write enable is turned off; the script has no step that restores the earlier values (by reading it; item 15 describes the same run from the
+    other side). Reproduced offline: the dongle model keeps the staged numbers and the write enable ends off. Reasoned from the package header and the dongle model's
+    start gate, not examined on a dongle: nothing starts without arming again and pressing, the same as after any other failed attempt of the scheduled start.
+    Direction: fail closed (nothing starts). You would see: the staged numbers on the dongle's own controls changed to the stopped run's values, with no start.
 
 ### Install order for the owner (each step needs its own authorisation; nothing here is installed)
 

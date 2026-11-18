@@ -506,11 +506,20 @@ template:
         icon: mdi:export
         # clear: no record is active. held: Hold battery, Skip tonight or Prepare for power cut has an expiry in the future (also
         # when another record is unreadable). unknown: nothing is active and at least one record cannot be read. now() makes this
-        # re-render every minute, so an expiry that has passed is noticed within a minute (late, which keeps the hold, never early).
-        # Each expiry is read from the helper's `timestamp` attribute, which is the true instant. The state string is local wall-clock
-        # time and is never parsed for the instant: on the October clock-change day an expiry in the repeated hour would be read as the
-        # first of the two equal local times and the override released up to 60 minutes early. A record is readable only when its state
-        # is not unknown, unavailable or empty AND its attribute is a number; anything else is an unreadable record (unknown, which refuses).
+        # re-render every minute, so an expiry that has passed is noticed within a minute (late, which keeps the hold; the re-render
+        # itself never releases it early).
+        # Each expiry is read from the helper's `timestamp` attribute, which the offline model holds as the true instant (it is set from
+        # an aware datetime). The state string is local wall-clock time and is never parsed for the instant: on the October clock-change
+        # day an expiry in the repeated hour would be read as the first of the two equal local times and the override released up to 60
+        # minutes early. A record is readable only when its state is not unknown, unavailable or empty AND its attribute is a number;
+        # anything else is an unreadable record (unknown, which refuses).
+        # NOT PROVEN, and not claimed: that the attribute is the true instant in real Home Assistant, and that it stays so across a
+        # restart. As recalled from Home Assistant core (not verified here, and not modelled by any suite), a restart restores a
+        # date-and-time helper from its state string, which has no offset, and a time in the repeated hour then reads as the first of the
+        # two equal local times. If so, a restart while an override is running whose expiry falls in the repeated hour (01:00 to 01:59
+        # GMT on the fall-back day) restores that expiry 60 minutes early and the hold is released early: the failure described above, in
+        # a much narrower case. It is left as it is: an open owner decision and an item for the supervised check (plan-core README,
+        # "Known limitations", item 19).
         state: >-
           {%- set n = as_timestamp(now()) -%}
           {%- set bad = ['unknown', 'unavailable', ''] -%}
