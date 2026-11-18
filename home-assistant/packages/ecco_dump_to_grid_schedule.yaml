@@ -56,6 +56,14 @@
 #     range: nan, infinity and anything else is refused before anything is staged, so a bad reading fails closed;
 # and it raises the Stop SOC it stages to at least the effective reserve (rounded up), never lowers it. The scheduled start is the
 # trusted backend: the dashboard and the card are not what keeps an override.
+#
+# PLAN, press-time recheck: a run can wait up to 10 minutes for the dongle (offline, or another write in progress), and the owner can start
+# a Hold battery, Skip tonight or Prepare for power cut in that time. So the hold and the reserve are read AGAIN immediately before the
+# press. If the hold is no longer clear (held, or cannot be read), or the reserve can no longer be read or is not a finite number from 0
+# to 100, or the Stop SOC staged for THIS run is below the rounded-up reserve of that moment, the run ends as a BLOCKED result with the
+# same reason codes (RESERVE_TOO_HIGH for the staged Stop SOC) that says it happened while the run was waiting, nothing is pressed, the
+# write enable ends off, it is never retried, and the end-of-run alert raises the notification. The re-read is a moment before the
+# press, not part of it: an override started in that moment is not seen.
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -128,7 +136,9 @@ script:
       - variables:
           requested_duration: "{{ duration_minutes | int(1) }}"
           requested_power: "{{ power_w | int(500) }}"
-          # The plan's hold and reserve, read once at the start of the run (a later change ends the NEXT start, not this one).
+          # The plan's hold and reserve, read at the start of the run. A run can then wait up to 10 minutes (dongle offline or another
+          # write in progress), so both are read AGAIN immediately before the press (press_block, in the retry loop below): a change that
+          # came in while the run waited ends THIS run, it does not wait for the next one.
           plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
           # The reserve must be a finite number from 0 to 100, tested as a positive range: a comparison with nan is always false, so a test
           # that only refused a too-big value would let nan through, and float() also accepts nan, inf and -inf (inf cannot be rounded, and
@@ -329,6 +339,23 @@ script:
                       continue_on_timeout: true
                     - delay:
                         seconds: 1
+                    # PLAN (press-time recheck): this run may have waited (dongle offline or another write in progress, up to 10 minutes) since it
+                    # read the plan at its start, and the owner may have started a Hold battery, Skip tonight or Prepare for power cut in the
+                    # meantime. The hold and the reserve are therefore read AGAIN here, immediately before the press, and sanitised as at the
+                    # start (the reserve passes only as a finite number from 0 to 100: below 0 is RESERVE_UNKNOWN, nan or anything above 100 is
+                    # RESERVE_INVALID). press_block is empty (press, exactly as before) or the reason: OVERRIDE_ACTIVE (held), OVERRIDE_UNREADABLE
+                    # (anything but held or clear), RESERVE_UNKNOWN, RESERVE_INVALID, or RESERVE_TOO_HIGH (the Stop SOC staged for THIS run is
+                    # below the rounded-up reserve of now: never press with a Stop SOC below the reserve).
+                    - variables:
+                        press_block: >-
+                          {%- set h = states('sensor.ecco_plan_export_hold') -%}
+                          {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+                          {%- if h == 'held' -%}OVERRIDE_ACTIVE
+                          {%- elif h != 'clear' -%}OVERRIDE_UNREADABLE
+                          {%- elif r < 0 -%}RESERVE_UNKNOWN
+                          {%- elif not (r >= 0 and r <= 100) -%}RESERVE_INVALID
+                          {%- elif (r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH
+                          {%- endif -%}
                     - if:
                         - condition: template
                           value_template: >-
@@ -338,6 +365,9 @@ script:
                                and (states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1)) == (requested_stop_soc | float(-2))
                                and is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on')
                                and as_timestamp(states.input_boolean.ecco_dump_to_grid_schedule_armed.last_changed, 0) <= (run_started | float(0)) }}
+                        # PLAN (press-time recheck): nothing is pressed while the hold or the reserve read just above says no.
+                        - condition: template
+                          value_template: "{{ (press_block | string | trim) == '' }}"
                       then:
                         # The firmware counts a start attempt only when its gate passes (published every 30 s).
                         - variables:
@@ -495,6 +525,25 @@ script:
                               retrying until {{ (retry_until | float(0)) | timestamp_custom('%H:%M') }}
                         - delay:
                             seconds: 5
+                    # PLAN (press-time recheck): the plan changed while this run waited. This ends THIS run for good: the BLOCKED text below is one
+                    # of the results the loop's `until` stops on (the write enable was turned off just above, nothing was pressed, and the end-of-run
+                    # alert raises the notification), so no later attempt stages or presses anything.
+                    - if:
+                        - condition: template
+                          value_template: "{{ (press_block | string | trim) != '' }}"
+                      then:
+                        - action: input_text.set_value
+                          target:
+                            entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                          data:
+                            value: >-
+                              {%- if press_block == 'OVERRIDE_ACTIVE' -%}BLOCKED - a Hold battery, Skip tonight or Prepare for power cut became active while this run was waiting ({{ state_attr('sensor.ecco_plan_export_hold', 'held_by') }}); nothing started (reason OVERRIDE_ACTIVE)
+                              {%- elif press_block == 'OVERRIDE_UNREADABLE' -%}BLOCKED - the plan override records could not be read while this run was waiting; nothing started (reason OVERRIDE_UNREADABLE)
+                              {%- elif press_block == 'RESERVE_UNKNOWN' -%}BLOCKED - the effective reserve could not be read while this run was waiting; nothing started (reason RESERVE_UNKNOWN)
+                              {%- elif press_block == 'RESERVE_INVALID' -%}BLOCKED - the effective reserve was not a number from 0 to 100 while this run was waiting; nothing started (reason RESERVE_INVALID)
+                              {%- elif press_block == 'RESERVE_TOO_HIGH' -%}BLOCKED - the effective reserve rose above the Stop SOC staged for this run ({{ requested_stop_soc }}%) while it was waiting; nothing started (reason RESERVE_TOO_HIGH)
+                              {%- else -%}BLOCKED - the plan could not be checked while this run was waiting; nothing started (reason OVERRIDE_UNREADABLE)
+                              {%- endif -%}
               until:
                 - condition: or
                   conditions:

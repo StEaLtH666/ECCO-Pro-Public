@@ -24,6 +24,10 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
   [8] clock       the scheduled start follows an override's true expiry through the repeated hour of the October clock change (the export hold reads
                   the helper's timestamp attribute, not its state string): refused while the override runs, started from its expiry second on, for
                   each kind; nine mutants (the hold-state read sites and the expiry second) are each caught by a running scheduled start
+  [9] press-time  the scheduled start reads the hold and the reserve AGAIN immediately before the press: an override started, a record or the reserve becoming
+                  unreadable or invalid, or a reserve raised above the Stop SOC staged for the run, while it waits for the dongle (busy or offline), ends that run
+                  (BLOCKED, the same stable codes, nothing pressed, write enable OFF, never retried); a run with no such change presses once as before; the
+                  mutants (no re-read, hold only, reserve only, the start values reused, not terminal, a moved boundary) are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -635,6 +639,232 @@ for label, mutated in MUTANTS8:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS8)} clock-change mutants, all caught by a running scheduled start", caught8 == len(MUTANTS8) and len(MUTANTS8) == 9, f"{caught8}/{len(MUTANTS8)}")
 check("control: the unmutated packages pass the same running cases", cd_bad == [])
+
+# ================================================================================================================================
+print("[9] press-time recheck: the hold and the reserve are read again immediately before the press (review finding 2)")
+# ================================================================================================================================
+# The scheduled start read the hold and the reserve once, at its start, and then, when the dongle was offline or another write was in progress, waited and
+# retried for up to 10 minutes and pressed without reading them again: a Hold battery, Skip tonight or Prepare for power cut the owner started DURING the wait
+# did not stop that press. The script now reads both again immediately before the press (press_block, the second condition of the pre-press check). If the hold
+# is no longer clear, or the reserve can no longer be read or is not a finite number from 0 to 100, or the Stop SOC staged for THIS run is below the rounded-up
+# reserve of that moment, the run ends as a BLOCKED result (the same reason codes, RESERVE_TOO_HIGH for the staged Stop SOC) that says it happened while the
+# run was waiting: nothing is pressed, the write enable ends off, it is never retried, and the end-of-run alert raises the notification. The staging of that last
+# attempt (three numbers, the write enable on, then off) has happened by then; the press has not. The dongle model's busy window is a Free Power transaction in
+# progress; its offline window makes every dongle entity unavailable and its services raise. The plan changes 15 s into a 45 s wait, on a virtual clock.
+SCHED = "ecco_dump_to_grid_start_scheduled"
+WAIT_UNTIL, CHANGE_AT = 45.0, 15.0
+
+
+def waiting_run(dump_text: str, wait: str, change=None, owner=40, stop_soc=25, at: float = CHANGE_AT, until: float = WAIT_UNTIL, seconds: float = 400.0):
+    """One scheduled run that has to wait for the dongle (`wait` is "busy" or "offline") with the write enable left ON beforehand; `change(pw)` happens `at`
+    seconds in. Returns (pw, d, n0, t0)."""
+    pw, d = world(dump_text, owner=owner)
+    w = pw.w
+    t0 = w.t
+    d.arm = True
+    w.set(D.D_ARM, "on")
+    if wait == "busy":
+        d.flags["fp_op"] = True
+        w.set(D.FP_OP, "on")
+        w.at(t0 + until, lambda: (d.flags.__setitem__("fp_op", False), w.set(D.FP_OP, "off")))
+    else:
+        d.set_offline(t0, t0 + until)
+    if change is not None:
+        w.at(t0 + at, lambda: change(pw))
+    n0 = len(w.service_log)
+    pw.ha.start_script(SCHED, {"duration_minutes": 30, "power_w": 2000, "stop_soc": stop_soc, "window_end_ts": t0 + 30 * 60 + 60})
+    w.run_until(t0 + seconds)
+    return pw, d, n0, t0
+
+
+def run_facts(pw, d, n0, t0) -> dict:
+    last = pw.state(LAST)
+    ended = next((t for t, e, v in pw.w.history if e == "script." + SCHED and v == "off" and t > t0), None)
+    return dict(last=last, presses=list(d.press_log), gate=list(d.presses), staged=[s for _t, s, _e, _d in pw.w.service_log[n0:] if s == "number.set_value"],
+                alerts=[n for n in pw.w.notification_log if n[1] == "create" and n[2] == NOTE], notice=pw.w.notifications.get(NOTE, {}).get("message", ""),
+                arm=pw.state(D.D_ARM), model_arm=d.arm, ended=None if ended is None else ended - t0, started=d.successes,
+                stop=[v for _t, e, v in d.number_log if e == D.D_SOC], warnings=list(pw.w.warnings))
+
+
+def override(kind: str, minutes: int = 120):
+    return lambda pw: pw.ha.start_script("ecco_plan_override_start", {"kind": kind, "expiry_min": minutes})
+
+
+def set_state(entity: str, value: str):
+    return lambda pw: pw.w.set(entity, value)
+
+
+def force_eff(txt: str):
+    return lambda pw: pw.w.template_entities.__setitem__(EFF, txt)
+
+
+# (label, change at 15 s, code, owner, asked Stop SOC): the staged Stop SOC of the run is max(asked, ceil(owner)) = 40 unless noted
+CHANGES = (
+    ("Hold battery started", override("hold_battery"), "OVERRIDE_ACTIVE", 40, 25),
+    ("Skip tonight started", override("skip_tonight"), "OVERRIDE_ACTIVE", 40, 25),
+    ("Prepare for power cut started", override("prepare_power_cut"), "OVERRIDE_ACTIVE", 40, 25),
+    ("a hold record becomes unreadable", set_state(EXP["hold_battery"], "unavailable"), "OVERRIDE_UNREADABLE", 40, 25),
+    ("the Prepare for power cut record becomes unreadable", set_state(EXP["prepare_power_cut"], "unavailable"), "OVERRIDE_UNREADABLE", 40, 25),
+    ("the owner's reserve becomes unreadable", set_state(OWNER, "unavailable"), "RESERVE_UNKNOWN", 40, 25),
+    ("the effective reserve sensor reads unavailable", force_eff("unavailable"), "RESERVE_UNKNOWN", 40, 25),
+    ("the effective reserve reads nan", force_eff("nan"), "RESERVE_INVALID", 40, 25),
+    ("the effective reserve reads inf", force_eff("inf"), "RESERVE_INVALID", 40, 25),
+    ("the effective reserve reads 150", force_eff("150"), "RESERVE_INVALID", 40, 25),
+    ("the reserve is raised from 40 to 60 above the staged Stop SOC 40", set_state(OWNER, "60.0"), "RESERVE_TOO_HIGH", 40, 25),
+    ("the reserve is raised to 95 (no room under 90 percent)", set_state(OWNER, "95.0"), "RESERVE_TOO_HIGH", 40, 25),
+    ("the effective reserve reads a fraction, 40.4 (rounded up 41, staged 40; defence in depth, forced onto the sensor)", force_eff("40.4"), "RESERVE_TOO_HIGH", 40, 25),
+    ("the reserve is raised one point above the staged Stop SOC (staged 40, reserve 41)", set_state(OWNER, "41.0"), "RESERVE_TOO_HIGH", 30, 40),
+)
+# (label, change, owner, asked, staged): the run is NOT stopped and presses once with the Stop SOC it staged
+UNCHANGED = (
+    ("nothing changes during the wait", None, 40, 25, 40),
+    ("the reserve falls during the wait (40 to 30)", set_state(OWNER, "30.0"), 40, 25, 40),
+    ("the reserve is raised to exactly the staged Stop SOC (staged 40, reserve 40)", set_state(OWNER, "40.0"), 30, 40, 40),
+    ("a Hold battery is started and cancelled again during the wait", lambda pw: (override("hold_battery")(pw), pw.w.at(pw.w.t + 5, lambda: pw.ha.start_script("ecco_plan_override_cancel", {"kind": "hold_battery"}))), 40, 25, 40),
+)
+
+
+def press_problems(dump_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+
+    def add(msg: str) -> bool:
+        bad.append(msg)
+        return stop_early
+
+    try:
+        for wait in ("busy", "offline"):
+            for label, change, code, owner, asked in CHANGES:
+                pw, d, n0, t0 = waiting_run(dump_text, wait, change, owner=owner, stop_soc=asked)
+                f = run_facts(pw, d, n0, t0)
+                last = f["last"]
+                ok = (f["presses"] == [] and f["gate"] == [] and f["started"] == 0 and last.startswith("BLOCKED - ") and "was waiting" in last
+                      and last.endswith(f"(reason {code})") and len(last) <= 255 and "already active" not in last
+                      and len(f["alerts"]) == 1 and last in f["notice"] and f["arm"] == "off" and f["model_arm"] is False
+                      and len(f["staged"]) == 3 and f["ended"] is not None and f["ended"] < 120 and not any("invalid value" in m for m in f["warnings"]))
+                if not ok and add(f"{wait} wait, {label}: {last[:70]!r} presses={f['presses']} staged={len(f['staged'])} alerts={len(f['alerts'])} arm={f['arm']}/{f['model_arm']} ended={f['ended']}"):
+                    return bad
+            for label, change, owner, asked, staged in UNCHANGED:
+                pw, d, n0, t0 = waiting_run(dump_text, wait, change, owner=owner, stop_soc=asked)
+                f = run_facts(pw, d, n0, t0)
+                ok = (len(f["presses"]) == 1 and f["gate"] and f["gate"][0][1] == "PASSED" and f["started"] == 1 and f["stop"] == [staged] and f["last"].startswith("STARTED OK")
+                      and f["alerts"] == [] and len(f["staged"]) == 3 and f["arm"] == "off" and f["model_arm"] is False)
+                if not ok and add(f"{wait} wait, {label}: wanted one press, got {f['last'][:60]!r} presses={f['presses']} staged={f['stop']}"):
+                    return bad
+        # the longest text (all three overrides named) fits the 255-character result helper
+        pw, d, n0, t0 = waiting_run(dump_text, "busy", lambda pw: [pw.w.at(pw.w.t + i, lambda k=k: pw.ha.start_script("ecco_plan_override_start", {"kind": k, "expiry_min": 120})) for i, k in enumerate(KINDS)])
+        worst = pw.state(LAST).replace("None", "hold_battery,skip_tonight,prepare_power_cut")
+        if (len(worst) > 255 or not worst.startswith("BLOCKED - a Hold battery") or pw.w.warnings) and add(f"the longest press-time text is {len(worst)} characters: {worst[:60]!r} {pw.w.warnings[:1]}"):
+            return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+def recheck_static_problems(dump_text: str) -> list[str]:
+    """The recheck sits where it must: press_block is computed in the retry loop's default branch immediately before the pre-press `if`, which carries it as its second
+    condition; the terminal step is after that `if`, writes only the result text, and there is still exactly one press."""
+    bad: list[str] = []
+    seq = yaml.safe_load(dump_text)["script"][SCHED]["sequence"]
+    top = next(a for a in seq if "choose" in a)
+    rep = next(a for a in top["default"] if "repeat" in a)["repeat"]
+    inner = next(a for a in rep["sequence"] if "choose" in a)
+    default = inner["default"]
+    idx_var = next((i for i, a in enumerate(default) if isinstance(a.get("variables"), dict) and "press_block" in a["variables"]), -1)
+    idx_if = next((i for i, a in enumerate(default) if "if" in a and "button.press" in str(a.get("then"))), -1)
+    idx_end = next((i for i, a in enumerate(default) if "if" in a and "press_block" in str(a["if"]) and "!=" in str(a["if"]) and i != idx_if), -1)
+    if not (idx_var != -1 and idx_if == idx_var + 1 and idx_end == idx_if + 1):
+        bad.append(f"press_block / pre-press if / terminal step are not adjacent in that order: {(idx_var, idx_if, idx_end)}")
+        return bad
+    conds = default[idx_if]["if"]
+    if len(conds) != 2 or "press_block" not in str(conds[1]) or "press_block" in str(conds[0]):
+        bad.append("the pre-press `if` does not carry the recheck as its second condition")
+    pb = default[idx_var]["variables"]["press_block"]
+    if "sensor.ecco_plan_export_hold" not in pb or "sensor.ecco_plan_effective_reserve" not in pb or "requested_stop_soc" not in pb:
+        bad.append("press_block does not read the hold and the reserve again and compare the staged Stop SOC")
+    then = default[idx_end]["then"]
+    if [a["action"] for a in then] != ["input_text.set_value"] or then[0]["target"]["entity_id"] != LAST:
+        bad.append(f"the terminal step does more than write the last-result text: {[a.get('action') for a in then]}")
+    if dump_text.count("action: button.press") != 1:
+        bad.append("the scheduled start no longer has exactly one button.press")
+    return bad
+
+
+rs = recheck_static_problems(DUMP_TEXT)
+check("press-time recheck, static: press_block is computed in the retry loop immediately before the pre-press `if` (second condition), the terminal step follows and writes only the "
+      "result text, and the script still has exactly one button.press", rs == [], str(rs))
+pp = press_problems(DUMP_TEXT)
+check("press-time recheck, running: a Hold battery, Skip tonight or Prepare for power cut started, a hold record or the reserve becoming unreadable, a reserve that is "
+      "not a finite number from 0 to 100, or a reserve raised above the staged Stop SOC (to 41, 60, 95; and a fractional one rounded up), DURING the wait with the dongle busy or offline: the run "
+      "does not press, records the BLOCKED text with the same stable code, saying it waited (at most 255 characters, the longest one included), raises one alert, ends with the "
+      "write enable OFF and is never retried (staged once, ended inside 2 minutes); with no change, a lower reserve, a reserve equal to the staged Stop SOC, or an override "
+      "started and cancelled again, it presses exactly once as before", pp == [], str(pp[:3]))
+
+print("[9] mutation: each way of dropping or weakening the recheck is caught by a running scheduled start")
+_PB = "                          "
+_STEP = "                              {%- if press_block == 'OVERRIDE_ACTIVE' -%}"
+
+
+def _all_blocked_to_starting(t: str) -> str:
+    a = t.index(_STEP)
+    b = t.index("{%- endif -%}\n              until:", a)
+    return t[:a] + t[a:b].replace("BLOCKED - ", "STARTING - ") + t[b:]
+
+
+MUTANTS9 = [
+    ("no re-read: the press ignores the recheck", [("value_template: \"{{ (press_block | string | trim) == '' }}\"", "value_template: \"{{ true }}\"")]),
+    ("the re-read looks at the hold only (the reserve is never re-read)",
+     [(_PB + "{%- elif r < 0 -%}RESERVE_UNKNOWN", _PB + "{%- elif false -%}RESERVE_UNKNOWN"),
+      (_PB + "{%- elif not (r >= 0 and r <= 100) -%}RESERVE_INVALID", _PB + "{%- elif false -%}RESERVE_INVALID"),
+      (_PB + "{%- elif (r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", _PB + "{%- elif false -%}RESERVE_TOO_HIGH")]),
+    ("the re-read looks at the reserve only (the hold is never re-read)",
+     [(_PB + "{%- if h == 'held' -%}OVERRIDE_ACTIVE", _PB + "{%- if false -%}OVERRIDE_ACTIVE"), (_PB + "{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", _PB + "{%- elif false -%}OVERRIDE_UNREADABLE")]),
+    ("the re-read ignores a held hold", [(_PB + "{%- if h == 'held' -%}OVERRIDE_ACTIVE", _PB + "{%- if false -%}OVERRIDE_ACTIVE")]),
+    ("the re-read ignores an unreadable hold", [(_PB + "{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", _PB + "{%- elif false -%}OVERRIDE_UNREADABLE")]),
+    ("the re-read ignores an unreadable reserve", [(_PB + "{%- elif r < 0 -%}RESERVE_UNKNOWN", _PB + "{%- elif false -%}RESERVE_UNKNOWN")]),
+    ("the re-read ignores an invalid reserve", [(_PB + "{%- elif not (r >= 0 and r <= 100) -%}RESERVE_INVALID", _PB + "{%- elif false -%}RESERVE_INVALID")]),
+    ("the re-read ignores a reserve above the staged Stop SOC", [(_PB + "{%- elif (r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", _PB + "{%- elif false -%}RESERVE_TOO_HIGH")]),
+    ("the reserve test is too-big-only (nan, always False, goes through)", [("{%- elif not (r >= 0 and r <= 100) -%}RESERVE_INVALID", "{%- elif r > 100 -%}RESERVE_INVALID")]),
+    ("the staged Stop SOC test refuses a reserve equal to it (> becomes >=)", [("(r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", "(r | round(0, 'ceil') | int) >= (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH")]),
+    ("the staged Stop SOC test lets a reserve one point above it through", [("(r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", "(r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) + 1 -%}RESERVE_TOO_HIGH")]),
+    ("the staged Stop SOC test rounds the reserve down (floor)", [("(r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", "(r | round(0, 'floor') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH")]),
+    ("the staged Stop SOC test rounds the reserve to nearest", [("(r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", "(r | round(0) | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH")]),
+    ("the re-read reuses the values read at the start of the run (the old read-once behaviour)",
+     [(_PB + "{%- set h = states('sensor.ecco_plan_export_hold') -%}", _PB + "{%- set h = plan_hold -%}"),
+      (_PB + "{%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}", _PB + "{%- set r = plan_reserve | float(-1) -%}")]),
+    ("the run is not ended: the BLOCKED result is not a result the loop stops on (it retries and re-stages)", [(None, _all_blocked_to_starting)]),
+    ("the terminal step is removed (no BLOCKED text: it retries until the deadline)", [("value_template: \"{{ (press_block | string | trim) != '' }}\"", "value_template: \"{{ false }}\"")]),
+]
+caught9 = 0
+built9 = 0
+for label, edits in MUTANTS9:
+    mutated = DUMP_TEXT
+    ok_built = True
+    for old, new in edits:
+        if old is None:
+            mutated = new(mutated)
+        elif mutated.count(old) != 1:
+            ok_built = False
+            check(f"mutant anchor: {label}", False, f"anchor found {mutated.count(old)}x: {old[:70]!r}")
+            break
+        else:
+            mutated = mutated.replace(old, new)
+    if not ok_built:
+        continue
+    built9 += 1
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = press_problems(mutated, stop_early=True)
+    if found:
+        caught9 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:80]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS9)} press-time recheck mutants, all caught by a running scheduled start", caught9 == len(MUTANTS9) == built9, f"{caught9}/{built9}/{len(MUTANTS9)}")
+check("control: the unmutated package passes the same running cases", pp == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

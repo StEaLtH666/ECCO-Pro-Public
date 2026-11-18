@@ -1343,10 +1343,10 @@ EPC2 = Entry(
         _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
         _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
         _epc2.DIST_REL: "a46fddab4083d91f13fe7664d7108b01aebcc6435fde4889929a7bca74fbb130",
-        _epc2.DUMP_REL: "6e37597fabce60245f02a647611d7bfdb874a98491c5b4fddca035ab4958b75c",
+        _epc2.DUMP_REL: "c2a7347a8705bef07c83e852f8a363bee4802f9a7b3091bbac69dd9aa00278dd",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="45ddfab2024818082192664b188e622789008c25ed4778c705104cd74033cbb9",
+    fingerprint="3ff78901e37809ffb67c41849e1beec1c878ad92e102b3c0caae5ba18fbd5c09",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1363,7 +1363,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="0a618c27b331f3930c4b686a13c6ebbeab9e13fd99edc8c15444e991798d3c11",
+    fingerprint="19b8201f8c46b7d0ce01e5920fe585edc1041591f6c5c25ad154ce8fd4bf34c2",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

@@ -41,6 +41,9 @@ virtual clock. Every Jinja condition is the package's own text, rendered by that
                   staged, armed or pressed, the write enable left ON reads OFF, the schedule disarmed, alerted; after a missed run the recovery and the
                   watchdog still record MISSED; a valid reserve (0, 0.0, 20, 90) behaves as before
   [14] mutation   in-memory mutants of that validation (removed, too-big-only, the ceil step unprotected, a bound moved, the new text dropped) are each caught
+  [15] press-time the same recheck through the fire automation (on-time start and the watchdog's rescue), the end-of-run alert and the disarm, with the dongle
+                  busy or offline while the plan changes; the unchanged runs still press once
+  [16] mutation   in-memory mutants of the recheck (no re-read, hold only, reserve only, the start values reused, not terminal) are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a live
 Home Assistant restart (the capture on the `homeassistant` start event, the restored helper states), the dongle or the inverter.
@@ -267,7 +270,7 @@ check("no refusal branch stages or presses anything (no number.set_value, button
 default = choose.get("default", [])
 check("the staging and the press sit only in the `default` branch: the three staged numbers, the arm, and exactly one press",
       len(calls(default, "number.set_value")) == 3 and len(calls(default, "switch.turn_on")) == 1 and len(calls(default, "button.press")) == 1)
-check("the script reads the plan's hold and reserve into variables BEFORE its `choose` (read once; never re-read after a refusal check)",
+check("the script reads the plan's hold and reserve into variables BEFORE its `choose` (read at the start; the press-time recheck, [15], reads them again just before the press)",
       i_vars < i_choose and "sensor.ecco_plan_export_hold" in variables["plan_hold"] and "sensor.ecco_plan_effective_reserve" in variables["plan_reserve"])
 stop_calls = [c for c in calls(default, "number.set_value") if c["target"]["entity_id"] == D.D_SOC]
 check("the Stop SOC the script stages is the RAISED value: requested_stop_soc is the larger of the request and the rounded-up reserve, staged by "
@@ -900,6 +903,164 @@ check("no helper refused a write (the plan helper range checks of the model)", P
 
 # ======================================================================================================================
 print("")
+# ======================================================================================================================
+print("\n[15] press-time recheck: an override or a reserve change that arrives while the run waits for the dongle ends the run, on the on-time start and the watchdog's rescue")
+# ======================================================================================================================
+# Independent review of 18 Nov 2026, finding 2. The start script read the hold and the reserve once and then waited and retried (dongle offline or another write in
+# progress, up to 10 minutes) and pressed without reading them again. It now reads both again immediately before the press (see test_ecco_plan_enforcement.py [9]
+# for the script on its own). Here the whole path runs: the fire automation, the script, the end-of-run alert and the automation's disarm. The busy window is a Free Power
+# transaction in progress, the offline window makes every dongle entity unavailable and its services raise; the plan changes 15 s into the 45 s wait. The write enable is
+# left ON beforehand, so its OFF at the end is the script's own step. The staging of that last attempt (three numbers, the write enable on) has happened by the time the
+# press is refused; the press has not: no press, one staging round (never retried), the BLOCKED result, the alert, the schedule disarmed.
+def x_override(kind: str):
+    return lambda x: x.pw.ha.start_script("ecco_plan_override_start", {"kind": kind, "expiry_min": 120})
+
+
+def x_set(entity: str, value: str):
+    return lambda x: x.w.set(entity, value)
+
+
+def x_force(entity: str, value: str):
+    return lambda x: force(x, entity, value)
+
+
+def x_cancel_after(kind: str):
+    return lambda x: (x_override(kind)(x), x.w.at(x.w.t + 5, lambda: x.pw.ha.start_script("ecco_plan_override_cancel", {"kind": kind})))
+
+
+def waiting_combo(lose, wait, change, mutate=None, owner=40.0, stop=40):
+    """A start that has to wait for the dongle: the on-time start (ST), or the watchdog's rescue three minutes later when the on-time trigger is lost."""
+    x = Combo(owner=owner, stop=stop, lose=lose, mutate=mutate)
+    base = ST + (180 if lose else 0)
+    x.stale_arm().until(ST - 30)
+    if wait == "busy":
+        x.d.flags["fp_op"] = True
+        x.w.set(D.FP_OP, "on")
+        x.w.at(base + 45, lambda: (x.d.flags.__setitem__("fp_op", False), x.w.set(D.FP_OP, "off")))
+    else:
+        x.d.set_offline(ST - 30, base + 45)
+    if change is not None:
+        x.w.at(base + 15, lambda: change(x))
+    x.until(ST + 900)
+    x.base = base
+    return x
+
+
+def waited_facts(x):
+    ended = next((t for t, e, v in x.w.history if e == "script." + "ecco_dump_to_grid_start_scheduled" and v == "off" and t > x.base - 1), None)
+    return dict(numbers=[s for _t, s, _e, _d in x.w.service_log if s == "number.set_value"], ended=None if ended is None else ended - x.base,
+                notice=x.w.notifications.get(NOTE, {}).get("message", ""))
+
+
+PRESS_CASES = (("Hold battery started", x_override("hold_battery"), "OVERRIDE_ACTIVE", {}),
+               ("Skip tonight started", x_override("skip_tonight"), "OVERRIDE_ACTIVE", {}),
+               ("Prepare for power cut started", x_override("prepare_power_cut"), "OVERRIDE_ACTIVE", {}),
+               ("a hold record becomes unreadable", x_set(EXP["skip_tonight"], "unavailable"), "OVERRIDE_UNREADABLE", {}),
+               ("the owner's reserve becomes unreadable", x_set(OWNER, "unavailable"), "RESERVE_UNKNOWN", {}),
+               ("the effective reserve reads nan", x_force(EFF, "nan"), "RESERVE_INVALID", {}),
+               ("the reserve is raised from 40 to 60 above the staged Stop SOC 40", x_set(OWNER, "60.0"), "RESERVE_TOO_HIGH", {}))
+PRESS_PATHS = (("on-time start", ()), ("watchdog rescue (on-time trigger lost)", ("start",)))
+
+
+def press_scenario(mutate=None, first_only=False) -> list:
+    rows: list = []
+    for path, lose in PRESS_PATHS:
+        for wait in ("busy", "offline"):
+            for label, change, code, kw in PRESS_CASES:
+                x = waiting_combo(lose, wait, change, mutate=mutate, **kw)
+                f = waited_facts(x)
+                ok = (x.presses() == [] and x.started() == 0 and x.last().startswith("BLOCKED - ") and "was waiting" in x.last() and x.last().endswith(f"(reason {code})")
+                      and len(x.last()) <= 255 and len(f["numbers"]) == 3 and f["ended"] is not None and f["ended"] < 120 and x.stop_staged() == [40]
+                      and (len(x.alerts()) == 1 if not lose else len(x.alerts()) >= 1) and code in f["notice"] and not x.is_armed() and x.write_enable_off())
+                rows.append((f"{path}, dongle {wait}, {label}: no press, BLOCKED ({code}) saying it waited, one staging round (never retried), alerted, write enable OFF, disarmed", ok,
+                             f"{x.last()!r} presses={x.presses()} numbers={len(f['numbers'])} ended={f['ended']} alerts={len(x.alerts())} armed={x.is_armed()} we_off={x.write_enable_off()}"))
+                if first_only and not ok:
+                    return rows
+            for label, change in (("nothing changes", None), ("the reserve falls (40 to 30)", x_set(OWNER, "30.0")), ("a Hold battery is started and cancelled again", x_cancel_after("hold_battery"))):
+                x = waiting_combo(lose, wait, change, mutate=mutate)
+                ok = (x.started() == 1 and len(x.presses()) == 1 and x.stop_staged() == [40] and x.last().startswith("STARTED OK") and not x.is_armed() and x.write_enable_off()
+                      and not any("did NOT start" in n[3] for n in x.alerts()))
+                rows.append((f"{path}, dongle {wait}, {label}: unchanged, one press, Stop SOC 40, STARTED OK, disarmed", ok, f"{x.started()} {x.presses()} {x.stop_staged()} {x.last()!r} {x.alerts()}"))
+                if first_only and not ok:
+                    return rows
+    return rows
+
+
+PRESS_ROWS = press_scenario()
+for _label, _ok, _detail in PRESS_ROWS:
+    check(_label, _ok, _detail)
+check(f"all {len(PRESS_ROWS)} press-time recheck cases ran (2 start paths, 2 waits, 7 plan changes that end the run, 3 that do not)", len(PRESS_ROWS) == 2 * 2 * (len(PRESS_CASES) + 3), str(len(PRESS_ROWS)))
+
+print("\n[16] mutation: the press-time recheck is load-bearing (each weakening is caught by the running cases of [15])")
+
+
+def _press_var(p):
+    hits = [d for d in walk(script_seq(p)) if isinstance(d.get("press_block"), str)]
+    assert len(hits) == 1, len(hits)
+    return hits[0]
+
+
+def _prepress_if(p):
+    hits = [d for d in walk(script_seq(p)) if isinstance(d.get("if"), list) and len(d["if"]) == 2 and "press_block" in str(d["if"][1]) and "button.press" in str(d.get("then"))]
+    assert len(hits) == 1, len(hits)
+    return hits[0]
+
+
+def _terminal(p):
+    hits = [d for d in walk(script_seq(p)) if isinstance(d.get("value"), str) and "became active while this run was waiting" in d["value"]]
+    assert len(hits) == 1, len(hits)
+    return hits[0]
+
+
+def _edit_press_var(p, pairs):
+    v = _press_var(p)
+    for old, new in pairs:
+        assert v["press_block"].count(old) == 1, old
+        v["press_block"] = v["press_block"].replace(old, new)
+
+
+def m_no_reread(p):
+    """The pre-press `if` no longer carries the recheck (the press ignores it)."""
+    d = _prepress_if(p)
+    d["if"] = d["if"][:1]
+
+
+def m_hold_only(p):
+    """Only the hold is re-read: the reserve branches never fire."""
+    _edit_press_var(p, (("{%- elif r < 0 -%}RESERVE_UNKNOWN", "{%- elif false -%}RESERVE_UNKNOWN"),
+                        ("{%- elif not (r >= 0 and r <= 100) -%}RESERVE_INVALID", "{%- elif false -%}RESERVE_INVALID"),
+                        ("{%- elif (r | round(0, 'ceil') | int) > (requested_stop_soc | int(0)) -%}RESERVE_TOO_HIGH", "{%- elif false -%}RESERVE_TOO_HIGH")))
+
+
+def m_reserve_only(p):
+    """Only the reserve is re-read: the hold branches never fire."""
+    _edit_press_var(p, (("{%- if h == 'held' -%}OVERRIDE_ACTIVE", "{%- if false -%}OVERRIDE_ACTIVE"), ("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif false -%}OVERRIDE_UNREADABLE")))
+
+
+def m_start_values(p):
+    """The recheck reuses the values read at the start of the run (the old read-once behaviour)."""
+    _edit_press_var(p, (("{%- set h = states('sensor.ecco_plan_export_hold') -%}", "{%- set h = plan_hold -%}"),
+                        ("{%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}", "{%- set r = plan_reserve | float(-1) -%}")))
+
+
+def m_not_terminal(p):
+    """The BLOCKED text is not one the loop stops on: it retries (and stages) again."""
+    t = _terminal(p)
+    t["value"] = t["value"].replace("BLOCKED - ", "STARTING - ")
+
+
+def scen_press(mut) -> bool:
+    return all(ok for _l, ok, _d in press_scenario(mutate=mut, first_only=True))
+
+
+check("control: unmutated, the press-time scenario of the mutants below passes (both paths, both waits, every plan change, the unchanged runs)", all(ok for _l, ok, _d in PRESS_ROWS))
+for name, mut in (("no re-read: the press ignores the recheck", m_no_reread),
+                  ("re-read the hold only (the reserve is never re-read)", m_hold_only),
+                  ("re-read the reserve only (the hold is never re-read)", m_reserve_only),
+                  ("the recheck reuses the values read at the start (the old read-once behaviour)", m_start_values),
+                  ("re-read but do not stop retrying (the BLOCKED text is not a result the loop stops on)", m_not_terminal)):
+    check(f"mutant caught: {name}", not scen_press(mut))
+
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed")
     for f in FAILURES:
