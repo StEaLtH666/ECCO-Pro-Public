@@ -1323,7 +1323,8 @@ EPC1 = Entry(
 # after epc1. FROZEN edits (PEX): the card's README.md, src/config.ts, src/ecco-energy-actions-card.ts and the rebuilt
 # dist/ecco-energy-actions-card.js (the bundle was not rebuilt since the export: the rebuild carries every source change since), and the
 # scheduled Dump to Grid package (it refuses during Hold battery / Skip tonight / Prepare for power cut, fails closed, and raises the
-# Stop SOC it stages to the effective reserve). CHAIN-PINNED edit: the deployment manifest (the stanzas of the two new packages).
+# Stop SOC it stages to the effective reserve). CHAIN-PINNED edit: the deployment manifest (the stanzas of the two new packages, and comments only above
+# the changed scheduled Dump to Grid stanza: its helper dependency and the active-override warning).
 # ADDED: the plan helper package (the owner's limits, the override records, two guarded scripts that write only those helpers, the
 # export-hold and effective-reserve sensors) and the guarded start package, their suites and test support, the card's control sources
 # and tests. Measured, not declared: no delta, no op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte;
@@ -1333,7 +1334,7 @@ EPC2 = Entry(
     id="epc2", pr="EPC2", commit="unmerged",
     reverts=dict(_epc2.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after epc2
-        HA_MANIFEST: "b5f1befe5034ceaee15e053442d93e82a49d52777587bb81fd3093d469f3264d",
+        HA_MANIFEST: "58dab82d35315afe5b7bc40d90dcdbbaa3f868599904f3a0668f304b55e2722d",
     },
     added_files=_epc2.ADDED_FILES,
     frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
@@ -1345,7 +1346,7 @@ EPC2 = Entry(
         _epc2.DUMP_REL: "6e37597fabce60245f02a647611d7bfdb874a98491c5b4fddca035ab4958b75c",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="3e76741b95ba0e464060b23ad3f0b54c01102b8b964dae85dd7093f1162792eb",
+    fingerprint="7d0cbaedf5259f733d014bb5d23fd94adcaa0f376ea9c3868e1d08ce244b4ae4",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1362,7 +1363,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="03bfab217260a196e488a657624e3b7268c582e63306cd146c6186ace8c469d7",
+    fingerprint="d9b4c1ccf56891110fda73ccd516faaacda1a2ea5ca974371ed24c1e8daec748",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

@@ -2,7 +2,8 @@
 edits (PEX): the card's README.md, src/config.ts, src/ecco-energy-actions-card.ts and rebuilt dist/ecco-energy-actions-card.js (the
 bundle had not been rebuilt since the export; the rebuild carries every source change since), and the scheduled Dump to Grid package
 (refuses during Hold battery / Skip tonight / Prepare for power cut, fails closed, raises the Stop SOC to the effective reserve).
-CHAIN-PINNED edit: the deployment manifest (two package stanzas). ADDED: the plan helper package and the guarded start package, their
+CHAIN-PINNED edit: the deployment manifest (two package stanzas, and a comment block above the changed scheduled Dump to Grid package stanza: the helper
+dependency and the active-override warning; the guarded start's stanza also states the unresolved Start-button limitation). ADDED: the plan helper package and the guarded start package, their
 three suites and test support, and the card's control sources and tests. ZERO firmware, registry data, Intelligence, ecco_core or
 VERSION.yaml byte; ZERO Modbus operation; every service the new scripts call is a helper setter or a persistent notification, except the
 guarded start's one press of the existing dongle start button.
@@ -1571,13 +1572,28 @@ dashboard:
     restart_required: true
   # The guarded manual Dump to Grid start the Energy Actions card calls when it is configured with dump_to_grid.guarded_start. It
   # presses the same dongle start button, but only while no override holds export and the staged Stop SOC is at least the effective
-  # reserve. Needs ecco_plan_helpers.yaml installed first.
+  # reserve. Needs ecco_plan_helpers.yaml installed first (install the two together, the plan helpers first; one full restart). While an
+  # override is active, or the plan records cannot be read, or the effective reserve or the staged Stop SOC is invalid, it refuses, says why
+  # in the plan last-result text and raises one notification, and presses nothing.
+  # The dongle's own Start button is not bound by these protections (unresolved; it needs a firmware gate, approved separately).
   - source: home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml
     destination: /config/packages/ecco_dump_to_grid_guarded_start.yaml
     method: ssh_file_copy
     restart_required: true
 
 dashboard:
+""")),
+    (_blk(r"""
+  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
+"""),
+     _blk(r"""
+  # Stage 3 (epc2; offline, not live-proven). HELPER DEPENDENCY: this package now needs ecco_plan_helpers.yaml installed WITH or BEFORE it.
+  # Install the two together, the plan helpers first, then restart Home Assistant once, fully (the R9 note above: a FULL restart, not a
+  # reload). Until the plan helpers exist, every scheduled start is refused (reason OVERRIDE_UNREADABLE), because the plan sensors cannot be read.
+  # ACTIVE-OVERRIDE WARNING: while a Hold battery, Skip tonight or Prepare for power cut override is active, or the plan records cannot be
+  # read, or the effective reserve is not a valid number, every scheduled start and every guarded manual start is REFUSED. The owner sees this
+  # only at the start time, through the blocked alert and the last-result text, not when the override is set: check before an armed start time.
+  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml
 """)),
 )
 

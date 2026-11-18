@@ -15,6 +15,8 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 click handlers, the plan call allow-list is still `script.turn_on` on three ids and names no button press, and the Stage 3
                 package headers add comments only
   [4] mutation  each way of losing the text or adding a path is caught by the checks above; the untouched tree is not flagged
+  [5] manifest  the deployment manifest states the limitation in one short sentence on the guarded-start stanza (and never claims full enforcement);
+                the scheduled Dump to Grid stanza carries the helper dependency and the active-override warning beside R9's full-restart note
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -201,6 +203,79 @@ check("mutant caught: a button press in the plan allow-list", bool(path_problems
 check("mutant caught: a fourth plan control id", bool(path_problems(controls_text, actions_text.replace('"cancel_script": "script.ecco_plan_override_cancel"', '"cancel_script": "script.ecco_plan_override_cancel",\n  "start_button": "button.x"'), plan_dir)))
 check("control: the untouched tree is not flagged", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text)
       and not path_problems(controls_text, actions_text, plan_dir))
+
+# ===========================================================================
+print("")
+print("[5] the deployment manifest states the same limitation in one short sentence, on the guarded-start stanza, and its warnings stand on the schedule stanza")
+# ===========================================================================
+# The manifest is where an installer reads what a package needs and what it does not guarantee, so the unresolved limitation is stated there too, in
+# one short ASCII sentence (no number, entity id, address or site value), on a comment line in the comment block directly above the guarded start's
+# stanza. The manifest never calls the protection fully enforced. The scheduled Dump to Grid stanza carries the helper dependency (install the plan
+# helpers WITH or BEFORE it, one full restart; until they exist every scheduled start is refused) and the active-override warning (while an override
+# is active, the records cannot be read or the reserve is invalid, every scheduled and every guarded start is REFUSED, seen only at the start time).
+MANIFEST = ROOT / "deployment" / "ha-manifest.yaml"
+MANIFEST_LIMITATION = "The dongle's own Start button is not bound by these protections (unresolved; it needs a firmware gate, approved separately)."
+GUARD_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml"
+SCHEDULE_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml"
+SCHEDULE_NOTES = ("FULL Home Assistant restart",                       # R9's note, kept
+                  "ecco_plan_helpers.yaml", "WITH or BEFORE", "the plan helpers first", "OVERRIDE_UNREADABLE",   # the helper dependency
+                  "Hold battery, Skip tonight or Prepare for power cut", "REFUSED", "blocked alert", "last-result text")   # the active-override warning
+FULL_CLAIM = re.compile(r"fully[- ]enforc|full enforcement|fully[- ]protect|completely (?:enforc|protect)", re.I)
+
+
+def block_above(lines: list[str], stanza: str) -> list[str]:
+    """The comment lines directly above `stanza` (empty when the stanza is missing or not preceded by comments)."""
+    if lines.count(stanza) != 1:
+        return []
+    j = lines.index(stanza)
+    k = j
+    while k > 0 and lines[k - 1].lstrip().startswith("#"):
+        k -= 1
+    return lines[k:j]
+
+
+def manifest_problems(text: str) -> list[str]:
+    out = []
+    lines = text.split("\n")
+    hits = [i for i, ln in enumerate(lines) if MANIFEST_LIMITATION in ln]
+    if len(hits) != 1 or text.count(MANIFEST_LIMITATION) != 1:
+        out.append(f"the limitation sentence stands {text.count(MANIFEST_LIMITATION)}x in {len(hits)} line(s), not exactly once")
+    elif not lines[hits[0]].lstrip().startswith("#"):
+        out.append("the limitation sentence is not on a comment line")
+    elif lines[hits[0]] not in block_above(lines, GUARD_STANZA):
+        out.append("the limitation sentence is not in the comment block directly above the guarded-start stanza")
+    if FULL_CLAIM.search(text):
+        out.append("the manifest claims full enforcement")
+    above = "\n".join(block_above(lines, SCHEDULE_STANZA))
+    missing = [s for s in SCHEDULE_NOTES if s not in above]
+    if missing:
+        out.append(f"the schedule stanza's comment block lacks {missing}")
+    return out
+
+
+manifest_text = text_of(MANIFEST)
+check("the manifest sentence is ASCII, one line, short, and spells no number, entity id, address or site value",
+      MANIFEST_LIMITATION.isascii() and "\n" not in MANIFEST_LIMITATION and len(MANIFEST_LIMITATION) < 140
+      and not re.search(r"\d|\b(?:sensor|switch|button|number|input_[a-z]+|script)\.|token|password", MANIFEST_LIMITATION, re.I))
+check("the manifest exists and is readable", bool(manifest_text))
+check("the manifest states the limitation exactly once, on a comment line directly above the guarded-start stanza; it never claims full enforcement; the schedule stanza "
+      "carries the helper dependency, the active-override warning and R9's full-restart note", not manifest_problems(manifest_text), str(manifest_problems(manifest_text)))
+check("the manifest names no entity id, address or site value in the notes above the two stanzas (comment lines only)",
+      not re.search(r"\b(?:sensor|switch|button|number|input_[a-z]+|binary_sensor)\.[a-z_]+|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+                    "\n".join(block_above(manifest_text.split("\n"), GUARD_STANZA) + block_above(manifest_text.split("\n"), SCHEDULE_STANZA)), re.I))
+_gone = manifest_text.replace(MANIFEST_LIMITATION, "")
+check("mutant caught: the manifest sentence removed", bool(manifest_problems(_gone)))
+check("mutant caught: the manifest sentence doubled", bool(manifest_problems(manifest_text + "\n# " + MANIFEST_LIMITATION)))
+check("mutant caught: the manifest sentence softened", bool(manifest_problems(manifest_text.replace("is not bound by", "is bound by"))))
+check("mutant caught: the manifest sentence moved above another stanza",
+      bool(manifest_problems(manifest_text.replace("  # " + MANIFEST_LIMITATION + "\n", "").replace(SCHEDULE_STANZA, "  # " + MANIFEST_LIMITATION + "\n" + SCHEDULE_STANZA))))
+check("mutant caught: the manifest sentence on a line that is not a comment",
+      bool(manifest_problems(manifest_text.replace("# " + MANIFEST_LIMITATION, "note: " + MANIFEST_LIMITATION))))
+check("mutant caught: the manifest claims the protection is fully enforced", bool(manifest_problems(manifest_text + "\n# The overrides are fully enforced.")))
+check("mutant caught: the schedule stanza's helper dependency removed", bool(manifest_problems(manifest_text.replace("WITH or BEFORE", "after"))))
+check("mutant caught: the schedule stanza's active-override warning removed", bool(manifest_problems(manifest_text.replace("last-result text", "result"))))
+check("mutant caught: R9's full-restart note removed from the schedule stanza", bool(manifest_problems(manifest_text.replace("FULL Home Assistant restart", "restart"))))
+check("control: the untouched manifest is not flagged", not manifest_problems(manifest_text))
 
 print("")
 if FAILURES:
