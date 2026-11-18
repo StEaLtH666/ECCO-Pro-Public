@@ -1339,14 +1339,14 @@ EPC2 = Entry(
     added_files=_epc2.ADDED_FILES,
     frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after epc2; as of pub0 each is its pub0 state (manifest result / enrolled hash)
-        _epc2.README_REL: "27b7ab576508994b1856440790232a063f1a6fe0eb13f6b59256a5221dc24b72",
+        _epc2.README_REL: "67b3ad09c5f8e7242ee1fd726da48b46b0e29807aab5526b1ba65625c97160cf",
         _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
         _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
         _epc2.DIST_REL: "74da60e880bb5632bb2ea9069e8cce80ca13fc08ee4ec8a72845955f2c95c9dc",
         _epc2.DUMP_REL: "c2a7347a8705bef07c83e852f8a363bee4802f9a7b3091bbac69dd9aa00278dd",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="7b2a0460cd0ae4bd04fadc45550235b564a6aaf7f076de5f30cb2af697d9b227",
+    fingerprint="f5c5032d19ce9c55016b356cd2b2b95b87f09eb284af9e13ff13a721b7dc67f2",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1363,7 +1363,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="555e692aa82ce17b1062221c66948199cd95ae41493a04ff31557a433e0d92ab",
+    fingerprint="0009ac94e61fbcef8391500d9985081b818f55bb8852a235ee998c9086fe2eca",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

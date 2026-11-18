@@ -20,6 +20,12 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 the three Stage 3 stanzas (plan helpers, scheduled start, guarded start) say the plan helpers go in the SAME deployment, before the
                 ONE full restart, that the order of the stanzas does not matter, and make no copy-order claim (the deploy tool copies every package and
                 restarts only as a separate step); the guarded start package header says the same
+  [6] wording   (finding 3 of the independent review of 18 Nov 2026; additive) the corrected wording stands at each place that carries it: an override
+                holds back ECCO's own scheduled and guarded export starts, Prepare for power cut sets the reserve ECCO's plan uses, and no override changes the
+                inverter's own reserve, stops the house using the battery, charges the battery or binds the dongle's own Start button; the phrase 'protected
+                reserve' (any case) is absent from the card sources, the bundle, both READMEs and the plan helper package; the plan-core README has the
+                'Known limitations (stated, not fixed in this change)' section with all its items, each with its direction of failure; the Stage 3
+                limitation sentence is still in every place; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -339,6 +345,241 @@ check("mutant caught: the guarded start package header says installed first agai
 check("mutant caught: the schedule stanza's active-override warning removed", bool(manifest_problems(manifest_text.replace("last-result text", "result"))))
 check("mutant caught: R9's full-restart note removed from the schedule stanza", bool(manifest_problems(manifest_text.replace("FULL Home Assistant restart", "restart"))))
 check("control: the untouched manifest is not flagged", not manifest_problems(manifest_text))
+
+# ===========================================================================
+print("")
+print("[6] the corrected wording (what an override does and does not do), no 'protected reserve', and the known limitations (finding 3 of the review of 18 Nov 2026)")
+# ===========================================================================
+# Finding 3 (MAJOR, over-claim): the card and the documents said that Prepare for power cut "raises a protected reserve (never lowers it)". That over-stated
+# it. The raised reserve is the reserve ECCO's PLAN uses (the effective reserve sensor: the larger of the owner's reserve and a running power-cut reserve,
+# each rounded up). The trusted backend refuses the scheduled Dump to Grid start and the card's guarded manual start when it cannot be read or is invalid, and
+# raises the Stop SOC the scheduled start stages to at least that reserve; it does NOT change the inverter's own reserve or any inverter setting, does not
+# stop the house using the battery, does not charge the battery and does not bind the dongle's own Start button. These checks are ADDITIVE: they require that
+# wording at each place that carries it, forbid the old phrase, and require the "Known limitations" section of the plan-core README with all its items.
+CARD_SRC_DIR = CARD / "src"
+PLAN_HELPERS_PKG = ROOT / "home-assistant" / "packages" / "ecco_plan_helpers.yaml"
+OVERRIDE_POLICY_TS = ROOT / "frontend" / "ecco-plan-core" / "src" / "overridePolicy.ts"
+card_sources = {str(p.relative_to(CARD)).replace("\\", "/"): text_of(p) for p in sorted(CARD_SRC_DIR.rglob("*.ts"))}
+
+PROTECTED_RE = re.compile(r"protected\s+(?:reserve|floor)", re.I)
+INVERTER_RESERVE_RE = re.compile(r"(?:(?:does|do) not change the inverter's own reserve|the inverter's own reserve is not changed)", re.I)
+
+
+def flat(text: str) -> str:
+    """Prose view: every run of white space becomes one space, so a phrase may wrap across lines."""
+    return re.sub(r"\s+", " ", text)
+
+
+def flat_yaml(text: str) -> str:
+    """Prose view of a YAML file's comments: the comment marker at the start of each line is dropped, then as flat()."""
+    return flat(re.sub(r"(?m)^[ \t]*# ?", "", text))
+
+
+# What the card says now (the source strings; the bundle carries them too). The effect text of Prepare for power cut has a number in the middle, so it is two parts.
+CONTROLS_WORDING = (
+    "Holds back ECCO's own scheduled and guarded export starts. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+    "Holds back ECCO's own scheduled and guarded export starts tonight. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+    "Sets the reserve ECCO's plan uses to the larger of your own reserve and the power-cut reserve, and holds back ECCO's own export starts. It does not change the inverter's own reserve and does not stop the house using the battery. It does not charge the battery.",
+    "They hold back ECCO's own export starts and, for Prepare for power cut, set the reserve ECCO's plan uses. They do not change the inverter's own reserve or any inverter setting, do not stop the house using the battery and never charge it.",
+)
+PRESENT_WORDING = (
+    "An override can only hold back ECCO's own export starts or raise the reserve ECCO's plan uses; it never writes the inverter's table, does not change the inverter's own reserve and never stops a running session.",
+    "Intended: ECCO's own scheduled and guarded export starts are held; charging and the inverter table are untouched.",
+    "Intended: ECCO's own export starts tonight are held; charging continues.",
+    "Intended: the reserve ECCO's plan uses is ",
+    " % or more, and ECCO's own export starts are held. The inverter's own reserve is not changed.",
+)
+CARD_README_WORDING = (
+    "override holds back ECCO's own scheduled and guarded export starts; it does not stop the battery charging or discharging and it does not stop the dongle's own Start button.",
+    "Prepare for power cut also sets the reserve ECCO's plan uses (the larger of your own reserve and the power-cut reserve, each rounded up). It does not change the inverter's own reserve or any inverter setting, does not stop the house using the battery, and never charges.",
+    "\"Known limitations (stated, not fixed in this change)\"",
+)
+PLAN_CORE_README_WORDING = (
+    "**What an override does, and does not do.**",
+    "gate ECCO's own scheduled Dump to Grid start and the card's guarded manual start, and nothing else",
+    "Prepare for power cut also sets the reserve ECCO's plan uses",
+    "An override does NOT change the inverter's own reserve or any inverter setting, does NOT stop the house using the battery, does NOT stop the battery charging or discharging, does NOT charge the battery, and does NOT bind the dongle's own Start button",
+    "Prepare for power cut sets the reserve ECCO's plan uses (the row above) and NEVER charges",
+    "an unreadable input is skipped (the other value stands)",
+)
+PACKAGE_WORDING = (
+    "It is the reserve ECCO's own plan uses, not an inverter setting.",
+    "Prepare for power cut adds a running reserve to ECCO's plan",
+    "it does not change the inverter's own reserve or any inverter setting, it does not stop the house using the battery, it does not stop the battery charging or discharging, it never starts a charge, and it does not bind the dongle's own Start button",
+)
+
+LIMITS_HEADING = "### Known limitations (stated, not fixed in this change)"
+LIMIT_ITEMS = (   # (number, a phrase that must stand in the item's bold title, lower case)
+    (1, "unreadable input falls back"), (2, "raise-only is compared"), (3, "start and cancel can interleave"), (4, "does not handle a failed press"),
+    (5, "unguarded unless"), (6, "floored to the minute"), (7, "first-run seed marker"), (8, "owner_reserve"), (9, "0.0001"), (10, "clock-change day"),
+    (11, "timestamp"), (12, "not atomic"),
+    # beyond the twelve the review's list names: smaller or informational items
+    (13, "input shapes"), (14, "discretionary"), (15, "already staged"), (16, "confirmation switch"), (17, "modelled, not live-proven"), (18, "site mapping"),
+)
+DIRECTION_RE = re.compile(r"Direction: (?:fail open|fail closed|either way|neutral|informational|unknown|believed fail closed|not applicable|your limits)")
+
+
+def card_text_places() -> dict[str, str]:
+    """The places that carry the corrected card wording (by name), as read now."""
+    return {
+        "card controls (source)": text_of(CARD / "src" / "plan" / "controls.ts"),
+        "card plan view (source)": text_of(CARD / "src" / "plan" / "present.ts"),
+        "card bundle": text_of(CARD / "dist" / "ecco-energy-actions-card.js"),
+        "card README": text_of(CARD / "README.md"),
+        "plan-core README": text_of(ROOT / "frontend" / "ecco-plan-core" / "README.md"),
+        "package: ecco_plan_helpers.yaml": text_of(PLAN_HELPERS_PKG),
+    }
+
+
+def wording_problems(t: dict[str, str]) -> list[str]:
+    """The corrected wording at every place that carries it, and the inverter's-own-reserve statement in the card text and both READMEs."""
+    out = []
+    for name in ("card controls (source)", "card bundle"):
+        for phrase in CONTROLS_WORDING:
+            if phrase not in flat(t.get(name, "")):
+                out.append(f"{name} lacks: {phrase[:70]}")
+    for name in ("card plan view (source)", "card bundle"):
+        for phrase in PRESENT_WORDING:
+            if phrase not in flat(t.get(name, "")):
+                out.append(f"{name} lacks: {phrase[:70]}")
+    for phrase in CARD_README_WORDING:
+        if phrase not in flat(t.get("card README", "")):
+            out.append(f"card README lacks: {phrase[:70]}")
+    for phrase in PLAN_CORE_README_WORDING:
+        if phrase not in flat(t.get("plan-core README", "")):
+            out.append(f"plan-core README lacks: {phrase[:70]}")
+    for phrase in PACKAGE_WORDING:
+        if phrase not in flat_yaml(t.get("package: ecco_plan_helpers.yaml", "")):
+            out.append(f"plan helper package lacks: {phrase[:70]}")
+    for name in ("card controls (source)", "card bundle", "card README", "plan-core README"):
+        if not INVERTER_RESERVE_RE.search(flat(t.get(name, ""))):
+            out.append(f"{name} does not say that an override does not change the inverter's own reserve")
+    return out
+
+
+def old_phrase_problems(t: dict[str, str]) -> list[str]:
+    """'protected reserve' (any case) must not stand in the card sources, the bundle, both READMEs or the plan helper package."""
+    return [name for name, text in t.items() if PROTECTED_RE.search(text)]
+
+
+def never_charges_problems(t: dict[str, str]) -> list[str]:
+    """The statements that an override never charges are still there (kept on purpose)."""
+    want = {
+        "card controls (source)": ("It does not charge the battery.",),
+        "card README": ("never charges",),
+        "plan-core README": ("NEVER charges",),
+        "package: ecco_plan_helpers.yaml": ("it never starts a charge",),
+    }
+    out = []
+    for name, phrases in want.items():
+        body = flat_yaml(t.get(name, "")) if name.startswith("package") else flat(t.get(name, ""))
+        out.extend(f"{name} lost: {p}" for p in phrases if p not in body)
+    return out
+
+
+def limitations_problems(readme: str) -> list[str]:
+    """The Known limitations section of the plan-core README: present once, all its items numbered in order, each naming its subject, its direction of failure and what you would see."""
+    n = readme.count(LIMITS_HEADING)
+    if n != 1:
+        return [f"the heading stands {n}x"]
+    start = readme.index(LIMITS_HEADING) + len(LIMITS_HEADING)
+    nxt = re.search(r"(?m)^#{2,3} ", readme[start:])
+    section = readme[start:start + nxt.start()] if nxt else readme[start:]
+    heads = [(int(num), title) for num, title in re.findall(r"(?m)^(\d+)\. \*\*(.+?)\*\*", section)]
+    out = []
+    if [num for num, _ in heads] != [num for num, _ in LIMIT_ITEMS]:
+        out.append(f"the numbered items are {[num for num, _ in heads]}, not 1..{len(LIMIT_ITEMS)}")
+        return out
+    bodies = re.split(r"(?m)^(?=\d+\. \*\*)", section)[1:]
+    for (num, phrase), (_, title), body in zip(LIMIT_ITEMS, heads, bodies):
+        if phrase not in title.lower():
+            out.append(f"item {num} does not name '{phrase}' in its title")
+        if not DIRECTION_RE.search(flat(body)):
+            out.append(f"item {num} states no direction of failure")
+        if "You would see:" not in flat(body):
+            out.append(f"item {num} does not say what you would see")
+    return out
+
+
+w6 = card_text_places()
+scope_texts = dict(w6)
+scope_texts.update({f"card {k}": v for k, v in card_sources.items()})   # every card source file, by name
+scope_texts["package: ecco_dump_to_grid_guarded_start.yaml"] = texts["package header: ecco_dump_to_grid_guarded_start.yaml"]
+
+check("the corrected wording stands at each place that carries it: the card blurbs and Quick overrides note, the plan view's effect and status texts (source and bundle), "
+      "the card README, the plan-core README and the plan helper package comments", not wording_problems(w6), str(wording_problems(w6)))
+check("'protected reserve' (any case) is absent from every card source file, the card bundle, both READMEs and the plan helper package (and the guarded start package)",
+      not old_phrase_problems(scope_texts), str(old_phrase_problems(scope_texts)))
+check("the card sources are read (the scan is not vacuous)", len(card_sources) >= 15 and "src/plan/controls.ts" in card_sources, str(sorted(card_sources)[:3]))
+check("it is said, in the card text and in the plan-core README, that an override does not change the inverter's own reserve",
+      all(INVERTER_RESERVE_RE.search(flat(w6[n])) for n in ("card controls (source)", "card bundle", "plan-core README")))
+check("the statements that an override never charges are still there (card text, card README, plan-core README, package)", not never_charges_problems(w6), str(never_charges_problems(w6)))
+def refusal_text_problems(policy_ts: str, package_yaml: str) -> list[str]:
+    """The refusal text 'an override never lowers a reserve' stays, unchanged, in the validator and in the plan helper package (it is true there; the suites compare the two)."""
+    return [n for n, t in (("overridePolicy.ts", policy_ts), ("ecco_plan_helpers.yaml", package_yaml)) if "an override never lowers a reserve" not in t]
+
+
+check("the refusal text 'an override never lowers a reserve' is unchanged in the validator and in the plan helper package (true there; the suites compare the two)",
+      not refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"]), str(refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"])))
+check("nothing claims the overrides are fully enforced (the card sources, the bundle, both READMEs, the package comments)",
+      not [n for n, v in scope_texts.items() if FULL_CLAIM.search(v)], str([n for n, v in scope_texts.items() if FULL_CLAIM.search(v)]))
+check("the Stage 3 limitation sentence is still in every place it was, exactly once (the new section and the new wording did not add or remove a copy)",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: eighteen numbered items, the review's twelve first, each with its direction "
+      "of failure and what you would see", not limitations_problems(w6["plan-core README"]), str(limitations_problems(w6["plan-core README"])))
+check("the card README points to that section (a one-line pointer)", "Known limitations (stated, not fixed in this change)" in flat(w6["card README"]))
+
+# ---- mutants: each way of losing the corrected wording, re-introducing the old phrase or losing the section is caught; the untouched tree is not flagged ----
+for name in ("card controls (source)", "card plan view (source)", "card bundle", "card README", "plan-core README", "package: ecco_plan_helpers.yaml"):
+    bad = dict(w6)
+    bad[name] = w6[name] + "\nRaises a protected reserve (never lowers it).\n"
+    sc = dict(scope_texts)
+    sc[name] = bad[name]
+    check(f"mutant caught: 'raises a protected reserve' back in {name}", bool(old_phrase_problems(sc)))
+    sc[name] = w6[name] + "\nThe Protected\n  Reserve is raised.\n"
+    check(f"mutant caught: 'Protected Reserve' (case and a line wrap) back in {name}", bool(old_phrase_problems(sc)))
+_old_prepare = "Raises a protected reserve (never lowers it) and holds exports. It does not charge the battery."
+_new_prepare = CONTROLS_WORDING[2]
+check("mutant caught: the old Prepare for power cut blurb restored in the card source", bool(wording_problems({**w6, "card controls (source)": w6["card controls (source)"].replace(_new_prepare, _old_prepare)})))
+check("mutant caught: the old Prepare for power cut blurb restored in the bundle", bool(wording_problems({**w6, "card bundle": w6["card bundle"].replace(_new_prepare, _old_prepare)})))
+check("mutant caught: the old effect text 'the reserve is raised to ... (never lowered)' restored in the plan view",
+      bool(wording_problems({**w6, "card plan view (source)": w6["card plan view (source)"].replace(PRESENT_WORDING[3], "Intended: the reserve is raised to ").replace(PRESENT_WORDING[4], " % (never lowered) and export starts are held.")})))
+check("mutant caught: 'It does not charge the battery.' dropped from the card source", bool(never_charges_problems({**w6, "card controls (source)": w6["card controls (source)"].replace("It does not charge the battery.", "")})))
+check("mutant caught: 'NEVER charges' dropped from the plan-core README", bool(never_charges_problems({**w6, "plan-core README": w6["plan-core README"].replace("NEVER charges", "charges")})))
+check("mutant caught: the inverter's-own-reserve statement dropped from the card source",
+      bool(wording_problems({**w6, "card controls (source)": w6["card controls (source)"].replace("does not change the inverter's own reserve", "keeps the reserve")})))
+check("mutant caught: the inverter's-own-reserve statement dropped from the plan-core README",
+      bool(wording_problems({**w6, "plan-core README": re.sub(r"does NOT change the\s+inverter's own reserve", "keeps the reserve", w6["plan-core README"])})))
+check("mutant caught: the card README pointer to the limitations section removed",
+      bool(wording_problems({**w6, "card README": w6["card README"].replace("Known limitations (stated, not fixed in this change)", "Known limits")})))
+check("mutant caught: the package comment's 'does not bind the dongle's own Start button' dropped",
+      bool(wording_problems({**w6, "package: ecco_plan_helpers.yaml": w6["package: ecco_plan_helpers.yaml"].replace("it does not bind the dongle's own Start button", "it binds the Start button")})))
+check("mutant caught: the overrides called fully enforced in the card source", bool(FULL_CLAIM.search(w6["card controls (source)"] + "\n// The overrides are fully enforced.")))
+check("mutant caught: the refusal text reworded in the validator", bool(refusal_text_problems(text_of(OVERRIDE_POLICY_TS).replace("an override never lowers a reserve", "an override keeps a reserve"), w6["package: ecco_plan_helpers.yaml"])))
+check("mutant caught: the refusal text reworded in the plan helper package", bool(refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"].replace("an override never lowers a reserve", "an override keeps a reserve"))))
+check("mutant caught: the Stage 3 limitation sentence removed from the new section's neighbourhood (the plan-core README)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: the Stage 3 limitation sentence doubled by a copy in the Known limitations section",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITS_HEADING, LIMITS_HEADING + "\n\n" + LIMITATION)})))
+_lim = w6["plan-core README"]
+check("mutant caught: the Known limitations heading removed", bool(limitations_problems(_lim.replace(LIMITS_HEADING, "### Notes"))))
+check("mutant caught: the Known limitations heading doubled", bool(limitations_problems(_lim + "\n" + LIMITS_HEADING + "\n")))
+_h = _lim.find(LIMITS_HEADING)
+_sec_end = _lim.find("\n### ", _h + 1) if _h >= 0 else -1
+_built = 0
+for num, phrase in LIMIT_ITEMS[:-1]:   # remove item `num` from inside the section (other numbered lists of the README are left alone)
+    _a, _b = _lim.find(f"\n{num}. **", _h, _sec_end), _lim.find(f"\n{num + 1}. **", _h, _sec_end)
+    if _h >= 0 and 0 <= _a < _b:
+        _built += 1
+        check(f"mutant caught: limitation item {num} ('{phrase}') removed", bool(limitations_problems(_lim[:_a] + _lim[_b:])))
+_last = _lim.find(f"\n{len(LIMIT_ITEMS)}. **", _h, _sec_end)
+check("mutant caught: the last limitation item removed", _h >= 0 and 0 <= _last < _sec_end and bool(limitations_problems(_lim[:_last] + "\n" + _lim[_sec_end:])))
+check("the limitation-item mutants were all built (one per item but the last)", _built == len(LIMIT_ITEMS) - 1, f"{_built} built")
+check("mutant caught: an item's direction of failure removed", bool(limitations_problems(_lim.replace("Direction: fail open for that one number", "Note: for that one number"))))
+check("mutant caught: an item's 'You would see' removed", bool(limitations_problems(_lim.replace("You would see: a stale last result and no start.", "Nothing else."))))
+check("mutant caught: an item's subject reworded (the schedule packages' clock-change reads)", bool(limitations_problems(_lim.replace("clock-change day", "clock change"))))
+check("mutant caught: the items renumbered", bool(limitations_problems(_lim.replace("\n7. **The first-run", "\n8. **The first-run"))))
+check("control: the untouched tree is not flagged by the new checks", not wording_problems(w6) and not old_phrase_problems(scope_texts) and not never_charges_problems(w6) and not limitations_problems(_lim))
 
 print("")
 if FAILURES:

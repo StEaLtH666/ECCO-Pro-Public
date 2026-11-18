@@ -215,7 +215,8 @@ backend (a) refuses the scheduled start and the guarded start when that reserve 
 when it is too high for the Stop SOC (the scheduled start: no room under its Stop SOC limit; the guarded start: the Stop SOC staged on the
 dongle is below it), and (b) raises the Stop SOC the scheduled start stages to at least that reserve. An override does NOT change the
 inverter's own reserve or any inverter setting, does NOT stop the house using the battery, does NOT stop the battery charging or
-discharging, does NOT charge the battery, and does NOT bind the dongle's own Start button (the known unresolved limitation, RG-ST3, below).
+discharging, does NOT charge the battery, and does NOT bind the dongle's own Start button (the known unresolved limitation, RG-ST3, below). What else is known and not fixed is under
+"Known limitations (stated, not fixed in this change)" below.
 
 Hold battery also withholds discretionary charge-rate edits. No guarded write path for such an edit exists in the repository (the gentle
 planner is pure code that returns proposals; no automation or script writes a charge rate on its own), so there is nothing to bind and
@@ -291,6 +292,68 @@ That mapping is the owner's own file, so this repository does not change it; it 
 6. Modelled, not live-proven: the Home Assistant template functions `today_at`, `timedelta` and `as_timestamp`, the helpers' `timestamp` attribute, and the template sensors' once-a-minute refresh. The suites model them (a real zone with clock changes); a supervised check on the owner's version is part of the install.
 7. The browser's own zone only decides which choices are OFFERED; the script decides on Home Assistant's clock.
 8. The card's own `npm run typecheck` (`tsconfig.json`) cannot cover the plan code, which imports this package outside its `rootDir`; use `tsc --noEmit -p tsconfig.card.json` in this folder. (Changing the card's `tsconfig.json` would need an owner decision to enrol it in the pin chain.)
+
+### Known limitations (stated, not fixed in this change)
+
+An independent review on 18 Nov 2026 found the items below. The fixes for the clock-change day, the press-time recheck, the rounded-up reserve and the five
+surviving mutants are in. The items here were NOT fixed; they are written down so that nobody reads more into the overrides than they do. "Fail open" means
+the override protects less than its name suggests; "fail closed" means a start is refused or held. Every item is read from the code and the offline models:
+none was seen on a live Home Assistant. Items 13 to 18 are smaller or informational.
+
+1. **An unreadable input falls back to the other value in the effective reserve.** With the owner's reserve unreadable while a power cut runs, the power-cut
+   reserve alone stands, which can be lower than the owner's own reserve (never lower than the power cut's own reserve). With the power-cut record unreadable
+   while it runs, the owner's reserve is published instead. Direction: fail open for that one number (the hold reads held or unknown, so a scheduled or guarded
+   Dump to Grid start is still refused). You would see: a lower number on the effective reserve sensor than you expect, and an outside reader of the sensor
+   sees the lower number too.
+2. **Raise-only is compared with the owner's reserve only, not with a running power cut.** Starting Prepare for power cut again after the policy was changed
+   is accepted if the new power-cut reserve is not below the owner's reserve, and it can lower the running power-cut reserve and shorten the override to the new
+   length. "An override never lowers a reserve" is true against the owner's reserve only. Direction: fail open. You would see: the effective reserve sensor
+   fall and a new expiry on the running override.
+3. **Start and cancel can interleave.** They are two separate scripts, each decides first and then writes in several steps, so a start and a cancel issued at
+   the same moment can write interleaved records and both bump the revision (a lost update). A second call of the same script while it runs is dropped with
+   only a log warning, and the card's last answer then still shows the earlier answer. Direction: either way (an override can stay active after a cancel, or be
+   cancelled after a start). You would see: a record that does not match what you pressed, or a stale last answer; check the card and press again.
+4. **The guarded start does not handle a failed press and writes no success text.** It dismisses the blocked notification and then presses; if the press
+   fails, the last result keeps its old text and no alert is raised. It does not check that the dongle is idle (the firmware owns that). Direction: fail closed
+   (nothing started). You would see: a stale last result and no start.
+5. **The card's own Start button is unguarded unless `dump_to_grid.guarded_start` is configured.** Without it the card presses the dongle's Start button
+   directly, while the same card shows Hold battery as active. A configured guarded start can be any script id from the dashboard configuration (an
+   administrator-controlled setting). Direction: fail open. You would see: Hold battery shown as active and Start still working from the card.
+6. **An override's start time is floored to the minute.** It can last up to 59 s less than asked. Direction: fail open by up to 59 s. You would see: an
+   override ending a few seconds early.
+7. **The first-run seed marker is a plain helper.** Clearing it, or losing its restored state, re-seeds the accepted limits at the next Home Assistant start
+   and overwrites your own values (the confirmation switch is never touched). After a package reload without a restart the limits sit at their minimums and the
+   policy reads invalid, so every start is refused. Direction: your limits are replaced by the accepted defaults, which may be wider or narrower than yours (the
+   invalid case fails closed). You would see: your limits changed back, or refusals saying the policy is invalid until the next restart.
+8. **The reserve sensor's `owner_reserve` attribute rounds half to even.** The state is what consumers read, and the state is rounded up. Direction:
+   informational (no effect on a start). You would see: an attribute that can read a whole percent lower than the state.
+9. **A reserve strictly between 0 and 0.0001 renders in exponent form and reads as unreadable.** A pre-existing edge, not changed here. Direction: fail
+   closed. You would see: the effective reserve unknown and starts refused.
+10. **The schedule packages' naive start-time reads were not reviewed for the clock-change day.** R9's direction was reasoned to fail closed, not tested.
+    Direction: believed fail closed, not proven. You would see: possibly a missed or refused scheduled start on the day of a clock change.
+11. **The expiry read uses the helper's `timestamp` attribute, which is modelled, not live-proven.** The offline models treat it as the true instant, also in
+    the repeated hour of the autumn clock change; real Home Assistant was not checked, including how it behaves after a restart inside that repeated hour. A
+    supervised check is needed. Direction: unknown until checked (a missing or non-numeric attribute is read as an unreadable record: the hold reads unknown,
+    which refuses). You would see: with the attribute missing, the hold unknown and starts refused.
+12. **The press-time recheck is not atomic.** The scheduled start reads the hold and the reserve a moment before the press (the guarded start one action
+    before it); an override started in those milliseconds is not seen. Direction: fail open for those milliseconds. You would see: a start that goes through
+    although an override began a moment earlier.
+13. **The package accepts a few input shapes the TypeScript validator refuses.** An empty length reads as the default, a numeric string such as `1e3` or
+    `15.0` is accepted, and a kind with spaces or capitals is normalised. Every limit still applies and the card sends numbers only. Direction: neutral (shape
+    only; no way round a limit). You would see: nothing from the card.
+14. **Hold battery's "no discretionary charge-rate edits" binds nothing.** No guarded write path for such an edit exists, so it is a plan-view fact only (stated
+    under the table in "What is enforced where"); the card no longer lists it as an effect. Direction: fail open (nothing to bind). You would see: nothing; an
+    override never edits a rate.
+15. **A run stopped by the press-time recheck has already staged its numbers.** The staged numbers were written and the write enable is turned off again;
+    nothing was pressed, and a STARTING text shows for up to 5 s before the BLOCKED text. Direction: fail closed. You would see: the staged numbers changed on
+    the dongle with no start, then a BLOCKED answer and one notification.
+16. **The confirmation switch gates only starting an override.** Cancel, the hold sensor and every Dump to Grid start do not read it, so an override already
+    running keeps holding exports when the switch is turned off. Direction: fail closed. You would see: the hold still active with the switch off.
+17. **Modelled, not live-proven in real Home Assistant:** the time functions the templates use, the round-up filter, whether a service call to set a number
+    enforces the helper's step, the default value of a date-and-time helper and how overlapping script calls are handled. Direction: unknown until checked.
+    You would see: nothing until a supervised check on the owner's version, which is part of the install.
+18. **What Intelligence does with the effective reserve depends on the owner's own site mapping.** This repository does not change that file and the review
+    did not read it; it matters only if the owner maps the reserve. Direction: not applicable. You would see: nothing unless the mapping is set.
 
 ### Install order for the owner (each step needs its own authorisation; nothing here is installed)
 

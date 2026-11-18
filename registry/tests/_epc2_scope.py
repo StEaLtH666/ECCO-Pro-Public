@@ -116,6 +116,7 @@ stop the dongle's own Start button. Prepare for power cut also sets the reserve 
 power-cut reserve, each rounded up). It does not change the inverter's own reserve or any inverter setting, does not stop the house using
 the battery, and never charges. Prepare for power cut with the battery below that reserve says so ("... Nothing is charging. Use Charge
 Battery if you want it filled.") and offers nothing automatic. Without the plan helpers nothing is added (the golden renders are unchanged).
+What is not enforced and what is not proven is listed in `frontend/ecco-plan-core/README.md`, "Known limitations (stated, not fixed in this change)".
 
 **Stated limitation.** Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
 
