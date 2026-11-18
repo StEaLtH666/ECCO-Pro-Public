@@ -44,6 +44,9 @@ virtual clock. Every Jinja condition is the package's own text, rendered by that
   [15] press-time the same recheck through the fire automation (on-time start and the watchdog's rescue), the end-of-run alert and the disarm, with the dongle
                   busy or offline while the plan changes; the unchanged runs still press once
   [16] mutation   in-memory mutants of the recheck (no re-read, hold only, reserve only, the start values reused, not terminal) are each caught
+  [17] sensors    the recheck when the hold sensor or the effective reserve sensor ITSELF reads unavailable, unknown, empty or junk during the wait (the sensor is forced, as in [9]),
+                  on the on-time start and the watchdog's rescue, busy and offline: BLOCKED with the right code, no press, alerted, disarmed; two forced-clear controls press once
+  [18] mutation   in-memory mutants of the recheck's hold and reserve reads (only `unknown` refused, only `unknown` and `unavailable` refused, an unreadable reserve read as 0) are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a live
 Home Assistant restart (the capture on the `homeassistant` start event, the restored helper states), the dongle or the inverter.
@@ -1060,6 +1063,80 @@ for name, mut in (("no re-read: the press ignores the recheck", m_no_reread),
                   ("the recheck reuses the values read at the start (the old read-once behaviour)", m_start_values),
                   ("re-read but do not stop retrying (the BLOCKED text is not a result the loop stops on)", m_not_terminal)):
     check(f"mutant caught: {name}", not scen_press(mut))
+
+# ======================================================================================================================
+print("\n[17] press-time recheck, part 2: the hold sensor or the reserve sensor ITSELF unavailable, unknown, empty or junk while the run waits, on the on-time start and the watchdog's rescue")
+# ======================================================================================================================
+# Re-review of 18 Nov 2026, minor 2. [15] makes a record unavailable, so the hold sensor then reads `unknown`; no case made the sensor itself unavailable (a template reload does), empty or junk
+# during the wait, and a mutant that changes the recheck's `h != 'clear'` to `h == 'unknown'` passed every behaviour check. Here the hold sensor and the effective reserve sensor are forced
+# (force(), the interpreter's own template_entities map) 15 s into the 45 s wait, through the whole path (fire automation, script, end-of-run alert, the automation's disarm): no press, BLOCKED with the
+# right code saying it waited, one staging round (never retried), alerted, write enable OFF, disarmed. The hold forced to clear and the reserve forced to 40 are the controls: one press, STARTED OK.
+FORCED_CASES = tuple((f"the export hold sensor itself reads {name}", x_force(HOLD, txt), "OVERRIDE_UNREADABLE", {})
+                     for name, txt in (("unavailable", "unavailable"), ("unknown", "unknown"), ("empty", ""), ("a junk text (maybe)", "maybe"), ("a near miss of clear (Clear)", "Clear"))) + \
+               tuple((f"the effective reserve sensor itself reads {name}", x_force(EFF, txt), code, {})
+                     for name, txt, code in (("unavailable", "unavailable", "RESERVE_UNKNOWN"), ("unknown", "unknown", "RESERVE_UNKNOWN"), ("empty", "", "RESERVE_UNKNOWN"),
+                                             ("nan", "nan", "RESERVE_INVALID"), ("inf", "inf", "RESERVE_INVALID"), ("150", "150", "RESERVE_INVALID"), ("-5", "-5", "RESERVE_UNKNOWN")))
+FORCED_PASS = (("the export hold sensor forced to clear", x_force(HOLD, "clear")), ("the effective reserve sensor forced to 40", x_force(EFF, "40")))
+
+
+def forced_scenario(mutate=None, first_only=False) -> list:
+    rows: list = []
+    for path, lose in PRESS_PATHS:
+        for wait in ("busy", "offline"):
+            for label, change, code, kw in FORCED_CASES:
+                x = waiting_combo(lose, wait, change, mutate=mutate, **kw)
+                f = waited_facts(x)
+                ok = (x.presses() == [] and x.started() == 0 and x.last().startswith("BLOCKED - ") and "was waiting" in x.last() and x.last().endswith(f"(reason {code})")
+                      and len(x.last()) <= 255 and len(f["numbers"]) == 3 and f["ended"] is not None and f["ended"] < 120 and x.stop_staged() == [40]
+                      and (len(x.alerts()) == 1 if not lose else len(x.alerts()) >= 1) and code in f["notice"] and not x.is_armed() and x.write_enable_off())
+                rows.append((f"{path}, dongle {wait}, {label}: no press, BLOCKED ({code}) saying it waited, one staging round (never retried), alerted, write enable OFF, disarmed", ok,
+                             f"{x.last()!r} presses={x.presses()} numbers={len(f['numbers'])} ended={f['ended']} alerts={len(x.alerts())} armed={x.is_armed()} we_off={x.write_enable_off()}"))
+                if first_only and not ok:
+                    return rows
+            for label, change in FORCED_PASS:
+                x = waiting_combo(lose, wait, change, mutate=mutate)
+                ok = (x.started() == 1 and len(x.presses()) == 1 and x.stop_staged() == [40] and x.last().startswith("STARTED OK") and not x.is_armed() and x.write_enable_off()
+                      and not any("did NOT start" in n[3] for n in x.alerts()))
+                rows.append((f"{path}, dongle {wait}, {label}: a forced literal alone does not stop the run: one press, Stop SOC 40, STARTED OK, disarmed", ok,
+                             f"{x.started()} {x.presses()} {x.stop_staged()} {x.last()!r} {x.alerts()}"))
+                if first_only and not ok:
+                    return rows
+    return rows
+
+
+FORCED_ROWS = forced_scenario()
+for _label, _ok, _detail in FORCED_ROWS:
+    check(_label, _ok, _detail)
+check(f"all {len(FORCED_ROWS)} sensor-state press-time cases ran (2 start paths, 2 waits, {len(FORCED_CASES)} forced sensor states that end the run, 2 forced-clear controls)",
+      len(FORCED_ROWS) == 2 * 2 * (len(FORCED_CASES) + len(FORCED_PASS)), str(len(FORCED_ROWS)))
+
+print("\n[18] mutation: the sensor-state recheck is load-bearing (each weakening is caught by the running cases of [17])")
+
+
+def m_hold_unknown_passes(p):
+    """Every hold text but `unknown` presses: unavailable, empty and junk are not refused."""
+    _edit_press_var(p, (("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h == 'unknown' -%}OVERRIDE_UNREADABLE"),))
+
+
+def m_hold_two_texts(p):
+    """Only `unknown` and `unavailable` are refused: an empty or junk hold sensor presses."""
+    _edit_press_var(p, (("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h in ['unknown', 'unavailable'] -%}OVERRIDE_UNREADABLE"),))
+
+
+def m_reserve_unreadable_zero(p):
+    """An unreadable effective reserve is read as 0 (float(-1) becomes float(0)): unavailable, unknown and empty press."""
+    _edit_press_var(p, (("{%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}", "{%- set r = states('sensor.ecco_plan_effective_reserve') | float(0) -%}"),))
+
+
+def scen_forced(mut) -> bool:
+    return all(ok for _l, ok, _d in forced_scenario(mutate=mut, first_only=True))
+
+
+check("control: unmutated, the sensor-state scenario of the mutants below passes (both paths, both waits, every forced sensor state, the forced-clear controls)", all(ok for _l, ok, _d in FORCED_ROWS))
+for name, mut in (("the hold sensor refused only when it reads `unknown` (h != 'clear' becomes h == 'unknown')", m_hold_unknown_passes),
+                  ("the hold sensor refused only when it reads `unknown` or `unavailable` (an empty or junk sensor presses)", m_hold_two_texts),
+                  ("an unreadable effective reserve read as 0 (float(-1) becomes float(0))", m_reserve_unreadable_zero)):
+    check(f"mutant caught: {name}", not scen_forced(mut))
 
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed")

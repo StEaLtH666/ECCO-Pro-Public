@@ -29,6 +29,9 @@ outside the supported subset raises: nothing is guessed.
                   below the owner's own value; the floor and half-to-even mutants are caught
   [12] honesty    additions that kill the five mutants the independent review found alive: cancel ends only its own kind (all three active, every order, every cross-kind
                   mutant), the raise-only boundary (equal, 0.5, 1 and 5 points on each side), and an unreadable record of each kind (unknown, or held by the running kinds)
+  [13] guards     the state guard (`states(helper) not in bad`) at EACH of the ten timestamp read sites: a record that reports unavailable, unknown or empty but still carries a stale
+                  timestamp attribute (the simulator keeps stale attributes; real Home Assistant drops them) is an unreadable record at every site (hold: unknown; held_by: not named; reserve:
+                  the power cut skipped; cancel: proceeds and repairs it); ten mutants, one per site, each caught by the check of that site
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's logic against a model; it proves nothing about a live
 Home Assistant, the helpers' timestamp attribute on the owner's version, or the dashboard.
@@ -1178,6 +1181,105 @@ for label, mutated, fn in MUT12:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUT12)} mutants (the six cross-kind cancels, the weakened raise-only tests, the ignored unreadable records), all caught by a running case", caught12 == len(MUT12) == 14, f"{caught12}/{len(MUT12)}")
 check("control: the unmutated package passes the same running cases", cl == [] and ro == [] and ur == [])
+
+# ================================================================================================================================
+print("[13] test honesty, part 2: the state guard at EACH of the ten timestamp read sites (re-review of 18 Nov 2026, minor 4)")
+# ================================================================================================================================
+# Every expiry read is `state_attr(helper, 'timestamp') | float(none)` and then `a if (a is number and a == a and states(helper) not in bad) else none`: the attribute is trusted only when
+# the helper's state is not unknown, unavailable or empty. The simulator KEEPS a helper's attributes when its state is set to unavailable; real Home Assistant drops them. So a record
+# that reports unavailable (or unknown, or empty) but still carries a STALE timestamp attribute is what reaches a site without the guard. [12] covered the guard at one site (the hold sensor's
+# state, Hold battery); removing it at the reserve sensor's power-cut site, at the cancel script's three sites and at the three held_by sites passed every check. The checks below put each
+# of the three kinds, in each of the three bad states, with a stale attribute that is in the FUTURE (the override was still running: a missing guard reads it as active) or in the PAST (it had
+# ended: a missing guard reads it as a readable, expired record), and require at EACH site that the record is UNREADABLE: the hold sensor reads unknown, held_by does not name it (also when another
+# kind is running), the effective reserve skips a power cut it cannot trust, and the cancel script proceeds and repairs the record (a stale PAST attribute: a missing guard answers NOT_ACTIVE).
+# The ten mutants remove the guard at one site each; the first problem found must come from the check of THAT site. Existing checks are untouched.
+BAD_STATES = (("unavailable", "unavailable"), ("unknown", "unknown"), ("empty", ""))
+SITE_TAGS = ["cancel", "cancel", "cancel", "hold sensor", "hold sensor", "hold sensor", "held_by", "held_by", "held_by", "effective reserve"]
+
+
+def stale_record(text: str, kind: str, bad_state: str, stale: str) -> P.PlanWorld:
+    """`kind`'s expiry helper reports `bad_state` but keeps a stale timestamp attribute (an hour ahead: `future`, ten minutes behind: `past`); the power-cut reserve is 80 and the owner's is 40."""
+    pw = world(text, owner=40)
+    pw.w.set(CUT_RESERVE_E, "80.0")
+    ts = pw.w.t + 3600 if stale == "future" else pw.w.t - 600
+    pw.w.set(EXPIRES_E[kind], bad_state, {"timestamp": ts, "has_date": True, "has_time": True})
+    return pw
+
+
+def guard_problems(text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+
+    def add(msg: str) -> None:
+        bad.append(msg)
+        if stop_early:
+            raise _Early()
+
+    try:
+        for kind in KINDS:
+            others = [k for k in KINDS if k != kind]
+            for bname, bstate in BAD_STATES:
+                for stale in ("future", "past"):
+                    tag = f"{kind}, state {bname}, stale {stale} attribute"
+                    pw = stale_record(text, kind, bstate, stale)
+                    if pw.state(HOLD) != "unknown":
+                        add(f"hold sensor, {tag}: the hold reads {pw.state(HOLD)!r}, wanted 'unknown' (an unreadable record)")
+                    if held_by_of(pw, text) != "":
+                        add(f"held_by, {tag}: held_by reads {held_by_of(pw, text)!r}, wanted '' (an unreadable record is not named)")
+                    if kind == "prepare_power_cut" and pw.state(EFF) != "40":
+                        add(f"effective reserve, {tag}: the effective reserve is {pw.state(EFF)}, wanted the owner's 40 (the power cut's record cannot be trusted, so it is skipped)")
+                    pw = stale_record(text, kind, bstate, stale)
+                    out = cancel(pw, kind=kind)
+                    repaired = pw.state(EXPIRES_E[kind]) not in ("unavailable", "unknown", "") and exp_ts(pw, kind) <= pw.w.t
+                    if not out.startswith("CANCELLED") or not repaired or pw.state(HOLD) != "clear":
+                        add(f"cancel, {tag}: {out[:50]!r}, record {pw.state(EXPIRES_E[kind])!r}, hold {pw.state(HOLD)!r}; wanted CANCELLED, the record repaired and the hold clear")
+                    if stale == "future":
+                        # another kind is running: held, and it alone is named
+                        pw = stale_record(text, kind, bstate, stale)
+                        start(pw, kind=others[0], expiry_min=30)
+                        if pw.state(HOLD) != "held" or held_by_of(pw, text) != others[0]:
+                            add(f"held_by, {tag}, with {others[0]} running: the hold reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}, wanted held, naming only {others[0]}")
+    except _Early:
+        pass
+    return bad
+
+
+gp = guard_problems(PKG_TEXT)
+check("the state guard at every timestamp read site: each kind, with its record unavailable, unknown or empty and a stale attribute in the future or the past (18 cases per site family): "
+      "the hold sensor reads unknown, held_by does not name it (also with another kind running), the effective reserve skips an untrusted power cut, and the cancel script proceeds and repairs "
+      "the record", gp == [], str(gp[:3]))
+
+print("[13] mutation: removing the state guard at any one of the ten read sites is caught by the running check of that site")
+GUARD_FRAG = re.compile(r" and states\('input_datetime\.[a-z_]+'\) not in bad")
+
+
+def drop_guard_site(text: str, k: int) -> str:
+    """Read site k (file order: the cancel script x3, the hold sensor's state x3, held_by x3, the effective reserve's power-cut expiry) without the `states(helper) not in bad` test."""
+    ms = list(READ_RE_FIX1.finditer(text))
+    assert len(ms) == 10, len(ms)
+    seg = ms[k].group(0)
+    new = GUARD_FRAG.sub("", seg)
+    assert new != seg and GUARD_FRAG.search(new) is None, k
+    return text[:ms[k].start()] + new + text[ms[k].end():]
+
+
+caught13 = 0
+for k in range(10):
+    label = f"the state guard removed at a read site: {SITES[k]}"
+    mutated = drop_guard_site(PKG_TEXT, k)
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = guard_problems(mutated, stop_early=True)
+    if found and found[0].startswith(SITE_TAGS[k]):
+        caught13 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label} ({found[:1]})")
+check("10 guard mutants (the state guard removed at each read site), each caught by the running check of its own site", caught13 == 10, f"{caught13}/10")
+check("control: the unmutated package passes the same running cases", gp == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

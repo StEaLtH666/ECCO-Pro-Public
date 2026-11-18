@@ -30,6 +30,9 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   mutants (no re-read, hold only, reserve only, the start values reused, not terminal, a moved boundary) are each caught
   [10] rounding   a fractional owner reserve end to end (the real producer sensor): the scheduled start stages it rounded UP and the guarded start refuses a staged
                   Stop SOC below it (62.4 -> 63); the floor and half-to-even mutants are caught
+  [11] sensors    the press-time recheck when the hold sensor or the effective reserve sensor ITSELF reads unavailable, unknown, empty or junk during the wait (not only a record):
+                  each ends the run as BLOCKED with the right code and no press, with six mutants; and a pin, documented and not blessed, of what a BLOCKED press-time run
+                  becomes when Dump to Grid is active as the loop ends (known limitation 20 of the plan-core README)
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -927,6 +930,163 @@ for label, new in (("the sensor rounds the owner's reserve down (floor)", _CO.re
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
 check("2 end-to-end rounding mutants, both caught by a running start", caught10 == 2, f"{caught10}/2")
+
+# ================================================================================================================================
+print("[11] press-time recheck, part 2: the hold sensor or the reserve sensor ITSELF unavailable, unknown, empty or junk during the wait; and the BLOCKED text when Dump to Grid is active as the loop ends")
+# ================================================================================================================================
+# Re-review of 18 Nov 2026, minor 2. Section [9] makes a RECORD unavailable, so the hold SENSOR then reads `unknown`; no case made the sensor itself unavailable (what a template
+# reload produces), unknown, empty or junk during the wait. A mutant that changes the recheck's `h != 'clear'` to `h == 'unknown'` (an unavailable, empty or junk hold sensor then
+# PRESSES) was not caught by any behaviour check. The cases below force the hold sensor and the effective reserve sensor to each such text 15 s into a 45 s wait, through the
+# interpreter's own `template_entities` map (nothing in a simulator is edited), with the dongle busy or offline: each ends the run as BLOCKED with the right reason code, with no
+# press, the write enable OFF, one alert, staged once, ended inside 2 minutes. The hold forced to `clear` and the reserve forced to 40 are the controls (a forced literal alone does not
+# stop a run). Existing checks are untouched.
+def force_hold(txt: str):
+    return lambda pw: pw.w.template_entities.__setitem__(HOLD, txt)
+
+
+FORCED = tuple((f"the export hold sensor itself reads {name}", force_hold(txt), "OVERRIDE_UNREADABLE")
+               for name, txt in (("unavailable", "unavailable"), ("unknown", "unknown"), ("empty", ""), ("a junk text (maybe)", "maybe"), ("a near miss of clear (Clear)", "Clear"))) + \
+         tuple((f"the effective reserve sensor itself reads {name}", force_eff(txt), code)
+               for name, txt, code in (("unavailable", "unavailable", "RESERVE_UNKNOWN"), ("unknown", "unknown", "RESERVE_UNKNOWN"), ("empty", "", "RESERVE_UNKNOWN"),
+                                       ("nan", "nan", "RESERVE_INVALID"), ("inf", "inf", "RESERVE_INVALID"), ("150", "150", "RESERVE_INVALID"), ("-5", "-5", "RESERVE_UNKNOWN")))
+FORCED_PRESS = (("the export hold sensor forced to clear", force_hold("clear")), ("the effective reserve sensor forced to 40", force_eff("40")))
+
+
+def blocked_ok(f: dict, code: str) -> bool:
+    last = f["last"]
+    return (f["presses"] == [] and f["gate"] == [] and f["started"] == 0 and last.startswith("BLOCKED - ") and "was waiting" in last and last.endswith(f"(reason {code})")
+            and len(last) <= 255 and "already active" not in last and len(f["alerts"]) == 1 and last in f["notice"] and f["arm"] == "off" and f["model_arm"] is False
+            and len(f["staged"]) == 3 and f["ended"] is not None and f["ended"] < 120 and not any("invalid value" in m for m in f["warnings"]))
+
+
+def forced_problems(dump_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+
+    def add(msg: str) -> bool:
+        bad.append(msg)
+        return stop_early
+
+    try:
+        for wait in ("busy", "offline"):
+            for label, change, code in FORCED:
+                pw, d, n0, t0 = waiting_run(dump_text, wait, change)
+                f = run_facts(pw, d, n0, t0)
+                if not blocked_ok(f, code) and add(f"{wait} wait, {label}: {f['last'][:70]!r} presses={f['presses']} staged={len(f['staged'])} alerts={len(f['alerts'])} arm={f['arm']}/{f['model_arm']} ended={f['ended']}"):
+                    return bad
+            for label, change in FORCED_PRESS:
+                pw, d, n0, t0 = waiting_run(dump_text, wait, change)
+                f = run_facts(pw, d, n0, t0)
+                ok = (len(f["presses"]) == 1 and f["gate"] and f["gate"][0][1] == "PASSED" and f["started"] == 1 and f["stop"] == [40] and f["last"].startswith("STARTED OK")
+                      and f["alerts"] == [] and f["arm"] == "off" and f["model_arm"] is False)
+                if not ok and add(f"{wait} wait, {label}: wanted one press, got {f['last'][:60]!r} presses={f['presses']} staged={f['stop']}"):
+                    return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+fp = forced_problems(DUMP_TEXT)
+check(f"press-time recheck, the sensors themselves, running: the export hold sensor forced to unavailable, unknown, empty, junk text or a near miss of clear, and the effective reserve sensor "
+      f"forced to unavailable, unknown, empty, nan, inf, 150 or -5, DURING the wait with the dongle busy or offline ({2 * len(FORCED)} runs): each ends the run as BLOCKED with the right "
+      "reason code (OVERRIDE_UNREADABLE, RESERVE_UNKNOWN or RESERVE_INVALID), saying it waited, with no press, one alert, the write enable OFF and staged once; the two forced-clear "
+      "controls (4 runs) press once", fp == [], str(fp[:3]))
+
+print("[11] mutation: an unavailable, unknown, empty or junk sensor that presses, or an unreadable reserve read as a number, is caught by a running scheduled start")
+_RK = "                          {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}"
+MUTANTS11 = [
+    ("the recheck lets every hold text but `unknown` press (h != 'clear' becomes h == 'unknown': unavailable, empty and junk press)",
+     [("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h == 'unknown' -%}OVERRIDE_UNREADABLE")]),
+    ("the recheck lets every hold text but `unavailable` press (h != 'clear' becomes h == 'unavailable': unknown, empty and junk press)",
+     [("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h == 'unavailable' -%}OVERRIDE_UNREADABLE")]),
+    ("the recheck refuses only an unavailable or unknown hold (empty and junk press)",
+     [("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h in ['unknown', 'unavailable'] -%}OVERRIDE_UNREADABLE")]),
+    ("the recheck refuses only the empty hold (unavailable, unknown and junk press)",
+     [("{%- elif h != 'clear' -%}OVERRIDE_UNREADABLE", "{%- elif h == '' -%}OVERRIDE_UNREADABLE")]),
+    ("an unreadable effective reserve is read as 0 (float(-1) becomes float(0): unavailable, unknown and empty press)", [(_RK, _RK.replace("float(-1)", "float(0)"))]),
+    ("a reserve below 0 is not told apart as unreadable (r < 0 becomes r < -10: -5 and every unreadable reserve read RESERVE_INVALID)",
+     [("{%- elif r < 0 -%}RESERVE_UNKNOWN", "{%- elif r < -10 -%}RESERVE_UNKNOWN")]),
+]
+caught11 = 0
+built11 = 0
+for label, edits in MUTANTS11:
+    mutated = DUMP_TEXT
+    ok_built = True
+    for old, new in edits:
+        if mutated.count(old) != 1:
+            ok_built = False
+            check(f"mutant anchor: {label}", False, f"anchor found {mutated.count(old)}x: {old[:70]!r}")
+            break
+        mutated = mutated.replace(old, new)
+    if not ok_built:
+        continue
+    built11 += 1
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = forced_problems(mutated, stop_early=True)
+    if found:
+        caught11 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:80]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS11)} sensor-state recheck mutants, all caught by a running scheduled start", caught11 == len(MUTANTS11) == built11, f"{caught11}/{built11}/{len(MUTANTS11)}")
+check("control: the unmutated package passes the same running cases", fp == [])
+
+print("[11] known limitation 20 (documented, NOT blessed): a BLOCKED press-time result is overwritten with STARTED OK when Dump to Grid is found active as the loop ends")
+# The terminal BLOCKED step sits inside the retry loop, so unlike the start-time BLOCKED branches it runs into the steps after the loop. If Dump to Grid is active when the loop ends (started from
+# the dongle's own Start button, which no override binds (RG-ST3), or by a manual start), the step after the loop writes "STARTED OK - Dump to Grid is active; this run could not confirm the
+# start as its own ...", so the BLOCKED reason is lost, the end-of-run alert is skipped and the schedule notification is dismissed. THIS SCRIPT STILL PRESSES NOTHING. The case below pins what the
+# package does TODAY so that the limitation is stated by a running check and cannot change unnoticed; it documents the behaviour, it does not approve it. If the package is ever changed so that the
+# BLOCKED text survives, this check will fail and must be rewritten together with the plan-core README's known limitation 20 and the schedule package's header.
+def overwrite_problems(dump_text: str, wait: str) -> list[str]:
+    bad: list[str] = []
+    pw, d = world(dump_text, owner=40)
+    w = pw.w
+    t0 = w.t
+    d.arm = True
+    w.set(D.D_ARM, "on")
+    if wait == "busy":
+        d.flags["fp_op"] = True
+        w.set(D.FP_OP, "on")
+        w.at(t0 + WAIT_UNTIL, lambda: (d.flags.__setitem__("fp_op", False), w.set(D.FP_OP, "off")))
+    else:
+        d.set_offline(t0, t0 + WAIT_UNTIL)
+
+    def change():
+        w.notifications[NOTE] = {"title": "earlier alert", "message": "an alert from an earlier run"}     # a stale alert that the end of the run dismisses
+        fired: list = []
+
+        def on_state(_kind):
+            if not fired and "not confirmed" in w.states.get(LAST, ("", {}))[0]:
+                fired.append(w.t)
+                w.after(2.0, lambda: (setattr(d, "active", True), w.set(D.D_ACTIVE, "on")))      # Dump to Grid becomes active 2 s into the 5 s pause after the refused press
+        w.listeners.append(on_state)
+        override("hold_battery")(pw)
+
+    w.at(t0 + CHANGE_AT, change)
+    n0 = len(w.service_log)
+    pw.ha.start_script(SCHED, {"duration_minutes": 30, "power_w": 2000, "stop_soc": 25, "window_end_ts": t0 + 30 * 60 + 60})
+    w.run_until(t0 + 400.0)
+    f = run_facts(pw, d, n0, t0)
+    dismissed = [n for n in w.notification_log if n[1] == "dismiss" and n[2] == NOTE]
+    if not (f["last"].startswith("STARTED OK - Dump to Grid is active; this run could not confirm the start as its own") and "BLOCKED" not in f["last"]):
+        bad.append(f"{wait} wait: the result is {f['last'][:90]!r}, wanted the STARTED OK text that overwrites the BLOCKED text")
+    if f["presses"] != [] or f["gate"] != [] or f["started"] != 0:
+        bad.append(f"{wait} wait: the script pressed ({f['presses']}, {f['gate']}) although the recheck blocked it")
+    if f["alerts"] != [] or NOTE in w.notifications or len(dismissed) != 1:
+        bad.append(f"{wait} wait: alerts {f['alerts']}, notification present {NOTE in w.notifications}, dismissals {len(dismissed)}; wanted no alert and the stale notification dismissed")
+    if len(f["staged"]) != 3 or f["arm"] != "off" or f["model_arm"] is not False or f["ended"] is None or f["ended"] >= 120:
+        bad.append(f"{wait} wait: staged {len(f['staged'])}, write enable {f['arm']}/{f['model_arm']}, ended {f['ended']}")
+    return bad
+
+
+ov = [p for wait in ("busy", "offline") for p in overwrite_problems(DUMP_TEXT, wait)]
+check("LIMITATION 20, documented and not blessed (a running pin of today's behaviour): the recheck BLOCKS a run during its wait (a Hold battery started), then Dump to Grid becomes active before the "
+      "loop ends (the dongle's own Start button or a manual start): the script presses nothing, but the BLOCKED text is overwritten with 'STARTED OK - Dump to Grid is active; this run could not "
+      "confirm the start as its own', no alert is raised and the schedule notification is dismissed (busy and offline waits)", ov == [], str(ov[:3]))
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
