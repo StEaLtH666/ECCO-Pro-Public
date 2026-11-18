@@ -27,6 +27,8 @@ outside the supported subset raises: nothing is guessed.
                   ordinary days agree; a missing or non-numeric attribute is an unreadable record; each read site and the expiry second are mutated
   [11] rounding   the effective reserve is published rounded UP to a whole percent (62.4 -> 63), for the owner's reserve and the running power cut's, so it is never
                   below the owner's own value; the floor and half-to-even mutants are caught
+  [12] honesty    additions that kill the five mutants the independent review found alive: cancel ends only its own kind (all three active, every order, every cross-kind
+                  mutant), the raise-only boundary (equal, 0.5, 1 and 5 points on each side), and an unreadable record of each kind (unknown, or held by the running kinds)
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's logic against a model; it proves nothing about a live
 Home Assistant, the helpers' timestamp attribute on the owner's version, or the dashboard.
@@ -967,6 +969,215 @@ for label, pairs in MUT11:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUT11)} reserve-rounding mutants, all caught by a running case", caught11 == len(MUT11), f"{caught11}/{len(MUT11)}")
 check("control: the unmutated package passes the same running cases", rp == [])
+
+# ================================================================================================================================
+print("[12] test honesty: cancel ends only its own kind, the raise-only boundary, and an unreadable record of each kind (review finding 4)")
+# ================================================================================================================================
+# The independent review mutated the package and five safety-relevant mutants survived every running check: M3 (cancelling Skip tonight also ends Hold battery) and M4
+# (cancelling Prepare for power cut also ends Skip tonight), so the README's 'cancel ends only its own kind' was claimed but not proved; M5 (the raise-only test weakened to
+# 'the power-cut reserve may be 5 below the owner's', the only refusal case having a 10 point gap); M1 (Hold battery released 45 s early, covered with finding 1 in [10] for
+# every kind: the exact expiry second) and M11 (the hold sensor ignores an unreadable Prepare for power cut record, the only unreadable-record case using Skip tonight).
+# These are additions only: no existing check, mutant list or assertion changed, and no package line changed with them.
+import itertools as _it  # noqa: E402
+
+class _Early12(Exception):
+    pass
+
+
+def exp_ts12(pw: P.PlanWorld, kind: str) -> float:
+    return float(pw.w.state_attr(EXPIRES_E[kind], "timestamp"))
+
+
+def held_by12(pw: P.PlanWorld, text: str) -> str:
+    return str(pw.w.render(yaml.safe_load(text)["template"][0]["sensor"][0]["attributes"]["held_by"])).strip()
+
+
+STAY_MIN = {"hold_battery": 240, "skip_tonight": 300, "prepare_power_cut": 600}
+
+
+def cancel_problems(text: str, stop_early: bool = False) -> list[str]:
+    """With all three kinds active, cancelling any one (in every order) ends that kind and leaves the other two, their records, the hold sensor, held_by and the
+    effective reserve exactly as they were."""
+    bad: list[str] = []
+
+    def add(msg: str) -> None:
+        bad.append(msg)
+        if stop_early:
+            raise _Early12()
+
+    def rec(pw, k):
+        return (pw.w.states[START_E[k]], pw.w.states[EXPIRES_E[k]])
+
+    try:
+        for perm in _it.permutations(KINDS):
+            pw = world(text)
+            for k in KINDS:
+                out = start(pw, kind=k, expiry_min=STAY_MIN[k])
+                if not out.startswith("STARTED"):
+                    add(f"{perm}: {k} did not start: {out[:50]!r}")
+            running = list(KINDS)
+            cut_reserve = pw.w.states[CUT_RESERVE_E]
+            for K in perm:
+                before = {k: rec(pw, k) for k in running if k != K}
+                own_start = pw.w.states[START_E[K]]
+                rev = float(pw.state(REV))
+                out = cancel(pw, kind=K)
+                running.remove(K)
+                tag = f"order {'>'.join(perm)}, cancelling {K}"
+                if not out.startswith(f"CANCELLED {K}"):
+                    add(f"{tag}: {out[:50]!r}")
+                if pw.w.states[START_E[K]] != own_start or exp_ts12(pw, K) > pw.w.t:
+                    add(f"{tag}: the cancelled record is not just ended (expires {exp_ts12(pw, K) - pw.w.t:+.0f} s)")
+                after = {k: rec(pw, k) for k in running}
+                if after != before:
+                    add(f"{tag}: it changed the record of {[k for k in running if after[k] != before[k]]}")
+                if pw.w.states[CUT_RESERVE_E] != cut_reserve:
+                    add(f"{tag}: it changed the power-cut reserve record")
+                want = [k for k in KINDS if k in running]
+                if pw.state(HOLD) != ("held" if want else "clear") or held_by12(pw, text) != ",".join(want):
+                    add(f"{tag}: the hold reads {pw.state(HOLD)!r} held_by {held_by12(pw, text)!r}, wanted {want}")
+                if pw.state(EFF) != ("80" if "prepare_power_cut" in running else "40"):
+                    add(f"{tag}: the effective reserve is {pw.state(EFF)}")
+                if float(pw.state(REV)) != rev + 1:
+                    add(f"{tag}: the revision went {rev} -> {pw.state(REV)}")
+    except _Early12:
+        pass
+    return bad
+
+
+RAISE_CASES = (  # (power-cut reserve limit, owner's reserve, starts?)  equal, 1 and 0.5 below, 5 below (the M5 gap), 1 and 0.5 above
+    (80, 80, True), (80, 81, False), (80, 80.5, False), (80, 85, False), (80, 86, False), (80, 100, False), (80, 79, True), (80, 79.5, True), (80, 0, True), (80, 0.5, True),
+    (10, 10, True), (10, 10.5, False), (10, 11, False), (10, 9.5, True), (100, 100, True), (100, 99.5, True), (100, 99, True))
+
+
+def raise_only_problems(text: str, stop_early: bool = False) -> list[str]:
+    """Prepare for power cut starts only when its reserve is at least the owner's current reserve: the boundary on both sides, 0.5 and 1 points, and 5 points below."""
+    bad: list[str] = []
+    try:
+        for cut, owner, starts in RAISE_CASES:
+            pw = world(text, owner=owner, policy={"cut_reserve": cut})
+            before = snapshot(pw, exclude=(LAST,))
+            out = start(pw, kind="prepare_power_cut", expiry_min=60)
+            if starts:
+                ok = out.startswith("STARTED prepare_power_cut") and pw.state(CUT_RESERVE_E) == f"{float(cut)}" and pw.state(HOLD) == "held" and pw.state(EFF) == str(cut)
+            else:
+                after = snapshot(pw, exclude=(LAST,))
+                ok = out.startswith("REFUSED RESERVE_BELOW_CURRENT") and after == before and NOTE in pw.w.notifications and pw.state(HOLD) == "clear"
+            if not ok:
+                bad.append(f"power-cut reserve {cut}, owner's reserve {owner}: wanted {'a start' if starts else 'RESERVE_BELOW_CURRENT, nothing changed'}, got {out[:60]!r}")
+                if stop_early:
+                    break
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:120]}")
+    return bad
+
+
+def unreadable_problems(text: str, stop_early: bool = False) -> list[str]:
+    """An unreadable record of EACH kind: unknown with the other two clear, held (naming only the running one) when another kind is running."""
+    bad: list[str] = []
+
+    def add(msg: str) -> None:
+        bad.append(msg)
+        if stop_early:
+            raise _Early12()
+
+    ways = [("unavailable", None), ("unknown", None), ("empty", None)]
+    if "'timestamp') | float(none)" in text:      # a package that reads the expiry from the timestamp attribute (the clock-change fix) also has this way
+        ways.append(("a valid state with no timestamp attribute", {"has_date": True, "has_time": True}))
+    try:
+        for K in KINDS:
+            others = [k for k in KINDS if k != K]
+            for label, attrs in ways:
+                def break_record(pw, K=K, label=label, attrs=attrs):
+                    if attrs is None:
+                        pw.w.set(EXPIRES_E[K], {"unavailable": "unavailable", "unknown": "unknown", "empty": ""}[label])
+                    else:
+                        pw.w.set(EXPIRES_E[K], "2026-11-18 09:00:00", attrs)
+                pw = world(text)
+                break_record(pw)
+                if pw.state(HOLD) != "unknown" or held_by12(pw, text) != "":
+                    add(f"{K} unreadable ({label}), the others clear: the hold reads {pw.state(HOLD)!r}, wanted unknown")
+                for J in others:
+                    pw = world(text)
+                    break_record(pw)
+                    start(pw, kind=J, expiry_min=30)
+                    if pw.state(HOLD) != "held" or held_by12(pw, text) != J:
+                        add(f"{K} unreadable ({label}) while {J} runs: the hold reads {pw.state(HOLD)!r} held_by {held_by12(pw, text)!r}, wanted held by {J} only")
+                pw = world(text)
+                break_record(pw)
+                for J in others:
+                    start(pw, kind=J, expiry_min=30)
+                if pw.state(HOLD) != "held" or held_by12(pw, text) != ",".join(others):
+                    add(f"{K} unreadable ({label}) while {others} run: the hold reads {pw.state(HOLD)!r} held_by {held_by12(pw, text)!r}")
+    except _Early12:
+        pass
+    return bad
+
+
+cl = cancel_problems(PKG_TEXT)
+check("cancel ends only its own kind: with all three active, cancelling any one (all six orders) ends that kind, bumps the revision, and leaves the other two records, "
+      "their start and expiry, the power-cut reserve record, the hold, held_by and the effective reserve exactly as they were", cl == [], str(cl[:3]))
+ro = raise_only_problems(PKG_TEXT)
+check("raise-only boundary: a power-cut reserve limit equal to the owner's reserve starts; 0.5, 1 and 5 points below it is refused (RESERVE_BELOW_CURRENT, nothing "
+      "changed but the last answer and one notification); 0.5 and 1 points above starts", ro == [], str(ro[:3]))
+ur = unreadable_problems(PKG_TEXT)
+check("an unreadable expiry record of EACH kind (unavailable, unknown, empty, no timestamp attribute) reads unknown with the other two clear and held (naming only the "
+      "running kinds) when another kind runs", ur == [], str(ur[:3]))
+
+print("[12] mutation: cancel touching another kind, a weakened raise-only test, and an ignored unreadable record are each caught by a running case above")
+_CANCEL_START = PKG_TEXT.index("  ecco_plan_override_cancel:")
+_CANCEL_END = PKG_TEXT.index("\nautomation:")
+_CSEG = PKG_TEXT[_CANCEL_START:_CANCEL_END]
+
+
+def _write_block(kind: str, ind: str) -> str:
+    return (f"{ind}- action: input_datetime.set_datetime\n{ind}  target:\n{ind}    entity_id: input_datetime.ecco_plan_override_{kind}_expires\n"
+            f"{ind}  data:\n{ind}    timestamp: \"{{{{ decision.expires_ts }}}}\"\n")
+
+
+def cross_cancel(k: str, j: str) -> str:
+    """The cancel script's branch for kind k also ends kind j."""
+    ind = "                  " if k == "prepare_power_cut" else "                      "
+    seg = _CSEG
+    anchor = _write_block(k, ind)
+    assert seg.count(anchor) == 1, (k, seg.count(anchor))
+    return PKG_TEXT[:_CANCEL_START] + seg.replace(anchor, anchor + _write_block(j, ind)) + PKG_TEXT[_CANCEL_END:]
+
+
+RAISE_LINE = "kind_in == 'prepare_power_cut' and p[7] < owner -%}"
+HOLD_UNKNOWN = "{%- elif a is none or b is none or c is none -%}unknown"
+MUT12 = []
+for _k, _j in ((_a, _b) for _a in KINDS for _b in KINDS if _a != _b):
+    _tag = " (M3)" if (_k, _j) == ("skip_tonight", "hold_battery") else (" (M4)" if (_k, _j) == ("prepare_power_cut", "skip_tonight") else "")
+    MUT12.append((f"cancel of {_k} also ends {_j}{_tag}", cross_cancel(_k, _j), cancel_problems))
+for _label, _new in (("the power-cut reserve may be 5 below the owner's (M5)", "kind_in == 'prepare_power_cut' and p[7] < owner - 5 -%}"),
+                     ("the power-cut reserve may be 0.5 below the owner's", "kind_in == 'prepare_power_cut' and p[7] < owner - 0.5 -%}"),
+                     ("the power-cut reserve must be 0.5 above the owner's", "kind_in == 'prepare_power_cut' and p[7] < owner + 0.5 -%}"),
+                     ("a power-cut reserve equal to the owner's is refused", "kind_in == 'prepare_power_cut' and p[7] <= owner -%}"),
+                     ("the owner's reserve is rounded before the comparison", "kind_in == 'prepare_power_cut' and p[7] < (owner | round(0)) -%}")):
+    assert PKG_TEXT.count(RAISE_LINE) == 1
+    MUT12.append((_label, PKG_TEXT.replace(RAISE_LINE, _new), raise_only_problems))
+for _label, _new in (("the hold sensor ignores an unreadable Prepare for power cut record (M11)", "{%- elif a is none or b is none -%}unknown"),
+                     ("the hold sensor ignores an unreadable Skip tonight record", "{%- elif a is none or c is none -%}unknown"),
+                     ("the hold sensor ignores an unreadable Hold battery record", "{%- elif b is none or c is none -%}unknown")):
+    assert PKG_TEXT.count(HOLD_UNKNOWN) == 1
+    MUT12.append((_label, PKG_TEXT.replace(HOLD_UNKNOWN, _new), unreadable_problems))
+caught12 = 0
+for label, mutated, fn in MUT12:
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = fn(mutated, stop_early=True)
+    if found:
+        caught12 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUT12)} mutants (the six cross-kind cancels, the weakened raise-only tests, the ignored unreadable records), all caught by a running case", caught12 == len(MUT12) == 14, f"{caught12}/{len(MUT12)}")
+check("control: the unmutated package passes the same running cases", cl == [] and ro == [] and ur == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
