@@ -35,7 +35,7 @@ export const OVERRIDES_LINE_NONE_HELPER =
   "Quick overrides: none active. Shown as status only; starting one needs the guarded start path, which is not installed.";
 
 export const OVERRIDES_STATUS_NOTE =
-  "Status only: nothing in this view starts, cancels or enforces an override. An override can only hold back a start or raise a reserve; it never writes the inverter's table and never stops a running session.";
+  "Status only: nothing in this view starts, cancels or enforces an override. An override can only hold back ECCO's own export starts or raise the reserve ECCO's plan uses; it never writes the inverter's table, does not change the inverter's own reserve and never stops a running session.";
 
 export interface FigureVM {
   key: string;
@@ -218,9 +218,9 @@ function touVM(snap: PlanSnapshot): TouVM {
 }
 
 const EFFECT_TEXT: Record<OverrideKind, (reserve: number | undefined) => string> = {
-  hold_battery: () => "Intended: no export starts and no discretionary rate edits; charging and the inverter table are untouched.",
-  skip_tonight: () => "Intended: tonight's export is held; charging continues.",
-  prepare_power_cut: (reserve) => `Intended: the reserve is raised to ${reserve ?? "?"} % (never lowered) and export starts are held.`,
+  hold_battery: () => "Intended: ECCO's own scheduled and guarded export starts are held; charging and the inverter table are untouched.",
+  skip_tonight: () => "Intended: ECCO's own export starts tonight are held; charging continues.",
+  prepare_power_cut: (reserve) => `Intended: the reserve ECCO's plan uses is ${reserve ?? "?"} % or more, and ECCO's own export starts are held. The inverter's own reserve is not changed.`,
 };
 
 function proposedLines(): string[] {

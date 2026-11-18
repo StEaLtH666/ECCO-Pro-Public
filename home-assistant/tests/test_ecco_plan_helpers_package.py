@@ -17,7 +17,7 @@ outside the supported subset raises: nothing is guessed.
                    (always allowed, never touches another kind), the result texts fit the 255-character helper
   [6] sensors      export hold (clear / held / unknown, at the minute an expiry passes) and the effective reserve (larger known value,
                    raise-only, fail closed), over a table and a seeded random sweep
-  [7] not a charge Prepare for power cut raises a protected reserve and starts nothing: the battery below the reserve changes no charge entity,
+  [7] not a charge Prepare for power cut sets the reserve ECCO's plan uses and starts nothing: the battery below the reserve changes no charge entity,
                    no charge service exists, and the result says "Nothing is charging. Use Charge Battery if you want it filled."
   [8] seed         the owner's accepted limits are written once; the switch stays off; an owner's own value survives a restart
   [9] mutation     in-memory mutants of the package are each caught; an equivalent rewrite survives

@@ -3,7 +3,8 @@
 // the card gives; nothing here names a service, a helper to write, a charge, a discharge or an inverter entity. The card double-checks
 // each call against the same allow-list before it sends it. Every value reaches the DOM through a Lit text binding, never innerHTML.
 //
-// What the owner sees, in order: what each override does (it holds ECCO's starts back, or raises a protected reserve, and never charges),
+// What the owner sees, in order: what each override does (it holds back ECCO's own export starts and, for Prepare for power cut, sets the
+// reserve ECCO's plan uses; it never charges and never changes the inverter's own reserve),
 // the choices the owner's limits allow (their default, chips inside the shortest and longest length, "until 07:00"), the running
 // override with its expiry and a Cancel, why a start is not offered, and the guarded script's own last answer, refusals included.
 import { css, html, nothing } from "lit";
@@ -15,9 +16,9 @@ import type { PlanServiceCall } from "./planActions.ts";
 import type { ControlsRenderer } from "./view.ts";
 
 const KIND_BLURB: Record<string, string> = {
-  hold_battery: "Holds ECCO back from starting an export. Charging and the battery's own work carry on.",
-  skip_tonight: "Holds tonight's export. Charging continues.",
-  prepare_power_cut: "Raises a protected reserve (never lowers it) and holds exports. It does not charge the battery.",
+  hold_battery: "Holds back ECCO's own scheduled and guarded export starts. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+  skip_tonight: "Holds back ECCO's own scheduled and guarded export starts tonight. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+  prepare_power_cut: "Sets the reserve ECCO's plan uses to the larger of your own reserve and the power-cut reserve, and holds back ECCO's own export starts. It does not change the inverter's own reserve and does not stop the house using the battery. It does not charge the battery.",
 };
 
 // The stated limitation of Stage 3 (release gate RG-ST3), always visible beside the controls. Plain text only: it adds no button, handler or
@@ -54,7 +55,7 @@ export function controlsView(vm: ControlsVM, dispatch: (call: PlanServiceCall) =
   return html`
     <div class="plan-controls" data-block="controls">
       <h3 class="plan-heading">Quick overrides</h3>
-      <p class="plan-reason">They only hold ECCO's starts back or raise a protected reserve. Home Assistant checks every one against your limits again and may refuse it.</p>
+      <p class="plan-reason">They hold back ECCO's own export starts and, for Prepare for power cut, set the reserve ECCO's plan uses. They do not change the inverter's own reserve or any inverter setting, do not stop the house using the battery and never charge it. Home Assistant checks every one against your limits again and may refuse it.</p>
       <p class="plan-reason plan-limitation" data-plan-limitation role="note">${START_BUTTON_LIMITATION}</p>
       ${vm.missingScripts.length
         ? html`<p class="plan-reason" data-controls-missing>The guarded scripts were not found (${vm.missingScripts.join(", ")}), so no override can be started or cancelled here.</p>`

@@ -215,9 +215,11 @@ tonight and Prepare for power cut: the owner's default, the lengths inside the o
 its expiry and a Cancel, why a start is not offered, and the scripts' own last answer (a refusal says why, with a stable code). Each button
 calls `script.turn_on` on `script.ecco_plan_override_start` or `script.ecco_plan_override_cancel` and on nothing else: `src/plan/planActions.ts`
 is the closed list and the card drops any other call. Home Assistant decides again, with the same rules, and may refuse a start. An
-override holds ECCO's starts back or raises a protected reserve; it never charges. Prepare for power cut with the battery below the reserve it
-raised says so ("... Nothing is charging. Use Charge Battery if you want it filled.") and offers nothing automatic. Without the plan helpers
-nothing is added (the golden renders are unchanged).
+override holds back ECCO's own scheduled and guarded export starts; it does not stop the battery charging or discharging and it does not
+stop the dongle's own Start button. Prepare for power cut also sets the reserve ECCO's plan uses (the larger of your own reserve and the
+power-cut reserve, each rounded up). It does not change the inverter's own reserve or any inverter setting, does not stop the house using
+the battery, and never charges. Prepare for power cut with the battery below that reserve says so ("... Nothing is charging. Use Charge
+Battery if you want it filled.") and offers nothing automatic. Without the plan helpers nothing is added (the golden renders are unchanged).
 
 **Stated limitation.** Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
 

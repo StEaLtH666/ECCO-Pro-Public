@@ -189,7 +189,7 @@ test("at most one override per kind, all three can run together, and Prepare for
   assert.equal(snap.overrides[0]?.reservePct, undefined);
   const rows = presentPlan(snap).overrideBlock?.rows ?? [];
   assert.equal(rows.length, 3);
-  assert.match(rows[2]?.effectText ?? "", /raised to 85 %/);
+  assert.match(rows[2]?.effectText ?? "", /reserve ECCO's plan uses is 85 % or more/);
   assert.equal(rows[2]?.countdownText, "ends in 2 days 20 min");
 });
 

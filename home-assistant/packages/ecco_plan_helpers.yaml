@@ -7,8 +7,9 @@
 # start / expiry pair per kind, so at most one active override per kind), the last outcome, and two derived read-only sensors:
 #   sensor.ecco_plan_export_hold         clear | held | unknown   (any Hold battery, Skip tonight or Prepare for power cut record
 #                                        with an expiry in the future = held; an unreadable record = unknown, which refuses)
-#   sensor.ecco_plan_effective_reserve   the larger of the owner's own reserve and the running Prepare for power cut reserve; the
-#                                        larger KNOWN value when one input is unreadable; unknown when none is known (refuses). The
+#   sensor.ecco_plan_effective_reserve   the larger of the owner's own reserve and the running Prepare for power cut reserve, each
+#                                        rounded up; the larger KNOWN value when one input is unreadable; unknown when none is known
+#                                        (refuses). It is the reserve ECCO's own plan uses, not an inverter setting. The
 #                                        Intelligence integration can read it through its existing `reserve.ha_minimum_soc` site
 #                                        mapping (a `{entity}` mapping in the owner's site file, a raise-only input there); that mapping
 #                                        is the owner's own file and is not changed by this repository.
@@ -22,14 +23,19 @@
 # this file's own template by home-assistant/tests/test_ecco_plan_helpers_package.py): the limits switch must be on and every
 # limit valid (finite, whole, on its step, inside its bounds, default between minimum and maximum); the expiry is a whole number of
 # minutes between the shortest allowed override and the kind's maximum, and never above the hard ceiling; there is no open-ended
-# override; Prepare for power cut raises a protected reserve and is refused when the current reserve is unknown or above it.
+# override; Prepare for power cut adds a running reserve to ECCO's plan (the larger of it and the owner's reserve, see the reserve
+# sensor above) and is refused when the owner's current reserve is unknown or above the power-cut reserve.
 # A refusal writes nothing but the last-result text, raises ONE persistent notification and carries a STABLE reason code:
 #   POLICY_UNCONFIRMED POLICY_INVALID UNKNOWN_KIND EXPIRY_NOT_WHOLE RESERVE_UNKNOWN RESERVE_BELOW_CURRENT EXPIRY_MISSING
 #   EXPIRY_BELOW_MIN EXPIRY_ABOVE_CAP EXPIRY_ABOVE_CEILING   (shared with the plan core)
 #   UNTIL_NOT_ALLOWED REVISION_UNREADABLE REVISION_CONFLICT NOT_ACTIVE   (script-only)
 # The scripts write ONLY ecco_plan_* helpers and a persistent notification. They never call a charge, discharge, time-of-use,
-# inverter or dongle service: an override WITHHOLDS an export start and RAISES a protected reserve; it never starts a charge.
-# Prepare for power cut is a raised floor, not a charge: a battery below the raised reserve stays where it is, and the result text
+# inverter or dongle service. What an override DOES: it holds back ECCO's own scheduled Dump to Grid start and the card's guarded
+# manual start (sensor.ecco_plan_export_hold), and Prepare for power cut raises the reserve ECCO's plan uses (the effective reserve
+# sensor above), which the scheduled start never stages a Stop SOC below. What it does NOT do: it does not change the inverter's own
+# reserve or any inverter setting, it does not stop the house using the battery, it does not stop the battery charging or
+# discharging, it never starts a charge, and it does not bind the dongle's own Start button (the stated limitation below, RG-ST3).
+# Prepare for power cut is a reserve for the plan, not a charge: a battery below that reserve stays where it is, and the result text
 # says so ("Nothing is charging. Use Charge Battery if you want it filled."); filling it stays the explicit, separate, guarded
 # Charge Battery action.
 #
@@ -307,7 +313,7 @@ script:
                           timestamp: "{{ decision.expires_ts }}"
                 default:
                   # Prepare for power cut: the reserve record first, so the effective reserve is already raised when the expiry
-                  # makes the record active. It raises a protected floor; it starts no charge.
+                  # makes the record active. It changes only the reserve ECCO's plan uses; it starts no charge.
                   - action: input_number.set_value
                     target:
                       entity_id: input_number.ecco_plan_override_prepare_power_cut_reserve
@@ -533,7 +539,7 @@ template:
         unique_id: ecco_plan_effective_reserve
         unit_of_measurement: "%"
         state_class: measurement
-        # The larger of the owner's own reserve and the running Prepare for power cut reserve (raise-only). An unreadable input is
+        # The larger of the owner's own reserve and the running Prepare for power cut reserve (each rounded up). An unreadable input is
         # skipped and the larger KNOWN value stands; when none is known the state is unknown and every start that needs it refuses.
         # Each input is rounded UP to a whole percent before the larger is taken, so the published reserve is never below the owner's own
         # value: 62.4 is published as 63. (round() alone rounds half to even and published 62, below 62.4, so the start scripts' rounded-up
