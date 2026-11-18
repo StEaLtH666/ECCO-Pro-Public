@@ -21,6 +21,10 @@ outside the supported subset raises: nothing is guessed.
                    no charge service exists, and the result says "Nothing is charging. Use Charge Battery if you want it filled."
   [8] seed         the owner's accepted limits are written once; the switch stays off; an owner's own value survives a restart
   [9] mutation     in-memory mutants of the package are each caught; an equivalent rewrite survives
+  [10] clock      every backend expiry read (the hold sensor's state and held_by, the effective reserve's power-cut expiry, the cancel script) uses the
+                  helper's `timestamp` attribute, not the state string: an override ending in the repeated hour of the October clock change stays held
+                  to its true expiry second (a 120 minute override from 00:40 BST ends 01:40 GMT), clear from the expiry second; spring-forward and
+                  ordinary days agree; a missing or non-numeric attribute is an unreadable record; each read site and the expiry second are mutated
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's logic against a model; it proves nothing about a live
 Home Assistant, the helpers' timestamp attribute on the owner's version, or the dashboard.
@@ -685,6 +689,197 @@ check(f"{len(MUTANTS)} mutants, all caught", killed == len(MUTANTS), f"{killed}/
 check("the unmutated package passes every dynamic check", behaviour_problems(PKG_TEXT) == [], str(behaviour_problems(PKG_TEXT)[:3]))
 equiv = PKG_TEXT.replace("Unknown override.", "Unknown override kind.")
 check("a harmless rewrite of a refusal text survives (the checks look at the stable codes, not the words)", behaviour_problems(equiv) == [] and static_problems(equiv) == [])
+
+# ================================================================================================================================
+print("[10] clock changes and the exact expiry second: every backend expiry read uses the helper's timestamp attribute")
+# ================================================================================================================================
+# New with the independent review of 18 Nov 2026 (finding 1). The three expiry records are date-and-time helpers. Their STATE is local
+# wall-clock time; their `timestamp` attribute is the true instant (Home Assistant sets it from an aware datetime). Parsing the state string
+# takes the FIRST of the two equal local times on the October clock-change day, so an override whose expiry falls in the repeated hour was
+# released up to 60 minutes early (Europe/London: a 120 minute override started at 00:40 BST ends at 01:40 GMT, state '01:40:00', which the
+# string parse reads as 01:40 BST, one hour too soon). The hold sensor (state and held_by), the effective reserve's power-cut expiry and the
+# cancel script now read the attribute. Existing checks stay as they were; these only add.
+class _Early(Exception):
+    pass
+
+
+def exp_ts(pw: P.PlanWorld, kind: str) -> float:
+    return float(pw.w.state_attr(EXPIRES_E[kind], "timestamp"))
+
+
+def held_by_of(pw: P.PlanWorld, text: str) -> str:
+    return str(pw.w.render(yaml.safe_load(text)["template"][0]["sensor"][0]["attributes"]["held_by"])).strip()
+
+
+def utc_ts(local_utc: str) -> float:
+    return datetime.strptime(local_utc, FMT).replace(tzinfo=ZoneInfo("UTC")).timestamp()
+
+
+def clock_problems(text: str, stop_early: bool = False) -> list[str]:
+    """Every clock-change and exact-second case on the package text given. `stop_early` returns at the first problem (the mutants)."""
+    bad: list[str] = []
+
+    def add(msg: str) -> None:
+        bad.append(msg)
+        if stop_early:
+            raise _Early()
+
+    def edge_checks(pw: P.PlanWorld, kinds: list, tag: str, offsets=(-3540, -1800, -60, -1, 0, 1, 61)) -> None:
+        """Around each running kind's own expiry (read from its attribute): the hold, held_by and the effective reserve must equal an independent
+        oracle, `expiry > now` (strictly: clear AT the expiry second, held the second before)."""
+        exps = {k: exp_ts(pw, k) for k in kinds}
+        for t in sorted({e + d for e in exps.values() for d in offsets}):
+            pw.w.run_until(t)
+            want = [k for k in KINDS if k in exps and exps[k] > t]
+            got, by = pw.state(HOLD), held_by_of(pw, text)
+            if got != ("held" if want else "clear") or by != ",".join(want):
+                add(f"{tag}: {t - min(exps.values()):+.0f} s from the first expiry the hold reads {got!r} held_by {by!r}, wanted {want}")
+            if pw.state(EFF) != ("80" if "prepare_power_cut" in want else "40"):
+                add(f"{tag}: {t - min(exps.values()):+.0f} s from the first expiry the effective reserve is {pw.state(EFF)}")
+
+    try:
+        # (1) the days: the October clock-change day (repeated hour), the spring-forward day, an ordinary day. Expiry from the attribute.
+        days = (("autumn clock-change day", "2026-10-25 00:40:40", "2026-10-25 01:40:00", "2026-10-25 01:40:00"),
+                ("spring-forward day", "2027-03-28 00:30:40", "2027-03-28 02:30:00", "2027-03-28 03:30:00"),
+                ("ordinary day", "2026-11-17 21:30:40", "2026-11-17 23:30:00", "2026-11-17 23:30:00"))
+        for label, started, exp_utc, state_str in days:
+            for kind in KINDS:
+                pw = world(text, now=started, zone="Europe/London")
+                out = start(pw, kind=kind, expiry_min=120)
+                exp = exp_ts(pw, kind) if out.startswith("STARTED") else 0.0
+                if not out.startswith("STARTED") or exp != utc_ts(exp_utc) or pw.state(EXPIRES_E[kind]) != state_str:
+                    add(f"{label} {kind}: started {out[:40]!r}, expiry {exp} state {pw.state(EXPIRES_E[kind])!r}, wanted {utc_ts(exp_utc)} {state_str!r}")
+                    continue
+                edge_checks(pw, [kind], f"{label} {kind}")
+            # all three at once (each start moves the model clock by 30 s, so the minute-floored expiries differ): every kind is named while it runs
+            pw = world(text, now=started, zone="Europe/London")
+            for kind in KINDS:
+                start(pw, kind=kind, expiry_min=120)
+            edge_checks(pw, KINDS, f"{label} all three")
+        # (2) the repeated hour, spelled out: the old read released at +60 min; now still held at +61, +90, +110 min of a 120 min override
+        pw = world(text, now="2026-10-25 00:40:40", zone="Europe/London")
+        start(pw, kind="hold_battery", expiry_min=120)
+        t0 = exp_ts(pw, "hold_battery") - 7200
+        for minutes in (59, 61, 90, 110, 119):
+            pw.w.run_until(t0 + minutes * 60)
+            if pw.state(HOLD) != "held":
+                add(f"a 120 minute Hold battery started at 00:40 BST on the clock-change day reads {pw.state(HOLD)!r} {minutes} minutes in")
+        # (3) the cancel script decides NOT_ACTIVE from the same instant: inside the repeated hour a running override can still be cancelled
+        for kind in KINDS:
+            pw = world(text, now="2026-10-25 00:40:40", zone="Europe/London")
+            start(pw, kind=kind, expiry_min=120)
+            pw.w.run_until(exp_ts(pw, kind) - 3000)       # 00:50 GMT: the override has 50 minutes left
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or exp_ts(pw, kind) > pw.w.t:
+                add(f"cancel {kind} on the clock-change day: {out[:40]!r} hold {pw.state(HOLD)!r}")
+        # (4) the instant is the attribute, never the string: a string that says 'long past' with a future attribute is held, and the reverse
+        for kind in KINDS:
+            pw = world(text)
+            pw.w.set(EXPIRES_E[kind], "2020-01-01 00:00:00", {"timestamp": pw.w.t + 600, "has_date": True, "has_time": True})
+            if pw.state(HOLD) != "held" or held_by_of(pw, text) != kind:
+                add(f"{kind}: a past-looking string with a future timestamp attribute reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}")
+            pw = world(text)
+            pw.w.set(EXPIRES_E[kind], "2099-01-01 00:00:00", {"timestamp": pw.w.t - 600, "has_date": True, "has_time": True})
+            if pw.state(HOLD) != "clear":
+                add(f"{kind}: a future-looking string with a past timestamp attribute reads {pw.state(HOLD)!r}")
+        pw = world(text, owner=40)
+        pw.w.set(CUT_RESERVE_E, "80.0")
+        pw.w.set(EXPIRES_E["prepare_power_cut"], "2020-01-01 00:00:00", {"timestamp": pw.w.t + 600, "has_date": True, "has_time": True})
+        if pw.state(EFF) != "80":
+            add(f"the effective reserve of a power cut with a past-looking string and a future attribute is {pw.state(EFF)}, wanted 80")
+        pw = world(text, owner=40)
+        pw.w.set(CUT_RESERVE_E, "80.0")
+        pw.w.set(EXPIRES_E["prepare_power_cut"], "2099-01-01 00:00:00", {"timestamp": pw.w.t - 600, "has_date": True, "has_time": True})
+        if pw.state(EFF) != "40":
+            add(f"the effective reserve of a power cut with a future-looking string and a past attribute is {pw.state(EFF)}, wanted 40")
+        # (5) an attribute that is missing or not a number is an unreadable record: unknown (and a readable held record still reads held)
+        for kind in KINDS:
+            others = [k for k in KINDS if k != kind]
+            for label, attrs in (("missing", {"has_date": True, "has_time": True}), ("not a number", {"timestamp": "abc"}), ("None", {"timestamp": None}),
+                                 ("nan", {"timestamp": float("nan")}), ("empty", {"timestamp": ""})):
+                pw = world(text)
+                pw.w.set(EXPIRES_E[kind], "2026-11-18 09:00:00", attrs)
+                if pw.state(HOLD) != "unknown" or held_by_of(pw, text) != "":
+                    add(f"{kind}: a timestamp attribute that is {label} reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}, wanted unknown")
+                pw = world(text)
+                pw.w.set(EXPIRES_E[kind], "2026-11-18 09:00:00", attrs)
+                start(pw, kind=others[0], expiry_min=30)
+                if pw.state(HOLD) != "held" or held_by_of(pw, text) != others[0]:
+                    add(f"{kind}: unreadable ({label}) with {others[0]} running reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}, wanted held")
+        # an unreadable power-cut expiry is skipped by the effective reserve, exactly as an unavailable one was
+        for label, attrs in (("missing", {"has_date": True, "has_time": True}), ("not a number", {"timestamp": "abc"})):
+            pw = world(text, owner=40)
+            pw.w.set(CUT_RESERVE_E, "80.0")
+            pw.w.set(EXPIRES_E["prepare_power_cut"], "2026-11-18 21:30:00", attrs)
+            if pw.state(EFF) != "40":
+                add(f"a power-cut expiry attribute that is {label}: the effective reserve is {pw.state(EFF)}, wanted the owner's 40 (the record is skipped)")
+        # cancel treats an unreadable record as it did: it proceeds, and writes a readable expiry (the record is repaired)
+        for kind in KINDS:
+            pw = world(text)
+            start(pw, kind=kind, expiry_min=120)
+            pw.w.set(EXPIRES_E[kind], pw.state(EXPIRES_E[kind]), {"has_date": True, "has_time": True})
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or exp_ts(pw, kind) > pw.w.t:
+                add(f"cancel {kind} with an unreadable record: {out[:40]!r} hold {pw.state(HOLD)!r}")
+    except _Early:
+        pass
+    return bad
+
+
+READ_RE_FIX1 = re.compile(r"\{%- set (\w+) = state_attr\('(input_datetime\.[a-z_]+)', 'timestamp'\) \| float\(none\) -%\}\n[ ]*\{%- set \1 = \1 if \([^\n]*\) else none -%\}")
+cp = clock_problems(PKG_TEXT)
+check("clock changes and the exact expiry second, for each kind: an override that ends in the repeated hour of the October clock change stays held "
+      "until its true expiry (the old read released it 60 minutes early); held at the last second, clear at the expiry second; the spring-forward and ordinary "
+      "days agree; the effective reserve and the cancel script follow the same instant; a missing or non-numeric attribute is unreadable (unknown); the instant is "
+      "the attribute, never the state string", cp == [], str(cp[:3]))
+check("no backend template parses an expiry (or any) helper state string with as_timestamp(states(...)): every expiry read is the timestamp attribute",
+      re.findall(r"as_timestamp\(\s*states\(", PKG_TEXT) == [] and len(READ_RE_FIX1.findall(PKG_TEXT)) == 10, str(re.findall(r"as_timestamp\(\s*states\([^)]*\)", PKG_TEXT)))
+
+print("[10] mutation: reverting any read site to the state string, or moving the expiry second, is caught by a running case above")
+SITES = ["the cancel script, Hold battery", "the cancel script, Skip tonight", "the cancel script, Prepare for power cut",
+         "the hold sensor's state, Hold battery", "the hold sensor's state, Skip tonight", "the hold sensor's state, Prepare for power cut",
+         "the held_by attribute, Hold battery", "the held_by attribute, Skip tonight", "the held_by attribute, Prepare for power cut",
+         "the effective reserve's power-cut expiry"]
+
+
+def revert_site(text: str, k: int) -> str:
+    """Read site k (file order) back to the old parse of the state string."""
+    ms = list(READ_RE_FIX1.finditer(text))
+    assert len(ms) == 10, len(ms)
+    m = ms[k]
+    return text[:m.start()] + "{%- set " + m.group(1) + " = as_timestamp(states('" + m.group(2) + "'), none) -%}" + text[m.end():]
+
+
+def swap_once(text: str, old: str, new: str) -> str:
+    assert text.count(old) == 1, (text.count(old), old[:60])
+    return text.replace(old, new)
+
+
+HOLD_LINE = "{%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held"
+CUT_ACTIVE = "e is not none and e > n and c is number"
+MUT10 = [(f"a read site reverted to the state string: {SITES[k]}", revert_site(PKG_TEXT, k)) for k in range(10)]
+for v, kind_name in (("a", "Hold battery"), ("b", "Skip tonight"), ("c", "Prepare for power cut")):
+    MUT10.append((f"the hold sensor releases {kind_name} 45 s early ({v} > n + 45)", swap_once(PKG_TEXT, HOLD_LINE, HOLD_LINE.replace(f"{v} > n", f"{v} > n + 45"))))
+    MUT10.append((f"the hold sensor still holds {kind_name} at the expiry second ({v} >= n)", swap_once(PKG_TEXT, HOLD_LINE, HOLD_LINE.replace(f"{v} > n", f"{v} >= n"))))
+MUT10.append(("the effective reserve releases the power cut's reserve 45 s early (e > n + 45)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e > n + 45"))))
+MUT10.append(("the effective reserve still raises at the expiry second (e >= n)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e >= n"))))
+caught10 = 0
+for label, mutated in MUT10:
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = clock_problems(mutated, stop_early=True)
+    if found:
+        caught10 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:70]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUT10)} clock-change / expiry-second mutants, all caught by a running case", caught10 == len(MUT10), f"{caught10}/{len(MUT10)}")
+check("control: the unmutated package passes the same running cases", cp == [])
+
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

@@ -369,9 +369,14 @@ script:
             {%- set rev_in = expected_revision | default('') -%}
             {%- set now_ts = as_timestamp(now()) -%}
             {%- set start_ts = (now_ts // 60) * 60 -%}
-            {%- set ex = {'hold_battery': as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none),
-                          'skip_tonight': as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none),
-                          'prepare_power_cut': as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none)} -%}
+            {%- set bad = ['unknown', 'unavailable', ''] -%}
+            {%- set eh = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
+            {%- set eh = eh if (eh is number and eh == eh and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+            {%- set es = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
+            {%- set es = es if (es is number and es == es and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+            {%- set ep = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
+            {%- set ep = ep if (ep is number and ep == ep and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
+            {%- set ex = {'hold_battery': eh, 'skip_tonight': es, 'prepare_power_cut': ep} -%}
             {%- set rev_raw = states('input_number.ecco_plan_revision') | float(none) -%}
             {%- set rev_ok = rev_raw is number and rev_raw == rev_raw and rev_raw >= 0 and (rev_raw % 1) == 0 -%}
             {%- set r = namespace(code='', text='') -%}
@@ -495,21 +500,33 @@ template:
         icon: mdi:export
         # clear: no record is active. held: Hold battery, Skip tonight or Prepare for power cut has an expiry in the future (also
         # when another record is unreadable). unknown: nothing is active and at least one record cannot be read. now() makes this
-        # re-render every minute, so an expiry is noticed within a minute (late, which keeps the hold, never early).
+        # re-render every minute, so an expiry that has passed is noticed within a minute (late, which keeps the hold, never early).
+        # Each expiry is read from the helper's `timestamp` attribute, which is the true instant. The state string is local wall-clock
+        # time and is never parsed for the instant: on the October clock-change day an expiry in the repeated hour would be read as the
+        # first of the two equal local times and the override released up to 60 minutes early. A record is readable only when its state
+        # is not unknown, unavailable or empty AND its attribute is a number; anything else is an unreadable record (unknown, which refuses).
         state: >-
           {%- set n = as_timestamp(now()) -%}
-          {%- set a = as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none) -%}
-          {%- set b = as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none) -%}
-          {%- set c = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+          {%- set bad = ['unknown', 'unavailable', ''] -%}
+          {%- set a = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
+          {%- set a = a if (a is number and a == a and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+          {%- set b = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
+          {%- set b = b if (b is number and b == b and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+          {%- set c = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
+          {%- set c = c if (c is number and c == c and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
           {%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held
           {%- elif a is none or b is none or c is none -%}unknown
           {%- else -%}clear{%- endif -%}
         attributes:
           held_by: >-
             {%- set n = as_timestamp(now()) -%}
-            {%- set a = as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none) -%}
-            {%- set b = as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none) -%}
-            {%- set c = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+            {%- set bad = ['unknown', 'unavailable', ''] -%}
+            {%- set a = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
+            {%- set a = a if (a is number and a == a and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+            {%- set b = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
+            {%- set b = b if (b is number and b == b and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+            {%- set c = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
+            {%- set c = c if (c is number and c == c and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
             {{ ((['hold_battery'] if (a is not none and a > n) else []) + (['skip_tonight'] if (b is not none and b > n) else []) + (['prepare_power_cut'] if (c is not none and c > n) else [])) | join(',') }}
 
       - name: ECCO Plan Effective Reserve
@@ -522,7 +539,9 @@ template:
           {%- set n = as_timestamp(now()) -%}
           {%- set o = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
           {%- set o = o if (o is number and o == o and o >= 0 and o <= 100) else none -%}
-          {%- set e = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+          {%- set bad = ['unknown', 'unavailable', ''] -%}
+          {%- set e = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
+          {%- set e = e if (e is number and e == e and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
           {%- set c = states('input_number.ecco_plan_override_prepare_power_cut_reserve') | float(none) -%}
           {%- set c = c if (e is not none and e > n and c is number and c == c and c >= 10 and c <= 100) else none -%}
           {%- set known = [o, c] | reject('none') | list -%}

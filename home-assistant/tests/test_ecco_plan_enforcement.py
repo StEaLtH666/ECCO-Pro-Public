@@ -21,6 +21,9 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   scheduled start and the guarded start, with the guarded start's staged Stop SOC read-back held to the same range; a valid
                   reserve behaves as before
   [7] mutation    in-memory mutants of that validation (removed, too-big-only, a bound moved, the new refusal or text dropped) are each caught
+  [8] clock       the scheduled start follows an override's true expiry through the repeated hour of the October clock change (the export hold reads
+                  the helper's timestamp attribute, not its state string): refused while the override runs, started from its expiry second on, for
+                  each kind; nine mutants (the hold-state read sites and the expiry second) are each caught by a running scheduled start
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -539,6 +542,99 @@ for which, label, old, new in MUTANTS6:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS6)} reserve-validation mutants, all caught by a running case", caught6 == len(MUTANTS6), f"{caught6}/{len(MUTANTS6)}")
 check("control: the unmutated packages pass the same cases", all(ok for _l, ok, _d in ROWS6))
+
+# ================================================================================================================================
+print("[8] the scheduled start follows an override's true expiry through the repeated hour of the October clock change (review finding 1)")
+# ================================================================================================================================
+# The export hold read each expiry from the helper's naive local state string, so an override that ended in the repeated hour was released up to
+# 60 minutes early and the scheduled start, which trusts the hold, then pressed while the card still showed the override as active. The hold
+# now reads the helper's `timestamp` attribute (the true instant). Europe/London, 25 Oct 2026: an override started at 00:40 BST for 120 minutes ends
+# at 01:40 GMT. Each probe is a fresh world; the scheduled start script is started at the probe's own second and reads the real hold sensor.
+from datetime import datetime as _dt, timezone as _tz  # noqa: E402
+
+_EXP_AUTUMN = _dt(2026, 10, 25, 1, 40, tzinfo=_tz.utc).timestamp()      # 01:40 GMT on the clock-change day
+
+
+def world_in(local_start: str, zone: str, plan: str = PLAN_TEXT, owner=40):
+    pkgs = [yaml.safe_load(t) for t in (DUMP_TEXT, plan, GUARD_TEXT)]
+    pw = P.PlanWorld(local_start, pkgs, zone)
+    w = pw.w
+    D.add_ha_filters(w)
+    d = D.DumpDongle(w, phase=0.0, handle_delays=(0.117,))
+    w.set("input_boolean.ecco_dump_to_grid_schedule_armed", "on")
+    w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+    w.set(LAST, "")
+    w.set(PLAN_LAST, "")
+    w.set("input_boolean.ecco_plan_overrides_enabled", "on")
+    w.set("input_boolean.ecco_plan_defaults_seeded", "on")
+    for k, v in {"min_expiry": 15, "hold_default": 240, "hold_cap": 1440, "skip_cap": 1440, "cut_default": 1440, "cut_cap": 4320, "cut_reserve": 80}.items():
+        w.set(f"input_number.ecco_plan_policy_{k}", f"{float(v)}")
+    pw.set_time("input_datetime.ecco_plan_policy_skip_until", "07:00:00")
+    w.set(OWNER, "unavailable" if owner is None else f"{float(owner)}")
+    return pw, d
+
+
+def clock_day_problems(plan_text: str, stop_early: bool = False) -> list[str]:
+    """The scheduled start, started at a given second of the override's life: refused (BLOCKED, OVERRIDE_ACTIVE, nothing staged or pressed) while the
+    override runs, started (one press) from its expiry second on. Every kind, on the clock-change day."""
+    bad: list[str] = []
+    probes = ((-3540, False), (-1800, False), (-60, False), (-1, False), (0, True), (1, True))      # (seconds from the true expiry, starts?)
+    try:
+        for kind in KINDS:
+            for off, starts in probes:
+                pw, d = world_in("2026-10-25 00:40:40", "Europe/London", plan_text)
+                hold(pw, kind, 120)
+                exp = float(pw.w.state_attr(EXP[kind], "timestamp"))
+                if exp != _EXP_AUTUMN or pw.state(EXP[kind]) != "2026-10-25 01:40:00":
+                    bad.append(f"{kind}: the override ends at {exp} / {pw.state(EXP[kind])!r}, wanted 01:40 GMT")
+                    break
+                pw.w.run_until(exp + off)
+                n0 = len(pw.w.service_log)
+                run_scheduled(pw, d)
+                last = pw.state(LAST)
+                if starts:
+                    ok = bool(d.presses) and d.presses[0][1] == "PASSED" and len(d.press_log) == 1 and not last.startswith("BLOCKED")
+                else:
+                    ok = last.startswith("BLOCKED - a Hold battery") and "OVERRIDE_ACTIVE" in last and untouched(pw, d, n0)
+                if not ok:
+                    bad.append(f"{kind}: scheduled start {off:+d} s from the true expiry: {last[:60]!r} presses={d.press_log}, wanted {'a start' if starts else 'a refusal'}")
+                    if stop_early:
+                        return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+cd_bad = clock_day_problems(PLAN_TEXT)
+check("clock-change day, each kind: a scheduled start inside the repeated hour of an override that ends at 01:40 GMT is refused (OVERRIDE_ACTIVE, nothing staged "
+      "or pressed) from 59 minutes in to the last second, and starts from the expiry second on", cd_bad == [], str(cd_bad[:3]))
+
+print("[8] mutation: the hold read from the state string, or its expiry second moved, lets a scheduled start through on the clock-change day")
+_READ = re.compile(r"\{%- set (\w+) = state_attr\('(input_datetime\.[a-z_]+)', 'timestamp'\) \| float\(none\) -%\}\n[ ]*\{%- set \1 = \1 if \([^\n]*\) else none -%\}")
+_HOLD_LINE = "{%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held"
+_ms = list(_READ.finditer(PLAN_TEXT))
+MUTANTS8 = []
+if len(_ms) == 10:
+    for k, kind_name in ((3, "Hold battery"), (4, "Skip tonight"), (5, "Prepare for power cut")):
+        m = _ms[k]
+        MUTANTS8.append((f"the export hold's {kind_name} expiry read back from the state string",
+                         PLAN_TEXT[:m.start()] + "{%- set " + m.group(1) + " = as_timestamp(states('" + m.group(2) + "'), none) -%}" + PLAN_TEXT[m.end():]))
+if PLAN_TEXT.count(_HOLD_LINE) == 1:
+    for v, kind_name in (("a", "Hold battery"), ("b", "Skip tonight"), ("c", "Prepare for power cut")):
+        MUTANTS8.append((f"the export hold releases {kind_name} 45 s early ({v} > n + 45)", PLAN_TEXT.replace(_HOLD_LINE, _HOLD_LINE.replace(f"{v} > n", f"{v} > n + 45"))))
+        MUTANTS8.append((f"the export hold still holds {kind_name} at the expiry second ({v} >= n)", PLAN_TEXT.replace(_HOLD_LINE, _HOLD_LINE.replace(f"{v} > n", f"{v} >= n"))))
+check("the nine mutants of this section are all built (the three hold-state read sites and the expiry-second line were each found)", len(MUTANTS8) == 9, str(len(MUTANTS8)))
+caught8 = 0
+for label, mutated in MUTANTS8:
+    found = clock_day_problems(mutated, stop_early=True)
+    if found:
+        caught8 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS8)} clock-change mutants, all caught by a running scheduled start", caught8 == len(MUTANTS8) and len(MUTANTS8) == 9, f"{caught8}/{len(MUTANTS8)}")
+check("control: the unmutated packages pass the same running cases", cd_bad == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
