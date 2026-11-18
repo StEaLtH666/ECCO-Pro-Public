@@ -11,7 +11,7 @@ import { buildControlsVM } from "../src/plan/controlsModel.ts";
 import { belowReserveSentence } from "../src/plan/present.ts";
 import { buildPlanSnapshotWithHelpers } from "../src/plan/helpers.ts";
 import { renderPlanSection } from "../src/plan/view.ts";
-import { renderPlanControls } from "../src/plan/controls.ts";
+import { renderPlanControls, START_BUTTON_LIMITATION } from "../src/plan/controls.ts";
 import { BASE_CONFIG } from "./support/fixtures.ts";
 import { flatten, loadCardClass } from "./support/loadCard.ts";
 import { NOW_MS, helperStates, running } from "./support/overrideFixtures.ts";
@@ -62,6 +62,20 @@ test("with the helpers the section says guarded, not read only, and lists every 
   for (const label of ["Hold battery", "Skip tonight", "Prepare for power cut"]) assert.ok(text.includes(label), label);
   assert.ok(text.includes("It does not charge the battery"), "Prepare for power cut says it does not charge");
   assert.ok(text.includes("Home Assistant checks every one against your limits again"), "the card says the server decides");
+});
+
+test("the stated Start-button limitation is shown with the controls, scripts found or missing, as plain text that adds no handler (release gate RG-ST3)", () => {
+  const found = renderPlanSection(cfg(), configured() as never, NOW_MS, renderPlanControls(() => undefined));
+  const missing = renderPlanSection(cfg(), helperStates(planStates()) as never, NOW_MS, renderPlanControls(() => undefined));
+  assert.ok(flatten(missing).includes("The guarded scripts were not found"), "the scripts-missing branch is the one under test");
+  for (const section of [found, missing]) {
+    const text = flatten(section);
+    assert.equal(text.split(START_BUTTON_LIMITATION).length - 1, 1, "the sentence is shown exactly once");
+    assert.ok(text.includes("data-plan-limitation"), "in its own marked paragraph");
+  }
+  assert.equal(handlersOf(missing).length, 0, "the note adds no handler of its own");
+  for (const must of ["Partial protection only", "Start button", "an assistant", "an administrator", "plain helpers", "firmware gate"]) assert.ok(START_BUTTON_LIMITATION.includes(must), must);
+  assert.ok(!/fully enforced|guaranteed|cannot be pressed/i.test(START_BUTTON_LIMITATION.replace("Partial protection only", "")), "it never claims full enforcement");
 });
 
 // ---- the closed list of calls -----------------------------------------------------------------------------------------------------------

@@ -1303,14 +1303,14 @@ EPC2 = Entry(
     added_files=_epc2.ADDED_FILES,
     frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after epc2; as of pub0 each is its pub0 state (manifest result / enrolled hash)
-        _epc2.README_REL: "6be98273ff76db8fea3dc261195b93b7556b1c8807fb33e23f202ab602d0beb6",
+        _epc2.README_REL: "43ac255500bedd7e62a39d1e30e441c3fd743b2fa468ce2c8b50a36a641c8b15",
         _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
         _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
-        _epc2.DIST_REL: "f6d2fc92fe2569a377c0f7ae796034c8aa1afaef8b2bbb567361a136e813edf9",
+        _epc2.DIST_REL: "a46fddab4083d91f13fe7664d7108b01aebcc6435fde4889929a7bca74fbb130",
         _epc2.DUMP_REL: "5ad802d885a1da5a3cfe4a692c9e97eb2c6a872d199cca9f301058347907d512",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="09888739f3376cd74d121bd6aebbca95595fe0b7192c25f3adb3bc001f5f8dc6",
+    fingerprint="0904104f23f624ee965ceae8d1492fdc5f9f5bbc0e555a42c8681ab0c0b11ce9",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1327,7 +1327,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="1fdfe7d8d8275e0c2e5b0e403a82b15b3f527fdb10979e3f424098951f34cb82",
+    fingerprint="79e63ae81fd265e086a35d8a2239e01a282a17576254bcff23cf06b20702dfd4",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

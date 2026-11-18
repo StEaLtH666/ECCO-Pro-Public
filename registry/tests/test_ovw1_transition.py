@@ -230,6 +230,10 @@ check("every frozen file as of ovw1 is its pinned sha256", all(sha(TXT[r]) == AF
       str({r: sha(TXT[r])[:16] for r in FROZEN_FILES if sha(TXT[r]) != AFTER[r]}))
 tracked = sorted(f for f in subprocess.run(["git", "ls-files", "-z", "--", CARD], cwd=str(ROOT), capture_output=True)
                  .stdout.decode("utf-8").split("\0") if f)
+# PEX (owner decision of 17 Nov 2026, OVW1 assertion correction): a card file that a post-export entry NEWER than ovw1 declares as added (epc1 onwards)
+# was not in the card folder as of ovw1. Only such declared additions are set aside; every other tracked file, the 28-file count and the folder hash stay pinned.
+LATER_ADDED = frozenset().union(frozenset(), *(e.added_files for e in POST[ids.index("ovw1") + 1:]))
+tracked = [f for f in tracked if f not in LATER_ADDED]
 folder = hashlib.sha256()
 for rel in tracked:
     folder.update(rel.encode())

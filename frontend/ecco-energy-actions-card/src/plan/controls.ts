@@ -20,6 +20,12 @@ const KIND_BLURB: Record<string, string> = {
   prepare_power_cut: "Raises a protected reserve (never lowers it) and holds exports. It does not charge the battery.",
 };
 
+// The stated limitation of Stage 3 (release gate RG-ST3), always visible beside the controls. Plain text only: it adds no button, handler or
+// service call. The same sentence stands in the card README, the plan-core README and the Stage 3 package headers; a static test
+// (home-assistant/tests/test_ecco_stage3_limitation.py) requires it, word for word, in each of those places and in the built bundle.
+export const START_BUTTON_LIMITATION =
+  "Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).";
+
 function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): TemplateResult {
   return html`
     <div class="plan-control" data-control=${k.kind}>
@@ -49,6 +55,7 @@ export function controlsView(vm: ControlsVM, dispatch: (call: PlanServiceCall) =
     <div class="plan-controls" data-block="controls">
       <h3 class="plan-heading">Quick overrides</h3>
       <p class="plan-reason">They only hold ECCO's starts back or raise a protected reserve. Home Assistant checks every one against your limits again and may refuse it.</p>
+      <p class="plan-reason plan-limitation" data-plan-limitation role="note">${START_BUTTON_LIMITATION}</p>
       ${vm.missingScripts.length
         ? html`<p class="plan-reason" data-controls-missing>The guarded scripts were not found (${vm.missingScripts.join(", ")}), so no override can be started or cancelled here.</p>`
         : vm.kinds.map((k) => kindView(k, dispatch))}
@@ -111,7 +118,8 @@ export const controlStyles = css`
     outline: 2px solid var(--eaa-accent);
     outline-offset: 2px;
   }
-  .plan-below-reserve {
+  .plan-below-reserve,
+  .plan-limitation {
     color: var(--eaa-warning);
   }
   .plan-result {

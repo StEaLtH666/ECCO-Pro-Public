@@ -270,6 +270,8 @@ That mapping is the owner's own file, so this repository does not change it; it 
 
 ### Residuals, stated plainly
 
+**Stated limitation.** Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
+
 1. **The dongle's own Start button entity can still be pressed** from the Home Assistant UI, another card or an assistant, and that press is
    bound by no override. Binding it needs a firmware gate: a flash, a separate approval. The scheduled start and the card's guarded start are bound.
 2. The helpers are plain helpers: anyone with Home Assistant administrator access (or an assistant holding it) can write them. The overrides

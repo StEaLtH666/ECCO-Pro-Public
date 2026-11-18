@@ -240,8 +240,11 @@ card and the dump schedule package.
 
 - `epc1` (stage 2, read-only plan views): the card's `README.md`, `src/config.ts` and `src/ecco-energy-actions-card.ts`, all frozen, and
   the files it adds (the plan sources and their tests, the plan-core package and its tests). The card's `tsconfig.json` is left at its export
-  state: enrolling it would need an owner decision (an O3 amendment and two pin assertions), so the strict type check of the card with the
-  plan core lives in `frontend/ecco-plan-core/tsconfig.card.json` instead.
+  state: enrolling it needs an owner decision (an O3 amendment) AND edits of eight pin assertions in seven suites (measured on 18 Nov 2026 in a
+  scratch copy: the `len(_pex.ENROLLED) == 6` pins of `test_ovw1_transition`, `test_ovw2_transition`, `test_ecco_battery_runtime`,
+  `test_ecco_intelligence_package`, `test_ecco_dump_to_grid_schedule_reliability` and `test_ecco_free_power_schedule_reliability`, and the exact
+  ENROLLED set and the 62-file FROZEN count of `test_pex_transition`), so the strict type check of the card with the plan core lives in
+  `frontend/ecco-plan-core/tsconfig.card.json` instead. The enrolment stays OPEN.
 - `epc2` (stage 3, guarded overrides): the same three card files again, the rebuilt `dist/ecco-energy-actions-card.js` (it was stale since
   the export: the rebuild also carries every source change since), the scheduled Dump to Grid package (frozen: refuses during an override,
   raises the Stop SOC to the effective reserve) and, chain-pinned, the deployment manifest (two package stanzas). Added: the plan helper
@@ -258,3 +261,20 @@ Home Assistant package, deployment, registry, Intelligence or ecco_core byte cha
 model returns data and says `actuationSupported: false`.
 
 Gentle Smart Charging v2 (18 Nov 2026) changes the CONTENT of those same three added files and of the plan-core `README.md` only: no file is added, so `epc3` is not re-sealed and no declaration changes. It stays read only (`actuationSupported: false`, `guarantee: 'NONE'`); no firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, no Modbus operation and no service call.
+
+## 18 Nov 2026: the OVW1 pin correction, the Stage 3 limitation text and the bundle rebuild
+
+- **`test_ovw1_transition` [1] and [2] (owner decision of 17 Nov 2026).** The card folder as of ovw1 has 28 Git-tracked files. After `epc1` and `epc2`
+  added card files, the suite counted every tracked file and failed. It now sets aside exactly the files that a post-export entry NEWER than ovw1
+  declares as added (read from the chain: `LATER_ADDED`, four lines, no new `_pex` call, so the PEX ledger is unchanged). Every frozen file's
+  sha256, the 28-file count, the folder hash, the 26 pre-ovw1 file set and ovw1's fingerprint stay pinned; an undeclared added file, a removed
+  file, an altered frozen file, an altered declaration and a re-ordered chain still fail (regression table in the status update).
+- **Stage 3 limitation text.** The overrides are a partial protection (release gate RG-ST3). The same sentence stands in the card's visible
+  Quick overrides block (`START_BUTTON_LIMITATION` in `src/plan/controls.ts`), the card README (an edit of epc2's README pair), the plan-core README
+  and the headers of the two Stage 3 packages; `home-assistant/tests/test_ecco_stage3_limitation.py` (added by epc2) requires it word for word in
+  each place and in the bundle, and that the card adds no service call or write path. The Start button itself is not bound by this: that needs a
+  firmware gate (a flash), approved separately.
+- **Bundle rebuild and re-seal.** `dist/ecco-energy-actions-card.js` was rebuilt (`node build.mjs`, esbuild 0.28.1, twice, byte-identical). A rebuild of
+  the `HEAD` sources alone would already differ from the committed bundle in minifier names, because `epc3` made `ecco-plan-core/src/index.ts`
+  re-export the controller model; the sources of `53326f2` reproduce the committed bundle byte for byte. `epc2`'s README and bundle pairs and
+  checkpoints were regenerated and `epc2` was re-sealed, then `epc3` (its parent link changed).

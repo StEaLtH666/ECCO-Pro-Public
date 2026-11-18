@@ -43,6 +43,8 @@
 #
 # The records are plain helpers: anyone with Home Assistant access can write them, as with every helper in this repository. They
 # protect against ECCO's own starts and the dashboard, not against an administrator.
+#
+# STATED LIMITATION (release gate RG-ST3): Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
 
 input_boolean:
   ecco_plan_overrides_enabled:
