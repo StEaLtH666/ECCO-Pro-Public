@@ -1,0 +1,536 @@
+# ECCO Pro - plan helpers and the guarded quick overrides (stage 3 of the two-master-card energy-control work)
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. This package is listed in deployment/ha-manifest.yaml so that a supervised install is possible;
+# nothing installs it until the owner authorises that. See frontend/ecco-plan-core/README.md ("Stage 3: what is enforced where").
+#
+# What it holds (and nothing else): the owner's override limits, the plan revision counter, the active-override records (one
+# start / expiry pair per kind, so at most one active override per kind), the last outcome, and two derived read-only sensors:
+#   sensor.ecco_plan_export_hold         clear | held | unknown   (any Hold battery, Skip tonight or Prepare for power cut record
+#                                        with an expiry in the future = held; an unreadable record = unknown, which refuses)
+#   sensor.ecco_plan_effective_reserve   the larger of the owner's own reserve and the running Prepare for power cut reserve; the
+#                                        larger KNOWN value when one input is unreadable; unknown when none is known (refuses). The
+#                                        Intelligence integration can read it through its existing `reserve.ha_minimum_soc` site
+#                                        mapping (a `{entity}` mapping in the owner's site file, a raise-only input there); that mapping
+#                                        is the owner's own file and is not changed by this repository.
+# One canonical plan: no PlanSettings value is copied here. The helpers hold policy, a counter and records only.
+#
+# The two guarded scripts (the ONLY writers of the override records):
+#   script.ecco_plan_override_start    kind, expiry_min | until_local, expected_revision
+#   script.ecco_plan_override_cancel   kind, expected_revision
+# Each enforces SERVER-SIDE the same rules as frontend/ecco-plan-core/src/overridePolicy.ts (parity table:
+# frontend/ecco-plan-core/test/parity/override_parity_cases.json, run against the validator by the plan-core suite and against
+# this file's own template by home-assistant/tests/test_ecco_plan_helpers_package.py): the limits switch must be on and every
+# limit valid (finite, whole, on its step, inside its bounds, default between minimum and maximum); the expiry is a whole number of
+# minutes between the shortest allowed override and the kind's maximum, and never above the hard ceiling; there is no open-ended
+# override; Prepare for power cut raises a protected reserve and is refused when the current reserve is unknown or above it.
+# A refusal writes nothing but the last-result text, raises ONE persistent notification and carries a STABLE reason code:
+#   POLICY_UNCONFIRMED POLICY_INVALID UNKNOWN_KIND EXPIRY_NOT_WHOLE RESERVE_UNKNOWN RESERVE_BELOW_CURRENT EXPIRY_MISSING
+#   EXPIRY_BELOW_MIN EXPIRY_ABOVE_CAP EXPIRY_ABOVE_CEILING   (shared with the plan core)
+#   UNTIL_NOT_ALLOWED REVISION_UNREADABLE REVISION_CONFLICT NOT_ACTIVE   (script-only)
+# The scripts write ONLY ecco_plan_* helpers and a persistent notification. They never call a charge, discharge, time-of-use,
+# inverter or dongle service: an override WITHHOLDS an export start and RAISES a protected reserve; it never starts a charge.
+# Prepare for power cut is a raised floor, not a charge: a battery below the raised reserve stays where it is, and the result text
+# says so ("Nothing is charging. Use Charge Battery if you want it filled."); filling it stays the explicit, separate, guarded
+# Charge Battery action.
+#
+# The owner's accepted defaults (17 Nov 2026) are written ONCE at the first Home Assistant start by ecco_plan_seed_accepted_limits
+# (a first-run seed, not `initial:`, so Home Assistant restores the owner's own values across restarts and updates):
+#   shortest allowed override 15 min | Hold battery default 4 h, maximum 24 h | Skip tonight ends 07:00 local next morning, maximum
+#   24 h | Prepare for power cut default 24 h, reserve 80 %, maximum 72 h.
+# The owner changes any of them by editing its input_number / input_datetime helper (within the helper's own min / max / step, which
+# equal the validator's bounds). The switch input_boolean.ecco_plan_overrides_enabled is NOT seeded: it stays off, and while it is off
+# no override can start, until the owner has looked at the limits and turned it on.
+#
+# The records are plain helpers: anyone with Home Assistant access can write them, as with every helper in this repository. They
+# protect against ECCO's own starts and the dashboard, not against an administrator.
+#
+# STATED LIMITATION (release gate RG-ST3): Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
+
+input_boolean:
+  ecco_plan_overrides_enabled:
+    name: ECCO plan, override limits reviewed and confirmed
+  ecco_plan_defaults_seeded:
+    name: ECCO plan, accepted limits seeded (set by the first-run seed)
+
+input_number:
+  ecco_plan_revision:
+    name: ECCO plan revision (counter, written only by the guarded path)
+    min: 0
+    max: 1000000000
+    step: 1
+    mode: box
+
+  ecco_plan_policy_min_expiry:
+    name: ECCO plan, shortest allowed override
+    min: 5
+    max: 60
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_hold_default:
+    name: ECCO plan, Hold battery default length
+    min: 5
+    max: 4320
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_hold_cap:
+    name: ECCO plan, Hold battery longest length
+    min: 5
+    max: 4320
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_skip_cap:
+    name: ECCO plan, Skip tonight longest length
+    min: 5
+    max: 2160
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_default:
+    name: ECCO plan, Prepare for power cut default length
+    min: 5
+    max: 10080
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_cap:
+    name: ECCO plan, Prepare for power cut longest length
+    min: 5
+    max: 10080
+    step: 5
+    mode: box
+    unit_of_measurement: min
+
+  ecco_plan_policy_cut_reserve:
+    name: ECCO plan, Prepare for power cut reserve
+    min: 10
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+
+  ecco_plan_override_prepare_power_cut_reserve:
+    name: ECCO plan, reserve of the running Prepare for power cut
+    min: 10
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"
+
+input_datetime:
+  ecco_plan_policy_skip_until:
+    name: ECCO plan, Skip tonight ends at (local time of day, 03:00 to 23:55)
+    has_date: false
+    has_time: true
+
+  ecco_plan_override_hold_battery_start:
+    name: ECCO plan, Hold battery started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_hold_battery_expires:
+    name: ECCO plan, Hold battery expires
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_skip_tonight_start:
+    name: ECCO plan, Skip tonight started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_skip_tonight_expires:
+    name: ECCO plan, Skip tonight expires
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_prepare_power_cut_start:
+    name: ECCO plan, Prepare for power cut started
+    has_date: true
+    has_time: true
+
+  ecco_plan_override_prepare_power_cut_expires:
+    name: ECCO plan, Prepare for power cut expires
+    has_date: true
+    has_time: true
+
+input_text:
+  ecco_plan_last_result:
+    name: ECCO plan, last guarded plan action result
+    max: 255
+
+script:
+  ecco_plan_override_start:
+    alias: "ECCO plan - start an override (guarded)"
+    description: >-
+      Starts Hold battery, Skip tonight or Prepare for power cut. Refuses, with a persistent notification and a stable reason code,
+      unless the owner's limits are confirmed and valid and the expiry is inside them. Writes only the plan helpers.
+    mode: single
+    fields:
+      kind:
+        description: "hold_battery, skip_tonight or prepare_power_cut"
+      expiry_min:
+        description: "Whole minutes from now; omit for the owner's default (Skip tonight: until its end time)"
+      until_local:
+        description: "true: until the owner's Skip tonight end time (Hold battery and Skip tonight only); expiry_min wins if both are given"
+      expected_revision:
+        description: "The plan revision the caller saw; a different stored revision refuses (compare and set)"
+    sequence:
+      - variables:
+          decision: >-
+            {%- set kinds = ['hold_battery', 'skip_tonight', 'prepare_power_cut'] -%}
+            {%- set kind_in = kind | default('') | string | trim | lower -%}
+            {%- set exp_in = expiry_min | default('') -%}
+            {%- set until_on = (until_local | default(false)) in [true, 'true', 'True', 'on', 'yes'] -%}
+            {%- set rev_in = expected_revision | default('') -%}
+            {%- set su = states('input_datetime.ecco_plan_policy_skip_until') -%}
+            {%- set sp = su.split(':') -%}
+            {%- set su_min = (sp[0] | int(-1)) * 60 + (sp[1] | int(-1)) + (sp[2] | int(-1)) / 60 if (sp | length == 3 and (sp[0] | int(-1)) >= 0 and (sp[0] | int(-1)) <= 23 and (sp[1] | int(-1)) >= 0 and (sp[1] | int(-1)) <= 59 and (sp[2] | int(-1)) >= 0 and (sp[2] | int(-1)) <= 59) else none -%}
+            {%- set specs = [
+                  ['Shortest allowed override', states('input_number.ecco_plan_policy_min_expiry') | float(none), 5, 60, 5],
+                  ['Hold battery default', states('input_number.ecco_plan_policy_hold_default') | float(none), 5, 4320, 5],
+                  ['Hold battery maximum', states('input_number.ecco_plan_policy_hold_cap') | float(none), 5, 4320, 5],
+                  ['Skip tonight end time', su_min, 180, 1435, 5],
+                  ['Skip tonight maximum', states('input_number.ecco_plan_policy_skip_cap') | float(none), 5, 2160, 5],
+                  ['Power-cut default', states('input_number.ecco_plan_policy_cut_default') | float(none), 5, 10080, 5],
+                  ['Power-cut maximum', states('input_number.ecco_plan_policy_cut_cap') | float(none), 5, 10080, 5],
+                  ['Power-cut reserve', states('input_number.ecco_plan_policy_cut_reserve') | float(none), 10, 100, 1]] -%}
+            {%- set pol = namespace(v=[], bad=[]) -%}
+            {%- for s in specs -%}
+              {%- set x = s[1] -%}
+              {%- if x is none or x != x or x < s[2] or x > s[3] or (x % 1) != 0 or ((x - s[2]) % s[4]) != 0 -%}
+                {%- set pol.bad = pol.bad + [s[0]] -%}
+                {%- set pol.v = pol.v + [none] -%}
+              {%- else -%}
+                {%- set pol.v = pol.v + [x | int] -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set p = pol.v -%}
+            {%- if p[0] is not none and p[1] is not none and p[1] < p[0] -%}{%- set pol.bad = pol.bad + ['Hold battery default is shorter than the shortest allowed override'] -%}{%- endif -%}
+            {%- if p[1] is not none and p[2] is not none and p[1] > p[2] -%}{%- set pol.bad = pol.bad + ['Hold battery default is longer than its maximum'] -%}{%- endif -%}
+            {%- if p[0] is not none and p[5] is not none and p[5] < p[0] -%}{%- set pol.bad = pol.bad + ['Power-cut default is shorter than the shortest allowed override'] -%}{%- endif -%}
+            {%- if p[5] is not none and p[6] is not none and p[5] > p[6] -%}{%- set pol.bad = pol.bad + ['Power-cut default is longer than its maximum'] -%}{%- endif -%}
+            {%- if p[0] is not none and p[4] is not none and p[4] < p[0] -%}{%- set pol.bad = pol.bad + ['Skip tonight maximum is shorter than the shortest allowed override'] -%}{%- endif -%}
+            {%- set confirmed = is_state('input_boolean.ecco_plan_overrides_enabled', 'on') -%}
+            {%- set owner = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
+            {%- set owner_ok = owner is number and owner == owner and owner >= 0 and owner <= 100 -%}
+            {%- set now_ts = as_timestamp(now()) -%}
+            {%- set start_ts = (now_ts // 60) * 60 -%}
+            {%- set until_min = (((as_timestamp(today_at(su)) if as_timestamp(today_at(su)) > start_ts else as_timestamp(today_at(su) + timedelta(days=1))) - start_ts) / 60) | round(0) | int if su_min is not none else none -%}
+            {%- if exp_in != '' -%}
+              {%- set ex = exp_in | float(none) -%}
+            {%- elif until_on or kind_in == 'skip_tonight' -%}
+              {%- set ex = until_min -%}
+            {%- elif kind_in == 'hold_battery' -%}
+              {%- set ex = p[1] -%}
+            {%- else -%}
+              {%- set ex = p[5] -%}
+            {%- endif -%}
+            {%- set cap = p[2] if kind_in == 'hold_battery' else (p[4] if kind_in == 'skip_tonight' else p[6]) -%}
+            {%- set ceiling = 4320 if kind_in == 'hold_battery' else (2160 if kind_in == 'skip_tonight' else 10080) -%}
+            {%- set rev_raw = states('input_number.ecco_plan_revision') | float(none) -%}
+            {%- set rev_ok = rev_raw is number and rev_raw == rev_raw and rev_raw >= 0 and (rev_raw % 1) == 0 -%}
+            {%- set r = namespace(code='', text='') -%}
+            {%- if not confirmed -%}
+              {%- set r.code = 'POLICY_UNCONFIRMED' -%}{%- set r.text = 'The override limits have not been confirmed (the switch is off or cannot be read), so no override can be started.' -%}
+            {%- elif pol.bad | length > 0 -%}
+              {%- set r.code = 'POLICY_INVALID' -%}{%- set r.text = 'The override limits are not valid (' ~ (pol.bad | join('; ')) ~ '), so no override can be started.' -%}
+            {%- elif kind_in not in kinds -%}
+              {%- set r.code = 'UNKNOWN_KIND' -%}{%- set r.text = 'Unknown override.' -%}
+            {%- elif exp_in != '' and (ex is none or ex != ex or (ex % 1) != 0) -%}
+              {%- set r.code = 'EXPIRY_NOT_WHOLE' -%}{%- set r.text = 'The expiry must be a whole number of minutes.' -%}
+            {%- elif until_on and kind_in == 'prepare_power_cut' and exp_in == '' -%}
+              {%- set r.code = 'UNTIL_NOT_ALLOWED' -%}{%- set r.text = 'Prepare for power cut has no until-a-time choice; give a length in minutes.' -%}
+            {%- elif kind_in == 'prepare_power_cut' and not owner_ok -%}
+              {%- set r.code = 'RESERVE_UNKNOWN' -%}{%- set r.text = 'The current backup reserve is not known, so it cannot be shown that the power-cut reserve raises it.' -%}
+            {%- elif kind_in == 'prepare_power_cut' and p[7] < owner -%}
+              {%- set r.code = 'RESERVE_BELOW_CURRENT' -%}{%- set r.text = 'The power-cut reserve (' ~ p[7] ~ ' %) is below the current backup reserve (' ~ (owner | round(0) | int) ~ ' %); an override never lowers a reserve.' -%}
+            {%- elif ex is none or ex != ex -%}
+              {%- set r.code = 'EXPIRY_MISSING' -%}{%- set r.text = 'An override needs an expiry; there is no open-ended override.' -%}
+            {%- elif ex < p[0] -%}
+              {%- set r.code = 'EXPIRY_BELOW_MIN' -%}{%- set r.text = 'The expiry must be at least ' ~ p[0] ~ ' minutes.' -%}
+            {%- elif ex > cap -%}
+              {%- set r.code = 'EXPIRY_ABOVE_CAP' -%}{%- set r.text = 'The expiry can be at most ' ~ cap ~ ' minutes for this override.' -%}
+            {%- elif ex > ceiling -%}
+              {%- set r.code = 'EXPIRY_ABOVE_CEILING' -%}{%- set r.text = 'The expiry is beyond the hard ceiling of ' ~ ceiling ~ ' minutes.' -%}
+            {%- elif not rev_ok -%}
+              {%- set r.code = 'REVISION_UNREADABLE' -%}{%- set r.text = 'The stored plan revision cannot be read, so nothing was changed.' -%}
+            {%- elif rev_in != '' and (rev_in | float(none)) != rev_raw -%}
+              {%- set r.code = 'REVISION_CONFLICT' -%}{%- set r.text = 'The plan changed since you looked at it (revision ' ~ (rev_raw | int) ~ '); look again and retry.' -%}
+            {%- endif -%}
+            {{ {'ok': r.code == '', 'code': r.code, 'text': r.text,
+                'expiry_min': (ex | int) if r.code == '' else 0,
+                'start_ts': start_ts,
+                'expires_ts': (start_ts + (ex | int) * 60) if r.code == '' else 0,
+                'reserve': (p[7] if kind_in == 'prepare_power_cut' else 0) if r.code == '' else 0,
+                'revision': (rev_raw | int) if rev_ok else -1,
+                'kind': kind_in} }}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ decision.ok }}"
+            sequence:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ decision.kind == 'hold_battery' }}"
+                    sequence:
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_hold_battery_start
+                        data:
+                          timestamp: "{{ decision.start_ts }}"
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_hold_battery_expires
+                        data:
+                          timestamp: "{{ decision.expires_ts }}"
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ decision.kind == 'skip_tonight' }}"
+                    sequence:
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_skip_tonight_start
+                        data:
+                          timestamp: "{{ decision.start_ts }}"
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_skip_tonight_expires
+                        data:
+                          timestamp: "{{ decision.expires_ts }}"
+                default:
+                  # Prepare for power cut: the reserve record first, so the effective reserve is already raised when the expiry
+                  # makes the record active. It raises a protected floor; it starts no charge.
+                  - action: input_number.set_value
+                    target:
+                      entity_id: input_number.ecco_plan_override_prepare_power_cut_reserve
+                    data:
+                      value: "{{ decision.reserve }}"
+                  - action: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.ecco_plan_override_prepare_power_cut_start
+                    data:
+                      timestamp: "{{ decision.start_ts }}"
+                  - action: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.ecco_plan_override_prepare_power_cut_expires
+                    data:
+                      timestamp: "{{ decision.expires_ts }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.ecco_plan_revision
+                data:
+                  value: "{{ decision.revision + 1 }}"
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_plan_last_result
+                data:
+                  value: >-
+                    {%- set soc = states('sensor.ecco_clock_dongle_ecco_battery_soc') | float(none) -%}
+                    {%- set tail = ' The battery is at ' ~ (soc | round(0) | int) ~ ' percent, below the ' ~ decision.reserve ~ ' percent reserve. Nothing is charging. Use Charge Battery if you want it filled.' if (decision.kind == 'prepare_power_cut' and soc is number and soc == soc and soc < decision.reserve) else '' -%}
+                    {{ ('STARTED ' ~ decision.kind ~ ' until ' ~ (decision.expires_ts | timestamp_custom('%Y-%m-%d %H:%M')) ~ '.' ~ tail)[:250] }}
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_plan_override_refused
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_plan_last_result
+            data:
+              value: "{{ ('REFUSED ' ~ decision.code ~ ' - ' ~ decision.text)[:250] }}"
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_plan_override_refused
+              title: "ECCO plan: override refused"
+              message: "{{ decision.text }} (reason {{ decision.code }})"
+
+  ecco_plan_override_cancel:
+    alias: "ECCO plan - cancel an override (guarded)"
+    description: >-
+      Ends Hold battery, Skip tonight or Prepare for power cut now by setting its expiry to this minute. Always allowed (it only
+      removes a hold), so it does not need the limits to be valid. Writes only the plan helpers.
+    mode: single
+    fields:
+      kind:
+        description: "hold_battery, skip_tonight or prepare_power_cut"
+      expected_revision:
+        description: "The plan revision the caller saw; a different stored revision refuses (compare and set)"
+    sequence:
+      - variables:
+          decision: >-
+            {%- set kind_in = kind | default('') | string | trim | lower -%}
+            {%- set rev_in = expected_revision | default('') -%}
+            {%- set now_ts = as_timestamp(now()) -%}
+            {%- set start_ts = (now_ts // 60) * 60 -%}
+            {%- set ex = {'hold_battery': as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none),
+                          'skip_tonight': as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none),
+                          'prepare_power_cut': as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none)} -%}
+            {%- set rev_raw = states('input_number.ecco_plan_revision') | float(none) -%}
+            {%- set rev_ok = rev_raw is number and rev_raw == rev_raw and rev_raw >= 0 and (rev_raw % 1) == 0 -%}
+            {%- set r = namespace(code='', text='') -%}
+            {%- if kind_in not in ex -%}
+              {%- set r.code = 'UNKNOWN_KIND' -%}{%- set r.text = 'Unknown override.' -%}
+            {%- elif not rev_ok -%}
+              {%- set r.code = 'REVISION_UNREADABLE' -%}{%- set r.text = 'The stored plan revision cannot be read, so nothing was changed.' -%}
+            {%- elif rev_in != '' and (rev_in | float(none)) != rev_raw -%}
+              {%- set r.code = 'REVISION_CONFLICT' -%}{%- set r.text = 'The plan changed since you looked at it (revision ' ~ (rev_raw | int) ~ '); look again and retry.' -%}
+            {%- elif ex[kind_in] is not none and ex[kind_in] <= now_ts -%}
+              {%- set r.code = 'NOT_ACTIVE' -%}{%- set r.text = 'That override is not active; nothing to cancel.' -%}
+            {%- endif -%}
+            {{ {'ok': r.code == '', 'code': r.code, 'text': r.text, 'kind': kind_in, 'expires_ts': start_ts,
+                'revision': (rev_raw | int) if rev_ok else -1} }}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ decision.ok }}"
+            sequence:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ decision.kind == 'hold_battery' }}"
+                    sequence:
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_hold_battery_expires
+                        data:
+                          timestamp: "{{ decision.expires_ts }}"
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ decision.kind == 'skip_tonight' }}"
+                    sequence:
+                      - action: input_datetime.set_datetime
+                        target:
+                          entity_id: input_datetime.ecco_plan_override_skip_tonight_expires
+                        data:
+                          timestamp: "{{ decision.expires_ts }}"
+                default:
+                  - action: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.ecco_plan_override_prepare_power_cut_expires
+                    data:
+                      timestamp: "{{ decision.expires_ts }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.ecco_plan_revision
+                data:
+                  value: "{{ decision.revision + 1 }}"
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_plan_last_result
+                data:
+                  value: "CANCELLED {{ decision.kind }}."
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_plan_override_refused
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_plan_last_result
+            data:
+              value: "{{ ('REFUSED ' ~ decision.code ~ ' - ' ~ decision.text)[:250] }}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ decision.code != 'NOT_ACTIVE' }}"
+                sequence:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_plan_override_refused
+                      title: "ECCO plan: override cancel refused"
+                      message: "{{ decision.text }} (reason {{ decision.code }})"
+
+automation:
+  - id: ecco_plan_seed_accepted_limits
+    alias: "ECCO plan - seed the accepted override limits once"
+    description: >-
+      First run only (until input_boolean.ecco_plan_defaults_seeded is on): writes the owner's accepted starting limits into the
+      limit helpers, which then keep whatever the owner sets. It never turns the confirmation switch on and writes only plan helpers.
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ecco_plan_defaults_seeded
+        state: "off"
+    actions:
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_min_expiry}
+        data: {value: 15}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_hold_default}
+        data: {value: 240}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_hold_cap}
+        data: {value: 1440}
+      - action: input_datetime.set_datetime
+        target: {entity_id: input_datetime.ecco_plan_policy_skip_until}
+        data: {time: "07:00:00"}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_skip_cap}
+        data: {value: 1440}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_cut_default}
+        data: {value: 1440}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_cut_cap}
+        data: {value: 4320}
+      - action: input_number.set_value
+        target: {entity_id: input_number.ecco_plan_policy_cut_reserve}
+        data: {value: 80}
+      - action: input_boolean.turn_on
+        target: {entity_id: input_boolean.ecco_plan_defaults_seeded}
+
+template:
+  - sensor:
+      - name: ECCO Plan Export Hold
+        unique_id: ecco_plan_export_hold
+        icon: mdi:export
+        # clear: no record is active. held: Hold battery, Skip tonight or Prepare for power cut has an expiry in the future (also
+        # when another record is unreadable). unknown: nothing is active and at least one record cannot be read. now() makes this
+        # re-render every minute, so an expiry is noticed within a minute (late, which keeps the hold, never early).
+        state: >-
+          {%- set n = as_timestamp(now()) -%}
+          {%- set a = as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none) -%}
+          {%- set b = as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none) -%}
+          {%- set c = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+          {%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held
+          {%- elif a is none or b is none or c is none -%}unknown
+          {%- else -%}clear{%- endif -%}
+        attributes:
+          held_by: >-
+            {%- set n = as_timestamp(now()) -%}
+            {%- set a = as_timestamp(states('input_datetime.ecco_plan_override_hold_battery_expires'), none) -%}
+            {%- set b = as_timestamp(states('input_datetime.ecco_plan_override_skip_tonight_expires'), none) -%}
+            {%- set c = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+            {{ ((['hold_battery'] if (a is not none and a > n) else []) + (['skip_tonight'] if (b is not none and b > n) else []) + (['prepare_power_cut'] if (c is not none and c > n) else [])) | join(',') }}
+
+      - name: ECCO Plan Effective Reserve
+        unique_id: ecco_plan_effective_reserve
+        unit_of_measurement: "%"
+        state_class: measurement
+        # The larger of the owner's own reserve and the running Prepare for power cut reserve (raise-only). An unreadable input is
+        # skipped and the larger KNOWN value stands; when none is known the state is unknown and every start that needs it refuses.
+        state: >-
+          {%- set n = as_timestamp(now()) -%}
+          {%- set o = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
+          {%- set o = o if (o is number and o == o and o >= 0 and o <= 100) else none -%}
+          {%- set e = as_timestamp(states('input_datetime.ecco_plan_override_prepare_power_cut_expires'), none) -%}
+          {%- set c = states('input_number.ecco_plan_override_prepare_power_cut_reserve') | float(none) -%}
+          {%- set c = c if (e is not none and e > n and c is number and c == c and c >= 10 and c <= 100) else none -%}
+          {%- set known = [o, c] | reject('none') | list -%}
+          {{ (known | max | round(0) | int) if known | length > 0 else 'unknown' }}
+        attributes:
+          owner_reserve: >-
+            {%- set o = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
+            {{ (o | round(0) | int) if (o is number and o == o and o >= 0 and o <= 100) else 'unknown' }}
+          # Moves every minute, so a reader that judges freshness by the entity's age (the Intelligence integration does, with a 600 s
+          # limit for the reserve signal) sees it as live, exactly as it does the configuration bridge's own reserve mirror.
+          refreshed_at: "{{ now().isoformat() }}"

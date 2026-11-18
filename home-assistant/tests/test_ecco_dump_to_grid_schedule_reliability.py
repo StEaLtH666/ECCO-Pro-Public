@@ -97,6 +97,10 @@ class Run:
         w.set(ARMED, "off")
         w.set(LAST, "")
         w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+        # PLAN (stage 3): the scheduled start reads the plan's two sensors and fails closed without them. Here no override runs and the
+        # effective reserve is below every Stop SOC of this suite; the plan cases are proved by test_ecco_plan_enforcement.py.
+        w.set("sensor.ecco_plan_export_hold", "clear")
+        w.set("sensor.ecco_plan_effective_reserve", "20")
         self.start_ts = S.parse_local(start)
         self.end_ts = self.start_ts + duration * 60
         self.ha.start()
@@ -141,7 +145,7 @@ def old_package_text() -> str:
 
 OLD_TEXT = old_package_text()
 import _pex as _pex  # noqa: E402  (PEX: r9's declared edits are undone below, so the earlier entry's round trip still lands on its package)
-PRE_R9_TEXT = _pex.as_of(PKG_REL, "isp1", PKG_TEXT)   # PEX: the live package with r9 undone (r9 is declared by its own entry)
+PRE_R9_TEXT = _pex.as_of(PKG_REL, "isp1", PKG_TEXT)   # PEX: the live package with every entry after isp1 undone (r9 and epc2 are each declared by their own entry)
 
 # ======================================================================================================================
 print("[0] static")

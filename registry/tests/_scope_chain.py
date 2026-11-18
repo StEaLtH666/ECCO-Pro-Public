@@ -122,6 +122,9 @@ import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
 import _isp1_scope as _isp1  # noqa: E402
+import _epc1_scope as _epc1  # noqa: E402
+import _epc2_scope as _epc2  # noqa: E402
+import _epc3_scope as _epc3  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1293,7 +1296,79 @@ R9 = Entry(
          "only (the FULL Home Assistant restart requirement on both package stanzas): ZERO firmware, registry, dashboard or card "
          "change, no new inverter or dongle write",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9)
+# epc1 (stage 2 of the two-master-card energy-control work: the read-only plan views in the Energy Actions card; _epc1_scope.py): made on
+# the export after isp1. FROZEN edits (PEX): the card's README.md (a pub0 target) and its src/config.ts and src/ecco-energy-actions-card.ts
+# (enrolled): the `show_plan` / `plan` configuration and the plan section under the two tiles. The card's tsconfig.json is NOT declared (it
+# is neither frozen nor enrolled; enrolling it is an owner decision): the working tree keeps it at its export content. ADDED: the plan sources
+# and tests of the card (the card folder's added files are what the three folder pins skip), the plan-core package and its tests.
+# Measured, not declared: no chain-pinned reverter, no delta, no op path; ZERO firmware, Home Assistant package, deployment, registry,
+# Intelligence or ecco_core byte; ZERO Modbus operation; no service call (the views display only).
+EPC1 = Entry(
+    id="epc1", pr="EPC1", commit="unmerged",
+    added_files=_epc1.ADDED_FILES,
+    frozen_reverts=dict(_epc1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after epc1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _epc1.README_REL: "08355cf94824817953b9781d0801844a341741f78e0e524d58a8088ac335562d",
+        _epc1.CONFIG_REL: "ba00c1bd90b1b0187dec9718df6a1bd99b2e5546040efb74dc4bd8496fdd950d",
+        _epc1.SRC_REL: "c5205c6cc04943e0082f53324205e9d613b93172daf6451a9a84c434a98d6986",
+    },
+    # _pex.fingerprint(EPC1): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="687105e3f533fcd19b8b94f3346a4aff70beb3c33afe772bd8fc67de130d95bd",
+    note="the read-only plan views in the Energy Actions card (Tomorrow's Plan, the six-slot TOU timeline, the override limits and running "
+         "overrides, behind show_plan, default off): the card's README, config and source, plus the plan sources, tests and the plan-core "
+         "package they use; the views display only (no service call); ZERO firmware, Home Assistant package, deployment, registry, "
+         "Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# epc2 (stage 3 of the same work: guarded overrides and their enforcement; offline, nothing installed; _epc2_scope.py): made on the export
+# after epc1. FROZEN edits (PEX): the card's README.md, src/config.ts, src/ecco-energy-actions-card.ts and the rebuilt
+# dist/ecco-energy-actions-card.js (the bundle was not rebuilt since the export: the rebuild carries every source change since), and the
+# scheduled Dump to Grid package (it refuses during Hold battery / Skip tonight / Prepare for power cut, fails closed, and raises the
+# Stop SOC it stages to the effective reserve). CHAIN-PINNED edit: the deployment manifest (the stanzas of the two new packages).
+# ADDED: the plan helper package (the owner's limits, the override records, two guarded scripts that write only those helpers, the
+# export-hold and effective-reserve sensors) and the guarded start package, their suites and test support, the card's control sources
+# and tests. Measured, not declared: no delta, no op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte;
+# ZERO Modbus operation; the new scripts call only helper setters and persistent notifications, and the guarded start presses the
+# existing dongle start button once, as the card did before.
+EPC2 = Entry(
+    id="epc2", pr="EPC2", commit="unmerged",
+    reverts=dict(_epc2.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after epc2
+        HA_MANIFEST: "b5f1befe5034ceaee15e053442d93e82a49d52777587bb81fd3093d469f3264d",
+    },
+    added_files=_epc2.ADDED_FILES,
+    frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after epc2; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _epc2.README_REL: "43ac255500bedd7e62a39d1e30e441c3fd743b2fa468ce2c8b50a36a641c8b15",
+        _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
+        _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
+        _epc2.DIST_REL: "a46fddab4083d91f13fe7664d7108b01aebcc6435fde4889929a7bca74fbb130",
+        _epc2.DUMP_REL: "4aa18beaaa185d5697aa86c3ed373f6843d3be5310c49de92c2798ac84dae371",
+    },
+    # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
+    fingerprint="ac818871098392f24264f3ee38ecce4bb311ac1bd68003009b231ab963ab3ecb",
+    note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
+         "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
+         "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
+         "Grid start refusing during an override and raising its Stop SOC to the effective reserve, the card's start and cancel controls "
+         "(script.turn_on on the guarded scripts only) and its rebuilt bundle, and the manifest stanzas of the two packages: ZERO firmware, "
+         "registry data, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# epc3 (the Gentle Smart Charging controller MODEL: read only, offline, nothing installed or actuated; _epc3_scope.py): made on the export
+# after epc2. ADDED files only: the pure controller model in the plan-core package, its closed-loop battery simulator and its suite. No
+# frozen or chain-pinned edit (the plan-core README and index are epc1 added files). Measured, not declared: no reverter, no delta, no op
+# path; ZERO firmware, Home Assistant package, deployment, registry, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation;
+# no service call and no write: the model returns data labelled "model, not a command" with actuationSupported false.
+EPC3 = Entry(
+    id="epc3", pr="EPC3", commit="unmerged",
+    added_files=_epc3.ADDED_FILES,
+    # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
+    fingerprint="30f8fa8b558227a71973748a7302f3416b915467134e3d8aabb109fbacd83ae6",
+    note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
+         "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
+         "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "
+         "Home Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

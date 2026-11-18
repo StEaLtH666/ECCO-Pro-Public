@@ -106,6 +106,11 @@ class Run:
         w.set(f"input_number.{p}_schedule_power", "3000.0")
         if kind == "dump":
             w.set(f"input_number.{p}_schedule_stop_soc", "40.0")
+            # PLAN (stage 3, merged with r9): the scheduled start reads the plan's two sensors and fails closed without them. Here no override
+            # runs and the effective reserve (20) is below this suite's Stop SOC (40), so nothing is raised; the plan cases are proved by
+            # test_ecco_plan_enforcement.py, and the two layers together by test_ecco_r9_stage3_composition.py.
+            w.set("sensor.ecco_plan_export_hold", "clear")
+            w.set("sensor.ecco_plan_effective_reserve", "20")
         w.set("sensor.ecco_config_maximum_grid_charge_power", "8000")
         w.set(self.armed, "off")
         w.set(self.last_e, "")

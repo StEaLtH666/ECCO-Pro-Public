@@ -1,0 +1,62 @@
+# ECCO Pro - guarded manual Dump to Grid start (stage 3 of the two-master-card energy-control work)
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Listed in deployment/ha-manifest.yaml for a supervised install; it needs
+# home-assistant/packages/ecco_plan_helpers.yaml installed first (it reads the two sensors that package defines).
+#
+# What it is: the path the Energy Actions card uses for the manual Dump to Grid Start when the card is configured with
+# dump_to_grid.guarded_start. The card used to press the dongle's start button directly, so a running Hold battery, Skip tonight or
+# Prepare for power cut (and the effective reserve) bound only the scheduled start. This script applies the same two checks before it
+# presses the SAME button, and only then:
+#   - sensor.ecco_plan_export_hold must read clear (held = an override is active; unknown = a record cannot be read: refused);
+#   - sensor.ecco_plan_effective_reserve must be known, and the Stop SOC staged on the dongle must be at least that reserve (below it
+#     is refused, not changed: the owner sees and sets the staged value, so nothing here writes it).
+# A refusal presses nothing, writes the last-result text (input_text.ecco_plan_last_result) and raises ONE persistent notification.
+# It calls exactly one dongle service: the same start button press the card made before. The firmware still owns every start
+# interlock (two-step arm, snapshot, bus, limits), so this script adds checks and removes none.
+#
+# RESIDUAL (not hidden): the dongle's own Start button entity can still be pressed from the Home Assistant UI, another card or an
+# assistant, and that press is not bound by any override. Binding it needs a firmware gate (a flash, a separate approval).
+#
+# STATED LIMITATION (release gate RG-ST3): Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
+
+script:
+  ecco_dump_to_grid_start_guarded:
+    alias: "ECCO - Start Dump to Grid (guarded by the plan overrides and the effective reserve)"
+    description: >-
+      Presses the Dump to Grid start button only while no Hold battery, Skip tonight or Prepare for power cut is active and the
+      staged Stop SOC is at least the effective reserve. Fails closed when either cannot be read.
+    mode: single
+    sequence:
+      - variables:
+          plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
+          plan_reserve: "{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}"
+          staged_stop_soc: "{{ states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) }}"
+          refusal: >-
+            {%- if plan_hold == 'held' -%}OVERRIDE_ACTIVE|A Hold battery, Skip tonight or Prepare for power cut is active, so Dump to Grid was not started.
+            {%- elif plan_hold != 'clear' -%}OVERRIDE_UNREADABLE|The override records cannot be read, so Dump to Grid was not started (it fails closed).
+            {%- elif plan_reserve < 0 -%}RESERVE_UNKNOWN|The effective reserve cannot be read, so Dump to Grid was not started (it fails closed).
+            {%- elif staged_stop_soc < 0 -%}STOP_SOC_UNREADABLE|The staged Stop SOC cannot be read, so Dump to Grid was not started.
+            {%- elif staged_stop_soc < plan_reserve -%}STOP_SOC_BELOW_RESERVE|The staged Stop SOC ({{ staged_stop_soc | round(0) | int }} %) is below the effective reserve ({{ plan_reserve | round(0) | int }} %); raise the Stop SOC, then start again.
+            {%- endif -%}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ refusal | trim != '' }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_plan_last_result
+                data:
+                  value: "{{ ('REFUSED ' ~ refusal.split('|')[0] ~ ' - ' ~ refusal.split('|')[1])[:250] }}"
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_dump_to_grid_plan_blocked
+                  title: "ECCO: Dump to Grid was not started"
+                  message: "{{ refusal.split('|')[1] }} (reason {{ refusal.split('|')[0] }})"
+        default:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: ecco_dump_to_grid_plan_blocked
+          - action: button.press
+            target:
+              entity_id: button.ecco_clock_dongle_start_dump_to_grid_now

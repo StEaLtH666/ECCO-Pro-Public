@@ -44,6 +44,16 @@
 # event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
 # on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
 # for Home Assistant's clock to agree with it; if that never happens the capture stays unknown (fail closed).
+#
+# PLAN (stage 3, home-assistant/packages/ecco_plan_helpers.yaml, which must be installed with or before this file): the start also
+# refuses, with its own BLOCKED result text (the end-of-run alert below raises the persistent notification) and with nothing
+# staged or pressed,
+#   - while a Hold battery, Skip tonight or Prepare for power cut is active (sensor.ecco_plan_export_hold reads held), and while that
+#     cannot be read (unknown, unavailable or the entity missing: it fails closed);
+#   - while the effective reserve (sensor.ecco_plan_effective_reserve: the larger of the owner's reserve and a running power-cut reserve)
+#     cannot be read, or leaves no room under the 90 % Stop SOC limit;
+# and it raises the Stop SOC it stages to at least the effective reserve (rounded up), never lowers it. The scheduled start is the
+# trusted backend: the dashboard and the card are not what keeps an override.
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -116,7 +126,12 @@ script:
       - variables:
           requested_duration: "{{ duration_minutes | int(1) }}"
           requested_power: "{{ power_w | int(500) }}"
-          requested_stop_soc: "{{ stop_soc | int(25) }}"
+          # The plan's hold and reserve, read once at the start of the run (a later change ends the NEXT start, not this one).
+          plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
+          plan_reserve: "{{ states('sensor.ecco_plan_effective_reserve') | float(-1) }}"
+          requested_stop_soc_raw: "{{ stop_soc | int(25) }}"
+          # Raise-only: at least the effective reserve, rounded up; never below what the owner asked for.
+          requested_stop_soc: "{{ [stop_soc | int(25), (plan_reserve | round(0, 'ceil') | int) if plan_reserve >= 0 else 0] | max }}"
           window_end: >-
             {% set w = window_end_ts | float(0) %}
             {{ w if w > 0 else as_timestamp(now()) + (duration_minutes | int(1)) * 60 }}
@@ -125,6 +140,51 @@ script:
           # A cancel - or a cancel and a re-arm - after this instant ends this run (armed's last_changed moves).
           run_started: "{{ as_timestamp(now()) }}"
       - choose:
+          # PLAN: an active Hold battery / Skip tonight / Prepare for power cut holds the start. (The alert at the end of this script
+          # already raises one persistent notification, with this text, for every BLOCKED result.)
+          - conditions:
+              - condition: template
+                value_template: "{{ plan_hold == 'held' }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    BLOCKED - a Hold battery, Skip tonight or Prepare for power cut is active ({{ state_attr('sensor.ecco_plan_export_hold', 'held_by') }});
+                    nothing started (reason OVERRIDE_ACTIVE). Cancel it on the Energy Actions card to allow this start.
+          # PLAN: the override records cannot be read (or the plan helper package is not installed): fail closed.
+          - conditions:
+              - condition: template
+                value_template: "{{ plan_hold != 'clear' }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: >-
+                    BLOCKED - the plan override records cannot be read ({{ plan_hold }}); nothing started (reason OVERRIDE_UNREADABLE).
+                    Check that the ECCO plan helper package is installed and its helpers are available.
+          # PLAN: no known effective reserve: fail closed.
+          - conditions:
+              - condition: template
+                value_template: "{{ plan_reserve < 0 }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "BLOCKED - the effective reserve cannot be read; nothing started (reason RESERVE_UNKNOWN)"
+          # PLAN: the reserve the Stop SOC must respect leaves no room under the 90 % limit.
+          - conditions:
+              - condition: template
+                value_template: "{{ (requested_stop_soc | int(0)) > 90 and (requested_stop_soc_raw | int(0)) <= 90 }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "BLOCKED - the effective reserve ({{ plan_reserve | round(0) | int }}%) leaves no room under the 90% Stop SOC limit; nothing started (reason RESERVE_TOO_HIGH)"
           - conditions:
               - condition: template
                 value_template: >-
@@ -163,7 +223,7 @@ script:
               entity_id: input_text.ecco_dump_to_grid_schedule_last_result
             data:
               value: >-
-                STARTING - {{ requested_power }}W, Stop SOC {{ requested_stop_soc }}%, until
+                STARTING - {{ requested_power }}W, Stop SOC {{ requested_stop_soc }}%{{ ' (raised from ' ~ requested_stop_soc_raw ~ '% to the effective reserve)' if (requested_stop_soc | int(0)) > (requested_stop_soc_raw | int(0)) else '' }}, until
                 {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}
           - repeat:
               sequence:

@@ -113,23 +113,11 @@ SHADOW_EDITS = (
     (SHADOW_0_OLD, SHADOW_0_NEW),
 )
 
+# Re-derived for the r9 + stage 3 merge (the same r9 edit, as two pairs): each pair now matches the combined package AND the package without stage 3.
 DUMP_0_OLD = _blk(r"""
-#   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, restart recovery, and a
 #     persistent notification for every failure or miss; the write enable always ends off.
-
-input_boolean:
-  ecco_dump_to_grid_schedule_armed:
-    name: ECCO Scheduled Dump to Grid Armed
-    icon: mdi:calendar-check
-
-input_datetime:
-  ecco_dump_to_grid_schedule_start:
-    name: ECCO Dump to Grid Schedule Start
-    has_date: true
-    has_time: true
 """)
 DUMP_0_NEW = _blk(r"""
-#   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, restart recovery, and a
 #     persistent notification for every failure or miss; the write enable always ends off.
 #
 # R9 (2026-11, owner requirement of 12 Nov): a missed scheduled run is never started after a Home Assistant restart. A start
@@ -146,14 +134,13 @@ DUMP_0_NEW = _blk(r"""
 # event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
 # on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
 # for Home Assistant's clock to agree with it; if that never happens the capture stays unknown (fail closed).
-
-input_boolean:
-  ecco_dump_to_grid_schedule_armed:
-    name: ECCO Scheduled Dump to Grid Armed
-    icon: mdi:calendar-check
-
-input_datetime:
-  ecco_dump_to_grid_schedule_start:
+""")
+DUMP_0B_OLD = _blk(r"""
+    name: ECCO Dump to Grid Schedule Start
+    has_date: true
+    has_time: true
+""")
+DUMP_0B_NEW = _blk(r"""
     name: ECCO Dump to Grid Schedule Start
     has_date: true
     has_time: true
@@ -167,7 +154,6 @@ input_datetime:
     has_date: true
     has_time: true
 """)
-
 DUMP_1_OLD = _blk(r"""
           start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
           end_ts: "{{ (start_ts | float(0)) + (states('input_number.ecco_dump_to_grid_schedule_duration') | int(1)) * 60 }}"
@@ -424,6 +410,7 @@ DUMP_5_NEW = _blk(r"""
 
 DUMP_EDITS = (
     (DUMP_0_OLD, DUMP_0_NEW),
+    (DUMP_0B_OLD, DUMP_0B_NEW),
     (DUMP_1_OLD, DUMP_1_NEW),
     (DUMP_2_OLD, DUMP_2_NEW),
     (DUMP_3_OLD, DUMP_3_NEW),
