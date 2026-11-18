@@ -17,7 +17,7 @@ Development before the first public release happened in a private repository; se
   override records; two guarded scripts that enforce the validator's rules server-side with stable refusal codes and write only these
   helpers; the export-hold and effective-reserve sensors), `ecco_dump_to_grid_guarded_start.yaml` (the card's manual Dump to Grid start,
   behind the same two checks) and the scheduled Dump to Grid start refusing during an override and raising its Stop SOC to the effective
-  reserve. Prepare for power cut raises a protected reserve and never charges. The Energy Actions card gains start and cancel controls that
+  reserve. Prepare for power cut raises the reserve ECCO's own plan uses (it does not change the inverter's own reserve) and never charges. The Energy Actions card gains start and cancel controls that
   can call only those scripts. One parity table runs against the validator and against the script. Post-export entries `epc1` (stage 2 views)
   and `epc2` (stage 3). The dongle's own Start button entity stays unbound (a firmware gate is a separate approval).
 - **Stage 3 limitation stated in every place a reader meets it (text only; nothing installed)**: the overrides are a PARTIAL protection
