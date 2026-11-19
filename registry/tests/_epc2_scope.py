@@ -1425,6 +1425,9 @@ DUMP_REL = 'home-assistant/packages/ecco_dump_to_grid_schedule.yaml'
 # 19 Nov 2026 (owner decision r14: a press-time BLOCKED result is no longer overwritten with STARTED OK): the header pair's `after` text carries the new header
 # lines, and two pairs were added at the end: the post-loop overwrite step (it now excludes a BLOCKED result) and the end-of-run alert's message (one sentence, only while
 # Dump to Grid is active). The pairs are exact and the apply/revert round trip is byte for byte (the epc2 reverter still lands on the r9 state).
+# 19 Nov 2026 (owner decision r15: a STARTING, FAILED or CANCELLED result is not overwritten with STARTED OK either): the header pair's `after` text carries the new last bullet, the post-loop step pair's `after`
+# text is the new step (it acts on a STARTING result only and writes no success text; its `before` now spans the whole r9 step, its `then` included) and the alert pair's `after` text carries the two-way
+# sentence (BLOCKED: this run did not start it; FAILED: this run did not confirm that it started it). The pairs stay exact and the round trip byte for byte.
 DUMP_EDITS = (
     (_blk(r"""
 
@@ -1466,8 +1469,17 @@ input_boolean:
 #     Grid is active when the loop ends (started from the dongle's own Start button, which no override binds (RG-ST3), or by a manual
 #     start). The end-of-run alert is raised as for any BLOCKED result, the schedule notifications are not dismissed, and the alert says
 #     that Dump to Grid is active now and that this run did not start it: check it, and the plan overrides, before assuming it is held.
-#     This script presses nothing in that case. A STARTING, FAILED or CANCELLED result keeps the rule it had: with Dump to Grid active
-#     it is still replaced by STARTED OK.
+#     This script presses nothing in that case.
+#   - Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome): the steps after the loop never write a success
+#     text. A FAILED or CANCELLED result is final too: it stays exactly as written when Dump to Grid is active (started some other way), and
+#     so does a BLOCKED one. A result that is still STARTING when Dump to Grid is found active has no verified start of this run: it becomes
+#     CANCELLED if the owner cancelled the schedule, else a FAILED TO START text that says the retries ended, repeats the last status and says
+#     that Dump to Grid is active now and that this run did not confirm that it started it. STARTED OK is written only inside the loop, after
+#     this run's own press, a start transaction that began and Dump to Grid active; that path is unchanged. A result this script did not write
+#     (ARMED, REJECTED, MISSED) is left alone. The alert's sentence says "this run did not start it" for a BLOCKED result only (nothing was
+#     pressed); for a FAILED result it says this run did not CONFIRM that it started it, because an unconfirmed outcome can be a late start of
+#     this run's own press. Still true: such a FAILED text can be a false negative (the dongle started late after a start transaction that
+#     began); the alert flags it. Nothing is pressed after the loop, the write enable ends off, and nothing changes while Dump to Grid is not active.
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -1635,16 +1647,49 @@ input_boolean:
                 value_template: >-
                   {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}
                   {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED') }}
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "STARTED OK - Dump to Grid is active; this run could not confirm the start as its own (check power, Stop SOC and end time)"
 """),
      _blk(r"""
-          # Owner decision r14 (19 Nov 2026): a BLOCKED result (the press-time recheck's) is a refusal and stays one. It is never replaced
-          # by STARTED OK, even when Dump to Grid is active (started some other way); the alert below then says so.
+          # Owner decision r15 (19 Nov 2026): the steps after the loop never turn a result into a success. STARTED OK is written only inside the loop,
+          # by this run's own verified start (its press, a start transaction that began, then Dump to Grid active). A FAILED, CANCELLED or BLOCKED result
+          # stays exactly as written, whatever Dump to Grid is doing (started some other way: the dongle's own Start button, which is not bound by
+          # any override (RG-ST3), or by hand); the alert below then says so. A result that is still STARTING when Dump to Grid is found active was not confirmed by
+          # this run: it becomes CANCELLED if the owner cancelled the schedule, else a FAILED TO START text that says Dump to Grid is active now and that
+          # this run did not confirm that it started it. A result this script did not write (ARMED, REJECTED, MISSED) is left alone.
           - if:
               - condition: template
                 value_template: >-
                   {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}
-                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED')
-                     and not r.startswith('BLOCKED') }}
+                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and r.startswith('STARTING') }}
+            then:
+              - choose:
+                  # Cancelled by the owner (tested as the loop top and the step above test it): the run reads CANCELLED, not failed.
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {{ not (is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on')
+                                  and as_timestamp(states.input_boolean.ecco_dump_to_grid_schedule_armed.last_changed, 0)
+                                      <= (run_started | float(0))) }}
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                        data:
+                          value: "CANCELLED - scheduled Dump to Grid cancelled before it started"
+                default:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: >-
+                        FAILED TO START - retries ended at {{ now().strftime('%H:%M') }}:
+                        {{ states('sensor.ecco_clock_dongle_dump_to_grid_status')[:120] }};
+                        Dump to Grid is active now, but this run did not confirm that it started it
 """)),
     (_blk(r"""
               title: "ECCO: scheduled Dump to Grid did NOT start"
@@ -1655,13 +1700,20 @@ input_boolean:
 """),
      _blk(r"""
               title: "ECCO: scheduled Dump to Grid did NOT start"
-              # Owner decision r14: while Dump to Grid is active at this moment the notice says so (this run did not start it).
+              # Owner decision r14: while Dump to Grid is active at this moment the notice says so. Owner decision r15: for a BLOCKED result (nothing was
+              # pressed) it says this run did not start it; for any other result (a FAILED one) it says only that this run did not CONFIRM that it started it,
+              # because an unconfirmed outcome can be a late start of this run's own press.
               message: >-
                 {{ states('input_text.ecco_dump_to_grid_schedule_last_result') }}
                 {%- if is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') %}
 
+                {% if states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('BLOCKED') -%}
                 Dump to Grid is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand).
                 Check it, and the plan overrides, before assuming it is held.
+                {%- else -%}
+                Dump to Grid is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, or, if a start transaction had begun, late by this run's own press).
+                Check it, and the plan overrides, before assuming it is held.
+                {%- endif %}
                 {%- endif %}
 
                 Authorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}.

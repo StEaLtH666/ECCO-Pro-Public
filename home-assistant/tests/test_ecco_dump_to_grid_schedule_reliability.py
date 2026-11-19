@@ -507,6 +507,52 @@ def cancel(x):
     x.ha.start_script("ecco_dump_to_grid_cancel_schedule", {})
 
 
+def old_fallback_package(text: str) -> str:
+    """The package with the step after the retry loop as it stood before owner decision r15 (0a488d8): while Dump to Grid is active, EVERY result but STARTED and BLOCKED is replaced by 'STARTED OK - Dump to Grid is
+    active; this run could not confirm the start as its own ...'. Owner decision r15 removed it; it is the mutant the two checks below must kill."""
+    a = text.find("          # Owner decision r15 (19 Nov 2026): the steps after the loop never turn a result into a success.")
+    if a < 0:
+        return text                       # the package before owner decision r15 already has the old step
+    end = ("          - if:\n              - condition: template\n                value_template: >-\n"
+           "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+           "                  {{ not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')\n"
+           "                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED')\n")
+    b = text.index(end, a)
+    old = ("          - if:\n              - condition: template\n                value_template: >-\n"
+           "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+           "                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED')\n"
+           "                     and not r.startswith('BLOCKED') }}\n"
+           "            then:\n              - action: input_text.set_value\n                target:\n                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+           "                data:\n                  value: \"STARTED OK - Dump to Grid is active; this run could not confirm the start as its own (check power, Stop SOC and end time)\"\n")
+    return text[:a] + old + text[b:]
+
+
+OLD_FALLBACK_TEXT = old_fallback_package(PKG_TEXT)
+
+
+def stalled_view_run(text):
+    r = Run(text, phase=5.0, delays=(0.05,))
+    r.d.stalls.append((ST + 1.0, ST + 45))
+    return r.until(900)
+
+
+def stalled_view_ok(r) -> bool:
+    """Owner decision r15 (it replaces the old expectation 'STARTED OK'): the press passed and its start was only seen late, so this run could not confirm it: ONE transaction, never two, the result stays FAILED TO START
+    (unconfirmed, final), the end-of-run alert is raised and says Dump to Grid is active now and this run did not confirm that it started it, nothing is dismissed, the write enable ends off."""
+    notice = r.w.notifications.get("ecco_dump_to_grid_schedule", {}).get("message", "")
+    return (r.passed() == 1 and r.d.successes == 1 and r.last().startswith("FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed")
+            and not r.last().startswith("STARTED") and len(r.created()) == 1 and "did not confirm that it started it" in notice and "this run did not start it" not in notice
+            and not [n for n in r.w.notification_log if n[1] == "dismiss"] and not r.arm_left_on())
+
+
+def own_start_ok(r, op) -> bool:
+    """Owner decision r15 (it replaces the old expectation 'STARTED or BLOCKED'): the owner's own START two seconds before the schedule: nothing staged into that transaction, never pressed during it, one transaction. The run
+    cannot confirm the start as its own, so it never reads STARTED: it is BLOCKED (Dump to Grid already active at the start) or the FAILED TO START text that says Dump to Grid is active now and this run did not confirm it."""
+    last = r.last()
+    return (r.passed() == 1 and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log) and not last.startswith("STARTED") and not r.arm_left_on()
+            and (last.startswith("BLOCKED") or (last.startswith("FAILED TO START - retries ended at") and last.endswith("Dump to Grid is active now, but this run did not confirm that it started it"))))
+
+
 for t_cancel in (28.5, 89.0):
     r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 240)))
     r.w.at(ST + t_cancel, lambda x=r: cancel(x))
@@ -528,12 +574,11 @@ r.until(400)
 check("cancel and re-arm for 19:30: today's run stops (no press after the cancel) and the new schedule stays ARMED, text kept",
       r.d.successes == 0 and all(p_ <= 89 for p_ in r.presses()) and r.w.state(ARMED) == "on" and r.last().startswith("ARMED"),
       f"{r.presses()[-2:]} {r.last()}")
-r = Run(phase=5.0, delays=(0.05,))
-r.d.stalls.append((ST + 1.0, ST + 45))
-r.until(900)
-check("Home Assistant's view stalls right after a press that passes: never two transactions; the start is recorded once the "
-      "view recovers; the write enable ends off", r.passed() == 1 and r.d.successes == 1 and r.last().startswith("STARTED OK")
-      and not r.arm_left_on(), f"{r.gate()} {r.last()}")
+r = stalled_view_run(PKG_TEXT)
+check("Home Assistant's view stalls right after a press that passes: never two transactions; the outcome is unconfirmed, so the run ends as FAILED TO START (final: a false negative when the dongle did start, which the alert "
+      "flags with 'Dump to Grid is active now ... this run did not confirm that it started it'; owner decision r15, it replaces the old expectation STARTED OK); the write enable ends off", stalled_view_ok(r), f"{r.gate()} {r.last()}")
+check("...the old fallback restored (STARTED OK for any result but BLOCKED) would turn that unconfirmed outcome into a success again: the check above kills it",
+      not stalled_view_ok(stalled_view_run(OLD_FALLBACK_TEXT)) and stalled_view_run(OLD_FALLBACK_TEXT).last().startswith("STARTED OK - Dump to Grid is active; this run could not confirm"))
 r = Run(phase=5.0, delays=(0.05,), outcome="capture_failed")
 r.d.stalls.append((ST + 1.0, ST + 45))
 r.until(900)
@@ -549,8 +594,12 @@ r.d.manual_start(ST - 2)
 r.until(600)
 op = r.d.op_intervals[0]
 check("the owner's own START two seconds before the schedule: nothing staged into that transaction, never pressed during it; "
-      "one transaction; Dump active", r.passed() == 1 and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log)
-      and r.last().startswith(("STARTED", "BLOCKED")) and not r.arm_left_on(), f"{r.d.number_log} {op} {r.last()}")
+      "one transaction; Dump active; the run never reads STARTED (it cannot confirm the start as its own: BLOCKED, or FAILED TO START saying Dump to Grid is active now and this run did not confirm it; owner decision r15, "
+      "it replaces the old expectation STARTED or BLOCKED)", own_start_ok(r, op), f"{r.d.number_log} {op} {r.last()}")
+_r_old = Run(OLD_FALLBACK_TEXT)
+_r_old.d.manual_start(ST - 2)
+_r_old.until(600)
+check("...the old fallback restored would read STARTED OK for it (the old pin): the check above kills it", not own_start_ok(_r_old, _r_old.d.op_intervals[0]) and _r_old.last().startswith("STARTED OK"), _r_old.last())
 r = Run()
 r.d.manual_start(ST + 1.0)
 r.until(600)

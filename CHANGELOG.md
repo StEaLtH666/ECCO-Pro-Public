@@ -154,6 +154,20 @@ Development before the first public release happened in a private repository; se
   rule (replaced by STARTED OK while Dump to Grid is active). This supersedes what the two bullets above say about the overwrite. `test_ecco_plan_enforcement.py` [12] (+23 checks net, 13 mutants, the
   old overwrite among them) replaces the [11] pin of the old behaviour and fails on the previous package; `test_ecco_stage3_limitation.py` [8] (+41) states the new wording. Two declared edit
   pairs were added to `epc2` and its header pair re-derived, then `epc2` and `epc3` were re-sealed; no pin assertion, scan, gate, threshold or hash of a frozen file was edited.
+- **Stage 3: a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either (owner decision r15, 19 Nov 2026; known limitation 20 extended; offline, nothing installed)**: the step
+  after the scheduled Dump to Grid start's retry loop replaced EVERY result but STARTED (BLOCKED excepted since r14) by "STARTED OK - Dump to Grid is active; this run could not confirm the start as
+  its own ..." whenever Dump to Grid was active (started from the dongle's own Start button, still not bound (RG-ST3), by hand or another path), so a start refused at the gate, a press nobody
+  answered, a run the owner cancelled and a run still retrying were reported as a success. Now the steps after the loop write no success text: a FAILED or CANCELLED result stays exactly as written; a result that is still
+  STARTING with Dump to Grid active (no verified start of this run) becomes CANCELLED if the owner cancelled the schedule, else a FAILED TO START text that says the retries ended, repeats the last status
+  and says Dump to Grid is active now and this run did not confirm that it started it (within 255 characters), so the end-of-run alert fires and the schedule notifications stay; a result another
+  writer left (ARMED, REJECTED, MISSED) is left alone. STARTED OK is written only in the loop, after this run's own press, a start transaction that began and Dump to Grid active: unchanged in every shape.
+  The alert's active-now sentence stays true for each result it can accompany: for BLOCKED "this run did not start it", for FAILED "this run did not confirm that it started it" (an unconfirmed outcome can be
+  a late start of this run's own press, a false negative the alert flags). With Dump to Grid not active nothing changes (compared run for run with the previous package). This supersedes the sentence of the bullet above that says
+  STARTING, FAILED and CANCELLED results keep their old rule, and what the two earlier Stage 3 bullets say about the overwrite. `test_ecco_plan_enforcement.py` [14] (the table of 19 result texts x Dump to Grid active or not
+  x armed through the package's own steps, 12 end-to-end runs, 7 shapes of a verified start, 22 mutants) and [12] (its three controls replaced by the opposite expectation, the old overwrite now a mutant for each class) fail on
+  the previous package; `test_ecco_stage3_limitation.py` [10] states the new wording. The `epc2` pairs of the schedule package (header, post-loop step, alert message) were re-derived, then `epc2` and
+  `epc3` were re-sealed; no pin assertion, scan, gate, threshold or hash of a frozen file was edited. Not changed: the Free Power schedule package has the same fallback text; the startup recovery after a Home
+  Assistant restart writes its own "STARTED OK - running" when Dump to Grid is active inside the window.
 - **Stage 3: an override's expiry is also an absolute epoch record, read raise-only (owner decision r14, 19 Nov 2026; known limitations 19 and 23; offline, nothing installed)**: each override's
   expiry is now held twice, as the date-and-time helper and as an absolute epoch record (an input_number per kind, the same number the start script already computes, written before the
   date-and-time expiry; the cancel script writes the cancel instant into both). Every read (the hold sensor's state and `held_by`, the effective reserve and the cancel script) takes the later

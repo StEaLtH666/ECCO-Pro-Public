@@ -35,12 +35,18 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
   [12] limit 20   (owner decision r14, 19 Nov 2026) a press-time BLOCKED result is never overwritten with STARTED OK, even when Dump to Grid is active as the loop ends (the dongle's own
                   Start button or a manual start): for each of the five reasons, busy and offline wait, Dump to Grid active before or as the text is written, the BLOCKED text stays exactly as the
                   recheck wrote it, one alert carries it plus ONE sentence (only while Dump to Grid is active) that it is active now and this run did not start it, neither schedule
-                  notification is dismissed, nothing is pressed, the write enable ends off; unchanged when Dump to Grid is not active; STARTING, FAILED and CANCELLED results keep their old rule
-                  (controls); the start-time BLOCKED results; thirteen mutants, the old overwrite among them. It replaces the pin of the old behaviour that stood at the end of [11]
+                  notification is dismissed, nothing is pressed, the write enable ends off; unchanged when Dump to Grid is not active; since owner decision r15 (see [14]) a STARTING, FAILED or CANCELLED
+                  result is not overwritten with STARTED OK either (the controls now require that); the start-time BLOCKED results; mutants, the old overwrite among them. It replaces the pin of the old
+                  behaviour that stood at the end of [11]
   [13] restart   (owner decision r14, 19 Nov 2026; known limitation 19) a Home Assistant restart inside the repeated hour of the October clock change restores a date-and-time expiry
                   60 minutes early in the offline model (_plan_sim.restart: a recollection, not verified live); the absolute epoch record next to it keeps the hold to the true expiry, so the
                   scheduled start is refused (OVERRIDE_ACTIVE, nothing staged or pressed) to the last second and starts from the expiry second, for each kind; [8] also runs with the epoch record
                   reset to 0 (the attribute alone), so its hold-state read-site mutants stay killed; the epoch-ignoring mutants are caught
+  [14] status    (owner decision r15, 19 Nov 2026; known limitation 20, extended) the steps after the retry loop never turn a result into a success: a FAILED or CANCELLED result is final and stays exactly as
+                  written when Dump to Grid is active (started some other way), a result still STARTING with Dump to Grid active becomes a FAILED TO START text that says Dump to Grid is active now and
+                  that this run did not confirm that it started it (CANCELLED if the owner cancelled), the alert's active-now sentence stays true for each result it can accompany, and the in-loop
+                  STARTED OK path (this run's own verified start) is unchanged in every shape; a table of every result class x Dump to Grid active or not x armed, run through the real steps and
+                  compared with the previous package where Dump to Grid is not active; end-to-end runs; mutants (the old overwrite restored per class, a success text added, wrong sentences)
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -91,8 +97,8 @@ START_BTN = D.D_PRESS
 T0 = "2026-11-17 21:00:00"
 
 
-def world(dump=DUMP_TEXT, plan=PLAN_TEXT, guard=GUARD_TEXT, owner=40, stop=None, install_plan=True):
-    pkgs = [yaml.safe_load(t) for t in ((dump, plan, guard) if install_plan else (dump, guard))]
+def world(dump=DUMP_TEXT, plan=PLAN_TEXT, guard=GUARD_TEXT, owner=40, stop=None, install_plan=True, pkgs=None):
+    pkgs = pkgs if pkgs is not None else [yaml.safe_load(t) for t in ((dump, plan, guard) if install_plan else (dump, guard))]   # `pkgs`: already-parsed packages ([14]'s probe script)
     pw = P.PlanWorld(T0, pkgs, "Etc/GMT-1")
     w = pw.w
     D.add_ha_filters(w)
@@ -1057,7 +1063,8 @@ print("[12] known limitation 20 FIXED (owner decision r14, 19 Nov 2026): a press
 # loop, so that overwrite lost the refusal: the end-of-run alert was skipped and the schedule notifications were dismissed. The owner's decision (r14): a refusal stays a refusal. Now a result that
 # starts with BLOCKED is never overwritten, the alert is raised as for any BLOCKED result, the schedule notifications are NOT dismissed, the write enable still ends off, and the alert says in ONE
 # conditional sentence, only while Dump to Grid is active at that moment, that Dump to Grid is active now and that this run did not start it. This script presses nothing in any of these runs.
-# Not changed (pre-existing rule, same harness, controls below): a STARTING, FAILED or CANCELLED result with Dump to Grid active is still replaced by STARTED OK (only BLOCKED is in scope). The old
+# r15 (19 Nov 2026, see [14]): the first version of this section left a STARTING, FAILED or CANCELLED result to the old rule (replaced by STARTED OK while Dump to Grid is active, shown by controls). The owner's
+# decision r15 reverses that: the controls below now require the OPPOSITE (never STARTED OK) and the old rule is a mutant for each of the three classes. The old
 # behaviour is kept as a mutant (the unconditional overwrite) that the checks below kill. The pin of limitation 20 that stood at the end of [11] required the overwrite (a Hold battery started during a busy or
 # offline wait, Dump to Grid becoming active 2 s into the 5 s pause: the result STARTED OK, no alert, the stale alert dismissed); it is replaced by the opposite expectation for that very scenario (the check
 # marked 'replaces the pin' below) and for every other reason.
@@ -1067,6 +1074,11 @@ ACTIVE_NOW = ("Dump to Grid is active now, and this run did not start it (it may
 ALERT_TAIL = (r"Authorised window ends \d\d:\d\d\. If time remains and the reason is cleared, use Dump to Grid now in Energy Actions\. "
               r"If a start transaction began or the outcome is unconfirmed, check the Dump to Grid status and recovery state first\.")
 OVERWRITE_TEXT = "STARTED OK - Dump to Grid is active; this run could not confirm the start as its own"
+# Owner decision r15: for a FAILED result (and the new STARTING-final text) the alert cannot say "did not start it" (an unconfirmed outcome can be a late start of this run's own press): it says it did not CONFIRM it.
+ACTIVE_CONFIRM = ("Dump to Grid is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, "
+                  "or, if a start transaction had begun, late by this run's own press). Check it, and the plan overrides, before assuming it is held.")
+FAILED_FINAL = r"FAILED TO START - retries ended at \d\d:\d\d: (.*); Dump to Grid is active now, but this run did not confirm that it started it"
+CANCELLED_TEXT = "CANCELLED - scheduled Dump to Grid cancelled before it started"
 ARMED = "input_boolean.ecco_dump_to_grid_schedule_armed"
 # (label, change 15 s into the wait, stable code): the five press-time BLOCKED reasons (the staged Stop SOC of the run is 40: owner reserve 40, asked 25)
 REASONS12 = (
@@ -1080,7 +1092,7 @@ REASONS12 = (
 ORDERS12 = (("before the BLOCKED text is written", lambda t: "not confirmed" in t, 2.0), ("as the BLOCKED text is written", lambda t: t.startswith("BLOCKED"), 0.0))
 
 
-def end_run(dump_text: str, wait: str, change=None, active_when=None, active_delay: float = 0.0, window=None, seconds: float = 400.0) -> dict:
+def end_run(dump_text: str, wait: str, change=None, active_when=None, active_delay: float = 0.0, window=None, seconds: float = 400.0, setup=None) -> dict:
     """One scheduled run (`wait`: busy, offline or none), with a stale alert and a stale readiness alert on screen. `change(pw)` happens 15 s in. Dump to Grid becomes active (the
     dongle's own Start button or a manual start) `active_delay` s after the result text first satisfies `active_when`, or never. Returns the run facts plus what the notifications did."""
     pw, d = world(dump_text, owner=40)
@@ -1113,6 +1125,8 @@ def end_run(dump_text: str, wait: str, change=None, active_when=None, active_del
     w.listeners.append(on_state)
     if change is not None:
         w.at(t0 + CHANGE_AT, lambda: change(pw))
+    if setup is not None:                      # r15 ([14]): dongle or Home Assistant faults that must stand from the start of the run
+        setup(pw, d, t0)
     n0 = len(w.service_log)
     pw.ha.start_script(SCHED, {"duration_minutes": 30, "power_w": 2000, "stop_soc": 25, "window_end_ts": t0 + (30 * 60 + 60 if window is None else window)})
     w.run_until(t0 + seconds)
@@ -1170,24 +1184,35 @@ def active_problems(dump_text: str, reasons=REASONS12, orders=ORDERS12, stop_ear
     return bad
 
 
-# (label, wait, change, when Dump to Grid becomes active, delay, window length or None): results that are NOT BLOCKED keep the rule they always had (replaced by STARTED OK while Dump to Grid is active)
+# (label, wait, change, when Dump to Grid becomes active, delay, window length or None, kind): owner decision r15 (19 Nov 2026) REPLACED the controls that stood here. They required the old rule (a STARTING, a FAILED and a
+# CANCELLED result replaced by STARTED OK while Dump to Grid is active, no alert, both schedule notifications dismissed); they now require the OPPOSITE, and the old rule is a mutant for each class below.
 CONTROLS12 = (
-    ("a STARTING result (the run is still waiting for the dongle)", "busy", None, lambda t: t.startswith("STARTING - attempt 1 waiting"), 2.0, None),
-    ("a FAILED result (the authorised window is nearly over)", "none", None, lambda t: t.startswith("FAILED"), 0.0, 20.0),
-    ("a CANCELLED result (the schedule is disarmed during the wait)", "busy", lambda pw: pw.w.set(ARMED, "off"), lambda t: t.startswith("CANCELLED"), 0.0, None),
+    ("a STARTING result (the run is still waiting for the dongle)", "busy", None, lambda t: t.startswith("STARTING - attempt 1 waiting"), 2.0, None, "STARTING"),
+    ("a FAILED result (the authorised window is nearly over)", "none", None, lambda t: t.startswith("FAILED"), 0.0, 20.0, "FAILED"),
+    ("a CANCELLED result (the schedule is disarmed during the wait)", "busy", lambda pw: pw.w.set(ARMED, "off"), lambda t: t.startswith("CANCELLED"), 0.0, None, "CANCELLED"),
 )
 
 
 def control_problems(dump_text: str, stop_early: bool = False) -> list[str]:
-    """Only BLOCKED is in scope: a STARTING, FAILED or CANCELLED result with Dump to Grid active is replaced by STARTED OK exactly as before: no alert, both schedule notifications dismissed, nothing pressed."""
+    """Owner decision r15, the opposite of the controls that stood here: with Dump to Grid active a STARTING, FAILED or CANCELLED result is NEVER replaced by STARTED OK, and nothing is pressed. FAILED stays exactly as
+    written (one alert that says Dump to Grid is active now and this run did not CONFIRM it started it; neither schedule notification dismissed); a STARTING result becomes the FAILED TO START text that says so (same alert,
+    nothing dismissed); CANCELLED stays exactly as written, no alert (the alert condition excludes it), the notifications dismissed as before."""
     bad: list[str] = []
     try:
-        for label, wait, change, when, delay, window in CONTROLS12:
+        for label, wait, change, when, delay, window, kind in CONTROLS12:
             f = end_run(dump_text, wait, change, when, delay, window)
-            ok = (f["went_active"] and f["last"].startswith(OVERWRITE_TEXT) and "BLOCKED" not in f["last"] and f["presses"] == [] and f["gate"] == [] and f["started"] == 0
-                  and f["alerts"] == [] and f["dismissed"] == sorted([NOTE, NOTE_READY]) and f["notes_left"] == [] and f["arm"] == "off" and f["model_arm"] is False)
+            last = f["last"]
+            base = (f["went_active"] and "STARTED" not in last and OVERWRITE_TEXT not in last and f["presses"] == [] and f["gate"] == [] and f["started"] == 0
+                    and f["arm"] == "off" and f["model_arm"] is False)
+            if kind == "CANCELLED":
+                ok = base and last.startswith("CANCELLED") and f["alerts"] == [] and f["dismissed"] == sorted([NOTE, NOTE_READY]) and f["notes_left"] == []
+            else:
+                shape = (last.startswith("FAILED TO START - authorised window ends") if kind == "FAILED" else re.fullmatch(FAILED_FINAL, last) is not None)
+                ok = (base and shape and len(last) <= 255 and len(f["alerts"]) == 1
+                      and re.fullmatch(re.escape(last) + "\n" + re.escape(ACTIVE_CONFIRM) + "\n" + ALERT_TAIL, f["notice"], re.S) is not None
+                      and f["dismissed"] == [] and NOTE in f["notes_left"] and NOTE_READY in f["notes_left"])
             if not ok:
-                bad.append(f"control, {label}: result {f['last'][:70]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']} left={f['notes_left']} presses={f['presses']}")
+                bad.append(f"control, {label}: result {last[:70]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']} left={f['notes_left']} presses={f['presses']}")
                 if stop_early:
                     return bad
     except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
@@ -1253,38 +1278,85 @@ ip = idle_problems(DUMP_TEXT)
 check("press-time BLOCKED with Dump to Grid NOT active (all five reasons, busy and offline), unchanged behaviour: the BLOCKED text, one alert whose message is the result text and the usual tail with no active-now "
       "sentence, nothing dismissed, nothing pressed, the write enable off", ip == [], str(ip[:2]))
 cp = control_problems(DUMP_TEXT)
-check("controls, only BLOCKED is in scope: a STARTING, a FAILED and a CANCELLED result with Dump to Grid active are replaced by STARTED OK exactly as before (no alert, both schedule notifications dismissed, nothing "
-      "pressed)", cp == [], str(cp[:2]))
+check("controls, owner decision r15 (the opposite of the old controls): a STARTING, a FAILED and a CANCELLED result with Dump to Grid active are NOT replaced by STARTED OK: FAILED stays as written with one alert ('this run did not confirm that it started it') and nothing dismissed; STARTING becomes the FAILED TO START text that says so (same alert); CANCELLED stays as written with no alert; nothing is pressed", cp == [], str(cp[:2]))
 sp = start_time_problems(DUMP_TEXT)
 check("start-time BLOCKED results, Dump to Grid already active: a Hold battery active at the start keeps its BLOCKED text and its one alert (which now carries the active-now sentence, the same alert); "
       "'BLOCKED - Dump to Grid already active' still raises no alert and still dismisses the schedule notifications; nothing staged or pressed", sp == [], str(sp[:2]))
 
-print("[12] mutation: the old overwrite, a guard that covers only some reasons or too many results, a missing, unconditional, inverted or reworded sentence, and a skipped alert (the old dismissal) are each caught")
-_COND_NEW = ("                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED')\n"
-             "                     and not r.startswith('BLOCKED') }}\n")
-_COND_OLD = "                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED') }}\n"
-_GUARD = "                     and not r.startswith('BLOCKED') }}\n"
+print("[12] mutation: the old overwrite restored (unconditional, with a partial BLOCKED guard, or for a STARTING, FAILED or CANCELLED result), a STARTING result left as it is, a missing, unconditional, inverted or reworded sentence, and a skipped alert (the old dismissal) are each caught")
+# Owner decision r15: the package's step after the loop now acts on a STARTING result only (NEW_STEP, from its first comment line to the step that follows it). The old behaviour is a mutant: _old_step() is the step as it
+# stood at 0a488d8 (the r14 step: `active and not STARTED and not BLOCKED`), its `tail` argument being the end of its condition; _old_class_step() is the pre-r14 overwrite limited to one class.
+_NEW_STEP_START = "          # Owner decision r15 (19 Nov 2026): the steps after the loop never turn a result into a success."
+_NEW_STEP_END = ("          - if:\n              - condition: template\n                value_template: >-\n"
+                 "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+                 "                  {{ not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')\n"
+                 "                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED')\n")
+
+
+def new_step_of(text: str) -> str:
+    a = text.find(_NEW_STEP_START)
+    b = text.find(_NEW_STEP_END, a) if a >= 0 else -1
+    return text[a:b] if a >= 0 and b > a else ""
+
+
+NEW_STEP = new_step_of(DUMP_TEXT)
+OLD_SUCCESS = '"STARTED OK - Dump to Grid is active; this run could not confirm the start as its own (check power, Stop SOC and end time)"'
+
+
+def _old_step(tail: str, cond: str = "not r.startswith('STARTED')") -> str:
+    return ("          - if:\n"
+            "              - condition: template\n"
+            "                value_template: >-\n"
+            "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+            "                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and " + cond + tail + " }}\n"
+            "            then:\n"
+            "              - action: input_text.set_value\n"
+            "                target:\n"
+            "                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+            "                data:\n"
+            "                  value: " + OLD_SUCCESS + "\n")
+
+
+def _old_class_step(cls: str) -> str:
+    return _old_step("", cond=f"r.startswith('{cls}')")
+
+
+_FAILED_VALUE = ("                      value: >-\n"
+                 "                        FAILED TO START - retries ended at {{ now().strftime('%H:%M') }}:\n"
+                 "                        {{ states('sensor.ecco_clock_dongle_dump_to_grid_status')[:120] }};\n"
+                 "                        Dump to Grid is active now, but this run did not confirm that it started it\n")
 _IF_ACTIVE = "                {%- if is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') %}\n"
+_BLOCKED_SENTENCE = ("                Dump to Grid is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand).\n"
+                     "                Check it, and the plan overrides, before assuming it is held.\n")
+_FAILED_SENTENCE = ("                Dump to Grid is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, "
+                    "or, if a start transaction had begun, late by this run's own press).\n"
+                    "                Check it, and the plan overrides, before assuming it is held.\n")
 _SENTENCE_BLOCK = (_IF_ACTIVE + "\n"
-                   "                Dump to Grid is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand).\n"
-                   "                Check it, and the plan overrides, before assuming it is held.\n"
+                   "                {% if states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('BLOCKED') -%}\n"
+                   + _BLOCKED_SENTENCE +
+                   "                {%- else -%}\n"
+                   + _FAILED_SENTENCE +
+                   "                {%- endif %}\n"
                    "                {%- endif %}\n")
 _ALERT_IF = "              {{ r.startswith('FAILED') or (r.startswith('BLOCKED') and 'already active' not in r)\n"
 MUTANTS12 = [
-    ("the old unconditional overwrite is restored (any result that is not STARTED becomes STARTED OK while Dump to Grid is active)", [(_COND_NEW, _COND_OLD)]),
-    ("the guard covers only the Hold battery reason (OVERRIDE_ACTIVE)", [(_GUARD, "                     and 'reason OVERRIDE_ACTIVE' not in r }}\n")]),
-    ("the guard covers the reserve reasons only (an override or an unreadable record is overwritten)", [(_GUARD, "                     and not (r.startswith('BLOCKED') and 'reason RESERVE' in r) }}\n")]),
-    ("the guard covers every reason but RESERVE_TOO_HIGH", [(_GUARD, "                     and not (r.startswith('BLOCKED') and 'reason RESERVE_TOO_HIGH' not in r) }}\n")]),
-    ("the guard also spares a STARTING result (too broad: the old rule for STARTING is lost)", [(_GUARD, _GUARD.replace(" }}\n", "\n                     and not r.startswith('STARTING') }}\n"))]),
-    ("the guard also spares a FAILED result (too broad: the old rule for FAILED is lost)", [(_GUARD, _GUARD.replace(" }}\n", "\n                     and not r.startswith('FAILED') }}\n"))]),
-    ("the guard also spares a CANCELLED result (too broad: the old rule for CANCELLED is lost)", [(_GUARD, _GUARD.replace(" }}\n", "\n                     and not r.startswith('CANCELLED') }}\n"))]),
+    ("the old unconditional overwrite is restored (any result that is not STARTED becomes STARTED OK while Dump to Grid is active)", [(NEW_STEP, _old_step(""))]),
+    ("the old guard covers only the Hold battery reason (OVERRIDE_ACTIVE)", [(NEW_STEP, _old_step("\n                     and 'reason OVERRIDE_ACTIVE' not in r"))]),
+    ("the old guard covers the reserve reasons only (an override or an unreadable record is overwritten)", [(NEW_STEP, _old_step("\n                     and not (r.startswith('BLOCKED') and 'reason RESERVE' in r)"))]),
+    ("the old guard covers every reason but RESERVE_TOO_HIGH", [(NEW_STEP, _old_step("\n                     and not (r.startswith('BLOCKED') and 'reason RESERVE_TOO_HIGH' not in r)"))]),
+    ("the old overwrite is restored for a STARTING result (it becomes STARTED OK again, the old rule)", [(_FAILED_VALUE, "                      value: " + OLD_SUCCESS + "\n")]),
+    ("the old overwrite is restored for a FAILED result (it becomes STARTED OK again, the old rule)", [(NEW_STEP, _old_class_step("FAILED") + NEW_STEP)]),
+    ("the old overwrite is restored for a CANCELLED result (it becomes STARTED OK again, the old rule)", [(NEW_STEP, _old_class_step("CANCELLED") + NEW_STEP)]),
+    ("a STARTING result with Dump to Grid active is left as STARTING (no final text, nothing alerted)", [("is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and r.startswith('STARTING') }}",
+                                                                                                    "is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and r.startswith('STARTING_') }}")]),
     ("the alert is skipped while Dump to Grid is active, so the notifications are dismissed again (the old dismissal)",
      [(_ALERT_IF, "              {{ (r.startswith('FAILED') or (r.startswith('BLOCKED') and 'already active' not in r)) and not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')\n")]),
     ("the active-now sentence is missing", [(_SENTENCE_BLOCK, "")]),
     ("the active-now sentence is shown whether or not Dump to Grid is active", [(_IF_ACTIVE, "                {%- if true %}\n")]),
     ("the active-now sentence is shown when Dump to Grid is NOT active (inverted)", [(_IF_ACTIVE, _IF_ACTIVE.replace("'on')", "'off')"))]),
-    ("the active-now sentence no longer says this run did not start it", [("Dump to Grid is active now, and this run did not start it", "Dump to Grid is running")]),
-    ("the active-now sentence no longer asks for the plan overrides to be checked", [("Check it, and the plan overrides, before assuming it is held.", "Check it.")]),
+    ("the active-now sentence no longer says this run did not start it (BLOCKED)", [("Dump to Grid is active now, and this run did not start it", "Dump to Grid is running")]),
+    ("the active-now sentence no longer asks for the plan overrides to be checked (BLOCKED)", [(_BLOCKED_SENTENCE, _BLOCKED_SENTENCE.replace("Check it, and the plan overrides, before assuming it is held.", "Check it."))]),
+    ("the active-now sentence no longer asks for the plan overrides to be checked (FAILED)", [(_FAILED_SENTENCE, _FAILED_SENTENCE.replace("Check it, and the plan overrides, before assuming it is held.", "Check it."))]),
 ]
 caught12 = 0
 built12 = 0
@@ -1377,6 +1449,424 @@ for label, mutated in MUTANTS13:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS13)} restart mutants, all caught by a running scheduled start", caught13 == len(MUTANTS13) == 4, f"{caught13}/{len(MUTANTS13)}")
 check("control: the unmutated packages pass the same running cases", rd_bad == [])
+
+
+# ================================================================================================================================
+print("[14] result status integrity (owner decision r15, 19 Nov 2026; known limitation 20, extended): the steps after the retry loop never turn a STARTING, FAILED, CANCELLED or BLOCKED result into STARTED OK")
+# ================================================================================================================================
+# THE DEFECT (limitation 20, extended). Since owner decision r14 a BLOCKED result is never overwritten, but the step after the scheduled start's retry loop still replaced EVERY other result that did not start with STARTED by
+# "STARTED OK - Dump to Grid is active; this run could not confirm the start as its own ..." whenever Dump to Grid was active at the loop end, for ANY reason (the dongle's own Start button, which no override binds (RG-ST3), a
+# manual start, another path): a start refused at the gate, a press nobody answered, a run the owner cancelled, a run still retrying. A rejected, failed or cancelled run was reported as a success, the end-of-run alert was
+# skipped and the schedule notifications were dismissed.
+# THE OWNER'S DECISION (r15): FAILED and CANCELLED are final and are never converted into success without a genuinely new, verified operation; STARTING may become STARTED only after a VERIFIED start of THIS run, which is the
+# in-loop path (this run's own press, a start transaction that began, then Dump to Grid active: 'STARTED OK - ... (attempt N; ends by HH:MM)'), unchanged. So the steps after the loop write no success text at all:
+#   - a FAILED, CANCELLED or BLOCKED result stays exactly as written; FAILED and BLOCKED raise the end-of-run alert (not dismissed), CANCELLED raises none (the alert condition is unchanged);
+#   - a result still STARTING with Dump to Grid active has no verified start of this run: it becomes CANCELLED if the owner cancelled the schedule, else FAILED TO START with 'retries ended', the last dongle status, and
+#     'Dump to Grid is active now, but this run did not confirm that it started it' (kept inside the 255-character helper limit);
+#   - a result this script did not write (ARMED, REJECTED, MISSED, empty) is left alone;
+#   - the alert's active-now sentence stays true for each result it can accompany: 'this run did not start it' for BLOCKED (nothing was pressed), 'did not CONFIRM that it started it' for FAILED (an unconfirmed outcome can be
+#     a late start of this run's own press, which the sentence says);
+#   - with Dump to Grid NOT active nothing changes.
+# What is still true: a FAILED result can be a false negative when the dongle starts late after a start transaction that began (the stalled-view run below); the alert flags it with the active-now sentence.
+# The proof: [14.1] the real steps after the loop and the end-of-run alert, run on their own (a probe script made from the package's own steps, so a change to those steps is what is tested) for 19 result texts x Dump to Grid
+# active or not x armed (valid, disarmed, re-armed since the run began); with Dump to Grid not active the outcome must equal the PREVIOUS package's (rebuilt from this package, its code lines pinned by sha256).
+# [14.2] end-to-end runs through the real retry loop for every in-loop result a late or foreign activation can meet, and for every shape in which this run's own verified start still ends as STARTED OK. [14.3] mutants.
+OLD_CODE_SHA = "e1128832f638f3c5219036feeb31ee4def7d6283d3e03eff761e6f5cfa908457"   # sha256 of the previous package (0a488d8) without its whole-line comments
+_OLD_SENTENCE_BLOCK = _IF_ACTIVE + "\n" + _BLOCKED_SENTENCE + "                {%- endif %}\n"
+_R14_TAIL = "\n                     and not r.startswith('BLOCKED')"
+
+
+def before_text(text: str) -> str:
+    """The previous package (0a488d8: the r14 step that spares BLOCKED only, and the one-sentence alert), rebuilt from `text` by undoing exactly the two code edits of this change."""
+    ns = new_step_of(text)
+    if not ns or text.count(_SENTENCE_BLOCK) != 1:
+        return text                              # nothing of this change to undo: this IS the previous package
+    return text.replace(ns, _old_step(_R14_TAIL)).replace(_SENTENCE_BLOCK, _OLD_SENTENCE_BLOCK)
+
+
+def code_sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256("\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("#")).encode("utf-8")).hexdigest()
+
+
+BEFORE_TEXT = before_text(DUMP_TEXT)
+check("the previous package, rebuilt from this one by undoing the two code edits of this change, has exactly the code lines of 0a488d8 (sha256 of everything but whole-line comments), so the 'Dump to Grid not active: "
+      "unchanged' comparison below is against the real previous behaviour", code_sha(BEFORE_TEXT) == OLD_CODE_SHA and (BEFORE_TEXT != DUMP_TEXT or NEW_STEP == ""), code_sha(BEFORE_TEXT)[:16])
+
+POST_PROBE = "ecco_post_loop_probe"
+STATUS14 = "ACTIVE - VERIFIED OK; target 3000W export - SETTLING - battery ceiling 2000W (feed-forward start: house 1416W, PV 0W); Stop SOC 40% " + "x" * 90   # longer than the 120 characters the text keeps
+ARMED_MODES = ("valid", "off", "rearmed")      # armed and untouched since the run began / disarmed (the cancel) / armed again after the run began (a re-arm)
+BOTH = sorted([NOTE, NOTE_READY])
+
+
+_parsed: dict = {}
+
+
+def probe_packages(dump_text: str) -> list:
+    """The three packages with one more script: the package's own steps after the retry loop, then its steps after the choose (the write enable off, the end-of-run alert). Nothing is copied by hand."""
+    import copy
+    if dump_text not in _parsed:
+        _parsed[dump_text] = [yaml.safe_load(t) for t in (dump_text, PLAN_TEXT, GUARD_TEXT)]
+    pkgs = copy.deepcopy(_parsed[dump_text])
+    seq = pkgs[0]["script"][SCHED]["sequence"]
+    ti = next(i for i, a in enumerate(seq) if "choose" in a)
+    default = seq[ti]["default"]
+    ri = next(i for i, a in enumerate(default) if "repeat" in a)
+    pkgs[0]["script"][POST_PROBE] = {"alias": "probe: the steps after the retry loop", "mode": "single", "sequence": default[ri + 1:] + seq[ti + 1:]}
+    return pkgs
+
+
+def probe(dump_text: str, result: str, active: bool, armed: str, status: str = STATUS14) -> dict:
+    pw, d = world(pkgs=probe_packages(dump_text), owner=40)
+    w = pw.w
+    w.set(LAST, result)
+    d.status = status
+    w.set(D.D_STATUS, status)
+    if active:
+        d.active = True
+        w.set(D.D_ACTIVE, "on")
+    d.arm = True
+    w.set(D.D_ARM, "on")
+    if armed == "off":
+        w.set(ARMED, "off")
+    run_started = (w.t + 600) if armed in ("valid", "off") else (w.t - 3600)      # "rearmed": armed is on, but it changed after the run began
+    w.notifications[NOTE] = {"title": "earlier alert", "message": "an alert from an earlier run"}
+    w.notifications[NOTE_READY] = {"title": "earlier readiness alert", "message": "a readiness alert from an earlier run"}
+    n0 = len(w.service_log)
+    pw.ha.start_script(POST_PROBE, {"window_end": w.t + 1800, "run_started": run_started})
+    w.run_until(w.t + 30)
+    return dict(last=pw.state(LAST), alerts=[n for n in w.notification_log if n[1] == "create" and n[2] == NOTE], notice=w.notifications.get(NOTE, {}).get("message", ""),
+                dismissed=sorted(n[2] for n in w.notification_log if n[1] == "dismiss"), arm=pw.state(D.D_ARM), presses=list(d.press_log), numbers=list(d.number_log),
+                calls=sorted({s for _t, s, _e, _d in w.service_log[n0:]}), warnings=list(w.warnings))
+
+
+# (label, class, the result text at the loop end). The texts are the package's own, one per way a run can end its loop (the five STARTING texts, the in-loop STARTED OK, the five FAILED texts, both CANCELLED texts,
+# the press-time BLOCKED texts) and the four a different writer can leave there (the arm validation's ARMED and REJECTED, the watchdog's MISSED, an empty helper).
+CELLS14 = (
+    ("STARTING, the run is waiting for the dongle", "STARTING", "STARTING - attempt 3 waiting: dongle offline or another write in progress; retrying until 21:10"),
+    ("STARTING, refused at the start gate", "STARTING", "STARTING - attempt 2 refused at the start gate (REJECTED - RTC correction currently active); nothing written; retrying until 21:10"),
+    ("STARTING, the press never reached the dongle", "STARTING", "STARTING - attempt 2 never reached the dongle (no start counted); retrying until 21:10"),
+    ("STARTING, arm or staged values not confirmed", "STARTING", "STARTING - attempt 4: arm or staged values not confirmed; nothing pressed; retrying until 21:10"),
+    ("STARTING, the first text of a run", "STARTING", "STARTING - 2000W, Stop SOC 40% (raised from 25% to the effective reserve), until 21:31"),
+    ("STARTED, this run's own verified start", "STARTED", "STARTED OK - 2000W for 30 min, Stop SOC 40% (attempt 1; ends by 21:31)"),
+    ("FAILED, the authorised window is over", "FAILED", "FAILED TO START - authorised window ends 21:31; not started (Inactive)"),
+    ("FAILED, refused at the gate, nothing written", "FAILED", "FAILED TO START - REJECTED - RECOVERY BLOCKED: durable recovery marker exists but its snapshot data cannot be trusted; deliberate recovery (attempt 1; nothing written)"),
+    ("FAILED, a start transaction began and failed", "FAILED", "FAILED TO START - START FAILED - could not capture/durably commit inverter snapshot; nothing written (start transaction began on attempt 1; not retried)"),
+    ("FAILED, no answer, outcome unconfirmed", "FAILED", "FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed, not retried (last status: Inactive)"),
+    ("FAILED, retries ended", "FAILED", "FAILED TO START - retries ended at 21:10: Inactive"),
+    ("CANCELLED, written by the retry loop", "CANCELLED", CANCELLED_TEXT),
+    ("CANCELLED, written by the cancel script", "CANCELLED", "CANCELLED - scheduled event disarmed"),
+    ("BLOCKED, the press-time recheck (an override)", "BLOCKED", "BLOCKED - a Hold battery, Skip tonight or Prepare for power cut became active while this run was waiting (hold_battery); nothing started (reason OVERRIDE_ACTIVE)"),
+    ("BLOCKED, the press-time recheck (the reserve)", "BLOCKED", "BLOCKED - the effective reserve rose above the Stop SOC staged for this run (40%) while it was waiting; nothing started (reason RESERVE_TOO_HIGH)"),
+    ("ARMED, the owner armed a new schedule during the run", "FOREIGN", "ARMED - 2026-11-17 22:00:00 \u2022 30 min \u2022 2000W \u2022 Stop SOC 40%"),
+    ("REJECTED, written by the arm validation", "FOREIGN", "REJECTED - scheduled start must be in the future"),
+    ("MISSED, written by the watchdog or the startup recovery", "FOREIGN", "MISSED - not started after a Home Assistant restart"),
+    ("empty", "FOREIGN", ""),
+)
+_before_cache: dict = {}
+
+
+def probe_before(result: str, active: bool, armed: str) -> dict:
+    key = (result, active, armed)
+    if key not in _before_cache:
+        _before_cache[key] = probe(BEFORE_TEXT, result, active, armed)
+    return _before_cache[key]
+
+
+def notice_is(f: dict, sentence: str | None) -> bool:
+    """The alert's message is the result text, then (only while Dump to Grid is active) the sentence, then the usual tail."""
+    mid = "" if sentence is None else "\n" + re.escape(sentence)
+    return re.fullmatch(re.escape(f["last"]) + mid + "\n" + ALERT_TAIL, f["notice"], re.S) is not None
+
+
+def cell_check(kind: str, text: str, active: bool, armed: str, f: dict) -> str:
+    """'' when the cell is right, else why not."""
+    last = f["last"]
+    if f["arm"] != "off" or f["presses"] or f["numbers"]:
+        return f"the write enable is {f['arm']!r}, presses {f['presses']}, numbers {f['numbers']}: nothing may be pressed or staged after the loop and the write enable ends off"
+    if not set(f["calls"]) <= {"input_text.set_value", "switch.turn_off", "persistent_notification.create", "persistent_notification.dismiss"}:
+        return f"services called: {f['calls']}"
+    if any("invalid value" in m for m in f["warnings"]):
+        return f"a text did not fit the helper: {f['warnings'][:1]}"
+    if not active:
+        g = probe_before(text, active, armed)
+        diff = [k for k in g if f[k] != g[k]]
+        return f"Dump to Grid not active, but the outcome differs from the previous package in {diff}: {last[:70]!r} vs {g['last'][:70]!r}" if diff else ""
+    if "could not confirm the start as its own" in last or (last.startswith("STARTED") and kind != "STARTED"):
+        return f"a result of class {kind} was turned into a success: {last[:90]!r}"
+    if kind == "STARTING" and armed == "valid":
+        m = re.fullmatch(FAILED_FINAL, last)
+        ok = (m is not None and m.group(1) == STATUS14[:120] and len(last) <= 255 and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_CONFIRM) and f["dismissed"] == [])
+        return "" if ok else f"a STARTING result with Dump to Grid active must end as the FAILED TO START text (retries ended, the last status, active now, not confirmed), alerted, nothing dismissed: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    if kind == "STARTING":
+        ok = last == CANCELLED_TEXT and f["alerts"] == [] and f["dismissed"] == BOTH
+        return "" if ok else f"a STARTING result of a cancelled run (armed {armed}) must end as CANCELLED, with no alert: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    if kind == "STARTED":
+        ok = last == text and f["alerts"] == [] and f["dismissed"] == BOTH
+        return "" if ok else f"a verified STARTED OK must stay exactly as written, with no alert: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    if kind == "FAILED":
+        ok = last == text and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_CONFIRM) and f["dismissed"] == []
+        return "" if ok else f"a FAILED result must stay exactly as written, alerted with 'did not confirm that it started it', nothing dismissed: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']} notice={f['notice'][-170:-60]!r}"
+    if kind == "CANCELLED":
+        ok = last == text and f["alerts"] == [] and f["dismissed"] == BOTH
+        return "" if ok else f"a CANCELLED result must stay exactly as written, with no failure alert: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    if kind == "BLOCKED":
+        ok = last == text and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_NOW) and f["dismissed"] == [] and "did not confirm" not in f["notice"]
+        return "" if ok else f"a BLOCKED result must stay exactly as written, alerted with 'this run did not start it', nothing dismissed: {last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    ok = last == text and f["alerts"] == [] and f["dismissed"] == BOTH
+    return "" if ok else f"a result this script did not write must be left alone: {last[:90]!r} (was {text[:40]!r}) alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+
+
+def cell_problems(dump_text: str, stop_early: bool = False, kinds=None) -> list[str]:
+    bad: list[str] = []
+    try:
+        for label, kind, text in CELLS14:
+            if kinds is not None and kind not in kinds:
+                continue
+            for active in (True, False):
+                for armed in ARMED_MODES:
+                    why = cell_check(kind, text, active, armed, probe(dump_text, text, active, armed))
+                    if why:
+                        bad.append(f"{label}, Dump to Grid {'active' if active else 'not active'}, armed={armed}: {why}")
+                        if stop_early:
+                            return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+print("[14.1] the steps after the retry loop, every result class x Dump to Grid active or not x armed")
+cp14: list[str] = []
+for kinds, what in ((("STARTING",), "a STARTING result (five texts: waiting, refused at the gate, never reached the dongle, values not confirmed, the first text)"),
+                    (("FAILED",), "a FAILED result (five texts: window over, refused with nothing written, a start transaction began and failed, no answer and unconfirmed, retries ended)"),
+                    (("CANCELLED",), "a CANCELLED result (the loop's text and the cancel script's)"),
+                    (("BLOCKED",), "a press-time BLOCKED result (an override, the reserve)"),
+                    (("STARTED", "FOREIGN"), "this run's own verified STARTED OK, and a result another writer left (ARMED, REJECTED, MISSED, empty)")):
+    kp = cell_problems(DUMP_TEXT, kinds=kinds)
+    cp14 += kp
+    check(f"{what}: with Dump to Grid ACTIVE it is never turned into a success text "
+          + {"STARTING": "(armed and untouched: the FAILED TO START text, 'retries ended', the last status, Dump to Grid is active now, this run did not confirm that it started it, within 255 characters, one alert, nothing dismissed; "
+                         "cancelled or re-armed: CANCELLED, no alert)",
+             "FAILED": "(exactly as written; one alert whose sentence says this run did not CONFIRM that it started it; nothing dismissed)",
+             "CANCELLED": "(exactly as written; no failure alert)",
+             "BLOCKED": "(exactly as written; one alert whose sentence says this run did not start it; nothing dismissed)",
+             "STARTED": "(left exactly as written, no alert)"}[kinds[0]]
+          + "; with Dump to Grid NOT active the outcome (final text, alerts, message, dismissals, services) equals the previous package's, armed, disarmed and re-armed; nothing pressed or staged after the loop; the write enable ends off",
+          kp == [], str(kp[:2]))
+
+# ---- [14.2] end to end -------------------------------------------------------------------------------------------------------------------------------------------------------------
+print("[14.2] end to end: the real retry loop, then the steps after it")
+STARTED_RE = r"STARTED OK - 2000W for \d+ min, Stop SOC 40% \(attempt (\d+); ends by \d\d:\d\d\)"
+
+
+def arm_busy(pw):                        # the owner disarms the schedule 15 s into a busy wait
+    pw.w.set(ARMED, "off")
+
+
+def cancel_script(pw):                   # the owner's Cancel: the real cancel script (disarms, writes its own CANCELLED text)
+    pw.ha.start_script("ecco_dump_to_grid_cancel_schedule", {})
+
+
+def cancel_and_active(pw):               # the owner disarms the schedule while Dump to Grid becomes active some other way, both before the loop's next look
+    pw.w.set(ARMED, "off")
+    pw.w.set(D.D_ACTIVE, "on")
+
+
+def rearm_and_active(pw):                # the owner arms a new schedule while Dump to Grid becomes active; the arm validation (an automation this harness does not run) writes its ARMED text, written here as it would
+    pw.w.set(ARMED, "off")
+    pw.w.set(ARMED, "on")
+    pw.w.set(LAST, "ARMED - 2026-11-17 22:00:00 \u2022 30 min \u2022 2000W \u2022 Stop SOC 40%")
+    pw.w.set(D.D_ACTIVE, "on")
+
+
+def sv(**kw):
+    return lambda pw, d, t0: [setattr(d, k, v) if k != "rtc" else d.rtc.append((t0 + v[0], t0 + v[1])) for k, v in kw.items()]
+
+
+def fail_press(n):
+    return lambda pw, d, t0: pw.w.fail_services.__setitem__("button.press", n)
+
+
+def stall(a, b):
+    return lambda pw, d, t0: d.stalls.append((t0 + a, t0 + b))
+
+
+def flag(name):
+    return lambda pw, d, t0: d.flags.__setitem__(name, True)
+
+
+# (label, class, end_run arguments). `when`: Dump to Grid becomes active (the dongle's own Start button or a manual start) `delay` s after the result text first satisfies it.
+E2E14 = (
+    ("STARTING: the run waits for a busy dongle and Dump to Grid becomes active 2 s after the waiting text", "S", dict(wait="busy", active_when=lambda t: t.startswith("STARTING - attempt 1 waiting"), active_delay=2.0)),
+    ("STARTING: a start refused at the gate for a transient reason (RTC correction), Dump to Grid becomes active during the retry", "S",
+     dict(wait="none", active_when=lambda t: t.startswith("STARTING - attempt 1 refused at the start gate"), active_delay=1.0, setup=lambda pw, d, t0: d.rtc.append((t0 - 5, t0 + 300)))),
+    ("STARTING: a press that never reached the dongle (one service error), Dump to Grid becomes active as the text is written (no pause follows it)", "S",
+     dict(wait="none", active_when=lambda t: t.startswith("STARTING - attempt 1 never reached"), active_delay=0.0, setup=fail_press(1))),
+    ("STARTING: staging that never reaches the dongle (arm or staged values not confirmed), Dump to Grid becomes active during the pause", "S",
+     dict(wait="none", active_when=lambda t: "arm or staged values not confirmed" in t, active_delay=1.0, setup=lambda pw, d, t0: setattr(d, "drop_numbers", True))),
+    ("FAILED: the authorised window is nearly over (20 s), Dump to Grid becomes active as the text is written", "F", dict(wait="none", active_when=lambda t: t.startswith("FAILED"), window=20.0)),
+    ("FAILED: refused at the gate for a reason that needs the owner (recovery blocked): nothing written; Dump to Grid becomes active as the text is written", "F",
+     dict(wait="none", active_when=lambda t: t.startswith("FAILED"), setup=flag("corrupt"))),
+    ("FAILED: a start transaction began and failed; Dump to Grid becomes active (another path) as the text is written", "F",
+     dict(wait="none", active_when=lambda t: t.startswith("FAILED"), setup=lambda pw, d, t0: setattr(d, "outcome", "capture_failed"))),
+    ("FAILED, a late start of THIS run's own press: the view stalls right after the press; the outcome is unconfirmed (one transaction, never two), then the dongle shows Dump to Grid active", "L", dict(wait="none", setup=stall(1.05, 45.0), seconds=200.0)),
+    ("CANCELLED: the schedule is disarmed during the wait, Dump to Grid becomes active as the CANCELLED text is written", "C", dict(wait="busy", change=arm_busy, active_when=lambda t: t.startswith("CANCELLED"))),
+    ("CANCELLED: the real cancel script runs during the wait, Dump to Grid becomes active as its text is written", "C", dict(wait="busy", change=cancel_script, active_when=lambda t: t.startswith("CANCELLED"))),
+    ("STARTING and cancelled: the schedule is disarmed and Dump to Grid becomes active at the same moment, before the loop looks again", "C", dict(wait="busy", change=cancel_and_active)),
+    ("another writer's result: the owner arms a new schedule during the wait (the arm validation's ARMED text, written by the harness) while Dump to Grid becomes active", "R", dict(wait="busy", change=rearm_and_active)),
+)
+# every shape in which this run's own verified start ends as STARTED OK (the in-loop path, unchanged): (label, minimum attempt number, end_run arguments)
+OK14 = (
+    ("immediate: the first press passes, Dump to Grid active within a few seconds", 1, dict(wait="none")),
+    ("a slow start transaction (70 s): waited for, one transaction", 1, dict(wait="none", setup=sv(transaction_s=70.0), seconds=300.0)),
+    ("active after a retry: the first three presses are refused at the gate (RTC correction)", 2, dict(wait="none", setup=sv(rtc=(-5, 20)))),
+    ("active after a press that never reached the dongle, retried once", 2, dict(wait="none", setup=fail_press(1))),
+    ("active after waiting for a busy dongle (45 s)", 1, dict(wait="busy")),
+    ("active after waiting for an offline dongle (45 s)", 1, dict(wait="offline")),
+    ("the view stalls AFTER the start began (the transaction is seen to begin, Dump to Grid active is seen when the view recovers)", 1, dict(wait="none", setup=stall(2.0, 45.0), seconds=200.0)),
+)
+
+
+def e2e_check(kind: str, f: dict, ref: dict | None) -> str:
+    last = f["last"]
+    if f["arm"] != "off" or f["model_arm"] is not False:
+        return f"the write enable ends {f['arm']}/{f['model_arm']}"
+    if "could not confirm the start as its own" in last or last.startswith("STARTED"):
+        return f"turned into a success: {last[:90]!r}"
+    if kind == "S":
+        ok = (f["went_active"] and re.fullmatch(FAILED_FINAL, last) is not None and len(last) <= 255 and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_CONFIRM)
+              and f["dismissed"] == [] and NOTE in f["notes_left"] and NOTE_READY in f["notes_left"] and f["started"] == 0 and not any(o == "PASSED" for _t, o in f["gate"]))
+        return "" if ok else f"{last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']} gate={f['gate'][:2]} started={f['started']}"
+    if kind == "F":
+        ok = (f["went_active"] and last == ref["last"] and last.startswith("FAILED TO START - ") and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_CONFIRM) and f["dismissed"] == []
+              and NOTE in f["notes_left"] and NOTE_READY in f["notes_left"] and f["presses"] == ref["presses"] and f["gate"] == ref["gate"] and len(ref["alerts"]) == 1 and notice_is(ref, None))
+        return "" if ok else f"{last[:90]!r} (without Dump to Grid active: {ref['last'][:60]!r}) alerts={len(f['alerts'])} dismissed={f['dismissed']} presses={f['presses']} vs {ref['presses']}"
+    if kind == "L":
+        ok = (last.startswith("FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed") and f["started"] == 1 and len(f["presses"]) == 1 and f["active_end"] == "on"
+              and len(f["alerts"]) == 1 and notice_is(f, ACTIVE_CONFIRM) and f["dismissed"] == [])
+        return "" if ok else f"{last[:90]!r} started={f['started']} presses={f['presses']} active={f['active_end']} alerts={len(f['alerts'])} dismissed={f['dismissed']}"
+    if kind == "C":
+        ok = (f["active_end"] == "on" and last.startswith("CANCELLED") and f["alerts"] == [] and f["dismissed"] == BOTH and f["notes_left"] == [] and f["presses"] == [] and f["started"] == 0)
+        return "" if ok else f"{last[:90]!r} alerts={len(f['alerts'])} dismissed={f['dismissed']} presses={f['presses']}"
+    ok = (f["active_end"] == "on" and last.startswith("ARMED - ") and f["alerts"] == [] and f["presses"] == [] and f["started"] == 0)
+    return "" if ok else f"{last[:90]!r} alerts={len(f['alerts'])} presses={f['presses']}"
+
+
+def e2e_problems(dump_text: str, stop_early: bool = False, ok_shapes: bool = True, others: bool = True) -> list[str]:
+    bad: list[str] = []
+    try:
+        if ok_shapes:
+            for label, min_attempt, kw in OK14:
+                f = end_run(dump_text, **kw)
+                m = re.fullmatch(STARTED_RE, f["last"])
+                ok = (m is not None and int(m.group(1)) >= min_attempt and "could not confirm" not in f["last"] and f["started"] == 1 and sum(1 for _t, o in f["gate"] if o == "PASSED") == 1
+                      and f["alerts"] == [] and f["dismissed"] == BOTH and f["notes_left"] == [] and f["arm"] == "off" and f["model_arm"] is False and f["active_end"] == "on")
+                if not ok:
+                    bad.append(f"verified start, {label}: {f['last'][:90]!r} started={f['started']} gate={f['gate'][:3]} alerts={len(f['alerts'])} dismissed={f['dismissed']}")
+                    if stop_early:
+                        return bad
+        if others:
+            for label, kind, kw in E2E14:
+                f = end_run(dump_text, **kw)
+                ref = end_run(dump_text, **{k: v for k, v in kw.items() if k != "active_when"}) if kind == "F" else None
+                why = e2e_check(kind, f, ref)
+                if why:
+                    bad.append(f"{label}: {why}")
+                    if stop_early:
+                        return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+def all14_problems(dump_text: str) -> list[str]:
+    """Every behaviour check of this section, in cost order, stopping at the first failure (a mutant is caught when any of them fails)."""
+    for fn in (lambda t: cell_problems(t, stop_early=True), lambda t: e2e_problems(t, stop_early=True)):
+        found = fn(dump_text)
+        if found:
+            return found
+    return []
+
+
+ok14 = e2e_problems(DUMP_TEXT, others=False)
+check(f"this run's own VERIFIED start still ends as STARTED OK, byte for byte the in-loop text 'STARTED OK - 2000W for N min, Stop SOC 40% (attempt K; ends by HH:MM)' (never the fallback text), in all {len(OK14)} shapes: "
+      "immediate, a slow transaction, after a retry, after a press that never arrived, after a busy and an offline wait, and a stalled view after the start began; one transaction, no alert, both schedule notifications dismissed, "
+      "the write enable off", ok14 == [], str(ok14[:2]))
+for label, kind, kw in E2E14:
+    f = end_run(DUMP_TEXT, **kw)
+    ref = end_run(DUMP_TEXT, **{k: v for k, v in kw.items() if k != "active_when"}) if kind == "F" else None
+    why = e2e_check(kind, f, ref)
+    check(f"end to end, {label}: "
+          + {"S": "the run ends as the FAILED TO START text that says Dump to Grid is active now and this run did not confirm that it started it (never STARTED OK), one alert, nothing dismissed, no start of this run",
+             "F": "the FAILED text stays exactly as the loop wrote it, one alert that says this run did not CONFIRM that it started it, nothing dismissed, no press after the loop",
+             "L": "the FAILED (unconfirmed) text stays, one transaction, and the alert says Dump to Grid is active now and this run did not confirm that it started it (a late start of this run's own press: a false negative the alert flags)",
+             "C": "the result stays CANCELLED, no failure alert, nothing pressed",
+             "R": "the ARMED text the new schedule's arming wrote stays (it is not replaced by a success), no failure alert, nothing pressed"}[kind], why == "", why)
+
+# ---- [14.3] mutants -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+print("[14.3] mutation: the old overwrite restored per class, a success text added after the loop, the cancel and sentence variants, the in-loop path broken: each is caught")
+_FAILED_SENTENCE_BRANCH = "                {%- else -%}\n" + _FAILED_SENTENCE
+_CANCEL_COND = "value_template: >-\n                          {{ not (is_state('input_boolean.ecco_dump_to_grid_schedule_armed', 'on')"
+_INLOOP_IF = ("                                - if:\n                                    - condition: state\n                                      entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active\n"
+              "                                      state: \"on\"\n                                  then:\n")
+_INLOOP_TEXT = "(attempt {{ repeat.index }}; ends by"
+_PRESS_STEP = "          - action: button.press\n            target:\n              entity_id: button.ecco_clock_dongle_start_dump_to_grid_now\n"
+MUTANTS14 = [
+    ("a success text is written for a result another writer left (the old fallback limited to ARMED, REJECTED, MISSED and empty)",
+     [(NEW_STEP, _old_step("\n                     and not r.startswith('STARTING') and not r.startswith('FAILED') and not r.startswith('CANCELLED') and not r.startswith('BLOCKED')") + NEW_STEP)]),
+    ("the old overwrite is restored for a BLOCKED result (the pre-r14 rule)", [(NEW_STEP, _old_class_step("BLOCKED") + NEW_STEP)]),
+    ("the old overwrite is restored for a FAILED result (the old rule)", [(NEW_STEP, _old_class_step("FAILED") + NEW_STEP)]),
+    ("the old overwrite is restored for a CANCELLED result (the old rule)", [(NEW_STEP, _old_class_step("CANCELLED") + NEW_STEP)]),
+    ("the old overwrite is restored for a STARTING result (it becomes STARTED OK again)", [(_FAILED_VALUE, "                      value: " + OLD_SUCCESS + "\n")]),
+    ("the old unconditional overwrite is restored (every result but STARTED)", [(NEW_STEP, _old_step(""))]),
+    ("the step acts on every result while Dump to Grid is active (a FAILED, CANCELLED or BLOCKED result is rewritten as the FAILED TO START text)",
+     [("is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and r.startswith('STARTING') }}", "is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') }}")]),
+    ("the step also rewrites this run's own verified STARTED OK as FAILED", [("and r.startswith('STARTING') }}", "and (r.startswith('STARTING') or r.startswith('STARTED')) }}")]),
+    ("the step also rewrites a CANCELLED result as FAILED", [("and r.startswith('STARTING') }}", "and (r.startswith('STARTING') or r.startswith('CANCELLED')) }}")]),
+    ("the step also rewrites a FAILED result (the last status of a different attempt replaces it)", [("and r.startswith('STARTING') }}", "and (r.startswith('STARTING') or r.startswith('FAILED')) }}")]),
+    ("a cancelled run with Dump to Grid active is reported as FAILED (the cancel branch never fires)", [(_CANCEL_COND, _CANCEL_COND.replace("{{ not (", "{{ false and ("))]),
+    ("a run that was NOT cancelled is reported as CANCELLED (the cancel branch inverted)", [(_CANCEL_COND, _CANCEL_COND.replace("{{ not (", "{{ ("))]),
+    ("the FAILED TO START text no longer says that this run did not confirm that it started it", [(_FAILED_VALUE, _FAILED_VALUE.replace("Dump to Grid is active now, but this run did not confirm that it started it\n", "Dump to Grid is active now\n"))]),
+    ("the FAILED TO START text claims that this run started it", [(_FAILED_VALUE, _FAILED_VALUE.replace("but this run did not confirm that it started it", "and this run started it"))]),
+    ("the FAILED TO START text drops the last status", [(_FAILED_VALUE, _FAILED_VALUE.replace("                        {{ states('sensor.ecco_clock_dongle_dump_to_grid_status')[:120] }};\n", ""))]),
+    ("the FAILED TO START text keeps the whole last status (not cut at 120 characters: it can exceed the 255-character helper)",
+     [(_FAILED_VALUE, _FAILED_VALUE.replace("[:120]", ""))]),
+    ("the alert's sentence says 'this run did not start it' for a FAILED result too (an unconfirmed outcome can be a late start of this run's own press)", [(_FAILED_SENTENCE, _BLOCKED_SENTENCE)]),
+    ("the alert's sentence says 'did not confirm' for a BLOCKED result (nothing was pressed: it did not start it)", [(_BLOCKED_SENTENCE, _FAILED_SENTENCE)]),
+    ("the alert has no sentence for a FAILED result", [(_FAILED_SENTENCE_BRANCH, "")]),
+    ("a press follows the steps after the loop", [(NEW_STEP, NEW_STEP + _PRESS_STEP)]),
+    ("the in-loop path writes STARTED OK when Dump to Grid is NOT active after the transaction (a failed start reads as success)", [(_INLOOP_IF, _INLOOP_IF.replace('state: "on"', 'state: "off"'))]),
+    ("the in-loop STARTED OK text says the start could not be confirmed as this run's own", [(_INLOOP_TEXT, "(attempt {{ repeat.index }}; could not confirm the start as its own; ends by")]),
+]
+caught14 = 0
+built14 = 0
+for label, edits in MUTANTS14:
+    mutated = DUMP_TEXT
+    ok_built = True
+    for old, new in edits:
+        if not old or mutated.count(old) != 1:
+            ok_built = False
+            check(f"mutant anchor: {label}", False, f"anchor found {mutated.count(old) if old else 0}x: {old[:70]!r}")
+            break
+        mutated = mutated.replace(old, new)
+    if not ok_built:
+        continue
+    built14 += 1
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = all14_problems(mutated)
+    if found:
+        caught14 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS14)} mutants of the steps after the loop, the end-of-run alert and the in-loop path (the old overwrite restored for each class among them), all caught by the table or a running scheduled start",
+      caught14 == len(MUTANTS14) == built14, f"{caught14}/{built14}/{len(MUTANTS14)}")
+check("control: the unmutated package passes the same table and running cases", cp14 == [] and ok14 == [] and not [1 for label, kind, kw in E2E14 if e2e_check(kind, end_run(DUMP_TEXT, **kw), end_run(DUMP_TEXT, **{k: v for k, v in kw.items() if k != "active_when"}) if kind == "F" else None)])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

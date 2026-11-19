@@ -38,6 +38,10 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 and 19 say so in the new words (the old 'open owner decision' wording is replaced, never merely dropped), the new item 23 (the card reads the timestamp attribute only: display
                 only, the backend decides) exists, the helper package comment and the CHANGELOG say so, the Stage 3 limitation sentence (RG-ST3) stands exactly once in each place, nothing says
                 'fully enforced', and all 23 items are listed; mutants and a control
+  [10] item 20 (owner decision r15, 19 Nov 2026; additive) limitation 20 is EXTENDED: a STARTING, FAILED or CANCELLED result is no longer overwritten with STARTED OK either. Item 20, the schedule package
+                header, the alert's two sentences (BLOCKED: this run did not start it; FAILED: this run did not confirm that it started it) and a new CHANGELOG bullet say so, the old wording ('is not covered
+                by the fix', 'keeps the rule it had', 'still replaced by STARTED OK') is gone, what is still true (a FAILED text can be a false negative) is stated, the RG-ST3 sentence stands exactly once in
+                each place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -630,7 +634,7 @@ SCHEDULE_HEADER_WORDING = (
     "the schedule notifications are not dismissed",
     "that Dump to Grid is active now and that this run did not start it",
     "which no override binds (RG-ST3)",
-    "A STARTING, FAILED or CANCELLED result keeps the rule it had",
+    "Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)",   # r15: replaces "A STARTING, FAILED or CANCELLED result keeps the rule it had" (the old rule is gone)
     "It runs on EVERY attempt, the first included",
     "momentarily unknown or unavailable at that moment",
     "that night's scheduled export is lost until the owner arms it again",
@@ -753,7 +757,7 @@ print("[8] known limitation 20 is FIXED (owner decision r14, 19 Nov 2026; additi
 # ===========================================================================
 # The press-time BLOCKED text is no longer overwritten with STARTED OK when Dump to Grid is active (running proof: test_ecco_plan_enforcement.py [12]). Item 20 stays in the list (with what was
 # done), the schedule package header and the CHANGELOG say so, and what is still true is stated: the dongle's own Start button is not bound by any override (RG-ST3), this change reports an
-# active Dump to Grid and does not stop it, and a STARTING, FAILED or CANCELLED result keeps its old rule. These checks are ADDITIVE to [6] and [7]: they require the new wording, forbid the old
+# active Dump to Grid and does not stop it (and, before owner decision r15 ([10]), that a STARTING, FAILED or CANCELLED result kept its old rule: it no longer does). These checks are ADDITIVE to [6] and [7]: they require the new wording, forbid the old
 # wording where it described the current behaviour, re-require the Stage 3 limitation sentence and the 22 items, and forbid any 'fully enforced' claim.
 OLD20_ITEM = ("only the record of the reason is lost", "pins today's behaviour", "the reason is lost from the record", "it documents the limitation and does not approve it")
 OLD20_HEADER = ("unless Dump to Grid is found active when the loop ends, in which case the result text reads STARTED OK", "only the record of the reason is lost",
@@ -789,8 +793,10 @@ def fixed20_problems(readme: str, schedule: str, changelog: str) -> list[str]:
     code = code_lines(schedule)
     if flat(code).count(ALERT_SENTENCE) != 1:
         out.append(f"the alert sentence stands {flat(code).count(ALERT_SENTENCE)}x in the package (not in a comment)")
-    if code.count("and not r.startswith('BLOCKED') }}") < 1:
-        out.append("the overwrite step does not exclude a BLOCKED result")
+    # r15: the old requirement here ('and not r.startswith('BLOCKED') }}' stands in the overwrite step) pinned the step that wrote STARTED OK for every result but BLOCKED. Owner decision r15 removed that step:
+    # the steps after the loop write no success text and the one step that acts on Dump to Grid being active acts on a STARTING result only (a BLOCKED result is spared by construction, as FAILED and CANCELLED are).
+    if "could not confirm the start as its own" in code or code.count("and r.startswith('STARTING') }}") != 1:
+        out.append("the steps after the loop write the fallback success text again, or the step does not act on a STARTING result only (so a BLOCKED, FAILED or CANCELLED result is not spared)")
     if FULL_CLAIM.search(item + " " + fs + " " + schedule + " " + fc):
         out.append("a 'fully enforced' claim stands in item 20, the package or the CHANGELOG")
     return out
@@ -818,7 +824,10 @@ check("mutant caught: the old 'unless Dump to Grid is found active ... STARTED O
 check("mutant caught: the alert sentence removed from the package code", bool(fixed20_problems(f8_readme, f8_schedule.replace(ALERT_SENTENCE.split(" (it may")[0], "Dump to Grid is running"), f8_changelog)))
 check("mutant caught: the alert sentence only in a comment, not in the package code",
       bool(fixed20_problems(f8_readme, f8_schedule.replace("\n                Dump to Grid is active now, and this run did not start it", "\n                # Dump to Grid is active now, and this run did not start it"), f8_changelog)))
-check("mutant caught: the overwrite step no longer excludes a BLOCKED result (the old condition)", bool(fixed20_problems(f8_readme, f8_schedule.replace("and not r.startswith('BLOCKED') }}", "}}"), f8_changelog)))
+# r15: the mutant that stood here ("the overwrite step no longer excludes a BLOCKED result") named a step that no longer exists; its two successors:
+check("mutant caught: the step after the loop acts on every result again (the STARTING test removed: a BLOCKED, FAILED or CANCELLED result is no longer spared)", bool(fixed20_problems(f8_readme, f8_schedule.replace("and r.startswith('STARTING') }}", "}}"), f8_changelog)))
+check("mutant caught: the fallback success text is back in the package code (the old overwrite)",
+      bool(fixed20_problems(f8_readme, f8_schedule.replace("                        Dump to Grid is active now, but this run did not confirm that it started it\n", "                        STARTED OK - Dump to Grid is active; this run could not confirm the start as its own\n"), f8_changelog)))
 check("mutant caught: item 20 loses the RG-ST3 statement", bool(fixed20_problems(f8_readme.replace("still not bound by any override (RG-ST3)", "still open"), f8_schedule, f8_changelog)))
 check("mutant caught: the schedule package header loses the RG-ST3 statement", bool(fixed20_problems(f8_readme, f8_schedule.replace("which no override binds (RG-ST3)", "which nothing binds"), f8_changelog)))
 check("mutant caught: the CHANGELOG bullet removed", bool(fixed20_problems(f8_readme, f8_schedule, drop_phrase(f8_changelog, "a press-time BLOCKED result stays BLOCKED"))))
@@ -932,6 +941,100 @@ check("mutant caught: items 19 and 23 merged (item 23 text inside item 19)",
       bool(limitations_problems(m9_readme.replace("\n23. **The card reads", "\n   **The card reads"))))
 check("control: the untouched tree is not flagged by the r14 checks", not mitigated19_problems(m9_readme, m9_helper, m9_changelog) and not status_problems(m9_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog)
       and not limitations_problems(m9_readme))
+
+# ===========================================================================
+print("")
+print("[10] known limitation 20 EXTENDED (owner decision r15, 19 Nov 2026; additive): a STARTING, FAILED or CANCELLED result is no longer overwritten with STARTED OK either; the new wording stands, the old wording is gone")
+# ===========================================================================
+# Owner decision r15: the steps after the scheduled start's retry loop write no success text. A FAILED or CANCELLED result stays exactly as written, a result still STARTING with Dump to Grid active becomes CANCELLED (the
+# owner cancelled) or a FAILED TO START text that says Dump to Grid is active now and this run did not confirm that it started it, and the alert's sentence says 'did not confirm' for a FAILED result and still 'did not start
+# it' for a BLOCKED one (running proof: test_ecco_plan_enforcement.py [12] and [14]). These checks are ADDITIVE to [6] to [9]: they require the new wording in item 20, the schedule package header and a new CHANGELOG bullet,
+# forbid the old wording where it described the current behaviour, state what is still true (a FAILED text can be a false negative), re-require the Stage 3 limitation sentence (RG-ST3) and the 23 items, and forbid any
+# 'fully enforced' claim. The CHANGELOG bullet of r14 stays as written (a record of what was true then); the r15 bullet says it supersedes the sentence about the old rule.
+OLD20_R15_ITEM = ("is not covered by the fix", "it is still replaced by STARTED OK, as before", "still replaced by STARTED OK")
+OLD20_R15_HEADER = ("keeps the rule it had", "it is still replaced by STARTED OK")
+ITEM20_R15 = ("FIXED the same day (owner decision r15)", "owner decision r15", "FAILED TO START text", "did not confirm that it started it", "STARTED OK is still written inside the loop only",
+              "With Dump to Grid not active nothing changed", "and [14] (every result class", "a FAILED text can be a false negative", "still not bound by any override (RG-ST3)")
+HEADER_R15 = ("Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)", "the steps after the loop never write a success text", "A FAILED or CANCELLED result is final too",
+              "STARTED OK is written only inside the loop", "such a FAILED text can be a false negative", "nothing changes while Dump to Grid is not active", "which no override binds (RG-ST3)")
+CHANGELOG_R15 = ("a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either", "known limitation 20 extended", "owner decision r15", "FAILED TO START text", "did not confirm that it started it",
+                 "STARTED OK is written only in the loop", "This supersedes the sentence of the bullet above", "STARTING, FAILED and CANCELLED results keep their old rule", "still not bound (RG-ST3)",
+                 "the Free Power schedule package has the same fallback text", "false negative")
+ALERT_CONFIRM = ("Dump to Grid is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, or, if a start transaction had begun, "
+                 "late by this run's own press). Check it, and the plan overrides, before assuming it is held.")
+
+
+def bullet15(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def extended20_problems(readme: str, schedule: str, changelog: str) -> list[str]:
+    out = []
+    item = item_bodies(readme).get(20, "")
+    fs, fb = flat_yaml(schedule), flat(bullet15(changelog))
+    code = code_lines(schedule)
+    out.extend(f"item 20 still says: {p}" for p in OLD20_R15_ITEM if p in item)
+    out.extend(f"the schedule package header still says: {p}" for p in OLD20_R15_HEADER if p in fs)
+    out.extend(f"item 20 lacks: {p}" for p in ITEM20_R15 if p not in item)
+    out.extend(f"the schedule package header lacks: {p}" for p in HEADER_R15 if p not in fs)
+    out.extend(f"the CHANGELOG bullet of r15 lacks: {p}" for p in CHANGELOG_R15 if p not in fb)
+    if flat(code).count(ALERT_CONFIRM) != 1:
+        out.append(f"the alert's 'did not confirm' sentence stands {flat(code).count(ALERT_CONFIRM)}x in the package code (not in a comment)")
+    if flat(code).count(ALERT_SENTENCE) != 1:
+        out.append(f"the alert's BLOCKED sentence ('did not start it') stands {flat(code).count(ALERT_SENTENCE)}x in the package code")
+    if "could not confirm the start as its own" in code:
+        out.append("the fallback success text is in the package code")
+    if code.count("and r.startswith('STARTING') }}") != 1:
+        out.append("the step that acts on Dump to Grid being active does not act on a STARTING result only")
+    if FULL_CLAIM.search(item + " " + fs + " " + schedule + " " + fb):
+        out.append("a 'fully enforced' claim stands in item 20, the package or the CHANGELOG")
+    return out
+
+
+x_readme, x_schedule, x_changelog = s2_readme, s2_schedule, s2_changelog
+check("limitation 20 is extended in the words of item 20, the schedule package header (and the alert's two sentences in its code) and the new CHANGELOG bullet; the old wording is gone; what is still true is stated",
+      not extended20_problems(x_readme, x_schedule, x_changelog), str(extended20_problems(x_readme, x_schedule, x_changelog)))
+check("the 23 numbered items are all still listed, item 20 among them (nothing was removed because it was extended)", [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and not limitations_problems(x_readme)
+      and 20 in item_bodies(x_readme), str(limitations_problems(x_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once, and item 20 and the schedule package header still say it",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text) and "(RG-ST3)" in item_bodies(x_readme).get(20, "") and "which no override binds (RG-ST3)" in flat_yaml(x_schedule))
+check("the r14 wording of item 20 and the r14 CHANGELOG bullet is not lost (additive): the BLOCKED sentence, 'the schedule notifications are not dismissed', 'is never overwritten' and the r14 bullet stand",
+      not fixed20_problems(x_readme, x_schedule, x_changelog) and not status_problems(x_readme), str(fixed20_problems(x_readme, x_schedule, x_changelog) + status_problems(x_readme)))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM20_R15:
+    check(f"mutant caught: item 20 loses '{ph[:48]}'", bool(extended20_problems(drop_in_item(x_readme, 20, ph), x_schedule, x_changelog)))
+for ph in HEADER_R15:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(extended20_problems(x_readme, drop_phrase(flat_yaml(x_schedule), ph), x_changelog)))
+for ph in CHANGELOG_R15:
+    check(f"mutant caught: the CHANGELOG bullet of r15 loses '{ph[:48]}'", bool(extended20_problems(x_readme, x_schedule, drop_phrase(x_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet of r15 removed", bool(extended20_problems(x_readme, x_schedule, drop_phrase(x_changelog, "a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either"))))
+check("mutant caught: item 20 says again that a STARTING, FAILED or CANCELLED result is not covered by the fix",
+      bool(extended20_problems(x_readme.replace("Not examined: how real Home Assistant renders the notice.", "A STARTING, FAILED or CANCELLED result is not covered by the fix. Not examined: how real Home Assistant renders the notice."), x_schedule, x_changelog)))
+check("mutant caught: item 20 says again that the old rule stands (still replaced by STARTED OK)",
+      bool(extended20_problems(x_readme.replace("Not examined: how real Home Assistant renders the notice.", "It is still replaced by STARTED OK, as before. Not examined: how real Home Assistant renders the notice."), x_schedule, x_changelog)))
+check("mutant caught: the schedule package header says again that a STARTING, FAILED or CANCELLED result keeps the rule it had",
+      bool(extended20_problems(x_readme, x_schedule + "\n# A STARTING, FAILED or CANCELLED result keeps the rule it had.\n", x_changelog)))
+check("mutant caught: the alert's 'did not confirm' sentence removed from the package code", bool(extended20_problems(x_readme, x_schedule.replace(ALERT_CONFIRM.split(" (it may")[0], "Dump to Grid is running"), x_changelog)))
+check("mutant caught: the alert's 'did not confirm' sentence only in a comment, not in the package code",
+      bool(extended20_problems(x_readme, x_schedule.replace("\n                Dump to Grid is active now, but this run did not confirm", "\n                # Dump to Grid is active now, but this run did not confirm"), x_changelog)))
+check("mutant caught: the alert's BLOCKED sentence changed to 'did not confirm' (nothing was pressed: it did not start it)",
+      bool(extended20_problems(x_readme, x_schedule.replace("Dump to Grid is active now, and this run did not start it", "Dump to Grid is active now, but this run did not confirm that it started it"), x_changelog)))
+check("mutant caught: the fallback success text is back in the package code", bool(extended20_problems(x_readme, x_schedule.replace("                        Dump to Grid is active now, but this run did not confirm that it started it\n",
+                                                                                                                             "                        STARTED OK - Dump to Grid is active; this run could not confirm the start as its own\n"), x_changelog)))
+check("mutant caught: the step after the loop acts on every result again (the STARTING test removed)", bool(extended20_problems(x_readme, x_schedule.replace("and r.startswith('STARTING') }}", "}}"), x_changelog)))
+check("mutant caught: item 20 claims the overrides are fully enforced", bool(extended20_problems(x_readme.replace("**A press-time BLOCKED result was", "**Fully enforced: a press-time BLOCKED result was"), x_schedule, x_changelog)))
+check("mutant caught: the schedule package header claims full enforcement", bool(extended20_problems(x_readme, x_schedule + "\n# The overrides are fully enforced.\n", x_changelog)))
+check("mutant caught: the CHANGELOG bullet of r15 claims full enforcement",
+      bool(extended20_problems(x_readme, x_schedule, x_changelog.replace("(owner decision r15, 19 Nov 2026; known limitation 20 extended;", "(fully enforced; owner decision r15, 19 Nov 2026; known limitation 20 extended;"))))
+check("mutant caught: item 20 loses the RG-ST3 statement", bool(extended20_problems(x_readme.replace("still not bound by any override (RG-ST3)", "still open"), x_schedule, x_changelog)))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 20 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
+check("control: the untouched tree is not flagged by the item 20 (r15) checks", not extended20_problems(x_readme, x_schedule, x_changelog) and not fixed20_problems(x_readme, x_schedule, x_changelog)
+      and not status_problems(x_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog) and not limitations_problems(x_readme))
 
 print("")
 if FAILURES:
