@@ -62,8 +62,8 @@
 # press. If the hold is no longer clear (held, or cannot be read), or the reserve can no longer be read or is not a finite number from 0
 # to 100, or the Stop SOC staged for THIS run is below the rounded-up reserve of that moment, the run ends as a BLOCKED result with the
 # same reason codes (RESERVE_TOO_HIGH for the staged Stop SOC) that says it happened while the run was waiting, nothing is pressed, the
-# write enable ends off, it is never retried, and the end-of-run alert raises the notification, unless Dump to Grid is found active when
-# the loop ends, in which case the result text reads STARTED OK (see the last point below). The re-read is a moment before the press,
+# write enable ends off, it is never retried, and the end-of-run alert raises the notification, also when Dump to Grid is found active when
+# the loop ends (see the last point below). The re-read is a moment before the press,
 # not part of it: an override started in that moment is not seen. What else the recheck does and does not do:
 #   - It runs on EVERY attempt, the first included: after the staging (up to about six seconds: three numbers, the arm and its
 #     confirmation) and before the press. A "while this run was waiting" text can therefore also come from a change during that staging.
@@ -72,11 +72,14 @@
 #     export is lost until the owner arms it again. It is not refused for good: the next armed run reads the sensors afresh.
 #   - The staging of that attempt stays on the dongle (export power, Stop SOC and duration) with the write enable off; nothing starts
 #     without arming again and pressing, as after any other failed attempt.
-#   - A limit, not fixed: this BLOCKED text is written inside the retry loop, so, unlike the start-time BLOCKED results, the steps after
-#     the loop still run. If Dump to Grid is active when the loop ends (started from the dongle's own Start button, which no override
-#     binds (RG-ST3), or by a manual start), the step after the loop overwrites the BLOCKED text with "STARTED OK - Dump to Grid is
-#     active; this run could not confirm the start as its own ...", the end-of-run alert is skipped and the schedule notifications are
-#     dismissed. This script presses nothing in that case; only the record of the reason is lost.
+#   - Fixed 19 Nov 2026 (owner decision r14: a refusal stays a refusal): this BLOCKED text is written inside the retry loop, so, unlike
+#     the start-time BLOCKED results, the steps after the loop still run. They no longer overwrite it: a result that starts with BLOCKED
+#     is never replaced by "STARTED OK - Dump to Grid is active; this run could not confirm the start as its own ...", also when Dump to
+#     Grid is active when the loop ends (started from the dongle's own Start button, which no override binds (RG-ST3), or by a manual
+#     start). The end-of-run alert is raised as for any BLOCKED result, the schedule notifications are not dismissed, and the alert says
+#     that Dump to Grid is active now and that this run did not start it: check it, and the plan overrides, before assuming it is held.
+#     This script presses nothing in that case. A STARTING, FAILED or CANCELLED result keeps the rule it had: with Dump to Grid active
+#     it is still replaced by STARTED OK.
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -589,11 +592,14 @@ script:
                   entity_id: input_text.ecco_dump_to_grid_schedule_last_result
                 data:
                   value: "CANCELLED - scheduled Dump to Grid cancelled before it started"
+          # Owner decision r14 (19 Nov 2026): a BLOCKED result (the press-time recheck's) is a refusal and stays one. It is never replaced
+          # by STARTED OK, even when Dump to Grid is active (started some other way); the alert below then says so.
           - if:
               - condition: template
                 value_template: >-
                   {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}
-                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED') }}
+                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED')
+                     and not r.startswith('BLOCKED') }}
             then:
               - action: input_text.set_value
                 target:
@@ -635,8 +641,14 @@ script:
             data:
               notification_id: ecco_dump_to_grid_schedule
               title: "ECCO: scheduled Dump to Grid did NOT start"
+              # Owner decision r14: while Dump to Grid is active at this moment the notice says so (this run did not start it).
               message: >-
                 {{ states('input_text.ecco_dump_to_grid_schedule_last_result') }}
+                {%- if is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') %}
+
+                Dump to Grid is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand).
+                Check it, and the plan overrides, before assuming it is held.
+                {%- endif %}
 
                 Authorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}.
                 If time remains and the reason is cleared, use Dump to Grid now in Energy Actions.
