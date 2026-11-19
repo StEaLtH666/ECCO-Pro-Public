@@ -117,7 +117,7 @@ POLICY_ENT = {
 }
 START_E = {k: f"input_datetime.ecco_plan_override_{k}_start" for k in KINDS}
 EXPIRES_E = {k: f"input_datetime.ecco_plan_override_{k}_expires" for k in KINDS}
-EPOCH_E = {k: f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # the absolute expiry record (owner decision r14); the card does not read it
+EPOCH_E = {k: f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # the absolute expiry record (owner decision r14); the card reads it too since owner decision r15 (it is in HELPER_IDS)
 CUT_RESERVE_E = "input_number.ecco_plan_override_prepare_power_cut_reserve"
 FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -502,8 +502,8 @@ for domain in ALLOWED_ATTRS:
 check("every helper is a generic ecco_plan_ name with only whitelisted attributes (so no `initial` can hide)",
       all(e.split(".", 1)[1].startswith("ecco_plan_") and set(a) <= ALLOWED_ATTRS[e.split(".", 1)[0]] for e, a in ents.items()), "")
 expected = set(IDS.values()) | {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"} | set(EPOCH_E.values())
-check("the helpers are exactly the entities the card reads (HELPER_IDS) plus the last result, the seed flag and the three backend-only epoch records of owner decision r14 "
-      "(the card does not read them)", set(ents) == expected, str(set(ents) ^ expected))
+check("the helpers are exactly the entities the card reads (HELPER_IDS, which since owner decision r15 names the three epoch records of owner decision r14 too) plus the last result and the seed flag; "
+      "the three epoch records stay required by this suite as well", set(ents) == expected, str(set(ents) ^ expected))
 check("one automation (the first-run seed), two scripts, two sensors",
       [a["id"] for a in doc["automation"]] == ["ecco_plan_seed_accepted_limits"] and set(doc["script"]) == {"ecco_plan_override_start", "ecco_plan_override_cancel"}
       and [s["name"] for s in doc["template"][0]["sensor"]] == ["ECCO Plan Export Hold", "ECCO Plan Effective Reserve"])
@@ -523,10 +523,16 @@ for key, ent in IDS.items():
             bad.append(f"{key}: {(a.get('min'), a.get('max'), a.get('step'))} != {(b['min'], b['max'], b['step'])}")
 check("every limit helper's min / max / step equals the validator's HELPER_BOUNDS", not bad, str(bad))
 check("each override kind has an absolute epoch record (owner decision r14): an input_number with min 0, max 4102444800 (the year 2100), step 1 and mode box, one per kind, "
-      "with no initial value (Home Assistant restores it), and the card's reader does not name it",
+      "with no initial value (Home Assistant restores it), and (owner decision r15, replacing the r14 requirement that the card must not read it) the card's reader NAMES each of them, so the card can place "
+      "an override held only by its epoch record and offer the guarded Cancel for it",
       all(e in ents and (ents[e].get("min"), ents[e].get("max"), ents[e].get("step"), ents[e].get("mode")) == (0, 4102444800, 1, "box") and "initial" not in ents[e]
-          for e in EPOCH_E.values()) and not set(EPOCH_E.values()) & set(IDS.values()) and len(EPOCH_E) == 3,
+          for e in EPOCH_E.values()) and set(EPOCH_E.values()) <= set(IDS.values()) and len(EPOCH_E) == 3,
       str({e: ents.get(e) for e in EPOCH_E.values()}))
+_IDS_BEFORE_R15 = {k: v for k, v in IDS.items() if v not in set(EPOCH_E.values())}   # the r14 card: its reader did not name the epoch records (the old behaviour, kept as a mutant)
+check("mutant caught: a card reader that does not name an epoch record (the r14 state, before owner decision r15) fails the requirement above",
+      not (set(EPOCH_E.values()) <= set(_IDS_BEFORE_R15.values())) and len(_IDS_BEFORE_R15) == len(IDS) - 3)
+check("the card's HELPER_IDS block holds the 17 helpers of before and the 3 epoch records (20 in all), each exactly once", len(IDS) == 20 and len(set(IDS.values())) == 20 and
+      [v for v in IDS.values() if v.endswith("_expires_epoch")] == [EPOCH_E[k] for k in KINDS], str(len(IDS)))
 rows = re.findall(r"\['([^']+)', states\('([a-z_.]+)'\) \| float\(none\), (\d+), (\d+), (\d+)\]", PKG_TEXT)
 by_ent = {e: (int(lo), int(hi), int(st)) for _l, e, lo, hi, st in rows}
 tpl_bounds = {k: (BOUNDS[k]["min"], BOUNDS[k]["max"], BOUNDS[k]["step"]) for k in POLICY_ENT if k != "skip_until"}

@@ -138,7 +138,8 @@ input_number:
   # computes for the date-and-time expiry, so the owner's deadline is preserved exactly and nothing is extended. Written only by the two guarded
   # scripts (the start script writes it BEFORE the date-and-time expiry; the cancel script writes the cancel instant). An override is active while
   # EITHER the date-and-time expiry or this record is in the future (see the export hold sensor). No `initial`: Home Assistant restores it, and a
-  # fresh helper starts at its minimum, 0, which is in the past. The card does not read these records (it shows the date-and-time expiry).
+  # fresh helper starts at its minimum, 0, which is in the past. The card reads them too (owner decision r15): it mirrors the backend's read rule, shows a kind as
+  # running while either record is in the future and as held by Home Assistant when a record cannot be read, and offers the guarded Cancel for both (plan-core README, known limitation 23).
   ecco_plan_override_hold_battery_expires_epoch:
     name: ECCO plan, Hold battery expiry as epoch seconds (absolute record)
     min: 0

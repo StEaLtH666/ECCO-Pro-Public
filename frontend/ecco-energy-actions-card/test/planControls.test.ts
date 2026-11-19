@@ -317,7 +317,7 @@ const MUTANTS: { label: string; file: string; find: string; put: string; times?:
   { label: "the sentence is shown while the battery is not below the reserve", file: "plan/controlsModel.ts", find: "h.socPct !== null && h.socPct < rem.override.reservePct", put: "h.socPct !== null" },
   { label: "the card ignores the owner's confirmation switch", file: "plan/helpers.ts", find: "const raw: OverrideConfigRaw = {\n    confirmed,", put: "const raw: OverrideConfigRaw = {\n    confirmed: true," },
   { label: "the controls show without the guarded scripts", file: "plan/controlsModel.ts", find: "const missingScripts = [PLAN_CONTROL_IDS.start_script, PLAN_CONTROL_IDS.cancel_script].filter((id) => ctx.states[id] === undefined);", put: "const missingScripts: string[] = [];" },
-  { label: "a cancel is offered with nothing running", file: "plan/controlsModel.ts", find: "cancel: row ? cancelOverrideCall(kind, revision) : null,", put: "cancel: cancelOverrideCall(kind, revision)," },
+  { label: "a cancel is offered with nothing running", file: "plan/controlsModel.ts", find: "cancel: row || held ? cancelOverrideCall(kind, revision) : null,", put: "cancel: cancelOverrideCall(kind, revision)," },   // re-anchored (owner decision r15): a Cancel is also offered for a held kind; the mutant is the same
   { label: "the script's refusal is not shown", file: "plan/controls.ts", find: "${vm.lastResult ? html`", put: "${false ? html`" },
 ];
 

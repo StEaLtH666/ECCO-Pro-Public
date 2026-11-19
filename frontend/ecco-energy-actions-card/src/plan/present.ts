@@ -3,7 +3,7 @@
 import { EXPIRY_CEILING_MIN, FIELD_DEFS, OVERRIDE_LABELS, PROPOSED_DEFAULTS, fmt, formatDurationMin, span } from "../../../ecco-plan-core/src/index.ts";
 import type { NativeSlot, OverrideConfig, OverrideKind, SlotReport } from "../../../ecco-plan-core/src/index.ts";
 import type { ChipState, FieldInfo, PlanSnapshot } from "./adapter.ts";
-import type { HelperSnapshot } from "./helpers.ts";
+import type { HelperSnapshot, KindRecord } from "./helpers.ts";
 
 export type ChipKind = ChipState | "UNKNOWN";
 
@@ -101,6 +101,24 @@ export interface OverrideRowVM {
   effectText: string;
   /** Prepare for power cut only: set while the battery is below the reserve it raised. It raises a floor; it never charges. */
   belowReserve: string | null;
+  /** Plain words when only the absolute epoch record carries the expiry ("" when nothing needs saying). */
+  note: string;
+}
+
+/** A kind Home Assistant holds, or may hold, that the card cannot show as a trusted running override (owner decision r15): it is never shown as ended. */
+export interface HeldRowVM {
+  kind: OverrideKind;
+  label: string;
+  /** "Held by Home Assistant until 2026-11-17 07:00 (ends in 9 h 30 min)" or "Held by Home Assistant (a record cannot be read here)". */
+  text: string;
+  note: string;
+}
+
+/** How a kind that is held but not a trusted running row reads, in the owner's words; `nowMin` is the minute the records were judged against. */
+export function heldText(r: KindRecord, nowMin: number | null): string {
+  return r.endMin !== null && r.endText !== null && nowMin !== null && r.endMin > nowMin
+    ? "Held by Home Assistant until " + r.endText + " (ends in " + formatDurationMin(r.endMin - nowMin) + ")"
+    : "Held by Home Assistant (a record cannot be read here)";
 }
 
 export interface OverrideBlockVM {
@@ -115,6 +133,8 @@ export interface OverrideBlockVM {
   proposed: string[];
   revisionText: string;
   rows: OverrideRowVM[];
+  /** Kinds Home Assistant holds, or may hold, that are not shown as running rows above. */
+  held: HeldRowVM[];
   problems: string[];
   note: string;
 }
@@ -248,6 +268,11 @@ function limitsLine(c: OverrideConfig): string {
   );
 }
 
+/** Said after the headline when Home Assistant holds, or may hold, a kind that the card cannot show as a running override. */
+function heldSuffix(h: HelperSnapshot): string {
+  return h.held.length > 0 ? " Home Assistant also holds, or cannot read the record of: " + h.held.map((r) => OVERRIDE_LABELS[r.kind]).join(", ") + " (see below)." : "";
+}
+
 function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
   const policy = h.policy;
   const rows: OverrideRowVM[] = h.active.map((r) => ({
@@ -260,6 +285,7 @@ function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
       r.override.kind === "prepare_power_cut" && typeof r.override.reservePct === "number" && h.socPct !== null && h.socPct < r.override.reservePct
         ? belowReserveSentence(h.socPct, r.override.reservePct)
         : null,
+    note: r.note,
   }));
   const revisionText = !h.revision.known
     ? `Plan revision: unknown (${h.revision.reason})`
@@ -275,6 +301,7 @@ function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
     proposed: policy.ok ? [] : proposedLines(),
     revisionText,
     rows,
+    held: h.held.map((r) => ({ kind: r.kind, label: r.label, text: heldText(r, h.nowMin), note: r.note })),
     problems: [...h.problems],
     note: OVERRIDES_STATUS_NOTE,
   };
@@ -307,9 +334,9 @@ export function presentPlan(snap: PlanSnapshot & { helpers?: HelperSnapshot | nu
     settings: snap.fields.map(settingRow),
     tou: touVM(snap),
     overridesLine: helpers
-      ? snap.overrides.length === 0
-        ? OVERRIDES_LINE_NONE_HELPER
-        : `Quick overrides active: ${snap.overrides.map((o) => OVERRIDE_LABELS[o.kind]).join(", ")} (status only).`
+      ? (snap.overrides.length === 0
+          ? OVERRIDES_LINE_NONE_HELPER
+          : `Quick overrides active: ${snap.overrides.map((o) => OVERRIDE_LABELS[o.kind]).join(", ")} (status only).`) + heldSuffix(helpers)
       : snap.overrides.length === 0
         ? OVERRIDES_LINE_NONE
         : `Quick overrides active: ${snap.overrides.map((o) => o.kind).join(", ")} (status only).`,

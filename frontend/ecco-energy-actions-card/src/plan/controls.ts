@@ -7,10 +7,13 @@
 // reserve ECCO's plan uses; it never charges and never changes the inverter's own reserve),
 // the choices the owner's limits allow (their default, chips inside the shortest and longest length, "until 07:00"), the running
 // override with its expiry and a Cancel, why a start is not offered, and the guarded script's own last answer, refusals included.
+// Owner decision r15: the same Cancel is also offered for a kind that Home Assistant holds only through its absolute epoch record, or whose
+// record cannot be read ("Held by Home Assistant"), and after a Cancel the card reads back the plan revision and BOTH records and says
+// plainly whether it is confirmed, still pending, or NOT confirmed (controlsModel.ts decides; this file only draws it).
 import { css, html, nothing } from "lit";
 import type { TemplateResult } from "lit";
-import { buildControlsVM } from "./controlsModel.ts";
-import type { ControlsVM, KindControlVM } from "./controlsModel.ts";
+import { buildControlsVM, noteCall } from "./controlsModel.ts";
+import type { CancelLedger, ControlsVM, KindControlVM } from "./controlsModel.ts";
 import { localClockContext } from "./clock.ts";
 import type { PlanServiceCall } from "./planActions.ts";
 import type { ControlsRenderer } from "./view.ts";
@@ -32,9 +35,14 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
     <div class="plan-control" data-control=${k.kind}>
       <div class="plan-control-head">
         <span class="plan-setting-label">${k.label}</span>
-        ${k.activeText ? html`<span class="plan-setting-value" data-control-active>${k.activeText}</span>` : nothing}
+        ${k.activeText
+          ? k.held
+            ? html`<span class="plan-setting-value" data-control-held>${k.activeText}</span>`
+            : html`<span class="plan-setting-value" data-control-active>${k.activeText}</span>`
+          : nothing}
       </div>
       <p class="plan-reason">${KIND_BLURB[k.kind] ?? ""}</p>
+      ${k.note ? html`<p class="plan-reason" data-control-note role="note">${k.note}</p>` : nothing}
       ${k.belowReserve ? html`<p class="plan-reason plan-below-reserve" data-below-reserve role="note">${k.belowReserve}</p>` : nothing}
       ${k.blockedReason ? html`<p class="plan-reason" data-control-blocked>${k.blockedReason}</p>` : nothing}
       <div class="plan-control-buttons">
@@ -47,6 +55,7 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
           ? html`<button type="button" class="plan-control-btn is-cancel" data-cancel aria-label=${"Cancel " + k.label} @click=${() => dispatch(k.cancel as PlanServiceCall)}>Cancel</button>`
           : nothing}
       </div>
+      ${k.readback ? html`<p class="plan-reason plan-readback" data-readback=${k.readback.outcome} role="status">${k.readback.text}</p>` : nothing}
     </div>
   `;
 }
@@ -65,11 +74,22 @@ export function controlsView(vm: ControlsVM, dispatch: (call: PlanServiceCall) =
   `;
 }
 
+/**
+ * The Cancel clicks of this page, remembered so that the next states can be read back against them (owner decision r15). It holds the plan revision
+ * and the script's answer the card had seen when the owner pressed Cancel, nothing else; a reload forgets it, and the card then makes no claim.
+ */
+const cancelLedger: CancelLedger = {};
+
 /** The renderer the card hands to the plan section. `nothing` when the plan helper entities are not configured. */
-export function renderPlanControls(dispatch: (call: PlanServiceCall) => void): ControlsRenderer {
+export function renderPlanControls(send: (call: PlanServiceCall) => void): ControlsRenderer {
   return ({ snap, states, nowMs }) => {
-    const vm = buildControlsVM({ snap, states, nowMs, clock: localClockContext(nowMs) });
-    return vm ? controlsView(vm, dispatch) : nothing;
+    const vm = buildControlsVM({ snap, states, nowMs, clock: localClockContext(nowMs), cancels: cancelLedger });
+    return vm
+      ? controlsView(vm, (call) => {
+          noteCall(cancelLedger, call, vm.lastResult);
+          send(call);
+        })
+      : nothing;
   };
 }
 
@@ -125,5 +145,11 @@ export const controlStyles = css`
   }
   .plan-result {
     margin-top: 8px;
+  }
+  .plan-readback[data-readback="confirmed"] {
+    color: var(--eaa-ok);
+  }
+  .plan-readback[data-readback="not_confirmed"] {
+    color: var(--eaa-fault);
   }
 `;

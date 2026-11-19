@@ -254,7 +254,7 @@ One canonical plan: no `PlanSettings` value is copied into a helper. The helpers
 | `ecco_plan_override_hold_battery_start`, `ecco_plan_override_hold_battery_expires` | the one Hold battery record |
 | `ecco_plan_override_skip_tonight_start`, `ecco_plan_override_skip_tonight_expires` | the one Skip tonight record |
 | `ecco_plan_override_prepare_power_cut_start`, `ecco_plan_override_prepare_power_cut_expires`, `ecco_plan_override_prepare_power_cut_reserve` | the one power-cut record and the reserve it raises to |
-| `ecco_plan_override_hold_battery_expires_epoch`, `ecco_plan_override_skip_tonight_expires_epoch`, `ecco_plan_override_prepare_power_cut_expires_epoch` | the ABSOLUTE expiry record of each kind (owner decision r14): the same expiry as epoch seconds (an input_number, min 0, max 4102444800, step 1, box, no `initial`), written only by the two guarded scripts, read together with the date-and-time expiry (the later valid instant wins). The card does not read them |
+| `ecco_plan_override_hold_battery_expires_epoch`, `ecco_plan_override_skip_tonight_expires_epoch`, `ecco_plan_override_prepare_power_cut_expires_epoch` | the ABSOLUTE expiry record of each kind (owner decision r14): the same expiry as epoch seconds (an input_number, min 0, max 4102444800, step 1, box, no `initial`), written only by the two guarded scripts, read together with the date-and-time expiry (the later valid instant wins). The card reads them too (owner decision r15): see known limitation 23 |
 | `ecco_plan_last_result` | the last answer of a guarded action (`STARTED ...`, `CANCELLED ...`, `REFUSED CODE - reason`), shown by the card |
 
 One start/expiry pair per kind means at most one active override per kind. A record is active while its expiry is in the future (in either of its two
@@ -263,8 +263,9 @@ epoch record is 0, hence expired.
 
 The card reads these entities (`src/plan/helpers.ts`, pure and read only): it shows the limits, the revision, each running override's
 expiry and countdown, and reports a malformed record (start not before expiry, longer than the hard ceiling, a power-cut record without a
-reserve inside 10-100 %) instead of showing it as active. With none of the entities present the card behaves exactly as before. It does not read the absolute
-epoch records (known limitation 23: display only; the backend decides).
+reserve inside 10-100 %) instead of showing it as active. With none of the entities present the card behaves exactly as before. Since owner decision r15 it reads the absolute
+epoch records too and mirrors the backend's read rule (known limitation 23, fixed on 19 Nov 2026 by owner decision r15): a running override is placed on the later valid instant, a kind whose record
+cannot be read is shown as held by Home Assistant, both with the guarded Cancel, and a cancel is read back (revision and both records) before it is called confirmed.
 
 ### Policy: configurable, bounded, fail closed
 
@@ -302,7 +303,8 @@ That mapping is the owner's own file, so this repository does not change it; it 
 An independent review on 18 Nov 2026 found the items below, and a second review of the fixes (the same day) added items 19 to 22; the owner decision of 19 Nov 2026 (r14) added
 item 23. The fixes for the clock-change
 day, the press-time recheck, the rounded-up reserve and the five surviving mutants are in. The items here were NOT fixed, except item 20 (fixed on 19 Nov 2026 by owner
-decisions r14 and r15, and kept in the list with what changed) and item 19 (mitigated offline the same day by an absolute epoch record, and kept in the list with what is still unproven);
+decisions r14 and r15, and kept in the list with what changed) and item 19 (mitigated offline the same day by an absolute epoch record, and kept in the list with what is still unproven), and item 23 (the card; fixed offline on 19 Nov 2026 by owner decision r15,
+and kept in the list with what is not claimed);
 they are written down so that nobody
 reads more into the overrides than they do. "Fail open" means the override protects less than its name suggests; "fail closed" means a start is refused or held.
 None was seen on a live Home Assistant. Unless an item says otherwise it was read from the code and the offline models; items 9, 10 and 19 to 23 say, in their
@@ -403,11 +405,11 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     filters (items 11 and 17); a supervised check on the owner's Home Assistant version that includes a restart with an override running remains an item for the install.
     What it costs: a record that cannot be read now keeps the hold unknown and the raised reserve in place until a cancel or a readable record reconciles it (a power cut
     that had finished is raised again if its record then becomes unreadable), and an attribute that is LATE (a partial write that left a later date-and-time expiry) holds
-    until that instant passes or the owner cancels. Not changed: the card (item 23). Direction: fail closed (the override never ends earlier than the later source and an
+    until that instant passes or the owner cancels. The card now reads both records and offers the guarded Cancel (item 23, owner decision r15). Direction: fail closed (the override never ends earlier than the later source and an
     unreadable record is retained). You would see: after such a restart the override still reads as running until its true expiry; with a record unreadable, the hold
-    unknown and the raised reserve kept, until a cancel clears it. The card offers Cancel only for an override it shows as running (item 23), so for a record the
-    backend holds only through its epoch record, or one that is unreadable, call `script.ecco_plan_override_cancel` yourself (Developer tools, Actions: the kind, and the
-    revision if you want the compare-and-set check); it writes both sources and reconciles the record.
+    unknown and the raised reserve kept, until a cancel clears it. The card shows such an override as running, or as held by Home Assistant when a record cannot be read, with the guarded Cancel (item 23); a cancel writes both
+    sources and reconciles the record. If the card is not at hand, call `script.ecco_plan_override_cancel` yourself (Developer tools, Actions: the kind, and the
+    revision if you want the compare-and-set check).
 20. **A press-time BLOCKED result was overwritten with STARTED OK when Dump to Grid is found active as the loop ends: FIXED on 19 Nov 2026 (owner decision r14); so was a STARTING, FAILED or CANCELLED result: FIXED the same day (owner decision r15).**
     The BLOCKED text of the press-time recheck is written inside the scheduled start's retry loop, so, unlike the start-time BLOCKED results, the steps after the
     loop still run. Before the fixes, if Dump to Grid was active when the loop ended (started from the dongle's own Start button, which no override binds (RG-ST3), or
@@ -449,16 +451,24 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     other side). Reproduced offline: the dongle model keeps the staged numbers and the write enable ends off. Reasoned from the package header and the dongle model's
     start gate, not examined on a dongle: nothing starts without arming again and pressing, the same as after any other failed attempt of the scheduled start.
     Direction: fail closed (nothing starts). You would see: the staged numbers on the dongle's own controls changed to the stopped run's values, with no start.
-23. **The card reads an override's expiry from the date-and-time helper's `timestamp` attribute only, so after a restart in the repeated hour it may show the override as ended, or its countdown short, up to an hour early (display only).**
-    The Energy Actions card places each override on the helper's `timestamp` attribute (`src/plan/helpers.ts`; the displayed time text comes from the state string, which a
-    restart does not change) and does not read the absolute epoch records of item 19. If a restart restores the attribute as the recalled behaviour of item 19 would, the
-    card could treat an override as already ended, or show it with a countdown up to an hour short, while the backend still holds it. The card, its bundle and the card
-    README are NOT changed; the backend decides: the hold, the held-by list, the effective reserve, the scheduled start, the guarded start and the cancel script all follow
-    the later of the two sources. Not reproduced in a browser and not examined in the card's own suites. The card also builds its Cancel button from the same row, so for an override it does not show
-    as running (a record the backend holds only through its epoch record, or one that is unreadable) it offers no Cancel: call `script.ecco_plan_override_cancel`
-    yourself (item 19). That is the fail-closed side: the hold stays, nothing is released early. Direction: informational (display only; the backend decides).
-    You would see: on the autumn clock-change night, after a restart inside the repeated hour, the card showing an override as ended, or with less time left than it has,
-    while the hold sensor still reads held.
+23. **The card used to read an override's expiry from the date-and-time helper's `timestamp` attribute only, so it could not place or cancel an override that only the absolute epoch record held, or whose record it could not read: FIXED offline on 19 Nov 2026 (owner decision r15; modelled and tested offline, not seen in a browser or on a real Home Assistant).**
+    What it was: the Energy Actions card placed each override on the helper's `timestamp` attribute only (`src/plan/helpers.ts`; the displayed time text comes from the state string, which a
+    restart does not change) and built its Cancel button from that row alone, so after a restart that restores the attribute early (item 19), when only the epoch record holds the override, or when a record
+    cannot be read, the card showed the override as ended, or not at all, with no Cancel, while the backend still held it (the owner then had to call `script.ecco_plan_override_cancel` by hand).
+    What the card does now (owner decision r15): it reads the three epoch records too (`HELPER_IDS`) and mirrors the backend's read rule, in pure TypeScript with no clock and no write. Per kind it takes the later of the two valid instants
+    (the date-and-time record's `timestamp` attribute, the absolute epoch record) and shows the kind as running, with the same Cancel, while either is in the future; an instant that only the epoch record gives is shown in UTC, with a note that
+    the absolute epoch record holds it. When a record cannot be read and the other does not hold, the kind is not shown as ended: it is shown as "Held by Home Assistant", with a plain-words note (the record cannot be read here; Home Assistant keeps
+    the hold, and any raised reserve, until a cancel settles it) and the same Cancel, because the backend allows a cancel on an unreadable or disagreeing record; a malformed record that is still in the future is shown the same way. The kind is shown as
+    ended, and the Cancel withdrawn, only when both records are readable and neither is in the future. An older package without the epoch records is judged by the date-and-time record only, and the card says so. The card is never more lenient than the
+    backend (a reading it cannot place counts as unreadable) and judges to the minute, on the browser's clock, as it does for every countdown.
+    The Cancel is the existing guarded call and nothing else: `script.turn_on` on `script.ecco_plan_override_cancel` with the stored revision as compare-and-set, behind the same controls as every other row; there is no new service, no second control route
+    and no direct helper write, and the card's allow-list is unchanged. After the call the card does not assume success. On the next states update it reads back the plan revision and BOTH records and says plainly "Cancel confirmed" only when the revision
+    moved by the cancel's own step and both records read as ended, "Cancel sent" (still pending) until Home Assistant has answered, and "Cancel NOT confirmed" while a record is still in the future or cannot be read, or when the script refused (its own answer is quoted, and also stays in
+    "Last answer"). If another writer moved the revision as well, or the answer is not a cancel's, it makes no claim. The card remembers the click in the page only (a reload forgets it, and the readback then says nothing).
+    What is NOT claimed: this is modelled and tested offline only (`frontend/ecco-energy-actions-card/test/planEpochCancel.test.ts`, with mutants), not seen in a browser or on a real Home Assistant, and the backend, not the card, still decides: the hold, the held-by list, the effective reserve,
+    the scheduled start, the guarded start and the cancel script all follow the later of the two sources whatever the card shows. A browser with a stale copy of the card keeps the old behaviour until its cache is cleared. The supervised check of item 19 should include a restart with
+    an override running and a Cancel from the card. The dongle's own Start button is still not bound by any override (RG-ST3). Direction: fail closed (a record the card cannot read is shown as held, with a Cancel, never as ended).
+    You would see: after a restart in the repeated hour (or any state that leaves a record early or unreadable), the override still shown as running, or as held by Home Assistant, with a Cancel, until its true expiry or a confirmed cancel.
 
 ### Install order for the owner (each step needs its own authorisation; nothing here is installed)
 

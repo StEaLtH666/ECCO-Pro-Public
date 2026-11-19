@@ -10,8 +10,15 @@
 //     longer than the hard ceiling, a power-cut reserve inside the reserve limits). A malformed one is reported, never trusted.
 //   * Records are read from the entity's own timestamp (a real instant), so a clock change or a browser in another time zone cannot
 //     move an expiry.
+//   * Owner decision r15 (19 Nov 2026, known limitation 23): each kind's expiry is read from BOTH of the backend's sources, with the backend's own
+//     raise-only rule (home-assistant/packages/ecco_plan_helpers.yaml): the date-and-time helper's timestamp attribute and the absolute epoch
+//     record (an input_number in seconds). A kind is ACTIVE while any valid source is in the future (the later valid instant wins), UNREADABLE
+//     when a source is invalid and none holds, and CLEARED only when every source is readable and none is in the future. An unreadable kind is
+//     never shown as cleared: it is listed as held by Home Assistant, because the backend keeps the hold and any raised reserve until a cancel
+//     settles it and allows that cancel. This card is never more lenient than the backend (a reading it cannot place is unreadable here), and
+//     judges to the minute. An older package without the epoch records is judged by the date-and-time record only, and says so.
 import { EXPIRY_CEILING_MIN, LIMITS, OVERRIDE_KINDS, OVERRIDE_LABELS, validateOverrideConfig } from "../../../ecco-plan-core/src/index.ts";
-import type { ActiveOverride, OverrideConfigRaw, OverrideConfigResult } from "../../../ecco-plan-core/src/index.ts";
+import type { ActiveOverride, OverrideConfigRaw, OverrideConfigResult, OverrideKind } from "../../../ecco-plan-core/src/index.ts";
 import { buildPlanSnapshot, stateNumber, stateText } from "./adapter.ts";
 import type { PlanSnapshot, StatesLike } from "./adapter.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
@@ -36,7 +43,10 @@ export const HELPER_IDS = {
   "skip_tonight_expires": "input_datetime.ecco_plan_override_skip_tonight_expires",
   "prepare_power_cut_start": "input_datetime.ecco_plan_override_prepare_power_cut_start",
   "prepare_power_cut_expires": "input_datetime.ecco_plan_override_prepare_power_cut_expires",
-  "prepare_power_cut_reserve": "input_number.ecco_plan_override_prepare_power_cut_reserve"
+  "prepare_power_cut_reserve": "input_number.ecco_plan_override_prepare_power_cut_reserve",
+  "hold_battery_expires_epoch": "input_number.ecco_plan_override_hold_battery_expires_epoch",
+  "skip_tonight_expires_epoch": "input_number.ecco_plan_override_skip_tonight_expires_epoch",
+  "prepare_power_cut_expires_epoch": "input_number.ecco_plan_override_prepare_power_cut_expires_epoch"
 } as const;
 // END HELPER_IDS_JSON
 
@@ -54,6 +64,25 @@ export interface ActiveOverrideRow {
   expiresText: string;
   /** Whole minutes left (at least 1). */
   remainingMin: number;
+  /** Plain words when the absolute epoch record alone carries the expiry ("" when nothing needs saying). */
+  note: string;
+}
+
+/** What the card reads of one kind's stored records, by the backend's rule: active, cleared, or unreadable (never shown as cleared). */
+export type KindRead = "active" | "cleared" | "unreadable";
+
+export interface KindRecord {
+  kind: OverrideKind;
+  label: string;
+  read: KindRead;
+  /** The later valid expiry in whole epoch minutes when the kind is active or cleared, else null. */
+  endMin: number | null;
+  /** That expiry as text: the date-and-time helper's local text when it is the later source, else "YYYY-MM-DD HH:MM UTC" of the epoch record. */
+  endText: string | null;
+  /** Plain words about where the kind stands when it is held by Home Assistant without being a trusted running row ("" otherwise). */
+  note: string;
+  /** True when the absolute epoch record is not installed (an older package): the kind is judged by the date-and-time record only. */
+  epochMissing: boolean;
 }
 
 export interface HelperSnapshot {
@@ -72,7 +101,11 @@ export interface HelperSnapshot {
   socPct: number | null;
   revision: RevisionInfo;
   active: ActiveOverrideRow[];
-  /** Stored records that cannot be read or are malformed, in plain words. They are not shown as active. */
+  /** Per kind, the card's reading of its records (empty when the time was not given). */
+  records: KindRecord[];
+  /** The kinds Home Assistant holds, or may hold, that are not a trusted running row (a record that cannot be read, or a malformed one that is still in the future): shown with a Cancel. */
+  held: KindRecord[];
+  /** Stored records that cannot be read or are malformed, in plain words. They are not shown as running overrides. */
   problems: string[];
   /** The minute (epoch minutes) the records were judged against, or null when the time was not given. */
   nowMin: number | null;
@@ -113,48 +146,136 @@ function readInstant(states: StatesLike, id: string, what: string): Instant {
   return { ok: true, min: Math.round(ts / 60), text: (m[1] as string) + " " + (m[2] as string) + ":" + (m[3] as string) };
 }
 
-function readRecords(states: StatesLike, nowMin: number | null, problems: string[]): ActiveOverrideRow[] {
+const EPOCH_MAX_SEC = 4102444800;
+const NOTE_EPOCH_LED =
+  "Held through the absolute epoch record: the date-and-time record does not show it running (it reads earlier, has ended or cannot be read). Home Assistant follows the later of the two.";
+const NOTE_UNREADABLE =
+  "A record of this override cannot be read here, so it is not shown as ended. Home Assistant keeps the hold, and any raised reserve, until a cancel settles it.";
+const NOTE_UNTRUSTED =
+  "This record is not trusted here (see the problem listed), but Home Assistant keeps the hold, and any raised reserve, while it runs. A cancel ends it.";
+
+/** "YYYY-MM-DD HH:MM" (UTC) of an instant in whole epoch minutes. Integer arithmetic only: this module reads no clock and builds no date object. */
+export function utcText(epochMin: number): string {
+  const days = Math.floor(epochMin / 1440);
+  const rem = epochMin - days * 1440;
+  const z = days + 719468;
+  const era = Math.floor(z / 146097);
+  const doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153);
+  const day = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  const month = mp < 10 ? mp + 3 : mp - 9;
+  const year = yoe + era * 400 + (month <= 2 ? 1 : 0);
+  const two = (n: number): string => (n < 10 ? "0" : "") + n;
+  return year + "-" + two(month) + "-" + two(day) + " " + two(Math.floor(rem / 60)) + ":" + two(rem % 60);
+}
+
+type EpochRead = Instant | { ok: false; absent: true; reason: string };
+
+/**
+ * The absolute epoch record of a kind, as the backend reads it: a number from 0 to 4102444800 seconds (anything else is invalid). Rounded UP to the
+ * minute, so it is never read earlier than the instant the backend reads. Missing entity: absent (an older package), never an invalid reading.
+ */
+function readEpoch(states: StatesLike, id: string, label: string): EpochRead {
+  if (states[id] === undefined) return { ok: false, absent: true, reason: label + " absolute expiry record is not installed." };
+  const v = stateNumber(states, id);
+  if (v === null) return { ok: false, reason: label + " absolute expiry record cannot be read." };
+  if (v < 0 || v > EPOCH_MAX_SEC) return { ok: false, reason: label + " absolute expiry record is not a time between 0 and " + EPOCH_MAX_SEC + " seconds." };
+  const min = Math.ceil(v / 60);
+  return { ok: true, min, text: utcText(min) + " UTC" };
+}
+
+interface Verdict {
+  read: KindRead;
+  endMin: number | null;
+  endFrom: "datetime" | "epoch" | null;
+}
+
+/**
+ * The backend's rule for one kind: when both sources are valid the later wins, and it holds while it is in the future; with one valid source, that
+ * source holds only while it is in the future (otherwise the record is unreadable); with no valid source the record is unreadable. An absent epoch
+ * record (an older package) leaves the date-and-time record alone to be judged.
+ */
+function judge(a: Instant, b: EpochRead, nowMin: number): Verdict {
+  if (a.ok && b.ok) {
+    const fromEpoch = b.min > a.min;
+    const endMin = fromEpoch ? b.min : a.min;
+    return { read: endMin > nowMin ? "active" : "cleared", endMin, endFrom: fromEpoch ? "epoch" : "datetime" };
+  }
+  if (a.ok && !b.ok && "absent" in b) return { read: a.min > nowMin ? "active" : "cleared", endMin: a.min, endFrom: "datetime" };
+  if (a.ok && a.min > nowMin) return { read: "active", endMin: a.min, endFrom: "datetime" };
+  if (b.ok && b.min > nowMin) return { read: "active", endMin: b.min, endFrom: "epoch" };
+  return { read: "unreadable", endMin: null, endFrom: null };
+}
+
+function readRecords(states: StatesLike, nowMin: number | null, problems: string[]): { rows: ActiveOverrideRow[]; records: KindRecord[] } {
   const rows: ActiveOverrideRow[] = [];
+  const records: KindRecord[] = [];
   if (nowMin === null) {
     problems.push("The current time is not known, so stored override records cannot be judged.");
-    return rows;
+    return { rows, records };
   }
+  const noEpoch: string[] = [];
   for (const kind of OVERRIDE_KINDS) {
     const label = OVERRIDE_LABELS[kind];
     const startId = HELPER_IDS[(kind + "_start") as keyof typeof HELPER_IDS];
     const expiresId = HELPER_IDS[(kind + "_expires") as keyof typeof HELPER_IDS];
+    const epochId = HELPER_IDS[(kind + "_expires_epoch") as keyof typeof HELPER_IDS];
     const end = readInstant(states, expiresId, label + " expiry");
-    if (!end.ok) {
-      problems.push(end.reason);
-      continue;
+    const epoch = readEpoch(states, epochId, label);
+    if (!end.ok) problems.push(end.reason);
+    if (!epoch.ok) {
+      if ("absent" in epoch) noEpoch.push(label);
+      else problems.push(epoch.reason);
     }
-    if (end.min <= nowMin) continue; // never started, cancelled or expired: nothing is active
-    const start = readInstant(states, startId, label + " start");
-    if (!start.ok) {
-      problems.push(start.reason + " The record is not trusted.");
-      continue;
-    }
-    const length = end.min - start.min;
-    if (!(length > 0)) {
-      problems.push(label + " starts at or after its expiry. The record is not trusted.");
-      continue;
-    }
-    if (length > EXPIRY_CEILING_MIN[kind]) {
-      problems.push(label + " lasts longer than its hard ceiling. The record is not trusted.");
-      continue;
-    }
-    const o: ActiveOverride = { kind, startedAtMin: start.min, expiresAtMin: end.min };
-    if (kind === "prepare_power_cut") {
-      const r = stateNumber(states, HELPER_IDS.prepare_power_cut_reserve);
-      if (r === null || !Number.isInteger(r) || r < LIMITS.reserveMin || r > LIMITS.reserveMax) {
-        problems.push(label + " has no readable reserve inside " + LIMITS.reserveMin + "-" + LIMITS.reserveMax + " %. The record is not trusted.");
-        continue;
+    const verdict = judge(end, epoch, nowMin);
+    const endText = verdict.endFrom === "epoch" && epoch.ok ? epoch.text : end.ok ? end.text : null;
+    let row: ActiveOverrideRow | null = null;
+    if (verdict.read === "active" && verdict.endMin !== null) {
+      const endMin = verdict.endMin;
+      const start = readInstant(states, startId, label + " start");
+      if (!start.ok) {
+        problems.push(start.reason + " The record is not trusted.");
+      } else {
+        const length = endMin - start.min;
+        if (!(length > 0)) {
+          problems.push(label + " starts at or after its expiry. The record is not trusted.");
+        } else if (length > EXPIRY_CEILING_MIN[kind]) {
+          problems.push(label + " lasts longer than its hard ceiling. The record is not trusted.");
+        } else {
+          const o: ActiveOverride = { kind, startedAtMin: start.min, expiresAtMin: endMin };
+          let trusted = true;
+          if (kind === "prepare_power_cut") {
+            const r = stateNumber(states, HELPER_IDS.prepare_power_cut_reserve);
+            if (r === null || !Number.isInteger(r) || r < LIMITS.reserveMin || r > LIMITS.reserveMax) {
+              problems.push(label + " has no readable reserve inside " + LIMITS.reserveMin + "-" + LIMITS.reserveMax + " %. The record is not trusted.");
+              trusted = false;
+            } else {
+              o.reservePct = r;
+            }
+          }
+          if (trusted) row = { override: o, label, expiresText: endText ?? "", remainingMin: Math.max(1, endMin - nowMin), note: verdict.endFrom === "epoch" ? NOTE_EPOCH_LED : "" };
+        }
       }
-      o.reservePct = r;
     }
-    rows.push({ override: o, label, expiresText: end.text, remainingMin: Math.max(1, end.min - nowMin) });
+    if (row) rows.push(row);
+    records.push({
+      kind,
+      label,
+      read: verdict.read,
+      endMin: verdict.endMin,
+      endText: verdict.endMin === null ? null : endText,
+      note: row ? row.note : verdict.read === "active" ? NOTE_UNTRUSTED : verdict.read === "unreadable" ? NOTE_UNREADABLE : "",
+      epochMissing: !epoch.ok && "absent" in epoch,
+    });
   }
-  return rows;
+  if (noEpoch.length > 0) {
+    problems.push(
+      "The absolute expiry record of " + noEpoch.join(", ") + " is not installed (an older helper package), so " + (noEpoch.length === 1 ? "it is" : "they are") + " judged by the date-and-time record only.",
+    );
+  }
+  return { rows, records };
 }
 
 function readRevision(states: StatesLike): RevisionInfo {
@@ -188,8 +309,9 @@ export function readOverrideHelpers(states: StatesLike, nowMin: number | null, c
   const policy = validateOverrideConfig(raw, { currentReservePct });
   const startPolicy = validateOverrideConfig(raw);
   const problems: string[] = [];
-  const active = readRecords(states, nowMin, problems);
-  return { missing, confirmed, policy, startPolicy, socPct, revision: readRevision(states), active, problems, nowMin };
+  const { rows: active, records } = readRecords(states, nowMin, problems);
+  const held = records.filter((r) => r.read !== "cleared" && !active.some((a) => a.override.kind === r.kind));
+  return { missing, confirmed, policy, startPolicy, socPct, revision: readRevision(states), active, records, held, problems, nowMin };
 }
 
 /** The stage-2 snapshot plus, when the proposed helpers exist, the policy, the stored revision and the active overrides. */

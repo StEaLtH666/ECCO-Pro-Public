@@ -7,7 +7,7 @@ import type { StatesLike } from "./adapter.ts";
 import { buildPlanSnapshotWithHelpers } from "./helpers.ts";
 import type { PlanSnapshotWithHelpers } from "./helpers.ts";
 import { presentPlan } from "./present.ts";
-import type { Chip, FigureVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
+import type { Chip, FigureVM, HeldRowVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
 
 function chip(c: Chip): TemplateResult {
@@ -46,7 +46,18 @@ function overrideRow(r: OverrideRowVM): TemplateResult {
       <span class="plan-setting-value">${r.untilText}</span>
       <span class="plan-note">${r.countdownText}</span>
       <span class="plan-reason">${r.effectText}</span>
+      ${r.note ? html`<span class="plan-reason" data-override-note>${r.note}</span>` : nothing}
       ${r.belowReserve ? html`<span class="plan-reason plan-below-reserve" data-below-reserve role="note">${r.belowReserve}</span>` : nothing}
+    </li>
+  `;
+}
+
+function heldRow(r: HeldRowVM): TemplateResult {
+  return html`
+    <li class="plan-setting" data-override-held=${r.kind}>
+      <span class="plan-setting-label">${r.label}</span>
+      <span class="plan-setting-value">${r.text}</span>
+      <span class="plan-reason">${r.note}</span>
     </li>
   `;
 }
@@ -55,7 +66,7 @@ function overrideRow(r: OverrideRowVM): TemplateResult {
 function overrideBlock(b: OverrideBlockVM): TemplateResult {
   return html`
     <div class="plan-override-block" data-block="overrides">
-      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}
+      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}${b.held.length ? html`<ul class="plan-settings" data-override-held-list>${b.held.map(heldRow)}</ul>` : nothing}
       <p class="plan-reason" data-override-policy=${b.policyOk ? "ok" : "unusable"}>${b.policyLine}</p>
       ${b.reasons.length ? html`<ul class="plan-reasons">${b.reasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
       ${b.warnings.length ? html`<ul class="plan-reasons">${b.warnings.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}

@@ -18,6 +18,20 @@ export function stamp(epochMs: number, textOverride?: string): { state: string; 
 export const NEVER = stamp(0);
 export const MIN = 60_000;
 
+// Owner decision r15 (19 Nov 2026): the absolute expiry record of each kind. The ids are restated here from the helper package, not taken from
+// the card's HELPER_IDS, so a test that reads them proves the card names the package's entities.
+export type KindName = "hold_battery" | "skip_tonight" | "prepare_power_cut";
+export const KIND_NAMES: readonly KindName[] = ["hold_battery", "skip_tonight", "prepare_power_cut"];
+export const EPOCH_ID = (kind: KindName): string => "input_number.ecco_plan_override_" + kind + "_expires_epoch";
+
+/** The absolute expiry record of one kind: an instant in ms (shown as epoch seconds), a raw state text, or undefined (the entity does not exist: an older package). */
+export function setEpoch(states: States, kind: KindName, value: number | string | undefined): States {
+  const s = states as Record<string, unknown>;
+  if (value === undefined) delete s[EPOCH_ID(kind)];
+  else s[EPOCH_ID(kind)] = { state: typeof value === "number" ? String(value / 1000) : value };
+  return states;
+}
+
 /** Every proposed helper present, policy = the proposed values, confirmed on, revision 12, no override running. */
 export function helperStates(base: States, patch: Record<string, unknown> = {}): States {
   const s = base as Record<string, unknown>;
@@ -39,6 +53,8 @@ export function helperStates(base: States, patch: Record<string, unknown> = {}):
     set((k + "_expires") as keyof typeof HELPER_IDS, NEVER);
   }
   set("prepare_power_cut_reserve", { state: "10" });
+  // Owner decision r15: the absolute expiry record of each kind, a fresh helper at its minimum (0: in the past), as Home Assistant restores it.
+  for (const k of KIND_NAMES) s[EPOCH_ID(k)] = { state: "0" };
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) delete s[k];
     else s[k] = v;

@@ -5,13 +5,14 @@ sensors, the seed and the parity with the validator are proved by test_ecco_plan
 
   [1] shape         it parses; the helper domains plus script / automation / template only; whitelisted attributes (no `initial`);
                     every object id is a generic `ecco_plan_` name; no site value anywhere, comments included
-  [2] agreement     the entities are exactly the ones the card's reader names (HELPER_IDS in src/plan/helpers.ts) plus the last result and
-                    the seed flag, and every min / max / step / unit equals the plan core's validator bounds (HELPER_BOUNDS), so a helper
+  [2] agreement     the entities are exactly the ones the card's reader names (HELPER_IDS in src/plan/helpers.ts, which since owner decision r15 also
+                    names the three absolute expiry records) plus the last result and the seed flag, and every min / max / step / unit equals the plan core's validator bounds (HELPER_BOUNDS), so a helper
                     cannot hold a value the validator refuses and the hard ceilings cannot be lifted from Home Assistant
   [3] records       one start and one expiry per override kind (at most one active override per kind, by construction), date and time
                     helpers; the reserve record has the reserve bounds; the skip-until helper is time only; and (owner decision r14, 19 Nov 2026)
                     one ABSOLUTE expiry record per kind, an input_number in epoch seconds (min 0, max 4102444800, step 1, box, no initial value)
-                    that the card's reader does not name
+                    that the card's reader NAMES (owner decision r15: the card reads them to place an override that only the epoch record holds,
+                    and offers the guarded Cancel for it; until r15 the reader did not name them)
   [4] ownership     no other package defines an ecco_plan_ helper; the manifest lists this package
   [5] mapping       the plan-core README names every entity of the package
   [6] mutation      in-memory mutants of the helper sections are each caught; a harmless change is not
@@ -71,7 +72,7 @@ CONTROL_IDS = block(ACTIONS_TS, "PLAN_CONTROL_IDS_JSON", "PLAN_CONTROL_IDS_JSON"
 EXTRA_HELPERS = {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"}   # the last answer the card shows; the first-run seed flag
 _kinds = re.search(r"OVERRIDE_KINDS: readonly OverrideKind\[\] = \[([^\]]*)\]", OVERRIDES_TS.read_text(encoding="utf-8"))
 KINDS = re.findall(r'"([a-z_]+)"', _kinds.group(1)) if _kinds else []
-EPOCH_HELPERS = {f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # owner decision r14: backend-only absolute expiry records; the card's reader does not name them
+EPOCH_HELPERS = {f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # owner decision r14: the absolute expiry records; since owner decision r15 the card's reader names them (HELPER_IDS) and each must be there
 
 ALLOWED_DOMAINS = {"input_boolean", "input_number", "input_datetime", "input_text"}
 OTHER_SECTIONS = {"script", "automation", "template"}
@@ -186,8 +187,8 @@ def problems(text: str) -> list[str]:
             found.append(f"{eid}: no absolute expiry record")
         elif not eid.startswith("input_number.") or (attrs.get("min"), attrs.get("max"), attrs.get("step"), attrs.get("mode")) != (0, 4102444800, 1, "box"):
             found.append(f"{eid}: an absolute expiry record must be an input_number with min 0, max 4102444800, step 1 and mode box")
-        if eid in IDS.values():
-            found.append(f"{eid}: the card's reader names an absolute expiry record (the card must not read it)")
+        if eid not in IDS.values():
+            found.append(f"{eid}: the card's reader does not name this absolute expiry record (owner decision r15: the card reads it, to place and cancel an override that only it holds)")
     if len(EPOCH_HELPERS) != 3:
         found.append(f"{len(EPOCH_HELPERS)} absolute expiry records (one per override kind, three kinds)")
     sk = ents.get(IDS.get("skip_until", ""), {})
@@ -215,13 +216,13 @@ HELPER_DOC = {k: v for k, v in DOC.items() if k in ALLOWED_DOMAINS}
 
 print("[1-3] the package's helpers against the reader and the validator")
 check("the package file exists and parses", isinstance(DOC, dict))
-check("the bounds and ids blocks were read", len(BOUNDS) == 9 and len(IDS) == 17, f"{len(BOUNDS)} bounds, {len(IDS)} ids")
+check("the bounds and ids blocks were read", len(BOUNDS) == 9 and len(IDS) == 20, f"{len(BOUNDS)} bounds, {len(IDS)} ids")
 check("the three override kinds were read from overrides.ts", KINDS == ["hold_battery", "skip_tonight", "prepare_power_cut"], str(KINDS))
 found = problems(TEXT)
 check("the package passes every static helper rule", not found, "; ".join(found))
 check("only the helper domains, script, automation and template are used", set(DOC) == ALLOWED_DOMAINS | OTHER_SECTIONS, str(sorted(DOC)))
 check("no helper sets an initial value (the owner's accepted limits are written once by the first-run seed, so an owner's own value survives a restart)", not re.search(r"^\s*initial\s*:", TEXT, re.M))
-check("the entity count is 22 (the 17 the reader names, the last result, the seed flag and the three backend-only absolute expiry records of owner decision r14)", len(entities(HELPER_DOC)) == 22, str(len(entities(HELPER_DOC))))
+check("the entity count is 22 (the 20 the reader names, three of them the absolute expiry records of owner decision r14 that the card reads since owner decision r15, plus the last result and the seed flag)", len(entities(HELPER_DOC)) == 22, str(len(entities(HELPER_DOC))))
 check("the revision helper holds a counter only (no plan value is copied into a helper)",
       not [e for e in entities(HELPER_DOC) if re.search(r"(power|soc|target|stop|start_time|duration)", e) and "override" not in e and "policy" not in e])
 check("the ceilings equal the cap maxima (a helper cannot lift a hard ceiling)",
@@ -321,6 +322,22 @@ TEXT_MUTANTS = {
 for label, text in TEXT_MUTANTS.items():
     check(f"mutant caught: {label}", bool(problems(text)))
 
+def problems_with_reader(text: str, reader_ids: dict) -> list[str]:
+    """`problems` against another HELPER_IDS block (a mutant of the card's reader)."""
+    global IDS
+    saved, IDS = IDS, reader_ids
+    try:
+        return problems(text)
+    finally:
+        IDS = saved
+
+
+for _eid in sorted(EPOCH_HELPERS):
+    check(f"mutant caught: the card's reader no longer names {_eid.split('.', 1)[1]} (the r14 state: the card does not read the epoch records)",
+          bool(problems_with_reader(TEXT, {k: v for k, v in IDS.items() if v != _eid})))
+check("mutant caught: the card's reader names none of the three epoch records (the r14 reader)",
+      bool(problems_with_reader(TEXT, {k: v for k, v in IDS.items() if v not in EPOCH_HELPERS})))
+check("control: the card's reader as it is names all three, and the package passes", not problems_with_reader(TEXT, dict(IDS)))
 check("control: a harmless change (a display name) is not flagged", not problems(reload_with(lambda d: d["input_number"]["ecco_plan_policy_hold_cap"].update(name="Hold battery longest length"))))
 check("control: the untouched package is not flagged", not problems(TEXT))
 
