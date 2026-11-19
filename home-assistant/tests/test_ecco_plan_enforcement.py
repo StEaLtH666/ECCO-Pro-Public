@@ -47,6 +47,11 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   that this run did not confirm that it started it (CANCELLED if the owner cancelled), the alert's active-now sentence stays true for each result it can accompany, and the in-loop
                   STARTED OK path (this run's own verified start) is unchanged in every shape; a table of every result class x Dump to Grid active or not x armed, run through the real steps and
                   compared with the previous package where Dump to Grid is not active; end-to-end runs; mutants (the old overwrite restored per class, a success text added, wrong sentences)
+  [15] recovery  (owner decision r15, 19 Nov 2026; known limitation 20, its last path) the startup recovery after a Home Assistant restart no longer writes STARTED OK over a result this schedule did not verify: only a
+                  last result that already starts with STARTED is kept as the old text (and the old disarm), a FAILED, BLOCKED or CANCELLED result stays exactly as written, every other result becomes a truthful UNCONFIRMED
+                  text (Dump to Grid is active after a Home Assistant restart, this schedule did not confirm that it started it); the real recovery automation run for every result class x Dump to Grid active or not x
+                  armed or not x where now is relative to the window, compared with the previous package where the branch does not run; what the owner still sees; end-to-end runs through the real start script, a restart
+                  and the real recovery; the diff is exactly the one branch; mutants (the old unconditional write restored among them)
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -1472,12 +1477,49 @@ print("[14] result status integrity (owner decision r15, 19 Nov 2026; known limi
 # active or not x armed (valid, disarmed, re-armed since the run began); with Dump to Grid not active the outcome must equal the PREVIOUS package's (rebuilt from this package, its code lines pinned by sha256).
 # [14.2] end-to-end runs through the real retry loop for every in-loop result a late or foreign activation can meet, and for every shape in which this run's own verified start still ends as STARTED OK. [14.3] mutants.
 OLD_CODE_SHA = "e1128832f638f3c5219036feeb31ee4def7d6283d3e03eff761e6f5cfa908457"   # sha256 of the previous package (0a488d8) without its whole-line comments
+# Owner decision r15, the startup recovery (see [15]): the package of e1005ad wrote STARTED OK in the recovery's active branch whatever the last result was. REC_OLD_BLOCK is that branch as it stood (its comment line through its disarm);
+# the new branch is taken from a package between its own comment line and the comment of the branch that follows it. undo_recovery() puts the old branch back, so before_text() below still rebuilds the package of 0a488d8 and the pin
+# OLD_CODE_SHA above is unchanged (a package without the new branch is left as it is: there is nothing to undo).
+_REC_START = "          # Restarted while the session runs and Dump to Grid is active."
+_REC_END = "          # R9: a start time between the Home Assistant start and this evaluation is not a missed run"
+REC_OLD_BLOCK = (
+    "          # Restarted while the session runs: it started; record it and disarm.\n"
+    "          - conditions:\n"
+    "              - condition: template\n"
+    "                value_template: \"{{ now_ts < end_ts }}\"\n"
+    "              - condition: state\n"
+    "                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active\n"
+    "                state: \"on\"\n"
+    "            sequence:\n"
+    "              - action: input_text.set_value\n"
+    "                target:\n"
+    "                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+    "                data:\n"
+    "                  value: \"STARTED OK - running (Home Assistant restarted during the session)\"\n"
+    "              - action: input_boolean.turn_off\n"
+    "                target:\n"
+    "                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed\n")
+
+
+def rec_new_block(text: str) -> str:
+    a = text.find(_REC_START)
+    b = text.find(_REC_END, a) if a >= 0 else -1
+    return text[a:b] if a >= 0 and b > a else ""
+
+
+def undo_recovery(text: str) -> str:
+    """The package with the recovery's active branch as it stood at e1005ad (the text unchanged when it has no new branch)."""
+    nb = rec_new_block(text)
+    return text.replace(nb, REC_OLD_BLOCK) if nb and text.count(nb) == 1 else text
+
+
 _OLD_SENTENCE_BLOCK = _IF_ACTIVE + "\n" + _BLOCKED_SENTENCE + "                {%- endif %}\n"
 _R14_TAIL = "\n                     and not r.startswith('BLOCKED')"
 
 
 def before_text(text: str) -> str:
-    """The previous package (0a488d8: the r14 step that spares BLOCKED only, and the one-sentence alert), rebuilt from `text` by undoing exactly the two code edits of this change."""
+    """The previous package (0a488d8: the r14 step that spares BLOCKED only, and the one-sentence alert), rebuilt from `text` by undoing exactly the two code edits of this change (and, since [15], the recovery's)."""
+    text = undo_recovery(text)
     ns = new_step_of(text)
     if not ns or text.count(_SENTENCE_BLOCK) != 1:
         return text                              # nothing of this change to undo: this IS the previous package
@@ -1867,6 +1909,487 @@ for label, edits in MUTANTS14:
 check(f"{len(MUTANTS14)} mutants of the steps after the loop, the end-of-run alert and the in-loop path (the old overwrite restored for each class among them), all caught by the table or a running scheduled start",
       caught14 == len(MUTANTS14) == built14, f"{caught14}/{built14}/{len(MUTANTS14)}")
 check("control: the unmutated package passes the same table and running cases", cp14 == [] and ok14 == [] and not [1 for label, kind, kw in E2E14 if e2e_check(kind, end_run(DUMP_TEXT, **kw), end_run(DUMP_TEXT, **{k: v for k, v in kw.items() if k != "active_when"}) if kind == "F" else None)])
+
+# ================================================================================================================================
+print("[15] the startup recovery after a Home Assistant restart never writes STARTED OK over a result this schedule did not verify (owner decision r15, 19 Nov 2026; known limitation 20, its last path)")
+# ================================================================================================================================
+# THE DEFECT (limitation 20, the last path). The startup recovery (ecco_dump_to_grid_schedule_startup_recovery) wrote "STARTED OK - running (Home Assistant restarted during the session)" whenever the schedule was armed, now was
+# inside the window and Dump to Grid was active, WHATEVER the last result was. So a run that was refused (BLOCKED), failed, cancelled, or killed by the restart while still STARTING was reported as a success whenever Dump to Grid
+# was active for ANY reason (the dongle's own Start button, which no override binds (RG-ST3), a manual start, another path), with nobody having verified that this schedule started it.
+# THE OWNER'S DECISION (r15): protect STARTING, FAILED and CANCELLED from incorrect STARTED OK overwrites; preserve the legitimate transition (STARTING may become STARTED after a verified successful start); FAILED and CANCELLED
+# are never converted into success without a genuinely new, verified operation; every final status reflects the actual outcome; a rejected start is never reported as successful. So, in the recovery's active-in-window branch:
+#   - a last result that already starts with STARTED (this schedule's own verified start, recorded before the restart): byte for byte as before (the same text, the same disarm);
+#   - a last result that starts with FAILED, BLOCKED or CANCELLED is final: its text is left exactly as written (no write at all); the existing disarm stays;
+#   - every other last result (STARTING, ARMED and ARMED AFTER RESTART, empty, unknown, REJECTED, MISSED, foreign text): a truthful non-success UNCONFIRMED text that says Dump to Grid is active after a Home Assistant restart and that this
+#     schedule did not confirm that it started it (at most 255 characters, never STARTED OK); the existing disarm stays;
+#   - nothing is pressed, staged or started by the recovery, no alert and no dismissal is added, and every other branch (not armed, a start running, before the start, the R9 not-missed leave-alone, the missed run, the expired window)
+#     and every case with Dump to Grid not active is unchanged.
+# The proof: [15.1] the REAL recovery automation, fired as on a Home Assistant start, for every result class x Dump to Grid active or not x armed or not x where now is relative to the window; the cells in which the active branch
+# runs are checked against the rule above, every other cell must equal the previous package's (rebuilt from this one, its code lines pinned by sha256). [15.2] what the owner still sees (the refusal stays the status FAILED once Dump to Grid
+# is off; no success status for an unverified start). [15.3] end to end through the real start script, a restart and the real recovery. [15.4] the package diff is exactly the one branch. [15.5] mutants (the old unconditional write
+# among them).
+import datetime as _dt
+
+REC_ID = "ecco_dump_to_grid_schedule_startup_recovery"
+START_E, HASTART_E = "input_datetime.ecco_dump_to_grid_schedule_start", "input_datetime.ecco_dump_to_grid_ha_start"
+DUR_E, PWR_E, SOC_E = "input_number.ecco_dump_to_grid_schedule_duration", "input_number.ecco_dump_to_grid_schedule_power", "input_number.ecco_dump_to_grid_schedule_stop_soc"
+SCRIPT_E, STATUS_E = "script.ecco_dump_to_grid_start_scheduled", "sensor.ecco_dump_to_grid_schedule_status"
+STARTED_REC = "STARTED OK - running (Home Assistant restarted during the session)"
+UNCONFIRMED_TEXT = ("UNCONFIRMED - Dump to Grid is active after a Home Assistant restart, but this schedule did not confirm that it started it (it may have been started some other way). "
+                    "Check it, and the plan overrides, before assuming it is held.")
+PREV_CODE_SHA = "f1a10005ecd5de887817f8813f50062fcb2b701043a0dea3d0a812807cc66894"   # sha256 of the previous package (e1005ad) without its whole-line comments
+PREV_TEXT = undo_recovery(DUMP_TEXT)
+REC_NEW = rec_new_block(DUMP_TEXT)
+check("the previous package, rebuilt from this one by undoing the startup recovery edit of this change, has exactly the code lines of e1005ad (sha256 of everything but whole-line comments), so the 'unchanged' comparisons below "
+      "are against the real previous behaviour", code_sha(PREV_TEXT) == PREV_CODE_SHA and (PREV_TEXT != DUMP_TEXT or REC_NEW == ""), code_sha(PREV_TEXT)[:16])
+check("the recovery's text for an unverified start is a non-success text of at most 255 characters that says Dump to Grid is active after a Home Assistant restart and that this schedule did not confirm that it started it",
+      len(UNCONFIRMED_TEXT) <= 255 and not UNCONFIRMED_TEXT.startswith("STARTED") and "STARTED OK" not in UNCONFIRMED_TEXT and "Dump to Grid is active after a Home Assistant restart" in UNCONFIRMED_TEXT
+      and "did not confirm that it started it" in UNCONFIRMED_TEXT, str(len(UNCONFIRMED_TEXT)))
+
+_rec_parsed: dict = {}
+
+
+def rec_packages(dump_text: str) -> list:
+    import copy
+    if dump_text not in _rec_parsed:
+        _rec_parsed[dump_text] = [yaml.safe_load(t) for t in (dump_text, PLAN_TEXT, GUARD_TEXT)]
+    return copy.deepcopy(_rec_parsed[dump_text])
+
+
+TIMING15 = {"before": 1800, "window": -2, "missed": -120, "after": -3600}   # the schedule's start, in seconds from the Home Assistant start (a 30 minute window): in the future / just after the captured start / before it / long over
+
+
+def local_at(pw, off: float) -> str:
+    return _dt.datetime.fromtimestamp(pw.w.t + off, pw.zone).strftime(P.FMT)
+
+
+def recovery_world(dump_text: str, result: str, active: bool, armed: str = "on", timing: str = "window", script_on: bool = False, capture: str = "known"):
+    """A world at the moment Home Assistant starts: the schedule armed (or not) for a start at TIMING15[timing], the last result `result`, the captured Home Assistant start known (or never captured at this boot), the dongle's
+    write enable left ON by the restart, Dump to Grid active (started some other way) or not, and the start script running or not."""
+    pw, d = world(pkgs=rec_packages(dump_text), owner=40)
+    w = pw.w
+    w.set(LAST, result)
+    w.set(ARMED, "on" if armed == "on" else "off")
+    w.set(DUR_E, "30.0")
+    w.set(PWR_E, "2000.0")
+    w.set(SOC_E, "40.0")
+    pw.set_local(START_E, local_at(pw, TIMING15[timing]))
+    if capture == "known":
+        pw.set_local(HASTART_E, local_at(pw, -5))
+    if active:
+        d.active = True
+        w.set(D.D_ACTIVE, "on")
+    d.arm = True
+    w.set(D.D_ARM, "on")
+    if script_on:
+        w.set(SCRIPT_E, "on")
+    return pw, d
+
+
+def fire_recovery(pw, d, seconds: float = 600.0) -> tuple:
+    """Home Assistant starts: only the startup recovery runs (the real automation, from its own `homeassistant` start trigger). Returns what the log, the services, the dongle's numbers and its presses held before it ran
+    (so a fact is what the recovery did, not what an earlier run did)."""
+    w = pw.w
+    marks = (len(w.service_log), len(w.notification_log), len(d.number_log), len(d.press_log))
+    a = next(x for x in pw.ha.automations if x.id == REC_ID)
+    a.setup()
+    a.ha_start()
+    w.run_until(w.t + seconds)
+    return marks
+
+
+def rec_facts(pw, d, marks: tuple) -> dict:
+    w = pw.w
+    n0, k0, m0, p0 = marks
+    return dict(last=pw.state(LAST), armed=pw.state(ARMED), arm=pw.state(D.D_ARM), model_arm=d.arm,
+                notes=[n for n in w.notification_log[k0:] if n[1] == "create"], dismissed=[n for n in w.notification_log[k0:] if n[1] == "dismiss"],
+                calls=[(s, e, dd) for _t, s, e, dd in w.service_log[n0:]], presses=list(d.press_log[p0:]), numbers=list(d.number_log[m0:]),
+                warnings=list(w.warnings), runs=list(pw.ha.runs), status=pw.state(STATUS_E))
+
+
+def rec_probe(dump_text: str, result: str, active: bool, armed: str = "on", timing: str = "window", script_on: bool = False, capture: str = "known") -> dict:
+    pw, d = recovery_world(dump_text, result, active, armed, timing, script_on, capture)
+    return rec_facts(pw, d, fire_recovery(pw, d))
+
+
+_rec_prev: dict = {}
+
+
+def rec_prev(result: str, active: bool, armed: str, timing: str, script_on: bool, capture: str) -> dict:
+    key = (result, active, armed, timing, script_on, capture)
+    if key not in _rec_prev:
+        _rec_prev[key] = rec_probe(PREV_TEXT, *key)
+    return _rec_prev[key]
+
+
+FINAL15 = ("FAILED", "BLOCKED", "CANCELLED")
+# (label, class, the result text). Every result the schedule can hold when Home Assistant starts: the package's own texts (CELLS14) and the ones that only a restart or another writer leaves.
+CELLS15 = CELLS14 + (
+    ("ARMED AFTER RESTART, written by an earlier recovery", "FOREIGN", "ARMED AFTER RESTART - waiting for 2026-11-17 21:30:00"),
+    ("STARTED OK - running, written by an earlier recovery", "STARTED", STARTED_REC),
+    ("unknown (a helper that was not restored)", "FOREIGN", "unknown"),
+    ("a text of another writer", "FOREIGN", "Hello from another writer"),
+    ("a text that only MENTIONS STARTED OK later (not a start of this schedule)", "FOREIGN", "REJECTED - the STARTED OK of an earlier run does not count"),
+    ("a text that only MENTIONS FAILED later (not a final result of this schedule)", "FOREIGN", "REJECTED - the earlier FAILED run is gone"),
+)
+CHANGED15 = (("window", "known"), ("missed", "known"), ("window", "unknown"))      # where now is inside the window: the recovery's active branch runs when Dump to Grid is active and the schedule armed
+REP15 = ("STARTING - attempt 3 waiting: dongle offline or another write in progress; retrying until 21:10", "STARTED OK - 2000W for 30 min, Stop SOC 40% (attempt 1; ends by 21:31)",
+         "FAILED TO START - retries ended at 21:10: Inactive", CANCELLED_TEXT, "BLOCKED - the effective reserve rose above the Stop SOC staged for this run (40%) while it was waiting; nothing started (reason RESERVE_TOO_HIGH)",
+         "ARMED - 2026-11-17 22:00:00 • 30 min • 2000W • Stop SOC 40%", "")
+UNCHANGED15 = (("before", "known"), ("window", "known"), ("missed", "known"), ("after", "known"), ("window", "unknown"))
+
+
+def rec_expect(kind: str, text: str, f: dict) -> str:
+    """'' when a cell in which the active branch runs is right, else why not."""
+    last = f["last"]
+    if f["armed"] != "off":
+        return f"the schedule must be disarmed, as before (armed is {f['armed']!r})"
+    if f["arm"] != "off" or f["model_arm"] is not False or f["presses"] or f["numbers"] or f["runs"]:
+        return f"nothing may be pressed, staged or started: write enable {f['arm']!r}, presses {f['presses']}, numbers {f['numbers']}, runs {f['runs']}"
+    extra = sorted({s for s, _e, _d in f["calls"]} - {"input_text.set_value", "input_boolean.turn_off", "switch.turn_off"})
+    if extra or f["notes"] or f["dismissed"]:
+        return f"no new service, alert or dismissal: {extra} notes={f['notes']} dismissed={f['dismissed']}"
+    if any("invalid value" in m for m in f["warnings"]):
+        return f"a text did not fit the helper: {f['warnings'][:1]}"
+    writes = [dd["value"] for s, _e, dd in f["calls"] if s == "input_text.set_value"]
+    if kind != "STARTED" and (last.startswith("STARTED") or "STARTED OK" in last or any("STARTED OK" in v for v in writes)):
+        return f"a result of class {kind} was reported as a success: {last[:90]!r}"
+    if kind == "STARTED":
+        return "" if last == STARTED_REC and writes == [STARTED_REC] else f"a verified STARTED result must read exactly {STARTED_REC!r}: {last[:90]!r} writes={len(writes)}"
+    if kind in FINAL15:
+        return "" if last == text and writes == [] else f"a {kind} result is final and must stay exactly as written, with no write at all: {last[:90]!r} writes={len(writes)}"
+    return "" if last == UNCONFIRMED_TEXT and writes == [UNCONFIRMED_TEXT] else f"any other result must become the UNCONFIRMED text (once): {last[:90]!r} writes={len(writes)}"
+
+
+def rec_cell_problems(dump_text: str, stop_early: bool = False, kinds=None, changed: bool = True, unchanged: bool = True) -> list[str]:
+    bad: list[str] = []
+
+    def differs(text, active, armed, timing, script_on, capture) -> str:
+        f, g = rec_probe(dump_text, text, active, armed, timing, script_on, capture), rec_prev(text, active, armed, timing, script_on, capture)
+        diff = [k for k in g if f[k] != g[k]]
+        return (f"{text[:24]!r}, Dump to Grid {'active' if active else 'not active'}, armed={armed}, start script {'running' if script_on else 'idle'}, window {timing}/{capture}: "
+                f"differs from the previous package in {diff}") if diff else ""
+    try:
+        if changed:
+            for label, kind, text in CELLS15:
+                if kinds is not None and kind not in kinds:
+                    continue
+                for timing, capture in CHANGED15:
+                    why = rec_expect(kind, text, rec_probe(dump_text, text, True, "on", timing, False, capture))
+                    if why:
+                        bad.append(f"{label}, Dump to Grid active, window {timing}/{capture}: {why}")
+                        if stop_early:
+                            return bad
+        if unchanged:
+            for text in REP15:
+                cases = [(text, active, armed, timing, False, capture) for active in (True, False) for armed in ("on", "off") for timing, capture in UNCHANGED15
+                         if not (active and armed == "on" and (timing, capture) in CHANGED15)]
+                cases.append((text, True, "on", "window", True, "known"))
+                for case in cases:
+                    why = differs(*case)
+                    if why:
+                        bad.append(why)
+                        if stop_early:
+                            return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+print("[15.1] the real startup recovery, every result class x Dump to Grid active or not x armed x where now is relative to the window")
+cp15: list[str] = []
+for kinds, what, rule in ((("STARTED",), "a result that already starts with STARTED (this schedule's own verified start, recorded before the restart; also the recovery's own earlier text)",
+                           f"the text reads exactly {STARTED_REC!r} and the schedule is disarmed, byte for byte as before"),
+                          (FINAL15, "a FAILED, BLOCKED or CANCELLED result (the package's own texts: the window over, refused at the gate, a failed transaction, no answer, retries ended, the loop's and the cancel script's CANCELLED, both press-time BLOCKED reasons)",
+                           "the text stays exactly as written (no write at all) and the schedule is disarmed as before: a refusal is never turned into a success"),
+                          (("STARTING", "FOREIGN"), "any other result (the five STARTING texts, ARMED, ARMED AFTER RESTART, REJECTED, MISSED, empty, unknown, a foreign text, a text that only mentions STARTED OK or FAILED later)",
+                           "the text becomes the UNCONFIRMED text (Dump to Grid is active after a Home Assistant restart, this schedule did not confirm that it started it; at most 255 characters; never STARTED OK) and the schedule is disarmed")):
+    kp = rec_cell_problems(DUMP_TEXT, kinds=kinds, unchanged=False)
+    cp15 += kp
+    check(f"{what}, Dump to Grid ACTIVE, armed, the start script not running, the window open (a start after or before the captured Home Assistant start, and the capture unknown): {rule}; nothing is pressed, staged or started; "
+          "no alert and no dismissal; the write enable ends off", kp == [], str(kp[:2]))
+up15 = rec_cell_problems(DUMP_TEXT, changed=False)
+cp15 += up15
+check(f"every other case equals the previous package's, field for field (the final text, the armed helper, the write enable, every service call and its data, the alerts and dismissals, the status): Dump to Grid not active, the schedule not armed, "
+      f"a start script running, the start still to come, the window over, for {len(REP15)} result texts (one per class) x active or not x armed or not x {len(UNCHANGED15)} window cases", up15 == [], str(up15[:2]))
+
+# ---- [15.2] what the owner still sees --------------------------------------------------------------------------------------------------------------------------------------------------------
+print("[15.2] what the owner sees: a refusal stays the status FAILED once Dump to Grid ends, a verified start stays COMPLETED, an unverified one is never COMPLETED")
+
+
+def visible_problems15(dump_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+    try:
+        for label, kind, text in CELLS15:
+            pw, d = recovery_world(dump_text, text, True)
+            f0 = rec_facts(pw, d, fire_recovery(pw, d))
+            pw.w.set(D.D_ACTIVE, "off")
+            d.active = False
+            st = pw.state(STATUS_E)
+            if kind == "STARTED":
+                ok = st == "COMPLETED"
+            elif kind in ("FAILED", "BLOCKED"):
+                ok = st == "FAILED" and pw.state(LAST) == text and f0["notes"] == []
+            elif kind == "CANCELLED":
+                ok = st == "IDLE" and pw.state(LAST) == text
+            else:
+                ok = st not in ("COMPLETED", "ACTIVE", "STARTING") and pw.state(LAST) == UNCONFIRMED_TEXT
+            if not ok:
+                bad.append(f"{label}: after the recovery and Dump to Grid ending, the status reads {st!r} and the result {pw.state(LAST)[:60]!r}")
+                if stop_early:
+                    return bad
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+vp15 = visible_problems15(DUMP_TEXT)
+check("a refusal stays visible without a new alert: after the recovery a FAILED or BLOCKED result still reads exactly as written and the status sensor reads FAILED as soon as Dump to Grid is not active (the recovery raised no notification); "
+      "a CANCELLED result reads IDLE; a verified STARTED result reads COMPLETED; an unverified start (the UNCONFIRMED text) never reads COMPLETED", vp15 == [], str(vp15[:2]))
+
+# ---- [15.3] end to end ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+print("[15.3] end to end: the real start script, a Home Assistant restart, the real recovery")
+
+
+def restart_ha(pw, dump_text: str, d, active: bool = True) -> tuple:
+    """Home Assistant restarts while the schedule is still armed and Dump to Grid is (or is not) active: the running scripts die, a new instance loads the packages, the helpers keep their states, and the recovery runs."""
+    w = pw.w
+    pw.ha.stop()
+    pw.ha = S.HA(w, rec_packages(dump_text))
+    if active:
+        d.active = True
+        w.set(D.D_ACTIVE, "on")
+    w.set(DUR_E, "30.0")
+    pw.set_local(START_E, local_at(pw, -2))
+    pw.set_local(HASTART_E, local_at(pw, -5))
+    w.set(ARMED, "on")                                         # the fire automation died before it could disarm the schedule
+    return fire_recovery(pw, d)
+
+
+def e2e15_run(dump_text: str, shape: str) -> dict:
+    pw, d = world(pkgs=rec_packages(dump_text), owner=40)
+    w = pw.w
+    t0 = w.t
+    if shape == "blocked":                                    # a Hold battery refuses the scheduled start; later the dongle's own Start button starts Dump to Grid; then Home Assistant restarts
+        hold(pw, "hold_battery")
+        run_scheduled(pw, d, seconds=150)
+    elif shape == "failed":                                   # the dongle refuses the start at the gate for a reason that needs the owner; later Dump to Grid is active some other way
+        d.flags["corrupt"] = True
+        run_scheduled(pw, d, seconds=150)
+    elif shape == "starting_offline":                         # the dongle is offline: the run is still STARTING when Home Assistant restarts (the restart kills it); the dongle is back before the recovery looks
+        d.set_offline(t0, t0 + 70)
+        run_scheduled(pw, d, seconds=60)
+    elif shape == "starting_own_press":                       # this run's own press is sent and Home Assistant restarts a moment later, before this run could verify it
+        killed: list = []
+
+        def watch(_kind):
+            if d.press_log and not killed:
+                killed.append(w.t)
+                w.after(0.5, lambda: pw.ha.stop())
+        w.listeners.append(watch)
+        run_scheduled(pw, d, seconds=40)
+        w.listeners.remove(watch)
+        w.run_until(w.t + 120)                                # the dongle's own start transaction completes without Home Assistant
+    elif shape == "verified":                                 # control: this run's own start was verified (STARTED OK written in the loop) before the restart
+        run_scheduled(pw, d, seconds=150)
+    else:
+        raise ValueError(shape)
+    before = dict(last=pw.state(LAST), presses=len(d.press_log), started=d.successes, active=pw.state(D.D_ACTIVE))
+    marks = restart_ha(pw, dump_text, d, active=shape != "starting_own_press")
+    f = rec_facts(pw, d, marks)
+    f.update(before=before, started=d.successes)
+    return f
+
+
+E2E15 = (
+    ("blocked", "a BLOCKED refusal (a Hold battery was active), then the dongle's own Start button starts Dump to Grid, then Home Assistant restarts: the refusal stays", "final"),
+    ("failed", "a FAILED TO START refusal (refused at the start gate), Dump to Grid active some other way, Home Assistant restarts: the refusal stays", "final"),
+    ("starting_offline", "a run still STARTING (dongle offline) is killed by the restart and Dump to Grid is active some other way: the UNCONFIRMED text, not a success", "unconfirmed"),
+    ("starting_own_press", "a run whose own press started Dump to Grid but whose verification was killed by the restart: the UNCONFIRMED text (this schedule did not confirm it), not a success, and no second press", "unconfirmed"),
+    ("verified", "control: this run's own verified STARTED OK, then Home Assistant restarts with Dump to Grid active: STARTED OK - running, as before, disarmed", "verified"),
+)
+
+
+def e2e15_check(kind: str, f: dict, shape: str = "") -> str:
+    last = f["last"]
+    if f["armed"] != "off" or f["arm"] != "off" or f["model_arm"] is not False:
+        return f"the schedule must be disarmed and the write enable off after the recovery: armed {f['armed']!r}, write enable {f['arm']!r}"
+    if f["presses"] or f["numbers"] or f["runs"]:
+        return f"the recovery pressed, staged or started something: presses {f['presses']}, numbers {f['numbers']}, runs {f['runs']}"
+    if shape == "starting_own_press" and (f["started"] != 1 or f["before"]["presses"] != 1):
+        return f"this run's own press must have started Dump to Grid exactly once before the restart: started={f['started']} presses={f['before']['presses']}"
+    if f["notes"] or f["dismissed"]:
+        return f"the recovery raised or dismissed an alert: {f['notes']} {f['dismissed']}"
+    if kind == "final":
+        ok = last == f["before"]["last"] and f["before"]["last"][:7] in ("BLOCKED", "FAILED ") and not any(s == "input_text.set_value" for s, _e, _d in f["calls"])
+        return "" if ok else f"the refusal must stay exactly as written: {last[:90]!r} (was {f['before']['last'][:50]!r})"
+    if kind == "unconfirmed":
+        ok = last == UNCONFIRMED_TEXT and f["before"]["last"].startswith("STARTING") and f["status"] == "ACTIVE"
+        return "" if ok else f"{last[:90]!r} (before the restart: {f['before']['last'][:40]!r}) status={f['status']!r}"
+    ok = last == STARTED_REC and f["before"]["last"].startswith("STARTED OK - 2000W") and f["started"] == 1
+    return "" if ok else f"{last[:90]!r} (before the restart: {f['before']['last'][:40]!r}) started={f['started']}"
+
+
+def e2e15_problems(dump_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+    try:
+        for shape, label, kind in E2E15:
+            why = e2e15_check(kind, e2e15_run(dump_text, shape), shape)
+            if why:
+                bad.append(f"{label}: {why}")
+                if stop_early:
+                    return bad
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+for shape, label, kind in E2E15:
+    f = e2e15_run(DUMP_TEXT, shape)
+    why = e2e15_check(kind, f, shape)
+    check(f"end to end, {label}", why == "", why)
+
+# ---- [15.4] the diff is exactly the one branch ---------------------------------------------------------------------------------------------------------------------------------------------
+print("[15.4] the package differs from the previous one in exactly the recovery's active branch; its STARTED OK write and its disarm are the old actions, unchanged")
+
+
+def branch_of(pkg: dict) -> tuple:
+    rec = next(a for a in pkg["automation"] if a["id"] == REC_ID)
+    ci = next(i for i, a in enumerate(rec["actions"]) if "choose" in a)
+    bi = next(i for i, b in enumerate(rec["actions"][ci]["choose"])
+              if any(c.get("entity_id") == "binary_sensor.ecco_clock_dongle_dump_to_grid_active" for c in b["conditions"]))
+    return rec, ci, bi
+
+
+def diff_problems(dump_text: str) -> list[str]:
+    import copy
+    out: list[str] = []
+    try:
+        new, old = yaml.safe_load(dump_text), yaml.safe_load(PREV_TEXT)
+        rn, ci, bi = branch_of(new)
+        ro, cj, bj = branch_of(old)
+        if (ci, bi) != (cj, bj):
+            return ["the branch moved"]
+        bn, bo = rn["actions"][ci]["choose"][bi], ro["actions"][ci]["choose"][bi]
+        if bn["conditions"] != bo["conditions"]:
+            out.append("the branch's conditions changed")
+        old_write, old_disarm = bo["sequence"]
+        seq = bn["sequence"]
+        if len(seq) != 2 or "choose" not in seq[0] or seq[1] != old_disarm:
+            out.append("the branch's sequence must be one choose followed by the old disarm action, unchanged")
+        else:
+            ch = seq[0]["choose"]
+            if not (len(ch) == 2 and ch[0]["sequence"] == [old_write] and ch[1]["sequence"] == [] and len(seq[0]["default"]) == 1
+                    and seq[0]["default"][0]["action"] == "input_text.set_value" and seq[0]["default"][0]["data"]["value"] == UNCONFIRMED_TEXT
+                    and seq[0]["default"][0]["target"] == old_write["target"]):
+                out.append("the choose must hold the old STARTED OK write (unchanged) for a STARTED result, an empty branch for FAILED, BLOCKED or CANCELLED, and the one UNCONFIRMED write by default")
+            if ch[0]["conditions"] != [{"condition": "template", "value_template": "{{ states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('STARTED') }}"}]:
+                out.append("the STARTED test is not `states(...last_result).startswith('STARTED')`")
+            if [c.get("value_template", "").replace("\n", " ").strip() for c in ch[1]["conditions"]] != [
+                    "{% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %} {{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}"]:
+                out.append("the final-result test is not FAILED, BLOCKED or CANCELLED by startswith")
+        nn, oo = copy.deepcopy(new), copy.deepcopy(old)
+        branch_of(nn)[0]["actions"][ci]["choose"][bi]["sequence"] = None
+        branch_of(oo)[0]["actions"][ci]["choose"][bi]["sequence"] = None
+        if nn != oo:
+            out.append("something other than the branch's sequence changed in the parsed package")
+    except Exception as exc:  # noqa: BLE001 - a structure this check cannot read is a failed proof
+        out.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return out
+
+
+dp15 = diff_problems(DUMP_TEXT)
+check("the parsed package differs from the previous one only in the sequence of the recovery's active-in-window branch (same conditions); that sequence is one choose (the old STARTED OK write unchanged for a STARTED result, "
+      "nothing for FAILED, BLOCKED or CANCELLED, the UNCONFIRMED write by default) and then the old disarm action, unchanged; every other branch, trigger, condition and text of the package is unchanged", dp15 == [], str(dp15))
+_walk: list = []
+
+
+def _collect(node):
+    if isinstance(node, list):
+        for x in node:
+            _collect(x)
+    elif isinstance(node, dict):
+        if "action" in node:
+            _walk.append(node["action"])
+        for v in node.values():
+            _collect(v)
+
+
+_collect(next(a for a in yaml.safe_load(DUMP_TEXT)["automation"] if a["id"] == REC_ID)["actions"])
+check("the recovery calls only helper writes, the write enable's turn_off and one persistent notification (the missed-run alert): no press, no number, no script, no start",
+      set(_walk) <= {"switch.turn_off", "input_text.set_value", "input_boolean.turn_off", "persistent_notification.create"} and "input_text.set_value" in _walk, str(sorted(set(_walk))))
+check("the recovery's STARTED OK text is written in one place only (and only for a result that already starts with STARTED), and the UNCONFIRMED text in one place",
+      DUMP_TEXT.count('value: "' + STARTED_REC + '"') == 1 and DUMP_TEXT.count('value: "UNCONFIRMED - ') == 1, f"{DUMP_TEXT.count('value: ' + chr(34) + STARTED_REC + chr(34))} {DUMP_TEXT.count('value: ' + chr(34) + 'UNCONFIRMED - ')}")
+
+# ---- [15.5] mutants ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+print("[15.5] mutation: the old unconditional write restored, the STARTED test dropped or moved, FAILED, BLOCKED or CANCELLED overwritten, STARTING left final, success wording added, a press or an alert added: each is caught")
+_STARTED_TEST = "value_template: \"{{ states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('STARTED') }}\""
+_FINAL_TEST = "{{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}"
+_WRITE_STARTED = ("                      - action: input_text.set_value\n                        target:\n                          entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+                  "                        data:\n                          value: \"" + STARTED_REC + "\"\n")
+_ACTIVE_COND = "              - condition: state\n                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active\n                state: \"on\"\n            sequence:\n              - choose:\n"
+_WINDOW_COND = ("          - conditions:\n              - condition: template\n                value_template: \"{{ now_ts < end_ts }}\"\n              - condition: state\n"
+                "                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active\n")
+_DISARM = "              - action: input_boolean.turn_off\n                target:\n                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed\n"
+_UNC = "UNCONFIRMED - Dump to Grid is active after a Home Assistant restart, but this schedule did not confirm that it started it"
+_PRESS = "              - action: button.press\n                target:\n                  entity_id: button.ecco_clock_dongle_start_dump_to_grid_now\n"
+_NOTIFY = ("                    sequence:\n                      - action: persistent_notification.create\n                        data:\n                          notification_id: ecco_dump_to_grid_schedule\n"
+           "                          title: \"x\"\n                          message: \"x\"\n")
+_START_SCRIPT = "              - action: script.ecco_dump_to_grid_start_scheduled\n                data:\n                  duration_minutes: 30\n                  power_w: 2000\n                  stop_soc: 40\n                  window_end_ts: 0\n"
+MUTANTS15 = [
+    ("the old unconditional write is restored (STARTED OK whatever the last result was)", [(REC_NEW, REC_OLD_BLOCK)]),
+    ("the STARTED test is dropped (always true: every result is written as STARTED OK)", [(_STARTED_TEST, "value_template: \"{{ true }}\"")]),
+    ("the STARTED test is inverted (a verified start is replaced by the UNCONFIRMED text, anything else is written as STARTED OK)", [(_STARTED_TEST, _STARTED_TEST.replace("{{ states(", "{{ not states("))]),
+    ("the STARTED test reads the wrong entity (a verified start is no longer recognised)", [(_STARTED_TEST, _STARTED_TEST.replace("ecco_dump_to_grid_schedule_last_result", "ecco_free_power_schedule_last_result"))]),
+    ("the STARTED test looks for STARTED anywhere in the text, not at its start", [(_STARTED_TEST, "value_template: \"{{ 'STARTED' in states('input_text.ecco_dump_to_grid_schedule_last_result') }}\"")]),
+    ("a STARTED result is not kept as the old text (the STARTED OK text changed)", [(_WRITE_STARTED, _WRITE_STARTED.replace(STARTED_REC, "STARTED OK - running"))]),
+    ("a FAILED result is not final (it is overwritten with the UNCONFIRMED text)", [(_FINAL_TEST, _FINAL_TEST.replace("r.startswith('FAILED') or ", ""))]),
+    ("a BLOCKED result is not final (it is overwritten with the UNCONFIRMED text)", [(_FINAL_TEST, _FINAL_TEST.replace("r.startswith('BLOCKED') or ", ""))]),
+    ("a CANCELLED result is not final (it is overwritten with the UNCONFIRMED text)", [(_FINAL_TEST, _FINAL_TEST.replace(" or r.startswith('CANCELLED')", ""))]),
+    ("a FAILED result is matched anywhere in the text (a foreign text that only mentions FAILED stays as it is)", [(_FINAL_TEST, _FINAL_TEST.replace("r.startswith('FAILED')", "'FAILED' in r"))]),
+    ("a STARTING result is final too (it is left as STARTING and no UNCONFIRMED text is written)", [(_FINAL_TEST, _FINAL_TEST.replace("r.startswith('CANCELLED') }}", "r.startswith('CANCELLED') or r.startswith('STARTING') }}"))]),
+    ("a FAILED, BLOCKED or CANCELLED result is overwritten with STARTED OK (the final branch writes the old success text)", [("                    sequence: []\n", "                    sequence:\n" + _WRITE_STARTED)]),
+    ("success wording is added to the UNCONFIRMED text (it starts with STARTED OK)", [(_UNC, _UNC.replace("UNCONFIRMED - Dump to Grid is active", "STARTED OK - Dump to Grid is active"))]),
+    ("the UNCONFIRMED text claims that this schedule started it", [(_UNC, _UNC.replace("but this schedule did not confirm that it started it", "and this schedule started it"))]),
+    ("the UNCONFIRMED text no longer says that this schedule did not confirm the start", [(_UNC, _UNC.replace(", but this schedule did not confirm that it started it", ""))]),
+    ("the UNCONFIRMED text no longer says that Home Assistant restarted", [(_UNC, _UNC.replace("after a Home Assistant restart", "now"))]),
+    ("the UNCONFIRMED text is longer than the 255-character helper (Home Assistant would keep the old value)", [(_UNC, _UNC + " " + "x" * 120)]),
+    ("the schedule is no longer disarmed after the recovery (the disarm dropped from the branch)", [(REC_NEW, REC_NEW.replace(_DISARM, ""))]),
+    ("the recovery presses the dongle's Start button", [(REC_NEW, REC_NEW + _PRESS)]),
+    ("the recovery starts the scheduled start script", [(REC_NEW, REC_NEW + _START_SCRIPT)]),
+    ("the recovery raises a new alert for a refusal (a persistent notification in the final branch)", [("                    sequence: []\n", _NOTIFY)]),
+    ("the branch also runs while Dump to Grid is NOT active (the active test dropped: a missed run is rewritten)", [(_ACTIVE_COND, "            sequence:\n              - choose:\n")]),
+    ("the branch also runs after the window is over (the window test dropped: the expired default is lost)", [(_WINDOW_COND, "          - conditions:\n              - condition: state\n                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active\n")]),
+]
+caught15 = 0
+built15 = 0
+for label, edits in MUTANTS15:
+    mutated = DUMP_TEXT
+    ok_built = True
+    for old, new in edits:
+        if not old or mutated.count(old) != 1:
+            ok_built = False
+            check(f"mutant anchor: {label}", False, f"anchor found {mutated.count(old) if old else 0}x: {old[:70]!r}")
+            break
+        mutated = mutated.replace(old, new)
+    if not ok_built:
+        continue
+    built15 += 1
+    try:
+        yaml.safe_load(mutated)
+    except yaml.YAMLError as exc:
+        check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+        continue
+    found = (rec_cell_problems(mutated, stop_early=True) or visible_problems15(mutated, stop_early=True) or e2e15_problems(mutated, stop_early=True) or diff_problems(mutated))
+    if found:
+        caught15 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS15)} mutants of the startup recovery (the old unconditional write restored, the STARTED test dropped, inverted or loosened, FAILED, BLOCKED or CANCELLED overwritten, STARTING left final, success wording added, the disarm dropped, "
+      "a press, a start or an alert added, the active or window test dropped), all caught by the table, the owner's view, an end-to-end run or the diff", caught15 == len(MUTANTS15) == built15, f"{caught15}/{built15}/{len(MUTANTS15)}")
+check("control: the unmutated package passes the same table, view, end-to-end runs and diff", cp15 == [] and vp15 == [] and dp15 == [] and e2e15_problems(DUMP_TEXT) == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

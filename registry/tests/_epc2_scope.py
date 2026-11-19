@@ -1615,6 +1615,9 @@ DUMP_REL = 'home-assistant/packages/ecco_dump_to_grid_schedule.yaml'
 # 19 Nov 2026 (owner decision r15: a STARTING, FAILED or CANCELLED result is not overwritten with STARTED OK either): the header pair's `after` text carries the new last bullet, the post-loop step pair's `after`
 # text is the new step (it acts on a STARTING result only and writes no success text; its `before` now spans the whole r9 step, its `then` included) and the alert pair's `after` text carries the two-way
 # sentence (BLOCKED: this run did not start it; FAILED: this run did not confirm that it started it). The pairs stay exact and the round trip byte for byte.
+# 19 Nov 2026 (owner decision r15, the last path of known limitation 20: the startup recovery no longer writes STARTED OK over a result this schedule did not verify): the header pair's `after` text carries one more
+# bullet (next to the r15 one) and ONE pair was added at the end: the recovery's active-in-window branch (its comment, a choose for a STARTED / a FAILED, BLOCKED or CANCELLED / any other result, and the old disarm).
+# The new pair's `before` is the branch as the r9 state has it; the pairs stay exact and the round trip byte for byte.
 DUMP_EDITS = (
     (_blk(r"""
 
@@ -1667,6 +1670,17 @@ input_boolean:
 #     pressed); for a FAILED result it says this run did not CONFIRM that it started it, because an unconfirmed outcome can be a late start of
 #     this run's own press. Still true: such a FAILED text can be a false negative (the dongle started late after a start transaction that
 #     began); the alert flags it. Nothing is pressed after the loop, the write enable ends off, and nothing changes while Dump to Grid is not active.
+#   - Fixed 19 Nov 2026 (owner decision r15, the last path of known limitation 20): the startup recovery after a Home Assistant restart no longer writes
+#     STARTED OK over a result this schedule did not verify. It used to write "STARTED OK - running (Home Assistant restarted during the session)" whenever
+#     the schedule was armed, now was inside the window and Dump to Grid was active, whatever the last result was, so a refused (BLOCKED), failed, cancelled
+#     or restart-killed STARTING run read as a success when the dongle's own Start button (which no override binds (RG-ST3)), a manual start or another path
+#     had started Dump to Grid. The recovery cannot tell who started it, so it trusts only the record: a last result that already starts with STARTED (this
+#     schedule's own verified start, recorded before the restart) keeps that text and the disarm, byte for byte; a result that starts with FAILED, BLOCKED or
+#     CANCELLED is final and is left exactly as written (the schedule is still disarmed and no alert is added: the text stays visible and, for FAILED or BLOCKED,
+#     so does the status FAILED once Dump to Grid is not active); every other result (STARTING, ARMED, empty, REJECTED, MISSED, foreign text) becomes an UNCONFIRMED
+#     text that says Dump to Grid is active after a Home Assistant restart and that this schedule did not confirm that it started it. The recovery presses and starts nothing, and
+#     every other branch of it and every case with Dump to Grid not active is unchanged. Still true: a FAILED text it leaves in place can be a false negative
+#     (the dongle started late after a start transaction that began), and the Free Power schedule package has its own old fallback and recovery, unchanged.
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -1904,6 +1918,65 @@ input_boolean:
                 {%- endif %}
 
                 Authorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}.
+""")),
+    (_blk(r"""
+          # Restarted while the session runs: it started; record it and disarm.
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts < end_ts }}"
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                state: "on"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "STARTED OK - running (Home Assistant restarted during the session)"
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+"""),
+     _blk(r"""
+          # Restarted while the session runs and Dump to Grid is active. Owner decision r15 (19 Nov 2026): the recovery never turns a result into a success that
+          # this schedule did not verify. It cannot tell who started Dump to Grid (the dongle's own Start button, which no override binds (RG-ST3), a manual start,
+          # or this schedule's own press), so it trusts only the record. A last result that already starts with STARTED (this schedule's own verified start, recorded
+          # before the restart) keeps the old text. A FAILED, BLOCKED or CANCELLED result is final: it is not written again (the text stays as the run left it and, for
+          # FAILED or BLOCKED, the status reads FAILED once Dump to Grid is not active; no new alert). Any other result (STARTING, ARMED, empty, REJECTED, MISSED, foreign text) gets a text that
+          # says Dump to Grid is active after a restart and that this schedule did not confirm that it started it. Nothing is pressed or started here. The schedule is
+          # disarmed in every case, as before, so the watchdog cannot turn a refusal into a MISSED record.
+          - conditions:
+              - condition: template
+                value_template: "{{ now_ts < end_ts }}"
+              - condition: state
+                entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                state: "on"
+            sequence:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('STARTED') }}"
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                        data:
+                          value: "STARTED OK - running (Home Assistant restarted during the session)"
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}
+                          {{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}
+                    sequence: []
+                default:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: "UNCONFIRMED - Dump to Grid is active after a Home Assistant restart, but this schedule did not confirm that it started it (it may have been started some other way). Check it, and the plan overrides, before assuming it is held."
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
 """)),
 )
 

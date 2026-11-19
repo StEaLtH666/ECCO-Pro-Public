@@ -48,6 +48,11 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 about the card, the plan-core README's epoch row and card paragraph, the plan helper package comment and a new CHANGELOG bullet say so in the new words; the old wording ('does not read the absolute epoch
                 records', 'NOT changed', 'offers Cancel only for an override it shows as running') is gone; the card's reader and bundle name the three epoch records and nothing in the card writes one; the RG-ST3
                 sentence stands exactly once in each place, nothing says 'fully enforced', all 23 items are listed; mutants (the old wording restored is one) and a control
+  [12] item 20  (owner decision r15, 19 Nov 2026; additive) limitation 20's LAST path is FIXED: the startup recovery after a Home Assistant restart no longer writes STARTED OK over a result this schedule did not verify.
+                Item 20, the schedule package header and a new CHANGELOG bullet say so (a result that already starts with STARTED keeps the old text; FAILED, BLOCKED and CANCELLED are final; every other result becomes an
+                UNCONFIRMED text), the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'the same fallback as the old one') is gone, what is still true is stated (the Free Power schedule package
+                is unchanged, a FAILED text can be a false negative), the package CODE is pinned statically (one UNCONFIRMED text within 255 characters, the STARTED test and the FAILED, BLOCKED or CANCELLED test once each, no
+                unconditional STARTED OK write), item 23 carries its two review notes, RG-ST3 stands once per place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -1160,6 +1165,128 @@ _h11 = f_readme.index(LIMITS_HEADING)
 check("mutant caught: item 23 removed (22 items)", bool(limitations_problems(f_readme[:f_readme.index("\n23. **", _h11)] + "\n" + f_readme[f_readme.index("\n### Install order", _h11):])))
 check("control: the untouched tree is not flagged by the item 23 (r15) checks", not fixed23_problems(f_readme, f_helper, f_changelog) and not mitigated19_problems(f_readme, f_helper, f_changelog)
       and not status_problems(f_readme) and not limitations_problems(f_readme) and not epoch_reader_problems(card_sources, texts["card bundle"], texts["card README"]))
+
+# ===========================================================================
+print("")
+print("[12] known limitation 20, its last path (owner decision r15, 19 Nov 2026; additive): the startup recovery never writes STARTED OK over a result this schedule did not verify; item 20, the schedule package header and a new CHANGELOG bullet say so; item 23 carries two notes")
+# ===========================================================================
+# The startup recovery after a Home Assistant restart (ecco_dump_to_grid_schedule_startup_recovery) used to write "STARTED OK - running (Home Assistant restarted during the session)" whenever the schedule was armed, now was inside the
+# window and Dump to Grid was active, whatever the last result was. Owner decision r15: only a last result that already starts with STARTED keeps that text (and the disarm), a FAILED, BLOCKED or CANCELLED result is final and stays
+# exactly as written, every other result becomes an UNCONFIRMED text that says Dump to Grid is active after a Home Assistant restart and that this schedule did not confirm that it started it (running proof:
+# test_ecco_plan_enforcement.py [15] and registry/tests/test_ha_r9_missed_runs.py). These checks are ADDITIVE to [6] to [11]: they require the new wording in item 20, the schedule package header and a new CHANGELOG bullet, forbid the
+# old wording where it described the current behaviour, state what is still true (the Free Power schedule package is unchanged; a FAILED text can be a false negative), require the two review notes of item 23 (the card's up-to-59-second
+# lag after a record ends inside a minute, and a missing epoch helper entity on a new package), re-require the Stage 3 limitation sentence (RG-ST3) once per place and the 23 items, and forbid any 'fully enforced' claim. Static
+# checks of the package code pin the recovery's three outcomes without running it (the running proof is the suites named above).
+OLD20_REC_ITEM = ("it is not one of these steps, it was not changed here", "it cannot tell who started Dump to Grid either", "has the same fallback as the old one and was not changed")
+ITEM20_REC = ("What changed, r15, the last path", "the startup recovery after a Home Assistant restart", "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final and stays exactly as written",
+              "UNCONFIRMED text of at most 255 characters", "this schedule did not confirm that it started it", "presses and starts nothing", "test_ecco_plan_enforcement.py` [15]",
+              "the Free Power schedule package still has its own old fallback and its own startup recovery, unchanged and outside this task", "a FAILED text that the startup recovery leaves in place can be a false negative as well",
+              "never STARTED OK unless this run's own start was verified, after a Home Assistant restart too", "still not bound by any override (RG-ST3)")
+HEADER_REC = ("Fixed 19 Nov 2026 (owner decision r15, the last path of known limitation 20)", "the startup recovery after a Home Assistant restart no longer writes STARTED OK over a result this schedule did not verify",
+              "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final and is left exactly as written", "becomes an UNCONFIRMED text",
+              "this schedule did not confirm that it started it", "The recovery presses and starts nothing", "every case with Dump to Grid not active is unchanged",
+              "the Free Power schedule package has its own old fallback and recovery, unchanged", "which no override binds (RG-ST3)")
+CHANGELOG_REC = ("known limitation 20, the last path", "owner decision r15", "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final", "UNCONFIRMED text",
+                 "did not confirm that it started it", "presses or starts nothing", "no alert is added", "This supersedes the sentence of the r15 bullet above that says the startup recovery was not changed",
+                 "still not bound (RG-ST3)", "the Free Power schedule package still has its own old fallback and recovery", "false negative", "known limitation 23", "re-sealed")
+ITEM23_NOTES = ("up to 59 seconds after the backend has cleared it", "the answer is then NOT_ACTIVE and the readback says Cancel NOT confirmed", "On a NEW package in which one or more epoch helper entities are missing",
+                "the backend reads that kind as unknown", "the card judges the missing record as absent and may show the kind as cleared without a Cancel", "the card lists the problem line",
+                "the cancel script still works", "the owner must repair the helper")
+REC_UNCONFIRMED_RE = re.compile(r'value: "(UNCONFIRMED - [^"\n]*)"')
+REC_STARTED_TEST = "states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('STARTED') }}"
+REC_FINAL_TEST = "{{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}"
+REC_OLD_WRITE = ("            sequence:\n              - action: input_text.set_value\n                target:\n                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+                 "                data:\n                  value: \"STARTED OK - running (Home Assistant restarted during the session)\"\n")
+
+
+def bullet_rec(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 for the startup recovery (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: the startup recovery never writes STARTED OK over a result this schedule did not verify")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def recovery_code_problems(schedule: str) -> list[str]:
+    """What the package CODE (not its comments) says about the recovery's active branch: three outcomes, one UNCONFIRMED text within the helper, no unconditional STARTED OK write."""
+    code = code_lines(schedule)
+    out = []
+    found = REC_UNCONFIRMED_RE.findall(code)
+    if len(found) != 1:
+        out.append(f"the UNCONFIRMED text is written {len(found)}x in the package code (once expected)")
+    else:
+        t = found[0]
+        if len(t) > 255:
+            out.append(f"the UNCONFIRMED text has {len(t)} characters (the helper keeps 255)")
+        out.extend(f"the UNCONFIRMED text lacks: {p}" for p in ("Dump to Grid is active after a Home Assistant restart", "this schedule did not confirm that it started it") if p not in t)
+        if "STARTED" in t:
+            out.append("the UNCONFIRMED text says STARTED")
+    if code.count('value: "STARTED OK - running (Home Assistant restarted during the session)"') != 1:
+        out.append("the recovery's STARTED OK text is not written exactly once")
+    if code.count(REC_STARTED_TEST) != 1:
+        out.append("the recovery does not test that the last result starts with STARTED exactly once")
+    if code.count(REC_FINAL_TEST) != 1:
+        out.append("the recovery does not leave a FAILED, BLOCKED or CANCELLED result alone exactly once")
+    if REC_OLD_WRITE in code:
+        out.append("the recovery writes STARTED OK unconditionally again (the old branch)")
+    return out
+
+
+def last_path_problems(readme: str, schedule: str, changelog: str) -> list[str]:
+    out = []
+    bodies = item_bodies(readme)
+    item20, item23 = bodies.get(20, ""), bodies.get(23, "")
+    fs, fb = flat_yaml(schedule), flat(bullet_rec(changelog))
+    out.extend(f"item 20 still says: {p}" for p in OLD20_REC_ITEM if p in item20)
+    out.extend(f"item 20 lacks: {p}" for p in ITEM20_REC if p not in item20)
+    out.extend(f"the schedule package header lacks: {p}" for p in HEADER_REC if p not in fs)
+    out.extend(f"the CHANGELOG bullet of the startup recovery lacks: {p}" for p in CHANGELOG_REC if p not in fb)
+    out.extend(f"item 23 lacks: {p}" for p in ITEM23_NOTES if p not in item23)
+    out.extend(recovery_code_problems(schedule))
+    if FULL_CLAIM.search(item20 + " " + item23 + " " + fs + " " + schedule + " " + fb):
+        out.append("a 'fully enforced' claim stands in item 20, item 23, the package or the CHANGELOG bullet")
+    return out
+
+
+l_readme, l_schedule, l_changelog = s2_readme, s2_schedule, s2_changelog
+check("limitation 20's last path is fixed in the words of item 20, the schedule package header and the new CHANGELOG bullet; the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'has the same fallback as the old one') "
+      "is gone; what is still true is stated (the Free Power package, a FAILED false negative, RG-ST3); item 23 carries its two review notes; the package code writes the UNCONFIRMED text once (within 255 characters), tests STARTED and FAILED, BLOCKED or "
+      "CANCELLED once each and no longer writes STARTED OK unconditionally", not last_path_problems(l_readme, l_schedule, l_changelog), str(last_path_problems(l_readme, l_schedule, l_changelog)))
+check("the 23 numbered items are all still listed (nothing was removed), and the earlier item 20 and item 23 checks still hold in their wording (additive)",
+      [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and not limitations_problems(l_readme) and not fixed20_problems(l_readme, l_schedule, l_changelog) and not extended20_problems(l_readme, l_schedule, l_changelog)
+      and not fixed23_problems(l_readme, s2_helper, l_changelog) and not status_problems(l_readme), str(limitations_problems(l_readme) + fixed20_problems(l_readme, l_schedule, l_changelog) + extended20_problems(l_readme, l_schedule, l_changelog)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once, and item 20, the schedule package header and the CHANGELOG bullet still say it",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text) and "(RG-ST3)" in item_bodies(l_readme).get(20, "") and "which no override binds (RG-ST3)" in flat_yaml(l_schedule)
+      and "(RG-ST3)" in bullet_rec(l_changelog))
+check("the schedule package header gains the startup recovery bullet next to the r15 one and keeps the r15 bullet (additive)", "Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)" in flat_yaml(l_schedule)
+      and "Fixed 19 Nov 2026 (owner decision r15, the last path of known limitation 20)" in flat_yaml(l_schedule), "")
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM20_REC:
+    check(f"mutant caught: item 20 loses '{ph[:48]}'", bool(last_path_problems(drop_in_item(l_readme, 20, ph), l_schedule, l_changelog)))
+for ph in HEADER_REC:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(last_path_problems(l_readme, drop_phrase(flat_yaml(l_schedule), ph), l_changelog)))
+for ph in CHANGELOG_REC:
+    check(f"mutant caught: the CHANGELOG bullet of the startup recovery loses '{ph[:48]}'", bool(last_path_problems(l_readme, l_schedule, drop_phrase(l_changelog, ph))))
+for ph in ITEM23_NOTES:
+    check(f"mutant caught: item 23 loses '{ph[:48]}'", bool(last_path_problems(drop_in_item(l_readme, 23, ph), l_schedule, l_changelog)))
+check("mutant caught: the CHANGELOG bullet of the startup recovery removed", bool(last_path_problems(l_readme, l_schedule, drop_phrase(l_changelog, "the startup recovery never writes STARTED OK over a result this schedule did not verify"))))
+check("mutant caught: item 20 says again that the startup recovery was not changed here",
+      bool(last_path_problems(l_readme.replace("Not examined: how real Home Assistant renders the notice.", "The startup recovery: it is not one of these steps, it was not changed here. Not examined: how real Home Assistant renders the notice."), l_schedule, l_changelog)))
+check("mutant caught: item 20 says again that the recovery cannot tell who started Dump to Grid either",
+      bool(last_path_problems(l_readme.replace("Not examined: how real Home Assistant renders the notice.", "The startup recovery: it cannot tell who started Dump to Grid either. Not examined: how real Home Assistant renders the notice."), l_schedule, l_changelog)))
+check("mutant caught: the UNCONFIRMED text is replaced by a success text in the package code", bool(last_path_problems(l_readme, l_schedule.replace('value: "UNCONFIRMED - Dump to Grid is active', 'value: "STARTED OK - Dump to Grid is active'), l_changelog)))
+check("mutant caught: the UNCONFIRMED text no longer says that this schedule did not confirm the start (code)", bool(last_path_problems(l_readme, l_schedule.replace("but this schedule did not confirm that it started it", "and this schedule started it"), l_changelog)))
+check("mutant caught: the UNCONFIRMED text exceeds the 255-character helper (code)", bool(last_path_problems(l_readme, l_schedule.replace('value: "UNCONFIRMED - Dump to Grid is active', 'value: "UNCONFIRMED - ' + "x" * 120 + ' - Dump to Grid is active'), l_changelog)))
+check("mutant caught: the STARTED test is removed from the recovery (code)", bool(last_path_problems(l_readme, l_schedule.replace(REC_STARTED_TEST, "true }}"), l_changelog)))
+check("mutant caught: the FAILED, BLOCKED or CANCELLED test is removed from the recovery (code)", bool(last_path_problems(l_readme, l_schedule.replace(REC_FINAL_TEST, "{{ false }}"), l_changelog)))
+check("mutant caught: the old unconditional STARTED OK write is back in the recovery (code)", bool(last_path_problems(l_readme, l_schedule + "\n" + REC_OLD_WRITE, l_changelog)))
+check("mutant caught: item 20 claims the overrides are fully enforced", bool(last_path_problems(l_readme.replace("**A press-time BLOCKED result was", "**Fully enforced: a press-time BLOCKED result was"), l_schedule, l_changelog)))
+check("mutant caught: the schedule package header claims full enforcement", bool(last_path_problems(l_readme, l_schedule + "\n# The overrides are fully enforced.\n", l_changelog)))
+check("mutant caught: the CHANGELOG bullet claims full enforcement", bool(last_path_problems(l_readme, l_schedule, l_changelog.replace("(owner decision r15, 19 Nov 2026; known limitation 20, the last path;", "(fully enforced; owner decision r15, 19 Nov 2026; known limitation 20, the last path;"))))
+check("mutant caught: item 20 loses the RG-ST3 statement", bool(last_path_problems(l_readme.replace("still not bound by any override (RG-ST3)", "still open"), l_schedule, l_changelog)))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 20 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
+check("control: the untouched tree is not flagged by the startup recovery checks", not last_path_problems(l_readme, l_schedule, l_changelog) and not recovery_code_problems(l_schedule) and not limitations_problems(l_readme))
 
 print("")
 if FAILURES:

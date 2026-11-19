@@ -75,6 +75,31 @@ for k, v in KINDS.items():
     v["text"] = (ROOT / v["rel"]).read_text(encoding="utf-8")
 
 
+UNCONFIRMED_START = "UNCONFIRMED - Dump to Grid is active after a Home Assistant restart"
+
+
+def session_restart(kind: str, last: str | None = None, mutate=None):
+    """A session that the dongle's own Start button started at ST + 5 (the schedule's start triggers lost), Home Assistant restarts at ST + 300 and is back at ST + 600; `last` is the last result the
+    schedule held when it went down (default: the ARMED text the arm validation wrote)."""
+    x = Run(kind, lose=("start", "watchdog"), mutate=mutate)
+    if kind == "dump":
+        x.d.manual_start(ST + 5, duration=60, power=3000, stop_soc=40)
+    else:
+        x.d.manual_start(ST + 5, duration=60)
+    if last is not None:
+        x.until(x.w.t + 10)                    # the arm validation (it fires on the next event) has written its ARMED text; the text under test replaces it
+        x.w.set(x.last_e, last)
+    x.restart(ST + 300, ST + 600).until(ST + 900)
+    return x
+
+
+def dump_unverified_ok(x) -> bool:
+    """The Dump to Grid recovery's answer for a session that this schedule did not verify (owner decision r15): the UNCONFIRMED text, never a success, disarmed, nothing started."""
+    t = x.last()
+    return (t.startswith(UNCONFIRMED_START) and "did not confirm that it started it" in t and "STARTED" not in t and len(t) <= 255 and not x.is_armed()
+            and not [r for r in x.ha.runs if r[1] == KINDS["dump"]["script"]] and x.missed_alerts() == [] and len(x.presses()) == 1 and x.d.successes == 1)
+
+
 class Run:
     """One schedule on a virtual clock: Home Assistant (booted at T0) + the real package + the dongle model, armed for ST."""
 
@@ -322,17 +347,31 @@ for kind in KINDS:
           x.started() == 1 and any("start was missed" in n[3] for n in x.w.notification_log if n[1] == "create"),
           f"{x.started()} {x.w.notification_log}")
 
-    # --- a restart during a running session (recorded and disarmed as today; nothing started by Home Assistant)
-    x = Run(kind, lose=("start", "watchdog"))
+    # --- a restart during a running session (recorded and disarmed; nothing started by Home Assistant)
+    x = session_restart(kind)
     if kind == "dump":
-        x.d.manual_start(ST + 5, duration=60, power=3000, stop_soc=40)
+        # Owner decision r15 (19 Nov 2026), known limitation 20, its last path: this session was started by the dongle's own Start button (a manual start), not verified as THIS schedule's own start, so the recovery must not
+        # record it as STARTED OK. It was pinned the other way here ("recorded STARTED OK and disarmed as today"); the old behaviour is kept below as a mutant that the new check kills. The Free Power package is unchanged.
+        check(f"{nm} restart during a running session that something else started (the dongle's own Start button): NOT recorded as STARTED OK (owner decision r15): the text says Dump to Grid is active after a Home Assistant restart "
+              "and that this schedule did not confirm that it started it, the schedule is disarmed, no start by Home Assistant",
+              dump_unverified_ok(x), f"{x.last()!r} {x.ha.runs}")
     else:
-        x.d.manual_start(ST + 5, duration=60)
-    x.restart(ST + 300, ST + 600).until(ST + 900)
-    check(f"{nm} restart during a running session: recorded STARTED OK and disarmed as today, no start by Home Assistant",
-          x.last().startswith("STARTED OK - running (Home Assistant restarted during the session)") and not x.is_armed()
-          and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]] and x.missed_alerts() == [],
-          f"{x.last()!r} {x.ha.runs}")
+        check(f"{nm} restart during a running session: recorded STARTED OK and disarmed as today, no start by Home Assistant",
+              x.last().startswith("STARTED OK - running (Home Assistant restarted during the session)") and not x.is_armed()
+              and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]] and x.missed_alerts() == [],
+              f"{x.last()!r} {x.ha.runs}")
+    if kind == "dump":
+        x = session_restart(kind, last="STARTED OK - 3000W for 60 min, Stop SOC 40% (attempt 1; ends by 19:05)")
+        check(f"{nm} restart during a session whose start THIS schedule verified (the last result starts with STARTED): recorded STARTED OK - running and disarmed, byte for byte as before (owner decision r15 keeps this path)",
+              x.last() == "STARTED OK - running (Home Assistant restarted during the session)" and not x.is_armed() and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]], f"{x.last()!r}")
+        for refused in ("FAILED TO START - REJECTED - another inverter write is active (attempt 1; nothing written)", "BLOCKED - the effective reserve rose above the Stop SOC staged for this run (40%) while it was waiting; nothing started (reason RESERVE_TOO_HIGH)",
+                        "CANCELLED - scheduled Dump to Grid cancelled before it started"):
+            x = session_restart(kind, last=refused)
+            check(f"{nm} restart while the dongle runs a session and the last result is '{refused.split(' - ')[0]}': the refusal is final and stays exactly as written (never STARTED OK), the schedule is disarmed, nothing started, no new alert",
+                  x.last() == refused and not x.is_armed() and not [r for r in x.ha.runs if r[1] == KINDS[kind]["script"]] and x.missed_alerts() == [], f"{x.last()!r}")
+        x = session_restart(kind, last="STARTING - 3000W, Stop SOC 40%, until 20:00")
+        check(f"{nm} restart while the dongle runs a session and this run was still STARTING: not a success: the UNCONFIRMED text, disarmed, nothing started",
+              dump_unverified_ok(x), f"{x.last()!r}")
 
     # --- a restart between an arm and its press: the write enable is turned off; the kept future occurrence is untouched
     x = Run(kind)
@@ -582,6 +621,27 @@ for kind in KINDS:
     x.restart(ST - 120, ST + 60).until(ST + 900)
     check(f"{kind}: mutant - a stale capture trusted: the stale-capture watchdog case fails (the watchdog starts it)",
           x.started() == 1, f"{x.started()} {x.last()!r}")
+
+
+
+def old_recovery_write(pkg):
+    """The recovery's active branch as it stood before owner decision r15: STARTED OK whatever the last result was (the Dump to Grid package only)."""
+    rec = next(a for a in pkg["automation"] if a["id"] == "ecco_dump_to_grid_schedule_startup_recovery")
+    for act in rec["actions"]:
+        for br in act.get("choose", []):
+            if any(str(c.get("entity_id", "")).endswith("dump_to_grid_active") for c in br["conditions"]) and any(c.get("value_template") == "{{ now_ts < end_ts }}" for c in br["conditions"]):
+                br["sequence"] = [{"action": "input_text.set_value", "target": {"entity_id": "input_text.ecco_dump_to_grid_schedule_last_result"},
+                                   "data": {"value": "STARTED OK - running (Home Assistant restarted during the session)"}},
+                                  {"action": "input_boolean.turn_off", "target": {"entity_id": "input_boolean.ecco_dump_to_grid_schedule_armed"}}]
+
+
+x = session_restart("dump", mutate=old_recovery_write)
+check("dump: mutant - the old unconditional STARTED OK write of the startup recovery put back: the r15 check for a session the dongle's own Start button started fails (it reads STARTED OK)",
+      x.last().startswith("STARTED OK - running") and not dump_unverified_ok(x), f"{x.last()!r}")
+x = session_restart("dump", last="FAILED TO START - REJECTED - another inverter write is active (attempt 1; nothing written)", mutate=old_recovery_write)
+check("dump: mutant - the old unconditional write put back: a FAILED result is recorded as STARTED OK (the r15 check for a refusal fails)", x.last().startswith("STARTED OK - running"), f"{x.last()!r}")
+x = session_restart("dump", last="CANCELLED - scheduled Dump to Grid cancelled before it started", mutate=old_recovery_write)
+check("dump: mutant - the old unconditional write put back: a CANCELLED result is recorded as STARTED OK (the r15 check for a cancel fails)", x.last().startswith("STARTED OK - running"), f"{x.last()!r}")
 
 # ======================================================================================================================
 print("\n[4] every call of the two start scripts is behind the R9 guard or the on-time start trigger")
