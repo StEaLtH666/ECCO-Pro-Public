@@ -29,7 +29,13 @@ on the days where all three exist. With fewer than SKILL_GATE_MIN_DAYS such days
 is above SKILL_GATE_MARGIN x the persistence one, persistence is published instead (source "persistence", LOW confidence,
 one plain note). The decision never reads the target day or later (no leakage). When the gate keeps the corrected forecast
 the result is identical to the ungated one. It is a fallback to a plain estimate, never a new forecast: it can only publish
-what `_persistence` already publishes."""
+what `_persistence` already publishes.
+
+RECENT-OUTPUT ENVELOPE (optional, OFF by default, a separate change). The `recent_max` ceiling (2.5 x the best of the last
+pv_recent_days days) is loose: after a bright spell, an out-of-season corrected value can sit just under it for weeks. With
+`PvModel(..., recent_envelope=True)` the recent ceiling becomes RECENT_ENVELOPE_HEADROOM x the best actual of the last
+RECENT_ENVELOPE_DAYS days (needs RECENT_ENVELOPE_MIN_OBS observed days in them; otherwise the legacy ceiling stays), and a
+corrected value above it is REJECTED exactly like any other ceiling breach (persistence, LOW, the reason in `plausibility`)."""
 
 from __future__ import annotations
 
@@ -58,6 +64,12 @@ SKILL_GATE_MARGIN = 0.9         # keep the corrected forecast only if its MAE <=
 GATE_REASON_BEAT = "BEAT_PERSISTENCE"
 GATE_REASON_NOT_BEATEN = "NOT_BEATEN"
 GATE_REASON_TOO_FEW_DAYS = "TOO_FEW_DAYS"
+
+# recent-output envelope (see the module docstring)
+PV_RECENT_ENVELOPE_DEFAULT = False  # PvModel(..., recent_envelope=None) uses this
+RECENT_ENVELOPE_DAYS = 14           # the best actual of the last 14 days ...
+RECENT_ENVELOPE_HEADROOM = 1.25     # ... times this is the ceiling
+RECENT_ENVELOPE_MIN_OBS = 7         # fewer observed days than this in the window: the legacy ceiling stays
 
 
 def _valid_kwh(x: object) -> bool:
@@ -125,16 +137,22 @@ class PvModel:
 
     `skill_gate`: True / False switches the persistence-skill gate (module docstring); None (the default) uses
     PV_SKILL_GATE_DEFAULT. It is deliberately a constructor argument and not a SiteConfig field: a new config field would
-    change `config_hash()` of every configuration."""
+    change `config_hash()` of every configuration.
+
+    `recent_envelope`: True / False switches the recent-output envelope (module docstring); None uses
+    PV_RECENT_ENVELOPE_DEFAULT."""
 
     def __init__(self, history: History, cfg: SiteConfig, forecasts: dict[str, dict[date, float]],
-                 skill_gate: bool | None = None):
+                 skill_gate: bool | None = None, recent_envelope: bool | None = None):
         if skill_gate is not None and not isinstance(skill_gate, bool):
             raise ValueError(f"PvModel skill_gate must be True, False or None, got {skill_gate!r}")
+        if recent_envelope is not None and not isinstance(recent_envelope, bool):
+            raise ValueError(f"PvModel recent_envelope must be True, False or None, got {recent_envelope!r}")
         self.history = history
         self.cfg = cfg
         self.forecasts = forecasts
         self.skill_gate = PV_SKILL_GATE_DEFAULT if skill_gate is None else skill_gate
+        self.recent_envelope = PV_RECENT_ENVELOPE_DEFAULT if recent_envelope is None else recent_envelope
         self._actual: dict[date, float | None] = {}
 
     def actual(self, day: date) -> float | None:
@@ -189,6 +207,10 @@ class PvModel:
         recent = [a for d, a in obs if (day - d).days <= cfg.pv_recent_days]
         if len(recent) >= 10:
             caps["recent_max"] = round(cfg.pv_recent_headroom * max(recent), 2)
+        if self.recent_envelope:
+            env = [a for d, a in obs if (day - d).days <= RECENT_ENVELOPE_DAYS]
+            if len(env) >= RECENT_ENVELOPE_MIN_OBS:
+                caps["recent_max"] = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)
         return caps
 
     def skill_gate_verdict(self, source: str, day: date) -> SkillGateVerdict:

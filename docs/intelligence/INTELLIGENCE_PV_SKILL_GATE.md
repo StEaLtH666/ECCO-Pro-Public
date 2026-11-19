@@ -67,3 +67,21 @@ To turn it on in a test or an offline run pass `skill_gate=True`. Wiring it into
 - 'Tomorrow' is evaluated while the current day is still in progress: today's actual counts only once at least 90 % of its hours exist
   (as for the ratio), so the decision can change between a morning and an evening run on the same day.
 - One 0.9 margin and a 14-day window are one choice among many; the offline tests pin the behaviour around them, not their optimality.
+
+## Optional second change: the recent-output envelope (separate commit, OFF by default)
+
+The `recent_max` ceiling of the plausibility guard is 2.5 x the best observed day of the last 30 days. After a bright spell it is
+loose enough to let an out-of-season corrected value through for weeks (a value several times the output of a dull day can sit just
+under a ceiling set by the best days of the weeks before). With `PvModel(..., recent_envelope=True)` that one ceiling becomes **1.25 x the best actual of the last 14
+days** (it needs at least 7 observed days in them, otherwise the legacy ceiling stays, so enabling it never removes a guard). A
+corrected value above it is REJECTED exactly like any other ceiling breach: persistence, LOW confidence, the source, the values and the
+limit named in `plausibility` and in the notes. The envelope is always tighter than the legacy ceiling (a 14-day best is never above
+the 30-day best, and 1.25 < 2.5), so enabling it can only reject more, which is the safe direction for the advisor (less PV assumed,
+more battery retained). Constants `PV_RECENT_ENVELOPE_DEFAULT` (False), `RECENT_ENVELOPE_DAYS` (14), `RECENT_ENVELOPE_HEADROOM` (1.25) and
+`RECENT_ENVELOPE_MIN_OBS` (7); a constructor argument like the gate, not a `SiteConfig` field. Tests:
+`intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 15 mutants applied in memory).
+
+Limits: it is blunt. A genuinely bright day after two dull weeks is rejected and persistence is published instead (a deliberate
+trade, see the plausibility paragraph in `ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`); it addresses the over-forecast side only; it
+changes nothing about a corrected value that is wrong but below the ceiling, which is the gate's job. It is independent of the gate
+(either can be on without the other) and this commit can be dropped without touching the gate.
