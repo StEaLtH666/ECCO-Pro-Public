@@ -8,7 +8,10 @@ What it adds, and why:
   - the helper services with Home Assistant's own range checks: `input_number.set_value` outside min / max / step raises (a script that
     writes a value its helper refuses fails loudly here, not silently), `input_datetime.set_datetime` takes `timestamp`, `datetime`
     or `time`, and keeps the `timestamp` attribute the card reads;
-  - the helper states a fresh Home Assistant would hold (date-and-time helpers start at 1970, numbers at their minimum).
+  - the helper states a fresh Home Assistant would hold (date-and-time helpers start at 1970, numbers at their minimum);
+  - `restart()`: a model of what a Home Assistant restart restores for each helper type (a date-and-time helper's attribute from its state
+    string, read as the FIRST of two equal local times; a number exactly, or one of the abnormal restores a suite lists). The restore model is
+    a recollection of Home Assistant core, not verified live; it exists so a suite can state it and test against it.
 Everything outside the supported subset still raises (the interpreter is fail-loud). No I/O, no network, no hardware.
 """
 from __future__ import annotations
@@ -64,10 +67,13 @@ class PlanWorld:
                 self.bounds[f"input_number.{name}"] = (float(cfg.get("min", 0)), float(cfg.get("max", 100)), float(cfg.get("step", 1)))
         self.ha = S.HA(w, packages)
         self.rejected: list[str] = []
+        self.datetime_records: list[str] = []      # the date-and-time helpers (date and time): what a restart restores from their state string
         for pk in packages:
             for name, cfg in (pk.get("input_datetime") or {}).items():
                 if cfg.get("has_date"):
                     self._store_datetime(f"input_datetime.{name}", datetime.strptime("1970-01-02 00:00:00", FMT).replace(tzinfo=z))
+                    if cfg.get("has_time"):
+                        self.datetime_records.append(f"input_datetime.{name}")
         w.service_handlers.update({
             "input_number.set_value": self._number,
             "input_datetime.set_datetime": self._datetime,
@@ -114,6 +120,44 @@ class PlanWorld:
             self.set_time(entity, str(data["time"]))
         else:
             raise S.Unsupported(f"set_datetime data {sorted(data)}")
+
+    # --- a Home Assistant restart: what each helper type is restored from --------------------------------------------
+    def restart(self, datetimes: str = "first", numbers: dict | None = None) -> None:
+        """Home Assistant restarts and the helpers are restored from what was stored. THE MODEL OF THE RESTORE IS THE OWNER'S RECOLLECTION OF
+        HOME ASSISTANT CORE, NOT VERIFIED AGAINST A LIVE INSTANCE (known limitations 19 and 23); this method only lets a suite state it.
+
+          datetimes  how a date-and-time helper's `timestamp` attribute is restored (the STATE STRING, local wall-clock time without an offset, is
+                     kept as it was):
+                       "first"  the attribute is the instant of the state string read as the FIRST of two equal local times (fold 0), so a time in
+                                the repeated hour of the autumn clock change is restored 60 minutes EARLY; any other time is restored exactly;
+                       "exact"  the attribute is kept as it was (the earlier suites' assumption);
+                       "missing"  the attribute is not restored at all (the state string is kept);
+                     a helper that reads unknown, unavailable or empty is left as it is.
+          numbers    {entity: restored state text, or None for an entity that no longer exists}: a number helper is restored EXACTLY unless it is
+                     listed (an abnormal restore: reset to 0, unavailable, unknown, junk, nan, inf, a value outside its range, or gone).
+        """
+        if datetimes not in ("first", "exact", "missing"):
+            raise ValueError(datetimes)
+        for entity in self.datetime_records:
+            state, attrs = self.w.states.get(entity, ("unknown", {}))
+            if datetimes == "exact":
+                continue
+            try:
+                naive = datetime.strptime(state, FMT)
+            except ValueError:
+                continue
+            new = dict(attrs)
+            if datetimes == "first":
+                new["timestamp"] = naive.replace(tzinfo=self.zone, fold=0).timestamp()
+            else:
+                new.pop("timestamp", None)
+            self.w.set(entity, state, new)
+        for entity, text in (numbers or {}).items():
+            if text is None:
+                self.w.states.pop(entity, None)
+                self.w._changed()
+            else:
+                self.w.set(entity, text)
 
     # --- running ---------------------------------------------------------------------------------------------------
     def run_script(self, name: str, variables: dict | None = None, seconds: float = 30.0) -> None:

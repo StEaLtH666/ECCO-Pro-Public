@@ -4,12 +4,16 @@
 # nothing installs it until the owner authorises that. See frontend/ecco-plan-core/README.md ("Stage 3: what is enforced where").
 #
 # What it holds (and nothing else): the owner's override limits, the plan revision counter, the active-override records (one
-# start / expiry pair per kind, so at most one active override per kind), the last outcome, and two derived read-only sensors:
+# start / expiry pair per kind, so at most one active override per kind, and one ABSOLUTE expiry record per kind: the same expiry
+# as epoch seconds in an input_number, see "EACH EXPIRY IS HELD TWICE" at the export hold sensor), the last outcome, and two
+# derived read-only sensors:
 #   sensor.ecco_plan_export_hold         clear | held | unknown   (any Hold battery, Skip tonight or Prepare for power cut record
-#                                        with an expiry in the future = held; an unreadable record = unknown, which refuses)
+#                                        with an expiry in the future, in EITHER of its two sources, = held; a record that cannot
+#                                        be read, with nothing else holding = unknown, which refuses)
 #   sensor.ecco_plan_effective_reserve   the larger of the owner's own reserve and the running Prepare for power cut reserve, each
-#                                        rounded up; the larger KNOWN value when one input is unreadable; unknown when none is known
-#                                        (refuses). It is the reserve ECCO's own plan uses, not an inverter setting. The
+#                                        rounded up; the larger KNOWN value when the owner's reserve is unreadable; the power-cut
+#                                        reserve also counts while ITS EXPIRY cannot be read (fail closed, owner decision r14);
+#                                        unknown when none is known (refuses). It is the reserve ECCO's own plan uses, not an inverter setting. The
 #                                        Intelligence integration can read it through its existing `reserve.ha_minimum_soc` site
 #                                        mapping (a `{entity}` mapping in the owner's site file, a raise-only input there); that mapping
 #                                        is the owner's own file and is not changed by this repository.
@@ -129,6 +133,32 @@ input_number:
     step: 1
     mode: box
     unit_of_measurement: "%"
+
+  # The ABSOLUTE expiry record of each kind (owner decision r14, 19 Nov 2026): the expiry as epoch seconds, the SAME number the start script
+  # computes for the date-and-time expiry, so the owner's deadline is preserved exactly and nothing is extended. Written only by the two guarded
+  # scripts (the start script writes it BEFORE the date-and-time expiry; the cancel script writes the cancel instant). An override is active while
+  # EITHER the date-and-time expiry or this record is in the future (see the export hold sensor). No `initial`: Home Assistant restores it, and a
+  # fresh helper starts at its minimum, 0, which is in the past. The card does not read these records (it shows the date-and-time expiry).
+  ecco_plan_override_hold_battery_expires_epoch:
+    name: ECCO plan, Hold battery expiry as epoch seconds (absolute record)
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
+
+  ecco_plan_override_skip_tonight_expires_epoch:
+    name: ECCO plan, Skip tonight expiry as epoch seconds (absolute record)
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
+
+  ecco_plan_override_prepare_power_cut_expires_epoch:
+    name: ECCO plan, Prepare for power cut expiry as epoch seconds (absolute record)
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
 
 input_datetime:
   ecco_plan_policy_skip_until:
@@ -292,6 +322,12 @@ script:
                           entity_id: input_datetime.ecco_plan_override_hold_battery_start
                         data:
                           timestamp: "{{ decision.start_ts }}"
+                      # the absolute record BEFORE the date-and-time expiry: a start interrupted between the two leaves the override held, never half released
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.ecco_plan_override_hold_battery_expires_epoch
+                        data:
+                          value: "{{ decision.expires_ts }}"
                       - action: input_datetime.set_datetime
                         target:
                           entity_id: input_datetime.ecco_plan_override_hold_battery_expires
@@ -306,6 +342,12 @@ script:
                           entity_id: input_datetime.ecco_plan_override_skip_tonight_start
                         data:
                           timestamp: "{{ decision.start_ts }}"
+                      # the absolute record BEFORE the date-and-time expiry: a start interrupted between the two leaves the override held, never half released
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.ecco_plan_override_skip_tonight_expires_epoch
+                        data:
+                          value: "{{ decision.expires_ts }}"
                       - action: input_datetime.set_datetime
                         target:
                           entity_id: input_datetime.ecco_plan_override_skip_tonight_expires
@@ -313,12 +355,18 @@ script:
                           timestamp: "{{ decision.expires_ts }}"
                 default:
                   # Prepare for power cut: the reserve record first, so the effective reserve is already raised when the expiry
-                  # makes the record active. It changes only the reserve ECCO's plan uses; it starts no charge.
+                  # makes the record active, then the absolute expiry record (BEFORE the date-and-time expiry, as for the other kinds).
+                  # It changes only the reserve ECCO's plan uses; it starts no charge.
                   - action: input_number.set_value
                     target:
                       entity_id: input_number.ecco_plan_override_prepare_power_cut_reserve
                     data:
                       value: "{{ decision.reserve }}"
+                  - action: input_number.set_value
+                    target:
+                      entity_id: input_number.ecco_plan_override_prepare_power_cut_expires_epoch
+                    data:
+                      value: "{{ decision.expires_ts }}"
                   - action: input_datetime.set_datetime
                     target:
                       entity_id: input_datetime.ecco_plan_override_prepare_power_cut_start
@@ -369,6 +417,9 @@ script:
       expected_revision:
         description: "The plan revision the caller saw; a different stored revision refuses (compare and set)"
     sequence:
+      # Each expiry is read from its two sources and combined RAISE-ONLY, exactly as the export hold sensor does (see "EACH EXPIRY IS HELD TWICE" there).
+      # NOT_ACTIVE only when every source of the kind is readable and none is in the future; a record that is unreadable or whose sources disagree can
+      # always be cancelled, and a cancel writes BOTH sources with the same cancel instant, which reconciles it (owner decision r14).
       - variables:
           decision: >-
             {%- set kind_in = kind | default('') | string | trim | lower -%}
@@ -378,10 +429,19 @@ script:
             {%- set bad = ['unknown', 'unavailable', ''] -%}
             {%- set eh = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
             {%- set eh = eh if (eh is number and eh == eh and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+            {%- set xh = states('input_number.ecco_plan_override_hold_battery_expires_epoch') | float(none) -%}
+            {%- set xh = xh if (xh is number and xh == xh and xh >= 0 and xh <= 4102444800) else none -%}
+            {%- set eh = ([eh, xh] | reject('none') | list | max) if ((eh is not none and xh is not none) or (eh is not none and eh > now_ts) or (xh is not none and xh > now_ts)) else none -%}
             {%- set es = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
             {%- set es = es if (es is number and es == es and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+            {%- set xs = states('input_number.ecco_plan_override_skip_tonight_expires_epoch') | float(none) -%}
+            {%- set xs = xs if (xs is number and xs == xs and xs >= 0 and xs <= 4102444800) else none -%}
+            {%- set es = ([es, xs] | reject('none') | list | max) if ((es is not none and xs is not none) or (es is not none and es > now_ts) or (xs is not none and xs > now_ts)) else none -%}
             {%- set ep = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
             {%- set ep = ep if (ep is number and ep == ep and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
+            {%- set xp = states('input_number.ecco_plan_override_prepare_power_cut_expires_epoch') | float(none) -%}
+            {%- set xp = xp if (xp is number and xp == xp and xp >= 0 and xp <= 4102444800) else none -%}
+            {%- set ep = ([ep, xp] | reject('none') | list | max) if ((ep is not none and xp is not none) or (ep is not none and ep > now_ts) or (xp is not none and xp > now_ts)) else none -%}
             {%- set ex = {'hold_battery': eh, 'skip_tonight': es, 'prepare_power_cut': ep} -%}
             {%- set rev_raw = states('input_number.ecco_plan_revision') | float(none) -%}
             {%- set rev_ok = rev_raw is number and rev_raw == rev_raw and rev_raw >= 0 and (rev_raw % 1) == 0 -%}
@@ -407,6 +467,11 @@ script:
                       - condition: template
                         value_template: "{{ decision.kind == 'hold_battery' }}"
                     sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.ecco_plan_override_hold_battery_expires_epoch
+                        data:
+                          value: "{{ decision.expires_ts }}"
                       - action: input_datetime.set_datetime
                         target:
                           entity_id: input_datetime.ecco_plan_override_hold_battery_expires
@@ -416,12 +481,22 @@ script:
                       - condition: template
                         value_template: "{{ decision.kind == 'skip_tonight' }}"
                     sequence:
+                      - action: input_number.set_value
+                        target:
+                          entity_id: input_number.ecco_plan_override_skip_tonight_expires_epoch
+                        data:
+                          value: "{{ decision.expires_ts }}"
                       - action: input_datetime.set_datetime
                         target:
                           entity_id: input_datetime.ecco_plan_override_skip_tonight_expires
                         data:
                           timestamp: "{{ decision.expires_ts }}"
                 default:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: input_number.ecco_plan_override_prepare_power_cut_expires_epoch
+                    data:
+                      value: "{{ decision.expires_ts }}"
                   - action: input_datetime.set_datetime
                     target:
                       entity_id: input_datetime.ecco_plan_override_prepare_power_cut_expires
@@ -504,31 +579,53 @@ template:
       - name: ECCO Plan Export Hold
         unique_id: ecco_plan_export_hold
         icon: mdi:export
-        # clear: no record is active. held: Hold battery, Skip tonight or Prepare for power cut has an expiry in the future (also
-        # when another record is unreadable). unknown: nothing is active and at least one record cannot be read. now() makes this
-        # re-render every minute, so an expiry that has passed is noticed within a minute (late, which keeps the hold; the re-render
-        # itself never releases it early).
-        # Each expiry is read from the helper's `timestamp` attribute, which the offline model holds as the true instant (it is set from
-        # an aware datetime). The state string is local wall-clock time and is never parsed for the instant: on the October clock-change
-        # day an expiry in the repeated hour would be read as the first of the two equal local times and the override released up to 60
-        # minutes early. A record is readable only when its state is not unknown, unavailable or empty AND its attribute is a number;
-        # anything else is an unreadable record (unknown, which refuses).
-        # NOT PROVEN, and not claimed: that the attribute is the true instant in real Home Assistant, and that it stays so across a
-        # restart. As recalled from Home Assistant core (not verified here, and not modelled by any suite), a restart restores a
-        # date-and-time helper from its state string, which has no offset, and a time in the repeated hour then reads as the first of the
-        # two equal local times. If so, a restart while an override is running whose expiry falls in the repeated hour (01:00 to 01:59
-        # GMT on the fall-back day) restores that expiry 60 minutes early and the hold is released early: the failure described above, in
-        # a much narrower case. It is left as it is: an open owner decision and an item for the supervised check (plan-core README,
-        # "Known limitations", item 19).
+        # clear: no record is active. held: Hold battery, Skip tonight or Prepare for power cut has an expiry in the future (also when another
+        # record is unreadable). unknown: nothing is active and at least one record cannot be read. now() makes this re-render every minute, so an
+        # expiry that has passed is noticed within a minute (late, which keeps the hold; the re-render itself never releases it early).
+        #
+        # EACH EXPIRY IS HELD TWICE (owner decision r14, 19 Nov 2026; plan-core README, "Known limitations", items 11, 17, 19 and 23).
+        # Source 1 is the date-and-time helper, read through its `timestamp` attribute; its state string is local wall-clock time and is never
+        # parsed for the instant. Source 2 is an ABSOLUTE record: an input_number per kind (ecco_plan_override_<kind>_expires_epoch) holding the same
+        # expiry as epoch seconds, the same number the start script computes for source 1, so the owner's deadline is exactly preserved and nothing is
+        # extended. The start script writes source 2 BEFORE source 1; the cancel script writes the cancel instant into both.
+        # READ RULE, identical in this sensor's state, its held_by attribute, the effective reserve sensor and the cancel script: source 1 is valid when
+        # its state is not unknown, unavailable or empty and its attribute is a number (not nan); source 2 is valid when it is a number in the positive
+        # range 0 to 4102444800 (so unknown, unavailable, empty, junk, nan, infinity and negative values are invalid). A kind is ACTIVE while ANY valid
+        # source is later than now: the LATER of the two instants wins (raise-only), so the read is never earlier than either source and never later than
+        # the later one. A kind is UNREADABLE when EITHER source is invalid. Held if any kind is active; else unknown if any kind is unreadable; else
+        # clear. An active source still holds when the other source of its kind is unreadable.
+        # WHY TWO SOURCES: as recalled from Home Assistant core (not verified here), a restart restores a date-and-time helper from its state string,
+        # which has no offset, so an expiry in the repeated hour (01:00 to 01:59 GMT on the fall-back day) is restored as the FIRST of the two equal
+        # local times and its attribute reads 60 minutes early; the input_number is restored as the number it was. After such a restart source 2
+        # carries the true instant and the later-wins rule keeps the hold to the true expiry, not a second longer. A source 2 that is missing, reset to
+        # 0 or unreadable can never release an override that source 1 still shows as running; a source 1 that is early can never release an override
+        # that source 2 shows as running; a source 1 that is LATE (a partial write that left a later date-and-time expiry) keeps the hold until that
+        # instant passes or the owner cancels it (fail closed). An unreadable source is not guessed at: the record is unreadable, the hold reads unknown
+        # (which refuses) unless another record holds, and the raised reserve of Prepare for power cut is retained until a cancel, or the readings
+        # returning, reconcile it.
+        # NOT PROVEN, and not claimed: that the attribute is the true instant in real Home Assistant, and that it stays so across a restart; that an
+        # input_number restores an exact ten-digit number across a restart; that the template filters used here (float(none), reject('none'), max)
+        # behave as modelled; and the recalled restore itself, which restores that expiry 60 minutes early (it is modelled offline, not seen). The
+        # repeated-hour restart is MITIGATED offline by source 2 (owner decision r14), and remains an item for the supervised check, which must
+        # include a restart with an override running (plan-core README, "Known limitations", items 19 and 23).
         state: >-
           {%- set n = as_timestamp(now()) -%}
           {%- set bad = ['unknown', 'unavailable', ''] -%}
           {%- set a = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
           {%- set a = a if (a is number and a == a and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+          {%- set ea = states('input_number.ecco_plan_override_hold_battery_expires_epoch') | float(none) -%}
+          {%- set ea = ea if (ea is number and ea == ea and ea >= 0 and ea <= 4102444800) else none -%}
+          {%- set a = ([a, ea] | reject('none') | list | max) if ((a is not none and ea is not none) or (a is not none and a > n) or (ea is not none and ea > n)) else none -%}
           {%- set b = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
           {%- set b = b if (b is number and b == b and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+          {%- set eb = states('input_number.ecco_plan_override_skip_tonight_expires_epoch') | float(none) -%}
+          {%- set eb = eb if (eb is number and eb == eb and eb >= 0 and eb <= 4102444800) else none -%}
+          {%- set b = ([b, eb] | reject('none') | list | max) if ((b is not none and eb is not none) or (b is not none and b > n) or (eb is not none and eb > n)) else none -%}
           {%- set c = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
           {%- set c = c if (c is number and c == c and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
+          {%- set ec = states('input_number.ecco_plan_override_prepare_power_cut_expires_epoch') | float(none) -%}
+          {%- set ec = ec if (ec is number and ec == ec and ec >= 0 and ec <= 4102444800) else none -%}
+          {%- set c = ([c, ec] | reject('none') | list | max) if ((c is not none and ec is not none) or (c is not none and c > n) or (ec is not none and ec > n)) else none -%}
           {%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held
           {%- elif a is none or b is none or c is none -%}unknown
           {%- else -%}clear{%- endif -%}
@@ -538,18 +635,30 @@ template:
             {%- set bad = ['unknown', 'unavailable', ''] -%}
             {%- set a = state_attr('input_datetime.ecco_plan_override_hold_battery_expires', 'timestamp') | float(none) -%}
             {%- set a = a if (a is number and a == a and states('input_datetime.ecco_plan_override_hold_battery_expires') not in bad) else none -%}
+            {%- set ea = states('input_number.ecco_plan_override_hold_battery_expires_epoch') | float(none) -%}
+            {%- set ea = ea if (ea is number and ea == ea and ea >= 0 and ea <= 4102444800) else none -%}
+            {%- set a = ([a, ea] | reject('none') | list | max) if ((a is not none and ea is not none) or (a is not none and a > n) or (ea is not none and ea > n)) else none -%}
             {%- set b = state_attr('input_datetime.ecco_plan_override_skip_tonight_expires', 'timestamp') | float(none) -%}
             {%- set b = b if (b is number and b == b and states('input_datetime.ecco_plan_override_skip_tonight_expires') not in bad) else none -%}
+            {%- set eb = states('input_number.ecco_plan_override_skip_tonight_expires_epoch') | float(none) -%}
+            {%- set eb = eb if (eb is number and eb == eb and eb >= 0 and eb <= 4102444800) else none -%}
+            {%- set b = ([b, eb] | reject('none') | list | max) if ((b is not none and eb is not none) or (b is not none and b > n) or (eb is not none and eb > n)) else none -%}
             {%- set c = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
             {%- set c = c if (c is number and c == c and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
+            {%- set ec = states('input_number.ecco_plan_override_prepare_power_cut_expires_epoch') | float(none) -%}
+            {%- set ec = ec if (ec is number and ec == ec and ec >= 0 and ec <= 4102444800) else none -%}
+            {%- set c = ([c, ec] | reject('none') | list | max) if ((c is not none and ec is not none) or (c is not none and c > n) or (ec is not none and ec > n)) else none -%}
             {{ ((['hold_battery'] if (a is not none and a > n) else []) + (['skip_tonight'] if (b is not none and b > n) else []) + (['prepare_power_cut'] if (c is not none and c > n) else [])) | join(',') }}
 
       - name: ECCO Plan Effective Reserve
         unique_id: ecco_plan_effective_reserve
         unit_of_measurement: "%"
         state_class: measurement
-        # The larger of the owner's own reserve and the running Prepare for power cut reserve (each rounded up). An unreadable input is
+        # The larger of the owner's own reserve and the running Prepare for power cut reserve (each rounded up). An unreadable OWNER reserve is
         # skipped and the larger KNOWN value stands; when none is known the state is unknown and every start that needs it refuses.
+        # The power-cut reserve counts while its record is ACTIVE or UNREADABLE (owner decision r14: fail closed, so the raised reserve is retained
+        # until a cancel, or the readings returning, reconcile the record), provided the stored reserve value is itself a number from 10 to 100; a
+        # record that is readable and finished never counts. The record is read exactly as the export hold sensor reads it (two sources, raise-only).
         # Each input is rounded UP to a whole percent before the larger is taken, so the published reserve is never below the owner's own
         # value: 62.4 is published as 63. (round() alone rounds half to even and published 62, below 62.4, so the start scripts' rounded-up
         # comparison then accepted a Stop SOC of 62.)
@@ -561,8 +670,11 @@ template:
           {%- set bad = ['unknown', 'unavailable', ''] -%}
           {%- set e = state_attr('input_datetime.ecco_plan_override_prepare_power_cut_expires', 'timestamp') | float(none) -%}
           {%- set e = e if (e is number and e == e and states('input_datetime.ecco_plan_override_prepare_power_cut_expires') not in bad) else none -%}
+          {%- set x = states('input_number.ecco_plan_override_prepare_power_cut_expires_epoch') | float(none) -%}
+          {%- set x = x if (x is number and x == x and x >= 0 and x <= 4102444800) else none -%}
+          {%- set e = ([e, x] | reject('none') | list | max) if ((e is not none and x is not none) or (e is not none and e > n) or (x is not none and x > n)) else none -%}
           {%- set c = states('input_number.ecco_plan_override_prepare_power_cut_reserve') | float(none) -%}
-          {%- set c = c if (e is not none and e > n and c is number and c == c and c >= 10 and c <= 100) else none -%}
+          {%- set c = c if ((e is none or e > n) and c is number and c == c and c >= 10 and c <= 100) else none -%}
           {%- set c = (c | round(0, 'ceil')) if c is not none else none -%}
           {%- set known = [o, c] | reject('none') | list -%}
           {{ (known | max | round(0) | int) if known | length > 0 else 'unknown' }}

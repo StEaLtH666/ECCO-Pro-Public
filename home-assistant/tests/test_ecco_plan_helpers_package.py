@@ -31,7 +31,17 @@ outside the supported subset raises: nothing is guessed.
                   mutant), the raise-only boundary (equal, 0.5, 1 and 5 points on each side), and an unreadable record of each kind (unknown, or held by the running kinds)
   [13] guards     the state guard (`states(helper) not in bad`) at EACH of the ten timestamp read sites: a record that reports unavailable, unknown or empty but still carries a stale
                   timestamp attribute (the simulator keeps stale attributes; real Home Assistant drops them) is an unreadable record at every site (hold: unknown; held_by: not named; reserve:
-                  the power cut skipped; cancel: proceeds and repairs it); ten mutants, one per site, each caught by the check of that site
+                  the power cut retained since r14 (it was skipped before); cancel: proceeds and repairs it); ten mutants, one per site, each caught by the check of that site
+  [14] epoch      (owner decision r14, 19 Nov 2026; the repeated-hour restart, known limitations 11, 17, 19 and 23) each override's expiry is also held as an ABSOLUTE epoch record, an
+                  input_number per kind written by the start script BEFORE the date-and-time expiry and by the cancel script with the cancel instant, and the two sources are read
+                  RAISE-ONLY (the later instant wins; either source unreadable makes the kind unreadable, and the raised reserve is retained while it cannot be read). The offline model
+                  gains a RESTART step (_plan_sim.restart: a date-and-time helper's attribute restored from its state string as the FIRST of two equal local times, so up to 60 minutes
+                  EARLY in the repeated hour; a number restored exactly, or one of the abnormal restores). The model of the restore is a recollection, not verified live. Cases: the
+                  October repeated hour without and with a restart (before, in and after the hour; an expiry outside the hour), the spring-forward and an ordinary day, every kind, start
+                  then cancel then restart, cancel inside the repeated hour after a restart, a missing attribute, a missing, reset, unavailable, unknown, empty, nan, infinite, negative,
+                  out-of-range or junk epoch (with the attribute active or past), both sources unreadable (the raised reserve retained; not applied with an invalid stored reserve), a stale-early
+                  and a stale-late attribute, an interrupted start or cancel (held), the normal paths, the deadline never extended, and a differential sweep (never earlier than the old attribute
+                  read; equal to it and to the true instant whenever both sources agree); 33 mutants, each killed
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's logic against a model; it proves nothing about a live
 Home Assistant, the helpers' timestamp attribute on the owner's version, or the dashboard.
@@ -107,6 +117,7 @@ POLICY_ENT = {
 }
 START_E = {k: f"input_datetime.ecco_plan_override_{k}_start" for k in KINDS}
 EXPIRES_E = {k: f"input_datetime.ecco_plan_override_{k}_expires" for k in KINDS}
+EPOCH_E = {k: f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # the absolute expiry record (owner decision r14); the card does not read it
 CUT_RESERVE_E = "input_number.ecco_plan_override_prepare_power_cut_reserve"
 FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -350,7 +361,7 @@ def script_problems(text: str) -> list[str]:
         n0 = len(pw.w.service_log)
         start(pw, kind=kind)
         writes = [(s, e) for s, e, _d in pw.services(n0) if s.startswith("input_")]
-        own = {START_E[kind], EXPIRES_E[kind], CUT_RESERVE_E if kind == "prepare_power_cut" else "-", REV, LAST}
+        own = {START_E[kind], EXPIRES_E[kind], EPOCH_E[kind], CUT_RESERVE_E if kind == "prepare_power_cut" else "-", REV, LAST}   # EPOCH_E: owner decision r14, the kind's own absolute record
         if not {e for _s, e in writes} <= own:
             bad.append(f"{kind} wrote {sorted({e for _s, e in writes} - own)}")
         if kind == "prepare_power_cut":
@@ -490,8 +501,9 @@ for domain in ALLOWED_ATTRS:
         ents[f"{domain}.{oid}"] = attrs
 check("every helper is a generic ecco_plan_ name with only whitelisted attributes (so no `initial` can hide)",
       all(e.split(".", 1)[1].startswith("ecco_plan_") and set(a) <= ALLOWED_ATTRS[e.split(".", 1)[0]] for e, a in ents.items()), "")
-expected = set(IDS.values()) | {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"}
-check("the helpers are exactly the entities the card reads (HELPER_IDS) plus the last result and the seed flag", set(ents) == expected, str(set(ents) ^ expected))
+expected = set(IDS.values()) | {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"} | set(EPOCH_E.values())
+check("the helpers are exactly the entities the card reads (HELPER_IDS) plus the last result, the seed flag and the three backend-only epoch records of owner decision r14 "
+      "(the card does not read them)", set(ents) == expected, str(set(ents) ^ expected))
 check("one automation (the first-run seed), two scripts, two sensors",
       [a["id"] for a in doc["automation"]] == ["ecco_plan_seed_accepted_limits"] and set(doc["script"]) == {"ecco_plan_override_start", "ecco_plan_override_cancel"}
       and [s["name"] for s in doc["template"][0]["sensor"]] == ["ECCO Plan Export Hold", "ECCO Plan Effective Reserve"])
@@ -510,6 +522,11 @@ for key, ent in IDS.items():
         elif (a.get("min"), a.get("max"), a.get("step")) != (b["min"], b["max"], b["step"]):
             bad.append(f"{key}: {(a.get('min'), a.get('max'), a.get('step'))} != {(b['min'], b['max'], b['step'])}")
 check("every limit helper's min / max / step equals the validator's HELPER_BOUNDS", not bad, str(bad))
+check("each override kind has an absolute epoch record (owner decision r14): an input_number with min 0, max 4102444800 (the year 2100), step 1 and mode box, one per kind, "
+      "with no initial value (Home Assistant restores it), and the card's reader does not name it",
+      all(e in ents and (ents[e].get("min"), ents[e].get("max"), ents[e].get("step"), ents[e].get("mode")) == (0, 4102444800, 1, "box") and "initial" not in ents[e]
+          for e in EPOCH_E.values()) and not set(EPOCH_E.values()) & set(IDS.values()) and len(EPOCH_E) == 3,
+      str({e: ents.get(e) for e in EPOCH_E.values()}))
 rows = re.findall(r"\['([^']+)', states\('([a-z_.]+)'\) \| float\(none\), (\d+), (\d+), (\d+)\]", PKG_TEXT)
 by_ent = {e: (int(lo), int(hi), int(st)) for _l, e, lo, hi, st in rows}
 tpl_bounds = {k: (BOUNDS[k]["min"], BOUNDS[k]["max"], BOUNDS[k]["step"]) for k in POLICY_ENT if k != "skip_until"}
@@ -593,7 +610,7 @@ pw = trap_world("35.0")
 before_all = snapshot(pw, exclude=(LAST,))
 n0 = len(pw.w.service_log)
 out = start(pw, kind="prepare_power_cut")
-touched = [e for e in pw.w.states if pw.w.states[e] != before_all.get(e) and e not in (LAST, REV, START_E["prepare_power_cut"], EXPIRES_E["prepare_power_cut"], CUT_RESERVE_E) and not e.startswith("sensor.ecco_plan_")]
+touched = [e for e in pw.w.states if pw.w.states[e] != before_all.get(e) and e not in (LAST, REV, START_E["prepare_power_cut"], EXPIRES_E["prepare_power_cut"], CUT_RESERVE_E, EPOCH_E["prepare_power_cut"]) and not e.startswith("sensor.ecco_plan_")]
 check("Prepare for power cut with the battery at 35 percent below the 80 percent reserve starts, writes only plan helpers and starts no charge",
       out.startswith("STARTED prepare_power_cut") and touched == [] and not charge_calls and all(s.startswith(("input_", "persistent_notification")) for s, _e, _d in pw.services(n0)), f"{out[:40]} {touched}")
 check("the result says so plainly: battery percent, reserve percent, nothing is charging, use Charge Battery",
@@ -663,7 +680,8 @@ MUTANTS = [
     ("the revision compare-and-set is gone (start and cancel)", "(rev_in | float(none)) != rev_raw", "false", 2),
     ("a start or cancel does not bump the plan revision", "value: \"{{ decision.revision + 1 }}\"", "value: \"{{ decision.revision }}\"", 2),
     ("the effective reserve takes the smaller input (not raise-only)", "known | max | round(0)", "known | min | round(0)", 1),
-    ("a finished power cut still raises the reserve", "e is not none and e > n and c is number", "e is not none and c is number", 1),
+    # owner decision r14: the power cut's reserve counts while its record is active OR unreadable, so the anchor moved with the package text; the defect is the same (a FINISHED, readable record still raises)
+    ("a finished power cut still raises the reserve", "(e is none or e > n) and c is number", "c is number", 1),
     ("the export hold ignores Skip tonight", "or (b is not none and b > n) or (c is not none and c > n) -%}held", "or (c is not none and c > n) -%}held", 1),
     ("an unreadable record reads clear", "{%- elif a is none or b is none or c is none -%}unknown", "{%- elif false -%}unknown", 1),
     ("a cancel needs the limits switch on", "{%- if kind_in not in ex -%}", "{%- if kind_in not in ex or not is_state('input_boolean.ecco_plan_overrides_enabled', 'on') -%}", 1),
@@ -813,13 +831,14 @@ def clock_problems(text: str, stop_early: bool = False) -> list[str]:
                 start(pw, kind=others[0], expiry_min=30)
                 if pw.state(HOLD) != "held" or held_by_of(pw, text) != others[0]:
                     add(f"{kind}: unreadable ({label}) with {others[0]} running reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}, wanted held")
-        # an unreadable power-cut expiry is skipped by the effective reserve, exactly as an unavailable one was
+        # an unreadable power-cut expiry RETAINS the raised reserve: owner decision r14 (fail closed, until a cancel or a readable record reconciles it). Before r14 the record was
+        # SKIPPED here and the owner's 40 was published; that old behaviour is a mutant of [14] ("effective reserve dropped on an unreadable expiry"), killed there.
         for label, attrs in (("missing", {"has_date": True, "has_time": True}), ("not a number", {"timestamp": "abc"})):
             pw = world(text, owner=40)
             pw.w.set(CUT_RESERVE_E, "80.0")
             pw.w.set(EXPIRES_E["prepare_power_cut"], "2026-11-18 21:30:00", attrs)
-            if pw.state(EFF) != "40":
-                add(f"a power-cut expiry attribute that is {label}: the effective reserve is {pw.state(EFF)}, wanted the owner's 40 (the record is skipped)")
+            if pw.state(EFF) != "80":
+                add(f"a power-cut expiry attribute that is {label}: the effective reserve is {pw.state(EFF)}, wanted 80 (the raised reserve is retained while the expiry cannot be read)")
         # cancel treats an unreadable record as it did: it proceeds, and writes a readable expiry (the record is repaired)
         for kind in KINDS:
             pw = world(text)
@@ -828,6 +847,27 @@ def clock_problems(text: str, stop_early: bool = False) -> list[str]:
             out = cancel(pw, kind=kind)
             if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or exp_ts(pw, kind) > pw.w.t:
                 add(f"cancel {kind} with an unreadable record: {out[:40]!r} hold {pw.state(HOLD)!r}")
+        # (6) the attribute ALONE (additive, owner decision r14): since r14 each expiry is also an absolute epoch record, which on its own would carry a read site that was reverted to the
+        # state string. With the epoch record reset to 0 only the date-and-time attribute carries the override, so every read site must still follow the attribute: held to the true expiry
+        # in the repeated hour (hold, held_by and the effective reserve), and a running override can still be cancelled there. These cases pass on the package before r14 as well.
+        for kind in KINDS:
+            pw = world(text, now="2026-10-25 00:40:40", zone="Europe/London")
+            start(pw, kind=kind, expiry_min=120)
+            pw.w.set(EPOCH_E[kind], "0.0")
+            t0 = exp_ts(pw, kind) - 7200
+            for minutes in (59, 61, 90, 110, 119):
+                pw.w.run_until(t0 + minutes * 60)
+                if pw.state(HOLD) != "held" or held_by_of(pw, text) != kind:
+                    add(f"{kind}, attribute alone (epoch reset to 0): {minutes} minutes in the hold reads {pw.state(HOLD)!r} held_by {held_by_of(pw, text)!r}")
+                if kind == "prepare_power_cut" and pw.state(EFF) != "80":
+                    add(f"{kind}, attribute alone (epoch reset to 0): {minutes} minutes in the effective reserve is {pw.state(EFF)}")
+            pw = world(text, now="2026-10-25 00:40:40", zone="Europe/London")
+            start(pw, kind=kind, expiry_min=120)
+            pw.w.set(EPOCH_E[kind], "0.0")
+            pw.w.run_until(exp_ts(pw, kind) - 3000)
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or exp_ts(pw, kind) > pw.w.t:
+                add(f"cancel {kind} on the clock-change day, attribute alone (epoch reset to 0): {out[:40]!r} hold {pw.state(HOLD)!r}")
     except _Early:
         pass
     return bad
@@ -863,13 +903,16 @@ def swap_once(text: str, old: str, new: str) -> str:
 
 
 HOLD_LINE = "{%- if (a is not none and a > n) or (b is not none and b > n) or (c is not none and c > n) -%}held"
-CUT_ACTIVE = "e is not none and e > n and c is number"
+CUT_ACTIVE = "(e is none or e > n) and c is number"     # owner decision r14: the record counts while ACTIVE or UNREADABLE (it was `e is not none and e > n and c is number`: active only)
 MUT10 = [(f"a read site reverted to the state string: {SITES[k]}", revert_site(PKG_TEXT, k)) for k in range(10)]
 for v, kind_name in (("a", "Hold battery"), ("b", "Skip tonight"), ("c", "Prepare for power cut")):
     MUT10.append((f"the hold sensor releases {kind_name} 45 s early ({v} > n + 45)", swap_once(PKG_TEXT, HOLD_LINE, HOLD_LINE.replace(f"{v} > n", f"{v} > n + 45"))))
     MUT10.append((f"the hold sensor still holds {kind_name} at the expiry second ({v} >= n)", swap_once(PKG_TEXT, HOLD_LINE, HOLD_LINE.replace(f"{v} > n", f"{v} >= n"))))
-MUT10.append(("the effective reserve releases the power cut's reserve 45 s early (e > n + 45)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e > n + 45"))))
-MUT10.append(("the effective reserve still raises at the expiry second (e >= n)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e >= n"))))
+if PKG_TEXT.count(CUT_ACTIVE) == 1:     # (a missing anchor is a failed check, not a crash of the suite: the anchor moved with the package text in owner decision r14)
+    MUT10.append(("the effective reserve releases the power cut's reserve 45 s early (e > n + 45)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e > n + 45"))))
+    MUT10.append(("the effective reserve still raises at the expiry second (e >= n)", swap_once(PKG_TEXT, CUT_ACTIVE, CUT_ACTIVE.replace("e > n", "e >= n"))))
+else:
+    check("mutant anchor: the effective reserve's power-cut condition", False, f"anchor found {PKG_TEXT.count(CUT_ACTIVE)}x, wanted 1")
 caught10 = 0
 for label, mutated in MUT10:
     try:
@@ -1225,8 +1268,9 @@ def guard_problems(text: str, stop_early: bool = False) -> list[str]:
                         add(f"hold sensor, {tag}: the hold reads {pw.state(HOLD)!r}, wanted 'unknown' (an unreadable record)")
                     if held_by_of(pw, text) != "":
                         add(f"held_by, {tag}: held_by reads {held_by_of(pw, text)!r}, wanted '' (an unreadable record is not named)")
-                    if kind == "prepare_power_cut" and pw.state(EFF) != "40":
-                        add(f"effective reserve, {tag}: the effective reserve is {pw.state(EFF)}, wanted the owner's 40 (the power cut's record cannot be trusted, so it is skipped)")
+                    # owner decision r14: a power-cut record that cannot be trusted RETAINS the raised reserve (80) until a cancel or a readable record reconciles it; it was skipped (the owner's 40) before
+                    if kind == "prepare_power_cut" and pw.state(EFF) != "80":
+                        add(f"effective reserve, {tag}: the effective reserve is {pw.state(EFF)}, wanted 80 (the power cut's record cannot be trusted, so its raised reserve is retained)")
                     pw = stale_record(text, kind, bstate, stale)
                     out = cancel(pw, kind=kind)
                     repaired = pw.state(EXPIRES_E[kind]) not in ("unavailable", "unknown", "") and exp_ts(pw, kind) <= pw.w.t
@@ -1280,6 +1324,634 @@ for k in range(10):
         print(f"  FAIL  mutant survived: {label} ({found[:1]})")
 check("10 guard mutants (the state guard removed at each read site), each caught by the running check of its own site", caught13 == 10, f"{caught13}/10")
 check("control: the unmutated package passes the same running cases", gp == [])
+
+# ================================================================================================================================
+print("[14] an override's expiry is also an ABSOLUTE epoch record, read raise-only with the date-and-time attribute (owner decision r14, 19 Nov 2026; known limitations 11, 17, 19, 23)")
+# ================================================================================================================================
+# THE PROBLEM (known limitation 19; recalled from Home Assistant core, NOT verified live): a restart restores a date-and-time helper from its STATE STRING, local wall-clock time without an
+# offset, so an expiry in the repeated hour of the autumn clock change (01:00 to 01:59 on the fall-back day, Europe/London) is restored as the FIRST of the two equal local times, 60 minutes
+# EARLY, and the hold and the raised reserve would release up to 60 minutes early. THE DECISION (owner, r14): prefer absolute timestamps; if the instant cannot be established reliably fail
+# closed and keep the safety-related override; do not blindly extend every override by an hour and do not silently alter the owner's deadline. THE DESIGN: an input_number per kind holds the expiry as
+# epoch seconds (the SAME number the start script already computes, so nothing is extended), written BEFORE the date-and-time expiry; every expiry read takes the later of the two valid sources
+# (raise-only), a kind is unreadable when either source is not a valid reading, and the raised reserve is retained while its expiry is unreadable. WHAT THIS SECTION DOES: it adds a RESTART step to
+# the offline model (_plan_sim.PlanWorld.restart) and runs the cases the owner listed. Every earlier section is untouched except where it pinned the old fail-open behaviour: the effective
+# reserve used to SKIP an unreadable power-cut record ([10] and [13] now expect the raised reserve to be retained; the old behaviour is the mutant below that the new cases kill).
+# The restore model is a RECOLLECTION, not verified live: these checks prove the package against the model, not against Home Assistant.
+LONDON, AUTUMN, ORDINARY = "Europe/London", "2026-10-25 00:40:40", "2026-11-17 21:30:40"   # AUTUMN (BST): a 120 minute override ends at 01:40 GMT, inside the repeated hour
+DAYS14 = (  # (label, local start, length in minutes, restart moments in minutes after the start (None: no restart))
+    ("October repeated hour (a 120 minute override from 00:40 BST ends at 01:40 GMT)", AUTUMN, 120, (None, 30, 61, 90, 110, 119, 125)),
+    ("October day, expiry after the repeated hour", "2026-10-25 01:10:40", 180, (None, 30, 100, 179, 185)),
+    ("October night across the repeated hour, expiry before it", "2026-10-24 21:30:40", 600, (None, 240, 300, 380, 600)),
+    ("spring-forward day", "2027-03-28 00:30:40", 120, (None, 30, 61, 110)),
+    ("ordinary day", ORDINARY, 120, (None, 30, 61, 110)),
+)
+EPOCH_BAD14 = (("missing", None), ("unavailable", "unavailable"), ("unknown", "unknown"), ("empty", ""), ("nan", "nan"), ("inf", "inf"), ("negative", "-5.0"),
+               ("junk", "abc"), ("above its range", "4102444801.0"))
+
+
+_HB14: dict[str, str] = {}
+
+
+def held_by14(pw: P.PlanWorld, text: str) -> str:
+    """held_by_of, with the attribute template parsed once per package text (the suite reads it thousands of times)."""
+    tpl = _HB14.get(text)
+    if tpl is None:
+        tpl = _HB14[text] = yaml.safe_load(text)["template"][0]["sensor"][0]["attributes"]["held_by"]
+    return str(pw.w.render(tpl)).strip()
+
+
+class _Stop14(Exception):
+    pass
+
+
+class _G:
+    """The problems of one group of cases; `stop_early` ends the group at the first one (the mutants)."""
+
+    def __init__(self, stop_early: bool):
+        self.bad: list[str] = []
+        self.stop_early = stop_early
+
+    def add(self, msg: str) -> None:
+        self.bad.append(msg)
+        if self.stop_early:
+            raise _Stop14()
+
+
+def put_dt14(pw: P.PlanWorld, kind: str, ts: float) -> None:
+    """The kind's date-and-time expiry at the instant `ts`, as Home Assistant stores it from an aware datetime (state: local wall clock; attribute: the instant)."""
+    pw._store_datetime(EXPIRES_E[kind], datetime.fromtimestamp(ts, pw.zone))
+
+
+def epoch_of(pw: P.PlanWorld, kind: str):
+    try:
+        return float(pw.state(EPOCH_E[kind]))
+    except ValueError:
+        return None
+
+
+def probe14(g: _G, pw: P.PlanWorld, text: str, exps: dict, tag: str) -> None:
+    """Right now (the model clock): the hold, held_by and the effective reserve must equal the TRUE instants: held while `expiry > now`, clear from the expiry second."""
+    t = pw.w.t
+    want = [k for k in KINDS if k in exps and exps[k] > t]
+    got, by = pw.state(HOLD), held_by14(pw, text)
+    rel = t - (min(exps.values()) if exps else t)
+    if got != ("held" if want else "clear") or by != ",".join(want):
+        g.add(f"{tag}: {rel:+.0f} s from the first true expiry the hold reads {got!r} held_by {by!r}, wanted {want}")
+    if pw.state(EFF) != ("80" if "prepare_power_cut" in want else "40"):
+        g.add(f"{tag}: {rel:+.0f} s from the first true expiry the effective reserve is {pw.state(EFF)}, wanted {'80' if 'prepare_power_cut' in want else '40'}")
+
+
+def running(text: str, kind: str, minutes: int = 120, now: str = ORDINARY):
+    """A world on `now` (Europe/London) with `kind` started for `minutes`; returns (pw, true expiry)."""
+    pw = world(text, now=now, zone=LONDON)
+    out = start(pw, kind=kind, expiry_min=minutes)
+    if not out.startswith("STARTED"):
+        raise AssertionError(f"{kind} did not start: {out[:60]!r}")
+    return pw, exp_ts(pw, kind)
+
+
+def g_writes(text: str, stop_early: bool = False) -> list[str]:
+    """What the start and the cancel script write: the epoch is the same number as the expiry, written first, for the kind's own record only."""
+    g = _G(stop_early)
+    try:
+        for kind in KINDS:
+            pw = world(text, now=ORDINARY, zone=LONDON)
+            n0 = len(pw.w.service_log)
+            out = start(pw, kind=kind, expiry_min=90)
+            if not out.startswith("STARTED"):
+                g.add(f"{kind}: did not start: {out[:50]!r}")
+                continue
+            exp = exp_ts(pw, kind)
+            if epoch_of(pw, kind) != exp:
+                g.add(f"{kind}: the start wrote the epoch record {pw.state(EPOCH_E[kind])!r}, wanted the same instant as the date-and-time expiry ({exp})")
+            order = [e for s, e, _d in pw.services(n0) if s.startswith("input_")]
+            others = (set(order) & set(EPOCH_E.values())) - {EPOCH_E[kind]}
+            if EPOCH_E[kind] not in order:
+                g.add(f"{kind}: the start did not write its epoch record")
+            elif order.index(EPOCH_E[kind]) > order.index(EXPIRES_E[kind]):
+                g.add(f"{kind}: the epoch record is written AFTER the date-and-time expiry")
+            elif kind == "prepare_power_cut" and not order.index(CUT_RESERVE_E) < order.index(EPOCH_E[kind]) < order.index(START_E[kind]) < order.index(EXPIRES_E[kind]):
+                g.add(f"{kind}: the write order is not reserve, epoch, start, expiry: {[o.split('.')[1][-24:] for o in order]}")
+            if others:
+                g.add(f"{kind}: the start also wrote another kind's epoch record {sorted(others)}")
+        pw = world(text, now=ORDINARY, zone=LONDON)
+        for k in KINDS:
+            start(pw, kind=k, expiry_min=90)
+        for K in KINDS:
+            before = {k: pw.state(EPOCH_E[k]) for k in KINDS if k != K}
+            n0, t_c = len(pw.w.service_log), pw.w.t
+            out = cancel(pw, kind=K)
+            order = [e for s, e, _d in pw.services(n0) if s.startswith("input_")]
+            want = t_c // 60 * 60
+            if not out.startswith(f"CANCELLED {K}"):
+                g.add(f"cancel {K}: {out[:50]!r}")
+            if epoch_of(pw, K) != want or exp_ts(pw, K) != want:
+                g.add(f"cancel {K}: the epoch record {epoch_of(pw, K)} and the date-and-time expiry {exp_ts(pw, K)} are not both the cancel instant {want} (the minute-floored now)")
+            if EPOCH_E[K] not in order or (set(order) & set(EPOCH_E.values())) - {EPOCH_E[K]}:
+                g.add(f"cancel {K}: it must write its own epoch record and no other: {[o.split('.')[1][-24:] for o in order]}")
+            if {k: pw.state(EPOCH_E[k]) for k in KINDS if k != K} != before:
+                g.add(f"cancel {K}: it changed another kind's epoch record")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def g_restart(text: str, stop_early: bool = False) -> list[str]:
+    """The October repeated hour, the spring-forward day and an ordinary day, every kind, without a restart and with one (before, in and after the hour; an expiry outside it)."""
+    g = _G(stop_early)
+    try:
+        for label, started, minutes, restarts in DAYS14:
+            for kind in KINDS:
+                for r in restarts:
+                    pw, exp = running(text, kind, minutes, started)
+                    t0 = exp - minutes * 60
+                    tag = f"{label}, {kind}, " + ("no restart" if r is None else f"restart {r} min in")
+                    tr = None if r is None else t0 + r * 60
+                    times = {t0 + m * 60 for m in (30, 61, 90, 110)} | {exp - 60, exp - 1, exp, exp + 1, exp + 61}
+                    if tr is not None:
+                        times |= {tr, tr + 61}
+                    pending = tr is not None
+                    for t in sorted(x for x in times if x >= pw.w.t):
+                        if pending and tr <= t:
+                            pw.w.run_until(tr)
+                            pw.restart("first")
+                            pending = False
+                        pw.w.run_until(t)
+                        probe14(g, pw, text, {kind: exp}, tag)
+        # all three running at once, every expiry in the repeated hour (each start moves the model clock by 30 s, so the minute-floored expiries differ), a restart inside it
+        for r in (None, 61, 90, 115):
+            pw = world(text, now=AUTUMN, zone=LONDON)
+            for k in KINDS:
+                start(pw, kind=k, expiry_min=120)
+            exps = {k: exp_ts(pw, k) for k in KINDS}
+            first = min(exps.values())
+            tr = None if r is None else first - 7200 + r * 60
+            times = {first - 7200 + m * 60 for m in (61, 90, 110)} | {e + d for e in exps.values() for d in (-1, 0, 1, 61)}
+            if tr is not None:
+                times |= {tr}
+            pending = tr is not None
+            for t in sorted(x for x in times if x >= pw.w.t):
+                if pending and tr <= t:
+                    pw.w.run_until(tr)
+                    pw.restart("first")
+                    pending = False
+                pw.w.run_until(t)
+                probe14(g, pw, text, exps, f"all three running, " + ("no restart" if r is None else f"restart {r} min in"))
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def g_cancel(text: str, stop_early: bool = False) -> list[str]:
+    """Start then cancel then restart (stays released); a restart in the repeated hour and then a cancel inside it (allowed, releases); a cancel when it is really over (NOT_ACTIVE)."""
+    g = _G(stop_early)
+    try:
+        for kind in KINDS:
+            # (a) cancel inside the repeated hour, then restart (twice): it stays released, and a second cancel finds nothing to cancel
+            pw, exp = running(text, kind, 120, AUTUMN)
+            pw.w.run_until(exp - 3000)
+            out = cancel(pw, kind=kind)
+            tag = f"{kind}, cancelled 50 minutes before its true expiry then restarted"
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40":
+                g.add(f"{tag}: {out[:40]!r} hold {pw.state(HOLD)!r} reserve {pw.state(EFF)}")
+            if epoch_of(pw, kind) is None or epoch_of(pw, kind) > pw.w.t or epoch_of(pw, kind) != exp_ts(pw, kind):
+                g.add(f"{tag}: the epoch record {epoch_of(pw, kind)} is not the cancel instant {exp_ts(pw, kind)}")
+            for t in (pw.w.t, exp - 1500, exp - 1, exp, exp + 61):
+                pw.w.run_until(t)
+                pw.restart("first")
+                probe14(g, pw, text, {}, tag + " ... " + str(int(t - exp)))
+            if not cancel(pw, kind=kind).startswith("REFUSED NOT_ACTIVE"):
+                g.add(f"{tag}: a second cancel was not refused as NOT_ACTIVE")
+            # (b) a restart inside the repeated hour (the attribute is now 60 minutes early), then a cancel inside it: allowed, and it releases
+            pw, exp = running(text, kind, 120, AUTUMN)
+            pw.w.run_until(exp - 1800)
+            pw.restart("first")
+            probe14(g, pw, text, {kind: exp}, f"{kind}, restarted at 01:10 GMT")
+            pw.w.run_until(exp - 1500)
+            out = cancel(pw, kind=kind)
+            tag = f"{kind}, restarted in the repeated hour then cancelled inside it"
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40" or epoch_of(pw, kind) is None or epoch_of(pw, kind) > pw.w.t:
+                g.add(f"{tag}: {out[:40]!r} hold {pw.state(HOLD)!r} reserve {pw.state(EFF)} epoch {epoch_of(pw, kind)}")
+            for t in (exp - 1, exp, exp + 61):
+                pw.w.run_until(t)
+                pw.restart("first")
+                probe14(g, pw, text, {}, tag)
+            # (c) restarted after the true expiry: nothing to cancel, nothing changed
+            pw, exp = running(text, kind, 120, AUTUMN)
+            pw.w.run_until(exp + 120)
+            pw.restart("first")
+            rev = pw.state(REV)
+            if not cancel(pw, kind=kind).startswith("REFUSED NOT_ACTIVE") or pw.state(REV) != rev:
+                g.add(f"{kind}: a cancel after the true expiry (and a restart) is not NOT_ACTIVE with the revision unchanged")
+            # (d) the last second: cancel allowed one second before the expiry, refused AT the expiry second
+            for off, allowed in ((-1, True), (0, False)):
+                pw, exp = running(text, kind, 120, AUTUMN)
+                pw.w.run_until(exp + off)
+                pw.restart("first")
+                out = cancel(pw, kind=kind)
+                if allowed != out.startswith("CANCELLED"):
+                    g.add(f"{kind}: a cancel {off:+d} s from the true expiry (after a restart) answers {out[:40]!r}")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def g_abnormal(text: str, stop_early: bool = False) -> list[str]:
+    """The epoch record missing, reset, unavailable, unknown, empty, nan, infinite, negative, out of range or junk; the attribute missing; both unreadable; stale-early and stale-late sources;
+    the stored reserve while the expiry is unreadable."""
+    g = _G(stop_early)
+    held_eff = lambda kind: "80" if kind == "prepare_power_cut" else "40"   # noqa: E731 - the effective reserve while `kind` is held or retained (the stored cut reserve is 80)
+    try:
+        for kind in KINDS:
+            others = [k for k in KINDS if k != kind]
+            for label, restored in EPOCH_BAD14:
+                tag = f"{kind}, epoch {label}"
+                # (A) the attribute still shows it running: held, the cut's reserve kept, a cancel allowed (and it repairs the epoch record); at the expiry second the record is unreadable: unknown
+                pw, exp = running(text, kind)
+                pw.restart("exact", {EPOCH_E[kind]: restored})
+                probe14(g, pw, text, {kind: exp}, tag + ", attribute running")
+                pw.w.run_until(exp - 1)
+                probe14(g, pw, text, {kind: exp}, tag + ", attribute running")
+                pw.w.run_until(exp)
+                if pw.state(HOLD) != "unknown" or held_by14(pw, text) != "" or pw.state(EFF) != held_eff(kind):
+                    g.add(f"{tag}, at the expiry second: the hold reads {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r} reserve {pw.state(EFF)}, wanted unknown, nothing named, reserve {held_eff(kind)}")
+                pw, exp = running(text, kind)
+                pw.restart("exact", {EPOCH_E[kind]: restored})
+                pw.w.run_until(exp - 600)
+                out = cancel(pw, kind=kind)
+                ep = epoch_of(pw, kind)
+                if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40" or ep is None or ep > pw.w.t:
+                    g.add(f"{tag}, cancel while the attribute shows it running: {out[:40]!r} hold {pw.state(HOLD)!r} epoch {ep}")
+                # (B) the attribute is past (nothing running): the kind is unreadable: unknown, the cut's reserve retained, held when another kind runs, a cancel allowed and it repairs
+                pw = world(text, now=ORDINARY, zone=LONDON)
+                pw.w.set(CUT_RESERVE_E, "80.0")
+                pw.restart("exact", {EPOCH_E[kind]: restored})
+                if pw.state(HOLD) != "unknown" or held_by14(pw, text) != "" or pw.state(EFF) != held_eff(kind):
+                    g.add(f"{tag}, attribute past: the hold reads {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r} reserve {pw.state(EFF)}, wanted unknown, nothing named, reserve {held_eff(kind)}")
+                start(pw, kind=others[0], expiry_min=30)
+                want_eff = "80" if "prepare_power_cut" in (kind, others[0]) else "40"
+                if pw.state(HOLD) != "held" or held_by14(pw, text) != others[0] or pw.state(EFF) != want_eff:
+                    g.add(f"{tag}, attribute past, {others[0]} running: hold {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r} reserve {pw.state(EFF)}, wanted held by {others[0]} only, reserve {want_eff}")
+                out = cancel(pw, kind=kind)
+                if not out.startswith("CANCELLED") or epoch_of(pw, kind) is None or epoch_of(pw, kind) > pw.w.t or held_by14(pw, text) != others[0]:
+                    g.add(f"{tag}, attribute past: a cancel answers {out[:40]!r}, epoch {epoch_of(pw, kind)}, held_by {held_by14(pw, text)!r}")
+            # (C) the epoch RESET to 0 (a valid number in the past): it can never release what the attribute still shows as running, and it is not an unreadable record
+            pw, exp = running(text, kind)
+            pw.restart("exact", {EPOCH_E[kind]: "0.0"})
+            probe14(g, pw, text, {kind: exp}, f"{kind}, epoch reset to 0, attribute running")
+            pw.w.run_until(exp - 1)
+            probe14(g, pw, text, {kind: exp}, f"{kind}, epoch reset to 0, attribute running")
+            pw.w.run_until(exp)
+            probe14(g, pw, text, {kind: exp}, f"{kind}, epoch reset to 0, at the expiry second")
+            pw, exp = running(text, kind)
+            pw.restart("exact", {EPOCH_E[kind]: "0.0"})
+            pw.w.run_until(exp - 600)
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear":
+                g.add(f"{kind}, epoch reset to 0: a cancel while the attribute shows it running answers {out[:40]!r} hold {pw.state(HOLD)!r}")
+            pw = world(text, now=ORDINARY, zone=LONDON)
+            pw.restart("exact", {EPOCH_E[kind]: "0.0"})
+            if pw.state(HOLD) != "clear" or not cancel(pw, kind=kind).startswith("REFUSED NOT_ACTIVE"):
+                g.add(f"{kind}, epoch 0 and nothing running: the hold reads {pw.state(HOLD)!r} or a cancel is not NOT_ACTIVE")
+            # (D) the attribute MISSING (the helper's state is kept, its attribute is gone): with the epoch running it is held; with the epoch past it is unreadable
+            pw, exp = running(text, kind)
+            pw.w.set(EXPIRES_E[kind], pw.state(EXPIRES_E[kind]), {"has_date": True, "has_time": True})
+            probe14(g, pw, text, {kind: exp}, f"{kind}, attribute missing, epoch running")
+            pw.w.run_until(exp - 1)
+            probe14(g, pw, text, {kind: exp}, f"{kind}, attribute missing, epoch running")
+            pw.w.run_until(exp)
+            if pw.state(HOLD) != "unknown" or held_by14(pw, text) != "" or pw.state(EFF) != held_eff(kind):
+                g.add(f"{kind}, attribute missing, epoch past: the hold reads {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r} reserve {pw.state(EFF)}, wanted unknown, nothing named, reserve {held_eff(kind)}")
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40" or exp_ts(pw, kind) > pw.w.t:
+                g.add(f"{kind}, attribute missing, epoch past: a cancel answers {out[:40]!r} hold {pw.state(HOLD)!r}; it must repair the record")
+            pw, exp = running(text, kind)
+            pw.w.set(EXPIRES_E[kind], pw.state(EXPIRES_E[kind]), {"has_date": True, "has_time": True})
+            pw.w.run_until(exp - 600)
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear":
+                g.add(f"{kind}, attribute missing, epoch running: a cancel answers {out[:40]!r} hold {pw.state(HOLD)!r}")
+            # (E) both sources unreadable (a missing attribute, a state that is not a time, a broken epoch): unknown, nothing named, the cut's reserve retained, a cancel repairs both
+            for dlabel, dset in (("attribute missing", lambda pw, k: pw.w.set(EXPIRES_E[k], pw.state(EXPIRES_E[k]), {"has_date": True, "has_time": True})),
+                                 ("state unavailable", lambda pw, k: pw.w.set(EXPIRES_E[k], "unavailable"))):
+                for elabel, restored in (("missing", None), ("junk", "abc"), ("unavailable", "unavailable")):
+                    pw = world(text, now=ORDINARY, zone=LONDON)
+                    pw.w.set(CUT_RESERVE_E, "80.0")
+                    dset(pw, kind)
+                    pw.restart("exact", {EPOCH_E[kind]: restored})
+                    tag = f"{kind}, {dlabel} and epoch {elabel}"
+                    if pw.state(HOLD) != "unknown" or held_by14(pw, text) != "" or pw.state(EFF) != held_eff(kind):
+                        g.add(f"{tag}: the hold reads {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r} reserve {pw.state(EFF)}, wanted unknown, nothing named, reserve {held_eff(kind)}")
+                    out = cancel(pw, kind=kind)
+                    if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40" or epoch_of(pw, kind) is None:
+                        g.add(f"{tag}: a cancel answers {out[:40]!r} hold {pw.state(HOLD)!r} reserve {pw.state(EFF)}; it must repair both records")
+            # (F) the sources disagree. STALE-EARLY attribute (restored early) against a later epoch: held until the epoch instant. STALE-LATE attribute (a partial write left a later date-and-time
+            # expiry) against an earlier epoch: held until the attribute's instant (fail closed), and a cancel reconciles it
+            for label, dt_off, ep_off in (("stale-early attribute", -600, 600), ("stale-late attribute", 3600, -600), ("stale-early attribute, epoch far ahead", -3000, 1800)):
+                pw = world(text, now=ORDINARY, zone=LONDON)
+                pw.w.set(CUT_RESERVE_E, "80.0")
+                t = pw.w.t
+                put_dt14(pw, kind, t + dt_off)
+                pw.restart("exact", {EPOCH_E[kind]: f"{float(t // 60 * 60 + ep_off)}"})
+                later = max(t + dt_off, t // 60 * 60 + ep_off)
+                for t_probe in (t, later - 1, later, later + 1):
+                    pw.w.run_until(t_probe)
+                    probe14(g, pw, text, {kind: later}, f"{kind}, {label}")
+                pw = world(text, now=ORDINARY, zone=LONDON)
+                t = pw.w.t
+                put_dt14(pw, kind, t + dt_off)
+                pw.restart("exact", {EPOCH_E[kind]: f"{float(t // 60 * 60 + ep_off)}"})
+                out = cancel(pw, kind=kind)
+                if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or epoch_of(pw, kind) != exp_ts(pw, kind):
+                    g.add(f"{kind}, {label}: a cancel answers {out[:40]!r} hold {pw.state(HOLD)!r}; it must reconcile both sources to the cancel instant")
+        # (G) the stored reserve while the power cut's expiry cannot be read: a valid value 10 to 100 is retained, an invalid one is not applied; a readable past record never counts
+        for stored, want in (("80.0", "80"), ("55.0", "55"), ("100.0", "100"), ("41.0", "41"), ("62.4", "63"), ("unavailable", "40"), ("unknown", "40"), ("", "40"), ("nan", "40"), ("inf", "40"),
+                             ("9.0", "40"), ("100.5", "40"), ("abc", "40"), ("-3.0", "40")):
+            pw = world(text, now=ORDINARY, zone=LONDON)
+            pw.w.set(CUT_RESERVE_E, stored)
+            pw.w.set(EXPIRES_E["prepare_power_cut"], pw.state(EXPIRES_E["prepare_power_cut"]), {"has_date": True, "has_time": True})
+            pw.restart("exact", {EPOCH_E["prepare_power_cut"]: "abc"})
+            if pw.state(EFF) != want:
+                g.add(f"the power cut's expiry is unreadable and its stored reserve is {stored!r}: the effective reserve is {pw.state(EFF)}, wanted {want}")
+        pw = world(text, now=ORDINARY, zone=LONDON)
+        pw.w.set(CUT_RESERVE_E, "80.0")
+        if pw.state(EFF) != "40":
+            g.add(f"a readable, past power-cut record with a stored reserve of 80 raises the effective reserve to {pw.state(EFF)}")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def inject_expiry_failure(pw: P.PlanWorld, kind: str):
+    """Make the date-and-time write of `kind`'s expiry raise (a service error, as an interrupted script would see); returns the function that restores the handler."""
+    orig = pw.w.service_handlers["input_datetime.set_datetime"]
+
+    def failing(entity, data):
+        if entity == EXPIRES_E[kind]:
+            raise S.ServiceError("injected: the date-and-time expiry write fails")
+        return orig(entity, data)
+
+    pw.w.service_handlers["input_datetime.set_datetime"] = failing
+    return lambda: pw.w.service_handlers.__setitem__("input_datetime.set_datetime", orig)
+
+
+def g_interrupt(text: str, stop_early: bool = False) -> list[str]:
+    """An interrupted start (the date-and-time expiry write fails after the epoch was written) leaves the override HELD, never half released; an interrupted cancel leaves it held, and a second cancel finishes it."""
+    g = _G(stop_early)
+    try:
+        for kind in KINDS:
+            pw = world(text, now=ORDINARY, zone=LONDON)
+            restore = inject_expiry_failure(pw, kind)
+            pw.run_script("ecco_plan_override_start", {"kind": kind, "expiry_min": 60})
+            if pw.state(HOLD) != "held" or held_by14(pw, text) != kind:
+                g.add(f"{kind}: a start whose date-and-time expiry write failed leaves the hold {pw.state(HOLD)!r} held_by {held_by14(pw, text)!r}, wanted held (the epoch record is written first)")
+            restore()
+            out = cancel(pw, kind=kind)
+            if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear":
+                g.add(f"{kind}: a cancel after an interrupted start answers {out[:40]!r} hold {pw.state(HOLD)!r}")
+            pw, exp = running(text, kind, 60)
+            restore = inject_expiry_failure(pw, kind)
+            pw.run_script("ecco_plan_override_cancel", {"kind": kind})
+            if pw.state(HOLD) != "held":
+                g.add(f"{kind}: an interrupted cancel leaves the hold {pw.state(HOLD)!r}, wanted held (fail closed)")
+            restore()
+            if not cancel(pw, kind=kind).startswith("CANCELLED") or pw.state(HOLD) != "clear":
+                g.add(f"{kind}: a second cancel does not finish an interrupted one")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def g_normal(text: str, stop_early: bool = False) -> list[str]:
+    """The normal paths, every kind, on an ordinary day and the clock-change day: held through the last second of a 15 minute override, clear at the expiry second, never extended; then a cancel."""
+    g = _G(stop_early)
+    try:
+        for kind in KINDS:
+            for label, started in (("ordinary day", ORDINARY), ("clock-change day", AUTUMN)):
+                pw, exp = running(text, kind, 15, started)
+                if epoch_of(pw, kind) != exp:
+                    g.add(f"{kind}, {label}: the epoch record {epoch_of(pw, kind)} is not the expiry {exp}")
+                for k in range(1, 16):
+                    pw.w.run_until(exp - 900 + 60 * k - 1)
+                    probe14(g, pw, text, {kind: exp}, f"{kind}, {label}, minute {k}")
+                for d in (0, 1, 61):
+                    pw.w.run_until(exp + d)
+                    probe14(g, pw, text, {kind: exp}, f"{kind}, {label}")
+                pw, exp = running(text, kind, 60, started)
+                pw.w.run_until(exp - 1800)
+                out = cancel(pw, kind=kind)
+                if not out.startswith("CANCELLED") or pw.state(HOLD) != "clear" or pw.state(EFF) != "40":
+                    g.add(f"{kind}, {label}: a cancel answers {out[:40]!r} hold {pw.state(HOLD)!r}")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+def g_diff(text: str, stop_early: bool = False) -> list[str]:
+    """A seeded sweep of start times, lengths and restart moments. The new read is never EARLIER than the old attribute-only read, equals it whenever the two sources agree, and equals
+    the true instant (the epoch record is restored exactly in every restart modelled here)."""
+    g = _G(stop_early)
+    rng = random.Random(1119)
+    starts = ("2026-10-24 22:15:20", "2026-10-25 00:05:10", AUTUMN, "2026-10-25 01:20:05", "2026-10-25 03:30:00", ORDINARY, "2027-03-27 23:10:00", "2027-03-28 00:30:40", "2027-03-28 05:00:00")
+    lengths = (15, 30, 45, 60, 75, 90, 120, 150, 180, 240, 360, 600)
+    try:
+        for i in range(34):
+            started, kind, minutes = rng.choice(starts), rng.choice(KINDS), rng.choice(lengths)
+            mode = rng.choice((None, "first", "exact"))
+            pw, exp = running(text, kind, minutes, started)
+            t0 = exp - minutes * 60
+            tr = max(t0 + rng.randrange(1, minutes + 90) * 60, pw.w.t)
+            probes = sorted({t0 + rng.randrange(0, (minutes + 100) * 60) for _ in range(9)} | {exp - 1, exp})
+            pending = mode is not None
+            for t in probes:
+                if t < pw.w.t:
+                    continue
+                if pending and tr <= t:
+                    pw.w.run_until(tr)
+                    pw.restart(mode)
+                    pending = False
+                pw.w.run_until(t)
+                now = pw.w.t
+                old_held = float(pw.w.state_attr(EXPIRES_E[kind], "timestamp")) > now                 # the earlier read: the attribute alone
+                agree = epoch_of(pw, kind) == float(pw.w.state_attr(EXPIRES_E[kind], "timestamp"))
+                new_held = pw.state(HOLD) == "held" and held_by14(pw, text) == kind
+                tag = f"sweep {i} ({started}, {kind}, {minutes} min, restart {mode} at {tr - t0:+.0f} s), {now - exp:+.0f} s from the true expiry"
+                if old_held and not new_held:
+                    g.add(f"{tag}: the new read is EARLIER than the attribute-only read")
+                if agree and new_held != old_held:
+                    g.add(f"{tag}: the sources agree but the new read differs from the old one ({new_held} vs {old_held})")
+                if new_held != (exp > now):
+                    g.add(f"{tag}: the new read ({new_held}) is not the true instant's ({exp > now})")
+                if kind == "prepare_power_cut" and pw.state(EFF) != ("80" if exp > now else "40"):
+                    g.add(f"{tag}: the effective reserve is {pw.state(EFF)}")
+    except _Stop14:
+        pass
+    return g.bad
+
+
+GROUPS14 = (g_writes, g_restart, g_cancel, g_abnormal, g_interrupt, g_normal, g_diff)
+
+
+def problems14(text: str, stop_early: bool = False) -> list[str]:
+    out: list[str] = []
+    for fn in GROUPS14:
+        try:
+            out += fn(text, stop_early)
+        except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+            out.append(f"{fn.__name__} raised {type(exc).__name__}: {str(exc)[:100]}")
+        if out and stop_early:
+            break
+    return out
+
+
+# ---- the model itself (independent of the package): what the restart restores ----
+def premise_problems() -> list[str]:
+    bad = []
+    pw, exp = running(PKG_TEXT, "hold_battery", 120, AUTUMN)
+    state_before, attr_before = pw.state(EXPIRES_E["hold_battery"]), exp_ts(pw, "hold_battery")
+    pw.restart("first")
+    if pw.state(EXPIRES_E["hold_battery"]) != state_before or exp_ts(pw, "hold_battery") != attr_before - 3600:
+        bad.append(f"an expiry in the repeated hour is not restored 60 minutes early with its state string unchanged: {pw.state(EXPIRES_E['hold_battery'])!r} {exp_ts(pw, 'hold_battery') - attr_before:+.0f} s")
+    for label, started in (("ordinary day", ORDINARY), ("spring-forward day", "2027-03-28 00:30:40"), ("October, expiry after the hour", "2026-10-25 01:10:40")):
+        pw, exp = running(PKG_TEXT, "skip_tonight", 120 if label != "October, expiry after the hour" else 180, started)
+        pw.restart("first")
+        if exp_ts(pw, "skip_tonight") != exp:
+            bad.append(f"{label}: a restart changed an expiry outside the repeated hour by {exp_ts(pw, 'skip_tonight') - exp:+.0f} s")
+    pw, exp = running(PKG_TEXT, "hold_battery", 120, AUTUMN)
+    before = {e: v for e, v in pw.w.states.items() if e.startswith("input_number.")}
+    pw.restart("first")
+    if {e: v for e, v in pw.w.states.items() if e.startswith("input_number.")} != before:
+        bad.append("a restart changed a number helper (they are restored exactly)")
+    pw.restart("missing")
+    if pw.w.state_attr(EXPIRES_E["hold_battery"], "timestamp") is not None:
+        bad.append("restart('missing') left the attribute")
+    return bad
+
+
+pm = premise_problems()
+check("the restart model: a date-and-time expiry in the repeated hour is restored 60 minutes EARLY with its state string unchanged, one outside it exactly, a number helper exactly, "
+      "and an abnormal restore can be stated (the recollection of Home Assistant core that known limitation 19 describes; not verified live)", pm == [], str(pm[:3]))
+
+SHAPE14 = {
+    "epoch": re.compile(r"\{%- set (\w+) = states\('input_number\.ecco_plan_override_[a-z_]+_expires_epoch'\) \| float\(none\) -%\}\n[ ]*\{%- set \1 = \1 if \(\1 is number and \1 == \1 and \1 >= 0 and \1 <= 4102444800\) else none -%\}"),
+    "combine": re.compile(r"\{%- set (\w+) = \(\[\1, (\w+)\] \| reject\('none'\) \| list \| max\) if \(\(\1 is not none and \2 is not none\) or \(\1 is not none and \1 > (\w+)\) or \(\2 is not none and \2 > \3\)\) else none -%\}"),
+    "write": re.compile(r"[ ]*- action: input_number\.set_value\n[ ]*target:\n[ ]*entity_id: input_number\.ecco_plan_override_(\w+?)_expires_epoch\n[ ]*data:\n[ ]*value: \"\{\{ decision\.expires_ts \}\}\"\n"),
+}
+shape = {k: len(rx.findall(PKG_TEXT)) for k, rx in SHAPE14.items()}
+check("the text has the new read at all ten expiry read sites (an epoch read with a positive-range test and the raise-only combination) and six epoch writes (three starts, three cancels)",
+      shape == {"epoch": 10, "combine": 10, "write": 6}, str(shape))
+
+def _guarded14(fn) -> list[str]:
+    try:
+        return fn(PKG_TEXT)
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof, not a crash of the suite
+        return [f"{fn.__name__} raised {type(exc).__name__}: {str(exc)[:100]}"]
+
+
+R14 = {fn.__name__: _guarded14(fn) for fn in GROUPS14}
+check("start and cancel write the epoch record: the same number as the date-and-time expiry (the cancel: the minute-floored now), BEFORE the date-and-time expiry (the power cut: reserve, epoch, start, "
+      "expiry), the kind's own record only, and a cancel leaves the other kinds' epoch records alone", R14["g_writes"] == [], str(R14["g_writes"][:3]))
+check("the October repeated hour, the October day and night around it, the spring-forward day and an ordinary day, each kind, with no restart and with a restart before, inside and after the hour "
+      "(the attribute restored 60 minutes early when the expiry is in the hour): the hold, held_by and the effective reserve equal the TRUE instants: held to the last second, clear at the expiry "
+      "second, never a second longer; all three kinds at once", R14["g_restart"] == [], str(R14["g_restart"][:3]))
+check("start then cancel then restart stays released; a restart inside the repeated hour and then a cancel inside it is allowed and releases; a cancel after the true expiry is NOT_ACTIVE with the "
+      "revision unchanged; one second before the expiry a cancel is allowed, at the expiry second it is not", R14["g_cancel"] == [], str(R14["g_cancel"][:3]))
+check("an epoch record that is missing, unavailable, unknown, empty, nan, infinite, negative, out of range or junk: with the attribute running it is held (the cut's reserve kept, a cancel repairs it); "
+      "with the attribute past the kind is unreadable (unknown; the cut's raised reserve retained; held by another running kind); an epoch reset to 0 can never release what the attribute shows as "
+      "running; a missing attribute with the epoch running is held, with the epoch past unreadable; both unreadable: unknown and the reserve retained; stale-early and stale-late sources; the stored "
+      "reserve (valid 10 to 100 retained, an invalid value not applied)", R14["g_abnormal"] == [], str(R14["g_abnormal"][:3]))
+check("an interrupted start leaves the override held (the epoch record is written first), an interrupted cancel leaves it held and a second cancel finishes it", R14["g_interrupt"] == [], str(R14["g_interrupt"][:3]))
+check("the normal paths of all three kinds on an ordinary day and the clock-change day: held through the last second of a 15 minute override, clear at the expiry second, never extended, then a cancel",
+      R14["g_normal"] == [], str(R14["g_normal"][:3]))
+check("a differential sweep of 34 seeded start times, lengths and restart moments: the new read is never EARLIER than the attribute-only read, equals it whenever the two sources agree, and equals the "
+      "true instant", R14["g_diff"] == [], str(R14["g_diff"][:3]))
+
+print("[14] mutation: each way of ignoring, mixing up, mis-writing or loosening the epoch record is caught by a running case above")
+
+
+def _line_indent(t: str, pos: int) -> str:
+    return t[t.rfind("\n", 0, pos) + 1:pos]
+
+
+def _sub_sites(t: str, rx: re.Pattern, fn, only=None) -> str:
+    out, last = [], 0
+    for k, m in enumerate(rx.finditer(t)):
+        out.append(t[last:m.start()])
+        out.append(fn(m, _line_indent(t, m.start())) if only is None or k in only else m.group(0))
+        last = m.end()
+    out.append(t[last:])
+    return "".join(out)
+
+
+def build_mutants14(t: str) -> list[tuple[str, str]]:
+    ident = lambda m, ind: "{%- set " + m.group(1) + " = " + m.group(1) + " -%}"                                       # noqa: E731 - the epoch source ignored
+    sites = ("the cancel script, Hold battery", "the cancel script, Skip tonight", "the cancel script, Prepare for power cut", "the hold sensor's state, Hold battery",
+             "the hold sensor's state, Skip tonight", "the hold sensor's state, Prepare for power cut", "the held_by attribute, Hold battery", "the held_by attribute, Skip tonight",
+             "the held_by attribute, Prepare for power cut", "the effective reserve's power-cut expiry")
+    muts: list[tuple[str, str]] = []
+    muts.append(("the epoch record is ignored at every read site", _sub_sites(t, SHAPE14["combine"], ident)))
+    for k in range(10):
+        muts.append((f"the epoch record is ignored at one read site: {sites[k]}", _sub_sites(t, SHAPE14["combine"], ident, only={k})))
+    muts.append(("min instead of max (the earlier instant wins)", _sub_sites(t, SHAPE14["combine"], lambda m, ind: m.group(0).replace("| list | max)", "| list | min)"))))
+    muts.append(("the epoch record replaces the attribute when it is valid (not raise-only)", _sub_sites(t, SHAPE14["combine"], lambda m, ind: "{%- set " + m.group(1) + " = " + m.group(2) + " if " + m.group(2) + " is not none else " + m.group(1) + " -%}")))
+    muts.append(("the attribute replaces the epoch record when it is valid (not raise-only)", _sub_sites(t, SHAPE14["combine"], lambda m, ind: "{%- set " + m.group(1) + " = " + m.group(1) + " if " + m.group(1) + " is not none else " + m.group(2) + " -%}")))
+    muts.append(("an unreadable epoch record is treated as clear (a valid 0)", _sub_sites(t, SHAPE14["epoch"], lambda m, ind: m.group(0).replace("else none -%}", "else 0 -%}"))))
+    muts.append(("an unreadable attribute is treated as clear (a valid 0)", _sub_sites(t, SHAPE14["combine"], lambda m, ind: "{%- set " + m.group(1) + " = " + m.group(1) + " if " + m.group(1) + " is not none else 0 -%}\n" + ind + m.group(0))))
+    muts.append(("the positive-range test is removed from the epoch read (inf and negative accepted)", _sub_sites(t, SHAPE14["epoch"], lambda m, ind: re.sub(r" and (\w+) >= 0 and \1 <= 4102444800", "", m.group(0)))))
+    muts.append(("the positive-range test is written as a negation without the self-equality test (nan accepted)",
+                 _sub_sites(t, SHAPE14["epoch"], lambda m, ind: re.sub(r" and (\w+) == \1 and \1 >= 0 and \1 <= 4102444800", lambda x: " and not (" + x.group(1) + " < 0 or " + x.group(1) + " > 4102444800)", m.group(0)))))
+    muts.append(("NOT_ACTIVE is decided from the date-and-time source only", _sub_sites(t, SHAPE14["combine"], ident, only={0, 1, 2})))
+    muts.append(("NOT_ACTIVE is decided from the epoch source only", _sub_sites(t, SHAPE14["combine"], lambda m, ind: "{%- set " + m.group(1) + " = " + m.group(2) + " -%}", only={0, 1, 2})))
+    old = "(e is none or e > n) and c is number"
+    muts.append(("the effective reserve drops the power cut's reserve when its expiry is unreadable (the behaviour before r14)", t.replace(old, "(e is not none and e > n) and c is number") if t.count(old) == 1 else ""))
+    old2 = "{%- set c = c if ((e is none or e > n) and c is number and c == c and c >= 10 and c <= 100) else none -%}"
+    muts.append(("the stored reserve range test is dropped while the expiry is unreadable", t.replace(old2, "{%- set c = c if (e is none or e > n) else none -%}") if t.count(old2) == 1 else ""))
+    blocks = list(SHAPE14["write"].finditer(t))
+    names = ("Hold battery", "Skip tonight", "Prepare for power cut")
+    for i in range(6):
+        who = f"the start of {names[i]}" if i < 3 else f"the cancel of {names[i - 3]}"
+        muts.append((f"the epoch record is not written by {who}", t[:blocks[i].start()] + t[blocks[i].end():] if len(blocks) == 6 else ""))
+    for i in range(3):
+        if len(blocks) != 6:
+            muts.append((f"the epoch record is written AFTER the date-and-time expiry: {names[i]}", ""))
+            continue
+        m, kind = blocks[i], KINDS[i]
+        rest = t[:m.start()] + t[m.end():]
+        at = rest.index(f"entity_id: input_datetime.ecco_plan_override_{kind}_expires\n", m.start())
+        j = rest.index("\n", rest.index("timestamp:", at)) + 1
+        muts.append((f"the epoch record is written AFTER the date-and-time expiry: {names[i]}", rest[:j] + m.group(0) + rest[j:]))
+    cancel_plus = lambda m, ind: m.group(0).replace("decision.expires_ts }}", "decision.expires_ts + 3600 }}")        # noqa: E731
+    muts.append(("a cancel leaves the epoch record in the future (an hour after the cancel instant)", _sub_sites(t, SHAPE14["write"], cancel_plus, only={3, 4, 5})))
+    muts.append(("a start blindly extends the epoch record by an hour", _sub_sites(t, SHAPE14["write"], cancel_plus, only={0, 1, 2})))
+    return muts
+
+
+caught14, built14 = 0, 0
+if shape == {"epoch": 10, "combine": 10, "write": 6}:
+    for label, mutated in build_mutants14(PKG_TEXT):
+        built14 += 1
+        if not mutated or mutated == PKG_TEXT:
+            check(f"mutant anchor: {label}", False, "the mutation did not change the text")
+            continue
+        try:
+            yaml.safe_load(mutated)
+        except yaml.YAMLError as exc:
+            check(f"mutant loads as YAML: {label}", False, str(exc)[:80])
+            continue
+        found = problems14(mutated, stop_early=True)
+        if found:
+            caught14 += 1
+            print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+        else:
+            FAILURES.append(f"mutant survived: {label}")
+            print(f"  FAIL  mutant survived: {label}")
+else:
+    check("the epoch-record mutants could be built (the new read and writes are in the package text)", False, f"shape {shape}")
+check(f"{built14} epoch-record mutants (the epoch ignored everywhere and at each of the ten read sites, min for max, either source replacing the other, an unreadable source read as clear, the positive-range "
+      "test removed or written as a negation, NOT_ACTIVE from one source, the old skip of an unreadable power cut, the stored-reserve range test dropped, an epoch not written by any start or cancel, "
+      "written after the expiry, a cancel that leaves it in the future, a start that extends it by an hour), all caught by a running case",
+      built14 == 33 and caught14 == built14, f"{caught14}/{built14}")
+check("control: the unmutated package passes the same running cases", all(v == [] for v in R14.values()))
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

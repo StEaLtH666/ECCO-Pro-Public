@@ -37,6 +37,10 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   recheck wrote it, one alert carries it plus ONE sentence (only while Dump to Grid is active) that it is active now and this run did not start it, neither schedule
                   notification is dismissed, nothing is pressed, the write enable ends off; unchanged when Dump to Grid is not active; STARTING, FAILED and CANCELLED results keep their old rule
                   (controls); the start-time BLOCKED results; thirteen mutants, the old overwrite among them. It replaces the pin of the old behaviour that stood at the end of [11]
+  [13] restart   (owner decision r14, 19 Nov 2026; known limitation 19) a Home Assistant restart inside the repeated hour of the October clock change restores a date-and-time expiry
+                  60 minutes early in the offline model (_plan_sim.restart: a recollection, not verified live); the absolute epoch record next to it keeps the hold to the true expiry, so the
+                  scheduled start is refused (OVERRIDE_ACTIVE, nothing staged or pressed) to the last second and starts from the expiry second, for each kind; [8] also runs with the epoch record
+                  reset to 0 (the attribute alone), so its hold-state read-site mutants stay killed; the epoch-ignoring mutants are caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -82,6 +86,7 @@ OWNER = "input_number.ecco_minimum_reserve_soc"
 KINDS = ["hold_battery", "skip_tonight", "prepare_power_cut"]
 EXP = {k: f"input_datetime.ecco_plan_override_{k}_expires" for k in KINDS}
 CUT_RES = "input_number.ecco_plan_override_prepare_power_cut_reserve"
+EPOCH = {k: f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}    # the absolute expiry records of owner decision r14
 START_BTN = D.D_PRESS
 T0 = "2026-11-17 21:00:00"
 
@@ -587,9 +592,10 @@ def world_in(local_start: str, zone: str, plan: str = PLAN_TEXT, owner=40):
     return pw, d
 
 
-def clock_day_problems(plan_text: str, stop_early: bool = False) -> list[str]:
+def clock_day_problems(plan_text: str, stop_early: bool = False, epoch_reset: bool = False) -> list[str]:
     """The scheduled start, started at a given second of the override's life: refused (BLOCKED, OVERRIDE_ACTIVE, nothing staged or pressed) while the
-    override runs, started (one press) from its expiry second on. Every kind, on the clock-change day."""
+    override runs, started (one press) from its expiry second on. Every kind, on the clock-change day. `epoch_reset`: the absolute epoch record of owner
+    decision r14 is reset to 0 after the start, so only the date-and-time attribute carries the override (the hold-state read sites then still matter)."""
     bad: list[str] = []
     probes = ((-3540, False), (-1800, False), (-60, False), (-1, False), (0, True), (1, True))      # (seconds from the true expiry, starts?)
     try:
@@ -597,6 +603,8 @@ def clock_day_problems(plan_text: str, stop_early: bool = False) -> list[str]:
             for off, starts in probes:
                 pw, d = world_in("2026-10-25 00:40:40", "Europe/London", plan_text)
                 hold(pw, kind, 120)
+                if epoch_reset:
+                    pw.w.set(EPOCH[kind], "0.0")
                 exp = float(pw.w.state_attr(EXP[kind], "timestamp"))
                 if exp != _EXP_AUTUMN or pw.state(EXP[kind]) != "2026-10-25 01:40:00":
                     bad.append(f"{kind}: the override ends at {exp} / {pw.state(EXP[kind])!r}, wanted 01:40 GMT")
@@ -621,6 +629,8 @@ def clock_day_problems(plan_text: str, stop_early: bool = False) -> list[str]:
 cd_bad = clock_day_problems(PLAN_TEXT)
 check("clock-change day, each kind: a scheduled start inside the repeated hour of an override that ends at 01:40 GMT is refused (OVERRIDE_ACTIVE, nothing staged "
       "or pressed) from 59 minutes in to the last second, and starts from the expiry second on", cd_bad == [], str(cd_bad[:3]))
+cd_bad2 = clock_day_problems(PLAN_TEXT, epoch_reset=True)
+check("the same with the absolute epoch record reset to 0 (owner decision r14): the date-and-time attribute alone still holds the scheduled start to the true expiry second", cd_bad2 == [], str(cd_bad2[:3]))
 
 print("[8] mutation: the hold read from the state string, or its expiry second moved, lets a scheduled start through on the clock-change day")
 _READ = re.compile(r"\{%- set (\w+) = state_attr\('(input_datetime\.[a-z_]+)', 'timestamp'\) \| float\(none\) -%\}\n[ ]*\{%- set \1 = \1 if \([^\n]*\) else none -%\}")
@@ -639,7 +649,7 @@ if PLAN_TEXT.count(_HOLD_LINE) == 1:
 check("the nine mutants of this section are all built (the three hold-state read sites and the expiry-second line were each found)", len(MUTANTS8) == 9, str(len(MUTANTS8)))
 caught8 = 0
 for label, mutated in MUTANTS8:
-    found = clock_day_problems(mutated, stop_early=True)
+    found = clock_day_problems(mutated, stop_early=True) or clock_day_problems(mutated, stop_early=True, epoch_reset=True)     # r14: the epoch record would carry a reverted attribute read on its own
     if found:
         caught8 += 1
         print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
@@ -647,7 +657,7 @@ for label, mutated in MUTANTS8:
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS8)} clock-change mutants, all caught by a running scheduled start", caught8 == len(MUTANTS8) and len(MUTANTS8) == 9, f"{caught8}/{len(MUTANTS8)}")
-check("control: the unmutated packages pass the same running cases", cd_bad == [])
+check("control: the unmutated packages pass the same running cases", cd_bad == [] and cd_bad2 == [])
 
 # ================================================================================================================================
 print("[9] press-time recheck: the hold and the reserve are read again immediately before the press (review finding 2)")
@@ -1304,6 +1314,69 @@ for label, edits in MUTANTS12:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS12)} mutants of the post-loop overwrite and the alert sentence (the old overwrite among them), all caught by a running scheduled start", caught12 == len(MUTANTS12) == built12, f"{caught12}/{built12}/{len(MUTANTS12)}")
 check("control: the unmutated package passes the same running cases", ip == [] and cp == [] and sp == [] and rp == [] and all(v == [] for v in ap.values()))
+
+# ================================================================================================================================
+print("[13] a Home Assistant restart inside the repeated hour does not release an override early: the scheduled start follows the absolute epoch record (owner decision r14; known limitation 19)")
+# ================================================================================================================================
+# THE MODEL (a recollection of Home Assistant core, NOT verified live): a restart restores a date-and-time helper's attribute from its state string, read as the first of two equal local times, so an
+# expiry in the repeated hour of the autumn clock change is restored 60 minutes early (_plan_sim.restart). Before r14 the export hold, which read only that attribute, then released the override up to an
+# hour early and the scheduled start pressed. Now each expiry is also an absolute epoch record (an input_number restored exactly) and the hold takes the LATER of the two instants. Europe/London, 25 Oct
+# 2026: an override started at 00:40 BST for 120 minutes ends at 01:40 GMT; Home Assistant restarts at 01:10 GMT (the attribute then reads 00:40 GMT, already past). Each probe is a fresh world.
+def restart_day_problems(plan_text: str, stop_early: bool = False) -> list[str]:
+    bad: list[str] = []
+    probes = ((-1500, False), (-60, False), (-1, False), (0, True), (1, True))      # (seconds from the true expiry, starts?)
+    try:
+        for kind in KINDS:
+            for off, starts in probes:
+                pw, d = world_in("2026-10-25 00:40:40", "Europe/London", plan_text)
+                hold(pw, kind, 120)
+                exp = float(pw.w.state_attr(EXP[kind], "timestamp"))
+                pw.w.run_until(exp - 1800)
+                pw.restart("first")
+                if float(pw.w.state_attr(EXP[kind], "timestamp")) != exp - 3600:
+                    bad.append(f"{kind}: the restart model did not restore the expiry 60 minutes early")
+                    break
+                pw.w.run_until(exp + off)
+                n0 = len(pw.w.service_log)
+                run_scheduled(pw, d)
+                last = pw.state(LAST)
+                if starts:
+                    ok = bool(d.presses) and d.presses[0][1] == "PASSED" and len(d.press_log) == 1 and not last.startswith("BLOCKED")
+                else:
+                    ok = last.startswith("BLOCKED - a Hold battery") and "OVERRIDE_ACTIVE" in last and untouched(pw, d, n0)
+                if not ok:
+                    bad.append(f"{kind}: after a restart at 01:10 GMT, a scheduled start {off:+d} s from the true expiry: {last[:60]!r} presses={d.press_log}, wanted {'a start' if starts else 'a refusal'}")
+                    if stop_early:
+                        return bad
+    except Exception as exc:  # noqa: BLE001 - a package that cannot run is a failed proof
+        bad.append(f"raised {type(exc).__name__}: {str(exc)[:140]}")
+    return bad
+
+
+rd_bad = restart_day_problems(PLAN_TEXT)
+check("restart at 01:10 GMT inside the repeated hour, each kind: the scheduled start is refused (OVERRIDE_ACTIVE, nothing staged or pressed) from 25 minutes before the true expiry to its last "
+      "second, although the restored attribute already reads 60 minutes early, and starts from the expiry second on", rd_bad == [], str(rd_bad[:3]))
+_COMBINE = re.compile(r"\{%- set (\w+) = \(\[\1, (\w+)\] \| reject\('none'\) \| list \| max\) if \(\(\1 is not none and \2 is not none\) or \(\1 is not none and \1 > (\w+)\) or \(\2 is not none and \2 > \3\)\) else none -%\}")
+_cs = list(_COMBINE.finditer(PLAN_TEXT))
+print("[13] mutation: the absolute epoch record ignored at a hold-state read site, or the earlier instant taken, lets a scheduled start through after a restart")
+MUTANTS13 = []
+if len(_cs) == 10:
+    for k, kind_name in ((3, "Hold battery"), (4, "Skip tonight"), (5, "Prepare for power cut")):
+        m = _cs[k]
+        MUTANTS13.append((f"the export hold ignores the epoch record of {kind_name}", PLAN_TEXT[:m.start()] + "{%- set " + m.group(1) + " = " + m.group(1) + " -%}" + PLAN_TEXT[m.end():]))
+    MUTANTS13.append(("the export hold takes the earlier of the two instants (min for max)", _COMBINE.sub(lambda m: m.group(0).replace("| list | max)", "| list | min)"), PLAN_TEXT)))
+check("the four mutants of this section are all built (the ten combination lines were found)", len(MUTANTS13) == 4, str(len(_cs)))
+caught13 = 0
+for label, mutated in MUTANTS13:
+    found = restart_day_problems(mutated, stop_early=True)
+    if found:
+        caught13 += 1
+        print(f"  PASS  mutant caught: {label} (first failing case: {found[0][:90]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{len(MUTANTS13)} restart mutants, all caught by a running scheduled start", caught13 == len(MUTANTS13) == 4, f"{caught13}/{len(MUTANTS13)}")
+check("control: the unmutated packages pass the same running cases", rd_bad == [])
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

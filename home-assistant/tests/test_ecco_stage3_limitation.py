@@ -34,6 +34,10 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 sentence and the CHANGELOG say so in the new words, the old wording (overwritten, no alert, dismissed, only the record is lost) is gone from item 20 and the header, the Stage 3
                 limitation sentence (RG-ST3: the dongle's own Start button is not bound) stands exactly once in each place and item 20 and the header still say so, nothing says 'fully enforced',
                 all 22 items are still listed; mutants and a control
+  [9] item 19   (owner decision r14, 19 Nov 2026; additive) limitation 19, the restart inside the repeated hour, is MITIGATED offline by an absolute epoch record read raise-only: items 1, 11, 17
+                and 19 say so in the new words (the old 'open owner decision' wording is replaced, never merely dropped), the new item 23 (the card reads the timestamp attribute only: display
+                only, the backend decides) exists, the helper package comment and the CHANGELOG say so, the Stage 3 limitation sentence (RG-ST3) stands exactly once in each place, nothing says
+                'fully enforced', and all 23 items are listed; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -425,6 +429,8 @@ LIMIT_ITEMS = (   # (number, a phrase that must stand in the item's bold title, 
     (13, "input shapes"), (14, "discretionary"), (15, "already staged"), (16, "confirmation switch"), (17, "modelled, not live-proven"), (18, "site mapping"),
     # the second review of the fixes (18 Nov 2026): a restart inside the repeated hour, the overwritten BLOCKED text, a momentary unreadable sensor, the leftover staging
     (19, "repeated hour"), (20, "overwritten"), (21, "momentary"), (22, "leftover staging"),
+    # owner decision r14 (19 Nov 2026): the card reads the timestamp attribute only (display only; the backend decides)
+    (23, "attribute only"),
 )
 DIRECTION_RE = re.compile(r"Direction: (?:fail open|fail closed|either way|neutral|informational|unknown|believed fail closed|not applicable|your limits)")
 
@@ -535,7 +541,7 @@ check("nothing claims the overrides are fully enforced (the card sources, the bu
       not [n for n, v in scope_texts.items() if FULL_CLAIM.search(v)], str([n for n, v in scope_texts.items() if FULL_CLAIM.search(v)]))
 check("the Stage 3 limitation sentence is still in every place it was, exactly once (the new section and the new wording did not add or remove a copy)",
       not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
-check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: twenty-two numbered items (the review's twelve first, six smaller ones, the four of the second review), each with its direction "
+check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: twenty-three numbered items (the review's twelve first, six smaller ones, the four of the second review, and item 23 of owner decision r14), each with its direction "
       "of failure and what you would see", not limitations_problems(w6["plan-core README"]), str(limitations_problems(w6["plan-core README"])))
 check("the card README points to that section (a one-line pointer)", "Known limitations (stated, not fixed in this change)" in flat(w6["card README"]))
 
@@ -606,8 +612,13 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 ITEM_STATUS = {   # item number -> phrases its body must carry (what was reproduced, what was only reasoned or recalled, what was not examined)
     9: ("NOT reproduced", "Run now against the current packages and simulators", "Reasoned, not examined"),
     10: ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed"),
-    11: ("modelled, not live-proven", "stricter than the earlier state-string read"),
-    19: ("recalled", "not verified here", "NOT said to be preserved across a restart", "open owner decision", "supervised check"),
+    1: ("RETAINED since owner decision r14", "fail closed for the unreadable power-cut record"),
+    11: ("modelled, not live-proven", "stricter than the earlier state-string read", "the two are read raise-only, the later valid instant winning"),
+    17: ("input_number restores an exact ten-digit epoch", "whether `input_number.set_value` accepts a value that large"),
+    19: ("recalled", "not verified here", "NOT said to be preserved across a restart", "MITIGATED offline 19 Nov 2026 by owner decision r14", "the later of the two valid instants",
+         "an epoch record that is missing, reset to 0 or unreadable cannot release one the attribute still shows as running", "fail closed", "that includes a restart with an override running",
+         "Not changed: the card (item 23)"),
+    23: ("`timestamp` attribute only", "display only; the backend decides", "does not read the absolute epoch records of item 19", "NOT changed", "Not reproduced in a browser"),
     20: ("FIXED on 19 Nov 2026 (owner decision r14)", "is never overwritten", "the schedule notifications are not dismissed", "Dump to Grid is active now",
          "this run did not start it", "test_ecco_plan_enforcement.py` [12]", "still not bound by any override (RG-ST3)", "STARTING, FAILED or CANCELLED", "Not examined: how real Home Assistant renders the notice"),
     21: ("Reproduced offline", "not examined: whether and for how long a real template reload", "lost until the owner arms the schedule again", "every attempt, the first included"),
@@ -631,7 +642,7 @@ HELPER_COMMENT_WORDING = (
     "NOT PROVEN, and not claimed",
     "stays so across a restart",
     "restores that expiry 60 minutes early",
-    "an open owner decision and an item for the supervised check",
+    "MITIGATED offline by source 2 (owner decision r14), and remains an item for the supervised check",
 )
 CHANGELOG_WORDING = (
     "stricter than before when the attribute is missing",
@@ -704,7 +715,7 @@ s2_readme = w6["plan-core README"]
 check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (read, not examined), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
       "not examined)", not status_problems(s2_readme), str(status_problems(s2_readme)))
 check("the plan-core README has the four items of the second review (19 restart in the repeated hour, 20 overwritten BLOCKED text, 21 momentary unreadable sensor, 22 leftover staging) "
-      "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if n >= 19] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
+      "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if 19 <= n <= 22] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
       and not limitations_problems(s2_readme), str(limitations_problems(s2_readme)))
 check("the caveats stand: the plan helper package comment says the timestamp attribute is NOT proven and not claimed across a restart (the open decision), the schedule package header says "
       "what the press-time recheck costs and the STARTED OK overwrite, and the CHANGELOG says stricter-when-missing and the residual; the over-claiming sentences are gone",
@@ -788,7 +799,7 @@ def fixed20_problems(readme: str, schedule: str, changelog: str) -> list[str]:
 f8_readme, f8_schedule, f8_changelog = s2_readme, s2_schedule, s2_changelog
 check("limitation 20 is fixed in the words of item 20, the schedule package header (and its alert sentence in the code) and the CHANGELOG; the old wording is gone from item 20 and the header; item 20 and the "
       "header still say the dongle's own Start button is not bound (RG-ST3); no 'fully enforced' claim", not fixed20_problems(f8_readme, f8_schedule, f8_changelog), str(fixed20_problems(f8_readme, f8_schedule, f8_changelog)))
-check("the 22 numbered items are all still listed, item 20 among them (nothing was removed because it was fixed)", [n for n, _ in LIMIT_ITEMS] == list(range(1, 23)) and not limitations_problems(f8_readme)
+check("the 22 numbered items are all still listed, item 20 among them (nothing was removed because it was fixed)", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and not limitations_problems(f8_readme)
       and 20 in item_bodies(f8_readme), str(limitations_problems(f8_readme)))
 check("the Stage 3 limitation sentence (RG-ST3) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
 check("the 'Known limitations' introduction says item 20 was fixed and that the other items were not", "except item 20" in flat(f8_readme) and "NOT fixed" in flat(f8_readme))
@@ -821,6 +832,106 @@ check("mutant caught: a copy of the Stage 3 limitation sentence added to the Kno
 _h8 = f8_readme.index(LIMITS_HEADING)
 check("mutant caught: item 20 removed (21 items)", bool(limitations_problems(f8_readme[:f8_readme.index("\n20. **", _h8)] + f8_readme[f8_readme.index("\n21. **", _h8):])))
 check("control: the untouched tree is not flagged by the item 20 checks", not fixed20_problems(f8_readme, f8_schedule, f8_changelog) and not status_problems(f8_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog))
+
+# ===========================================================================
+print("")
+print("[9] known limitation 19 is MITIGATED offline (owner decision r14, 19 Nov 2026; additive): the epoch record is stated, item 23 is new, the old 'open owner decision' wording is replaced, RG-ST3 and the 23 items stay")
+# ===========================================================================
+# Each override's expiry is also held as an absolute epoch record (an input_number per kind) and read raise-only with the date-and-time attribute (running proof: test_ecco_plan_helpers_package.py [14]
+# and test_ecco_plan_enforcement.py [13]). Item 19 stays in the list with what changed and what is still modelled only; items 1, 11 and 17 say what that did to them; item 23 is new (the card
+# reads the attribute only and may show an override as ended up to an hour early after a restart: display only, the backend decides). These checks are ADDITIVE to [6] to [8]: they require the new wording,
+# forbid the old wording where it described the current behaviour (an open owner decision; the unreadable power-cut record published as the owner's reserve; the state-string claim for the card),
+# re-require the Stage 3 limitation sentence (RG-ST3) and the 23 items, and forbid any 'fully enforced' claim.
+OLD19_ITEM = ("An open owner decision (accept the residual", "Not reproduced, not changed, and not claimed either way")
+OLD1_ITEM = ("With the power-cut record unreadable while it runs, the owner's reserve is published instead.",)
+OLD19_HELPER = ("an open owner decision and an item for the supervised check",)
+OLD19_CHANGELOG = ("This is an open owner decision (accept",)
+CHANGELOG_R14 = ("an absolute epoch record", "read raise-only", "the later of the two valid instants", "known limitations 19 and 23", "owner decision r14", "it was skipped before",
+                 "supersedes what the earlier bullet", "still not bound by any override (RG-ST3)", "known limitation 23, display only; the backend decides")
+HELPER_R14 = ("EACH EXPIRY IS HELD TWICE", "the LATER of the two instants wins (raise-only)", "UNREADABLE when EITHER source is invalid", "The start script writes source 2 BEFORE source 1",
+              "A source 2 that is missing, reset to 0 or unreadable can never release an override that source 1 still shows as running", "that is LATE", "NOT PROVEN, and not claimed",
+              "MITIGATED offline by source 2 (owner decision r14)")
+
+
+def bullet_r14(changelog: str) -> str:
+    """The CHANGELOG bullet of the absolute epoch record (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: an override's expiry is also an absolute epoch record")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def mitigated19_problems(readme: str, helper: str, changelog: str) -> list[str]:
+    out = []
+    bodies = item_bodies(readme)
+    item19, item23 = bodies.get(19, ""), bodies.get(23, "")
+    out.extend(f"item 19 still says: {p}" for p in OLD19_ITEM if p in item19)
+    out.extend(f"item 1 still says: {p}" for p in OLD1_ITEM if p in bodies.get(1, ""))
+    fh = flat_yaml(helper)
+    out.extend(f"the plan helper package comment still says: {p}" for p in OLD19_HELPER if p in fh)
+    out.extend(f"the plan helper package comment lacks: {p}" for p in HELPER_R14 if p not in fh)
+    fc, fb = flat(changelog), flat(bullet_r14(changelog))
+    out.extend(f"the CHANGELOG still says: {p}" for p in OLD19_CHANGELOG if p in fc)
+    out.extend(f"the CHANGELOG lacks: {p}" for p in CHANGELOG_R14 if p not in fb)
+    if "MITIGATED" not in item19 or "FIXED" in item19 or "FIXED" in item23:
+        out.append("item 19 must say MITIGATED (offline) and neither item 19 nor item 23 may say FIXED: it is not proven in real Home Assistant")
+    if "item 19" not in item23:
+        out.append("item 23 must point to item 19")
+    intro = flat(readme)
+    if "added item 23" not in intro or "item 19 (mitigated offline the same day by an absolute epoch record" not in intro or "items 9, 10 and 19 to 23" not in intro:
+        out.append("the Known limitations introduction does not name item 23, the mitigated item 19 and the items that say what was reproduced")
+    if "except item 20" not in intro or "NOT fixed" not in intro:
+        out.append("the Known limitations introduction lost 'except item 20' or 'NOT fixed'")
+    for name, body in (("item 19", item19), ("item 23", item23), ("the plan helper package comment", fh), ("the CHANGELOG bullet", fb)):
+        if FULL_CLAIM.search(body):
+            out.append(f"a 'fully enforced' claim stands in {name}")
+    if "the dongle's own Start button" not in flat(readme) or "not bound" not in flat(readme):
+        out.append("the plan-core README no longer says that the dongle's own Start button is not bound")
+    return out
+
+
+m9_readme, m9_helper, m9_changelog = s2_readme, s2_helper, s2_changelog
+check("limitation 19 is MITIGATED in the words of item 19, items 1, 11, 17 and 23, the plan helper package comment and the CHANGELOG bullet; the old 'open owner decision' wording is gone; "
+      "no FIXED or 'fully enforced' claim", not mitigated19_problems(m9_readme, m9_helper, m9_changelog) and not status_problems(m9_readme), str(mitigated19_problems(m9_readme, m9_helper, m9_changelog) + status_problems(m9_readme)))
+check("the 23 numbered items are all listed (the first 22 in their order and item 23 last), none removed or merged", [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and len(LIMIT_ITEMS) == 23
+      and not limitations_problems(m9_readme) and sorted(item_bodies(m9_readme)) == list(range(1, 24)), str(limitations_problems(m9_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("the card, its bundle and the card README still do not name the epoch records (the card is not changed by owner decision r14)",
+      not [n for n in ("card controls (source)", "card bundle", "card README") if "expires_epoch" in texts[n]] and "expires_epoch" not in " ".join(card_sources.values()))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM_STATUS[19]:
+    check(f"mutant caught: item 19 loses '{ph[:48]}'", bool(status_problems(drop_in_item(m9_readme, 19, ph))))
+for num in (1, 11, 17, 23):
+    for ph in ITEM_STATUS[num]:
+        check(f"mutant caught: item {num} loses '{ph[:48]}'", bool(status_problems(drop_in_item(m9_readme, num, ph))))
+for ph in HELPER_R14:      # (the fourth HELPER_COMMENT_WORDING phrase, replaced by r14, is mutated by the loop of [7])
+    check(f"mutant caught: the plan helper package comment loses '{ph[:48]}'", bool(mitigated19_problems(m9_readme, drop_phrase(flat_yaml(m9_helper), ph), m9_changelog)))
+for ph in CHANGELOG_R14:
+    check(f"mutant caught: the CHANGELOG bullet loses '{ph[:48]}'", bool(mitigated19_problems(m9_readme, m9_helper, drop_phrase(m9_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet removed", bool(mitigated19_problems(m9_readme, m9_helper, drop_phrase(m9_changelog, "an absolute epoch record, read raise-only"))))
+check("mutant caught: the open owner decision restored in item 19", bool(mitigated19_problems(m9_readme.replace("Not changed: the card (item 23).", "An open owner decision (accept the residual, or have the start script push the expiry). Not changed: the card (item 23)."), m9_helper, m9_changelog)))
+check("mutant caught: the open owner decision restored in the plan helper package comment", bool(mitigated19_problems(m9_readme, m9_helper + "\n# an open owner decision and an item for the supervised check\n", m9_changelog)))
+check("mutant caught: the open owner decision restored in the CHANGELOG", bool(mitigated19_problems(m9_readme, m9_helper, m9_changelog + "\nThis is an open owner decision (accept the residual).\n")))
+check("mutant caught: item 19 claims it FIXED", bool(mitigated19_problems(m9_readme.replace("MITIGATED offline 19 Nov 2026 by owner decision r14.**", "FIXED offline 19 Nov 2026 by owner decision r14.**"), m9_helper, m9_changelog)))
+check("mutant caught: item 23 claims it FIXED", bool(mitigated19_problems(m9_readme.replace("(display only).**", "(display only, FIXED).**"), m9_helper, m9_changelog)))
+check("mutant caught: item 19 claims the overrides are fully enforced", bool(mitigated19_problems(m9_readme.replace("Not changed: the card (item 23).", "The overrides are fully enforced. Not changed: the card (item 23)."), m9_helper, m9_changelog)))
+check("mutant caught: item 23 claims the overrides are fully enforced", bool(mitigated19_problems(m9_readme.replace("the backend decides: the hold,", "the backend decides, fully enforced: the hold,"), m9_helper, m9_changelog)))
+check("mutant caught: the helper package comment claims full enforcement", bool(mitigated19_problems(m9_readme, m9_helper + "\n# These overrides are fully enforced.\n", m9_changelog)))
+check("mutant caught: the CHANGELOG bullet claims full enforcement", bool(mitigated19_problems(m9_readme, m9_helper, m9_changelog.replace("known limitations 19 and 23; offline, nothing installed)", "known limitations 19 and 23; fully enforced; offline, nothing installed)"))))
+check("mutant caught: the Known limitations introduction does not name item 23", bool(mitigated19_problems(m9_readme.replace("added\nitem 23.", "added\nnothing."), m9_helper, m9_changelog)))
+_a23 = m9_readme.index("\n23. **", m9_readme.index(LIMITS_HEADING))
+check("mutant caught: item 23 does not point to item 19", bool(mitigated19_problems(m9_readme[:_a23] + m9_readme[_a23:].replace("item 19", "another item"), m9_helper, m9_changelog)))
+check("mutant caught: item 1 says again that the owner's reserve is published when the power-cut record is unreadable",
+      bool(mitigated19_problems(m9_readme.replace("before r14 the owner's reserve was published instead", "With the power-cut record unreadable while it runs, the owner's reserve is published instead."), m9_helper, m9_changelog)))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan helper package", bool(places_problems({**texts, "package header: ecco_plan_helpers.yaml": texts["package header: ecco_plan_helpers.yaml"].replace(LIMITATION, "")})))
+_h9 = m9_readme.index(LIMITS_HEADING)
+check("mutant caught: item 23 removed (22 items)", bool(limitations_problems(m9_readme[:m9_readme.index("\n23. **", _h9)] + "\n" + m9_readme[m9_readme.index("\n### Install order", _h9):])))
+check("mutant caught: item 19 removed (22 items)", bool(limitations_problems(m9_readme[:m9_readme.index("\n19. **", _h9)] + m9_readme[m9_readme.index("\n20. **", _h9):])))
+check("mutant caught: items 19 and 23 merged (item 23 text inside item 19)",
+      bool(limitations_problems(m9_readme.replace("\n23. **The card reads", "\n   **The card reads"))))
+check("control: the untouched tree is not flagged by the r14 checks", not mitigated19_problems(m9_readme, m9_helper, m9_changelog) and not status_problems(m9_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog)
+      and not limitations_problems(m9_readme))
 
 print("")
 if FAILURES:

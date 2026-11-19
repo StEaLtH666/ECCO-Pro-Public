@@ -9,7 +9,9 @@ sensors, the seed and the parity with the validator are proved by test_ecco_plan
                     the seed flag, and every min / max / step / unit equals the plan core's validator bounds (HELPER_BOUNDS), so a helper
                     cannot hold a value the validator refuses and the hard ceilings cannot be lifted from Home Assistant
   [3] records       one start and one expiry per override kind (at most one active override per kind, by construction), date and time
-                    helpers; the reserve record has the reserve bounds; the skip-until helper is time only
+                    helpers; the reserve record has the reserve bounds; the skip-until helper is time only; and (owner decision r14, 19 Nov 2026)
+                    one ABSOLUTE expiry record per kind, an input_number in epoch seconds (min 0, max 4102444800, step 1, box, no initial value)
+                    that the card's reader does not name
   [4] ownership     no other package defines an ecco_plan_ helper; the manifest lists this package
   [5] mapping       the plan-core README names every entity of the package
   [6] mutation      in-memory mutants of the helper sections are each caught; a harmless change is not
@@ -69,6 +71,7 @@ CONTROL_IDS = block(ACTIONS_TS, "PLAN_CONTROL_IDS_JSON", "PLAN_CONTROL_IDS_JSON"
 EXTRA_HELPERS = {CONTROL_IDS["last_result"], "input_boolean.ecco_plan_defaults_seeded"}   # the last answer the card shows; the first-run seed flag
 _kinds = re.search(r"OVERRIDE_KINDS: readonly OverrideKind\[\] = \[([^\]]*)\]", OVERRIDES_TS.read_text(encoding="utf-8"))
 KINDS = re.findall(r'"([a-z_]+)"', _kinds.group(1)) if _kinds else []
+EPOCH_HELPERS = {f"input_number.ecco_plan_override_{k}_expires_epoch" for k in KINDS}   # owner decision r14: backend-only absolute expiry records; the card's reader does not name them
 
 ALLOWED_DOMAINS = {"input_boolean", "input_number", "input_datetime", "input_text"}
 OTHER_SECTIONS = {"script", "automation", "template"}
@@ -131,7 +134,7 @@ def problems(text: str) -> list[str]:
                 found.append(f"{eid}: the name contains an entity id")
 
     # [2] agreement with the reader and the validator
-    want = set(IDS.values()) | EXTRA_HELPERS
+    want = set(IDS.values()) | EXTRA_HELPERS | EPOCH_HELPERS
     have = set(ents)
     if want - have:
         found.append(f"entities the reader names but the package lacks: {sorted(want - have)}")
@@ -177,6 +180,16 @@ def problems(text: str) -> list[str]:
             found.append(f"{kind}: {len(mine)} record entities (exactly one start and one expiry, so at most one active override)")
     if not KINDS:
         found.append("the override kinds could not be read from overrides.ts")
+    for eid in sorted(EPOCH_HELPERS):
+        attrs = ents.get(eid)
+        if attrs is None:
+            found.append(f"{eid}: no absolute expiry record")
+        elif not eid.startswith("input_number.") or (attrs.get("min"), attrs.get("max"), attrs.get("step"), attrs.get("mode")) != (0, 4102444800, 1, "box"):
+            found.append(f"{eid}: an absolute expiry record must be an input_number with min 0, max 4102444800, step 1 and mode box")
+        if eid in IDS.values():
+            found.append(f"{eid}: the card's reader names an absolute expiry record (the card must not read it)")
+    if len(EPOCH_HELPERS) != 3:
+        found.append(f"{len(EPOCH_HELPERS)} absolute expiry records (one per override kind, three kinds)")
     sk = ents.get(IDS.get("skip_until", ""), {})
     if sk.get("has_time") is not True or sk.get("has_date") is not False:
         found.append("the skip-until helper must be time only (has_time true, has_date false)")
@@ -208,7 +221,7 @@ found = problems(TEXT)
 check("the package passes every static helper rule", not found, "; ".join(found))
 check("only the helper domains, script, automation and template are used", set(DOC) == ALLOWED_DOMAINS | OTHER_SECTIONS, str(sorted(DOC)))
 check("no helper sets an initial value (the owner's accepted limits are written once by the first-run seed, so an owner's own value survives a restart)", not re.search(r"^\s*initial\s*:", TEXT, re.M))
-check("the entity count is 19 (the 17 the reader names, the last result and the seed flag)", len(entities(HELPER_DOC)) == 19, str(len(entities(HELPER_DOC))))
+check("the entity count is 22 (the 17 the reader names, the last result, the seed flag and the three backend-only absolute expiry records of owner decision r14)", len(entities(HELPER_DOC)) == 22, str(len(entities(HELPER_DOC))))
 check("the revision helper holds a counter only (no plan value is copied into a helper)",
       not [e for e in entities(HELPER_DOC) if re.search(r"(power|soc|target|stop|start_time|duration)", e) and "override" not in e and "policy" not in e])
 check("the ceilings equal the cap maxima (a helper cannot lift a hard ceiling)",
@@ -240,7 +253,7 @@ check("the old proposal file is gone (this package replaced it: one canonical de
 
 print("[5] mapping")
 readme = README.read_text(encoding="utf-8")
-missing = [eid.split(".", 1)[1] for eid in list(IDS.values()) + sorted(EXTRA_HELPERS) if eid.split(".", 1)[1] not in readme]
+missing = [eid.split(".", 1)[1] for eid in list(IDS.values()) + sorted(EXTRA_HELPERS) + sorted(EPOCH_HELPERS) if eid.split(".", 1)[1] not in readme]
 check("the plan-core README names every entity of the package", not missing, str(missing))
 
 print("[6] mutation")
@@ -278,6 +291,15 @@ MUTANTS = {
     "an entity reference in a name": lambda d: d["input_boolean"]["ecco_plan_overrides_enabled"].update(name="mirror of number.some_inverter_power"),
     "the dongle in a name": lambda d: d["input_boolean"]["ecco_plan_overrides_enabled"].update(name="ECCO dongle write enable"),
     "the confirmation switch as a number": lambda d: d["input_number"].update(ecco_plan_overrides_enabled=d["input_boolean"].pop("ecco_plan_overrides_enabled")),
+    # owner decision r14: the three absolute expiry records
+    "a missing absolute expiry record": lambda d: d["input_number"].pop("ecco_plan_override_skip_tonight_expires_epoch"),
+    "an absolute expiry record with a lower ceiling": lambda d: d["input_number"]["ecco_plan_override_hold_battery_expires_epoch"].update(max=2000000000),
+    "an absolute expiry record that may be negative": lambda d: d["input_number"]["ecco_plan_override_hold_battery_expires_epoch"].update(min=-1),
+    "an absolute expiry record with a coarse step": lambda d: d["input_number"]["ecco_plan_override_prepare_power_cut_expires_epoch"].update(step=60),
+    "an absolute expiry record as a slider": lambda d: d["input_number"]["ecco_plan_override_skip_tonight_expires_epoch"].update(mode="slider"),
+    "an absolute expiry record with an initial value": lambda d: d["input_number"]["ecco_plan_override_hold_battery_expires_epoch"].update(initial=0),
+    "an absolute expiry record as a text helper": lambda d: d["input_text"].update(ecco_plan_override_hold_battery_expires_epoch={"name": "x", "max": 20}) or d["input_number"].pop("ecco_plan_override_hold_battery_expires_epoch"),
+    "a second absolute expiry record for one kind": lambda d: d["input_number"].update(ecco_plan_override_hold_battery_expires_epoch2={"name": "x", "min": 0, "max": 4102444800, "step": 1, "mode": "box"}),
 }
 for label, mutate in MUTANTS.items():
     try:
