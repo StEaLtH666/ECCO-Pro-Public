@@ -174,7 +174,37 @@ def sec_gate(M, rec: Rec) -> None:
         ok.label in ("LOW", "MEDIUM", "HIGH") and math.isfinite(ok.p50) and ok.p10 <= ok.p50 <= ok.p90)
 
 
-BATTERY = (sec_ceiling, sec_reject, sec_off_default, sec_gate)
+def sec_never_loosens(M, rec: Rec) -> None:
+    rec.section("[4b] enabling the envelope never loosens the guard (a configured pv_recent_headroom below 1.25)")
+    flat = {day(i): 20.0 + (i % 5) * 0.5 for i in range(40)}        # best of the last 14 days equals best of the last 30
+    raw = {d: v * 1.4 for d, v in flat.items()}
+    t = day(40)
+    best = max(v for d, v in flat.items() if 0 < (t - d).days <= 14)
+    for headroom in (1.0, 1.1, 1.25, 1.5):
+        cfg = SiteConfig(tz="UTC", pv_array_kwp=None, pv_recent_headroom=headroom)
+        on = M.PvModel(history_from(flat), cfg, {"src": raw}, skill_gate=False, recent_envelope=True)
+        off = M.PvModel(history_from(flat), cfg, {"src": raw}, skill_gate=False, recent_envelope=False)
+        lim_on, lim_off = on.plausibility_limits(t), off.plausibility_limits(t)
+        want = min(round(headroom * best, 2), round(1.25 * best, 2))
+        rec(f"pv_recent_headroom {headroom}: the recent ceiling ON is the lower of the two ({want}), never above the OFF ceiling",
+            abs(lim_on["recent_max"] - want) < 1e-9 and lim_on["recent_max"] <= lim_off["recent_max"] + 1e-9, f"{lim_on} {lim_off}")
+    few = {day(i): 20.0 + (i % 3) for i in range(33, 40)}           # 7 observed days: the envelope applies, the legacy ceiling (needs 10) does not exist
+    lim_few_on = M.PvModel(history_from(few), CFG, {}, recent_envelope=True).plausibility_limits(t)
+    lim_few_off = M.PvModel(history_from(few), CFG, {}, recent_envelope=False).plausibility_limits(t)
+    rec("no legacy ceiling (fewer than 10 recent days) but 7 in the window: the envelope is the ceiling",
+        "recent_max" not in lim_few_off and abs(lim_few_on.get("recent_max", -1) - round(1.25 * max(few.values()), 2)) < 1e-9, f"{lim_few_on} {lim_few_off}")
+    cfg = SiteConfig(tz="UTC", pv_array_kwp=None, pv_recent_headroom=1.1)
+    on = M.PvModel(history_from(flat), cfg, {"src": raw}, skill_gate=False, recent_envelope=True)
+    off = M.PvModel(history_from(flat), cfg, {"src": raw}, skill_gate=False, recent_envelope=False)
+    value = round(1.1 * best, 2) + 1.0          # above the legacy ceiling (headroom 1.1), below 1.25 x best
+    raw_in = value / on.ratio("src", t)[0]
+    a, b = on.forecast_day(t, {"src": raw_in}), off.forecast_day(t, {"src": raw_in})
+    rec("a corrected value above the lower legacy ceiling is REJECTED with the envelope on exactly as with it off",
+        a.to_dict()["plausibility"]["verdict"] == "REJECTED" and b.to_dict()["plausibility"]["verdict"] == "REJECTED"
+        and a.source == b.source == "persistence", f"{a.to_dict()['plausibility']} {b.to_dict()['plausibility']}")
+
+
+BATTERY = (sec_ceiling, sec_reject, sec_off_default, sec_gate, sec_never_loosens)
 
 
 def battery(M, rec: Rec) -> None:
@@ -200,10 +230,20 @@ MUTANTS = [
     ("an explicit switch is ignored", "self.recent_envelope = PV_RECENT_ENVELOPE_DEFAULT if recent_envelope is None else recent_envelope",
      "self.recent_envelope = PV_RECENT_ENVELOPE_DEFAULT"),
     ("the envelope replaces the ceiling even without enough days", "if len(env) >= RECENT_ENVELOPE_MIN_OBS:", "if len(env) >= 0 and env:"),
-    ("the legacy ceiling is removed when the envelope is on", "caps[\"recent_max\"] = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)",
+    ("the legacy ceiling is removed when the envelope is on",
+     "caps[\"recent_max\"] = min(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else envelope",
      "caps.pop(\"recent_max\", None)"),
-    ("the ceiling is not rounded the engine's way", "caps[\"recent_max\"] = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)",
-     "caps[\"recent_max\"] = round(RECENT_ENVELOPE_HEADROOM * max(env), 0)"),
+    ("the envelope REPLACES the legacy ceiling instead of taking the lower",
+     "caps[\"recent_max\"] = min(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else envelope",
+     "caps[\"recent_max\"] = envelope"),
+    ("the HIGHER of the two ceilings is taken",
+     "caps[\"recent_max\"] = min(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else envelope",
+     "caps[\"recent_max\"] = max(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else envelope"),
+    ("the envelope is not used when no legacy ceiling exists",
+     "caps[\"recent_max\"] = min(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else envelope",
+     "caps[\"recent_max\"] = min(caps[\"recent_max\"], envelope) if \"recent_max\" in caps else caps.get(\"recent_max\", 1e9)"),
+    ("the ceiling is not rounded the engine's way", "envelope = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)",
+     "envelope = round(RECENT_ENVELOPE_HEADROOM * max(env), 0)"),
 ]
 
 

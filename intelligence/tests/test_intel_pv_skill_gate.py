@@ -282,6 +282,16 @@ def sec_shaded(M, rec: Rec) -> None:
     rec("exactly one plain note line says the corrected forecast has not beaten persistence recently; the generic "
         "'no forecast correction available' line is not used", len(gate_notes) == 1 and len(pf.notes) == 1
         and "persistence only: no forecast correction available" not in pf.notes and "recently" in gate_notes[0], str(pf.notes))
+    rec("the note carries the corrected error, then the persistence error, then the comparable-day count",
+        f"mean error {gv.mae_corrected:.1f} vs {gv.mae_persistence:.1f} kWh over {gv.n_days} days" in gate_notes[0]
+        and f"{gv.mae_corrected:.1f}" != f"{gv.mae_persistence:.1f}", str(gate_notes))
+    Wf = World("shaded", 18, 12)    # 18 history days: 13 comparable days (fewer than the 14-day window, at least 8): decided, not beaten
+    onf = Wf.model(M, True)
+    gvf, pff = onf.skill_gate_verdict("src", Wf.T), onf.forecast_day(Wf.T, {"src": 14.0})
+    nf = [n for n in pff.notes if "has not beaten persistence" in n]
+    rec("a decided failure on 13 comparable days: the note says 13 days (the comparable-day count, not the window length 14)",
+        gvf.reason == M.GATE_REASON_NOT_BEATEN and gvf.n_days == 13 and len(nf) == 1
+        and f"mean error {gvf.mae_corrected:.1f} vs {gvf.mae_persistence:.1f} kWh over 13 days" in nf[0], f"{gvf} {pff.notes}")
     rec("the plausibility block is the ordinary one (verdict OK, the ceilings, nothing rejected)",
         d["plausibility"]["verdict"] == "OK" and d["plausibility"]["rejected"] == [] and "history_max" in d["plausibility"]["limits_kwh"])
     o = off.forecast_day(W.T, raw)

@@ -67,6 +67,20 @@ To turn it on in a test or an offline run pass `skill_gate=True`. Wiring it into
 - 'Tomorrow' is evaluated while the current day is still in progress: today's actual counts only once at least 90 % of its hours exist
   (as for the ratio), so the decision can change between a morning and an evening run on the same day.
 - One 0.9 margin and a 14-day window are one choice among many; the offline tests pin the behaviour around them, not their optimality.
+- **What the replay on real data shows (kept offline): the gate kept the corrected forecast on 0 of 39 days (12 Oct to 19 Nov, one site, one autumn).**
+  On that data it therefore equals "always publish persistence"; the replay's passes only say that persistence beat the corrected path at that
+  site that autumn. There is no real-data evidence of how it behaves where the corrected path has skill (only synthetic tests cover that).
+- A step change in the actuals can fool it: when the actuals step from dull to bright and the persistence baseline lags, a source with no
+  skill can briefly beat the lagging baseline and be kept (reproduced on a synthetic world). There is no hysteresis, and no test of flapping near the 0.9 margin.
+- Only the chosen (best-error) source is gated: if it fails but another source would pass, persistence is published (a test pins this).
+- The fallback leaves no structured trace: the gate verdict (day count and the two errors) is only in the note text, the reason codes are identical with it on and off.
+- **Before it is enabled anywhere (advisor effect, not assessed here).** A persistence `pv_tomorrow` can be HIGHER than the corrected value
+  (a bright spell followed by a dull day), and its p10 is far above a widened corrected p10. In a synthetic whole-engine replay (a source with
+  no skill, a bright spell) the overnight charge target was 80 percent with the gate off and 70 percent with it on, the unsafe direction
+  (less battery retained). The engine's overall confidence is capped at 0.545 only, so MEDIUM is still possible, and, unlike a rejected forecast, the
+  gate fallback adds no LOW cap and no reason code. On the real replay the gated p50 was above the actual on 25 of 39 days (18 ungated) because
+  persistence lags the autumn decline, and the gated p10 above the actual on 1 day (2 ungated), so the real data looked safer, but the effect on
+  the overnight target over the acceptance period is NOT replayed. Required before any enable: that replay, a LOW cap or reason code for a gate fallback, and an owner decision.
 
 ## Optional second change: the recent-output envelope (separate commit, OFF by default)
 
@@ -75,11 +89,12 @@ loose enough to let an out-of-season corrected value through for weeks (a value 
 under a ceiling set by the best days of the weeks before). With `PvModel(..., recent_envelope=True)` that one ceiling becomes **1.25 x the best actual of the last 14
 days** (it needs at least 7 observed days in them, otherwise the legacy ceiling stays, so enabling it never removes a guard). A
 corrected value above it is REJECTED exactly like any other ceiling breach: persistence, LOW confidence, the source, the values and the
-limit named in `plausibility` and in the notes. The envelope is always tighter than the legacy ceiling (a 14-day best is never above
-the 30-day best, and 1.25 < 2.5), so enabling it can only reject more, which is the safe direction for the advisor (less PV assumed,
+limit named in `plausibility` and in the notes. The ceiling used is the LOWER of the legacy ceiling and the envelope (a configured
+`pv_recent_headroom` between 1.0 and 5.0 is allowed, and below 1.25 the legacy ceiling can already be the lower one, so a plain replacement would
+loosen it; a review found that and the code now takes the minimum). Enabling it therefore can only reject more, which is the safe direction for the advisor (less PV assumed,
 more battery retained). Constants `PV_RECENT_ENVELOPE_DEFAULT` (False), `RECENT_ENVELOPE_DAYS` (14), `RECENT_ENVELOPE_HEADROOM` (1.25) and
 `RECENT_ENVELOPE_MIN_OBS` (7); a constructor argument like the gate, not a `SiteConfig` field. Tests:
-`intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 15 mutants applied in memory).
+`intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 18 mutants applied in memory).
 
 Limits: it is blunt. A genuinely bright day after two dull weeks is rejected and persistence is published instead (a deliberate
 trade, see the plausibility paragraph in `ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`); it addresses the over-forecast side only; it

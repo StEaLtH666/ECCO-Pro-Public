@@ -11,10 +11,10 @@ Development before the first public release happened in a private repository; se
 
 ### Added
 - **Intelligence PV recent-output envelope** (offline, SHADOW engine, OFF by default, a separate change that can be dropped without
-  the persistence-skill gate): `PvModel(..., recent_envelope=True)` replaces the loose `recent_max` ceiling (2.5 x the best of the
-  last 30 days) by 1.25 x the best actual of the last 14 days (at least 7 observed days, else the legacy ceiling stays); a corrected
+  the persistence-skill gate): `PvModel(..., recent_envelope=True)` tightens the loose `recent_max` ceiling (2.5 x the best of the
+  last 30 days) to the lower of it and 1.25 x the best actual of the last 14 days (at least 7 observed days, else the legacy ceiling stays); a corrected
   value above it is REJECTED like any other ceiling breach (persistence, LOW). New suite
-  `intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 15 mutants applied in memory). Nothing is switched on.
+  `intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 18 mutants applied in memory). Nothing is switched on.
 - **Intelligence PV persistence-skill gate** (offline, SHADOW engine, OFF by default; nothing installed, deployed or switched on):
   `PvModel(..., skill_gate=True)` publishes the engine's own persistence estimate (source `persistence`, LOW confidence, one plain
   note) instead of the corrected PV forecast unless that forecast has beaten persistence (mean absolute error at most 0.9 x) over

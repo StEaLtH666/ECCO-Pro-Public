@@ -33,9 +33,9 @@ what `_persistence` already publishes.
 
 RECENT-OUTPUT ENVELOPE (optional, OFF by default, a separate change). The `recent_max` ceiling (2.5 x the best of the last
 pv_recent_days days) is loose: after a bright spell, an out-of-season corrected value can sit just under it for weeks. With
-`PvModel(..., recent_envelope=True)` the recent ceiling becomes RECENT_ENVELOPE_HEADROOM x the best actual of the last
-RECENT_ENVELOPE_DAYS days (needs RECENT_ENVELOPE_MIN_OBS observed days in them; otherwise the legacy ceiling stays), and a
-corrected value above it is REJECTED exactly like any other ceiling breach (persistence, LOW, the reason in `plausibility`)."""
+`PvModel(..., recent_envelope=True)` the recent ceiling becomes the LOWER of the legacy ceiling and RECENT_ENVELOPE_HEADROOM x
+the best actual of the last RECENT_ENVELOPE_DAYS days (needs RECENT_ENVELOPE_MIN_OBS observed days in them; otherwise the
+legacy ceiling stays), so enabling it never loosens the guard, and a corrected value above it is REJECTED exactly like any other ceiling breach (persistence, LOW, the reason in `plausibility`)."""
 
 from __future__ import annotations
 
@@ -210,7 +210,10 @@ class PvModel:
         if self.recent_envelope:
             env = [a for d, a in obs if (day - d).days <= RECENT_ENVELOPE_DAYS]
             if len(env) >= RECENT_ENVELOPE_MIN_OBS:
-                caps["recent_max"] = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)
+                envelope = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)
+                # the TIGHTER of the two: with a configured pv_recent_headroom below 1.25 the legacy ceiling can already be
+                # the lower one, and enabling the envelope must never loosen a guard
+                caps["recent_max"] = min(caps["recent_max"], envelope) if "recent_max" in caps else envelope
         return caps
 
     def skill_gate_verdict(self, source: str, day: date) -> SkillGateVerdict:
