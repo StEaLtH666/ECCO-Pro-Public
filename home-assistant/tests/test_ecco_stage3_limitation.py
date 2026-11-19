@@ -53,6 +53,11 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 UNCONFIRMED text), the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'the same fallback as the old one') is gone, what is still true is stated (the Free Power schedule package
                 is unchanged, a FAILED text can be a false negative), the package CODE is pinned statically (one UNCONFIRMED text within 255 characters, the STARTED test and the FAILED, BLOCKED or CANCELLED test once each, no
                 unconditional STARTED OK write), item 23 carries its two review notes, RG-ST3 stands once per place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
+  [13] item 10  (owner decision r15, 19 Nov 2026; additive) limitation 10, the schedule packages' start-time reads on the clock-change day, was EXAMINED offline on 19 Nov 2026 and is rewritten: findings, what is NOT
+                fail closed, what is FAIL CLOSED, what is NOT EXAMINABLE offline and the proposals that are PROPOSED and NOT implemented; nothing was changed. This REPLACES the [7] requirement of the old item 10
+                wording ('Shown by reading', 'Not examined: what those reads give', 'not reproduced and is not claimed', which is now false) by the new wording, and the old wording ('were not examined for the clock-change
+                day', 'Direction: unknown (not examined)' ...) is a forbidden text and a killed mutant. Item 10 is still numbered 10 and names the clock-change day, the item count is still 23, the Known limitations
+                introduction and a new CHANGELOG bullet say so, the item is ASCII and names no address or token, the RG-ST3 sentence stands once per place, nothing says 'fully enforced'; mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -448,6 +453,9 @@ LIMIT_ITEMS = (   # (number, a phrase that must stand in the item's bold title, 
     (23, "attribute only"),
 )
 DIRECTION_RE = re.compile(r"Direction: (?:fail open|fail closed|either way|neutral|informational|unknown|believed fail closed|not applicable|your limits)")
+# Item 10 (owner decision r15, 19 Nov 2026) lists a direction per finding, so its own direction is 'mixed, as listed'. That is allowed for item 10 ONLY (the set above is not widened for any other item).
+DIRECTION_MIXED_RE = re.compile(r"Direction: mixed, as listed\.")
+DIRECTION_MIXED_ITEMS = (10,)
 
 
 def card_text_places() -> dict[str, str]:
@@ -525,7 +533,7 @@ def limitations_problems(readme: str) -> list[str]:
     for (num, phrase), (_, title), body in zip(LIMIT_ITEMS, heads, bodies):
         if phrase not in title.lower():
             out.append(f"item {num} does not name '{phrase}' in its title")
-        if not DIRECTION_RE.search(flat(body)):
+        if not (DIRECTION_RE.search(flat(body)) or (num in DIRECTION_MIXED_ITEMS and DIRECTION_MIXED_RE.search(flat(body)))):
             out.append(f"item {num} states no direction of failure")
         if "You would see:" not in flat(body):
             out.append(f"item {num} does not say what you would see")
@@ -617,7 +625,7 @@ print("")
 print("[7] the second independent review of the fixes (18 Nov 2026; additive): the limitation items say what was shown, and the caveats stand in the comments and the CHANGELOG")
 # ===========================================================================
 # The first version of known limitations 9 and 10 was written from a task text and not run. Item 9 (a reserve in (0, 0.0001)) was run against the current packages and simulators and
-# is NOT a failure there; item 10 (the schedule packages' start-time reads on the clock-change day) was only read. Both now say so. Four items are new: 19 (a restart inside the repeated
+# is NOT a failure there; item 10 (the schedule packages' start-time reads on the clock-change day) was only read. Both now say so. (Item 10 was examined offline on 19 Nov 2026 by owner decision r15: see [13], which replaces the wording required here.) Four items are new: 19 (a restart inside the repeated
 # hour may restore an expiry an hour early: recalled from Home Assistant core, not verified, not modelled), 20 (a press-time BLOCKED text overwritten with STARTED OK when Dump to Grid is
 # active as the loop ends; FIXED on 19 Nov 2026 by owner decision r14, see [8]), 21 (a momentarily unreadable sensor at press time costs that night's export) and 22 (the leftover staging). The checks below require the status wording of those
 # items, the four new items by name (LIMIT_ITEMS above, never fewer than before), and the caveats in the helper package comment, the schedule package header and the CHANGELOG; each is shown
@@ -626,7 +634,9 @@ SCHEDULE_PKG = ROOT / "home-assistant" / "packages" / "ecco_dump_to_grid_schedul
 CHANGELOG = ROOT / "CHANGELOG.md"
 ITEM_STATUS = {   # item number -> phrases its body must carry (what was reproduced, what was only reasoned or recalled, what was not examined)
     9: ("NOT reproduced", "Run now against the current packages and simulators", "Reasoned, not examined"),
-    10: ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed"),
+    # r15 (19 Nov 2026): item 10 was EXAMINED offline. The old requirement ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed") is false now and is replaced by the new
+    # wording; the old wording is forbidden and a killed mutant in [13] (OLD10_ITEM).
+    10: ("EXAMINED offline on 19 Nov 2026", "NOT fail closed", "FAIL CLOSED", "NOT EXAMINABLE", "PROPOSED and NOT implemented", "28 Mar 2027"),
     1: ("RETAINED since owner decision r14", "fail closed for the unreadable power-cut record"),
     11: ("modelled, not live-proven", "stricter than the earlier state-string read", "the two are read raise-only, the later valid instant winning"),
     17: ("input_number restores an exact ten-digit epoch", "whether `input_number.set_value` accepts a value that large"),
@@ -728,7 +738,7 @@ def drop_in_item(readme: str, num: int, phrase: str) -> str:
 
 s2_helper, s2_schedule, s2_changelog = text_of(PLAN_HELPERS_PKG), text_of(SCHEDULE_PKG), text_of(CHANGELOG)
 s2_readme = w6["plan-core README"]
-check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (read, not examined), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
+check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (EXAMINED offline since r15: findings, nothing changed), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
       "not examined)", not status_problems(s2_readme), str(status_problems(s2_readme)))
 check("the plan-core README has the four items of the second review (19 restart in the repeated hour, 20 overwritten BLOCKED text, 21 momentary unreadable sensor, 22 leftover staging) "
       "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if 19 <= n <= 22] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
@@ -747,7 +757,7 @@ _end = s2_readme.find("\n### ", _cut)
 check("mutant caught: the four items of the second review removed (the README back to eighteen items)", _cut > 0 and _end > _cut and bool(limitations_problems(s2_readme[:_cut] + "\n" + s2_readme[_end:])))
 check("mutant caught: item 9 worded as a fact again ('reads as unreadable', starts refused)",
       bool(status_problems(s2_readme.replace("a failure was suspected and was NOT reproduced", "renders in exponent form and reads as unreadable"))))
-check("mutant caught: item 10 worded as reasoned again", bool(status_problems(drop_in_item(s2_readme, 10, "Not examined: what those reads give"))))
+check("mutant caught: item 10 worded as not examined again (the statement that it was EXAMINED offline lost)", bool(status_problems(drop_in_item(s2_readme, 10, "EXAMINED offline on 19 Nov 2026"))))
 for num, phrases in ITEM_STATUS.items():
     for ph in phrases:
         check(f"mutant caught: item {num} loses '{ph[:48]}'", bool(status_problems(drop_in_item(s2_readme, num, ph))))
@@ -1287,6 +1297,134 @@ check("mutant caught: item 20 loses the RG-ST3 statement", bool(last_path_proble
 check("mutant caught: a copy of the Stage 3 limitation sentence added to item 20 (the sentence must stand once)",
       bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
 check("control: the untouched tree is not flagged by the startup recovery checks", not last_path_problems(l_readme, l_schedule, l_changelog) and not recovery_code_problems(l_schedule) and not limitations_problems(l_readme))
+
+
+# ===========================================================================
+print("")
+print("[13] known limitation 10 (owner decision r15, 19 Nov 2026; additive): the schedule packages' start-time reads on the clock-change day were EXAMINED offline; item 10 and a new CHANGELOG bullet say what was found and what is not implemented")
+# ===========================================================================
+# Item 10 used to say that these reads "were not examined for the clock-change day" (and [7] required that wording). The owner approved an offline examination (decision r15, item 4) and it was done on 19 Nov 2026:
+# a zone-aware (Europe/London) harness ran the packages' own template expressions and the repository's simulators on 28 Mar 2027, 31 Oct 2027 and the past 25 Oct 2026, each with an ordinary-day control. Item 10 now
+# states the method, what is EXACT, what is NOT fail closed, what is FAIL CLOSED, what is NOT EXAMINABLE offline and the proposals that are PROPOSED and NOT implemented; nothing in the packages was changed. These checks are
+# ADDITIVE to [6] to [12]: they require the new wording (and replace the [7] requirement of the old wording, which is false now), FORBID the old wording (a forbidden text and a killed mutant, as for items 20 and 23), keep item 10
+# numbered 10 with its subject, the item count at 23, the RG-ST3 sentence once per place and every 'fully enforced' claim out, and make the item and the CHANGELOG bullet ASCII and free of an address or token.
+NEW10_TITLE = "The schedule packages' start-time reads on the clock-change day were EXAMINED offline on 19 Nov 2026 (owner decision r15); there are findings and nothing was changed."
+OLD10_TITLE = "The schedule packages' naive start-time reads were not examined for the clock-change day."
+OLD10_ITEM = (   # the old wording of item 10 (false now): none of it may stand in the item
+    "were not examined for the clock-change day", "naive start-time reads were not examined", "Shown by reading: the scheduled Dump to Grid package reads its",
+    "no running check that was read for this item covers a start time inside the repeated or the skipped hour", "Not examined: what those reads give", "not reproduced and is not claimed",
+    "Direction: unknown (not examined)", "possibly a missed or refused scheduled start",
+)
+OLD10_README = ("were not examined for the clock-change day", "Not examined: what those reads give", "Direction: unknown (not examined)")   # and none of the three may stand anywhere in the README
+ITEM10_R15 = (
+    NEW10_TITLE, "EXAMINED offline on 19 Nov 2026", "owner decision r15", "there are findings and nothing was changed", "a zone-aware (Europe/London) harness", "the packages' own template expressions and the repository's simulators",
+    "28 Mar 2027 (spring forward: the local hour 01:00 to 01:59 does not exist)", "31 Oct 2027 (fall back: that hour happens twice)", "the past 25 Oct 2026", "each with an ordinary-day control",
+    "EXACT (reproduced)", "is epoch arithmetic", "nothing starts twice",
+    "NOT fail closed (reproduced)", "is NOT refused", "a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30)", "a repeated 01:30 starts once, at its first occurrence",
+    "walks the window as continuous wall-clock minutes", "(a false accept)", "(a false refusal; older than R9)", "(reasoned from the code, not run), so there is no backstop",
+    "FAIL CLOSED (reproduced)", 'refused with a misleading text ("must be in the future")', "is never captured for R9", "the watchdog does not rescue a lost on-time start",
+    "(EXPIRY_ABOVE_CAP, a 25 hour night)", "is covered by item 19", "The Free Power schedule package behaves identically",
+    "NOT EXAMINABLE offline", "the real Home Assistant time-trigger rule", "whether a date-and-time helper accepts a skipped time", "the dongle's timers and TOU gate across a clock change",
+    "PROPOSED and NOT implemented (each needs the owner's decision)", "refuse a skipped, repeated or unreadable start label at arm time", "an epoch-correct TOU walk or a refusal when the window spans the change",
+    "a supervised read-only template check of the three conversions",
+    "Direction: mixed, as listed.", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "The next clock change is 28 Mar 2027.",
+)
+INTRO10_R15 = ("Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15)", "its proposals are not implemented")
+CHANGELOG_R15D = (
+    "known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten", "owner decision r15", "documentation only", "zone-aware (Europe/London)",
+    "28 Mar 2027", "31 Oct 2027", "25 Oct 2026", "Reproduced and exact", "NOT fail closed", "FAIL CLOSED", "there is no backstop", "NOT EXAMINABLE offline", "PROPOSED and NOT implemented, each needing the owner's decision",
+    "This supersedes the sentences of the earlier bullets", "not reviewed or not examined for the clock-change day", "no package, card, bundle, pin assertion, scan, gate, threshold or hash of a frozen file was edited",
+    "still not bound by any override (RG-ST3)",
+)
+
+
+def bullet_r15d(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 for known limitation 10 (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def limitations_intro(readme: str) -> str:
+    """The introduction of the Known limitations section (from its heading to item 1) as flat text; empty when the heading or item 1 is missing."""
+    h = readme.find(LIMITS_HEADING)
+    e = readme.find("\n1. **", h) if h >= 0 else -1
+    return flat(readme[h:e]) if h >= 0 and e > h else ""
+
+
+def examined10_problems(readme: str, changelog: str) -> list[str]:
+    out = []
+    item10 = item_bodies(readme).get(10, "")
+    fr, fb, intro = flat(readme), flat(bullet_r15d(changelog)), limitations_intro(readme)
+    if not item10:
+        out.append("item 10 is not there")
+    if len(re.findall(r"(?m)^10\. \*\*" + re.escape(NEW10_TITLE) + r"\*\*", readme)) != 1:
+        out.append("item 10 does not stand once, numbered 10, under its new title")
+    out.extend(f"item 10 lacks: {p}" for p in ITEM10_R15 if p not in item10)
+    out.extend(f"item 10 still says: {p}" for p in OLD10_ITEM if p in item10)
+    out.extend(f"the plan-core README still says: {p}" for p in OLD10_README if p in fr)
+    out.extend(f"the Known limitations introduction lacks: {p}" for p in INTRO10_R15 if p not in intro)
+    out.extend(f"the CHANGELOG bullet of r15 (item 10) lacks: {p}" for p in CHANGELOG_R15D if p not in fb)
+    for name, body in (("item 10", item10), ("the CHANGELOG bullet of r15 (item 10)", fb)):
+        if re.search(r"(?i)(?<!not )\bimplemented", body):
+            out.append(f"{name} says that something is implemented (the proposals are NOT implemented)")
+        if not body.isascii():
+            out.append(f"{name} is not ASCII")
+        if re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", body, re.I):
+            out.append(f"{name} names an address, token or password")
+    if FULL_CLAIM.search(item10 + " " + fb + " " + intro):
+        out.append("a 'fully enforced' claim stands in item 10, the introduction or the CHANGELOG bullet")
+    return out
+
+
+n_readme, n_changelog = s2_readme, s2_changelog
+check("limitation 10 is EXAMINED offline in the words of item 10 (method, EXACT, NOT fail closed, FAIL CLOSED, NOT EXAMINABLE, PROPOSED and NOT implemented, 28 Mar 2027), the Known limitations introduction and the new CHANGELOG bullet; "
+      "the old wording ('were not examined for the clock-change day' and the rest) is gone; the item and the bullet are ASCII and name no address or token", not examined10_problems(n_readme, n_changelog), str(examined10_problems(n_readme, n_changelog)))
+check("item 10 is present and numbered 10, still names the clock-change day in its title, and the 23 numbered items are all still listed (the count did not change); its direction is 'mixed, as listed' (allowed for item 10 only)",
+      [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and LIMIT_ITEMS[9] == (10, "clock-change day") and sorted(item_bodies(n_readme)) == list(range(1, 24)) and not limitations_problems(n_readme)
+      and DIRECTION_MIXED_ITEMS == (10,), str(limitations_problems(n_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("nothing claims the overrides are fully enforced (item 10, the Known limitations introduction, the CHANGELOG bullet, the plan-core README, the card sources and bundle, both package headers)",
+      not FULL_CLAIM.search(" ".join([n_readme, flat(bullet_r15d(n_changelog)), texts["card bundle"], texts["card README"], flat_yaml(s2_helper), flat_yaml(s2_schedule)] + list(card_sources.values()))))
+check("the earlier checks of items 9, 11, 19, 20 and 23 still hold in their wording (additive), and item 10 no longer needs the old [7] wording",
+      not status_problems(n_readme) and not mitigated19_problems(n_readme, s2_helper, n_changelog) and not fixed23_problems(n_readme, s2_helper, n_changelog) and not last_path_problems(n_readme, s2_schedule, n_changelog)
+      and not fixed20_problems(n_readme, s2_schedule, n_changelog) and not extended20_problems(n_readme, s2_schedule, n_changelog) and "Not examined: what those reads give" not in flat(n_readme), "")
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM10_R15:
+    check(f"mutant caught: item 10 loses '{ph[:48]}'", bool(examined10_problems(drop_in_item(n_readme, 10, ph), n_changelog)))
+for ph in INTRO10_R15:
+    check(f"mutant caught: the Known limitations introduction loses '{ph[:48]}'", bool(examined10_problems(drop_phrase(n_readme, ph), n_changelog)))
+for ph in CHANGELOG_R15D:
+    check(f"mutant caught: the CHANGELOG bullet of r15 (item 10) loses '{ph[:48]}'", bool(examined10_problems(n_readme, drop_phrase(n_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet of r15 (item 10) removed", bool(examined10_problems(n_readme, drop_phrase(n_changelog, CHANGELOG_R15D[0]))))
+check("mutant caught: the old wording restored (item 10 titled 'naive start-time reads were not examined for the clock-change day' again)", bool(examined10_problems(n_readme.replace(NEW10_TITLE, OLD10_TITLE), n_changelog)))
+check("mutant caught: the old wording added to item 10 (every required phrase still there: the forbidden text alone kills it)",
+      bool(examined10_problems(n_readme.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + OLD10_TITLE), n_changelog)))
+check("mutant caught: the old 'Not examined: what those reads give' added to item 10", bool(examined10_problems(n_readme.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. Not examined: what those reads give."), n_changelog)))
+check("mutant caught: the old direction 'unknown (not examined)' restored in item 10", bool(examined10_problems(n_readme.replace("Direction: mixed, as listed.", "Direction: unknown (not examined)."), n_changelog)))
+check("mutant caught: the proposals sentence turned into 'implemented'", bool(examined10_problems(n_readme.replace("PROPOSED and NOT implemented (each needs the owner's decision)", "PROPOSED and implemented (each needs the owner's decision)"), n_changelog)))
+check("mutant caught: the proposals sentence turned into 'IMPLEMENTED in this change'", bool(examined10_problems(n_readme.replace("PROPOSED and NOT implemented (each needs the owner's decision)", "IMPLEMENTED in this change"), n_changelog)))
+check("mutant caught: 'NOT fail closed' removed (the finding turned into a fail-closed one)", bool(examined10_problems(drop_in_item(n_readme, 10, "NOT fail closed"), n_changelog)))
+check("mutant caught: 'NOT fail closed (reproduced)' softened to 'fail closed (reproduced)'", bool(examined10_problems(n_readme.replace("NOT fail closed (reproduced)", "fail closed (reproduced)"), n_changelog)))
+check("mutant caught: 'is NOT refused' softened to 'is refused'", bool(examined10_problems(n_readme.replace("is NOT refused", "is refused"), n_changelog)))
+check("mutant caught: 'NOT EXAMINABLE offline' turned into 'EXAMINED offline'", bool(examined10_problems(n_readme.replace("NOT EXAMINABLE offline:", "EXAMINED offline:"), n_changelog)))
+check("mutant caught: the proposals sentence of the CHANGELOG bullet turned into 'implemented'", bool(examined10_problems(n_readme, n_changelog.replace("PROPOSED and NOT implemented, each needing the owner's decision", "PROPOSED and implemented, each needing the owner's decision"))))
+check("mutant caught: item 10 removed (22 items)", bool(limitations_problems(n_readme[:n_readme.index("\n10. **", n_readme.index(LIMITS_HEADING))] + n_readme[n_readme.index("\n11. **", n_readme.index(LIMITS_HEADING)):])))
+check("mutant caught: item 10 renumbered", bool(examined10_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE), n_changelog)) or bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
+check("mutant caught: item 10 loses its direction of failure", bool(limitations_problems(n_readme.replace("Direction: mixed, as listed.", "Note: as listed."))))
+check("mutant caught: item 10 loses its 'You would see'", bool(limitations_problems(drop_in_item(n_readme, 10, "You would see:"))))
+check("mutant caught: item 10 loses 'clock-change day' from its title", bool(limitations_problems(n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))))
+check("mutant caught: 'mixed, as listed' is NOT accepted as the direction of any other item (item 1)",
+      bool(limitations_problems(n_readme.replace("Direction: fail open for that one number", "Direction: mixed, as listed. That one number"))))
+check("mutant caught: item 10 claims the overrides are fully enforced", bool(examined10_problems(n_readme.replace("The Free Power schedule package behaves identically.", "The Free Power schedule package behaves identically (fully enforced)."), n_changelog)))
+check("mutant caught: the CHANGELOG bullet of r15 (item 10) claims full enforcement", bool(examined10_problems(n_readme, n_changelog.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. The overrides are fully enforced."))))
+check("mutant caught: item 10 is not ASCII", bool(examined10_problems(n_readme.replace("a 25 hour night", "a 25 hour night " + chr(0x2013)), n_changelog)))
+check("mutant caught: item 10 names a token", bool(examined10_problems(n_readme.replace("a 25 hour night", "a 25 hour night, token"), n_changelog)))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 10 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("\n10. **" + NEW10_TITLE, "\n10. " + LIMITATION + " **" + NEW10_TITLE)})))
+check("control: the untouched tree is not flagged by the item 10 checks", not examined10_problems(n_readme, n_changelog) and not limitations_problems(n_readme) and not status_problems(n_readme) and not places_problems(texts))
 
 print("")
 if FAILURES:
