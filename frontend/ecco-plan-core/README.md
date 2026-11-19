@@ -377,7 +377,9 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
 17. **Modelled, not live-proven in real Home Assistant:** the time functions the templates use, the round-up filter, whether a service call to set a number
     enforces the helper's step, the default value of a date-and-time helper and how overlapping script calls are handled; and, since owner decision r14, whether an
     input_number restores an exact ten-digit epoch after a restart, whether `input_number.set_value` accepts a value that large, and how the template filters of the
-    epoch read (`float(none)`, `reject('none')`, `max`) behave. Direction: unknown until checked.
+    epoch read (`float(none)`, `reject('none')`, `max`) behave; and, as recalled, a service call that writes a helper that is missing or not loaded is only a logged
+    warning in Home Assistant, so a start or cancel script could still write STARTED or CANCELLED while that record stays unreadable (the result text then over-reports;
+    the hold stays unknown and the raised reserve stays, fail closed). Direction: unknown until checked.
     You would see: nothing until a supervised check on the owner's version, which is part of the install.
 18. **What Intelligence does with the effective reserve depends on the owner's own site mapping.** This repository does not change that file and the review
     did not read it; it matters only if the owner maps the reserve. Direction: not applicable. You would see: nothing unless the mapping is set.
@@ -385,7 +387,8 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     As recalled from Home Assistant core (not verified here), a restart restores a date-and-time helper from its state string, which is local wall-clock time without an
     offset, and a time in the repeated hour (01:00 to 01:59 on the fall-back day, in Europe/London) then reads as the first of the two. If that is how it behaves, a restart
     while an override is running whose expiry falls in the repeated hour restores that expiry 60 minutes early, and the hold and the effective reserve would have released
-    up to 60 minutes early (one night a year, and only with a restart in that window). The owner decided (r14, 19 Nov 2026) not to accept that: prefer absolute timestamps;
+    up to 60 minutes early (only an override whose expiry falls in the repeated hour of that one night a year is affected, but ANY restart while it is running is
+    enough, including one days earlier for a long power cut). The owner decided (r14, 19 Nov 2026) not to accept that: prefer absolute timestamps;
     if an expiry instant cannot be established reliably, fail closed and keep the safety-related override until its state can be reconciled; do not blindly extend every
     override by an hour or silently alter the owner's configured deadline. What changed: each expiry is now also held as an absolute epoch record, an input_number per kind
     holding the same number of seconds the start script already computes (so the owner's deadline is exactly preserved and nothing is extended); the start script writes it
@@ -402,7 +405,9 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     that had finished is raised again if its record then becomes unreadable), and an attribute that is LATE (a partial write that left a later date-and-time expiry) holds
     until that instant passes or the owner cancels. Not changed: the card (item 23). Direction: fail closed (the override never ends earlier than the later source and an
     unreadable record is retained). You would see: after such a restart the override still reads as running until its true expiry; with a record unreadable, the hold
-    unknown and the raised reserve kept, until a cancel clears it.
+    unknown and the raised reserve kept, until a cancel clears it. The card offers Cancel only for an override it shows as running (item 23), so for a record the
+    backend holds only through its epoch record, or one that is unreadable, call `script.ecco_plan_override_cancel` yourself (Developer tools, Actions: the kind, and the
+    revision if you want the compare-and-set check); it writes both sources and reconciles the record.
 20. **A press-time BLOCKED result was overwritten with STARTED OK when Dump to Grid is found active as the loop ends: FIXED on 19 Nov 2026 (owner decision r14).**
     The BLOCKED text of the press-time recheck is written inside the scheduled start's retry loop, so, unlike the start-time BLOCKED results, the steps after the
     loop still run. Before the fix, if Dump to Grid was active when the loop ended (started from the dongle's own Start button, which no override binds (RG-ST3), or
@@ -436,7 +441,9 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     restart does not change) and does not read the absolute epoch records of item 19. If a restart restores the attribute as the recalled behaviour of item 19 would, the
     card could treat an override as already ended, or show it with a countdown up to an hour short, while the backend still holds it. The card, its bundle and the card
     README are NOT changed; the backend decides: the hold, the held-by list, the effective reserve, the scheduled start, the guarded start and the cancel script all follow
-    the later of the two sources. Not reproduced in a browser and not examined in the card's own suites. Direction: informational (display only; the backend decides).
+    the later of the two sources. Not reproduced in a browser and not examined in the card's own suites. The card also builds its Cancel button from the same row, so for an override it does not show
+    as running (a record the backend holds only through its epoch record, or one that is unreadable) it offers no Cancel: call `script.ecco_plan_override_cancel`
+    yourself (item 19). That is the fail-closed side: the hold stays, nothing is released early. Direction: informational (display only; the backend decides).
     You would see: on the autumn clock-change night, after a restart inside the repeated hour, the card showing an override as ended, or with less time left than it has,
     while the hold sensor still reads held.
 
