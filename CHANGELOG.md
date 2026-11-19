@@ -10,6 +10,17 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Intelligence PV persistence-skill gate** (offline, SHADOW engine, OFF by default; nothing installed, deployed or switched on):
+  `PvModel(..., skill_gate=True)` publishes the engine's own persistence estimate (source `persistence`, LOW confidence, one plain
+  note) instead of the corrected PV forecast unless that forecast has beaten persistence (mean absolute error at most 0.9 x) over
+  the trailing 14 days, scored walk-forward without ever reading the target day or later; fewer than 8 comparable days fails
+  closed to persistence; the plausibility guard still runs first; `to_dict`, `PV_TOMORROW_SUMMARY_KEYS`, the 2048-byte summary and
+  the date scoping of 'tomorrow' are unchanged, and a kept forecast is bit-identical to the ungated one. New suite
+  `intelligence/tests/test_intel_pv_skill_gate.py` (synthetic data, 35 mutants applied in memory) and
+  [docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md](docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md), which states the limits: one site,
+  one autumn, designed after seeing a failure; it can only fall back to persistence, never create skill. Enabling it is a separate
+  owner authorisation; with it on, one existing check moves (`test_intelligence_arithmetic.py`, PV band widening), which is why
+  the default is OFF. It is a constructor argument, not a `SiteConfig` field (a new field would change every `config_hash()`).
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently (while the policy is deliberately aside, `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the one-run override; the pin stays); `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment, checks in memory that it will succeed (including the post-condition), and on a re-run into the same `--out` deploys the applied file already there or fails when that file is not `apply`'s output ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with

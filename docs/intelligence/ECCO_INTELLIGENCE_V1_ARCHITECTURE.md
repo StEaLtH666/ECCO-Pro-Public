@@ -148,6 +148,8 @@ Forecast kinds recorded: `load_kwh:{next_1h,cheap_window,morning,overnight,to_us
   `pv[day].plausibility` lists the source, the raw and corrected values and the limit that was broken, the day falls back to
   persistence at LOW confidence, overall confidence is capped at LOW (`confidence.downgrade_reasons`), and the recommendation
   carries a `PV_FORECAST_REJECTED` reason and a HIGH uncertainty entry. Rejecting is the safe direction for the advisor.
+  A source that passes the ceilings can still have no skill at all; the optional, default-OFF persistence-skill gate publishes
+  persistence unless the corrected forecast recently beat it ([INTELLIGENCE_PV_SKILL_GATE.md](INTELLIGENCE_PV_SKILL_GATE.md)).
   Non-finite, negative, string or boolean forecast values are ignored the same way. The rule is deliberately simple and
   explainable; it does not try to model weather.
 * **Absence / return-day protection** (`usage.baseline_guard`, `Planner`). The fast profile has a ~5-day memory, so after an

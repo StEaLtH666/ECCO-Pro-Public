@@ -17,7 +17,19 @@ error or a stale value 10x too high). Three simple ceilings, each reported with 
                  out-of-season value that the all-time maximum would let through)
 A source whose raw value exceeds the physical ceiling, or whose corrected value exceeds the lowest ceiling, is
 REJECTED: it is not used, the notes and `plausibility` say why, and the forecast falls back to persistence at LOW
-confidence. Rejecting is the safe direction for the advisor (less PV assumed => more battery retained)."""
+confidence. Rejecting is the safe direction for the advisor (less PV assumed => more battery retained).
+
+PERSISTENCE-SKILL GATE (offline, switchable; docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md). A source that passes the
+ceilings can still carry no skill at all (a shaded array whose output stays in a narrow band whatever the forecast says: a
+scalar ratio cannot fit that). So, after the source choice and the unchanged plausibility guard, the corrected forecast is
+published only if it would have beaten the model's own persistence estimate over the trailing SKILL_GATE_DAYS days:
+for each of those days the corrected forecast the engine WOULD have published (that day's raw forecast x the median ratio of
+the pairs BEFORE it) and the persistence estimate computed from data BEFORE it are both scored against that day's actual,
+on the days where all three exist. With fewer than SKILL_GATE_MIN_DAYS such days, or when the corrected mean absolute error
+is above SKILL_GATE_MARGIN x the persistence one, persistence is published instead (source "persistence", LOW confidence,
+one plain note). The decision never reads the target day or later (no leakage). When the gate keeps the corrected forecast
+the result is identical to the ungated one. It is a fallback to a plain estimate, never a new forecast: it can only publish
+what `_persistence` already publishes."""
 
 from __future__ import annotations
 
@@ -36,6 +48,27 @@ RATIO_CLIP = (0.10, 3.0)
 MIN_FORECAST_KWH = 1.0          # ratios from tiny forecasts are noise
 RESIDUAL_DAYS = 90
 PRIOR_REL_SIGMA = 0.45          # used until enough walk-forward residuals exist
+
+# persistence-skill gate (see the module docstring). Fixed in advance of any result, not tuned to one.
+PV_SKILL_GATE_DEFAULT = False   # PvModel(..., skill_gate=None) uses this; True/False to pass it explicitly. OFF because ON moves
+                                # an existing check (test_intelligence_arithmetic.py, band widening): see the gate doc
+SKILL_GATE_DAYS = 14            # trailing days compared (the 14 days before the target day, never the target day)
+SKILL_GATE_MIN_DAYS = 8         # fewer comparable days than this => the comparison cannot be made => persistence
+SKILL_GATE_MARGIN = 0.9         # keep the corrected forecast only if its MAE <= this x the persistence MAE
+GATE_REASON_BEAT = "BEAT_PERSISTENCE"
+GATE_REASON_NOT_BEATEN = "NOT_BEATEN"
+GATE_REASON_TOO_FEW_DAYS = "TOO_FEW_DAYS"
+
+
+def _valid_kwh(x: object) -> bool:
+    """A finite, non-negative number that is not a bool (a kWh value the gate may score)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x >= 0.0
+
+
+def skill_gate_keeps(mae_corrected: float, mae_persistence: float) -> bool:
+    """The gate's one comparison: keep the corrected forecast only if it is at least (1 - margin) better than persistence.
+    A value that is not a number compares False, so the gate fails closed (persistence)."""
+    return mae_corrected <= SKILL_GATE_MARGIN * mae_persistence
 
 
 def actual_pv_kwh(history: History, day: date, tz_name: str) -> float | None:
@@ -74,13 +107,34 @@ class PvForecast:
         }
 
 
-class PvModel:
-    """`forecasts` is {source: {local_date: day-ahead forecast kWh as issued before dawn}}."""
+@dataclass(frozen=True)
+class SkillGateVerdict:
+    """What the persistence-skill gate decided for one (source, day): `keep` is True only when the corrected forecast beat
+    persistence over `n_days` comparable days (`mae_*` are None when the comparison could not be made)."""
+    source: str
+    day: date
+    n_days: int
+    mae_corrected: float | None
+    mae_persistence: float | None
+    keep: bool
+    reason: str                          # GATE_REASON_BEAT / GATE_REASON_NOT_BEATEN / GATE_REASON_TOO_FEW_DAYS
 
-    def __init__(self, history: History, cfg: SiteConfig, forecasts: dict[str, dict[date, float]]):
+
+class PvModel:
+    """`forecasts` is {source: {local_date: day-ahead forecast kWh as issued before dawn}}.
+
+    `skill_gate`: True / False switches the persistence-skill gate (module docstring); None (the default) uses
+    PV_SKILL_GATE_DEFAULT. It is deliberately a constructor argument and not a SiteConfig field: a new config field would
+    change `config_hash()` of every configuration."""
+
+    def __init__(self, history: History, cfg: SiteConfig, forecasts: dict[str, dict[date, float]],
+                 skill_gate: bool | None = None):
+        if skill_gate is not None and not isinstance(skill_gate, bool):
+            raise ValueError(f"PvModel skill_gate must be True, False or None, got {skill_gate!r}")
         self.history = history
         self.cfg = cfg
         self.forecasts = forecasts
+        self.skill_gate = PV_SKILL_GATE_DEFAULT if skill_gate is None else skill_gate
         self._actual: dict[date, float | None] = {}
 
     def actual(self, day: date) -> float | None:
@@ -137,6 +191,47 @@ class PvModel:
             caps["recent_max"] = round(cfg.pv_recent_headroom * max(recent), 2)
         return caps
 
+    def skill_gate_verdict(self, source: str, day: date) -> SkillGateVerdict:
+        """Would the corrected forecast of `source` have beaten persistence over the SKILL_GATE_DAYS days before `day`?
+
+        For each of those days d (never `day` itself or later): the corrected forecast is that day's raw forecast x
+        ratio(source, d) (the median ratio of the pairs before d, the engine's own clip and rules), the persistence estimate
+        uses only actuals before d, and both are scored against the actual of d. A day counts only when its forecast is a
+        finite non-negative number, its actual exists, and both estimates exist. Fewer than SKILL_GATE_MIN_DAYS such days
+        => keep=False (the comparison cannot be made: fail closed)."""
+        f = self.forecasts.get(source, {})
+        err_c: list[float] = []
+        err_p: list[float] = []
+        for k in range(1, SKILL_GATE_DAYS + 1):
+            d = day - timedelta(days=k)
+            fc, act = f.get(d), self.actual(d)
+            if not _valid_kwh(fc) or act is None or not math.isfinite(act):
+                continue
+            r, _n = self.ratio(source, d)
+            p = self._persistence_estimate(d)
+            if r is None or p is None:
+                continue
+            err_c.append(abs(act - fc * r))
+            err_p.append(abs(act - p))
+        n = len(err_c)
+        if n < SKILL_GATE_MIN_DAYS:
+            return SkillGateVerdict(source, day, n, None, None, False, GATE_REASON_TOO_FEW_DAYS)
+        mae_c, mae_p = sum(err_c) / n, sum(err_p) / n
+        keep = skill_gate_keeps(mae_c, mae_p)
+        return SkillGateVerdict(source, day, n, mae_c, mae_p, keep, GATE_REASON_BEAT if keep else GATE_REASON_NOT_BEATEN)
+
+    def _gate_fallback(self, day: date, notes: list[str], verdict: dict, gv: SkillGateVerdict) -> PvForecast:
+        """Publish persistence (LOW confidence) because the corrected forecast did not earn its place; one plain note."""
+        if gv.reason == GATE_REASON_TOO_FEW_DAYS:
+            note = (f"PV forecast correction could not be compared with persistence ({gv.n_days} of "
+                    f"{SKILL_GATE_MIN_DAYS} comparable days needed); using persistence")
+        else:
+            note = (f"PV forecast correction has not beaten persistence recently (mean error {gv.mae_corrected:.1f} vs "
+                    f"{gv.mae_persistence:.1f} kWh over {gv.n_days} days); using persistence")
+        pf = self._persistence(day, notes + [note], default_note=False)
+        pf.plausibility = verdict
+        return pf
+
     def forecast_day(self, day: date, raw_by_source: dict[str, float]) -> PvForecast:
         """Corrected PV for `day` given today's raw forecasts per source. Picks the source with the best
         trailing corrected MAE (ties/short history -> first available)."""
@@ -187,6 +282,10 @@ class PvModel:
                 pf.label = "INSUFFICIENT" if pf.label == "INSUFFICIENT" else "LOW"
             return pf
         _k, src, raw, r, n, mae_c, mae_r = best
+        if self.skill_gate:
+            gv = self.skill_gate_verdict(src, day)
+            if not gv.keep:
+                return self._gate_fallback(day, notes, verdict, gv)
         point = raw * r
         wf = self.walk_forward(src, day, RESIDUAL_DAYS)
         rel = [(a - c) / c for _d, _f, c, a in wf if c > 0.5]
@@ -219,7 +318,8 @@ class PvModel:
         from .usage import confidence_label
         return PvForecast(day, src, raw, r, p10, point, p90, n, mae_c, mae_r, conf, confidence_label(conf), notes, infl, verdict)
 
-    def _persistence(self, day: date, notes: list[str]) -> PvForecast:
+    def _persistence_days(self, day: date) -> list[float]:
+        """The last (up to 30, within 60 days) daily actuals strictly BEFORE `day`, oldest first."""
         days = []
         d = day - timedelta(days=1)
         while len(days) < 30 and d >= day - timedelta(days=60):
@@ -227,14 +327,26 @@ class PvModel:
             if a is not None:
                 days.append(a)
             d -= timedelta(days=1)
-        days = list(reversed(days))
+        return list(reversed(days))
+
+    def _persistence_estimate(self, day: date) -> float | None:
+        """The persistence point estimate for `day` from data before it, or None with fewer than 5 actual days."""
+        days = self._persistence_days(day)
+        if len(days) < 5:
+            return None
+        est, _ = stats.robust_ewma(days, 0.3, 3.0, 28, 0.5)
+        return est
+
+    def _persistence(self, day: date, notes: list[str], default_note: bool = True) -> PvForecast:
+        days = self._persistence_days(day)
         if len(days) < 5:
             from .usage import confidence_label
             return PvForecast(day, "none", None, None, 0.0, 0.0, 0.0, len(days), None, None, 0.0, "INSUFFICIENT",
                               notes + ["no PV history"])
         est, _ = stats.robust_ewma(days, 0.3, 3.0, 28, 0.5)
         sig = max(stats.robust_sigma(days, 1.0), 0.35 * est)
-        notes.append("persistence only: no forecast correction available")
+        if default_note:
+            notes.append("persistence only: no forecast correction available")
         from .usage import confidence_label
         conf = 0.3
         return PvForecast(day, "persistence", None, None, max(0.0, est - 1.2816 * sig), est, est + 1.2816 * sig,
