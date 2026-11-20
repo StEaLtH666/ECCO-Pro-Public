@@ -16,13 +16,21 @@ reviewed ones). Modelled on tools/tests/test_intelligence_card.py.
       themes.darkMode, and the hand-over to child cards) at the known sites, and the three click-only actions (open an entity's dialog by the standard
       event, copy to the clipboard, download a Blob), each reached only from a click handler
   [4] the sets that keep it read-only: the entity domains whose dialog may open, the safe actions, the refusal key set, the write card types and
-      writable domains, the card types allowed beside the Intelligence card; the card imports nothing
+      writable domains, the card types allowed beside the Intelligence card; the card imports nothing; no computed member access on this, window,
+      document, navigator or hass (or a global bound to a bare name), no member name built from string pieces, no call through a computed member;
+      the redaction vocabulary (six word lists) and the reasons of its 23 value rules, pinned as written, so that a removed word is seen here
   [5] the export surface (41 names, listed) and the registration (customElements.define once, guarded; one window.customCards entry)
   [6] the catalogue: schema, view id, 17 sources, 344 attribute rows, 19 alerts, 361 ledger rows; no secret-looking string, URL, address, e-mail, token,
       private path or coordinate anywhere in it
   [7] the generated dashboard configuration: consistent with the committed catalogue and example, deterministic, and pinned by size and sha256
   [8] mutants (all in memory, on the bytes this suite pins): at least 25 deliberate breaks of the card, 8 of the catalogue and 4 of the configuration,
       each caught by the rule that exists for it; and a change of one comment letter is caught by the byte pin alone (a deliberate edit, nothing more)
+
+DEFENCE IN DEPTH, said plainly: every rule below (the forbidden APIs, the exact surface, the read-only sets, the member-access rules, the redaction pins)
+catches the careless and the obvious; none of them proves the card read-only, and an edit written to get past them can. The byte pin is the real guard: a
+repin (a new size and sha256 in this file) needs a REVIEW OF THE FULL DIFF of the card, never only a green run of this suite.
+
+A check that cannot run here (git or its index is not available, as in an archive without .git) prints SKIP and is counted apart from PASS.
 
 Test-only, no network, no Node. I/O: reads repository files; runs `git ls-files --eol` (read-only).
 """
@@ -61,6 +69,7 @@ CONFIG_SHA256 = "4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd8216
 CAT_COUNTS = {"sources": 17, "attribute_rows": 344, "alerts": 19, "ledger_rows": 361}
 
 FAILURES: list[str] = []
+SKIPPED: list[str] = []
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -71,13 +80,19 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
 
 
+def skip(name: str, why: str) -> None:
+    """A check that could not run here. It is neither a PASS nor a FAIL: it is printed and counted apart."""
+    SKIPPED.append(name)
+    print(f"  SKIP  {name} - {why}")
+
+
 def sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def git_eol(rels: list[str]) -> dict[str, str] | None:
+def git_eol(rels: list[str], git: str = "git") -> dict[str, str] | None:
     try:
-        r = subprocess.run(["git", "-c", "gc.auto=0", "ls-files", "--eol", "--", *rels], cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+        r = subprocess.run([git, "-c", "gc.auto=0", "ls-files", "--eol", "--", *rels], cwd=str(ROOT), capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0 or not r.stdout.strip():
@@ -286,6 +301,65 @@ def registration_findings(text: str) -> list[str]:
     return out
 
 
+# [4] member access that hides a name: the forbidden-API list reads names, so a name assembled at run time (this['_ha' + 'ss'], z['call' + 'Service']) would
+# not be read by it. None of these shapes exists in the card; each is written to have no false positive on it. They do not make the list watertight (a name
+# can be assembled in a variable first); the byte pin is the guard that is.
+GLOBALS_RX = r"(?:this|window|document|globalThis|self|top|parent|navigator|hass|_hass)"
+ACCESS_RULES = {
+    "computed member access on this, window, document, navigator or hass": r"(?<![\w$.])" + GLOBALS_RX + r"\s*(?:\?\.)?\s*\[|\bthis\s*\.\s*_?hass\s*(?:\?\.)?\s*\[",
+    "a member name built from string pieces inside brackets": r"\[\s*(?:'[^'\n]*'|\"[^\"\n]*\")\s*\+|\+\s*(?:'[^'\n]*'|\"[^\"\n]*\")\s*\]",
+    "a template literal used as a member name": r"[\w$)\]]\s*\[\s*`",
+    "this, window or another global bound to a bare name": r"\b(?:const|let|var)\s+[\w$]+\s*=\s*(?:this|window|document|globalThis|self|top|parent|navigator)\s*[;,)]"
+                                                         r"|(?<![\w$.])[\w$]+\s*=\s*(?:this|window|document|globalThis|self|top|parent|navigator)\s*;",
+    "a call through a computed member": r"[\w$)\]]\s*\[[^\]\n]*\]\s*(?:\?\.)?\s*\(",
+}
+
+
+def access_findings(text: str) -> list[str]:
+    code = "\n".join(code_lines(text))
+    return [f"access: {name}" for name, rx in ACCESS_RULES.items() if re.search(rx, code, re.M)]
+
+
+# [4] the redaction vocabulary, pinned as written (the word lists of the card's key rules, and the reasons of its value rules). A word removed from one of
+# them lets the value of such a key through to the screen, and CI runs no Node; the byte pin would catch it only until someone repins.
+REDACTION_SETS = {
+    "SECRET_TOKENS": (
+        "token", "tokens", "password", "passwords", "passwd", "pwd", "passphrase", "passcode", "pincode", "secret", "secrets", "apikey", "apikeys",
+        "authorization", "auth", "bearer", "credential", "credentials", "privatekey", "webhook", "webhooks", "cookie", "cookies", "session",
+        "sessions", "psk", "pin", "dsn", "otp", "jwt", "signature", "accesskey", "secretkey", "signingkey", "clientsecret", "connectionstring",
+        "connstr", "refreshtoken", "pw", "wifipass", "wifipw"),
+    "KEY_WORDS": ("key", "keys"),
+    "LOGIN_WORDS": ("user", "users", "usr", "login", "logins"),
+    "PASS_WORDS": ("pass",),
+    "PRIVATE_TOKENS": (
+        "latitude", "longitude", "lat", "lon", "lng", "location", "locations", "gps", "coordinates", "coordinate", "address", "addresses", "email",
+        "emails", "phone", "postcode", "postal", "ssid", "bssid", "mac", "ip", "hostname", "serial", "serialnumber", "mpan", "mprn", "imei",
+        "username", "account", "accountid", "meterid"),
+    "DIGEST_KEYS": ("gitsha", "commit", "commitsha", "gitcommit"),
+}
+RULE_REASONS = (
+    "jwt", "key block", "url credentials", "connection string", "url token", "credential pair", "connection pairs", "pass pair", "wifi credentials",
+    "bearer", "known token", "email address", "IPv4 address", "IPv6 address", "MAC address", "MAC address (dotted)", "MAC address (spaced)", "coordinates",
+    "labelled coordinate", "hemisphere coordinates", "webhook path", "internal host name", "private host name")
+
+
+def redaction_findings(text: str) -> list[str]:
+    out = []
+    for name, want in REDACTION_SETS.items():
+        m = re.search(r"^const " + name + r" = new Set\(\[(.*?)\]\);", text, re.M | re.S)
+        got = tuple(re.findall(r"'([^']*)'", m.group(1))) if m else None
+        if got != want:
+            gone = sorted(set(want) - set(got or ()))[:4]
+            new = sorted(set(got or ()) - set(want))[:4]
+            out.append(f"redaction: {name} is not the pinned word list (missing {gone}; new {new}; {len(got) if got is not None else 'not found'} vs {len(want)})")
+    m = re.search(r"^const RULES = \[\n(.*?)^\];", text, re.M | re.S)
+    reasons = tuple(re.findall(r"^  \['([^']+)',\s*(?:'[^']*'|null),\s*/", m.group(1), re.M)) if m else None
+    if reasons != RULE_REASONS:
+        out.append(f"redaction: the value rules are not the pinned {len(RULE_REASONS)} (missing {sorted(set(RULE_REASONS) - set(reasons or ()))[:4]}; "
+                   f"new {sorted(set(reasons or ()) - set(RULE_REASONS))[:4]})")
+    return out
+
+
 def hygiene_findings(b: bytes) -> list[str]:
     out = []
     if not b.isascii():
@@ -305,12 +379,14 @@ def byte_findings(b: bytes, size: int, digest: str, what: str) -> list[str]:
     return [] if len(b) == size and sha(b) == digest else [f"bytes: the {what} is not the pinned file ({len(b)} bytes, sha256 {sha(b)[:16]}; pinned {size}, {digest[:16]})"]
 
 
-def card_findings(b: bytes) -> list[str]:
+def card_findings(b: bytes, with_pin: bool = True) -> list[str]:
+    """Every finding of every rule on these bytes. with_pin=False leaves the byte pin out: the rules alone, as they stand when someone has repinned."""
+    pin = byte_findings(b, CARD_SIZE, CARD_SHA256, "card") if with_pin else []
     if not b.isascii():
-        return hygiene_findings(b) + byte_findings(b, CARD_SIZE, CARD_SHA256, "card")
+        return hygiene_findings(b) + pin
     t = b.decode("ascii")
-    return (byte_findings(b, CARD_SIZE, CARD_SHA256, "card") + hygiene_findings(b) + forbidden_findings(t) + surface_findings(t) + set_findings(t)
-            + export_findings(t) + registration_findings(t))
+    return (pin + hygiene_findings(b) + forbidden_findings(t) + surface_findings(t) + set_findings(t)
+            + export_findings(t) + registration_findings(t) + access_findings(t) + redaction_findings(t))
 
 
 # [6] the catalogue
@@ -371,9 +447,11 @@ check("the example: UTF-8, LF only (no CR), no BOM, no NUL, one final newline (i
       and [c for c in EXAMPLE_B.decode("utf-8") if ord(c) > 127] == ["\u00b7", "\u00b7"], str(hygiene_findings(EXAMPLE_B)))
 eol = git_eol([CARD_REL, CAT_REL, LEDGER_REL, EXAMPLE_REL, PKG_REL])
 if eol is None:
-    check("LF as stored by git (git or the index is not available here: the working-tree check above stands in)", b"\r" not in CARD_B + CAT_B + LEDGER_B + EXAMPLE_B)
+    skip("LF as stored by git for the card, the catalogue, the ledger, the example and package.json (i/lf)",
+         "git or its index is not available here (an archive without .git); the working-tree checks above (no CR) still ran")
 else:
     check("LF as stored by git for the card, the catalogue, the ledger, the example and package.json (i/lf)", all(eol.get(r) == "i/lf" for r in (CARD_REL, CAT_REL, LEDGER_REL, EXAMPLE_REL, PKG_REL)), str(eol))
+check("a missing git is reported as 'not available' (None): the check above prints SKIP for it and never PASS", git_eol([CARD_REL], git="no-such-git-for-this-test") is None)
 ledger = json.loads(LEDGER_B) if LEDGER_B else {}
 check("the ledger is bound to this catalogue (its catalogue_sha256) and lists 361 rows: one per source and attribute",
       ledger.get("catalogue_sha256") == sha(CAT_B) and len(ledger.get("rows", [])) == CAT_COUNTS["ledger_rows"] == CAT_COUNTS["sources"] + CAT_COUNTS["attribute_rows"],
@@ -414,6 +492,11 @@ print("[4] the sets that keep it read-only")
 check("the more-info domains (sensor, binary_sensor, event), the safe actions (none, more-info, navigate), the service-call keys, the write card types, the writable "
       "domains, the allowed card types and the one default custom card are the reviewed statements, each present once", set_findings(CARD_T) == [], str(set_findings(CARD_T)))
 check("the card imports nothing (no import statement, no require)", not re.search(r"^\s*import\b", CARD_T, re.M) and "require(" not in CARD_T)
+check("no computed member access on this, window, document, navigator or hass, no member name built from string pieces or a template literal, no global bound "
+      "to a bare name, no call through a computed member (defence in depth: the byte pin is the guard)", access_findings(CARD_T) == [], str(access_findings(CARD_T)))
+check("the redaction vocabulary is the pinned one: six word lists (41 secret words, 2 key words, 5 login words, 1 pass word, 31 private words, 4 digest keys) "
+      "and the 23 value rules by reason", redaction_findings(CARD_T) == [] and [len(v) for v in REDACTION_SETS.values()] == [41, 2, 5, 1, 31, 4] and len(RULE_REASONS) == 23,
+      str(redaction_findings(CARD_T)))
 
 # =====================================================================================================================
 print("")
@@ -513,6 +596,36 @@ fm = card_findings(cm)
 check("C40 one comment letter changed: only the byte pin fires (a deliberate edit of this file's pins is what it takes)", len(fm) == 1 and fm[0].startswith("bytes:"), str(fm))
 check("the byte pin fires for every mutant above too (nothing slips through by a rule that was never run)", all(any(f.startswith("bytes:") for f in card_findings(b)) for _n, b, _w in MUTANTS))
 
+# The review's own mutants, run the way a careless repin would leave them: with the byte pin OFF, so the RULES alone must see them. Not covered, and said so:
+# a member name assembled in a variable first (const k = 'call' + 'Service'; z[k]) is seen only as "a call through a computed member"; a determined edit can
+# always be written to get past a text rule. The byte pin and the reviewer's reading of the diff are the guards.
+REDACT_LINE = re.compile(r"^  \['credential pair'.*\n", re.M)
+RULE_MUTANTS: list[tuple[str, bytes, str]] = [
+    ("R01 a hass taken from this by a built name: this['_ha' + 'ss']", append("const z = this['_ha' + 'ss'];"), "access: computed member access on this"),
+    ("R02 the same with a space before the bracket", append("const z = this ['_hass'];"), "access: computed member access on this"),
+    ("R03 a network call by a built name: window['fe' + 'tch']('x')", append("window['fe' + 'tch']('x');"), "access: a member name built from string pieces"),
+    ("R04 a service call by a built name on an alias: z['call' + 'Service'](...)", append("const z = this._hass; z['call' + 'Service']('a', 'b');"), "access: a member name built from string pieces"),
+    ("R05 a template literal as the member name", append("const f = z[`call${s}`];"), "access: a template literal used as a member name"),
+    ("R06 this bound to a bare name", append("const z = this;"), "access: this, window or another global bound to a bare name"),
+    ("R07 window assigned to a bare name", append("z = window;"), "access: this, window or another global bound to a bare name"),
+    ("R08 a call through a computed member: z[k]('a')", append("z[k]('a');"), "access: a call through a computed member"),
+    ("R09 optional-chained computed access on hass", append("const v = hass?.['x'];"), "access: computed member access on this"),
+    ("R10 'password' removed from the secret words", swap("'password', 'passwords', ", ""), "redaction: SECRET_TOKENS"),
+    ("R11 the last secret word removed", swap(", 'wifipw']", "]"), "redaction: SECRET_TOKENS"),
+    ("R12 'email' removed from the private words", swap("'email', 'emails', ", ""), "redaction: PRIVATE_TOKENS"),
+    ("R13 'key' removed from the key words", swap("new Set(['key', 'keys'])", "new Set(['keys'])"), "redaction: KEY_WORDS"),
+    ("R14 a login word removed", swap("'usr', ", ""), "redaction: LOGIN_WORDS"),
+    ("R15 a word added to the digest keys (a 40-hex name would be shown under it)", swap("'commitsha', 'gitcommit'", "'commitsha', 'gitcommit', 'anykey'"), "redaction: DIGEST_KEYS"),
+    ("R16 the 'credential pair' value rule removed", REDACT_LINE.sub("", CARD_T, count=1).encode("utf-8"), "redaction: the value rules"),
+]
+check("the rules alone find nothing on the unchanged card (negative control, byte pin off)", card_findings(CARD_B, with_pin=False) == [], str(card_findings(CARD_B, with_pin=False)[:2]))
+check("the R16 edit really removed one line (the rule mutant is not a no-op)", len(RULE_MUTANTS[-1][1]) < len(CARD_B) and RULE_MUTANTS[-1][1] != CARD_B)
+for name, b, want in RULE_MUTANTS:
+    off = card_findings(b, with_pin=False)
+    check(f"{name}: caught by {want!r} with the byte pin OFF", any(want in f for f in off), "; ".join(off)[:200] or "NOT CAUGHT")
+check(f"all {len(RULE_MUTANTS)} rule mutants are run, and the byte pin fires for each of them too", len(RULE_MUTANTS) >= 16
+      and all(any(f.startswith("bytes:") for f in card_findings(b)) for _n, b, _w in RULE_MUTANTS))
+
 CAT_T = CAT_B.decode("utf-8")
 cat_d = json.loads(CAT_T)
 
@@ -565,4 +678,9 @@ if FAILURES:
     for f in FAILURES:
         print(f"  - {f}")
     sys.exit(1)
-print("all checks passed")
+if SKIPPED:
+    print(f"all checks that could run passed; {len(SKIPPED)} SKIPPED (counted apart from PASS):")
+    for s in SKIPPED:
+        print(f"  - {s}")
+else:
+    print("all checks passed")
