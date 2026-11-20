@@ -80,12 +80,14 @@ provisional ones it used in `provisionalInUse`.
 | `assumedDemandW` | 2000 W | MEASURED_REQUIRED | floor of the demand peak when demand over the window is not covered and the policy is ASSUME_PROVISIONAL (`ASSUMED_DEMAND`) | the measured overnight household demand profile (unknown today) |
 | `solarCreditPct` | 0 | PROVISIONAL | percent (0-100) of the bounded solar credited INSIDE the hard grid limit; 0 = none (the cap is the limit minus the demand peak); above 0 only behind a measured forecast skill gate, which does not exist yet | a measured forecast skill gate |
 | `maxHouseholdAgeMin` | 15 min | PROVISIONAL | demand and solar readings older than this are treated as unknown | the real update rate of those sensors |
+| `setpointConversionEff` | 0.85 | PROVISIONAL | converts a grid-side limit (the grid headroom, a ceiling labelled `GRID_AC`) to the battery-side watts of a `BATTERY_DC` or `UNSETTLED` setpoint: S <= eff x grid-side limit; pessimistic and UNMEASURED; not the charge-energy `chargeEff` | the measured grid-to-battery power ratio at the settled basis |
 | `maxForecastAgeMin` | 120 min | PROVISIONAL | the demand and solar FORECASTS (`demandProfileAgeMin`, `solarProfileAgeMin`) older than this, or with no valid age, are unknown | the real refresh rate of those forecasts |
 | `maxCeilingAgeMin` | 60 min | PROVISIONAL | a named ceiling with an age (`ageMin`) older than this is stale: it cannot make a setpoint safe, but a stale value that is lower than every fresh one still caps | the real update rate of the live battery and grid-charge limits |
 | `maxGridLimitAgeMin` | 60 min | PROVISIONAL | a grid import limit with an age (`gridImportLimitAgeMin`) older than this is unusable: nothing is recommended | the real update rate of the limit, when it is read from a device |
 | `maxDecreaseStepW` | 8000 W | PROVISIONAL | slew limit per decrease; 8000 W never binds, which keeps the v1 behaviour; the recommended gentle value is 1000 W (`GENTLE_RECOMMENDED_PARAMS`) | the owner's confirmation |
 | `fallbackPolicy` | KEEP_CURRENT | PROVISIONAL | what to hold when the plan cannot run: `KEEP_CURRENT`, `USE_STATIC_PLAN` or `NONE` | the owner's choice |
 | `unknownDemandPolicy` | FALLBACK | PROVISIONAL | unknown demand with a known grid limit: `FALLBACK` (the default: no recommendation, nothing is guessed) or `ASSUME_PROVISIONAL` (an explicit option: plans from `assumedDemandW`, status `DEGRADED`, never `OK`) | the owner's choice |
+| `setpointBasis` | UNSETTLED | PROVISIONAL | what the setpoint S means to the actuator: `GRID_AC` (grid-side watts), `BATTERY_DC` (battery-side watts) or `UNSETTLED` (the default: every cap holds under either) | live proof of the actuator's convention |
 | `targetSocPct` | owner setting | OWNER_SET | the charge target, 10-100; never lowered by the model | the owner's setting |
 | `bufferMin` | 60 min | OWNER_SET | finish-early buffer, 0-120 in 5-minute steps (`GENTLE_DEFAULT_BUFFER_MIN` is the default helpers and tests use) | the owner's setting |
 | `gridImportLimitW` | owner setting or unknown | OWNER_SET | the KNOWN safe grid import limit; unknown means no headroom constraint | the owner's or installer's figure |
@@ -95,15 +97,27 @@ Unmeasured values are never presented as facts: the decision's `assumptionsLabel
 ### Household demand, solar and grid headroom (optional)
 
 An optional `household` input group, with `policy` and `staticPlanRateW`. Without it every v1 output is **bit-identical** (a golden-master digest
-over 400 closed-loop runs and 4000 random inputs proves it). The setpoint S is grid-side watts, as in v1; the battery receives `chargeEff x S`.
-Demand is the household load EXCLUDING the charger (the caller subtracts the present charge draw from a meter reading).
+over 400 closed-loop runs and 4000 random inputs proves it). Demand is the household load EXCLUDING the charger (the caller subtracts the present
+charge draw from a meter reading).
 
-- Grid import = `chargeW / chargeEff + demand - solarUsed` (`gridImportW`), which is `S + demand - solarUsed`.
-- The battery-side charge power the grid allows = `chargeEff x (gridLimit - demand + solarUsed)`, never below zero (`batteryHeadroomW`); in setpoint
-  units that is `gridLimit - demand + solarUsed`.
-- Pessimism: demand = the PEAK of the fresh reading and the forecast profile over the remaining window, plus `demandMarginPct`; solarUsed per
-  minute = `min(fresh reading, forecast x confidence)`, and 0 when the reading is unknown or stale, there is no forecast, or no confidence.
-  A reading or forecast older than `maxHouseholdAgeMin` is unknown.
+**What the setpoint S means (`policy.setpointBasis`).** Nothing proves it yet: today's firmware turns watts into amps at the battery voltage when a
+lease starts, and the inverter's own AC and DC figures differ by several percent. So the basis is explicit: `GRID_AC` (S is grid-side watts: grid
+draw = S), `BATTERY_DC` (S is battery-side watts: grid draw = S / efficiency) or `UNSETTLED` (the default: every cap is the lower of the two readings
+and holds under either convention). The efficiency of that conversion is `setpointConversionEff` (default 0.85: pessimistic, UNMEASURED; not the
+charge-energy `chargeEff`, which only shapes the SOC projection and stays on the pessimistic side in every basis). The cost of the safe default is
+visible: the grid cap is 15 percent lower than a settled grid-side basis would allow. Settle the basis by live proof and measure the ratio to remove it.
+Named ceilings may say which side they are measured on (`NamedCeiling.basis`): an unlabelled ceiling is already in setpoint units (an owner limit in the
+editor's own unit) and is never converted; a `BATTERY_DC` ceiling is never raised to a grid-side equivalent; a `GRID_AC` ceiling is converted DOWN by
+`setpointConversionEff` unless the basis is `GRID_AC`.
+
+- Grid import = `S / scale + demand - solarUsed` (`gridImportW`), where `scale` is 1 for `GRID_AC` and `setpointConversionEff` otherwise.
+- The cap on S = `scale x max(0, gridLimit - demandPeak + solarCredited)` (`batteryHeadroomW` gives the battery-side figure for a grid-side limit at the
+  charge efficiency); the reported `projectedImportW` is the draw at the recommended setpoint on the same reading, so it never exceeds the limit.
+- Pessimism: demand = the PEAK of the fresh reading and the forecast profile over the remaining window, plus `demandMarginPct`. Solar is NOT
+  inside the hard limit: `solarCreditPct` is 0 by default, so the cap is the limit minus the demand peak. The bounded solar (`min(fresh reading, forecast
+  x confidence)`, 0 when the reading is unknown or stale, there is no forecast or no confidence) is reported as `solarPotentialMinW`, information only;
+  `solarNowW` is GROSS PV output (the household use is already in the demand, so a surplus would count it twice). A reading older than
+  `maxHouseholdAgeMin` is unknown.
 - The cap on the setpoint is the least headroom over the remaining minutes, rounded down to a step (`headroomCapW`); the setpoint is at most
   `min(ceiling, cap)` and the decision reports `limitedBy` and the pessimistic `projectedImportW` (never above the limit). The forward projection
   uses the delivered power per minute, `min(setpoint, ceiling x taper acceptance, headroom at that minute)`, not a constant. (For a setpoint inside the cap the headroom is never the smaller term, because the cap is its least value over the window; the term makes the projection honest for any setpoint outside the cap and is covered by its own tests.)

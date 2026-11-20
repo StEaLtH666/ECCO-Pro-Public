@@ -704,7 +704,9 @@ const withAges = (h: HouseholdInput | undefined): HouseholdInput | undefined => 
   if (o.solarProfile && o.solarProfileAgeMin === undefined) o.solarProfileAgeMin = 0;
   return o;
 };
-const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: withAges(h), ...over });
+// v3 G5: the default setpoint basis is UNSETTLED (the caps hold under either convention, see the G5 tests). The hand-checked arithmetic of the older
+// checks is the grid-side convention, so this helper asks for it explicitly; a check that passes its own policy keeps that and still gets GRID_AC.
+const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: withAges(h), ...over, policy: { setpointBasis: "GRID_AC", ...(over.policy ?? {}) } });
 const flat = (watts: number): StepPoint[] => [{ fromInMin: 0, watts }];
 const PLANNING = new Set(["OK", "DEGRADED", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);   // v3 G3: DEGRADED (an assumed demand, asked for explicitly) is a planning status
 const inf = (x: number | null) => (x === null ? Infinity : x);
@@ -715,7 +717,7 @@ test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 
   for (const [k, v] of Object.entries(v1Defaults)) assert.equal((DEFAULT_GENTLE_PARAMS as unknown as Record<string, number>)[k], v, "v1 default " + k);
   assert.equal(DEFAULT_GENTLE_PARAMS.maxDecreaseStepW, DEFAULT_GENTLE_PARAMS.hardMaxW, "the slew is off by default (never binds)");
   assert.equal(GENTLE_RECOMMENDED_PARAMS.maxDecreaseStepW, 1000);
-  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit
+  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit; v3 G5: the explicit basis
   // the golden digest is sensitive: one changed v1 field changes it
   const bent = (i: GentleInput) => ({ ...planGentle(i), neededW: (planGentle(i).neededW ?? 0) + 1 });
   assert.notEqual(v1Fingerprint(bent), GOLDEN_V1_DIGEST);
@@ -1767,7 +1769,7 @@ test("[v3 G3] unknown demand under a KNOWN grid limit: the default is FALLBACK (
   assert.ok(swept > 300, "swept " + swept);
 });
 
-const HP = (age: unknown, over: Partial<HouseholdInput> = {}) => planGentle({ ...hbase, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: age as number, ...over } });
+const HP = (age: unknown, over: Partial<HouseholdInput> = {}) => planGentle({ ...hbase, policy: { setpointBasis: "GRID_AC" }, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: age as number, ...over } });
 const CE = (cs: NamedCeiling[], over: Partial<GentleInput> = {}) => plan({ ceilings: cs, ...over });
 
 test("[v3 G4a] a forecast needs a fresh age: a stale, missing or invalid age counts as unknown (fail closed), never a covered window", () => {
@@ -1940,4 +1942,110 @@ test("[v3 G2b] closed loop: a cloud, or a solar forecast far too high, cannot pu
   assert.ok(atRisk >= 20, "the shortfall is reported, not hidden: " + atRisk + " of " + runs + " runs flagged at risk or unreachable");
   assert.ok(withCredit >= 10, "the loop is able to expose the old behaviour: with solarCreditPct 100 the limit was crossed in " + withCredit + " of " + runs + " runs");
   console.log("[gentle G2] cloud scenarios: " + runs + " runs, solar not credited: limit never crossed; flagged at risk or unreachable in " + atRisk + "; with the credit switched on the limit was crossed in " + withCredit);
+});
+
+test("[v3 G5a] the setpoint basis is explicit and every grid-side limit is converted to it: the default UNSETTLED holds under either convention, GRID_AC keeps the exact grid-side arithmetic, battery-side ceilings are never raised", () => {
+  assert.equal(DEFAULT_GENTLE_POLICY.setpointBasis, "UNSETTLED");
+  assert.equal(DEFAULT_GENTLE_PARAMS.setpointConversionEff, 0.85);
+  assert.equal(PARAM_PROVENANCE.setpointBasis?.kind, "PROVISIONAL");
+  assert.equal(PARAM_PROVENANCE.setpointConversionEff?.kind, "PROVISIONAL");
+  const H: HouseholdInput = { gridImportLimitW: 5000, demandProfile: flat(1000), demandProfileAgeMin: 0 };
+  const run = (basis: string | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: H, ...(basis === undefined ? {} : { policy: { setpointBasis: basis as GentlePolicy["setpointBasis"] } }), ...over });
+  // 5000 - 1000 x 1.2 = 3800 grid-side watts; a setpoint that is battery-side watts can use 0.85 of that: 3230 -> 3200
+  assert.equal(run("GRID_AC").headroomCapW, 3800);
+  assert.equal(run("BATTERY_DC").headroomCapW, 3200);
+  assert.equal(run("UNSETTLED").headroomCapW, 3200);
+  assert.equal(run(undefined).headroomCapW, 3200, "the default is the unsettled basis");
+  assert.equal(run(undefined).setpointBasis, "UNSETTLED");
+  assert.equal(run("GRID_AC").setpointBasis, "GRID_AC");
+  assert.equal(run("BATTERY_DC", { params: { setpointConversionEff: 0.9 } }).headroomCapW, 3400);
+  assert.equal(run("BATTERY_DC", { params: { setpointConversionEff: 1 } }).headroomCapW, 3800);
+  assert.equal(run("GRID_AC", { params: { setpointConversionEff: 0.5 } }).headroomCapW, 3800, "a settled grid-side basis needs no conversion");
+  // whatever the basis, the recommended setpoint stays inside the cap and the import it draws stays inside the limit, on both readings
+  for (const basis of ["GRID_AC", "BATTERY_DC", "UNSETTLED", undefined]) {
+    const d = run(basis, { targetSocPct: 100, socPct: 30 });
+    assert.ok((d.setpointW as number) <= (d.headroomCapW as number), String(basis));
+    const importGrid = (d.setpointW as number) + 1200;
+    const importBattery = (d.setpointW as number) / 0.85 + 1200;
+    assert.ok((d.household?.projectedImportW as number) <= 5000 + 1e-6, "reported import " + d.household?.projectedImportW);
+    assert.ok(basis === "GRID_AC" ? importGrid <= 5000 : importBattery <= 5000 + 1e-6, String(basis) + ": the draw at an efficiency of 0.85 stays inside the limit");
+  }
+  assert.equal(run("GRID_AC", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW, 5000, "grid-side: import = setpoint + demand");
+  assert.ok((run("UNSETTLED", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW as number) < 5000 && (run("UNSETTLED", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW as number) > 4900);
+  // validated
+  for (const setpointConversionEff of [0, -0.1, 1.01, NaN, Infinity]) assert.equal(plan({ params: { setpointConversionEff } }).status, "INVALID", String(setpointConversionEff));
+  for (const setpointConversionEff of [0.01, 0.5, 1]) assert.equal(plan({ params: { setpointConversionEff } }).status, "OK", String(setpointConversionEff));
+  for (const setpointBasis of ["AC", "", null, 7, "grid_ac"]) assert.equal(plan({ policy: { setpointBasis } as unknown as Partial<GentlePolicy> }).status, "INVALID", String(setpointBasis));
+  // named ceilings: an unlabelled one is already in setpoint units; a battery-side one is never raised; a grid-side one is converted DOWN unless the basis is grid-side
+  const CB = (c: NamedCeiling[], basis?: string) => plan({ ceilings: c, ...(basis === undefined ? {} : { policy: { setpointBasis: basis as GentlePolicy["setpointBasis"] } }) });
+  const unl: NamedCeiling[] = [{ name: "owner_maximum", watts: 5000 }];
+  const bat: NamedCeiling[] = [{ name: "battery_max_charge", watts: 5000, basis: "BATTERY_DC" }];
+  const grid: NamedCeiling[] = [{ name: "grid_charge_power", watts: 5000, basis: "GRID_AC" }];
+  for (const b of [undefined, "GRID_AC", "BATTERY_DC", "UNSETTLED"]) {
+    assert.equal(CB(unl, b).ceilingW, 5000, "unlabelled, " + b);
+    assert.equal(CB(bat, b).ceilingW, 5000, "battery-side, " + b);
+  }
+  assert.equal(CB(grid, "GRID_AC").ceilingW, 5000);
+  assert.equal(CB(grid, "BATTERY_DC").ceilingW, 4200, "5000 x 0.85 = 4250, down to a step");
+  assert.equal(CB(grid, "UNSETTLED").ceilingW, 4200);
+  assert.equal(CB(grid, undefined).ceilingW, 4200);
+  const mix = CB([...unl, { name: "grid_charge_power", watts: 5200, basis: "GRID_AC" }]);
+  assert.equal(mix.ceilingW, 4400, "5200 x 0.85 = 4420 is the smallest");
+  assert.equal(mix.ceilingName, "grid_charge_power");
+  assert.ok((mix.setpointW as number) <= 4400);
+  assert.equal(CB([{ name: "x", watts: 5000, basis: "weird" as unknown as "GRID_AC" }], "UNSETTLED").ceilingW, 4200, "an unrecognised label is treated as grid-side: the lower figure");
+  assert.equal(CB([{ name: "x", watts: 5000, basis: "weird" as unknown as "GRID_AC" }], "GRID_AC").ceilingW, 5000);
+  // the helpers, exported pure
+  assert.equal(G4.setpointScale("GRID_AC", 0.85), 1);
+  assert.equal(G4.setpointScale("BATTERY_DC", 0.85), 0.85);
+  assert.equal(G4.setpointScale("UNSETTLED", 0.85), 0.85);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000, basis: "GRID_AC" }, "UNSETTLED", 0.8), 800);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000, basis: "BATTERY_DC" }, "UNSETTLED", 0.8), 1000);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000 }, "BATTERY_DC", 0.8), 1000);
+  // the provisional parameters that shaped the answer are listed
+  const listed = run(undefined).provisionalInUse.map((x) => x.name);
+  assert.ok(listed.includes("setpointBasis") && listed.includes("setpointConversionEff"));
+  assert.ok(!run("GRID_AC").provisionalInUse.some((x) => x.name === "setpointConversionEff"));
+  // v1 numbers are untouched: no household and no labelled ceiling means no conversion at all
+  assert.equal(plan().ceilingW, 5000);
+});
+
+test("[v3 G5b] closed loop with a simulator convention that DIFFERS from the model's: with the default basis the limit holds whether the actuator applies grid-side or battery-side watts; a model that assumed the grid side is exposed", () => {
+  let n = 0;
+  let reachedBattery = 0;
+  let feasible = 0;
+  const grid: Partial<GentlePolicy> = { setpointBasis: "GRID_AC" };
+  for (let id = 0; id < 240; id++) {
+    const sc = makeHouseholdScenario(id);
+    if (sc.hh.demandKind === "exceeds") continue;   // demand above the forecast and its margin can cross any limit; that is reported elsewhere
+    n++;
+    const defGrid = runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC" });
+    const defBat = runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC" });
+    assert.equal(defGrid.overLimitMin, 0, "default basis, grid-side actuator, scenario " + id);
+    assert.equal(defBat.overLimitMin, 0, "default basis, battery-side actuator, scenario " + id);
+    assert.ok(defBat.maxImportW <= sc.hh.gridLimitW + 1e-6, "scenario " + id + " import " + defBat.maxImportW);
+    // the same assumption meeting a grid-side actuator is exact
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", policy: grid }).overLimitMin, 0, "scenario " + id);
+    if (sc.kind === "in-band" && feasibilityHH(sc) === "margin") {
+      feasible++;
+      if (defBat.reachedTolMin !== null && defBat.reachedTolMin <= defBat.deadlineMin) reachedBattery++;
+    }
+  }
+  // The loop must be able to SEE a convention mismatch: demand at its forecast, no demand margin, the cap binding (an at-risk target). A model that
+  // assumed grid-side watts, meeting a battery-side actuator, crosses the limit; the default basis does not, with either actuator.
+  let exposed = 0;
+  let minutes = 0;
+  const tight: Partial<GentleParams> = { demandMarginPct: 0 };
+  for (let v = 0; v < 27; v++) {
+    const { sc } = cloudScenario(v);
+    const wrong = runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC", params: tight, policy: grid });
+    if (wrong.overLimitMin > 0) { exposed++; minutes += wrong.overLimitMin; }
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC", params: tight }).overLimitMin, 0, "default basis, battery-side actuator, variant " + v);
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", params: tight }).overLimitMin, 0, "default basis, grid-side actuator, variant " + v);
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", params: tight, policy: grid }).overLimitMin, 0, "grid-side assumption, grid-side actuator, variant " + v);
+  }
+  console.log("[gentle G5] " + n + " scenarios without demand above the forecast: the default basis crossed the limit in 0 runs with either actuator; tight cases (no margin, cap binding): a grid-side assumption under a battery-side actuator crossed it in " + exposed + " of 27 (" + minutes + " minutes with the setpoint above the limit), the default in 0; feasible-with-margin runs reaching the deadline with a battery-side actuator " + reachedBattery + " of " + feasible);
+  assert.ok(n >= 120, "scenarios: " + n);
+  assert.ok(exposed >= 15 && minutes > 1000, "the loop is able to expose a convention mismatch: " + exposed + " of 27, " + minutes + " minutes");
+  assert.ok(feasible >= 50 && reachedBattery >= feasible - 2, "the conservative default still reaches the deadline where the true battery can: " + reachedBattery + " of " + feasible);
 });

@@ -28,6 +28,13 @@ export type GentleStatus = "OK" | "DEGRADED" | "NOTHING_TO_CHARGE" | "TARGET_AT_
 export type GentleChange = "NONE" | "START" | "INCREASE" | "DECREASE";
 export type FallbackPolicy = "KEEP_CURRENT" | "USE_STATIC_PLAN" | "NONE";
 export type UnknownDemandPolicy = "ASSUME_PROVISIONAL" | "FALLBACK";
+/** Which side of the charger a power figure is measured on: GRID_AC (drawn from the grid) or BATTERY_DC (delivered to the battery). */
+export type PowerBasis = "GRID_AC" | "BATTERY_DC";
+/**
+ * What the recommended setpoint S means to the actuator. GRID_AC: S is grid-side watts. BATTERY_DC: S is battery-side watts (grid draw = S / efficiency).
+ * UNSETTLED (the default): not proven, so every cap is the lower of the two readings and holds under either convention.
+ */
+export type SetpointBasis = PowerBasis | "UNSETTLED";
 export type ParamKind = "PROVISIONAL" | "OWNER_SET" | "MEASURED_REQUIRED";
 
 /** A safe power ceiling candidate. `watts` null / undefined / not a finite number >= 0 means UNKNOWN (never guessed). */
@@ -40,6 +47,12 @@ export interface NamedCeiling {
    * `effectiveCeiling`).
    */
   ageMin?: number | null;
+  /**
+   * Which side of the charger this value is measured on. Absent = already in setpoint units (an owner-set limit in the editor's own unit): never
+   * converted. BATTERY_DC (a battery or BMS limit) is never raised to a grid-side equivalent: the grid-side figure would be larger by the loss, and
+   * the model does not take that credit. GRID_AC (a grid-charge limit) is converted DOWN by `setpointConversionEff` unless the setpoint basis is GRID_AC.
+   */
+  basis?: PowerBasis;
 }
 
 /** Battery-side power from a current limit and a voltage (a convenience for the two current-based ceilings); null if either is unknown. */
@@ -91,6 +104,13 @@ export interface GentleParams {
   maxHouseholdAgeMin: number;
   /** Demand and solar FORECASTS older than this are stale (treated as unknown). A forecast with no valid age is unknown too. */
   maxForecastAgeMin: number;
+  /**
+   * Efficiency used ONLY to convert a grid-side limit (the grid headroom, a ceiling labelled GRID_AC) to the battery-side watts of a BATTERY_DC or
+   * UNSETTLED setpoint: S <= efficiency x grid-side limit, so the grid import S / efficiency + demand never crosses the limit whatever the real
+   * efficiency is, as long as it is not below this value. Deliberately pessimistic and UNMEASURED; 0 < eff <= 1. Not the charge-energy efficiency
+   * (`chargeEff`), which only shapes the SOC projection.
+   */
+  setpointConversionEff: number;
   /** A named ceiling with an age (`NamedCeiling.ageMin`) older than this is stale: it cannot make a setpoint safe, but a stale lower value still caps. */
   maxCeilingAgeMin: number;
   /** A grid import limit with an age (`HouseholdInput.gridImportLimitAgeMin`) older than this is unusable (nothing is recommended). */
@@ -118,6 +138,7 @@ export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
   assumedDemandW: 2000,
   solarCreditPct: 0,
   maxHouseholdAgeMin: 15,
+  setpointConversionEff: 0.85,
   maxForecastAgeMin: 120,
   maxCeilingAgeMin: 60,
   maxGridLimitAgeMin: 60,
@@ -136,9 +157,11 @@ export interface GentlePolicy {
    * `assumedDemandW` and its status is DEGRADED, never OK.
    */
   unknownDemandPolicy: UnknownDemandPolicy;
+  /** What the setpoint means to the actuator (see `SetpointBasis`). The default UNSETTLED is safe under either convention; settle it before relying on exact caps. */
+  setpointBasis: SetpointBasis;
 }
 
-export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK" });
+export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED" });
 
 export interface ParamProvenance {
   kind: ParamKind;
@@ -166,12 +189,14 @@ const KINDS: Record<string, readonly [ParamKind, string]> = {
   assumedDemandW: ["MEASURED_REQUIRED", "the measured overnight household demand profile (unknown today)"],
   solarCreditPct: ["PROVISIONAL", "a measured forecast skill gate (none exists: 0 means no solar inside the hard grid limit)"],
   maxHouseholdAgeMin: ["PROVISIONAL", "the real update rate of the demand and solar sensors"],
+  setpointConversionEff: ["PROVISIONAL", "the measured grid-to-battery power ratio at the settled setpoint basis (unmeasured; pessimistic by design)"],
   maxForecastAgeMin: ["PROVISIONAL", "the real refresh rate of the demand and solar forecasts"],
   maxCeilingAgeMin: ["PROVISIONAL", "the real update rate of the live battery and grid-charge limits"],
   maxGridLimitAgeMin: ["PROVISIONAL", "the real update rate of the grid import limit, when it is read from a device"],
   maxDecreaseStepW: ["PROVISIONAL", "the owner's confirmation (recommended 1000 W; off by default)"],
   fallbackPolicy: ["PROVISIONAL", "the owner's choice"],
   unknownDemandPolicy: ["PROVISIONAL", "the owner's choice"],
+  setpointBasis: ["PROVISIONAL", "live proof of what the actuator's setpoint means: AC grid watts or DC battery watts"],
   targetSocPct: ["OWNER_SET", "the owner's charge target"],
   bufferMin: ["OWNER_SET", "the owner's finish-early buffer"],
   gridImportLimitW: ["OWNER_SET", "the owner's or installer's safe grid import limit (unknown means no headroom constraint)"],
@@ -369,6 +394,8 @@ export interface GentleDecision {
   nextReplanInMin: number | null;
   actuationSupported: false;
   actuationReason: string;
+  /** What the setpoint was taken to mean (the policy's setpointBasis): GRID_AC, BATTERY_DC or UNSETTLED (safe under either). */
+  setpointBasis: SetpointBasis;
   /** The target is never guaranteed, in any status. */
   guarantee: "NONE";
   guaranteeNote: string;
@@ -407,6 +434,18 @@ export function smallestKnownCeiling(ceilings: readonly NamedCeiling[]): { watts
     if (best === null || c.watts < best.watts) best = { watts: c.watts, name: String(c.name) };
   }
   return best;
+}
+
+/** The capped fraction of a grid-side figure that a setpoint can use: 1 when S is grid-side watts, the conversion efficiency otherwise (UNSETTLED included). */
+export function setpointScale(basis: SetpointBasis, conversionEff: number): number {
+  return basis === "GRID_AC" ? 1 : conversionEff;
+}
+
+/** A named ceiling in setpoint watts: only a GRID_AC (or unrecognised) label is converted, and only to a lower figure, never a higher one. */
+export function ceilingInSetpointUnits(c: NamedCeiling, basis: SetpointBasis, conversionEff: number): number {
+  const w = c.watts as number;
+  if (c.basis === undefined || c.basis === null || c.basis === "BATTERY_DC") return w;
+  return w * setpointScale(basis, conversionEff);
 }
 
 /** True when an age is given and it is not a number of minutes from 0 to the limit (a ceiling with no age counts as current). */
@@ -542,6 +581,7 @@ function mergePolicy(over: Partial<GentlePolicy> | undefined): GentlePolicy {
   if (over && typeof over === "object") {
     if (over.fallbackPolicy !== undefined) out.fallbackPolicy = over.fallbackPolicy;
     if (over.unknownDemandPolicy !== undefined) out.unknownDemandPolicy = over.unknownDemandPolicy;
+    if (over.setpointBasis !== undefined) out.setpointBasis = over.setpointBasis;
   }
   return out;
 }
@@ -549,6 +589,7 @@ function mergePolicy(over: Partial<GentlePolicy> | undefined): GentlePolicy {
 function policyProblem(pol: GentlePolicy): string | null {
   if (pol.fallbackPolicy !== "KEEP_CURRENT" && pol.fallbackPolicy !== "USE_STATIC_PLAN" && pol.fallbackPolicy !== "NONE") return "fallbackPolicy must be KEEP_CURRENT, USE_STATIC_PLAN or NONE.";
   if (pol.unknownDemandPolicy !== "ASSUME_PROVISIONAL" && pol.unknownDemandPolicy !== "FALLBACK") return "unknownDemandPolicy must be ASSUME_PROVISIONAL or FALLBACK.";
+  if (pol.setpointBasis !== "GRID_AC" && pol.setpointBasis !== "BATTERY_DC" && pol.setpointBasis !== "UNSETTLED") return "setpointBasis must be GRID_AC, BATTERY_DC or UNSETTLED.";
   return null;
 }
 
@@ -562,6 +603,7 @@ function paramProblem(p: GentleParams): string | null {
   if (p.maxSocAgeMin <= 0 || p.maxSocAgeMin > 120) return "maxSocAgeMin must be 1-120 minutes.";
   if (p.socResolutionPct < 0 || p.socResolutionPct > 5) return "socResolutionPct must be 0-5.";
   if (p.chargeEff <= 0 || p.chargeEff > 1) return "chargeEff must be above 0 and at most 1.";
+  if (p.setpointConversionEff <= 0 || p.setpointConversionEff > 1) return "setpointConversionEff must be above 0 and at most 1.";
   if (p.taperStartSocPct < 0 || p.taperStartSocPct > 99) return "taperStartSocPct must be 0-99.";
   if (p.taperEndFraction <= 0 || p.taperEndFraction > 1) return "taperEndFraction must be above 0 and at most 1.";
   if (p.topHoldMin < 0 || p.topHoldMin > 120) return "topHoldMin must be 0-120 minutes.";
@@ -619,6 +661,7 @@ function shell(status: GentleStatus, targetSocPct: number, reasons: string[], co
     nextReplanInMin: p ? p.replanMin : null,
     actuationSupported: false,
     actuationReason: ACTUATION_REASON,
+    setpointBasis: "UNSETTLED",
     guarantee: "NONE",
     guaranteeNote: NO_GUARANTEE_NOTE,
     provisionalInUse: [],
@@ -665,13 +708,15 @@ interface HouseholdEval {
   solarMinW: number | null;
   /** The least bounded solar (min of the fresh reading and the confidence-scaled forecast) over the window: information only, never in the cap. */
   solarPotentialMinW: number | null;
+  /** Setpoint watts per grid-side watt (1 for a GRID_AC setpoint, the conversion efficiency otherwise). */
+  scale: number;
   /** The smallest per-minute headroom in setpoint watts, before rounding to a step. */
   capW: number | null;
   perMinW: number[] | null;
 }
 
 function noHousehold(): HouseholdEval {
-  return { given: false, limitW: null, problem: null, codes: [], reasons: [], basis: "NONE", peakW: null, solarMinW: null, solarPotentialMinW: null, capW: null, perMinW: null };
+  return { given: false, limitW: null, problem: null, codes: [], reasons: [], basis: "NONE", peakW: null, solarMinW: null, solarPotentialMinW: null, scale: 1, capW: null, perMinW: null };
 }
 
 function fresh(age: unknown, maxAge: number): boolean {
@@ -782,6 +827,8 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
   // Solar is NOT inside the hard limit by default: a cloud or an over-forecast can take it away faster than a re-plan reacts, and the import would then
   // cross the known limit. Only the share `solarCreditPct` (0 by default, an explicit and validated parameter that belongs behind a measured forecast
   // skill gate) of the bounded solar is credited to the cap. The bounded solar is still computed and reported, labelled as information only.
+  const scale = setpointScale(pol.setpointBasis, p.setpointConversionEff);
+  ev.scale = scale;
   const potential = solarKnown && solarProf !== null && conf > 0;
   const credit = p.solarCreditPct / 100;
   const per: number[] = [];
@@ -792,7 +839,7 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
     const fc = potential ? stepProfileAt(solarProf as readonly StepPoint[], t) : null;
     const pot = potential ? Math.min(solarNow, (fc ?? 0) * conf) : 0;
     const s = pot * credit;
-    const hr = batteryHeadroomW(lim, peakW, s, p.chargeEff) / p.chargeEff;
+    const hr = Math.max(0, lim - peakW + s) * scale;
     per.push(hr);
     if (hr < cap) cap = hr;
     if (s < solarMin) solarMin = s;
@@ -923,14 +970,18 @@ export function planGentle(input: GentleInput): GentleDecision {
   const toDeadline = windowReal - input.bufferMin - input.elapsedMin;
   const toEnd = windowReal - input.elapsedMin;
   const cMin = ceilStep(p.minW, p.stepW);
-  const ceil = effectiveCeiling(input.ceilings, p.maxCeilingAgeMin);
+  const ceil = effectiveCeiling(input.ceilings, p.maxCeilingAgeMin, (c) => ceilingInSetpointUnits(c, pol.setpointBasis, p.setpointConversionEff));
   const known = ceil.best;
   const cCeil = known === null ? null : floorStep(Math.min(known.watts, p.hardMaxW), p.stepW);
   const staleCeilingNote = "A named ceiling is stale (" + ceil.staleNames.join(", ") + "; older than " + p.maxCeilingAgeMin + " min or no valid age): a stale value cannot make a setpoint safe on its own" + (ceil.staleCaps ? ", and the stale value is lower than every fresh one, so it still caps" : "") + ".";
   const agedCeilings = Array.isArray(input.ceilings) && input.ceilings.some((c) => !!c && c.ageMin !== undefined && c.ageMin !== null);
   let hhMemo: HouseholdEval | null = null;
   const hhEval = (): HouseholdEval => (hhMemo ??= evalHousehold(input.household, p, pol, toEnd));
-  const mk = (status: GentleStatus, reasons: string[], codes: GentleCode[]) => shell(status, target, reasons, codes, p, used, pol.fallbackPolicy);
+  const mk = (status: GentleStatus, reasons: string[], codes: GentleCode[]) => {
+    const d = shell(status, target, reasons, codes, p, used, pol.fallbackPolicy);
+    d.setpointBasis = pol.setpointBasis;
+    return d;
+  };
   const withFallback = (d: GentleDecision, why: string, names: readonly string[]): GentleDecision => {
     d.fallback = computeFallback(input, p, pol, why, cCeil, cMin, hhEval());
     d.provisionalInUse = provisionalList([...names, "fallbackPolicy"], p, pol, input);
@@ -981,7 +1032,7 @@ export function planGentle(input: GentleInput): GentleDecision {
       headroomBinds = true;
     }
   }
-  const householdNames: string[] = hh.given && hh.limitW !== null ? ["demandMarginPct", "maxHouseholdAgeMin", "maxForecastAgeMin", ...(hh.basis === "ASSUMED" ? ["assumedDemandW", "unknownDemandPolicy"] : [])] : [];
+  const householdNames: string[] = hh.given && hh.limitW !== null ? ["demandMarginPct", "maxHouseholdAgeMin", "maxForecastAgeMin", "setpointBasis", ...(pol.setpointBasis !== "GRID_AC" ? ["setpointConversionEff"] : []), ...(hh.basis === "ASSUMED" ? ["assumedDemandW", "unknownDemandPolicy"] : [])] : [];
   const hold = target >= 100 ? p.topHoldMin : 0;
   const slewNames = p.maxDecreaseStepW < p.hardMaxW ? ["maxDecreaseStepW"] : [];
   const provNames = [...CORE_NAMES, ...(hold > 0 ? ["topHoldMin"] : []), ...(agedCeilings ? ["maxCeilingAgeMin"] : []), ...householdNames, ...slewNames];
@@ -1033,7 +1084,8 @@ export function planGentle(input: GentleInput): GentleDecision {
           out.codes.push("HEADROOM_LIMITED");
           out.reasons.push(summary());
         }
-        const imp = out.setpointW === null ? null : gridImportW(out.setpointW * p.chargeEff, p.chargeEff, hh.peakW as number, hh.solarMinW as number);
+        // the grid import this setpoint would draw if the setpoint is battery-side (S / scale), which is the larger reading under UNSETTLED
+        const imp = out.setpointW === null ? null : gridImportW(out.setpointW, hh.scale, hh.peakW as number, hh.solarMinW as number);
         out.household = householdReport(hh, imp, p, headroomBinds ? "The grid headroom limits the setpoint." : "The grid headroom does not bind.");
       } else out.household = householdReport(hh, null, p, "No grid limit is known: no headroom constraint.");
       if (out.status === "OK" && hh.basis === "ASSUMED") {
