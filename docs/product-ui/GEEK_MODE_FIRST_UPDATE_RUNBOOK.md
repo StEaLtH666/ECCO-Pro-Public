@@ -937,7 +937,7 @@ Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node on
 `PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). Nothing was pushed, merged, installed, registered or
 deployed, and no live system was contacted.
 
-**Two rounds.** Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
+**Three rounds** (round 3 follows the pinned artefacts). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
 and verified there (its table is kept below as "round 1"). An independent review of that runbook found eight points (F1 to F8);
 they are fixed in four new commits on the same branch: `66009ef` (the generator's `--verify-storage` and its suite), `748e68a`
 (the card's pin suite), `a4fa2d0` (a comment kept ASCII) and `f188a5a` (this runbook). Round 2 was run in a clean clone
@@ -946,7 +946,7 @@ they are fixed in four new commits on the same branch: `66009ef` (the generator'
 differ: this runbook, the generator and its two suites. The card, the catalogue, the example and every protected file are
 byte-identical (sha256 below, checked at both ends); no manifest, scope chain, preflight or deploy tool was touched.
 
-**The pinned artefacts (the same at every commit of both rounds):**
+**The pinned artefacts (the same at every commit of all three rounds):**
 
 | Artefact | Size | sha256 |
 |---|---|---|
@@ -956,6 +956,52 @@ byte-identical (sha256 below, checked at both ends); no manifest, scope chain, p
 | the generated dashboard configuration (`--out`) | 147,178 bytes | `4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167` |
 | the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
 | the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
+
+**Round 3** (20 Nov 2026: the owner's directive to make U1 the first deployment candidate). Docs and one new suite only. The commits on top of
+`5b8f29d` are `dc63e2d` (the runbook corrections), `db96c46` (one sentence of them), `4e6fda1` (the GO checklist
+`docs/product-ui/GEEK_MODE_U1_GO_CHECKLIST.md` and its suite `tools/tests/test_geek_mode_checklist.py`), `80f22f9` (the checklist's Stop column)
+and the commit that holds this section, which differs from `80f22f9` **only in this document**. The five pinned hashes were recomputed before
+the first edit and again at the end, and are unchanged (table above); the card, the catalogue, the example, the generator and every pin and protected
+assertion are untouched. What was done:
+
+1. **A command-truth audit.** Every command and tool call this runbook asks a person to run (19 PowerShell blocks and the inline forms) was set
+   against the real definition of the tool (argument names, required arguments, defaults, exit codes, the lines it prints), the Python tools were run
+   with `--help`, and `verify-served` and `verify-resource` were run in-process against the hand-made plan with their one request replaced by a function
+   (3 and 16 cases: the right switch passes with exit 0; every wrong URL, type, count, change, byte or age fails with exit 1; an unreadable list is
+   refused with exit 2). Eleven mismatches or gaps were fixed (5.0, 5.1, 5.3, 5.4, 5.7, section 7).
+2. **The five checks of the directive** (the exact module resource, the admin-only setup, the backup, the rollback, the correct-dashboard targeting)
+   were each read against the text and corrected where it was thin: the exact names (5.3), what the gate rests on and the wrong-URL table (5.4), what
+   admin-only is and is not (section 1), what restoring a backup does (5.2), the targeting verdict (5.6), and the rollback proofs (section 7).
+3. **A preservation audit** (section 1.1): the cards Production shows are deep-equal to the existing Intelligence dashboard's; the card source has no
+   service call, request, websocket, storage or dynamic code (a word-bounded search); no remote command of this runbook writes except the optional move
+   of the card file in section 7.
+4. **The PowerShell blocks.** All 19 blocks of this runbook and the 2 of the checklist parse (the Windows PowerShell 5.1 parser). Fourteen of the 19
+   ran against stand-ins (seventeen runs: `ssh` and `scp` replaced by functions over a scratch folder, the real generator, the clipboard stubbed); the
+   other five are the checkout line, the deploy line, the two preflight calls (those tools ran offline as in item 1) and the clipboard copy of the
+   147 KB text. The new verdict and rollback blocks also ran against a paste into the wrong dashboard, a dashboard that is not admin-only, a list that
+   Home Assistant formats differently and an incomplete rollback, and print what the text says.
+5. **The checklist and its suite.** The suite has 82 checks and 33 in-memory mutants, all killed. It was shown to fail first (a checklist that does not
+   exist, and one with a wrong card hash: exit 1) and then to pass on the real checklist (exit 0). Its first run of the mutants exposed two weak spots in
+   the suite itself (an address followed by a full stop was not seen; one mutant changed prose, not the command): both fixed and re-run.
+
+Not run, said plainly: GitHub CI (nothing is pushed), the owner's M2 private-pattern scan (the owner's go only), the other CI roots, the other twelve
+Node suites, the 518-mutant run and the headless strip check (the card, the catalogue, the example and the generator's output are byte-identical to
+rounds 1 and 2, so nothing they test changed), and anything on a live system.
+
+**Round 3 results** (the worktree of the branch; Python: `<PY> -I -B -X utf8`; serially, one process at a time):
+
+| What | Command | rc | Count |
+|---|---|---|---|
+| repository validator | `tools/validate_repo.py` | 0 | PASSED (yaml 52, python 393, json 81, text 652) |
+| CI root `tools/tests`, every suite, serially | `tools/run_offline_tests.py --root tools/tests --parallel 1` | 0 | 24/24 passed (230 s); round 2: 23/23, the new suite is the 24th |
+| the pin suite | `tools/tests/test_ecco_mode_shell_card.py` | 0 | 107 PASS, 0 FAIL, 0 SKIP (unchanged) |
+| the generator suite | `tools/tests/test_geek_mode_dashboard_config.py` | 0 | 104 PASS, 0 FAIL (unchanged) |
+| the new consistency suite | `tools/tests/test_geek_mode_checklist.py` | 0 | 82 PASS, 0 FAIL; 33 mutants (28 of the checklist, 5 of the runbook), all killed |
+| neighbours | `test_geek_mode_example.py`; `test_intelligence_card.py`; `test_geek_mode_privacy.py`; `test_geek_mode_catalogue.py`; `test_geek_mode_coverage.py`; `test_geek_mode_fixtures.py`; `test_geek_mode_ledger.py` | 0 each | 35; 81; 195; 134; 219; 102; 68 PASS, 0 FAIL |
+| privacy suite (without the owner's pattern file) | `tools/tests/test_public_privacy.py` | 0 | 25 PASS, 1 SKIP (the owner's private pattern file) |
+| generators | `tools/geek_mode_dashboard_config.py --check`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check` | 0; 0; 0 | `OK: 147178 bytes, sha256 4abf3b1e...` (unchanged); no drift; no drift |
+| the Node suite that runs the generator (local, guarded) | `node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass |
+| PowerShell blocks | the Windows PowerShell 5.1 parser over every fenced block | 0 | 19 of the runbook and 2 of the checklist parse; 14 of the runbook's ran against stand-ins |
 
 **Round 2 results** (a clean clone of `f188a5a`; Python: `<PY> -I -B -X utf8`):
 
