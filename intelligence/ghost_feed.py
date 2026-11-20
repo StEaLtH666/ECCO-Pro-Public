@@ -28,6 +28,11 @@ What the hourly slots cost (stated, not hidden):
     half an hour reaches no slot and is reported as not followed);
   * PV the inverter spilled is unknown here (taken as 0), so the ghost cannot use it for extra charge.
 
+The advice log holds one row per kind per slot cycle (the same advice again every hour), so `advice.records_in_period` and
+`not_followed` count LOG ROWS, `followed_log_rows` the followed rows, and `advice.followed` (and each day's `advice_followed`) the
+DISTINCT (kind, window, target) among them. A row that is followable but was withdrawn by a later BLOCKED row before it took effect
+is still counted as followed; what the simulation really acted on is `advice_in_force_hours`.
+
 The summary carries, per local day (newest `days` at most), the actual and the ghost net before wear, the realised and the
 stock-adjusted deltas, the no-advice baseline, each run's minimum SOC, the ghost's reserve breach and the advice followed or
 not (with reasons); the period, the data-quality flags, the `ready_for_assisted_evidence` block (evidence only; it decides
@@ -128,6 +133,11 @@ def _snap(a: AdviceRecord, slots: tuple[Slot, ...]) -> tuple[AdviceRecord, str |
     if not inside:
         return replace(a, window_start=None, window_end=None), "WINDOW_SHORTER_THAN_SLOT"
     return replace(a, window_start=inside[0].start, window_end=inside[-1].start + timedelta(hours=inside[-1].hours)), None
+
+
+def _advice_key(a: AdviceRecord) -> tuple:
+    """One piece of advice, whatever the number of log rows that repeat it (the slot cycles log it every hour): kind, window, target."""
+    return (a.kind, a.window_start, a.window_end, a.target_soc_pct)
 
 
 def _empty(status: str, reason: str, notes: list[str], **extra) -> dict:
@@ -256,17 +266,17 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
     per_day_adv: dict[str, dict] = {}
     for a in in_period:
         d = a.issued_at.astimezone(tz).date().isoformat()
-        cell = per_day_adv.setdefault(d, {"followed": 0, "not_followed": {}})
+        cell = per_day_adv.setdefault(d, {"followed": set(), "not_followed": {}})
         rs = reason(a)
         if rs is None:
-            cell["followed"] += 1
+            cell["followed"].add(_advice_key(a))
         else:
             cell["not_followed"][rs] = cell["not_followed"].get(rs, 0) + 1
     ready = rep["ready_for_assisted_evidence"]
     breach_dates = set(ready["ghost_below_reserve_dates"])
     day_out = []
     for d in rep["days"]:
-        cell = per_day_adv.get(d["date"], {"followed": 0, "not_followed": {}})
+        cell = per_day_adv.get(d["date"], {"followed": set(), "not_followed": {}})
         row = {"date": d["date"]}
         if d["slots"] != 24:
             row["hours"] = d["slots"]
@@ -277,7 +287,7 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
                         "model_baseline_delta_p": _r(d["model_baseline_delta_p"]), "advice_effect_p": _r(d["advice_effect_p"])})
         row.update({"actual_min_soc_pct": _r(d["actual_min_soc_pct"], 1), "ghost_min_soc_pct": _r(d["ghost_min_soc_pct"], 1),
                     "ghost_below_reserve": d["date"] in breach_dates, "advice_in_force_hours": d["advice_in_force_slots"],
-                    "advice_followed": cell["followed"],
+                    "advice_followed": len(cell["followed"]),
                     "extra_import_kwh_in_ghost": _r(d["extra_import_kwh_in_ghost"])})
         if cell["not_followed"]:
             row["advice_not_followed"] = cell["not_followed"]
@@ -323,7 +333,8 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
                        "advice_effect_p": _r(tot["advice_effect_p"]),
                        "actual_net_before_wear_p": _r(tot["actual"]["net_before_wear_p"]),
                        "ghost_net_before_wear_p": _r(tot["ghost"]["net_before_wear_p"])})
-    followed = sum(1 for a in in_period if reason(a) is None)
+    followed_rows = [a for a in in_period if reason(a) is None]
+    followed = len({_advice_key(a) for a in followed_rows})
     nf: dict[str, int] = {}
     for a in in_period:
         rs = reason(a)
@@ -348,7 +359,8 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
            "period": {"start": p_start.isoformat(), "end": p_end.isoformat(), "hours": n, "timezone": cfg.tz,
                       "slot_minutes": 60, "longest_usable_run_hours": 0 if longest_data is None else len(longest_data),
                       "soc_start_pct": _r(soc0, 1)},
-           "advice": {"records_in_period": len(in_period), "followed": followed, "not_followed": nf},
+           "advice": {"records_in_period": len(in_period), "followed": followed, "followed_log_rows": len(followed_rows),
+                      "not_followed": nf},
            "totals": totals, "days": day_out, "ready_for_assisted_evidence": ready_out, "uncertainty": uncertainty,
            "data_quality": quality}
     if detail is not None:

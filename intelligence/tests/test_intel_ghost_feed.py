@@ -9,6 +9,7 @@
       ready_for_assisted_evidence and the uncertainty block (stock rules, model baseline, efficiency +/- 3 points)
   [6] data: a gap picks the longest run; too little history is INSUFFICIENT_HISTORY; hourly slot matching of advice windows
   [7] the durable advice log round-trips through Scorecard.record_advice / advice_records into the feed
+  [7c] per-slot log rows of the same advice are one advice followed (review finding G5); a later BLOCKED row withdraws (G6)
   [8] no write path (static)
 The "actual" house is generated here by an independent simple rule set, not by ghost.py.
 """
@@ -294,6 +295,45 @@ check("advice_records filters by time and kind and writes nothing", sc.advice_re
 fl = gf.build_ghost_feed(H0, got, CFG, import_tariff=tb)
 check("the logged advice runs through the feed as the same losing day", fl["advice"]["followed"] == 1
       and next(d for d in fl["days"] if d["date"] == "2030-01-09")["delta_stock_adjusted_p"] < -1.0)
+
+print("== [7c] per-slot log rows are not distinct advice (G5), and a later BLOCKED row withdraws (G6)")
+H8 = house(80.0)
+T8 = tariff(H8)
+base8 = advice_for_every_night(H8, 80.0)
+dup8 = []
+for r in base8:                                        # the slot cycles log the same advice every hour until its window opens
+    t_iss = datetime.fromisoformat(r["issued_at"])
+    for k in range(1, 5):
+        dup8.append(dict(r, issued_at=(t_iss - timedelta(hours=k)).isoformat(), advice_id=f"{r['advice_id']}-{k}"))
+f_dup = gf.build_ghost_feed(H8, base8 + dup8, CFG, import_tariff=T8)
+f_one = gf.build_ghost_feed(H8, base8, CFG, import_tariff=T8)
+check("non-vacuity: five log rows per night are five times the rows of one",
+      f_dup["advice"]["records_in_period"] == 5 * f_one["advice"]["records_in_period"] > 0, str(f_dup["advice"]))
+check("'followed' counts distinct (kind, window, target), not log rows: five rows of the same night's advice are one",
+      f_dup["advice"]["followed"] == f_one["advice"]["followed"] > 0, f"{f_dup['advice']} {f_one['advice']}")
+check("... the raw count of followed log rows is kept next to it", f_dup["advice"].get("followed_log_rows") == f_dup["advice"]["records_in_period"]
+      and f_one["advice"].get("followed_log_rows") == f_one["advice"]["followed"], str(f_dup["advice"]))
+check("... per day too: one followed advice per night, however many rows", all(d["advice_followed"] <= 1 for d in f_dup["days"])
+      and [d["advice_followed"] for d in f_dup["days"]] == [d["advice_followed"] for d in f_one["days"]],
+      str([d["advice_followed"] for d in f_dup["days"]]))
+check("a different target on the same window is another advice", gf.build_ghost_feed(H8, base8 + [dict(base8[3], target_soc_pct=70.0, advice_id="x",
+      issued_at=(datetime.fromisoformat(base8[3]["issued_at"]) - timedelta(minutes=30)).isoformat())], CFG, import_tariff=T8)["advice"]["followed"]
+      == f_one["advice"]["followed"] + 1)
+BAD8 = date(2030, 1, 9)
+H_b = H8                                                # the real house charged to 80 % that night; the advice says 100 %
+T_b = tariff(H_b, (BAD8,))
+ok_b = advice_for_every_night(H_b, 100.0, only=BAD8)
+wd_row = dict(ok_b[0], status="BLOCKED", issued_at=(datetime.fromisoformat(ok_b[0]["issued_at"]) + timedelta(minutes=30)).isoformat(),
+              window_start=None, window_end=None, target_soc_pct=None, advice_id="wd")
+f_ok = gf.build_ghost_feed(H_b, ok_b, CFG, import_tariff=T_b)
+f_wd = gf.build_ghost_feed(H_b, ok_b + [wd_row], CFG, import_tariff=T_b)
+day_ok = next(d for d in f_ok["days"] if d["date"] == BAD8.isoformat())
+day_wd = next(d for d in f_wd["days"] if d["date"] == BAD8.isoformat())
+check("a BLOCKED row issued after the OK one and before its window: the ghost does not follow the withdrawn advice (nothing in force)",
+      day_ok["advice_in_force_hours"] > 0 and day_wd["advice_in_force_hours"] == 0 and f_wd["totals"]["advice_effect_p"] == 0.0
+      and f_ok["totals"]["advice_effect_p"] != 0.0, f"{day_ok['advice_in_force_hours']} {day_wd['advice_in_force_hours']} {f_wd['totals']['advice_effect_p']}")
+check("... and the withdrawn row is still counted as followable, the BLOCKED row as not followed",
+      f_wd["advice"]["followed"] == 1 and f_wd["advice"]["not_followed"] == {"BLOCKED": 1}, str(f_wd["advice"]))
 
 print("== [7b] the unwired entity payload helper")
 st, at = gf.to_entity_payload(f2)

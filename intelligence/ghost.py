@@ -46,7 +46,10 @@ How the ghost runs (slot by slot, stored energy = SOC x capacity, one-way effici
       (curtailed_absorbed_kwh). A ghost identical to reality therefore costs exactly the
       same, and noise in the recorded flows (0.1 kWh counters, simultaneous charge and discharge) cancels.
     * Advice is used only from its issue time (no look-ahead); of overlapping advice the latest wins; BLOCKED advice and, by
-      default, INSUFFICIENT_DATA fallbacks are not followed (include_fallback=True follows a fallback target).
+      default, INSUFFICIENT_DATA fallbacks are not followed (include_fallback=True follows a fallback target). A row that is not
+      followed (BLOCKED, a fallback, no window or target, a dump that is not advisable) and was issued AFTER earlier advice of the
+      same kind withdraws that advice from its issue time on (the engine's latest word on that kind is "none"); a later followable
+      row of that kind is advice again. Advice of another kind is untouched.
     Both runs are valued by `net_value.py` (same tariff, same wear price), so they are directly comparable. The closing-stock
     difference is valued by a stated rule (STOCK_RULE) and the ahead/behind counts use that stock-adjusted figure; a no-advice
     baseline run shows the simulator's own error, and `strict=True` switches off the constraint release (its value is reported
@@ -60,6 +63,7 @@ Export format for tools/ghost_report.py: see that module's docstring.
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Mapping, Sequence
@@ -232,17 +236,32 @@ class _Run:
     curtailed_extra_kwh: float = 0.0     # surplus the ghost could neither export nor use, spilled on top of the recorded curtailment
 
 
-def _select(adv: Sequence[AdviceRecord], start: datetime) -> int | None:
+def _withdrawn(a: AdviceRecord, start: datetime, withdrawn: Mapping[str, Sequence[datetime]] | None) -> bool:
+    """True when a row of the same kind that is NOT followed (BLOCKED, a fallback, ...) was issued at or after `a` and by `start`:
+    the engine's latest word on that kind at that time was "none" (a tie counts as withdrawn: the safe reading)."""
+    lst = withdrawn.get(a.kind) if withdrawn else None
+    if not lst:
+        return False
+    i = bisect_right(lst, start)
+    return i > 0 and lst[i - 1] >= a.issued_at
+
+
+def _select(adv: Sequence[AdviceRecord], start: datetime, withdrawn: Mapping[str, Sequence[datetime]] | None = None) -> int | None:
+    """The index of the followable advice in force at `start` (the latest issued of those covering it that no later non-followed
+    row of the same kind has withdrawn), or None. `withdrawn`: {kind: sorted issue times of the non-followed rows}."""
     best = None
     for i, a in enumerate(adv):
         if a.window_start <= start < a.window_end and a.issued_at <= start:
+            if _withdrawn(a, start, withdrawn):
+                continue
             if best is None or (a.issued_at, a.kind) >= (adv[best].issued_at, adv[best].kind):
                 best = i
     return best
 
 
 def _simulate(period: ActualPeriod, adv: Sequence[AdviceRecord], cfg: SiteConfig, limits: GhostLimits, policy: str,
-              ha_reserve_pct: float | None, release: bool = True) -> _Run:
+              ha_reserve_pct: float | None, release: bool = True,
+              withdrawn: Mapping[str, Sequence[datetime]] | None = None) -> _Run:
     eta = eta_one_way(cfg)
     cap = cfg.battery_capacity_kwh
     base_floor_pct = cfg.effective_min_soc_pct(ha_reserve_pct)
@@ -264,7 +283,7 @@ def _simulate(period: ActualPeriod, adv: Sequence[AdviceRecord], cfg: SiteConfig
     for i, sl in enumerate(period.slots):
         h = sl.hours
         net = sl.pv - sl.load
-        k = _select(adv, sl.start)
+        k = _select(adv, sl.start, withdrawn)
         floor_pct = base_floor_pct if k is None else max(base_floor_pct, adv[k].effective_reserve_pct or 0.0)
         floor = min(floor_pct, 100.0) / 100.0 * cap
         room_ac = max(0.0, (ceil_kwh - soc) / eta)
@@ -437,17 +456,22 @@ def run_ghost(period: ActualPeriod, advice: Sequence[AdviceRecord], cfg: SiteCon
         raise ValueError("outside_advice must be 'follow_actual' or 'self_use'")
     followable = [a for a in advice if a.followable(include_fallback)]
     ignored = [(a, a.not_followed_reason(include_fallback)) for a in advice if not a.followable(include_fallback)]
+    wd: dict[str, list[datetime]] = {}                # G6: the rows that are not followed still say "none" for their kind from then on
+    for a_, _why in ignored:
+        wd.setdefault(a_.kind, []).append(a_.issued_at)
+    for v_ in wd.values():
+        v_.sort()
     cap = cfg.battery_capacity_kwh
     opening = period.soc0_pct / 100.0 * cap
     kw = dict(wear_p_per_kwh=wear_p_per_kwh, opening_stored_kwh=opening,
               opening_cost_p_per_kwh=period.opening_cost_p_per_kwh)
     actual_v = value_run(period.slots, period.tariff, cfg, **kw)
-    run = _simulate(period, followable, cfg, limits, outside_advice, ha_reserve_pct, release=not strict)
+    run = _simulate(period, followable, cfg, limits, outside_advice, ha_reserve_pct, release=not strict, withdrawn=wd)
     ghost_v = value_run(run.slots, period.tariff, cfg, **kw)
     base_run = _simulate(period, [], cfg, limits, outside_advice, ha_reserve_pct, release=not strict)
     base_v = value_run(base_run.slots, period.tariff, cfg, **kw)
     strict_v = ghost_v if strict else value_run(
-        _simulate(period, followable, cfg, limits, outside_advice, ha_reserve_pct, release=False).slots,
+        _simulate(period, followable, cfg, limits, outside_advice, ha_reserve_pct, release=False, withdrawn=wd).slots,
         period.tariff, cfg, **kw)
     excl = any(v.total.unattributed_kwh > 1e-9 for v in (actual_v, ghost_v, base_v, strict_v))
     mean_p = sum(period.tariff.import_p) / len(period.tariff.import_p)

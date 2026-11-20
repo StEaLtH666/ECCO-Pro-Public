@@ -7,6 +7,7 @@
   [4] a bad-forecast day: the ghost loses, is listed, and the decision point is explained in words
   [5] a good day: the ghost wins; per-day and total figures add up; unknown wear stays unknown
   [6] label, ready_for_assisted_evidence (below-reserve count is 0), reproducibility, the CLI, no write path
+  [5c] a later BLOCKED / INSUFFICIENT row of the same kind withdraws earlier advice (review finding G6)
 The "actual" houses are generated here by an independent simple simulation, not by ghost.py.
 """
 
@@ -503,6 +504,59 @@ with tempfile.TemporaryDirectory() as td:
         code_missing = ghost_report.main([str(Path(td) / "nope.json")])
     check("bad or missing input exits 2 without a traceback", code_bad == 2 and code_missing == 2)
 check("the CLI source carries the format in its docstring", "ecco-intel-ghost-export/1" in (ghost_report.__doc__ or ""))
+
+print("== [5c] a later BLOCKED or INSUFFICIENT row withdraws earlier advice of its kind (review finding G6)")
+P7 = make_period([1.0, 1.0, 1.0], night_target=60.0)
+W7 = D0 + timedelta(days=1, minutes=30)                                  # the window start of charge_advice(1, ...)
+ok7 = charge_advice(1, 95.0, issued_h=-3.0, aid="ok")                    # issued 3 h before the window: charge to 95 %
+
+
+def blocked(issued, kind="charge_target", status="BLOCKED", **kw) -> AdviceRecord:
+    return AdviceRecord(kind, status, issued, advice_id=kw.pop("aid", "b"), **kw)
+
+
+def in_force(rep) -> int:
+    return sum(d["advice_in_force_slots"] for d in rep["days"].values()) if isinstance(rep["days"], dict) else sum(d["advice_in_force_slots"] for d in rep["days"])
+
+
+def same_money(a, b) -> bool:
+    return all(near(a["totals"][k], b["totals"][k]) for k in ("delta_headline_p", "ghost_throughput_kwh", "closing_stored_difference_kwh"))
+
+
+r_none, r_ok = run_ghost(P7, [], CFG), run_ghost(P7, [ok7], CFG)
+check("non-vacuity: the OK advice alone is in force for its whole 5 h window and moves the ghost away from reality",
+      in_force(r_none) == 0 and in_force(r_ok) == 10 and not same_money(r_none, r_ok), f"{in_force(r_ok)}")
+r_wd = run_ghost(P7, [ok7, blocked(W7 - timedelta(hours=1))], CFG)
+check("a BLOCKED row issued after it and before its window withdraws it: nothing is in force and the ghost IS reality",
+      in_force(r_wd) == 0 and same_money(r_wd, r_none) and near(r_wd["totals"]["delta_headline_p"], 0.0), f"{in_force(r_wd)}")
+check("... whatever the order of the records in the list", same_money(run_ghost(P7, [blocked(W7 - timedelta(hours=1)), ok7], CFG), r_none)
+      and in_force(run_ghost(P7, [blocked(W7 - timedelta(hours=1)), ok7], CFG)) == 0)
+r_fb = run_ghost(P7, [ok7, blocked(W7 - timedelta(hours=1), status="INSUFFICIENT_DATA", conservative_fallback=True)], CFG)
+check("an INSUFFICIENT_DATA fallback issued later withdraws it too (a fallback is not followed by default)",
+      in_force(r_fb) == 0 and same_money(r_fb, r_none))
+fb7 = AdviceRecord("charge_target", "INSUFFICIENT_DATA", W7 - timedelta(hours=1), W7, W7 + timedelta(hours=5), 70.0,
+                   conservative_fallback=True, advice_id="fb")
+r_fb2 = run_ghost(P7, [ok7, fb7], CFG, include_fallback=True)
+check("with include_fallback=True the later fallback is followable, so it is the advice in force, not a withdrawal",
+      in_force(r_fb2) == 10 and not same_money(r_fb2, r_ok))
+ok7b = charge_advice(1, 95.0, issued_h=-0.5, aid="ok2")
+r_back = run_ghost(P7, [ok7, blocked(W7 - timedelta(hours=1)), ok7b], CFG)
+check("a still later OK row restores the advice: in force again, same result as the OK advice alone",
+      in_force(r_back) == 10 and same_money(r_back, r_ok), f"{in_force(r_back)}")
+r_early = run_ghost(P7, [blocked(W7 - timedelta(hours=5)), ok7], CFG)
+check("a BLOCKED row issued BEFORE the OK one withdraws nothing", in_force(r_early) == 10 and same_money(r_early, r_ok))
+r_late = run_ghost(P7, [ok7, blocked(W7 + timedelta(hours=2))], CFG)
+check("a BLOCKED row issued INSIDE the window withdraws it from its issue time on only (the first 4 half-hour slots stay in force)",
+      in_force(r_late) == 4, f"{in_force(r_late)}")
+d7 = dump_advice(1, 17, 55.0, 3.0, aid="dump7")
+r_dump = run_ghost(P7, [d7], CFG)
+r_dump_b = run_ghost(P7, [d7, blocked(D0 + timedelta(days=1, hours=16, minutes=58), kind="charge_target")], CFG)
+check("a BLOCKED row of another kind withdraws nothing (a blocked charge target does not withdraw a dump advice)",
+      in_force(r_dump) > 0 and in_force(r_dump_b) == in_force(r_dump) and same_money(r_dump, r_dump_b))
+r_dump_w = run_ghost(P7, [d7, blocked(D0 + timedelta(days=1, hours=16, minutes=58), kind="dump_to_grid")], CFG)
+check("... but a blocked dump row withdraws it", in_force(r_dump_w) == 0)
+sim = _simulate(P7, [ok7], CFG, GhostLimits(), "follow_actual", None)
+check("_simulate keeps its own signature: called without the withdrawal argument it behaves as before", sum(1 for k in sim.advice_idx if k is not None) == 10)
 
 print("== no write path: the package-wide authority tests also cover these modules")
 check("modules exist where the package-wide scans look", all((ROOT / "intelligence" / n).exists() for n in ("net_value.py", "ghost.py", "tools/ghost_report.py")))
