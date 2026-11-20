@@ -63,6 +63,13 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 or 'safe to'. Item 10 is still numbered 10 and names the clock-change day, the item count is still 23, the item and the bullets are ASCII and name no address or token, the RG-ST3 sentence stands once per place;
                 mutants and a control
 
+  [13b] review    (the independent review of 20 Nov 2026; additive) F1 the oracle method is worded exactly (every real UTC minute walked only to COUNT how often each wall-clock label occurs; the real arm
+                validation run once per label and compared with that count; the old 'run through the real arm validation' and 'minute by minute' are forbidden texts); F2 the over-claim guard is hardened
+                (banned words, 'passed' / 'installed' / 'deployed' only after a negation, 'flash' only as a decision not taken, 'implemented offline' must end its clause, every sentence that names a real system
+                needs a negation of its own) and is stated plainly as a WORD-LIST guard, defence in depth, not a proof; five over-claims of the review and ten rewordings are killed in all four scopes; F3 the
+                arm-time TOU walk runs only when the TOU slot table can be read (pinned, tied to the package text; whether an unreadable table should fail closed stays an open owner question); F4 a mutant whose
+                anchor is absent is reported by ONE final check and never raises
+
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
 """
@@ -723,21 +730,38 @@ def comment_problems(helper_text: str, schedule_text: str, changelog: str) -> li
     return out
 
 
+NOOP_MUTANTS: list[str] = []   # every mutation whose anchor was absent from the text it mutates (reported by ONE final check; a missing anchor never raises)
+
+
 def drop_phrase(text: str, phrase: str) -> str:
-    """`text` with every occurrence of `phrase` replaced by 'REMOVED' (whitespace in the phrase may match a line wrap); asserts that it was there."""
+    """`text` with every occurrence of `phrase` replaced by 'REMOVED' (whitespace in the phrase may match a line wrap). When the phrase is absent the text comes back
+    UNCHANGED and the phrase is recorded in NOOP_MUTANTS (a clean FAIL of the final check, never an AssertionError): a mutant that cannot be built is reported, not a crash."""
     pat = r"\s+".join(re.escape(w) for w in phrase.split())
     new, n = re.subn(pat, "REMOVED", text)
-    assert n >= 1, phrase
+    if n < 1:
+        NOOP_MUTANTS.append(phrase)
     return new
 
 
-def drop_in_item(readme: str, num: int, phrase: str) -> str:
-    """The README with every occurrence of `phrase` removed from limitation item `num` only (the other items are left alone)."""
-    h = readme.index(LIMITS_HEADING)
-    a = readme.index(f"\n{num}. **", h)
+def item_span(readme: str, num: int) -> tuple[int, int] | None:
+    """The slice of the README that is limitation item `num` (from its newline to the start of the next item or section); None when the heading or the item is missing."""
+    h = readme.find(LIMITS_HEADING)
+    a = readme.find(f"\n{num}. **", h) if h >= 0 else -1
+    if a < 0:
+        return None
     b = readme.find(f"\n{num + 1}. **", a)
     if b < 0:
         b = readme.find("\n### ", a)
+    return (a, b) if b > a else None
+
+
+def drop_in_item(readme: str, num: int, phrase: str) -> str:
+    """The README with every occurrence of `phrase` removed from limitation item `num` only (the other items are left alone); unchanged (and recorded) when the item is missing."""
+    span = item_span(readme, num)
+    if span is None:
+        NOOP_MUTANTS.append(f"item {num}: {phrase}")
+        return readme
+    a, b = span
     return readme[:a] + drop_phrase(readme[a:b], phrase) + readme[b:]
 
 
@@ -1318,7 +1342,9 @@ print("[13] known limitation 10 (owner decision r15, 19 Nov 2026; rewritten by o
 # Home Assistant', the firmware START gate unchanged, arm time only, the one-hour (UK) probe, P-F open, the offline proof described as offline. The claims the item makes about the packages (the refusal text, its order before
 # 'must be in the future', the fixed one-hour probe, the single arm trigger, the walk on the real instants, no TOU check in the Free Power package, the firmware not changed, P-F open) are tied to the package text
 # statically. Over-claim guards: in item 10, the Known limitations introduction and the two CHANGELOG bullets every 'implemented' is qualified ('offline' or 'not'), every 'verified' or 'proven' is preceded by 'not ' or 'un',
-# and 'fully enforced', 'guarantee' and 'safe to' are absent (item 10 also carries neither 'fixed' nor 'safe').
+# and 'fully enforced', 'guarantee' and 'safe to' are absent (item 10 also carries neither 'fixed' nor 'safe'). Since the review of 20 Nov 2026 the guard also bans confirmed / live-tested / works live, lets passed,
+# worked, tested, deployed and installed stand only after a negation, names a flash only as a decision not taken, makes every 'implemented offline' end its clause, and gives every sentence that names a real
+# system, the firmware or the TOU slot table a negation of its own: a WORD-LIST guard, defence in depth, not a proof that no over-claim can be written (section [13b] holds its killed mutants).
 FREE_PKG = ROOT / "home-assistant" / "packages" / "ecco_free_power_schedule.yaml"
 DUMP_DOC = ROOT / "docs" / "DUMP_TO_GRID_V1.md"
 CLOCK_TEXT = "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
@@ -1346,10 +1372,13 @@ ITEM10_IMPL = (   # (a) what R9 implements, offline
     "not installed on any Home Assistant", "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented offline", "in both schedule packages",
     'BEFORE "must be in the future"', "arming in the second 01:xx hour for a 01:xx start is still refused (fail closed) but now with that text",
     "P-B (an epoch-correct TOU walk or a refusal when the window spans the change; R9 chose the walk) is implemented offline", "in the Export to Grid package only",
-    "walks the run on the real instants", "a minute whose local time cannot be read refuses the arm", "the Charge Battery (Free Power) package has no such check",
+    "walks the run on the real instants", "a minute whose local time cannot be read refuses the arm", "(both only when the TOU slot table can be read: see (c))",
+    "the Charge Battery (Free Power) package has no such check",
 )
 ITEM10_PROOF = (   # what the offline proof is, and that it is only that
-    "an independent oracle", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026", "both readings of a naive local string",
+    "an independent oracle", "every real UTC minute of each change day walked, counting how often each wall-clock label occurs",
+    "is compared with the real arm validation label by label", "each of the 1440 wall-clock minute labels of a day is armed once and its answer compared with the oracle's count",
+    "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026", "both readings of a naive local string",
     "failing-first", "mutants of both changes", "registry/tests/test_ha_r9_missed_runs.py [5]", "home-assistant/tests/test_ecco_r9_stage3_composition.py [19]",
     "an offline proof of the offline model only, not a test on a real Home Assistant",
 )
@@ -1368,9 +1397,14 @@ ITEM10_UNCHANGED = (   # (c)
     "EXACT (reproduced)", "is epoch arithmetic", "nothing starts twice",
     "FAIL CLOSED (reproduced)", "is never captured for R9", "the watchdog does not rescue a lost on-time start", "(EXPIRY_ABOVE_CAP, a 25 hour night)", "is covered by item 19",
     "The Free Power schedule package behaves identically",
+    # F3 (review of 20 Nov 2026): the arm-time TOU walk of (a) is skipped when the TOU slot table cannot be read (package text: the walk sits inside `if ns.ok`, ns.ok is false for any unreadable row)
+    "The TOU walk of (a) runs only when the TOU slot table can be read", "a time that reads as hours and minutes and a charge source that is not unknown, unavailable or empty",
+    "the package does not walk the window at all", "this check does not refuse the arm", "the firmware's own START gate is then the only gate",
+    "the offline suite pins that an unreadable slot table does not refuse the arm",
+    "Whether an unreadable TOU slot table should fail closed stays an open question for the owner and is not decided here",
 )
 ITEM10_SEE = (   # (d)
-    "Direction: mixed, as listed.", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "with R9 installed (offline only so far)",
+    "Direction: mixed, as listed.", "against the slots it really covers (when the TOU slot table can be read)", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "with R9 installed (offline only so far)",
     "The next clock change is 28 Mar 2027.",
 )
 ITEM10_ALL = ITEM10_SCOPE + ITEM10_IMPL + ITEM10_PROOF + ITEM10_BEFORE + ITEM10_UNVERIFIED + ITEM10_UNCHANGED + ITEM10_SEE
@@ -1392,13 +1426,19 @@ CHANGELOG_R30 = (
     "known limitation 10 now says which clock-change refusals and checks R9 implements offline (P-A, P-B), what is not verified on a real Home Assistant and what is unchanged", "owner decision r30, 20 Nov 2026",
     "documentation and its static check only, nothing installed", "keeping offline proof and real Home Assistant verification apart",
     "Implemented offline in R9: P-A", "before 'must be in the future'", "still fails closed but with the clock-change text", "P-B (the Export to Grid package's arm-time TOU overlap check walks the run on the real instants",
-    "the Charge Battery package has no such check", "The proof is offline only", "an independent oracle", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026",
+    "the Charge Battery package has no such check", "The proof is offline only", "an independent oracle", "every real UTC minute of each change day walked, counting how often each wall-clock label occurs",
+    "compared with the real arm validation label by label", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026",
     "failing-first runs on the unchanged packages and mutants", "Not verified on a real Home Assistant", "recalled, not verified", "P-F, the supervised read-only template check, is still open",
     "Unchanged: the dongle firmware's START gate", "a flash is a separate decision", "the arm-time-only check (a start helper edited while the schedule is armed is not checked again)",
+    "the Export to Grid TOU walk runs only when the TOU slot table can be read", "whether an unreadable table should fail closed stays an open question for the owner, not decided here",
     "the repeated-time probe (a constant one-hour shift: the UK only)", "the second-hour capture loss", "the Skip tonight cap", "the epoch arithmetic of every deadline",
     "This supersedes, for P-A and P-B, the sentences of the r15 bullet above", "the r15 bullet stays the record of 19 Nov 2026",
-    "the pin of the wording is stricter", "No package, card, bundle, scan, gate, threshold, pin-chain declaration or hash of a frozen file was edited", "still not bound by any override (RG-ST3)",
+    "a word-list guard that catches the common over-claims", "defence in depth, not a proof that no over-claim can be written", "the pin of the wording is stricter", "No package, card, bundle, scan, gate, threshold, pin-chain declaration or hash of a frozen file was edited", "still not bound by any override (RG-ST3)",
 )
+OLD10_ORACLE = (   # the oracle method as it was worded wrongly (finding F1): none may stand in item 10, the introduction or either CHANGELOG bullet
+    "run through the real arm validation", "every real UTC minute of each change day run", "minute by minute",
+)
+CHANGELOG_R30_OLD = ("guarded against over-claims", "guarded against over-claim")   # the r30 sentence that over-stated a word-list guard (finding F2)
 EVERYWHERE_OLD = ("PROPOSED and NOT implemented", "its proposals are not implemented", "there are findings and nothing was changed", "NOT fail closed (reproduced)")   # in none of the files that carry the wording
 DOC_PROBE_OPEN = "(proposal P-F) is still open"
 
@@ -1427,16 +1467,82 @@ def limitations_intro(readme: str) -> str:
     return flat(readme[h:e]) if h >= 0 and e > h else ""
 
 
+# ---- the over-claim guard -------------------------------------------------------------------------------------------------------------------------------
+# WHAT IT IS (owner review of 20 Nov 2026, finding F2): a WORD-LIST guard that is clause-local where it can be. It catches the common over-claims (a result word,
+# an install, a flash, a claim about a real system, an 'implemented offline and ...' that goes on to a real system). It is defence in depth, NOT a proof that no
+# over-claim can be written; the sentences that the suite pins one by one (ITEM10_ALL, CHANGELOG_R30 ...) carry the real weight. It runs over item 10, the Known
+# limitations introduction and the two CHANGELOG bullets. Every allowance below is LOCAL to the word or clause it qualifies: a 'not' in another sentence does not help.
+BANNED_RE = re.compile(r"(?i)\b(?:confirm(?:ed|s|ation)?|live[- ]test(?:ed|s|ing)?|(?:works?|worked|working)\s+live|succeed(?:ed|s)?|in production|in service|rolled out|shipped|go(?:es)? live|went live)\b")
+# a result, a run or an install word is allowed only right after a negation ('not installed', 'nothing deployed', 'has not been installed'); 'installed' may also be followed
+# at once by '(offline only'. Nothing else qualifies it: not a 'not' elsewhere in the sentence.
+GATED_RE = re.compile(r"(?i)\b(?:pass(?:ed|es|ing)?|work(?:s|ed|ing)?|tested|testing|deploy(?:ed|s|ing|ment)?|install(?:ed|s|ing|ation)?)\b")
+NEGATED_BEFORE_RE = re.compile(r"(?i)\b(?:not|nothing|never|no)\s+(?:(?:was|is|were|are|been|be|yet|ever)\s+)*$")
+OFFLINE_ONLY_AFTER_RE = re.compile(r"\s*\(offline only\b")
+# a flash may be named only as a decision that is not taken; every other 'flash...' (flashed, after the flash, now flashes) is refused
+FLASH_OK = ("a flash is a separate decision", "needs a flash")
+# 'live' may stand in exactly one sentence; every other 'live' (works live, live-tested, the live Home Assistant) is refused
+LIVE_OK = ("None was seen on a live Home Assistant",)
+# 'implemented offline' (and 'implements offline') must END its clause after at most an explicit location or an offline-only qualifier from this list; 'and ...', a comma
+# and a new claim, a 'then' or 'as well' after it is a claim about something else
+IMPL_TAIL_RE = re.compile(
+    r"(?i)(?:\s+(?:in R9|by R9|in both schedule packages|in the Export to Grid package only|on 20 Nov 2026|\(P-A, P-B\)"
+    r"|\(owner decision r30, 20 Nov 2026(?:; not installed on any Home Assistant)?\)|\(not installed\)|\(offline only[^()]*\)))*"
+    r"\s*(?:$|[;:.)]|,\s*(?:\([a-d]\)|that is not verified\b|so the findings\b|what is not verified\b))")
+# a sentence that names a real system, the firmware or the TOU slot table must carry a negation or an 'open' / 'unchanged' marker IN THAT SENTENCE
+REAL_SYSTEM_RE = re.compile(
+    r"(?i)\b(?:real|live|actual|owner's)\s+(?:Home\s+Assistant|dongle|inverter|firmware|hardware|system|installation)\b|\bfirmware\b|\bSTART gate\b|\bdongle\b|\binverter\b"
+    r"|\bhardware\b|\bslot table\b|\bin the field\b|\bproduction\b")
+NEGATION_RE = re.compile(r"(?i)\b(?:not|no|none|never|nothing|nor|neither|cannot|without|unverified|unproven|recalled|reasoned|open|until|unchanged)\b|n't\b|\bstay as they are\b")
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[`\"])")
+
+
 def overclaim_problems(name: str, body: str, strict: bool = False) -> list[str]:
-    """No unqualified 'implemented' (it needs 'offline' after it or 'not ' before it), no 'verified' or 'proven' that is not 'not verified' / 'unverified' / 'unproven', no 'fully enforced', 'guarantee', 'safe to'.
+    """No unqualified 'implemented' (it needs 'offline' after it or 'not ' before it) and every 'implemented offline' ends its clause; no 'verified' or 'proven' that is not
+    'not verified' / 'unverified' / 'unproven'; no 'fully enforced', 'guarantee', 'safe to'; none of the banned words (confirmed, live-tested, works live ...); 'passed', 'worked',
+    'tested', 'deployed' and 'installed' only after a negation; 'flash' only as a decision not taken; 'live' only in the one sentence that says nothing was seen live; and every sentence
+    that names a real system, the firmware or the TOU slot table carries a negation of its own.
     `strict` (item 10 only) also bans 'fixed', 'safe' and 'guaranteed' for the real system."""
     out = []
+
+    def ctx(m) -> str:
+        return "..." + body[max(0, m.start() - 30):m.end() + 30]
+
     for m in re.finditer(r"(?i)\bimplemented\b", body):
         if not (re.search(r"(?i)\bnot $", body[:m.start()]) or body[m.end():].lower().startswith(" offline")):
             out.append(f"{name}: 'implemented' is not qualified by 'offline' or 'not': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    for m in re.finditer(r"(?i)\bimplements?\b", body):   # 'implements' needs 'offline' in its own sentence, after it
+        end = re.search(r"[.!?](?:\s|$)", body[m.end():])
+        if "offline" not in body[m.end():m.end() + (end.start() if end else len(body))].lower():
+            out.append(f"{name}: 'implements' has no 'offline' in its own sentence: {ctx(m)}")
+    for m in re.finditer(r"(?i)\bimplement(?:ed|s)\s+offline\b", body):
+        if not IMPL_TAIL_RE.match(body, m.end()):
+            out.append(f"{name}: 'implemented offline' does not end its clause (what follows is not a listed location or offline-only qualifier): {ctx(m)}")
     for m in re.finditer(r"(?i)\b(?:verified|proven)\b", body):
         if not re.search(r"(?i)\bnot $", body[:m.start()]):
             out.append(f"{name}: '{m.group(0)}' is not preceded by 'not ' or 'un': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    for m in BANNED_RE.finditer(body):
+        out.append(f"{name}: banned over-claim word '{m.group(0)}': {ctx(m)}")
+    for m in GATED_RE.finditer(body):
+        word = m.group(0).lower()
+        if NEGATED_BEFORE_RE.search(body[:m.start()]):
+            continue
+        if word.startswith("install") and OFFLINE_ONLY_AFTER_RE.match(body, m.end()):
+            continue
+        out.append(f"{name}: '{m.group(0)}' is not directly negated ('not ', 'nothing ', 'never ') and not followed by '(offline only': {ctx(m)}")
+    rest = body
+    for ok in FLASH_OK:
+        rest = re.sub(re.escape(ok), "", rest, flags=re.I)
+    for m in re.finditer(r"(?i)\bflash\w*", rest):
+        out.append(f"{name}: 'flash' is named other than as a decision not taken ('a flash is a separate decision', 'needs a flash'): ...{rest[max(0, m.start() - 30):m.end() + 30]}")
+    rest = body
+    for ok in LIVE_OK:
+        rest = rest.replace(ok, "")
+    for m in re.finditer(r"(?i)\blive\b", rest):
+        out.append(f"{name}: 'live' stands outside 'None was seen on a live Home Assistant': ...{rest[max(0, m.start() - 30):m.end() + 30]}")
+    for s in SENTENCE_SPLIT_RE.split(body):
+        m = REAL_SYSTEM_RE.search(s)
+        if m and not NEGATION_RE.search(s):
+            out.append(f"{name}: a sentence names '{m.group(0)}' with no negation, 'open' or 'unchanged' in the same sentence: {s[:110]}")
     if FULL_CLAIM.search(body):
         out.append(f"{name}: a 'fully enforced' claim")
     if re.search(r"(?i)guarantee|safe to", body):
@@ -1448,6 +1554,9 @@ def overclaim_problems(name: str, body: str, strict: bool = False) -> list[str]:
     if re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", body, re.I):
         out.append(f"{name} names an address, token or password")
     return out
+
+
+ROW_TIME_TEST = r"t is match('^\\d{1,2}:\\d{2}$')"   # as the Export to Grid package spells the slot time test (two backslashes in the YAML text)
 
 
 def package_tie_problems(dump: str, free: str) -> list[str]:
@@ -1469,6 +1578,12 @@ def package_tie_problems(dump: str, free: str) -> list[str]:
             out.append(f"{name}: the header no longer says that P-F is still open")
     if dump.count("k * 60) | timestamp_local") != 1 or "range(0, dur + 1)" not in dump:
         out.append("Export to Grid: the TOU overlap walk is not on the real instants")
+    # F3: the walk sits inside the readability flag (`ns.ok`: false for any of the six rows whose time is not H:MM or whose charge source is unknown, unavailable or empty), so an unreadable table is not walked
+    if dump.count("{% if ns.ok and (start_ts | float(0)) > 0 %}") != 1 or dump.count("{% set ns.ok = false %}") != 1 or "c not in ['unknown', 'unavailable', '']" not in dump \
+            or "range(1, 7)" not in dump or ROW_TIME_TEST not in dump:
+        out.append("Export to Grid: the TOU walk is no longer inside the slot table readability flag (item 10 says an unreadable slot table is not walked)")
+    if "an unreadable slot table still defers to the firmware" not in flat_yaml(dump):
+        out.append("Export to Grid: the header no longer says that an unreadable slot table defers to the firmware")
     if "is NOT changed here (a firmware change is a separate flash)" not in flat_yaml(dump):
         out.append("Export to Grid: the header no longer says that the firmware is not changed")
     if "charge source set" in free:
@@ -1499,6 +1614,9 @@ def item10_problems(readme: str, changelog: str, dump: str = "", free: str = "")
     out.extend(f"the CHANGELOG bullet of r15 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b15)
     out.extend(f"the CHANGELOG bullet of r30 (item 10) lacks: {p}" for p in CHANGELOG_R30 if p not in b30)
     out.extend(f"the CHANGELOG bullet of r30 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b30)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) still says: {p}" for p in CHANGELOG_R30_OLD if p in b30)
+    for where, body in (("item 10", item10), ("the Known limitations introduction", intro), ("the CHANGELOG bullet of r15 (item 10)", b15), ("the CHANGELOG bullet of r30 (item 10)", b30)):
+        out.extend(f"{where} still words the oracle method wrongly: {p}" for p in OLD10_ORACLE if p in body)
     out.extend(overclaim_problems("item 10", item10, strict=True))
     out.extend(overclaim_problems("the Known limitations introduction", intro))
     out.extend(overclaim_problems("the CHANGELOG bullet of r15 (item 10)", b15))
@@ -1516,32 +1634,44 @@ def everywhere_problems(files: dict[str, str]) -> list[str]:
 
 
 def in_item(readme: str, num: int, fn) -> str:
-    """The README with limitation item `num` replaced by fn(its text)."""
-    h = readme.index(LIMITS_HEADING)
-    a = readme.index(f"\n{num}. **", h)
-    b = readme.find(f"\n{num + 1}. **", a)
-    if b < 0:
-        b = readme.find("\n### ", a)
+    """The README with limitation item `num` replaced by fn(its text); unchanged (and recorded) when the item is missing."""
+    span = item_span(readme, num)
+    if span is None:
+        NOOP_MUTANTS.append(f"item {num} (in_item)")
+        return readme
+    a, b = span
     return readme[:a] + fn(readme[a:b]) + readme[b:]
 
 
 def in_intro(readme: str, fn) -> str:
-    h = readme.index(LIMITS_HEADING)
-    e = readme.index("\n1. **", h)
+    """The README with the Known limitations introduction replaced by fn(its text); unchanged (and recorded) when the heading or item 1 is missing."""
+    h = readme.find(LIMITS_HEADING)
+    e = readme.find("\n1. **", h) if h >= 0 else -1
+    if e < 0:
+        NOOP_MUTANTS.append("the Known limitations introduction (in_intro)")
+        return readme
     return readme[:h] + fn(readme[h:e]) + readme[e:]
 
 
 def in_bullet(changelog: str, marker: str, fn) -> str:
-    a = changelog.index(marker)
+    """The CHANGELOG with the bullet that starts with `marker` replaced by fn(its text); unchanged (and recorded) when the bullet is missing."""
+    a = changelog.find(marker)
+    if a < 0:
+        NOOP_MUTANTS.append(f"bullet: {marker[:60]}")
+        return changelog
     b = changelog.find("\n- **", a + 1)
+    if b < 0:
+        b = len(changelog)
     return changelog[:a] + fn(changelog[a:b]) + changelog[b:]
 
 
 def sw(text: str, phrase: str, repl: str) -> str:
-    """`text` with every occurrence of `phrase` (whitespace in it may match a line wrap) replaced by `repl`; asserts that it was there."""
+    """`text` with every occurrence of `phrase` (whitespace in it may match a line wrap) replaced by `repl`. When the phrase is absent the text comes back UNCHANGED and the
+    phrase is recorded in NOOP_MUTANTS (a clean FAIL of the final check, never an AssertionError)."""
     pat = r"\s+".join(re.escape(w) for w in phrase.split())
     new, n = re.subn(pat, lambda m: repl, text)
-    assert n >= 1, phrase
+    if n < 1:
+        NOOP_MUTANTS.append(phrase)
     return new
 
 
@@ -1661,7 +1791,8 @@ check("mutant caught: the repeated-time probe is no longer a fixed one hour (350
 def with_second_trigger(pk: str) -> str:
     """The package with a second trigger (a Home Assistant start event) added to its arm validation: arm time only is then no longer true."""
     new = re.sub(r"(- id: \S+_schedule_arm_validation\n    alias: .*\n    mode: restart\n    triggers:\n(?:      .*\n)+?)(    actions:)", r"\1      - trigger: homeassistant\n        event: start\n\2", pk, count=1)
-    assert new != pk
+    if new == pk:
+        NOOP_MUTANTS.append("a second trigger on the arm validation (the validation block was not found)")
     return new
 
 
@@ -1676,6 +1807,131 @@ check("mutant caught: the r15 sentence 'PROPOSED and NOT implemented' added to a
 check("mutant caught: the r15 sentence 'its proposals are not implemented' added to docs/DUMP_TO_GRID_V1.md", bool(everywhere_problems({**n_files, "docs/DUMP_TO_GRID_V1.md": n_doc + "\nits proposals are not implemented.\n"})))
 check("mutant caught: 'NOT fail closed (reproduced)' added to the CHANGELOG", bool(everywhere_problems({**n_files, "the CHANGELOG": n_changelog + "\nNOT fail closed (reproduced)\n"})))
 check("control: the untouched tree is not flagged by the item 10 checks", not all10() and not limitations_problems(n_readme) and not status_problems(n_readme) and not places_problems(texts) and not everywhere_problems(n_files))
+
+# ===========================================================================
+# The independent review of 20 Nov 2026 (verdict APPROVE_WITH_MINORS) of the r30 change to limitation 10: its four findings, each with killed in-memory mutants run against the REAL texts.
+#   F1  the CHANGELOG said the oracle ran 'every real UTC minute of each change day through the real arm validation'. It does not: the oracle WALKS every real UTC minute only to COUNT how often each
+#       wall-clock label occurs; the real arm validation is then run once per wall-clock label (1440 labels a day) and its answer is compared with the oracle's count. Item 10 and the r30 bullet
+#       now say exactly that, it is pinned, and the old sentence (and 'minute by minute') is a forbidden text.
+#   F2  the over-claim guard was a short word list that five over-claims all passed. It is hardened (see the comment above overclaim_problems), it is stated plainly for what it is (a word-list guard,
+#       defence in depth, not a proof), and each of the five (L1 to L5) and ten rewordings of its own (W1 to W10) are killed mutants in all four scopes.
+#   F3  the arm-time TOU walk runs only when the TOU slot table can be read (the Export to Grid package skips it otherwise and defers to the firmware's gate, which still walks the old way). Item 10 and the
+#       r30 bullet say so, it is pinned and tied to the package text; whether an unreadable table should fail closed stays an OPEN owner question and is not decided.
+#   F4  a mutant whose anchor is absent from the text it mutates (for example every 'not verified on a real Home Assistant' dropped from the README) used to abort the run with an AssertionError inside
+#       drop_phrase before [13] ran; the helpers now return the text unchanged and one final check lists every such mutant, so every mutant ends in a recorded PASS or FAIL line.
+# ===========================================================================
+print("")
+print("[13b] the review of 20 Nov 2026 of limitation 10: the oracle method worded exactly (F1), the over-claim guard hardened (F2), the unreadable TOU slot table named (F3), a clean FAIL for every mutant (F4)")
+ITEM10 = item_bodies(n_readme).get(10, "")
+INTRO = limitations_intro(n_readme)
+B15, B30 = flat(bullet_r15d(n_changelog)), flat(bullet_r30(n_changelog))
+SCOPES = (("item 10", ITEM10, True), ("the Known limitations introduction", INTRO, False), ("the CHANGELOG bullet of r15 (item 10)", B15, False), ("the CHANGELOG bullet of r30 (item 10)", B30, False))
+TAIL13 = "The next clock change is 28 Mar 2027."
+
+# ---- F1: the oracle method, exactly ----
+check("F1: item 10 and the r30 bullet word the oracle exactly (every real UTC minute walked only to count how often each wall-clock label occurs; the real arm validation run once per label and compared with that count); "
+      "the old wording ('run through the real arm validation', 'minute by minute') stands nowhere in the four texts",
+      all(p in ITEM10 for p in ITEM10_PROOF[:4]) and all(p in B30 for p in ("every real UTC minute of each change day walked, counting how often each wall-clock label occurs", "compared with the real arm validation label by label"))
+      and not any(p in body for _, body, _s in SCOPES for p in OLD10_ORACLE))
+check("mutant caught: the r30 bullet says again that every real UTC minute was 'run through the real arm validation' (the required phrase is replaced)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "every real UTC minute of each change day walked, counting how often each wall-clock label occurs", "every real UTC minute of each change day run through the real arm validation")))))
+check("mutant caught: the old oracle sentence added to the r30 bullet (every required phrase still there: the forbidden text alone kills it)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The oracle ran every real UTC minute of each change day run through the real arm validation."))))
+check("mutant caught: item 10 says again that the oracle is compared 'minute by minute' (the required phrase is replaced)",
+      bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "is compared with the real arm validation label by label", "is compared with the real arm validation minute by minute")))))
+check("mutant caught: 'minute by minute' added to item 10 (every required phrase still there: the forbidden text alone kills it)", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " The arm validation is compared minute by minute."))))
+check("mutant caught: 'minute by minute' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " The oracle is compared minute by minute."))))
+check("mutant caught: the 1440 labels dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "each of the 1440 wall-clock minute labels of a day is armed once and its answer compared with the oracle's count"))))
+
+# ---- F2: the over-claim guard, hardened ----
+check("F2: the r30 bullet says plainly what the guard is (a word-list guard that catches the common over-claims; defence in depth, not a proof) and no longer says 'guarded against over-claims'",
+      "a word-list guard that catches the common over-claims" in B30 and "defence in depth, not a proof that no over-claim can be written" in B30 and not any(p in B30 for p in CHANGELOG_R30_OLD))
+check("mutant caught: the r30 bullet says again that the wording is 'guarded against over-claims' (the required sentence is replaced)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "checked by a word-list guard that catches the common over-claims (defence in depth, not a proof that no over-claim can be written)", "guarded against over-claims")))))
+check("mutant caught: 'guarded against over-claims' added to the r30 bullet (every required phrase still there: the forbidden text alone kills it)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The wording is guarded against over-claims."))))
+check("mutant caught: 'defence in depth, not a proof that no over-claim can be written' dropped from the r30 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: drop_phrase(s, "defence in depth, not a proof that no over-claim can be written")))))
+OVERCLAIMS = (   # the five of the review (L1 to L5) and rewordings of my own (W1 to W10): different words, the same over-claim
+    ("L1", "P-A and P-B are confirmed on the owner's Home Assistant and work live."),
+    ("L2", "P-F was run on the real Home Assistant and passed; the refusal is live-tested."),
+    ("L3", "P-A is implemented offline and installed on the live Home Assistant."),
+    ("L4", "P-B is implemented offline and on the real Home Assistant as well."),
+    ("L5", "The firmware START gate now also walks the real instants after the flash."),
+    ("W1", "P-A and P-B were checked on the owner's Home Assistant and behave correctly there."),
+    ("W2", "The refusal has been exercised on the real Home Assistant and succeeded."),
+    ("W3", "P-A is implemented offline, then deployed to the owner's Home Assistant."),
+    ("W4", "The Export to Grid arm check was run on the owner's dongle and refused correctly."),
+    ("W5", "R9 is in service on the owner's Home Assistant."),
+    ("W6", "P-B is implemented offline as well as in the field."),
+    ("W7", "The firmware gate now walks the real instants too."),
+    ("W8", "P-A is implemented offline and runs unchanged on real hardware."),
+    ("W9", "P-F, the read-only template check, was carried out on the owner's Home Assistant and everything held."),
+    ("W10", "An unreadable TOU slot table is refused, so the arm fails closed."),
+)
+check("F2: the guard accepts the real item 10, introduction and both bullets (the over-claim mutants below start from clean texts)",
+      all(not overclaim_problems(nm, body, strict) for nm, body, strict in SCOPES), str([(nm, overclaim_problems(nm, body, strict)[:2]) for nm, body, strict in SCOPES if overclaim_problems(nm, body, strict)]))
+for label, text in OVERCLAIMS:
+    for nm, body, strict in SCOPES:
+        base, new = overclaim_problems(nm, body, strict), overclaim_problems(nm, body + " " + text, strict)
+        check(f"mutant caught by the over-claim guard alone: {label} appended to {nm}: {text[:70]}", len(new) > len(base), str(new[-2:]))
+    check(f"mutant caught end to end: {label} appended to item 10: {text[:70]}", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " " + text))))
+RULE_CASES = (   # one case per forbidden word or phrase of the review, each appended to item 10
+    ("confirmed", "P-A and P-B are confirmed."), ("live-tested", "The refusal is live-tested."), ("works live", "P-A works live."), ("work live", "P-A and P-B work live."),
+    ("passed", "P-F passed."), ("worked", "P-F worked."), ("tested", "P-A was tested."), ("flashed", "The dongle was flashed."), ("after the flash", "The gate walks the real instants after the flash."),
+    ("a flash that was done", "A flash was done."), ("implemented offline and", "P-A is implemented offline and on the real Home Assistant as well."),
+    ("implemented offline, then", "P-A is implemented offline, then used on the real Home Assistant."), ("installed", "P-A is installed."), ("deployed", "P-A is deployed."),
+    ("installed, with a 'not' in ANOTHER sentence", "P-A is installed. R9 is not installed anywhere else."),
+    ("passed, with a 'not' in ANOTHER sentence", "P-F passed. R9 is not installed."),
+    ("implemented offline and, with a 'not' later in the sentence", "P-A is implemented offline and installed on the real Home Assistant, not on a test system."),
+    ("a real-system sentence with no negation", "The refusal behaves correctly on the real Home Assistant."), ("a firmware sentence with no negation", "The firmware START gate walks the real instants."),
+)
+for label, text in RULE_CASES:
+    base, new = overclaim_problems("item 10", ITEM10, True), overclaim_problems("item 10", ITEM10 + " " + text, True)
+    check(f"mutant caught by the over-claim guard alone: {label}: {text[:70]}", len(new) > len(base), str(new[-2:]))
+HONEST = (   # honest negations and decisions that are not taken: appended to the real item 10, none may be flagged
+    "R9 is not installed on the real Home Assistant.", "Nothing is installed; nothing was deployed.", "With R9 installed (offline only so far) the arm is refused.", "A flash is a separate decision.",
+    "The firmware START gate needs a flash and is not changed.", "P-F has not passed because it has not been run.", "It does not work on the owner's Home Assistant yet.",
+    "P-A is implemented offline in R9 (not installed), that is not verified on a real Home Assistant.", "P-A is implemented offline in both schedule packages: arming refuses it.",
+    "None was seen on a live Home Assistant.", "An unreadable TOU slot table is not refused and is not decided here.",
+)
+for text in HONEST:
+    check(f"control: the over-claim guard accepts the honest sentence: {text[:70]}", not overclaim_problems("item 10", ITEM10 + " " + text, True), str(overclaim_problems("item 10", ITEM10 + " " + text, True)[:2]))
+
+# ---- F3: the arm-time TOU walk runs only when the TOU slot table can be read ----
+check("F3: item 10 says that the TOU walk runs only when the TOU slot table can be read, what an unreadable table does, and that whether it should fail closed stays open (not decided); the r30 bullet agrees; "
+      "the claim is tied to the package text (the walk sits inside the readability flag; the header says an unreadable slot table defers to the firmware)",
+      all(p in ITEM10 for p in ITEM10_UNCHANGED[-7:]) and "(both only when the TOU slot table can be read: see (c))" in ITEM10 and "against the slots it really covers (when the TOU slot table can be read)" in ITEM10
+      and "the Export to Grid TOU walk runs only when the TOU slot table can be read" in B30 and not package_tie_problems(n_dump, n_free), str(package_tie_problems(n_dump, n_free)))
+check("mutant caught: the owner's question turned into a decision in item 10 ('is decided: an unreadable TOU slot table fails closed')",
+      bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "stays an open question for the owner and is not decided here", "is decided: an unreadable TOU slot table fails closed")))))
+check("mutant caught: the walk made unconditional in item 10 ('always runs')", bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "The TOU walk of (a) runs only when the TOU slot table can be read", "The TOU walk of (a) always runs")))))
+check("mutant caught: the readable-table condition dropped from part (a) of item 10", bool(all10(rd=drop_in_item(n_readme, 10, "(both only when the TOU slot table can be read: see (c))"))))
+check("mutant caught: the unreadable-table sentence of part (c) dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "Whether an unreadable TOU slot table should fail closed stays an open question for the owner and is not decided here"))))
+check("mutant caught: an unreadable TOU slot table is claimed to fail closed, in a new sentence of item 10", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " An unreadable TOU slot table now fails closed."))))
+check("mutant caught: the r30 bullet loses the unreadable-table sentence", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: drop_phrase(s, "the Export to Grid TOU walk runs only when the TOU slot table can be read")))))
+check("mutant caught: the Export to Grid package walks without the readability flag (`ns.ok and` removed)", bool(package_tie_problems(sw(n_dump, "{% if ns.ok and (start_ts | float(0)) > 0 %}", "{% if (start_ts | float(0)) > 0 %}"), n_free)))
+check("mutant caught: the Export to Grid package no longer marks an unreadable row (`ns.ok = false` removed)", bool(package_tie_problems(sw(n_dump, "{% set ns.ok = false %}", "{% set ns.ok = true %}"), n_free)))
+check("mutant caught: the Export to Grid header stops saying that an unreadable slot table defers to the firmware", bool(package_tie_problems(sw(n_dump, "an unreadable slot table still defers to the firmware", "an unreadable slot table is refused"), n_free)))
+
+# ---- F4: every mutant ends in a recorded line, never in an exception ----
+_n0 = len(NOOP_MUTANTS)
+_unchanged = (drop_phrase("alpha beta", "gamma") == "alpha beta" and sw("alpha beta", "gamma", "x") == "alpha beta" and drop_in_item("no limitations here", 10, "gamma") == "no limitations here"
+              and in_item("no limitations here", 10, lambda s: s) == "no limitations here" and in_intro("no limitations here", lambda s: s) == "no limitations here"
+              and in_bullet("no bullet here", "- **absent", lambda s: s) == "no bullet here" and with_second_trigger("not a package") == "not a package")
+_recorded = len(NOOP_MUTANTS) - _n0
+del NOOP_MUTANTS[_n0:]
+check("F4: a mutant whose anchor is absent leaves the text unchanged and is recorded (drop_phrase, sw, drop_in_item, in_item, in_intro, in_bullet and the second-trigger mutant never raise)", _unchanged and _recorded == 7, f"recorded {_recorded}")
+_n0 = len(NOOP_MUTANTS)
+_all_nv = sw(n_readme, "not verified on a real Home Assistant", "REMOVED")
+_cleanly = (bool(all10(rd=_all_nv)) and bool(status_problems(_all_nv)) and drop_in_item(_all_nv, 10, "not verified on a real Home Assistant") == _all_nv
+            and bool(all10(rd=in_intro(_all_nv, lambda s: drop_phrase(s, "not verified on a real Home Assistant")))))
+del NOOP_MUTANTS[_n0:]
+check("F4: the mutant 'every not verified on a real Home Assistant dropped from the README' is killed by recorded FAILs of the primary checks ([7] item 10 and [13]) and the mutant helpers that follow it return "
+      "unchanged text instead of raising", _cleanly)
+
+check("no mutant of this suite was a no-op: every phrase it drops or swaps, and every item, heading and bullet it edits, was present in the text it mutated (a missing anchor is reported here as ONE FAIL, "
+      "never as an exception inside a helper)", not NOOP_MUTANTS, str(NOOP_MUTANTS[:6]))
 
 print("")
 if FAILURES:

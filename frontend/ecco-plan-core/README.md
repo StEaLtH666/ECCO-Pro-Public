@@ -362,9 +362,11 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     second 01:xx hour for a 01:xx start is still refused (fail closed) but now with that text and no longer with a misleading one. P-B (an epoch-correct TOU walk or a
     refusal when the window spans the change; R9 chose the walk) is implemented offline in the Export to Grid package only: its arm-time TOU overlap check now walks the run
     on the real instants (each minute of the run is converted to its local time of day), so a window that crosses a clock change checks the slots it really covers, and a
-    minute whose local time cannot be read refuses the arm; the Charge Battery (Free Power) package has no such check. What the offline proof is, and that it is only that:
+    minute whose local time cannot be read refuses the arm (both only when the TOU slot table can be read: see (c)); the Charge Battery (Free Power) package has no such check.
+    What the offline proof is, and that it is only that:
     the repository's own simulators run the real package text under the real Europe/London zone; an independent oracle (every real UTC minute of each change day walked,
-    counting how often each wall-clock label occurs) is compared with the real arm validation minute by minute, for both packages and under both readings of a naive local
+    counting how often each wall-clock label occurs) is compared with the real arm validation label by label (each of the 1440 wall-clock minute labels of a day is armed once
+    and its answer compared with the oracle's count), for both packages and under both readings of a naive local
     string: exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026 are refused with the clock-change text and none on an ordinary day; the
     TOU walk is compared with an independent truth over every quarter hour around those days and two ordinary days; the new checks fail on the unchanged packages
     (failing-first) and mutants of both changes are killed (registry/tests/test_ha_r9_missed_runs.py [5]; with a Hold battery running,
@@ -386,7 +388,11 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
     (c) NOT CHANGED by R9: the dongle firmware's START gate is not changed (a flash is a separate decision) and, read from its text (reasoned from the code, not run), still
     walks the TOU window the old way, as continuous wall-clock minutes, so it does not follow the real instants: on the spring day the arm-time check of (a) is the only one
     that sees a charge slot after the skipped hour. The checks of (a) run only when the schedule is armed (the arm validation is triggered by the armed switch turning on
-    and by nothing else): a start helper edited while the schedule is armed is not checked again. The repeated-time probe shifts the label by a constant one hour: right for
+    and by nothing else): a start helper edited while the schedule is armed is not checked again. The TOU walk of (a) runs only when the TOU slot table can be read (each of the
+    six slots needs a time that reads as hours and minutes and a charge source that is not unknown, unavailable or empty): when it cannot, the package does not walk the window
+    at all, this check does not refuse the arm, and the firmware's own START gate is then the only gate for a TOU overlap (it still walks the old way, as said above); the
+    offline suite pins that an unreadable slot table does not refuse the arm. Whether an unreadable TOU slot table should fail closed stays an open question for the owner and is
+    not decided here. The repeated-time probe shifts the label by a constant one hour: right for
     the UK clock change only, not for a zone that changes by another amount, and only Europe/London was modelled. EXACT (reproduced), unchanged: every window end, retry
     deadline, run length and plan override expiry is epoch arithmetic, so no deadline is silently extended or shortened, nothing starts twice, and restarts around the
     change behave in epoch terms. FAIL CLOSED (reproduced) and unchanged: a Home Assistant start in the second 01:xx hour is never captured for R9 (the dongle's time text
@@ -396,7 +402,8 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
 
     (d) Direction: mixed, as listed. You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine,
     for as long as R9 is not installed (today); with R9 installed (offline only so far), arming a start time in the skipped or repeated hour refused with the clock-change
-    text and the schedule switched off, and a Dump to Grid window that crosses the change checked against the slots it really covers, while the firmware's own gate, a start
+    text and the schedule switched off, and a Dump to Grid window that crosses the change checked against the slots it really covers (when the TOU slot table can be read),
+    while the firmware's own gate, a start
     helper edited after arming and the unchanged findings above stay as they are. The next clock change is 28 Mar 2027.
 
 11. **The expiry read uses the helper's `timestamp` attribute, which is modelled, not live-proven.** The offline models set it from an aware datetime and treat it
