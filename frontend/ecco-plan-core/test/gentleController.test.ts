@@ -696,7 +696,7 @@ const GOLDEN_V1_DIGEST = "0449cbd371baaf7748fad96ef6391ebb9aeaf70436e82a8d69e66c
 const hbase: GentleInput = { ...base, bufferMin: GENTLE_DEFAULT_BUFFER_MIN };
 const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: h, ...over });
 const flat = (watts: number): StepPoint[] => [{ fromInMin: 0, watts }];
-const PLANNING = new Set(["OK", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);
+const PLANNING = new Set(["OK", "DEGRADED", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);   // v3 G3: DEGRADED (an assumed demand, asked for explicitly) is a planning status
 const inf = (x: number | null) => (x === null ? Infinity : x);
 
 test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 400 closed-loop runs and 4000 random inputs; the new behaviours are off by default", () => {
@@ -705,7 +705,7 @@ test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 
   for (const [k, v] of Object.entries(v1Defaults)) assert.equal((DEFAULT_GENTLE_PARAMS as unknown as Record<string, number>)[k], v, "v1 default " + k);
   assert.equal(DEFAULT_GENTLE_PARAMS.maxDecreaseStepW, DEFAULT_GENTLE_PARAMS.hardMaxW, "the slew is off by default (never binds)");
   assert.equal(GENTLE_RECOMMENDED_PARAMS.maxDecreaseStepW, 1000);
-  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "ASSUME_PROVISIONAL" });
+  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit
   // the golden digest is sensitive: one changed v1 field changes it
   const bent = (i: GentleInput) => ({ ...planGentle(i), neededW: (planGentle(i).neededW ?? 0) + 1 });
   assert.notEqual(v1Fingerprint(bent), GOLDEN_V1_DIGEST);
@@ -828,8 +828,9 @@ test("grid headroom binds the setpoint, never the ceiling's job: not binding lea
 });
 
 test("unknown demand with a KNOWN grid limit follows the chosen policy and says so; an unknown grid limit means no headroom constraint, and says so", () => {
-  // default ASSUME_PROVISIONAL: the labelled provisional 2000 W (x1.2 margin = 2400) is the floor of the peak
-  const assumed = hplan({ gridImportLimitW: 6000 });
+  // v3 G3: ASSUME_PROVISIONAL is no longer the default; these checks ask for it explicitly. The labelled provisional 2000 W (x1.2 margin = 2400) is the floor of the peak
+  const ha = (h: HouseholdInput, over: Partial<GentleInput> = {}) => hplan(h, { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" }, ...over });
+  const assumed = ha({ gridImportLimitW: 6000 });
   assert.equal(assumed.household?.demandBasis, "ASSUMED");
   assert.equal(assumed.household?.demandPeakW, 2400);
   assert.equal(assumed.headroomCapW, 3600);
@@ -837,14 +838,14 @@ test("unknown demand with a KNOWN grid limit follows the chosen policy and says 
   assert.match(assumed.reasons.join(" "), /assumed, not measured/);
   assert.ok(assumed.provisionalInUse.some((x) => x.name === "assumedDemandW" && x.value === 2000 && x.kind === "MEASURED_REQUIRED" && x.source === "DEFAULT"));
   // a reading alone (no forecast) does not cover the window either: the assumption is a FLOOR, a larger reading wins
-  assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }).headroomCapW, 3600);
-  assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 3000, demandAgeMin: 0 }).headroomCapW, 2400);
+  assert.equal(ha({ gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }).headroomCapW, 3600);
+  assert.equal(ha({ gridImportLimitW: 6000, demandNowW: 3000, demandAgeMin: 0 }).headroomCapW, 2400);
   // a forecast that starts later and no fresh reading leaves the first minutes uncovered
-  assert.ok(hplan({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"));
-  assert.ok(!hplan({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 0, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a forecast from now covers the window");
-  assert.ok(!hplan({ gridImportLimitW: 6000, demandNowW: 100, demandAgeMin: 0, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a fresh reading plus a forecast covers it");
+  assert.ok(ha({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"));
+  assert.ok(!ha({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 0, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a forecast from now covers the window");
+  assert.ok(!ha({ gridImportLimitW: 6000, demandNowW: 100, demandAgeMin: 0, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a fresh reading plus a forecast covers it");
   // the assumed value is a parameter
-  assert.equal(hplan({ gridImportLimitW: 6000 }, { params: { assumedDemandW: 1000 } }).headroomCapW, 4800);
+  assert.equal(ha({ gridImportLimitW: 6000 }, { params: { assumedDemandW: 1000 } }).headroomCapW, 4800);
   // policy FALLBACK: no guess; NO_DATA with its own code and a fallback record; nothing is recommended
   const fb = hplan({ gridImportLimitW: 6000 }, { policy: { unknownDemandPolicy: "FALLBACK" }, currentSetpointW: 3000, lastChangeElapsedMin: 0, elapsedMin: 5 });
   assert.equal(fb.status, "NO_DATA");
@@ -1157,8 +1158,9 @@ test("parameter provenance: every parameter is PROVISIONAL, OWNER_SET or MEASURE
   assert.ok(wl.some((x) => x.name === "maxDecreaseStepW" && x.value === 1000 && x.source === "CALLER"));
   assert.ok(wl.some((x) => x.name === "dwellMin" && x.value === 45 && x.source === "CALLER"), "a caller-set value is shown as such");
   assert.ok(!wl.some((x) => x.name === "assumedDemandW"), "the assumption is listed only when it is used");
-  assert.ok(hplan({ gridImportLimitW: 6000 }).provisionalInUse.some((x) => x.name === "assumedDemandW"));
-  assert.ok(hplan({ gridImportLimitW: 6000 }).provisionalInUse.some((x) => x.name === "unknownDemandPolicy"));
+  const asked = { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" } } as Partial<GentleInput>;   // v3 G3: explicit
+  assert.ok(hplan({ gridImportLimitW: 6000 }, asked).provisionalInUse.some((x) => x.name === "assumedDemandW"));
+  assert.ok(hplan({ gridImportLimitW: 6000 }, asked).provisionalInUse.some((x) => x.name === "unknownDemandPolicy"));
   assert.ok(plan({ socAgeMin: 99 }).provisionalInUse.some((x) => x.name === "fallbackPolicy" && x.value === "KEEP_CURRENT"));
   assert.deepEqual(plan({ targetSocPct: 9 }).provisionalInUse, [], "an invalid input lists nothing");
   // the README has one table: value, kind and what would replace it
@@ -1295,7 +1297,7 @@ test("property: more demand never lowers the needed setpoint or brings the finis
     demandNowW: h.demandNowW == null ? h.demandNowW : h.demandNowW * kd, demandProfile: h.demandProfile ? h.demandProfile.map((q) => ({ ...q, watts: q.watts * kd })) : h.demandProfile,
     solarNowW: h.solarNowW == null ? h.solarNowW : h.solarNowW * ks, solarProfile: h.solarProfile ? h.solarProfile.map((q) => ({ ...q, watts: q.watts * ks })) : h.solarProfile,
   });
-  const rank = (d: GentleDecision) => (d.status === "OK" ? 0 : d.status === "TARGET_AT_RISK" ? 1 : 2);
+  const rank = (d: GentleDecision) => (d.status === "OK" || d.status === "DEGRADED" ? 0 : d.status === "TARGET_AT_RISK" ? 1 : 2);
   let demandPairs = 0;
   let solarPairs = 0;
   let limitPairs = 0;
@@ -1349,7 +1351,8 @@ test("property: more demand never lowers the needed setpoint or brings the finis
     for (const big of [{ ...h, gridImportLimitW: 1e9 }, { ...h, gridImportLimitW: null }] as HouseholdInput[]) {
       const g = planGentle({ ...i, household: big });
       neutral++;
-      for (const k of ["status", "setpointW", "neededW", "finishInMin", "marginMin", "change", "ceilingW", "suggestedBufferMin"] as const) assert.deepEqual(g[k], v1[k], k + " with a limit that cannot bind");
+      // v3 G3: an ASSUMED demand (an explicit option) turns an OK into DEGRADED; every number is still the v1 number
+      for (const k of ["status", "setpointW", "neededW", "finishInMin", "marginMin", "change", "ceilingW", "suggestedBufferMin"] as const) assert.deepEqual(k === "status" && g.status === "DEGRADED" ? "OK" : g[k], v1[k], k + " with a limit that cannot bind");
     }
   }
   assert.ok(demandPairs > 300 && solarPairs > 300 && limitPairs > 300 && timePairs > 200 && neutral > 600 && strictDemand > 100, [demandPairs, solarPairs, limitPairs, timePairs, neutral, strictDemand].join("/"));
@@ -1691,4 +1694,61 @@ test("[v3 G1] an increase toward the ceiling in an at-risk or deadline-passed st
     n++;
   }
   assert.equal(n, 35);
+});
+
+test("[v3 G3] unknown demand under a KNOWN grid limit: the default is FALLBACK (nothing guessed, no recommendation); the provisional assumption is an explicit option and its status is DEGRADED, never OK", () => {
+  assert.equal(DEFAULT_GENTLE_POLICY.unknownDemandPolicy, "FALLBACK");
+  assert.equal(PARAM_PROVENANCE.unknownDemandPolicy?.value, "FALLBACK");
+  // a known limit, no demand at all, the default policy: the guessed constant is not used
+  for (const h of [{ gridImportLimitW: 6000 }, { gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }, { gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }] as HouseholdInput[]) {
+    const d = hplan(h, { currentSetpointW: 3000, lastChangeElapsedMin: 0, elapsedMin: 5 });
+    assert.equal(d.status, "NO_DATA", JSON.stringify(h));
+    assert.equal(d.setpointW, null, "no guessed 2000 W under a known safety limit");
+    assert.equal(d.changeRecommended, false);
+    assert.ok(d.codes.includes("HOUSEHOLD_UNUSABLE"));
+    assert.ok(!d.codes.includes("ASSUMED_DEMAND"));
+    assert.equal(d.household, null);
+    assert.equal(d.fallback.applied, true);
+    assert.equal(d.fallback.setpointW, null, "the grid headroom cannot be checked, so even KEEP_CURRENT recommends nothing");
+  }
+  // the assumption is still available, but only when asked for, and it is DEGRADED, not OK
+  const opt: Partial<GentleInput> = { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" } };
+  const a = hplan({ gridImportLimitW: 9000 }, opt);
+  assert.equal(a.status, "DEGRADED");
+  assert.notEqual(a.status, "OK");
+  assert.ok(a.codes.includes("ASSUMED_DEMAND"));
+  assert.ok(a.setpointW !== null && a.setpointW <= (a.headroomCapW as number));
+  assert.equal(hplan({ gridImportLimitW: 6000 }, opt).headroomCapW, 3600, "the explicit option keeps its arithmetic: 6000 - 2000 x 1.2");
+  assert.equal(a.headroomCapW, 6600);
+  assert.equal(a.household?.demandBasis, "ASSUMED");
+  assert.match(a.reasons.join(" "), /DEGRADED/);
+  assert.match(a.reasons.join(" "), /assumed, not measured/);
+  assert.ok(a.provisionalInUse.some((x) => x.name === "assumedDemandW" && x.kind === "MEASURED_REQUIRED" && x.source === "DEFAULT"));
+  assert.ok(a.provisionalInUse.some((x) => x.name === "unknownDemandPolicy" && x.value === "ASSUME_PROVISIONAL" && x.source === "CALLER"));
+  assert.equal(a.guarantee, "NONE");
+  // a worse status is not softened: at risk stays at risk (and still carries the assumed-demand code)
+  const risk = hplan({ gridImportLimitW: 5000 }, { ...opt, targetSocPct: 100, socPct: 40 });
+  assert.ok(risk.status === "TARGET_AT_RISK" || risk.status === "TARGET_UNREACHABLE", risk.status);
+  assert.ok(risk.codes.includes("ASSUMED_DEMAND"));
+  // a forecast from now covers the window under either policy: OK, no degradation
+  for (const policy of ["FALLBACK", "ASSUME_PROVISIONAL"] as const) {
+    const ok = hplan({ gridImportLimitW: 7000, demandProfile: flat(1000) }, { policy: { unknownDemandPolicy: policy } });
+    assert.equal(ok.status, "OK", policy);
+    assert.ok(!ok.codes.includes("ASSUMED_DEMAND"));
+  }
+  // without a known limit demand is irrelevant: v1 numbers, status OK
+  assert.equal(hplan({ demandProfile: undefined }).status, "OK");
+  // a sweep: a known limit and no usable demand under the default policy never yields a setpoint, whatever the state
+  const rand = rng(31337);
+  let swept = 0;
+  for (let n = 0; n < 600; n++) {
+    const i = householdCase(rand);
+    const lim = 1500 + Math.floor(rand() * 9000);
+    const d = planGentle({ ...i, socPct: 5 + Math.floor(rand() * 80), socAgeMin: 1, ceilings: [{ name: "owner_maximum", watts: 5000 }], policy: undefined, household: { gridImportLimitW: lim } });
+    if (d.status === "NOTHING_TO_CHARGE" || d.status === "INVALID") continue;
+    swept++;
+    assert.equal(d.setpointW, null, "no guessed demand: " + d.status);
+    assert.ok(d.status === "NO_DATA" || d.status === "DEADLINE_PASSED", d.status);
+  }
+  assert.ok(swept > 300, "swept " + swept);
 });

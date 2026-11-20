@@ -24,7 +24,7 @@ export const GENTLE_DEFAULT_BUFFER_MIN = 60;
 /** Hard bounds of the numbers the model accepts (the buffer step is the owner's 5-minute grid). */
 export const GENTLE_BOUNDS = Object.freeze({ targetMin: 10, targetMax: 100, bufferMin: LIMITS.bufferMin, bufferMax: LIMITS.bufferMax, bufferStep: 5, replanMin: 5, replanMax: 15 });
 
-export type GentleStatus = "OK" | "NOTHING_TO_CHARGE" | "TARGET_AT_RISK" | "TARGET_UNREACHABLE" | "NO_DATA" | "NO_SAFE_CEILING" | "DEADLINE_PASSED" | "INVALID";
+export type GentleStatus = "OK" | "DEGRADED" | "NOTHING_TO_CHARGE" | "TARGET_AT_RISK" | "TARGET_UNREACHABLE" | "NO_DATA" | "NO_SAFE_CEILING" | "DEADLINE_PASSED" | "INVALID";
 export type GentleChange = "NONE" | "START" | "INCREASE" | "DECREASE";
 export type FallbackPolicy = "KEEP_CURRENT" | "USE_STATIC_PLAN" | "NONE";
 export type UnknownDemandPolicy = "ASSUME_PROVISIONAL" | "FALLBACK";
@@ -108,11 +108,15 @@ export const GENTLE_RECOMMENDED_PARAMS: Readonly<Partial<GentleParams>> = Object
 export interface GentlePolicy {
   /** What to hold when the controller cannot run (unknown or stale SOC, unknown ceiling, unusable household input). */
   fallbackPolicy: FallbackPolicy;
-  /** What to do when the household demand over the window is not covered by a fresh reading and a forecast. */
+  /**
+   * What to do when the household demand over the window is not covered by a fresh reading and a forecast. FALLBACK (the default) recommends
+   * nothing: no guessed constant stands in for an unknown demand under a known safety limit. ASSUME_PROVISIONAL is an explicit option: it plans from
+   * `assumedDemandW` and its status is DEGRADED, never OK.
+   */
   unknownDemandPolicy: UnknownDemandPolicy;
 }
 
-export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "ASSUME_PROVISIONAL" });
+export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK" });
 
 export interface ParamProvenance {
   kind: ParamKind;
@@ -905,6 +909,11 @@ export function planGentle(input: GentleInput): GentleDecision {
         const imp = out.setpointW === null ? null : gridImportW(out.setpointW * p.chargeEff, p.chargeEff, hh.peakW as number, hh.solarMinW as number);
         out.household = householdReport(hh, imp, p, headroomBinds ? "The grid headroom limits the setpoint." : "The grid headroom does not bind.");
       } else out.household = householdReport(hh, null, p, "No grid limit is known: no headroom constraint.");
+      if (out.status === "OK" && hh.basis === "ASSUMED") {
+        // A plan that rests on an assumed demand under a known safety limit is not a normal OK.
+        out.status = "DEGRADED";
+        out.reasons.push("Status DEGRADED, not OK: the grid cap rests on the provisional assumed demand (assumed, not measured), not on a forecast or a fresh reading.");
+      }
       if (out.status === "TARGET_AT_RISK" || out.status === "TARGET_UNREACHABLE") out.reasons.push("The target is NOT guaranteed.");
     }
     return out;
