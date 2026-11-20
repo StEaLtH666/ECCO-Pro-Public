@@ -1516,6 +1516,7 @@ test("noisy demand and solar inputs cannot make the setpoint flap: where the hea
   let bindingRuns = 0;
   let reversals = 0;
   let unneeded = 0;
+  let atRiskRises = 0;
   let noisyRuns = 0;
   let changesNoisy = 0;
   let changesClean = 0;
@@ -1558,12 +1559,15 @@ test("noisy demand and solar inputs cannot make the setpoint flap: where the hea
         if (prev.kind === "DECREASE" && cur.kind === "INCREASE" && cur.t - prev.t < p.dwellMin) {
           reversals++;
           const tk = noisy.ticks.find((x) => x.t === cur.t) as (typeof noisy.ticks)[number];
-          if (tk.decision.neededW === null) unneeded++;
+          // v3 G1: a rise toward the CEILING in an at-risk state (the limit does not bind) is a deadline need and is never held; only a binding cap's
+          // recovery waits, so only that case can be an unneeded reversal
+          if (tk.decision.neededW === null && tk.decision.limitedBy === "GRID_HEADROOM") unneeded++;
+          else if (tk.decision.neededW === null) atRiskRises++;
         }
       }
     }
   }
-  console.log("[gentle noise] " + noisyRuns + " runs with 50 % noise on the demand and solar readings and 20 % stale demand: " + identical + " never limited by the headroom, neither noisy nor clean, and then identical to the run with exact household input; " + bindingRuns + " limited by it at some tick; decrease-then-increase inside the dwell " + reversals + " times, of which not needed for the deadline " + unneeded + "; setpoint changes noisy " + changesNoisy + " vs clean " + changesClean);
+  console.log("[gentle noise] " + noisyRuns + " runs with 50 % noise on the demand and solar readings and 20 % stale demand: " + identical + " never limited by the headroom, neither noisy nor clean, and then identical to the run with exact household input; " + bindingRuns + " limited by it at some tick; decrease-then-increase inside the dwell " + reversals + " times, of which not needed for the deadline " + unneeded + " (and " + atRiskRises + " rises toward the ceiling in an at-risk state, a deadline need that is never held); setpoint changes noisy " + changesNoisy + " vs clean " + changesClean);
   assert.ok(identical >= 150, "enough runs where the headroom never bound: " + identical);
   assert.ok(bindingRuns >= 50, "and enough where it did: " + bindingRuns);
   assert.equal(unneeded, 0, "no flapping: an increase right after a decrease only when the deadline needs it");
@@ -1623,4 +1627,68 @@ test("static: the household, fallback, slew and provenance code is pure data: st
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /does not guarantee|NOT guaranteed|not guaranteed/);
   assert.match(readme, /100 percent|100 %/);
+});
+
+// =================================================================================================================================
+// v3 review fixes (independent review of the read-only model). Each section names the finding it closes: G1 recovery flag, G2 solar in the
+// hard limit, G3 unknown-demand default, G4 ages, G5 setpoint basis, G6 taper shapes, G7 minors. Everything is simulated, never measured.
+// =================================================================================================================================
+
+test("[v3 G1] an increase toward the ceiling in an at-risk or deadline-passed state is never held by hysteresis or dwell when the grid limit does not bind; a binding cap still waits like a saving", () => {
+  // The reviewer's case: a known limit that does not bind (30000 W), a dip makes the needed rate unknown (the target is out of reach at the
+  // ceiling), the setpoint in force is just under the ceiling. With household input the old flag held it (400 W < the 500 W hysteresis).
+  const risk: Partial<GentleInput> = { targetSocPct: 90, socPct: 50, elapsedMin: 160, currentSetpointW: 4600, lastChangeElapsedMin: 155, changesUsed: 0 };
+  const NB: HouseholdInput = { gridImportLimitW: 30000, demandProfile: flat(500) };
+  const free = plan({ ...risk, bufferMin: 60 });
+  assert.equal(free.status, "TARGET_AT_RISK");
+  assert.equal(free.neededW, null);
+  assert.equal(free.change, "INCREASE", "without household input the increase goes through");
+  assert.equal(free.setpointW, 5000);
+  for (const [name, over] of [["short of the hysteresis", {}], ["inside the dwell", { currentSetpointW: 3000 }], ["both", { currentSetpointW: 4600, lastChangeElapsedMin: 159 }]] as [string, Partial<GentleInput>][]) {
+    const d = hplan(NB, { ...risk, ...over });
+    const v1 = plan({ ...risk, ...over, bufferMin: 60 });
+    assert.equal(d.status, "TARGET_AT_RISK", name);
+    assert.equal(d.limitedBy, "CEILING", name);
+    assert.equal(d.change, "INCREASE", name + ": " + d.codes.join(","));
+    assert.equal(d.setpointW, 5000, name);
+    assert.ok(d.codes.includes("INCREASE_FOR_DEADLINE"), name);
+    assert.ok(!d.codes.includes("HELD_HYSTERESIS") && !d.codes.includes("HELD_DWELL"), name);
+    assert.equal(d.setpointW, v1.setpointW, name + ": the household answer equals the v1 answer where the limit does not bind");
+    assert.equal(d.change, v1.change, name);
+  }
+  // the deadline has passed but the window is still open: the same rule
+  const late: Partial<GentleInput> = { targetSocPct: 80, socPct: 60, elapsedMin: 310, currentSetpointW: 4600, lastChangeElapsedMin: 305 };
+  const dp = hplan(NB, late);
+  assert.equal(dp.status, "DEADLINE_PASSED");
+  assert.equal(dp.change, "INCREASE", dp.codes.join(","));
+  assert.equal(dp.setpointW, 5000);
+  assert.equal(dp.change, plan({ ...late, bufferMin: 60 }).change);
+  // an exhausted changes budget still holds (as in v1), and a fall is immediate whatever the limit
+  assert.ok(hplan(NB, { ...risk, changesUsed: 6 }).codes.includes("HELD_BUDGET"));
+  const fell = hplan({ gridImportLimitW: 30000, demandProfile: flat(500) }, { ...risk, currentSetpointW: 5600, ceilings: [{ name: "battery_max_charge", watts: 4000 }] });
+  assert.equal(fell.change, "DECREASE");
+  assert.ok(fell.codes.includes("ABOVE_CEILING"));
+  // a BINDING cap (3300 W): the rise of a recovering cap waits for the hysteresis and the dwell, at risk and after the deadline alike
+  const BIND: HouseholdInput = { gridImportLimitW: 4500, demandProfile: flat(1000) };
+  const bind = hplan(BIND, { ...risk, currentSetpointW: 3000, lastChangeElapsedMin: 120 });
+  assert.equal(bind.limitedBy, "GRID_HEADROOM");
+  assert.equal(bind.change, "NONE");
+  assert.ok(bind.codes.includes("HELD_HYSTERESIS"));
+  assert.equal(hplan(BIND, { ...risk, currentSetpointW: 2500, lastChangeElapsedMin: 155 }).codes.includes("HELD_DWELL"), true);
+  assert.equal(hplan(BIND, { ...risk, currentSetpointW: 2500, lastChangeElapsedMin: 120 }).change, "INCREASE");
+  const bindLate = hplan(BIND, { ...late, currentSetpointW: 3000, lastChangeElapsedMin: 250 });
+  assert.equal(bindLate.status, "DEADLINE_PASSED");
+  assert.equal(bindLate.limitedBy, "GRID_HEADROOM");
+  assert.equal(bindLate.change, "NONE");
+  assert.ok(bindLate.codes.includes("HELD_HYSTERESIS"));
+  // a limit that is KNOWN but far above (so it never binds) and the same state with no household group agree tick for tick
+  let n = 0;
+  for (const cur of [3000, 3500, 4000, 4400, 4600, 4800, 4900]) for (const since of [1, 10, 29, 31, 60]) {
+    const a = hplan(NB, { ...risk, currentSetpointW: cur, lastChangeElapsedMin: 160 - since });
+    const b = plan({ ...risk, currentSetpointW: cur, lastChangeElapsedMin: 160 - since, bufferMin: 60 });
+    assert.equal(a.setpointW, b.setpointW, cur + "/" + since);
+    assert.equal(a.change, b.change, cur + "/" + since);
+    n++;
+  }
+  assert.equal(n, 35);
 });

@@ -885,7 +885,9 @@ export function planGentle(input: GentleInput): GentleDecision {
   out.limitedBy = headroomBinds ? "GRID_HEADROOM" : "CEILING";
   const limitWord = headroomBinds ? "safe grid headroom" : "safe ceiling";
   const limitName = headroomBinds ? "grid headroom" : known.name;
-  const ctx = (recovery: boolean, canWait?: (remMin: number) => boolean): ChooseCtx => ({ ceilW: cMax0, recovery: recovery && hh.capW !== null, headroomBinds, canWait });
+  // The recovery hold (a rising cap waits like a saving) applies only where the grid headroom is what limits the setpoint. A known limit that does
+  // not bind leaves the ceiling as the target, and an increase toward it is a deadline need that is never held back by hysteresis or dwell.
+  const ctx = (recovery: boolean, canWait?: (remMin: number) => boolean): ChooseCtx => ({ ceilW: cMax0, recovery: recovery && headroomBinds, headroomBinds, canWait });
 
   // Plan from the pessimistic end of the reading's rounding: a reading of 50 may be 49.5.
   const planSoc = Math.max(0, soc - p.socResolutionPct / 2);
