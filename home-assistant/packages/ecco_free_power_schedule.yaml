@@ -4,6 +4,27 @@
 # controls, arms the dedicated Free Power write enable, and presses the verified START button.
 # The ESPHome firmware remains responsible for snapshot, verified writes, timer and exact restore.
 #
+# CLOCK CHANGES (owner decision of 20 Nov 2026; offline, not installed; clock-change examination of 19 Nov 2026, proposal P-A): arming REFUSES a
+# start time that is a skipped local time (the hour that does not exist when the UK clocks go forward), a repeated one (the hour that happens twice
+# when they go back) or one that cannot be read, with "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick
+# another time". The check comes BEFORE 'must be in the future', so arming in the second 01:xx hour for a 01:xx start gets this text and not a
+# misleading 'must be in the future'. It reads the helper's text, converts it to an instant and back, and refuses when the text does not survive the
+# round trip (a skipped time), when the same text one hour away reads the same (a repeated time) or when a conversion fails (fail closed). The
+# deadlines in this package were already epoch arithmetic and are exact across a clock change. The check runs when the schedule is armed (the card
+# locks the start while it is armed). How Home Assistant's template functions read a naive local time (the first occurrence of a repeated time, the
+# offset before the change for a skipped one) and which zone they use is RECALLED, not verified: a supervised read-only template check on the real
+# Home Assistant (proposal P-F) is still open. The check refuses a repeated time on either reading.
+#
+# RESULT INTEGRITY (owner decision of 20 Nov 2026): the steps after the retry loop never turn a result into a success. STARTED OK is written only
+# inside the loop, by this run's own verified start (its press, a start transaction that began, then Free Power active). A FAILED, BLOCKED or
+# CANCELLED result stays exactly as written even when Free Power is found active (it was started some other way, for example from the dongle's own
+# Start button or by hand); a result that is still STARTING when Free Power is found active becomes CANCELLED if the owner cancelled the schedule,
+# else "FAILED TO START ... Free Power is active now, but this run did not confirm that it started it", and the end-of-run alert then says so. The
+# startup recovery after a Home Assistant restart writes "STARTED OK - running" only over a result that already starts with STARTED; a FAILED,
+# BLOCKED or CANCELLED result stays as written; any other result becomes an UNCONFIRMED text. Neither step presses or starts anything, and nothing
+# changes while Free Power is not active. A FAILED text can be a false negative (the dongle started late after a start transaction that began); the
+# alert flags it.
+#
 # FPS1 (2026-10-11 incident): the firmware start gate refuses a press at once while any Modbus
 # frame is queued or awaiting its reply (including the 600 ms turnaround after it). The routine
 # 10 s telemetry poll keeps the bus busy for about 20 % of the time. The old fixed timing (press
@@ -432,17 +453,41 @@ script:
                   entity_id: input_text.ecco_free_power_schedule_last_result
                 data:
                   value: "CANCELLED - scheduled Free Power cancelled before it started"
+          # Owner decision of 20 Nov 2026 (Free Power result integrity): the steps after the loop never turn a result into a success. STARTED OK is
+          # written only inside the loop, by this run's own verified start (its press, a start transaction that began, then Free Power active). A
+          # FAILED, CANCELLED or BLOCKED result stays exactly as written, whatever Free Power is doing (started some other way: the dongle's own Start
+          # button, or by hand); the alert below then says so. A result that is still STARTING when Free Power is found active was not confirmed by this
+          # run: it becomes CANCELLED if the owner cancelled the schedule, else a FAILED TO START text that says Free Power is active now and that this
+          # run did not confirm that it started it. A result this script did not write (ARMED, REJECTED, MISSED) is left alone.
           - if:
               - condition: template
                 value_template: >-
                   {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
-                  {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and not r.startswith('STARTED') }}
+                  {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and r.startswith('STARTING') }}
             then:
-              - action: input_text.set_value
-                target:
-                  entity_id: input_text.ecco_free_power_schedule_last_result
-                data:
-                  value: "STARTED OK - Free Power is active; this run could not confirm the start as its own (check power and end time)"
+              - choose:
+                  # Cancelled by the owner (tested as the loop top and the step above test it): the run reads CANCELLED, not failed.
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {{ not (is_state('input_boolean.ecco_free_power_schedule_armed', 'on')
+                                  and as_timestamp(states.input_boolean.ecco_free_power_schedule_armed.last_changed, 0)
+                                      <= (run_started | float(0))) }}
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_free_power_schedule_last_result
+                        data:
+                          value: "CANCELLED - scheduled Free Power cancelled before it started"
+                default:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: >-
+                        FAILED TO START - retries ended at {{ now().strftime('%H:%M') }}:
+                        {{ states('sensor.ecco_clock_dongle_free_power_status')[:120] }};
+                        Free Power is active now, but this run did not confirm that it started it
           - if:
               - condition: template
                 value_template: >-
@@ -478,8 +523,21 @@ script:
             data:
               notification_id: ecco_free_power_schedule
               title: "ECCO: scheduled Free Power did NOT start"
+              # Owner decision of 20 Nov 2026: while Free Power is active at this moment the notice says so. For a BLOCKED result (nothing was pressed) it
+              # says this run did not start it; for any other result (a FAILED one) it says only that this run did not CONFIRM that it started it,
+              # because an unconfirmed outcome can be a late start of this run's own press. With Free Power not active the message is unchanged.
               message: >-
                 {{ states('input_text.ecco_free_power_schedule_last_result') }}
+                {%- if is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') %}
+
+                {% if states('input_text.ecco_free_power_schedule_last_result').startswith('BLOCKED') -%}
+                Free Power is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand).
+                Check it before assuming this schedule started it.
+                {%- else -%}
+                Free Power is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, or, if a start transaction had begun, late by this run's own press).
+                Check it before assuming this schedule started it.
+                {%- endif %}
+                {%- endif %}
 
                 Authorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}.
                 If time remains and the reason is cleared, use Free Power now in Energy Actions.
@@ -554,6 +612,29 @@ automation:
                   value: >-
                     REJECTED - scheduled {{ scheduled_power }}W outside safe range
                     500-{{ effective_limit }}W
+          # Clock changes (owner decision of 20 Nov 2026, proposal P-A): a start time that is a skipped, a repeated or an unreadable local time is
+          # refused, BEFORE 'must be in the future' (which would be misleading for a 01:xx start armed in the second 01:xx hour). The label is
+          # converted to an instant and back: a skipped label does not survive the round trip, a repeated one reads the same one hour away, and
+          # every conversion carries a default so that a conversion that fails refuses instead of raising (fail closed).
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {%- set s = states('input_datetime.ecco_free_power_schedule_start') -%}
+                  {%- set t = as_timestamp(s, 0) -%}
+                  {%- set f = '%Y-%m-%d %H:%M:%S' -%}
+                  {{ t <= 0
+                     or (t | timestamp_custom(f, true, 'unreadable')) != s
+                     or ((t + 3600) | timestamp_custom(f, true, 'unreadable')) == s
+                     or ((t - 3600) | timestamp_custom(f, true, 'unreadable')) == s }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_free_power_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_free_power_schedule_last_result
+                data:
+                  value: "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
           - conditions:
               - condition: template
                 value_template: "{{ start_ts <= as_timestamp(now()) }}"
@@ -879,7 +960,13 @@ automation:
                 data:
                   value: >-
                     ARMED AFTER RESTART - waiting for {{ states('input_datetime.ecco_free_power_schedule_start') }}
-          # Restarted while the session runs: it started; record it and disarm.
+          # Restarted while the session runs and Free Power is active. Owner decision of 20 Nov 2026: the recovery never turns a result into a success that
+          # this schedule did not verify. It cannot tell who started Free Power (the dongle's own Start button, a manual start, or this schedule's own
+          # press), so it trusts only the record. A last result that already starts with STARTED (this schedule's own verified start, recorded before
+          # the restart) keeps the old text. A FAILED, BLOCKED or CANCELLED result is final: it is not written again. Any other result (STARTING, ARMED,
+          # empty, REJECTED, MISSED, foreign text) gets a text that says Free Power is active after a restart and that this schedule did not confirm that
+          # it started it. Nothing is pressed or started here. The schedule is disarmed in every case, as before, so the watchdog cannot turn a refusal
+          # into a MISSED record.
           - conditions:
               - condition: template
                 value_template: "{{ now_ts < end_ts }}"
@@ -887,11 +974,28 @@ automation:
                 entity_id: binary_sensor.ecco_clock_dongle_free_power_active
                 state: "on"
             sequence:
-              - action: input_text.set_value
-                target:
-                  entity_id: input_text.ecco_free_power_schedule_last_result
-                data:
-                  value: "STARTED OK - running (Home Assistant restarted during the session)"
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ states('input_text.ecco_free_power_schedule_last_result').startswith('STARTED') }}"
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_free_power_schedule_last_result
+                        data:
+                          value: "STARTED OK - running (Home Assistant restarted during the session)"
+                  - conditions:
+                      - condition: template
+                        value_template: >-
+                          {% set r = states('input_text.ecco_free_power_schedule_last_result') %}
+                          {{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}
+                    sequence: []
+                default:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_free_power_schedule_last_result
+                    data:
+                      value: "UNCONFIRMED - Free Power is active after a Home Assistant restart, but this schedule did not confirm that it started it (it may have been started some other way). Check it in Energy Actions before assuming this schedule started it."
               - action: input_boolean.turn_off
                 target:
                   entity_id: input_boolean.ecco_free_power_schedule_armed

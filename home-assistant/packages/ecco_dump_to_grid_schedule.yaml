@@ -9,6 +9,25 @@
 #
 # NOT LIVE-PROVEN - see docs/DUMP_TO_GRID_V1.md.
 #
+# CLOCK CHANGES (owner decision of 20 Nov 2026; offline, not installed; clock-change examination of 19 Nov 2026, proposals P-A and P-B). Arming
+# REFUSES a start time that is a skipped local time (the hour that does not exist when the UK clocks go forward), a repeated one (the hour that
+# happens twice when they go back) or one that cannot be read, with "REJECTED - the start time is a skipped, repeated or unreadable local time
+# (clock change); pick another time". The check comes BEFORE 'must be in the future', so arming in the second 01:xx hour for a 01:xx start gets this
+# text and not a misleading 'must be in the future'. It reads the helper's text, converts it to an instant and back, and refuses when the text does
+# not survive the round trip (a skipped time), when the same text one hour away reads the same (a repeated time) or when a conversion fails (fail
+# closed). The deadlines in this package were already epoch arithmetic and are exact across a clock change. The check runs when the schedule is
+# armed (the card locks the start while it is armed). How Home Assistant's template functions read a naive local time (the first occurrence of a
+# repeated time, the offset before the change for a skipped one) and which zone they use is RECALLED, not verified: a supervised read-only template
+# check on the real Home Assistant (proposal P-F) is still open. The check refuses a repeated time on either reading.
+# The arm-time TOU slot check walks the run window on the REAL INSTANTS: for each minute of the run it takes the local minute of the day of (start +
+# that many minutes) through the local timestamp conversion, so a window that crosses a clock change checks the slots it really covers. It used to
+# add minutes to the start's wall-clock minute: on the day the clocks go forward it did not see a charge slot that begins after the skipped hour (00:30
+# for 120 minutes covers 00:30-01:00 and then 02:00-03:30 local, not 00:30-02:30), and on the day they go back it refused a clear window (00:45 for
+# 240 minutes ends at 03:45 local). A minute whose local time cannot be read refuses the arm. The window is bounded by the duration helper (at most
+# 240 minutes), and an unreadable slot table still defers to the firmware, as before. The firmware's own START gate walks the window the old way (read
+# from its text, not run) and is NOT changed here (a firmware change is a separate flash), so on the day the clocks go forward the arm check is the
+# only one that sees a charge slot after the skipped hour.
+#
 # DGS1 (2026-10-12 review, after the 11 Oct scheduled Free Power incident, FPS1): the Dump to Grid
 # start gate is the same shape as Free Power's. It refuses a press at once, with no side effect
 # (one status text, the write enable turned off, no Modbus I/O, no counter), while any Modbus frame
@@ -573,6 +592,29 @@ automation:
                 data:
                   value: >-
                     REJECTED - scheduled Stop SOC {{ scheduled_stop_soc }}% outside safe range 10-90%
+          # Clock changes (owner decision of 20 Nov 2026, proposal P-A): a start time that is a skipped, a repeated or an unreadable local time is
+          # refused, BEFORE 'must be in the future' (which would be misleading for a 01:xx start armed in the second 01:xx hour). The label is
+          # converted to an instant and back: a skipped label does not survive the round trip, a repeated one reads the same one hour away, and
+          # every conversion carries a default so that a conversion that fails refuses instead of raising (fail closed).
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {%- set s = states('input_datetime.ecco_dump_to_grid_schedule_start') -%}
+                  {%- set t = as_timestamp(s, 0) -%}
+                  {%- set f = '%Y-%m-%d %H:%M:%S' -%}
+                  {{ t <= 0
+                     or (t | timestamp_custom(f, true, 'unreadable')) != s
+                     or ((t + 3600) | timestamp_custom(f, true, 'unreadable')) == s
+                     or ((t - 3600) | timestamp_custom(f, true, 'unreadable')) == s }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
           - conditions:
               - condition: template
                 value_template: "{{ start_ts <= as_timestamp(now()) }}"
@@ -620,10 +662,16 @@ automation:
           # runs from its time to slot i+1's, slot 6 wrapping to slot 1. Only
           # ever refuses; if the slot sensors are unavailable it defers to the
           # firmware's own check.
+          # Clock changes (owner decision of 20 Nov 2026, proposal P-B): the run window is walked on the REAL INSTANTS, not as continuous wall-clock
+          # minutes. For each minute k of the run the local minute of the day is taken from the instant (start + k minutes) through the local timestamp
+          # conversion, so a window that crosses a clock change checks the slots it really covers (00:30 for 120 minutes on the day the clocks go forward
+          # covers 00:30-01:00 and then 02:00-03:30 local; 00:45 for 240 minutes on the day they go back ends at 03:45 local). A minute whose local time
+          # cannot be read refuses the arm (fail closed); an unreadable slot table still defers to the firmware. The run is bounded by the duration helper
+          # (at most 240 minutes). The firmware's own START gate is not changed by this (a firmware change is a separate flash).
           - conditions:
               - condition: template
                 value_template: >-
-                  {% set ns = namespace(ok=true, starts=[], charges=[], hit=0) %}
+                  {% set ns = namespace(ok=true, starts=[], charges=[], hit=0, bad=false) %}
                   {% for i in range(1, 7) %}
                     {% set t = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_time') %}
                     {% set c = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_charge') %}
@@ -635,11 +683,15 @@ automation:
                     {% endif %}
                   {% endfor %}
                   {% if ns.ok and (start_ts | float(0)) > 0 %}
-                    {% set st = (start_ts | float(0)) | timestamp_local %}
-                    {% set m0 = (st[11:13] | int) * 60 + (st[14:16] | int) %}
                     {% set dur = states('input_number.ecco_dump_to_grid_schedule_duration') | int(0) %}
                     {% for k in range(0, dur + 1) %}
-                      {% set m = (m0 + k) % 1440 %}
+                      {% set sk = ((start_ts | float(0)) + k * 60) | timestamp_local %}
+                      {% set hh = sk[11:13] | int(-1) %}
+                      {% set mi = sk[14:16] | int(-1) %}
+                      {% if hh < 0 or hh > 23 or mi < 0 or mi > 59 %}
+                        {% set ns.bad = true %}
+                      {% endif %}
+                      {% set m = hh * 60 + mi %}
                       {% for i in range(0, 6) %}
                         {% set s = ns.starts[i] %}
                         {% set e = ns.starts[(i + 1) % 6] %}
@@ -650,7 +702,7 @@ automation:
                       {% endfor %}
                     {% endfor %}
                   {% endif %}
-                  {{ ns.hit > 0 }}
+                  {{ ns.hit > 0 or ns.bad }}
             sequence:
               - action: input_boolean.turn_off
                 target:

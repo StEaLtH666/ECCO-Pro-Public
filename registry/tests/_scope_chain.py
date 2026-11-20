@@ -1279,13 +1279,13 @@ R9 = Entry(
     added_files=_r9.ADDED_FILES,
     frozen_reverts=dict(_r9.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after r9
-        _r9.DUMP_REL: "b5a82eb239548e69adad5b01f42651ab84408d776956b4496463a07bd84a417e",
-        _r9.FREE_REL: "2ff3e73449639edef0866f49391fe78a900a423999e1156906331ede93d37814",
+        _r9.DUMP_REL: "97d1af088d9c8912e5098b98eadb5bdb1a48faa5808111d766174ac1ab0f58f3",
+        _r9.FREE_REL: "e0917a5d43bdf68ab8a90aadc0bae0394d4c59f8181a5ad61858a4e002438249",
         _r9.PKGTEST_REL: "2e85448a97c195bbf8bf5c16621df81e9f077d5b673abc1324128b4f807dcfb1",
         _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
     },
     # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
-    fingerprint="e7f4a184a62207ff4b751aa637c2399355bb46608b9a7d98e51ca284dd0e8492",
+    fingerprint="d90142a0205112514b1d0f94402ca1e990327a323a4cb55bed0a7f1b5bb7b274",
     note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
          "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
          "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "

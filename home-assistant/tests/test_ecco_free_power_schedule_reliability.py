@@ -31,6 +31,8 @@ of the dongle's start gate, transaction, timer and Modbus poll, using the busy w
   [15] review 2     the real cancel script mid-staging / mid-delay, cancel and re-arm, the limit lowered while offline,
                     staging never confirmed, arming with a past start, the readiness alert, a write enable left on
   [16] review 3     the limit lowered just before a press; a re-arm's ARMED text kept
+  [17] integrity    (owner decision of 20 Nov 2026) the steps after the retry loop never turn a result into a success: a table over every
+                    result x Free Power active x armed, the alert's active-now sentence, end-to-end runs, mutants
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the package's control flow against a model, not a live
 Home Assistant or the dongle.
@@ -472,6 +474,80 @@ for name, anchor, repl in (("equivalent: the attempt cap written as 59 + 1", "ma
     res = battery(PKG_TEXT.replace(anchor, repl))
     check(f"control '{name}' survives the battery", all(v is True for v in res.values()), str(res))
 
+# ----------------------------------------------------------------------------------------------------------------------
+# Owner decision of 20 Nov 2026 (the Free Power result-integrity fix; the same rule the stage 3 pull request applies to Dump to Grid): the steps after
+# the retry loop never turn a result into a success. STARTED OK is written only inside the loop, by this run's own verified start. The helpers below
+# rebuild the package as it stood before (r9 as pushed) from the parsed package, so that the old behaviour is a mutant the new checks must kill.
+# ----------------------------------------------------------------------------------------------------------------------
+import copy  # noqa: E402
+
+OLD_ALERT_MESSAGE = ("{{ states('input_text.ecco_free_power_schedule_last_result') }}\nAuthorised window ends {{ (window_end | float(0)) | timestamp_custom('%H:%M') }}. "
+                     "If time remains and the reason is cleared, use Free Power now in Energy Actions. If a start transaction began or the outcome is unconfirmed, "
+                     "check the Free Power status and recovery state first.")
+OLD_FALLBACK_STEP = {
+    "if": [{"condition": "template", "value_template": "{% set r = states('input_text.ecco_free_power_schedule_last_result') %} "
+                                                         "{{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and not r.startswith('STARTED') }}"}],
+    "then": [{"action": "input_text.set_value", "target": {"entity_id": "input_text.ecco_free_power_schedule_last_result"},
+              "data": {"value": "STARTED OK - Free Power is active; this run could not confirm the start as its own (check power and end time)"}}]}
+
+
+def start_script(pkg: dict) -> dict:
+    return pkg["script"]["ecco_free_power_start_scheduled"]
+
+
+def post_loop(pkg: dict):
+    """(the default branch's action list, the index of its retry loop): the three `if` steps after the loop follow it."""
+    d = start_script(pkg)["sequence"][1]["default"]
+    return d, next(n for n, a in enumerate(d) if "repeat" in a)
+
+
+def alert_step(pkg: dict) -> dict:
+    return start_script(pkg)["sequence"][3]["then"][0]
+
+
+def dump_package(pkg: dict) -> str:
+    return yaml.safe_dump(pkg, sort_keys=False, width=10 ** 6)
+
+
+def old_integrity_package(text: str, fallback: bool = True, alert: bool = True) -> str:
+    """The package with the step after the retry loop and the alert message as r9 had them (STARTED OK for any result but STARTED while Free Power is active)."""
+    pkg = yaml.safe_load(text)
+    d, i = post_loop(pkg)
+    if fallback:
+        d[i + 2] = copy.deepcopy(OLD_FALLBACK_STEP)
+    if alert:
+        alert_step(pkg)["data"]["message"] = OLD_ALERT_MESSAGE
+    return dump_package(pkg)
+
+
+def stalled_view_run(text):
+    r = Run(text, phase=5.0, delays=(0.05,))
+    r.d.stalls.append((ST + 1.0, ST + 45))
+    return r.until(900)
+
+
+def stalled_view_ok(r) -> bool:
+    """Owner decision of 20 Nov 2026 (it replaces the old expectation 'STARTED OK'): the press passed and its start was only seen late, so this run could not confirm it: ONE transaction, never two, the result stays
+    FAILED TO START (unconfirmed, final), the end-of-run alert is raised and says Free Power is active now and this run did not confirm that it started it, nothing is dismissed, the write enable ends off."""
+    notice = r.w.notifications.get("ecco_free_power_schedule", {}).get("message", "")
+    return (sum(1 for _, o in r.d.presses if o == "PASSED") == 1 and len(r.d.press_log) == 1 and r.d.successes == 1
+            and r.last().startswith("FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed") and not r.last().startswith("STARTED")
+            and len(r.created()) == 1 and "did not confirm that it started it" in notice and "this run did not start it" not in notice
+            and not [n for n in r.w.notification_log if n[1] == "dismiss"] and not r.arm_left_on())
+
+
+def own_start_ok(r, op) -> bool:
+    """Owner decision of 20 Nov 2026 (it replaces the old expectation 'STARTED or BLOCKED'): the owner's own START two seconds before the schedule: nothing staged into that transaction, never pressed during it, one
+    transaction. The run cannot confirm the start as its own, so it never reads STARTED: it is BLOCKED (Free Power already active at the start) or the FAILED TO START text that says Free Power is active now and that
+    this run did not confirm it."""
+    last = r.last()
+    return (r.d.successes == 1 and sum(1 for _, o in r.d.presses if o == "PASSED") == 1 and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log)
+            and not last.startswith("STARTED") and not r.arm_left_on()
+            and (last.startswith("BLOCKED") or (last.startswith("FAILED TO START - retries ended at") and last.endswith("Free Power is active now, but this run did not confirm that it started it"))))
+
+
+OLD_INTEGRITY_TEXT = old_integrity_package(PKG_TEXT)
+
 # ======================================================================================================================
 print("\n[14] review: cancel, stale state, outages, long texts, races, service errors")
 # ======================================================================================================================
@@ -493,13 +569,10 @@ r.w.at(ST + 60, _rearm)
 r.until(900)
 check("a schedule re-armed for another day while today's run is retrying is not disarmed when that run ends",
       r.w.state(ARMED) == "on" and r.d.successes == 1, f"{r.w.state(ARMED)} {r.last()}")
-r = Run(phase=5.0, delays=(0.05,))
-r.d.stalls.append((ST + 1.0, ST + 45))
-r.until(900)
-check("Home Assistant's view stalls right after a press that passes: never pressed again, never two transactions; the run "
-      "records the start once the view recovers; the write enable ends off",
-      sum(1 for _, o in r.d.presses if o == "PASSED") == 1 and len(r.d.press_log) == 1 and r.d.successes == 1
-      and r.last().startswith("STARTED OK") and not r.arm_left_on(), f"{r.gate()} {r.last()}")
+r = stalled_view_run(PKG_TEXT)
+check("Home Assistant's view stalls right after a press that passes: never pressed again, never two transactions; the outcome is unconfirmed, so the run ends as FAILED TO START (final: a false negative when the "
+      "dongle did start, which the alert flags with 'Free Power is active now ... this run did not confirm that it started it'; owner decision of 20 Nov 2026, it replaces the old expectation STARTED OK); "
+      "the write enable ends off", stalled_view_ok(r), f"{r.gate()} {r.last()}")
 r = Run(phase=5.0, delays=(0.05,), outcome="capture_failed")
 r.d.stalls.append((ST + 1.0, ST + 45))
 r.until(900)
@@ -524,10 +597,8 @@ r.d.manual_start(ST - 2)
 r.until(600)
 op = r.d.op_intervals[0]
 check("the owner's own START two seconds before the schedule: the schedule stages nothing into that transaction and never "
-      "presses during it; Free Power active, recorded as started",
-      r.d.successes == 1 and sum(1 for _, o in r.d.presses if o == "PASSED") == 1
-      and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log) and r.last().startswith(("STARTED", "BLOCKED"))
-      and not r.arm_left_on(), f"{r.d.number_log} {op} {r.last()}")
+      "presses during it; one transaction; Free Power active; the run never reads STARTED (it cannot confirm the start as its own: BLOCKED, or FAILED TO START saying Free Power is active now and this run did not "
+      "confirm it; owner decision of 20 Nov 2026, it replaces the old expectation STARTED or BLOCKED)", own_start_ok(r, op), f"{r.d.number_log} {op} {r.last()}")
 r = Run()
 r.d.manual_start(ST + 1.0)
 r.until(600)
@@ -654,6 +725,234 @@ r.w.at(ST + 95, _rearm2)
 r.until(400)
 check("after a cancel and a re-arm, the ending run leaves the new schedule's ARMED text alone", r.last().startswith("ARMED"),
       r.last())
+
+# ======================================================================================================================
+print("\n[17] result integrity (owner decision of 20 Nov 2026): the steps after the retry loop never turn a result into a success")
+# ======================================================================================================================
+# Before: while Free Power was active at the end of the retry loop, EVERY result that did not start with STARTED (a refusal at the gate, a press nobody
+# answered, a run the owner cancelled, a run still retrying, a BLOCKED limit) was replaced by "STARTED OK - Free Power is active; this run could not
+# confirm the start as its own ...", the end-of-run alert was skipped and the schedule notifications were dismissed. Free Power can be active because the
+# dongle's own Start button or a manual start began it, so the text was a success nobody had verified. Now STARTED OK is written only inside the loop
+# (this run's own press, a start transaction that began, then Free Power active); the steps after the loop write no success text at all.
+CANCELLED_TEXT = "CANCELLED - scheduled Free Power cancelled before it started"
+NOT_CONFIRMED = "Free Power is active now, but this run did not confirm that it started it"
+STATUS_120 = "REJECTED - " + "x" * 109                       # a 120 character status, the longest the texts carry
+LAST_TEXTS = (
+    "STARTING - 8000W until 13:00",
+    "STARTING - attempt 3 waiting: dongle offline, limit unavailable or another write in progress; retrying until 11:10",
+    "STARTING - attempt 2 refused at the start gate (REJECTED - Modbus bus busy with another transaction; try again shortly); nothing written; retrying until 11:10",
+    "STARTING - attempt 1 never reached the dongle (no start counted); retrying until 11:10",
+    "STARTING - attempt 2: arm or staged values not confirmed; nothing pressed; retrying until 11:10",
+    "FAILED TO START - REJECTED - another inverter write is active (attempt 1; nothing written)",
+    "FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed, not retried (last status: STARTING - taking fresh inverter snapshot)",
+    "FAILED TO START - authorised window ends 13:00; not started (IDLE)",
+    "BLOCKED - requested 8000W above the effective grid charge limit 3000W",
+    "BLOCKED - Free Power already active",
+    CANCELLED_TEXT,
+    "STARTED OK - 8000W for 120 min (attempt 1; ends by 13:00)",
+    "ARMED - 2026-10-11 11:00:00 • 120 min • 8000W", "REJECTED - scheduled start must be in the future", "MISSED - not started after a Home Assistant restart",
+    "", "unknown", "something another writer left",
+)
+
+
+def run_tail(text: str, last: str, active: bool, armed_ok: bool) -> dict:
+    """Run the REAL steps after the retry loop, the write-enable-off step and the end-of-run alert of the start script (taken from `text`) on a world where
+    the last result, Free Power's active sensor and the schedule's armed state are as given. armed_ok: the schedule is armed and was armed before this run began
+    (False: it was cancelled)."""
+    pkg = yaml.safe_load(text)
+    d, i = post_loop(pkg)
+    steps = d[i + 1:] + start_script(pkg)["sequence"][2:]
+    w = S.World(ST)
+    w.service_handlers["switch.turn_off"] = lambda e, dd: w.set(e, "off")
+    ha = S.HA(w, pkg)
+    w.t = ST - 100
+    w.set(ARMED, "on" if armed_ok else "off")                 # its last_changed is before the run began
+    w.t = ST
+    w.set(S.E_ACTIVE, "on" if active else "off")
+    w.set("switch.ecco_clock_dongle_free_power_write_enable", "on")
+    w.set(S.E_STATUS, STATUS_120)
+    w.set(LAST, last)
+    w.notifications["ecco_free_power_schedule"] = {"title": "old", "message": "old"}
+    w.notifications["ecco_free_power_schedule_readiness"] = {"title": "old", "message": "old"}
+    ha._drive(ha._seq(steps, {"run_started": ST - 50, "window_end": ST + 3600, "this": {}}), lambda err=None: None)
+    w.run_until(ST + 5)
+    return {"last": w.state(LAST), "notes": {k: v["message"] for k, v in w.notifications.items()},
+            "log": [(k, nid) for _t, k, nid, _ti in w.notification_log], "arm": w.state("switch.ecco_clock_dongle_free_power_write_enable"),
+            "warnings": list(w.warnings)}
+
+
+def tail_violations(text: str) -> tuple[int, list[str]]:
+    """Every cell of (last result x Free Power active x armed before the run) against the rule; the list of cells that break it."""
+    bad, n = [], 0
+    for last in LAST_TEXTS:
+        for active in (True, False):
+            for armed_ok in (True, False):
+                n += 1
+                got = run_tail(text, last, active, armed_ok)
+                r = got["last"]
+                cell = f"[{last[:36]!r} active={active} armed={armed_ok}]"
+                if r.startswith("STARTED") and not last.startswith("STARTED"):
+                    bad.append(f"{cell} became a success: {r[:60]}")
+                if active and not last.startswith("STARTING") and r != last:
+                    bad.append(f"{cell} a result that is not STARTING was rewritten while Free Power is active: {r[:60]}")
+                if active and last.startswith("STARTING"):
+                    want_cancel = not armed_ok
+                    if want_cancel and r != CANCELLED_TEXT:
+                        bad.append(f"{cell} a cancelled run must read CANCELLED, read {r[:60]}")
+                    if not want_cancel and not (r.startswith("FAILED TO START - retries ended at") and r.endswith(NOT_CONFIRMED) and len(r) <= 255):
+                        bad.append(f"{cell} a STARTING run found Free Power active must read FAILED TO START ... {NOT_CONFIRMED} (<= 255), read {r[:80]} ({len(r)})")
+                if got["arm"] != "off" or got["warnings"]:
+                    bad.append(f"{cell} write enable {got['arm']} / warnings {got['warnings'][:1]}")
+                alerted = ("create", "ecco_free_power_schedule") in got["log"]
+                should = (r.startswith("FAILED") or (r.startswith("BLOCKED") and "already active" not in r)
+                          or not (r.startswith("STARTED") or r.startswith("CANCELLED") or r.startswith("BLOCKED") or r.startswith("ARMED") or active))
+                if alerted != should:
+                    bad.append(f"{cell} alert {alerted}, the unchanged rule says {should}")
+                if alerted:
+                    msg = got["notes"]["ecco_free_power_schedule"]
+                    if active and r.startswith("BLOCKED"):
+                        want = "this run did not start it" in msg and "did not confirm" not in msg
+                    elif active:
+                        want = "did not confirm that it started it" in msg and "this run did not start it" not in msg
+                    else:
+                        want = "Free Power is active now" not in msg
+                    if not want:
+                        bad.append(f"{cell} the alert's active-now sentence is wrong: {msg[len(r):][:120]!r}")
+                    if got["log"].count(("dismiss", "ecco_free_power_schedule")) or got["log"].count(("dismiss", "ecco_free_power_schedule_readiness")):
+                        bad.append(f"{cell} an alert was raised and the schedule notifications were dismissed")
+    return n, bad
+
+
+n_cells, bad_cells = tail_violations(PKG_TEXT)
+check(f"the steps after the retry loop, the write enable and the alert follow the rule in all {n_cells} cells (18 results x Free Power active or not x armed since before the run or cancelled): "
+      "no result becomes a success, nothing but STARTING is rewritten while Free Power is active, STARTING becomes CANCELLED (cancelled) or FAILED TO START that says Free Power is active "
+      "now and this run did not confirm it (<= 255 characters), the write enable ends off, the unchanged alert rule, the sentence right for BLOCKED and for FAILED, and an alert is never "
+      "followed by a dismissal", not bad_cells, f"{len(bad_cells)} cells: {bad_cells[:3]}")
+n_old, bad_old = tail_violations(OLD_INTEGRITY_TEXT)
+check(f"...and that table is not vacuous: the old steps break it in {len(bad_old)} cells (a refusal, a cancel, a failure or a retry turned into STARTED OK)",
+      len(bad_old) >= 20 and any("became a success" in b for b in bad_old), f"{len(bad_old)}")
+same, diff = 0, []
+for last in LAST_TEXTS:
+    for armed_ok in (True, False):
+        a = run_tail(PKG_TEXT, last, False, armed_ok)
+        b = run_tail(OLD_INTEGRITY_TEXT, last, False, armed_ok)
+        same += a == b
+        if a != b:
+            diff.append((last[:30], armed_ok))
+check(f"with Free Power NOT active every outcome (last result, notifications and their exact text, write enable) equals the previous package's: {same} of {2 * len(LAST_TEXTS)} cells identical",
+      not diff, str(diff[:3]))
+BLOCKED_ACTIVE = run_tail(PKG_TEXT, "BLOCKED - requested 8000W above the effective grid charge limit 3000W", True, True)
+check("a BLOCKED result found with Free Power active (started some other way) stays exactly as written; the alert is raised, says Free Power is active now and that THIS RUN DID NOT START IT, "
+      "and nothing is dismissed",
+      BLOCKED_ACTIVE["last"].startswith("BLOCKED - requested 8000W above") and ("create", "ecco_free_power_schedule") in BLOCKED_ACTIVE["log"]
+      and "Free Power is active now, and this run did not start it" in BLOCKED_ACTIVE["notes"]["ecco_free_power_schedule"]
+      and not [k for k in BLOCKED_ACTIVE["log"] if k[0] == "dismiss"], str(BLOCKED_ACTIVE))
+FAILED_ACTIVE = run_tail(PKG_TEXT, LAST_TEXTS[5], True, True)
+check("a FAILED result found with Free Power active stays exactly as written; the alert says this run did not CONFIRM that it started it (a late start of its own press is possible), nothing is dismissed",
+      FAILED_ACTIVE["last"] == LAST_TEXTS[5] and "did not confirm that it started it" in FAILED_ACTIVE["notes"]["ecco_free_power_schedule"]
+      and not [k for k in FAILED_ACTIVE["log"] if k[0] == "dismiss"], str(FAILED_ACTIVE))
+CANCELLED_ACTIVE = run_tail(PKG_TEXT, CANCELLED_TEXT, True, False)
+check("a CANCELLED result found with Free Power active stays exactly as written, raises no alert and (as before) clears the schedule notifications",
+      CANCELLED_ACTIVE["last"] == CANCELLED_TEXT and ("create", "ecco_free_power_schedule") not in CANCELLED_ACTIVE["log"]
+      and ("dismiss", "ecco_free_power_schedule") in CANCELLED_ACTIVE["log"], str(CANCELLED_ACTIVE))
+STARTED_ACTIVE = run_tail(PKG_TEXT, LAST_TEXTS[11], True, True)
+check("this run's own verified start (the result already reads STARTED OK, written inside the loop) is untouched: same text, no alert, the schedule notifications cleared",
+      STARTED_ACTIVE["last"] == LAST_TEXTS[11] and ("create", "ecco_free_power_schedule") not in STARTED_ACTIVE["log"] and ("dismiss", "ecco_free_power_schedule") in STARTED_ACTIVE["log"],
+      str(STARTED_ACTIVE))
+quiet = run_tail(PKG_TEXT, LAST_TEXTS[5], False, True)
+check("with Free Power NOT active a FAILED result raises the alert and the rendered message is byte for byte the old one (no sentence)",
+      quiet["notes"]["ecco_free_power_schedule"] == run_tail(OLD_INTEGRITY_TEXT, LAST_TEXTS[5], False, True)["notes"]["ecco_free_power_schedule"]
+      and "active now" not in quiet["notes"]["ecco_free_power_schedule"], quiet["notes"]["ecco_free_power_schedule"][:200])
+
+# ---- end to end, through the real script and the dongle model
+r = Run(OLD_INTEGRITY_TEXT)
+r.d.manual_start(ST - 2)
+r.until(600)
+check("...the old steps read STARTED OK for the owner's own START two seconds before the schedule (what this decision removes; the replaced check above kills it)",
+      not own_start_ok(r, r.d.op_intervals[0]) and r.last().startswith("STARTED OK - Free Power is active; this run could not confirm"), r.last())
+r = stalled_view_run(PKG_TEXT)
+check("end to end: the stalled-view run (a press that passed, its start seen late): FAILED TO START (outcome unconfirmed) stays, ONE transaction, the alert says this run did not confirm it",
+      stalled_view_ok(r), f"{r.last()!r} {r.created()}")
+check("...the old fallback restored would turn that unconfirmed outcome into a success again: the check above kills it",
+      not stalled_view_ok(stalled_view_run(OLD_INTEGRITY_TEXT)) and stalled_view_run(OLD_INTEGRITY_TEXT).last().startswith("STARTED OK - Free Power is active; this run could not confirm"))
+r = Run()
+r.until(600)
+check("end to end: this run's own verified start is still STARTED OK, byte for byte (written inside the loop), no alert, nothing dismissed that was not there",
+      r.last().startswith("STARTED OK - 8000W for 120 min (attempt 1; ends by 13:00)") and r.created() == [] and r.d.successes == 1, r.last())
+
+# ---- mutation: each wrong version of the steps is killed by the table or the end-to-end runs
+def tail_battery(text: str) -> dict:
+    res = {}
+    try:
+        _n, bad = tail_violations(text)
+        res["table"] = not bad
+        x = Run(text)
+        x.d.manual_start(ST - 2)
+        x.until(600)
+        res["own_start"] = own_start_ok(x, x.d.op_intervals[0])
+        res["stalled"] = stalled_view_ok(stalled_view_run(text))
+        res["quiet"] = run_tail(text, LAST_TEXTS[5], False, True)["notes"]["ecco_free_power_schedule"] == run_tail(OLD_INTEGRITY_TEXT, LAST_TEXTS[5], False, True)["notes"]["ecco_free_power_schedule"]
+    except Exception as exc:  # noqa: BLE001 - a mutant that breaks the script is caught too
+        res["crash"] = f"{type(exc).__name__}: {exc}"
+    return res
+
+
+def mutate_pkg(fn) -> str:
+    pkg = yaml.safe_load(PKG_TEXT)
+    fn(pkg)
+    return dump_package(pkg)
+
+
+def new_step(pkg):
+    d, i = post_loop(pkg)
+    return d[i + 2]
+
+
+def m_cond(pkg, old, new):
+    c = new_step(pkg)["if"][0]
+    assert c["value_template"].count(old) == 1, (old, c["value_template"])
+    c["value_template"] = c["value_template"].replace(old, new)
+
+
+def m_default_text(pkg):
+    new_step(pkg)["then"][0]["default"][0]["data"]["value"] = "STARTED OK - Free Power is active; this run could not confirm the start as its own (check power and end time)"
+
+
+def m_no_cancel(pkg):
+    new_step(pkg)["then"][0]["choose"] = []
+
+
+def m_msg(pkg, old, new, count=1):
+    a = alert_step(pkg)["data"]
+    assert a["message"].count(old) == count, (old, a["message"])
+    a["message"] = a["message"].replace(old, new)
+
+
+MESSAGE_SENTENCE_OPEN = "{%- if is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') %}"
+POST_MUTANTS = [
+    ("the old fallback put back (STARTED OK for any result but STARTED)", lambda pkg: post_loop(pkg)[0].__setitem__(post_loop(pkg)[1] + 2, copy.deepcopy(OLD_FALLBACK_STEP))),
+    ("the STARTING test dropped (every result is rewritten while Free Power is active)", lambda pkg: m_cond(pkg, " and r.startswith('STARTING') }}", " }}")),
+    ("the STARTING test loosened to 'not STARTED' (a refusal, a failure or a cancel is rewritten)", lambda pkg: m_cond(pkg, "and r.startswith('STARTING')", "and not r.startswith('STARTED')")),
+    ("the active test dropped (a STARTING run is rewritten even when Free Power is not active)", lambda pkg: m_cond(pkg, "is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and ", "")),
+    ("the active test inverted", lambda pkg: m_cond(pkg, "{{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and", "{{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and")),
+    ("the cancel branch removed (a cancelled run reads FAILED TO START)", m_no_cancel),
+    ("the FAILED text replaced by a success text", m_default_text),
+    ("the active-now sentence missing from the alert", lambda pkg: m_msg(pkg, MESSAGE_SENTENCE_OPEN, "{%- if false %}")),
+    ("the active-now sentence printed always (also when Free Power is not active)", lambda pkg: m_msg(pkg, MESSAGE_SENTENCE_OPEN, "{%- if true %}")),
+    ("the BLOCKED sentence says 'did not confirm' (the BLOCKED and FAILED sentences swapped)",
+     lambda pkg: m_msg(pkg, "{% if states('input_text.ecco_free_power_schedule_last_result').startswith('BLOCKED') -%}", "{% if not states('input_text.ecco_free_power_schedule_last_result').startswith('BLOCKED') -%}")),
+]
+base_tail = tail_battery(PKG_TEXT)
+check("the post-loop battery holds on the real package", all(v is True for v in base_tail.values()), str(base_tail))
+for name, fn in POST_MUTANTS:
+    try:
+        res = tail_battery(mutate_pkg(fn))
+    except AssertionError as exc:
+        check(f"post-loop mutant '{name}': its anchor is present", False, str(exc)[:200])
+        continue
+    check(f"post-loop mutant '{name}' is killed (fails: {[k for k, v in res.items() if v is not True]})", not all(v is True for v in res.values()), str(res))
+same_res = tail_battery(dump_package(yaml.safe_load(PKG_TEXT)))
+check("control: the package parsed and dumped again (an equivalent rewrite) survives the battery", all(v is True for v in same_res.values()), str(same_res))
 
 # ======================================================================================================================
 print("\n[13] the post-export declaration (PEX entry fps1)")
