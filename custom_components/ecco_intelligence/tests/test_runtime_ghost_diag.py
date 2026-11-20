@@ -20,6 +20,9 @@ This suite:
       an import-time fault of the Ghost code, the job kept only after a published result;
   [3b] the coordinator and the diagnostics import no Ghost code at import time (static);
   [3c] the documents and docstrings state the durable advice-log write and the sharing warning, and no longer claim "nothing written";
+  [3c2] the documents state what the verified write proves (a same-connection read-back by id, kind, issue time and content hash: not a
+      durability or fsync proof, nothing about a power loss), that a failed or timed-out store step counts only inside the incident, that
+      a failed incident write changes nothing else, and the incident table's known limit (keyed and pruned by its first-failure text);
   [4] the live tree is unchanged by all of it (nothing here writes into the repository).
 Plain script; exits 1 on any failure. Synthetic data only; no network.
 """
@@ -181,6 +184,26 @@ try:
         miss = [w for w in words if w not in texts[rel]]
         check(f"{rel} states the durable advice-log write, its size, its failure counter, the rollback and the sharing warning as relevant to it",
               not miss, str(miss))
+    print("== [3c2] the documents say what the verified write proves and what it does not, how a failed step is counted, and the "
+          "incident table's known limit (whitespace-insensitive: the sentences must not silently disappear)")
+
+    def squash(rel: str) -> str:
+        return " ".join(doc(rel).split())
+    shared = ("same-connection read-back", "reads each of them back by its id", "kind, issue time and content hash",
+              "is not a durability or fsync proof", "says nothing about what a power loss would keep", "counted only inside the incident",
+              "is a plain commit and is not read back", "offered again at the next verified write", "by the text of `first_failed_utc`",
+              "pruned at once", "a known limit")
+    pins = {"docs/intelligence/INTELLIGENCE_HA_RUNTIME.md": shared + ("on the writing connection: not a durability proof",),
+            "intelligence/README.md": shared + ("on the writing connection (not a durability proof)",),
+            "CHANGELOG.md": ("same-connection read-back", "comparing kind, issue time and content hash", "not a durability or fsync proof",
+                             "says nothing about what a power loss would keep", "counts only inside the incident", "pruned at once",
+                             "known limit")}
+    for rel, words in pins.items():
+        miss = [w for w in words if w not in squash(rel)]
+        check(f"{rel}: the read-back is stated as same-connection and not a durability proof, a failed step counts only inside the "
+              "incident, incidents are keyed and pruned by their first failure time (a known limit)", not miss, str(miss))
+    check("neither document says the rows are 'read back from the database' (the read-back is of the writing connection)",
+          all("read back from the database" not in squash(rel) for rel in ("docs/intelligence/INTELLIGENCE_HA_RUNTIME.md", "intelligence/README.md")))
     print("== [4] the live tree is unchanged")
     check("nothing in the live integration directory changed", tree_digest(REPO / "custom_components" / "ecco_intelligence") == live_before)
 finally:

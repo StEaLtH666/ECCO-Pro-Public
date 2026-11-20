@@ -28,11 +28,17 @@ slot cycle). The table is created by the first advice write, not at start-up, an
 scorecard record: a failure (a table of that name with other columns, a failing create, a full disk) is counted and affects nothing
 else, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value.
 
-*A verified write, and an incident.* After the commit the rows just written are read back from the database by their own ids; that
-read-back is what makes a write *verified*. A write that raises nothing but whose rows are not found again is *unverified* (it is not a
-success), and so is one whose read-back itself fails. A failed or unverified write opens an *incident* (kept in memory, the newest
-10: when it began and when it last failed, the attempts, the slot cycles missed, the exception class name as the reason and the issue
-times of the advice that could not be written). `self_test.STORE_RECORD` is WARN, with the reason and the counts, while the latest
+*A verified write, and an incident.* After the commit, the connection that wrote the advice rows reads each of them back by its id and
+compares its kind, issue time and content hash with what it wrote (a *same-connection read-back*). That is what makes a write
+*verified*, and it proves exactly this much: the row is visible to the connection that wrote it and matches what was written. It is
+not a durability or fsync proof, and it says nothing about what a power loss would keep. A write that raises nothing but whose rows are
+not found again is *unverified* (it is not a success), and so is one whose read-back itself fails. A failed or unverified write opens an
+*incident* (kept in memory, the newest 10: when it began and when it last failed, the attempts, the slot cycles missed, the exception
+class name as the reason and the issue times of the advice that could not be written). A slot cycle whose whole store step times out or
+raises opens or extends the incident too (nothing is known about that cycle's advice write), but it is counted only inside the
+incident, in its attempts and missed slot cycles: not in `counters.advice_write_failures` or `counters.advice_unverified_writes`, which
+count the advice log's own failures, and so not in the failed/unverified-since-start count of the `STORE_RECORD` text either.
+`self_test.STORE_RECORD` is WARN, with the reason and the counts, while the latest
 attempt has failed or is unverified, and returns to PASS only after a verified write; the incident is then closed and kept. A slot
 cycle that wrote nothing (no advice to log) changes nothing. After a restart nothing is assumed: PASS shows only after that
 run's own first verified write. Look at the diagnostics download's `counters.advice_write_failures` and
@@ -42,11 +48,17 @@ warning is logged when an incident opens and one line when it closes (class name
 
 *What survives, and what is lost.* Closed incidents are also written, right after the next verified write, to a second small table,
 `advice_incident` (at most 10 rows; counts, times and a class name, never a message). It is created only then: not at start-up, not when
-the scorecard is opened, not by an advice write, and not while the database cannot take the advice write. It is read back in the
-download as `advice_incidents.stored` and by `python intelligence/tools/advice_export.py <scorecard file> --incidents`. An incident
+the scorecard is opened, not by an advice write, and not while the database cannot take the advice write. It is shown in the
+download as `advice_incidents.stored` and by `python intelligence/tools/advice_export.py <scorecard file> --incidents`. The write of an
+incident into it is a plain commit and is not read back. An incident
 that is still open when Home Assistant restarts, or that stays open because the database never takes the advice write again, is
 not in that table: it then lives only in the one warning logged when it opened (the class name only) and, until the restart,
-in memory and the diagnostics. Older incidents beyond the newest 10 are dropped (counted in memory as `dropped`). All of this is
+in memory and the diagnostics. If writing a closed incident fails or times out after a verified advice write, nothing else changes
+(`STORE_RECORD` stays PASS, no published value differs): the failure shows only in `advice_incidents.last_persist` (the class name),
+and the incident stays listed and is offered again at the next verified write. Older incidents beyond the newest 10 are dropped (counted
+in memory as `dropped`). The table keeps the newest 10 by the text of `first_failed_utc`, which is also an incident's key, so after the
+clock has been stepped backwards a new incident whose first failure is older than the 10 rows already stored is written and then pruned
+at once: it is reported as persisted but is not in the table (a known limit; diagnostics only). All of this is
 diagnostics only: it changes no published value, status, mode or advice, adds no entity, and takes effect with the Ghost update's own
 restart. To roll back: install the previous kit (the tables are then unused) and, to remove them, drop the tables `advice_log` and
 `advice_incident`, or delete `scorecard.sqlite3`, while the integration is stopped. The Ghost block of the diagnostics download only
@@ -120,7 +132,7 @@ until the entry is reloaded.
 | `ENTITY_IDS` | every entity was registered under its contract id. A different id, for example a `_2` suffix, FAILs. So does a contract entity that Home Assistant never added once the platforms are set up (for example one disabled in the entity registry): the status entity carries `mode` and `applies_nothing`, so a missing entity stops all computing. The text names contract keys only |
 | `ENTITY_WRITE` | a state write of one of its own entities raised (Home Assistant refuses, for example, an ENUM value outside its options). Each entity is updated in its own guard, so the others still follow the envelope; the failure FAILs the self-test and gives `SELF_TEST_FAILED` |
 | `PAUSE_CONTROL` | the pause helper is readable. A missing helper WARNs: not paused, `pause_control: MISSING` |
-| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs. `STORE_RECORD` is also WARN, with the reason (a class name) and the counts, while the latest advice log write attempt has failed or is unverified, or after a scorecard step that timed out or raised (it also opens an incident); it is PASS again only after a verified write (the rows read back by their ids), and INFO, never PASS, while a run has written and verified nothing yet. A slot cycle with no advice to log changes nothing. `counters.advice_write_failures` and `counters.advice_unverified_writes` are history and are never reset; the scorecard record and every published value are unaffected |
+| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs. `STORE_RECORD` is also WARN, with the reason (a class name) and the counts, while the latest advice log write attempt has failed or is unverified, or after a scorecard step that timed out or raised (it also opens an incident); it is PASS again only after a verified write (the rows read back by their ids on the writing connection: not a durability proof), and INFO, never PASS, while a run has written and verified nothing yet. A slot cycle with no advice to log changes nothing. `counters.advice_write_failures` and `counters.advice_unverified_writes` are history and are never reset; the scorecard record and every published value are unaffected |
 | `CPU_BUDGET` (at run time) | WARN while refreshes are suspended by the CPU guard (section 2.2); PASS again once the rolling hour is back within the budget |
 
 **No site value in a check text.** A check's text reaches the status entity (`self_test`, `blockers`) and the diagnostics
