@@ -205,7 +205,7 @@ with tempfile.TemporaryDirectory(prefix="ecco-u1-cfg-") as tmp:
 print("")
 print("[4b] --verify-storage on read-backs as a real capture delivers them")
 # ===========================================================================
-# Home Assistant writes `.storage` as raw UTF-8; the generated text escapes its two middle dots (·). The tool compares PARSED structures, so how a
+# Home Assistant writes `.storage` as raw UTF-8; the generated text escapes its two middle dots (U+00B7). The tool compares PARSED structures, so how a
 # dot is written, a byte order mark, CRLF line ends and an integral float written as an integer (a browser's JSON has no 60.0) make no difference. What
 # does make a difference: any changed card text, and text that a console code page has damaged (a capture through ssh output redirection, not a copy).
 def wrapper(cfg):
