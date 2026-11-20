@@ -16,9 +16,23 @@ const SPRING: ClockDay = { changeAtMin: 120, deltaMin: 60 };
 const AUTUMN: ClockDay = { changeAtMin: 120, deltaMin: -60 };
 const ORDINARY: ClockDay = { changeAtMin: 0, deltaMin: 0 };
 
+/**
+ * The shape of the TRUE battery's acceptance above its taper start. LINEAR is the shape the controller model assumes (acceptance falls linearly from the
+ * ceiling to `endFraction` x ceiling at 100 %). The other two are what the closed loop uses to show what a WRONG taper assumption costs:
+ *  - CV_TAIL: a constant-voltage tail, the acceptance decays exponentially above the start (`tauPct` SOC points per e-fold) down to `endFraction`;
+ *  - CURRENT_ABSOLUTE: a current-based limit of the battery itself, `ratedW` at and below the start and falling linearly above it, independent of the
+ *    ceiling the model knows (a BMS limit lower than every ceiling the caller can read).
+ */
+export type TaperShape = "LINEAR" | "CV_TAIL" | "CURRENT_ABSOLUTE";
 export interface TrueTaper {
   startSocPct: number;
   endFraction: number;
+  /** Default LINEAR. */
+  shape?: TaperShape;
+  /** CV_TAIL: SOC percentage points per e-fold of the acceptance above the start. */
+  tauPct?: number;
+  /** CURRENT_ABSOLUTE: the battery's own limit in W, independent of the ceiling. */
+  ratedW?: number;
 }
 export interface Dip {
   fromMin: number;
@@ -60,6 +74,14 @@ export interface Scenario {
 }
 
 export const trueFraction = (soc: number, t: TrueTaper) => (soc <= t.startSocPct ? 1 : Math.max(t.endFraction, 1 - (1 - t.endFraction) * ((soc - t.startSocPct) / (100 - t.startSocPct))));
+
+/** The acceptance power of the TRUE battery at a SOC, in the unit of the delivered power. LINEAR is exactly the original expression (the golden master depends on it). */
+export function acceptW(sc: Pick<Scenario, "ceilW" | "trueTaper">, soc: number): number {
+  const t = sc.trueTaper;
+  if (t.shape === "CV_TAIL") return sc.ceilW * (soc <= t.startSocPct ? 1 : Math.max(t.endFraction, Math.exp(-(soc - t.startSocPct) / (t.tauPct ?? 3))));
+  if (t.shape === "CURRENT_ABSOLUTE") return (t.ratedW ?? sc.ceilW) * trueFraction(soc, t);
+  return sc.ceilW * trueFraction(soc, t);
+}
 
 export function makeScenario(id: number): Scenario {
   const r = rng(9000 + id);
@@ -115,7 +137,7 @@ const dipFactor = (sc: Scenario, t: number) => sc.dips.reduce((f, d) => (t >= d.
 
 /** Deliver one real minute at `appliedW`: grid-side watts, limited by the true acceptance and any dip. Returns the new true SOC. */
 function physics(sc: Scenario, soc: number, appliedW: number, t: number): number {
-  const delivered = Math.min(appliedW * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+  const delivered = Math.min(appliedW * dipFactor(sc, t), acceptW(sc, soc));
   return Math.min(100, soc + (((delivered / 1000 / 60) * sc.trueEff) / (sc.trueCapacityKwh / 100)));
 }
 
@@ -498,7 +520,7 @@ export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planG
     }
     const dem = trueDemandW(hs, t);
     const sol = trueSolarW(hs, t);
-    const want = Math.min((applied ?? 0) * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+    const want = Math.min((applied ?? 0) * dipFactor(sc, t), acceptW(sc, soc));
     // grid-side room under the physical limit, in the unit of `want` (battery-side watts in the BATTERY_DC world)
     const gridRoom = Math.max(0, hs.gridLimitW - dem + sol);
     const room = battery ? gridRoom * sc.trueEff : gridRoom;
@@ -526,7 +548,7 @@ export function runStaticHH(sc: HouseholdScenario): { rateW: number; reachedTolM
     if (reached === null && soc >= sc.targetSocPct - tol) reached = t;
     const dem = trueDemandW(hs, t);
     const sol = trueSolarW(hs, t);
-    const want = Math.min(st.rateW * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+    const want = Math.min(st.rateW * dipFactor(sc, t), acceptW(sc, soc));
     const room = Math.max(0, hs.gridLimitW - dem + sol);
     if (st.rateW > 0 && st.rateW + dem - sol > hs.gridLimitW + 1e-6) over++;
     if (room < want - 1e-9) clipped++;

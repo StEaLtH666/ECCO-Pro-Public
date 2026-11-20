@@ -154,11 +154,22 @@ unauthorised; the model only says what such a controller would do, and the contr
 and proven on hardware. The taper, the efficiency, the demand assumption and the capacity band are assumptions, not measurements.
 
 **Versus the static planner.** `chargePlanner.ts` picks ONE fixed rate and stress-tests it (that is what today's firmware can do). The controller model
-re-plans from the measured SOC, so it follows the real taper and capacity instead of a margin chosen in advance. `test/support/batterySim.ts` is the
+re-plans from the measured SOC at every tick, so it corrects an error it can OBSERVE (a slower rise than projected) instead of relying on a margin chosen in advance; it does not know the real taper or capacity (assumed, unmeasured), and nothing here shows that it follows them. `test/support/batterySim.ts` is the
 closed-loop simulator (a true battery that differs from the model, rounded and noisy SOC readings, dips, 23 and 25 hour days; for the household mode also true
 demand and solar that differ from the forecast and a physical grid limit that clips the delivered charge) and `test/gentleController.test.ts` prints the
 comparison with the static planner and the miss rate when the true demand exceeds the forecast; everything is simulated, not measured. The controller
 stops at the **reported** target, so the simulation counts the target as reached within half the reading step plus the noise (the strict count is printed too).
+
+**Taper shapes the model does not assume.** The simulator's TRUE battery has three taper shapes (`TrueTaper.shape`): `LINEAR`, the shape the model assumes
+(acceptance falls linearly from the ceiling to `endFraction` x ceiling at 100 %); `CV_TAIL`, a constant-voltage tail (the acceptance decays exponentially
+above the taper start); and `CURRENT_ABSOLUTE`, a current-based limit of the battery itself that is independent of the ceiling the model knows. In the
+seeded run (380 in-band scenarios per shape, only those the true battery can make with time to spare) the model's own shape misses none; the other four
+variants (two CV tails, two current limits) miss 32 of 1073 (3.0 percent), 29 of the misses are 100 percent targets and all 29 were reported
+`TARGET_AT_RISK` or `TARGET_UNREACHABLE` before the deadline; one miss (a 95 percent target with no buffer, so no tick exists after the deadline) was reported
+`OK` until the window end. The test prints every row and asserts only what holds. **What this shows:** the closed loop CAN expose a wrong taper
+assumption, the misses appear where a harsh taper meets a 100 percent target, and in this seed set a missed 100 percent target was flagged at risk before
+the deadline. **What it does not show:** that the assumed taper is right, that a real BMS resembles any of these shapes, that the at-risk report always comes
+early enough to act on, or any guarantee. The real taper, the top-of-charge hold and the BMS limits are unmeasured (see the list before an actuator).
 
 ## Run the tests
 

@@ -11,7 +11,8 @@ import type { ClockDay } from "../src/time.ts";
 import { norm } from "../src/time.ts";
 import * as G4 from "../src/gentleController.ts";   // v3: new helpers are reached through the namespace
 import { rng } from "./fixtures.ts";
-import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1 } from "./support/batterySim.ts";
+import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1, acceptW, trueFraction } from "./support/batterySim.ts";
+import type { TrueTaper } from "./support/batterySim.ts";
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // A fixed example: 22:00 to 04:00 (360 min), 60 min buffer (deadline at minute 300), 30 kWh nominal (+6 % band), 20 % -> 80 %.
@@ -2048,4 +2049,89 @@ test("[v3 G5b] closed loop with a simulator convention that DIFFERS from the mod
   assert.ok(n >= 120, "scenarios: " + n);
   assert.ok(exposed >= 15 && minutes > 1000, "the loop is able to expose a convention mismatch: " + exposed + " of 27, " + minutes + " minutes");
   assert.ok(feasible >= 50 && reachedBattery >= feasible - 2, "the conservative default still reaches the deadline where the true battery can: " + reachedBattery + " of " + feasible);
+});
+
+// ---- G6: taper shapes the model does not assume ------------------------------------------------------------------------------------------
+type TaperMake = (sc: ReturnType<typeof makeScenario>) => TrueTaper;
+const TAPERS: readonly [string, TaperMake][] = [
+  ["LINEAR (the model's shape)", (sc) => sc.trueTaper],
+  ["CV_TAIL, tau 3, floor 0.05", (sc) => ({ startSocPct: Math.max(sc.trueTaper.startSocPct, 90), endFraction: 0.05, shape: "CV_TAIL", tauPct: 3 })],
+  ["CV_TAIL, tau 2, floor 0.03", (sc) => ({ startSocPct: Math.max(sc.trueTaper.startSocPct, 90), endFraction: 0.03, shape: "CV_TAIL", tauPct: 2 })],
+  ["CURRENT_ABSOLUTE, 60 % of the ceiling", (sc) => ({ startSocPct: sc.trueTaper.startSocPct, endFraction: sc.trueTaper.endFraction, shape: "CURRENT_ABSOLUTE", ratedW: 0.6 * sc.ceilW })],
+  ["CURRENT_ABSOLUTE, 85 % of the ceiling", (sc) => ({ startSocPct: sc.trueTaper.startSocPct, endFraction: sc.trueTaper.endFraction, shape: "CURRENT_ABSOLUTE", ratedW: 0.85 * sc.ceilW })],
+];
+
+test("[v3 G6a] the simulator's true taper has three shapes: the linear one the model assumes, a constant-voltage tail and a current-based limit independent of the ceiling", () => {
+  const sc0 = { ...makeScenario(1), ceilW: 6000, nominalKwh: 30, trueCapacityKwh: 30, trueEff: 1, dips: [] as [] };
+  const linear: TrueTaper = { startSocPct: 90, endFraction: 0.15 };
+  const cv: TrueTaper = { startSocPct: 90, endFraction: 0.05, shape: "CV_TAIL", tauPct: 3 };
+  const cur: TrueTaper = { startSocPct: 90, endFraction: 0.15, shape: "CURRENT_ABSOLUTE", ratedW: 4000 };
+  const A = (t: TrueTaper, soc: number, ceilW = 6000) => acceptW({ ceilW, trueTaper: t }, soc);
+  // the linear shape is exactly the original expression, and an explicit LINEAR label changes nothing
+  for (const soc of [10, 90, 92, 95, 99, 100]) {
+    assert.equal(A(linear, soc), 6000 * trueFraction(soc, linear));
+    assert.equal(A({ ...linear, shape: "LINEAR" }, soc), A(linear, soc));
+  }
+  // CV tail: the full ceiling to the start, then exp(-(soc - start) / tau) down to the floor, never rising
+  assert.equal(A(cv, 90), 6000);
+  assert.ok(Math.abs(A(cv, 93) - 6000 * Math.exp(-1)) < 1e-9);
+  assert.ok(Math.abs(A(cv, 96) - 6000 * Math.exp(-2)) < 1e-9);
+  assert.equal(A(cv, 100), 6000 * 0.05, "the floor");
+  for (let soc = 80; soc < 100; soc += 0.5) assert.ok(A(cv, soc + 0.5) <= A(cv, soc) + 1e-9, "never rising at " + soc);
+  assert.ok(A(cv, 95) < A(linear, 95) / 3, "far harsher than the linear shape at 95 %: " + A(cv, 95) + " vs " + A(linear, 95));
+  // current-based: its own limit, independent of the ceiling the model knows, linear above the start
+  assert.equal(A(cur, 50), 4000);
+  assert.equal(A(cur, 50, 8000), 4000, "the ceiling is irrelevant");
+  assert.equal(A(cur, 50, 3000), 4000, "and it may exceed it: the delivered power is then the setpoint's, which the loop caps by the ceiling");
+  assert.ok(Math.abs(A(cur, 95) - 4000 * trueFraction(95, cur)) < 1e-9);
+  // the shapes change the time the TRUE battery needs (the closed loop would be blind if they did not)
+  const base = { ...sc0, startSocPct: 80, targetSocPct: 100, dips: [] as [] };
+  const tL = trueFinishMin({ ...base, trueTaper: linear }, 6000) as number;
+  const tC = trueFinishMin({ ...base, trueTaper: cv }, 6000) as number;
+  const tR = trueFinishMin({ ...base, trueTaper: cur }, 6000) as number;
+  assert.ok(tC > tL + 20, "a CV tail takes much longer to 100 %: " + tC + " vs " + tL);
+  assert.ok(tR > tL + 15, "a lower current-based limit takes longer: " + tR + " vs " + tL);
+  // the feasibility class follows the true shape
+  const sc1 = { ...makeScenario(2), targetSocPct: 100, startSocPct: 50, bufferMin: 30, dips: [] as [] };
+  assert.ok(["margin", "tight", "buffer", "infeasible"].includes(feasibility({ ...sc1, trueTaper: cv })));
+});
+
+test("[v3 G6b] closed loop under taper shapes the model does NOT assume: the misses are counted and printed, a 100 % target that misses was flagged at risk before the deadline, and what this shows and does not show is stated", () => {
+  const rows: string[] = [];
+  const stat = { margin: 0, reached: 0, miss: 0, flagged: 0, miss100: 0, flagged100: 0, margin100: 0, linearMiss: 0 };
+  const unflagged: string[] = [];
+  for (const [name, mk] of TAPERS) {
+    let n = 0, margin = 0, reached = 0, miss = 0, flagged = 0, margin100 = 0, miss100 = 0, flagged100 = 0;
+    for (let id = 0; id < 400; id++) {
+      const sc0 = makeScenario(id);
+      if (sc0.kind !== "in-band") continue;
+      const sc = { ...sc0, trueTaper: mk(sc0) };
+      n++;
+      if (feasibility(sc) !== "margin") continue;   // what the TRUE battery, with ITS shape, can do at the full ceiling with time to spare
+      margin++;
+      const is100 = sc.targetSocPct >= 100;
+      if (is100) margin100++;
+      const run = runClosedLoop(sc);
+      for (const tk of run.ticks) { assert.equal(tk.decision.guarantee, "NONE"); assert.equal(tk.decision.targetSocPct, sc.targetSocPct); assert.equal(tk.decision.actuationSupported, false); }
+      if (run.reachedTolMin !== null && run.reachedTolMin <= run.deadlineMin) { reached++; continue; }
+      miss++;
+      if (is100) miss100++;
+      const early = run.ticks.some((tk) => tk.t <= run.deadlineMin && (tk.decision.status === "TARGET_AT_RISK" || tk.decision.status === "TARGET_UNREACHABLE"));
+      if (early) { flagged++; if (is100) flagged100++; } else unflagged.push(name + " scenario " + id + " target " + sc.targetSocPct);
+      // A miss with a buffer of 0 has no tick after the deadline (it is the window end), so a miss that was not flagged before it is NOT claimed away: it is listed below.
+    }
+    rows.push(name.padEnd(40) + " in-band " + n + ", true battery feasible with margin " + margin + ": reached by the deadline " + reached + ", MISSED " + miss + " (flagged at risk before the deadline " + flagged + "); 100 % targets: " + margin100 + " feasible, missed " + miss100 + ", flagged " + flagged100);
+    if (name.startsWith("LINEAR")) { stat.linearMiss = miss; assert.equal(miss, 0, "the model's own shape: every feasible-with-margin run reaches the target by the deadline (the existing claim)"); }
+    else { stat.margin += margin; stat.reached += reached; stat.miss += miss; stat.flagged += flagged; stat.miss100 += miss100; stat.flagged100 += flagged100; stat.margin100 += margin100; }
+  }
+  for (const r of rows) console.log("[gentle taper] " + r);
+  console.log("[gentle taper] shapes the model does not assume: " + stat.margin + " feasible-with-margin runs, " + stat.miss + " missed the deadline (" + (100 * stat.miss / stat.margin).toFixed(1) + " %), " + stat.flagged + " of them flagged at risk before the deadline; 100 % targets: " + stat.miss100 + " missed, " + stat.flagged100 + " flagged; not flagged before the deadline: " + (unflagged.length === 0 ? "none" : unflagged.join("; ")));
+  // the closed loop must be CAPABLE of exposing a wrong taper assumption: misses exist, and they are mostly 100 % targets
+  assert.ok(stat.miss >= 20, "the shapes expose misses: " + stat.miss);
+  assert.ok(stat.miss100 >= 20 && stat.miss100 >= 0.7 * stat.miss, "a harsh taper hits the 100 % targets: " + stat.miss100 + " of " + stat.miss);
+  // and the honest report the owner asked for: a 100 % target that is missed under a harsh taper was flagged TARGET_AT_RISK or TARGET_UNREACHABLE before the deadline
+  assert.equal(stat.flagged100, stat.miss100, "every missed 100 % target was flagged at risk before the deadline");
+  assert.ok(unflagged.length <= 0.1 * stat.miss, "a miss that was not flagged before the deadline is rare and printed: " + unflagged.join("; "));
+  // the claim that is NOT made here: that the assumed taper is right (it is unmeasured), or that these shapes resemble the real BMS
+  assert.match(NO_GUARANTEE_NOTE, /assumed/i);
 });
