@@ -10,7 +10,12 @@ SIMULATION computed lazily at the download (runtime/ghost_link.py, intelligence/
 constant codes only, never an entity id, a coordinate, a secret or a sensor text. Its numbers ARE site-derived behaviour and money
 figures (daily pence, SOC, kWh, throughput, the reserve percentage, dates and timestamps with an offset), and TO_REDACT does not
 remove them: review a download before sharing it. Any failure gives a small block with a status and a constant reason, and the rest
-of the download is unchanged."""
+of the download is unchanged.
+
+The `advice_incidents` block (the coordinator's own, in memory) lists the incidents of the advice log's write, and its `stored` member
+(read-only from the store's advice_incident table, in the executor, with a short time budget) the ones that survived a restart:
+counts, times and exception class names only, never a message. A failure of the stored read is a small block with a status and
+the class name. No top-level key is added to the download."""
 
 from __future__ import annotations
 
@@ -43,4 +48,10 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Any) ->
         data["ghost"] = await coordinator.async_ghost_diagnostics()
     except Exception:  # noqa: BLE001 - a failure of the Ghost is a small block, the rest of the download stands
         data["ghost"] = _ghost_unavailable("OTHER")
+    try:                                    # the incidents the store holds (read-only, bounded): never allowed to fail the download
+        stored = await coordinator.async_stored_advice_incidents()
+    except Exception as exc:  # noqa: BLE001 - only the class name is kept
+        stored = {"status": "ERROR", "error_type": type(exc).__name__, "incidents": []}
+    if isinstance(data.get("advice_incidents"), dict):          # nested: the download's top-level keys stay the coordinator's own
+        data["advice_incidents"] = {**data["advice_incidents"], "stored": stored}
     return async_redact_data(data, TO_REDACT)
