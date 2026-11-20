@@ -21,6 +21,7 @@ Times are epoch seconds; the local zone is fixed at UTC+1 (BST), which is what t
 from __future__ import annotations
 
 import ast
+import contextlib
 import heapq
 import itertools
 import math
@@ -30,6 +31,25 @@ import jinja2
 import jinja2.sandbox
 
 LOCAL = timezone(timedelta(hours=1))
+# The PEP 495 fold used when a NAIVE local string is read (Home Assistant's as_timestamp of "YYYY-MM-DD HH:MM:SS"). 0 is the RECALLED
+# Home Assistant / CPython behaviour: a repeated time is its FIRST occurrence and a skipped time is read with the offset in force before
+# the change. It is not verified against a real Home Assistant (the clock-change examination, proposal P-F, is still open); the r9 clock
+# change suite also runs the other reading (fold 1) so that nothing depends on which one is right.
+FOLD = 0
+
+
+@contextlib.contextmanager
+def local_zone(tz, fold: int = 0):
+    """Run a block with another local zone (for example zoneinfo.ZoneInfo("Europe/London"), whose clock changes the fixed UTC+1 default
+    cannot show) and, optionally, the other fold for a naive local string. Everything that reads LOCAL or FOLD at call time follows it
+    (parse_local, local_str, now(), timestamp_custom, the dump simulator's timestamp_local); the previous zone is restored on exit."""
+    global LOCAL, FOLD
+    saved = (LOCAL, FOLD)
+    LOCAL, FOLD = tz, fold
+    try:
+        yield
+    finally:
+        LOCAL, FOLD = saved
 
 
 class Unsupported(Exception):
@@ -53,7 +73,7 @@ def local_str(ts: float) -> str:
 
 
 def parse_local(s: str) -> float:
-    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL).timestamp()
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL, fold=FOLD).timestamp()
 
 
 _MISSING = object()
@@ -156,8 +176,7 @@ class World:
         env.filters.update({
             "int": lambda v, d=_MISSING: _num(v, d, lambda x: int(float(x))),
             "float": lambda v, d=_MISSING: _num(v, d, float),
-            "timestamp_custom": lambda v, fmt="%Y-%m-%d %H:%M:%S", local=True: datetime.fromtimestamp(
-                float(v), LOCAL if local else timezone.utc).strftime(fmt),
+            "timestamp_custom": self._timestamp_custom,
             "round": self._round,
         })
         self.env = env
@@ -247,6 +266,17 @@ class World:
         except (TypeError, ValueError):
             if default is _MISSING:
                 raise SimError(f"as_timestamp could not parse {value!r} and no default was given")
+            return default
+
+    @staticmethod
+    def _timestamp_custom(value, fmt="%Y-%m-%d %H:%M:%S", local=True, default=_MISSING):
+        """Home Assistant's timestamp_custom(format_string, local=True, default): a value that cannot be converted raises unless a
+        default is given, which is then returned (the package's classifier gives every call one, so it can never raise)."""
+        try:
+            return datetime.fromtimestamp(float(value), LOCAL if local else timezone.utc).strftime(fmt)
+        except (TypeError, ValueError, OverflowError, OSError):
+            if default is _MISSING:
+                raise SimError(f"timestamp_custom could not convert {value!r} and no default was given")
             return default
 
     @staticmethod

@@ -52,6 +52,8 @@ suite (_ha_dump_sim.py), on a virtual clock. Nothing here touches Home Assistant
                   text (Dump to Grid is active after a Home Assistant restart, this schedule did not confirm that it started it); the real recovery automation run for every result class x Dump to Grid active or not x
                   armed or not x where now is relative to the window, compared with the previous package where the branch does not run; what the owner still sees; end-to-end runs through the real start script, a restart
                   and the real recovery; the diff is exactly the one branch; mutants (the old unconditional write restored among them)
+  [15.6] rebuild  (R9's clock-change refusals merged under this change) the previous package of [14] and [15] is rebuilt by first undoing R9's five declared Dump pairs (the r9 scope module's strict reverter), so the two
+                  code-line pins stay as they were; one-character mutants inside R9's region and a package without any of the pairs fail the rebuild
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a
 live Home Assistant, the dongle or the inverter, and it cannot bind the dongle's own Start button entity (see the plan-core README).
@@ -71,6 +73,8 @@ sys.path.insert(0, str(HERE))
 import _ha_script_sim as S  # noqa: E402
 import _ha_dump_sim as D  # noqa: E402
 import _plan_sim as P  # noqa: E402
+sys.path.append(str(ROOT / "registry" / "tests"))      # appended, not inserted: nothing of this directory can shadow a module imported above
+import _r9_scope as _r9s  # noqa: E402                  # R9's declared edits to the Dump package (exact pairs and the strict reverter), used by the rebuild of the previous package in [14] and [15]
 
 PKGS = ROOT / "home-assistant" / "packages"
 DUMP_TEXT = (PKGS / "ecco_dump_to_grid_schedule.yaml").read_text(encoding="utf-8")
@@ -1513,13 +1517,31 @@ def undo_recovery(text: str) -> str:
     return text.replace(nb, REC_OLD_BLOCK) if nb and text.count(nb) == 1 else text
 
 
+# R9 (the clock-change refusals, owner decision of 20 Nov 2026, proposals P-A and P-B) is merged under this change: the package now carries R9's five declared Dump pairs (DUMP_6 to DUMP_10 of the r9 scope module: the header
+# comment, the arm validation's refusal of a skipped, repeated or unreadable start time, and the TOU overlap walk on real instants). They are NOT part of the previous package (0a488d8, e1005ad), so the rebuild of the previous
+# package starts by undoing EXACTLY those pairs with the r9 scope module's own strict reverter (every 'after' text present exactly once, every 'before' anchor unique afterwards: an AssertionError otherwise). The two code-line
+# pins (OLD_CODE_SHA, PREV_CODE_SHA) are therefore unchanged and prove that the whole difference between this package and the previous one is R9's declared pairs plus this change's own edits, and nothing else.
+R9_CLOCK_PAIRS = (
+    (_r9s.DUMP_6_OLD, _r9s.DUMP_6_NEW),
+    (_r9s.DUMP_7_OLD, _r9s.DUMP_7_NEW),
+    (_r9s.DUMP_8_OLD, _r9s.DUMP_8_NEW),
+    (_r9s.DUMP_9_OLD, _r9s.DUMP_9_NEW),
+    (_r9s.DUMP_10_OLD, _r9s.DUMP_10_NEW),
+)
+
+
+def undo_clock_changes(text: str) -> str:
+    """The package without R9's five declared clock-change pairs; AssertionError unless every one of them is present exactly once (and every anchor is unique afterwards)."""
+    return _r9s._revert(text, R9_CLOCK_PAIRS, "the previous package (R9's clock-change pairs)")
+
+
 _OLD_SENTENCE_BLOCK = _IF_ACTIVE + "\n" + _BLOCKED_SENTENCE + "                {%- endif %}\n"
 _R14_TAIL = "\n                     and not r.startswith('BLOCKED')"
 
 
 def before_text(text: str) -> str:
     """The previous package (0a488d8: the r14 step that spares BLOCKED only, and the one-sentence alert), rebuilt from `text` by undoing exactly the two code edits of this change (and, since [15], the recovery's)."""
-    text = undo_recovery(text)
+    text = undo_recovery(undo_clock_changes(text))
     ns = new_step_of(text)
     if not ns or text.count(_SENTENCE_BLOCK) != 1:
         return text                              # nothing of this change to undo: this IS the previous package
@@ -1938,7 +1960,8 @@ STARTED_REC = "STARTED OK - running (Home Assistant restarted during the session
 UNCONFIRMED_TEXT = ("UNCONFIRMED - Dump to Grid is active after a Home Assistant restart, but this schedule did not confirm that it started it (it may have been started some other way). "
                     "Check it, and the plan overrides, before assuming it is held.")
 PREV_CODE_SHA = "f1a10005ecd5de887817f8813f50062fcb2b701043a0dea3d0a812807cc66894"   # sha256 of the previous package (e1005ad) without its whole-line comments
-PREV_TEXT = undo_recovery(DUMP_TEXT)
+PREV_TEXT = undo_recovery(undo_clock_changes(DUMP_TEXT))
+PREV_R9_TEXT = _r9s._apply(PREV_TEXT, R9_CLOCK_PAIRS, "the previous package")      # the previous package carrying R9's declared pairs: the text [15.4] compares this package with
 REC_NEW = rec_new_block(DUMP_TEXT)
 check("the previous package, rebuilt from this one by undoing the startup recovery edit of this change, has exactly the code lines of e1005ad (sha256 of everything but whole-line comments), so the 'unchanged' comparisons below "
       "are against the real previous behaviour", code_sha(PREV_TEXT) == PREV_CODE_SHA and (PREV_TEXT != DUMP_TEXT or REC_NEW == ""), code_sha(PREV_TEXT)[:16])
@@ -2265,7 +2288,7 @@ def diff_problems(dump_text: str) -> list[str]:
     import copy
     out: list[str] = []
     try:
-        new, old = yaml.safe_load(dump_text), yaml.safe_load(PREV_TEXT)
+        new, old = yaml.safe_load(dump_text), yaml.safe_load(PREV_R9_TEXT)
         rn, ci, bi = branch_of(new)
         ro, cj, bj = branch_of(old)
         if (ci, bi) != (cj, bj):
@@ -2390,6 +2413,82 @@ for label, edits in MUTANTS15:
 check(f"{len(MUTANTS15)} mutants of the startup recovery (the old unconditional write restored, the STARTED test dropped, inverted or loosened, FAILED, BLOCKED or CANCELLED overwritten, STARTING left final, success wording added, the disarm dropped, "
       "a press, a start or an alert added, the active or window test dropped), all caught by the table, the owner's view, an end-to-end run or the diff", caught15 == len(MUTANTS15) == built15, f"{caught15}/{built15}/{len(MUTANTS15)}")
 check("control: the unmutated package passes the same table, view, end-to-end runs and diff", cp15 == [] and vp15 == [] and dp15 == [] and e2e15_problems(DUMP_TEXT) == [])
+
+# ---- [15.6] the rebuild of the previous package undoes EXACTLY R9's declared clock-change pairs --------------------------------------------------------------------------------------------------------
+print("[15.6] the previous package (0a488d8, e1005ad) is rebuilt by undoing R9's five declared clock-change pairs and this change's own edits: a stray edit inside R9's region, or a package without the pairs, fails the rebuild")
+check("the five pairs are the last five of the r9 scope module's declared Dump pairs (a pair added there later is not silently left out of the rebuild)", tuple(_r9s.DUMP_EDITS[-5:]) == R9_CLOCK_PAIRS and len(R9_CLOCK_PAIRS) == 5)
+check("each of R9's five declared texts is in this package exactly once and in neither rebuilt previous package; each of their anchors is in the rebuilt previous packages exactly once",
+      all(DUMP_TEXT.count(new) == 1 and BEFORE_TEXT.count(new) == 0 and PREV_TEXT.count(new) == 0 and BEFORE_TEXT.count(old) == 1 and PREV_TEXT.count(old) == 1 for old, new in R9_CLOCK_PAIRS))
+check("the previous package plus R9's declared pairs is exactly this package without the startup recovery edit (the text [15.4] compares with), and undoing the pairs again gives the pinned previous package back",
+      PREV_R9_TEXT == undo_recovery(DUMP_TEXT) and undo_clock_changes(PREV_R9_TEXT) == PREV_TEXT and code_sha(PREV_TEXT) == PREV_CODE_SHA)
+
+
+def rebuild_problem(text: str) -> str:
+    """'' when `text` rebuilds to BOTH pinned previous packages (0a488d8 by before_text, e1005ad by the recovery undo); else the first reason (an AssertionError of the strict reverter, or a code-line hash that differs)."""
+    for name, fn, pin in (("0a488d8", before_text, OLD_CODE_SHA), ("e1005ad", lambda t: undo_recovery(undo_clock_changes(t)), PREV_CODE_SHA)):
+        try:
+            rebuilt = fn(text)
+        except AssertionError as exc:
+            return f"{name}: the rebuild raised AssertionError ({str(exc)[:110]})"
+        if code_sha(rebuilt) != pin:
+            return f"{name}: the code-line hash differs"
+    return ""
+
+
+check("control: this package rebuilds to both pinned previous packages", rebuild_problem(DUMP_TEXT) == "")
+# One character altered in the package, inside R9's declared region (the start-label refusal P-A, the walk on real instants P-B, and the two comment blocks the pairs also declare) or, as a control for the hash, outside it.
+# Every one of them must make the rebuild raise AssertionError (inside R9's region: the declared text is no longer present exactly once) or the code-line hash differ (outside it).
+CLOCK_MUTANTS = [
+    ("P-A: the label refusal's zero test flipped (t <= 0 becomes t >= 0)", "{{ t <= 0\n", "{{ t >= 0\n", True),
+    ("P-A: the round-trip test flipped (!= s becomes == s)", "'unreadable')) != s", "'unreadable')) == s", True),
+    ("P-A: the repeated-hour test reads 3601 s after the label, not 3600", "(t + 3600)", "(t + 3601)", True),
+    ("P-A: the repeated-hour test reads 3500 s before the label, not 3600", "(t - 3600)", "(t - 3500)", True),
+    ("P-A: the label is converted with another default (as_timestamp(s, 0) becomes (s, 1))", "as_timestamp(s, 0)", "as_timestamp(s, 1)", True),
+    ("P-A: the refusal's fail-closed default text is changed in one place", "(t | timestamp_custom(f, true, 'unreadable')) != s", "(t | timestamp_custom(f, true, 'unreadablf')) != s", True),
+    ("P-A: the refusal text is changed by one letter", "value: \"REJECTED - the start time is a skipped", "value: \"REJECTED - the start time is a skippeD", True),
+    ("P-B: the walk's minute step is 61 s, not 60", "k * 60) | timestamp_local", "k * 61) | timestamp_local", True),
+    ("P-B: the walk's hour bound is 22, not 23", "hh > 23", "hh > 22", True),
+    ("P-B: the walk's minute bound is 58, not 59", "mi > 59", "mi > 58", True),
+    ("P-B: the unreadable-minute flag is never read (ns.bad becomes ns.bac in the result)", "ns.hit > 0 or ns.bad }}", "ns.hit > 0 or ns.bac }}", True),
+    ("P-B: the unreadable-minute flag is never set (true becomes trua)", "{% set ns.bad = true %}", "{% set ns.bad = trua %}", True),
+    ("P-B: the hour is read from one character more", "sk[11:13] | int(-1)", "sk[11:14] | int(-1)", True),
+    ("P-B: the minute's fail-closed default is -2, not -1", "sk[14:16] | int(-1)", "sk[14:16] | int(-2)", True),
+    ("P-B: the walk covers one minute more (dur + 2)", "for k in range(0, dur + 1) %}\n                      {% set sk", "for k in range(0, dur + 2) %}\n                      {% set sk", True),
+    ("comment of the declared header block (a letter of REFUSES changed)", "REFUSES a start time that is a skipped local time", "REFUSEs a start time that is a skipped local time", True),
+    ("comment of the declared P-A block (proposal P-A becomes P-D)", "proposal P-A): a start time", "proposal P-D): a start time", True),
+    ("comment of the declared P-B block (proposal P-B becomes P-C)", "proposal P-B): the run window is walked", "proposal P-C): the run window is walked", True),
+    ("control outside R9's region: the 'must be in the future' refusal text changed by one letter", "REJECTED - scheduled start must be in the future", "REJECTED - scheduled start must be in the futurf", False),
+    ("control outside R9's region: the safe Stop SOC range's upper bound changed by one digit", "scheduled_stop_soc }}% outside safe range 10-90%", "scheduled_stop_soc }}% outside safe range 10-91%", False),
+]
+caught_cm = built_cm = 0
+for label, anchor, repl, inside in CLOCK_MUTANTS:
+    if DUMP_TEXT.count(anchor) != 1 or len(anchor) != len(repl) or sum(1 for x, y in zip(anchor, repl) if x != y) != 1:
+        check(f"mutant is exactly one character, anchored once: {label}", False, f"anchor found {DUMP_TEXT.count(anchor)}x")
+        continue
+    built_cm += 1
+    mutated = DUMP_TEXT.replace(anchor, repl)
+    found = rebuild_problem(mutated)
+    if found and (("AssertionError" in found) if inside else ("hash differs" in found)):
+        caught_cm += 1
+        print(f"  PASS  mutant caught: {label} ({found[:170]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label} ({found or 'the rebuild still reproduces both pins'})")
+check(f"{len(CLOCK_MUTANTS)} one-character mutants ({sum(1 for m in CLOCK_MUTANTS if m[3])} inside R9's declared region: the P-A refusal, the P-B walk and their comment blocks; {sum(1 for m in CLOCK_MUTANTS if not m[3])} outside it), each made the rebuild raise AssertionError (inside) or the code-line hash differ (outside)",
+      caught_cm == len(CLOCK_MUTANTS) == built_cm and sum(1 for m in CLOCK_MUTANTS if m[3]) == 18 and sum(1 for m in CLOCK_MUTANTS if not m[3]) == 2, f"{caught_cm}/{built_cm}/{len(CLOCK_MUTANTS)}")
+# A package without R9's pairs (the package of a840755 plus this change), without one of them, or whose declared text is moved is not the previous package plus R9: the rebuild must refuse it.
+no_pairs = undo_clock_changes(DUMP_TEXT)
+caught_np = 0
+for label, text in ([("the package without any of R9's five pairs (a840755 plus this change)", no_pairs)]
+                    + [(f"the package without R9's pair {k} of 5 (only that one undone)", _r9s._revert(DUMP_TEXT, (pair,), "mutant")) for k, pair in enumerate(R9_CLOCK_PAIRS, 1)]):
+    found = rebuild_problem(text)
+    if "AssertionError" in found:
+        caught_np += 1
+        print(f"  PASS  mutant caught: {label} ({found[:170]})")
+    else:
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label} ({found or 'the rebuild still reproduces both pins'})")
+check("a package without R9's pairs, or without any one of them, fails the rebuild with an AssertionError (the pairs are required, not optional)", caught_np == 6 and no_pairs != DUMP_TEXT, str(caught_np))
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")

@@ -1282,13 +1282,13 @@ R9 = Entry(
     added_files=_r9.ADDED_FILES,
     frozen_reverts=dict(_r9.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after r9
-        _r9.DUMP_REL: "b5a82eb239548e69adad5b01f42651ab84408d776956b4496463a07bd84a417e",
-        _r9.FREE_REL: "2ff3e73449639edef0866f49391fe78a900a423999e1156906331ede93d37814",
+        _r9.DUMP_REL: "97d1af088d9c8912e5098b98eadb5bdb1a48faa5808111d766174ac1ab0f58f3",
+        _r9.FREE_REL: "e0917a5d43bdf68ab8a90aadc0bae0394d4c59f8181a5ad61858a4e002438249",
         _r9.PKGTEST_REL: "2e85448a97c195bbf8bf5c16621df81e9f077d5b673abc1324128b4f807dcfb1",
         _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
     },
     # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
-    fingerprint="e7f4a184a62207ff4b751aa637c2399355bb46608b9a7d98e51ca284dd0e8492",
+    fingerprint="d90142a0205112514b1d0f94402ca1e990327a323a4cb55bed0a7f1b5bb7b274",
     note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
          "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
          "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "
@@ -1313,7 +1313,7 @@ EPC1 = Entry(
         _epc1.SRC_REL: "c5205c6cc04943e0082f53324205e9d613b93172daf6451a9a84c434a98d6986",
     },
     # _pex.fingerprint(EPC1): hashes its parent isp1's fingerprint and every declaration above
-    fingerprint="687105e3f533fcd19b8b94f3346a4aff70beb3c33afe772bd8fc67de130d95bd",
+    fingerprint="0b6e38835e6d14ac831e18a01132366e2d2aae137f30fb2b23a39e5834953185",
     note="the read-only plan views in the Energy Actions card (Tomorrow's Plan, the six-slot TOU timeline, the override limits and running "
          "overrides, behind show_plan, default off): the card's README, config and source, plus the plan sources, tests and the plan-core "
          "package they use; the views display only (no service call); ZERO firmware, Home Assistant package, deployment, registry, "
@@ -1343,10 +1343,10 @@ EPC2 = Entry(
         _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
         _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
         _epc2.DIST_REL: "ae25c13deb315ac044ecd4b06ac2d7c2a2bb65c66236643a029d63651ceb8c06",
-        _epc2.DUMP_REL: "9b3e937446ddb8e68ce9ceacbc54574b7301a007fdad4157352ef374f8a40952",
+        _epc2.DUMP_REL: "1af5c0a51f540a7de4dcaa9effeb1cff95b789bc1219e06a36699309c4bdc2a6",
     },
     # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
-    fingerprint="6fa7742cfa96cae44eb1f500c4937e6494b0be1a4f74e530404978a5a79317bd",
+    fingerprint="54acc24b002c81219b84d70b2b2a9bfa39e6e6a1e0bfc4bc584c6606214124f4",
     note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
          "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
          "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
@@ -1363,7 +1363,7 @@ EPC3 = Entry(
     id="epc3", pr="EPC3", commit="unmerged",
     added_files=_epc3.ADDED_FILES,
     # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
-    fingerprint="2a5a35affcdbf5dce8760eb613846ea39af217c94ae377a6dad5dfeacd115f4d",
+    fingerprint="a9921068378e9d3957f3041eaccd72d87a8c6599f92b5477f476fdb3b90a3d76",
     note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
          "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "

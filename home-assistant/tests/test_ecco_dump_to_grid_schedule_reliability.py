@@ -166,10 +166,18 @@ check("helper definitions, the cancel script and the template sensor's attribute
       and pkg["script"]["ecco_dump_to_grid_cancel_schedule"] == old["script"]["ecco_dump_to_grid_cancel_schedule"]
       and pkg["template"][0]["sensor"][0]["attributes"] == old["template"][0]["sensor"][0]["attributes"])
 new_av, old_av = (next(a for a in p["automation"] if a["id"] == "ecco_dump_to_grid_schedule_arm_validation") for p in (pkg, old))
-check("the arm validation is unchanged except that a successful arm also clears the two schedule alerts",
+# Owner decision of 20 Nov 2026 (clock changes, proposals P-A and P-B): the arm validation also gains the refusal of a skipped, repeated or unreadable start time and walks the TOU slots on real instants. Both edits are
+# declared as exact pairs (DUMP_7 to DUMP_10) of the r9 scope module, and the expected arm validation is the pre-dgs1 one with exactly those pairs applied: any OTHER change to it still fails this check (it used to
+# require the whole `choose` to equal the old one).
+import _r9_scope as _r9s  # noqa: E402
+_clock_pairs = ((_r9s.DUMP_7_OLD, _r9s.DUMP_7_NEW), (_r9s.DUMP_8_OLD, _r9s.DUMP_8_NEW), (_r9s.DUMP_9_OLD, _r9s.DUMP_9_NEW), (_r9s.DUMP_10_OLD, _r9s.DUMP_10_NEW))
+exp_av = next(a for a in yaml.safe_load(_r9s._apply(OLD_TEXT, _clock_pairs, "arm validation"))["automation"] if a["id"] == "ecco_dump_to_grid_schedule_arm_validation")
+check("the arm validation is unchanged except that a successful arm also clears the two schedule alerts and (owner decision of 20 Nov 2026) refuses a skipped, repeated or unreadable start time and walks the TOU "
+      "slots on real instants: its `choose` is the old one with exactly the declared pairs applied",
       {k: v for k, v in new_av.items() if k != "actions"} == {k: v for k, v in old_av.items() if k != "actions"}
       and new_av["actions"][0] == old_av["actions"][0]
-      and new_av["actions"][1]["choose"] == old_av["actions"][1]["choose"]
+      and new_av["actions"][1]["choose"] == exp_av["actions"][1]["choose"]
+      and exp_av["actions"][1]["choose"] != old_av["actions"][1]["choose"]
       and new_av["actions"][1]["default"][0] == old_av["actions"][1]["default"][0]
       and [a["data"]["notification_id"] for a in new_av["actions"][1]["default"][1:]]
       == ["ecco_dump_to_grid_schedule", "ecco_dump_to_grid_schedule_readiness"])

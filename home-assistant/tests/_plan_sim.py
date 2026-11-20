@@ -58,8 +58,17 @@ class PlanWorld:
             return datetime.combine(now().date(), dtime(hh, mm, ss[0] if ss else 0), tzinfo=z)
 
         w.env.globals.update(now=now, as_timestamp=as_ts, today_at=today_at, timedelta=timedelta)
-        w.env.filters["timestamp_custom"] = lambda v, fmt=FMT, local=True: datetime.fromtimestamp(
-            float(v), z if local else timezone.utc).strftime(fmt)
+        def ts_custom(v, fmt=FMT, local=True, default=S._MISSING):
+            # Home Assistant's timestamp_custom(format_string, local=True, default): R9's arm validation gives every call a default so that a failed conversion refuses instead of raising
+            # (the interpreter's own filter, _ha_script_sim.World._timestamp_custom, does the same). Without a default a bad value raises exactly as before.
+            try:
+                return datetime.fromtimestamp(float(v), z if local else timezone.utc).strftime(fmt)
+            except (TypeError, ValueError, OverflowError, OSError):
+                if default is S._MISSING:
+                    raise
+                return default
+
+        w.env.filters["timestamp_custom"] = ts_custom
         w.as_timestamp = as_ts
         self.bounds: dict[str, tuple[float, float, float]] = {}
         for pk in packages:
