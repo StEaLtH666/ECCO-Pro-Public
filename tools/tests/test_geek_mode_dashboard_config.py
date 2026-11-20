@@ -10,10 +10,15 @@ existing resource read-back gate (tools/ecco_deploy_preflight.py verify-resource
   [3] the catalogue is inline and equals the committed catalogue after parsing (the same object Home Assistant's !include would hand the card)
   [4] the command line: --check (alone and against a file), --out (outside the repository or under dist/ only; never a symlink; no silent
       overwrite), --verify-storage (a raw storage file or a bare configuration; a changed card or catalogue is a difference), exit codes
+  [4b] --verify-storage on read-backs as a real capture delivers them: raw UTF-8 and escaped middle dots, a byte order mark, CRLF line ends and an
+      integral float written as an integer all compare EQUAL (the tool compares PARSED structures); a changed card is a DIFFERENCE that names the
+      top-level key and the path (keys and indexes only, never card text); text damaged by a console code page is a DIFFERENCE with a hint (still exit
+      1: a false failure of the capture, not a pass); a UTF-16 file is refused with its cause; a boolean is not a number
   [5] the resource plan: written for the LF card file only (CRLF refused), content-addressed, and READ BY THE REAL preflight verify-resource: a
       correct switch is VERIFIED, and eleven wrong ones (not switched, wrong URL, wrong type, two resources, another resource changed, added or
       removed, a stale read-back, bytes served that differ, a malformed list) are refused or FAIL
   [6] mutants (24): each is caught, by the rule that exists for it where there is one
+  [6b] in-memory mutants of the read-back comparison itself (the real source, one edit each), run against a fixed set of cases: each is killed
 
 Test-only, no network (the one GET of verify-resource is replaced by a function), no Node. Scratch files live in the system temp directory and
 are removed.
@@ -23,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import inspect
 import io
 import json
 import os
@@ -197,6 +203,115 @@ with tempfile.TemporaryDirectory(prefix="ecco-u1-cfg-") as tmp:
 
 # ===========================================================================
 print("")
+print("[4b] --verify-storage on read-backs as a real capture delivers them")
+# ===========================================================================
+# Home Assistant writes `.storage` as raw UTF-8; the generated text escapes its two middle dots (·). The tool compares PARSED structures, so how a
+# dot is written, a byte order mark, CRLF line ends and an integral float written as an integer (a browser's JSON has no 60.0) make no difference. What
+# does make a difference: any changed card text, and text that a console code page has damaged (a capture through ssh output redirection, not a copy).
+def wrapper(cfg):
+    return {"version": 1, "minor_version": 1, "key": "lovelace.u1", "data": {"config": cfg}}
+
+
+def ints_for_floats(node):
+    if isinstance(node, float) and node == int(node):
+        return int(node)
+    if isinstance(node, dict):
+        return {k: ints_for_floats(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [ints_for_floats(v) for v in node]
+    return node
+
+
+def damaged(node, codec):
+    """What a console of that code page makes of UTF-8 text it is asked to decode: every non-ASCII string re-read byte for byte in the code page."""
+    if isinstance(node, str):
+        return node if node.isascii() else node.encode("utf-8").decode(codec)
+    if isinstance(node, dict):
+        return {k: damaged(v, codec) for k, v in node.items()}
+    if isinstance(node, list):
+        return [damaged(v, codec) for v in node]
+    return node
+
+
+def find_path(node, pred, path=()):
+    if pred(node):
+        return path
+    kids = node.items() if isinstance(node, dict) else enumerate(node) if isinstance(node, list) else ()
+    for k, v in kids:
+        r = find_path(v, pred, path + (k,))
+        if r is not None:
+            return r
+    return None
+
+
+def set_at(node, path, value):
+    for k in path[:-1]:
+        node = node[k]
+    node[path[-1]] = value
+
+
+NON_ASCII = [v for _p, v in G._walk(CFG) if isinstance(v, str) and not v.isascii()]
+check("the generated configuration holds non-ASCII text: two middle dots in the text fallback (escaped in the generated text, raw in a stored file)",
+      len(NON_ASCII) == 1 and sum(1 for ch in NON_ASCII[0] if not ch.isascii()) == 2)
+raw8 = json.dumps(wrapper(CFG), indent=2, ensure_ascii=False)
+BOM = b"\xef\xbb\xbf"
+VARIANTS = [
+    ("raw UTF-8 (the form Home Assistant writes)", raw8.encode("utf-8")),
+    ("escaped, as the generator writes it", json.dumps(wrapper(CFG), indent=2, ensure_ascii=True).encode("ascii")),
+    ("raw UTF-8 with a byte order mark", BOM + raw8.encode("utf-8")),
+    ("raw UTF-8 with a byte order mark and CRLF line ends (an Out-File capture)", BOM + raw8.replace("\n", "\r\n").encode("utf-8")),
+    ("a bare configuration, raw UTF-8", json.dumps(CFG, indent=2, ensure_ascii=False).encode("utf-8")),
+    ("integral floats written as integers (60 for 60.0, as a browser sends them)", json.dumps(wrapper(ints_for_floats(CFG)), ensure_ascii=False).encode("utf-8")),
+]
+with tempfile.TemporaryDirectory(prefix="ecco-u1-rb-") as tmp:
+    rb = Path(tmp) / "readback.json"
+    for name, data in VARIANTS:
+        rb.write_bytes(data)
+        rc, out = run_tool("--verify-storage", str(rb))
+        check(f"--verify-storage: {name} is EQUAL (exit 0)", rc == 0 and "EQUALS THE GENERATED" in out and "DIFFERS" not in out, out[-200:])
+    # a changed card: a DIFFERENCE that names where, never what
+    MARK = "QZX-marker-7"
+    bad = copy.deepcopy(CFG)
+    bad["views"][0]["cards"][0]["always"][1]["title"] = MARK
+    rb.write_bytes(json.dumps(wrapper(bad), ensure_ascii=False).encode("utf-8"))
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: a changed card title is a DIFFERENCE (exit 1) that names the top-level key", rc == 1 and "DIFFERS" in out and "differ: views" in out, out[-300:])
+    check("--verify-storage: it names the path (keys and indexes only) of the first difference", "/views/0/cards/0/always/1/title" in out, out[-300:])
+    check("--verify-storage: it never prints card text (neither the changed text nor the original)", MARK not in out and "Watchdog and status" not in out, out[-300:])
+    bad = copy.deepcopy(CFG)
+    bad["title"] = MARK
+    rb.write_bytes(json.dumps(wrapper(bad)).encode("utf-8"))
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: a changed dashboard title names the top-level key title, not views",
+          rc == 1 and "differ: title" in out and "differ: views" not in out, out[-300:])
+    # text a console code page has damaged: a DIFFERENCE (never a pass), with the cause named
+    for codec in ("cp850", "cp437"):
+        rb.write_bytes(json.dumps(wrapper(damaged(CFG, codec)), ensure_ascii=False).encode("utf-8"))
+        rc, out = run_tool("--verify-storage", str(rb))
+        check(f"--verify-storage: text damaged by the {codec} console code page is still a DIFFERENCE (exit 1) and the output names the cause and the remedy (scp)",
+              rc == 1 and "DIFFERS" in out and "code page" in out and codec in out and "scp" in out and "differ: views" in out, out[-400:])
+    bad = damaged(CFG, "cp850")
+    bad["views"][0]["cards"][0]["always"][1]["title"] = MARK
+    rb.write_bytes(json.dumps(wrapper(bad), ensure_ascii=False).encode("utf-8"))
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: damaged text AND a changed card: a DIFFERENCE with no claim that the code page explains it", rc == 1 and "DIFFERS" in out and "code page" not in out, out[-300:])
+    # a boolean is not a number
+    bpath = find_path(CFG, lambda v: v is False)
+    flipped = copy.deepcopy(CFG)
+    set_at(flipped, bpath, 0)
+    rb.write_bytes(json.dumps(wrapper(flipped)).encode("utf-8"))
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: false read back as 0 is a DIFFERENCE (a boolean is not a number) and the output says the type differs", rc == 1 and "DIFFERS" in out and "type differs" in out, out[-300:])
+    # refusals: UTF-16 (a redirect or Out-File without -Encoding utf8) is named, never guessed
+    rb.write_bytes(json.dumps(wrapper(CFG)).encode("utf-16"))
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: a UTF-16 file is refused (exit 2) and the output names UTF-16", rc == 2 and "UTF-16" in out, out[-300:])
+    rb.write_bytes(b"\xfa not utf-8 \xfa")
+    rc, out = run_tool("--verify-storage", str(rb))
+    check("--verify-storage: bytes that are neither UTF-8 nor UTF-16 are refused (exit 2)", rc == 2, out[-300:])
+
+# ===========================================================================
+print("")
 print("[5] the resource plan, read by the real verify-resource")
 # ===========================================================================
 CARD_BYTES = (ROOT / G.CARD_REL).read_bytes()
@@ -351,6 +466,91 @@ ok, why = caught(TEXT, ex=EXAMPLE_TEXT.replace("Watchdog and status", "Watchdog 
 check("input mutant: the example changed after the output was made (an output that no longer equals the generation) is caught", ok, why)
 ok, why = caught(TEXT, cat=CATALOGUE_BYTES.replace(b"SHADOW", b"SHADOX", 1))
 check("input mutant: the catalogue changed after the output was made is caught", ok, why)
+
+# ===========================================================================
+print("")
+print("[6b] mutants of the read-back comparison itself")
+# ===========================================================================
+# The comparison (tools/geek_mode_dashboard_config.py: config_differences, codepage_damage and their helpers) is run against a fixed set of cases; a mutant is the
+# real source of those functions with ONE textual edit, compiled in a copy of the module's namespace. Every mutant must fail at least one case.
+DIFF_NAMES = ("_is_number", "_key_text", "config_differences", "_redecode", "codepage_damage")
+SHELL_CARD = ("views", 0, "cards", 0)
+
+
+def at(cfg, path):
+    for k in path:
+        cfg = cfg[k]
+    return cfg
+
+
+def mutate(cfg, fn):
+    c = copy.deepcopy(cfg)
+    fn(c)
+    return c
+
+
+CASES = [   # (name, the read-back, whether it must differ from the generated configuration)
+    ("the same configuration", CFG, False),
+    ("the same, parsed again from raw UTF-8 text", json.loads(json.dumps(CFG, ensure_ascii=False)), False),
+    ("integral floats written as integers", ints_for_floats(CFG), False),
+    ("a card title changed", mutate(CFG, lambda c: at(c, SHELL_CARD + ("always", 1)).__setitem__("title", "x")), True),
+    ("the last catalogue source missing", mutate(CFG, lambda c: at(c, SHELL_CARD + ("catalogue", "sources")).pop()), True),
+    ("a catalogue source added at the end", mutate(CFG, lambda c: at(c, SHELL_CARD + ("catalogue", "sources")).append({})), True),
+    ("an extra key in the shell card", mutate(CFG, lambda c: at(c, SHELL_CARD).__setitem__("extra", 1)), True),
+    ("a key missing in the shell card", mutate(CFG, lambda c: at(c, SHELL_CARD).pop("always")), True),
+    ("false read back as 0", mutate(CFG, lambda c: set_at(c, find_path(c, lambda v: v is False), 0)), True),
+    ("a number read back as text", mutate(CFG, lambda c: set_at(c, find_path(c, lambda v: isinstance(v, int) and not isinstance(v, bool)), "10")), True),
+    ("the top level is a list", [CFG], True),
+]
+DAMAGE_CASES = [   # (name, the read-back, the code page the finder must name, or None)
+    ("text damaged by cp850", damaged(CFG, "cp850"), "cp850"),
+    ("text damaged by cp437", damaged(CFG, "cp437"), "cp437"),
+    ("the same configuration, undamaged", CFG, None),
+    ("a changed card, undamaged", CASES[3][1], None),
+    ("damaged text and a changed card", mutate(damaged(CFG, "cp850"), lambda c: at(c, SHELL_CARD + ("always", 1)).__setitem__("title", "x")), None),
+]
+
+
+def build_ns(old=None, new=None):
+    """The comparison functions as the module has them, optionally with ONE textual edit (a mutant), compiled in a copy of the module's namespace."""
+    ns = dict(vars(G))
+    srcs = {n: inspect.getsource(getattr(G, n)) for n in DIFF_NAMES}
+    if old is not None:
+        hits = [n for n, s in srcs.items() if old in s]
+        assert len(hits) == 1 and srcs[hits[0]].count(old) == 1, f"the mutant's text must be in exactly one place: {old!r}"
+        srcs[hits[0]] = srcs[hits[0]].replace(old, new)
+    for s in srcs.values():
+        exec(compile(s, "<read-back comparison>", "exec"), ns)  # noqa: S102 - the repository's own source, one edit, in a scratch namespace
+    return ns
+
+
+def oracle(ns):
+    """The names of the cases the functions in `ns` get wrong (empty means all right)."""
+    wrong = []
+    for name, got, differs in CASES:
+        if bool(ns["config_differences"](got, CFG)) != differs:
+            wrong.append(name)
+    for name, got, codec in DAMAGE_CASES:
+        if ns["codepage_damage"](got, CFG) != codec:
+            wrong.append(name)
+    return wrong
+
+
+if not all(hasattr(G, n) for n in DIFF_NAMES):
+    check("the read-back comparison exists in the generator (" + ", ".join(DIFF_NAMES) + ")", False, "missing: " + ", ".join(n for n in DIFF_NAMES if not hasattr(G, n)))
+else:
+    real_wrong = oracle(build_ns())
+    check(f"the real comparison gets all {len(CASES)} comparison cases and all {len(DAMAGE_CASES)} code-page cases right", real_wrong == [], str(real_wrong))
+    READBACK_MUTANTS = [
+        ("V1 a boolean counts as a number (false equals 0)", " and not isinstance(v, bool)", ""),
+        ("V2 lists are compared up to the shorter one (a missing or added item is not seen)", "if len(got) != len(want):", "if False:"),
+        ("V3 a key that only the read-back has is ignored", "if k not in want:", "if False:"),
+        ("V4 the code-page finder names a code page for any difference", "if fixed != got and not config_differences(fixed, want):", "if True:"),
+    ]
+    for name, old, new in READBACK_MUTANTS:
+        failed = oracle(build_ns(old, new))
+        check(f"{name}: killed (cases that fail: {', '.join(failed[:2])})", bool(failed))
+    check("at least four read-back mutants are run", len(READBACK_MUTANTS) >= 4)
 
 print("")
 if FAILURES:

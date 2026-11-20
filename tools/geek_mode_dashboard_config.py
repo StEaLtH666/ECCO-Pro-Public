@@ -26,6 +26,10 @@ to gate this one resource. The card file must be the LF file as committed (a CRL
 
 `--verify-storage` compares a read-back of the persisted configuration (the raw `.storage` file of the new dashboard, whose `data.config` is read, or a
 bare configuration JSON) with a fresh generation: the check that the paste arrived as generated. Read-only: it reads the files named and writes nothing.
+It compares PARSED JSON, so raw UTF-8 and \\uXXXX-escaped text are equal, a UTF-8 byte order mark and CRLF line ends are tolerated, and the key order does
+not matter; a boolean is not a number. A difference prints which top-level keys differ and where the first one is (keys and list indexes only, never card
+text). The read-back must be copied byte for byte (scp): text captured through a console is decoded with its code page, which damages the two middle dots of
+the text fallback; the tool names that cause when it explains the whole difference (the verdict stays a difference, exit 1). UTF-16 is refused (exit 2).
 
 Standard library plus PyYAML (as the repository's other generators). No network. Exit codes: 0 fine; 1 a problem or a difference; 2 bad usage or a
 refused input or output path.
@@ -311,6 +315,88 @@ def stored_config(raw: str):
     return doc
 
 
+# What the comparison of a read-back with the generated configuration is made of. Both sides are PARSED JSON, so how a character was written (raw UTF-8 or a
+# \uXXXX escape), the line ends and the key order do not matter; what matters is every key, every list item, every text, every number and the type of each
+# (a boolean is not a number; 60 and 60.0 are the same number, as a browser's JSON has no 60.0). Nothing printed from here ever holds card text.
+CONSOLE_CODE_PAGES = ("cp850", "cp437", "cp1252")
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _key_text(k) -> str:
+    """A dictionary key as it may be printed: a short run of name characters (structure), otherwise a question mark."""
+    return k if isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", k) else "?"
+
+
+def config_differences(got, want, path: str = "") -> list[tuple[str, str]]:
+    """Where two parsed configurations differ, as (path, what) pairs. The path holds keys and list indexes only. Empty means equal."""
+    out: list[tuple[str, str]] = []
+    if isinstance(got, dict) and isinstance(want, dict):
+        for k in want:
+            if k not in got:
+                out.append((f"{path}/{_key_text(k)}", "missing in the read-back"))
+            else:
+                out += config_differences(got[k], want[k], f"{path}/{_key_text(k)}")
+        for k in got:
+            if k not in want:
+                out.append((f"{path}/{_key_text(k)}", "not in the generated configuration"))
+    elif isinstance(got, list) and isinstance(want, list):
+        if len(got) != len(want):
+            out.append((path or "/", f"{len(got)} items instead of {len(want)}"))
+        for i, (g, w) in enumerate(zip(got, want)):
+            out += config_differences(g, w, f"{path}/{i}")
+    elif _is_number(got) and _is_number(want):
+        if got != want:
+            out.append((path or "/", "number differs"))
+    elif type(got) is not type(want):
+        out.append((path or "/", f"type differs ({type(got).__name__} instead of {type(want).__name__})"))
+    elif got != want:
+        out.append((path or "/", "value differs"))
+    return out
+
+
+def _redecode(node, codec: str):
+    """`node` with every non-ASCII text undone from what a console of that code page does to UTF-8 text (UnicodeError when a text cannot be undone)."""
+    if isinstance(node, str):
+        return node if node.isascii() else node.encode(codec).decode("utf-8")
+    if isinstance(node, dict):
+        return {k: _redecode(v, codec) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_redecode(v, codec) for v in node]
+    return node
+
+
+def codepage_damage(got, want):
+    """The name of the console code page whose damage to UTF-8 text explains the WHOLE difference, else None."""
+    for codec in CONSOLE_CODE_PAGES:
+        try:
+            fixed = _redecode(got, codec)
+            if fixed != got and not config_differences(fixed, want):
+                return codec
+        except UnicodeError:
+            continue
+    return None
+
+
+def describe_differences(got, want, diffs: list[tuple[str, str]]) -> list[str]:
+    """The lines printed under DIFFERS: the top-level keys that differ, how many differences there are and where the first is (structure only), and, when
+    a console code page explains the whole difference, that cause. The verdict does not change: it stays a difference."""
+    if isinstance(got, dict) and isinstance(want, dict):
+        tops = sorted({p.split("/")[1] for p, _what in diffs if len(p) > 1})
+        lines = [f"  top-level key(s) that differ: {', '.join(tops)}"]
+    else:
+        lines = [f"  the read-back's top level is {type(got).__name__}, not a mapping"]
+    lines.append(f"  {len(diffs)} difference(s); the first is at {diffs[0][0]} ({diffs[0][1]})")
+    codec = codepage_damage(got, want)
+    if codec:
+        lines.append(f"  note: the whole difference is what the {codec} console code page does to UTF-8 text: this read-back was captured through a console "
+                     "(ssh output redirected), not copied byte for byte. Copy the stored file with scp and run this check again. It is still reported as a "
+                     "difference: nothing is assumed about the dashboard.")
+    return lines
+
+
 # ---------------------------------------------------------------------------------------------------------------------------
 # paths
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -386,14 +472,21 @@ def main(argv: list[str] | None = None) -> int:
             f = Path(a.verify_storage)
             if f.is_symlink() or not f.is_file():
                 raise Refused("the read-back is not a regular file")
+            raw = f.read_bytes()
+            if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+                raise Refused("the read-back is UTF-16 (a redirect or Out-File without -Encoding utf8 writes that): copy the stored file with scp, or save it as UTF-8")
             try:
-                got = stored_config(f.read_text(encoding="utf-8-sig"))
-            except (ValueError, UnicodeDecodeError) as ex:
+                got = stored_config(raw.decode("utf-8-sig"))
+            except ValueError as ex:  # includes UnicodeDecodeError
                 raise Refused(f"the read-back is not strict JSON ({ex})") from None
-            if got == build_config(example_text, catalogue_bytes):
+            want = build_config(example_text, catalogue_bytes)
+            diffs = config_differences(got, want)
+            if not diffs:
                 print("STORED CONFIGURATION EQUALS THE GENERATED ONE")
             else:
                 print("STORED CONFIGURATION DIFFERS FROM THE GENERATED ONE")
+                for line in describe_differences(got, want, diffs):
+                    print(line)
                 rc = 1
         return rc
     except Refused as ex:
