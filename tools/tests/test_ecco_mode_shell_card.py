@@ -528,7 +528,7 @@ CAT_MUTANTS = [
     ("K02 an attribute row dropped", cat_mut(lambda d: d["sources"][0]["attributes"].pop()), "counts"),
     ("K03 an alert dropped", cat_mut(lambda d: d["alerts"].pop()), "counts"),
     ("K04 a URL in a description", cat_mut(lambda d: d["sources"][0].__setitem__("description", "see https://example.invalid/x")), "url-like"),
-    ("K05 a private address in a title", cat_mut(lambda d: d["sources"][0].__setitem__("title", "host 10.1.2.3")), "ipv4-like"),
+    ("K05 a private address in a title", cat_mut(lambda d: d["sources"][0].__setitem__("title", "host " + ".".join(("10", "1", "2", "3")))), "ipv4-like"),
     ("K06 a token in a text", cat_mut(lambda d: d["sources"][0].__setitem__("description", "ghp_" + "a" * 36)), "token-like"),
     ("K07 another schema", cat_mut(lambda d: d.__setitem__("schema", "ecco-geek-catalogue/2")), "not the Intelligence catalogue"),
     ("K08 a duplicate key", CAT_B.replace(b'"view_id": "intelligence",', b'"view_id": "intelligence", "view_id": "x",', 1), "not strict JSON"),

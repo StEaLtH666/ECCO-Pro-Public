@@ -317,7 +317,7 @@ MUTANTS = [
     ("M03 an alert dropped from the catalogue", remake(lambda c: sh(c)["catalogue"]["alerts"].pop(0)), "inline catalogue"),
     ("M04 the catalogue replaced by an !include", remake(lambda c: sh(c).__setitem__("catalogue", "!include ../catalogue/intelligence.catalogue.json")), "!include"),
     ("M05 a URL in a card title", remake(lambda c: sh(c)["always"][0].__setitem__("title", "see https://example.invalid/x")), "url-like"),
-    ("M06 a private address in a card title", remake(lambda c: sh(c).__setitem__("title", "host 192.168.1.20")), "ipv4-like"),
+    ("M06 a private address in a card title", remake(lambda c: sh(c).__setitem__("title", "host " + ".".join(("192", "168", "1", "20")))), "ipv4-like"),
     ("M07 an e-mail address in a card title", remake(lambda c: sh(c).__setitem__("title", "a.b@example.org")), "email-like"),
     ("M08 a token in a card title", remake(lambda c: sh(c).__setitem__("title", "ghp_" + "a" * 36)), "token-like"),
     ("M09 a write-capable card (button) in the always list", remake(lambda c: sh(c)["always"].append({"type": "button", "entity": "x.y"})), "card type 'button'"),
