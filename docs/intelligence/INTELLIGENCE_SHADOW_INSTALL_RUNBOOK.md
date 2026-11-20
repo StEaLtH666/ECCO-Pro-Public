@@ -400,8 +400,9 @@ published and not recorded. Alternatively disable the config entry.
      the entry is deleted, and never as part of an upgrade or a rollback;
   5. restart with approval (one restart covers steps 3 and 4).
 
-  `site.local.json` and `state/` are the owner's data and stay where they are (the advice log table in `state/scorecard.sqlite3` stays
-  with them, unused after a rollback; it can be dropped while the integration is stopped).
+  `site.local.json` and `state/` are the owner's data and stay where they are (the advice log table, and the small advice incident
+  table once it exists, in `state/scorecard.sqlite3` stay with them, unused after a rollback; they can be dropped while the integration
+  is stopped).
 
   **What Home Assistant itself recorded.** The integration's code makes no registry or storage call. When the entry was
   added, Home Assistant recorded the config entry, the eleven entity-registry entries and one device-registry entry (the

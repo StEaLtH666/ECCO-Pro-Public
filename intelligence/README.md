@@ -26,7 +26,7 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `ghost.py`, `tools/ghost_report.py` | read-only Intelligence-vs-reality: a simulated ghost battery that follows recorded advice (`AdviceRecord`), both runs valued by `net_value.py`; per-day deltas, divergences in words, losing days, `ready_for_assisted_evidence` (evidence only; ghost below reserve must be 0); JSON export format in the tool docstring |
 | `ghost_feed.py` | pure: builds the Ghost's input from the runtime's hourly `History`, the advice log (`Scorecard.advice_records`), the tariff (`TariffResult`: no verified tariff means no money, behaviour comparison only) and the `SiteConfig`, runs `run_ghost` at 60-minute slots and returns a JSON-safe summary of at most about 8 KB: last 14 days, actual vs ghost, deltas, advice followed or not, `ready_for_assisted_evidence`, uncertainty (stock rules, model baseline, efficiency +/- 3 points); a simulation, Intelligence controlled nothing |
 | `ghost_compare.py`, `tools/ghost_diag_report.py` | pure: the Ghost's diagnostics-only block (the existing schedule against Intelligence's logged advice: money only with a verified tariff, SOC, reserve margin and breach, uncertainty and a within-noise verdict, bounded to 12 KB, failures as small blocks with a constant reason) and its plain-text report on a downloaded diagnostics file; read-only, see the section below |
-| `scorecard.py` `advice_log`, `tools/advice_export.py` | durable advice log (an additive table created by the first advice write, not when the scorecard is opened; one row per kind per slot cycle, about 52 rows a day at most, 400-day retention, failure-isolated `record_advice`; see "What is written" below) and a read-only (`mode=ro`) exporter printing the Ghost export's `advice` list; the host calls `Scorecard.record_advice(to_entity_payloads(env), dump_duration_min=...)` after publishing |
+| `scorecard.py` `advice_log`, `tools/advice_export.py` | durable advice log (an additive table created by the first advice write, not when the scorecard is opened; one row per kind per slot cycle, about 52 rows a day at most, 400-day retention, failure-isolated `record_advice`, each write read back by its row ids; closed incidents of its failures in a small `advice_incident` table created only after a verified write; see "What is written" below) and a read-only (`mode=ro`) exporter printing the Ghost export's `advice` list (or, with `--incidents`, the incidents); the host calls `Scorecard.record_advice(to_entity_payloads(env), dump_duration_min=...)` after publishing |
 
 The V1.1 modules are a foundation: nothing consumes them yet and the V1 report is unchanged. See
 `docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md`; their suites are `tests/test_intelligence_v11_*.py`.
@@ -65,18 +65,37 @@ only: no entity id, coordinate, time zone name, secret or sensor text. The numbe
 SOC, kWh, throughput, the reserve percentage, dates and timestamps with an offset): they show when the house charges and discharges and what
 that costs. The diagnostics redaction set is unchanged and does not remove them, so review a downloaded file before sharing it.
 
-**What is written (a durable write).** The Ghost needs the advice that was published, so the slot cycle's store step logs it: ONE table,
-`advice_log`, in the integration's own `state/scorecard.sqlite3` (the same file as the scorecard; no other file, table or entity is added).
-Each slot cycle (26 a day: every full hour and 21:30) adds at most one row per kind (charge target, Dump-to-Grid), so about 52 rows a day at
-most and, at the 400 days kept, about 21 000 rows (a few MB); older rows are deleted at write time. The engine's validity is at most 900 s and
-slots are an hour apart, so the same advice is logged again every slot: the Ghost counts distinct advice (kind, window, target), not rows. The
+**What is written (a durable write).** The Ghost needs the advice that was published, so the slot cycle's store step logs it: the table
+`advice_log`, in the integration's own `state/scorecard.sqlite3` (the same file as the scorecard; no other file or entity is added; one
+small second table, `advice_incident`, below).
+Each slot cycle (25 a day: every full hour and 21:30; 26 on the day the clocks go back) adds one row per kind (charge target, Dump-to-Grid),
+so at most 52 rows a day (50 on a normal day) and, at the 400 days kept, about 21 000 rows (a few MB); older rows are deleted at write
+time. The engine's validity is at most 900 s and slots are an hour apart, so the same advice is logged again every slot, every time as
+its own row (the one skip: the same advice published again inside the validity of its own previous row, within one slot cycle): the Ghost
+counts distinct advice (kind, window, target), not rows. The
 table is created by the first advice write, not when the scorecard is opened, and the write runs in its own transaction after the scorecard
 record: if it fails (a table of that name with other columns, a failing create, a full disk) the failure is counted and nothing else is
-affected, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value. Where to look: the diagnostics
-download's `counters.advice_write_failures` (0 when well), `last_store.advice_error` (the exception class) and `self_test.STORE_RECORD`
-(PASS; WARN with the count since start after a failure; one warning is logged too). To roll back: install the previous kit (the table is then
-unused) and, to remove it, drop the table or delete `scorecard.sqlite3` while the integration is stopped. The diagnostics download only reads
-the table.
+affected, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value.
+
+*Verified write, incident.* After the commit the rows just written are read back by their own ids; a write whose rows are found again is
+*verified*. A write that raises nothing but whose rows are not found again (or whose read-back fails) is *unverified*, not a success. A
+failed or unverified write opens an *incident* (in memory, the newest 10): when it began and last failed, the attempts, the slot cycles
+missed, the exception class name as the reason and the issue times of the advice that could not be written. `self_test.STORE_RECORD`
+is WARN, with the reason and the counts, while the latest attempt has failed or is unverified, and returns to PASS only after a
+verified write, when the incident is closed and kept; a slot cycle with nothing to log changes nothing, and after a restart PASS shows only
+after that run's own first verified write. Where to look: the diagnostics download's `counters.advice_write_failures` and
+`counters.advice_unverified_writes` (history, never reset), `counters.advice_current_failure` (1 while an incident is open),
+`advice_incidents`, `last_store.advice_error` (the class name) and `self_test.STORE_RECORD`; one warning is logged when an incident opens.
+
+*What survives, what is lost.* Closed incidents are written, right after the next verified write, to the table `advice_incident` (at
+most 10 rows: counts, times, a class name, never a message). It is created only then, never at start-up, when the scorecard is opened, by an
+advice write, or while the database cannot take the advice write. It is shown in the download as `advice_incidents.stored` and printed by
+`python intelligence/tools/advice_export.py <scorecard file> --incidents`. An incident still open when Home Assistant restarts, or open
+because the database never takes the advice write again, is not in that table: it then lives only in the one warning logged when it opened
+(the class name only) and, until a restart, in memory and the diagnostics. This is diagnostics only (no entity, no published value,
+status, mode or advice changes) and takes effect with the Ghost update's own restart. To roll back: install the previous kit (the tables
+are then unused) and, to remove them, drop `advice_log` and `advice_incident` or delete `scorecard.sqlite3` while the integration is
+stopped. The diagnostics download only reads them.
 
 **What it cannot show.** Dump-to-Grid advice is logged without a window (the engine passes no intended duration), so it is not simulated.
 Money covers only the days the tariff integration's rate table covers (a few days), not the whole 14-day history. SOC is an hourly mean and
