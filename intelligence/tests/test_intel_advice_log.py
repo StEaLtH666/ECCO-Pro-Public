@@ -12,6 +12,14 @@
       created by the advice WRITE path, inside its own try); an incompatible pre-existing table, a DDL that raises and a write
       that raises each leave the existing scorecard paths (open, record_run, counts, metrics) working; reading tolerates a missing
       or incompatible table
+  [9] one row per slot cycle (the engine's validity, hourly slots: N identical advices are N rows, in the table, the export and the
+      read API: no deduplication) and the age bound of the retention (a running check on the real 400 days, also after a failed
+      write; the only insert path)
+  [10] a verified write: the rows just written are read back by their own ids after the commit (found: verified; not found, or
+      the read-back itself fails: unverified, never a failure of the caller; nothing to write: neutral)
+  [11] the incident table (advice_incident): created only when an incident is persisted (never when the scorecard is opened or an
+      advice row is written), closed incidents only, bounded to the newest ADVICE_INCIDENTS_KEPT, idempotent, its failures isolated
+      (a table of another shape, a DDL that raises), only a class name as a reason, readable read-only (library and CLI)
 """
 
 from __future__ import annotations
@@ -48,10 +56,11 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 T0 = datetime(2030, 3, 4, 20, 0, tzinfo=timezone.utc)
 
 
-def payloads(gen: datetime, ct_target=80.0, dump_kwh=3.2, dump_ok=True, ct_status="OK", fallback=False) -> dict:
-    """Published payloads in the shape of advisory_contract.to_entity_payloads (built with its own _view_advice)."""
+def payloads(gen: datetime, ct_target=80.0, dump_kwh=3.2, dump_ok=True, ct_status="OK", fallback=False, valid_s=None) -> dict:
+    """Published payloads in the shape of advisory_contract.to_entity_payloads (built with its own _view_advice). The validity
+    is 6 h unless `valid_s` (seconds) is given: the engine's own is at most 900 s."""
     base = {"mode": "SHADOW", "applies_nothing": True, "contract_version": ac.CONTRACT_VERSION}
-    until = gen + timedelta(hours=6)
+    until = gen + (timedelta(hours=6) if valid_s is None else timedelta(seconds=valid_s))
     ct_sum = {"target_soc_pct": ct_target, "effective_reserve_pct": 40.0, "conservative_fallback": fallback,
               "window": [(T0 + timedelta(hours=2)).isoformat(), (T0 + timedelta(hours=6)).isoformat()]}
     dp_sum = {"dump_advisable": True, "stop_soc_pct": 55.0, "export_kwh": dump_kwh, "export_kw_avg": 3.2,
@@ -75,6 +84,22 @@ def rows(db_path_or_sc, sql="SELECT * FROM advice_log ORDER BY advice_id"):
 
 def has_table(db, name="advice_log") -> bool:
     return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+class guard:
+    """Run a block of checks; an exception inside it is a FAIL of the named check, not a crash of the whole suite."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, et, ev, tb) -> bool:
+        if et is not None and issubclass(et, Exception):
+            check(self.name, False, f"raised {et.__name__}: {str(ev)[:160]}")
+            return True
+        return False
 
 
 print("== [1] fresh and old databases")
@@ -342,6 +367,291 @@ check("reading a store with no advice table: no rows and the status MISSING",
       f"{tried(lambda: sc_m.advice_records())} {tried(lambda: sc_m.advice_log_status())}")
 sc_m.record_advice(payloads(T0))
 check("... and OK once the advice write has created it", tried(lambda: sc_m.advice_log_status()) == "OK")
+
+print("== [9] R1: one row per slot cycle (no deduplication) and the age bound of the retention")
+from intelligence.daily_plan import PROPOSED_ADVICE_VALIDITY_S  # noqa: E402 - the engine's own validity ceiling
+
+ADVICE_KINDS = ("charge_target", "dump_to_grid")
+SLOTS_A_DAY = 25                   # 24 full hours and the 21:30 slot (the runtime's due_slot); 26 on the day the clocks go back
+
+
+def n_rows(scx) -> int:
+    return scx.db.execute("SELECT COUNT(*) FROM advice_log").fetchone()[0]
+
+
+with guard("[9] N slot cycles of identical advice"):
+    N = 30
+    r1 = tmp / "r1.db"
+    sc9 = Scorecard(str(r1))
+    for k in range(N):
+        sc9.record_advice(payloads(T0 + timedelta(hours=k), valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    per = {kd: [r for r in rows(sc9) if r["kind"] == kd] for kd in ADVICE_KINDS}
+    check("the engine's validity ceiling is at most 900 s, shorter than the hourly slot spacing",
+          0 < PROPOSED_ADVICE_VALIDITY_S <= 900.0, str(PROPOSED_ADVICE_VALIDITY_S))
+    check(f"{N} slot cycles with the identical advice give {N} rows of each kind (nothing is deduplicated away)",
+          all(len(v) == N for v in per.values()), str({k: len(v) for k, v in per.items()}))
+    check("... and they are identical in content (one content hash per kind), so a deduplication on content would have dropped them",
+          all(len({r["content_hash"] for r in v}) == 1 for v in per.values()))
+    exported = advice_export.read_advice(str(r1))
+    check("... the export returns every one of them", len(exported) == 2 * N and len({e["advice_id"] for e in exported}) == 2 * N,
+          str(len(exported)))
+    check("... and so does Scorecard.advice_records", len(sc9.advice_records()) == 2 * N)
+    sc9b = Scorecard(":memory:")
+    for k in range(N):
+        sc9b.record_advice(payloads(T0 + timedelta(hours=k), valid_s=3599), dump_duration_min=30)
+    check("even a validity of 3599 s (just under the slot spacing) keeps one row per slot cycle", n_rows(sc9b) == 2 * N, str(n_rows(sc9b)))
+    sc9c = Scorecard(":memory:")
+    sc9c.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    check("the one skip that remains: the same advice published again inside the previous row's own validity (within one slot) is "
+          "not a second row",
+          sc9c.record_advice(payloads(T0 + timedelta(minutes=5), valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30) == 0
+          and n_rows(sc9c) == 2)
+    sc9.db.close()
+
+with guard("[9] the retention is an age bound that runs at every write"):
+    check("the retention is 400 days of the advice's own issue time", scmod.ADVICE_LOG_RETENTION_DAYS == ADVICE_LOG_RETENTION_DAYS == 400)
+    real_days = scmod.ADVICE_LOG_RETENTION_DAYS
+    scmod.ADVICE_LOG_RETENTION_DAYS = 20                    # the mechanism on a short bound, so a month of slot cycles shows it
+    try:
+        scr = Scorecard(":memory:")
+        issued, peak = [], 0
+        for d in range(32):
+            for k in range(SLOTS_A_DAY):
+                g = T0 + timedelta(days=d, minutes=57 * k)
+                scr.record_advice(payloads(g, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+                issued.append(g)
+                peak = max(peak, n_rows(scr))
+    finally:
+        scmod.ADVICE_LOG_RETENTION_DAYS = real_days
+    cut = (issued[-1] - timedelta(days=20)).isoformat()
+    want = 2 * sum(1 for g in issued if g.isoformat() >= cut)
+    check("on a 20-day bound, 32 days of 25 slot cycles keep exactly the rows of the last 20 days", n_rows(scr) == want,
+          f"{n_rows(scr)} {want}")
+    check("... the count never exceeded 2 kinds x 26 slot cycles x the bound in days", peak <= 2 * 26 * 20, str(peak))
+    check("... and no kept row is older than the bound",
+          scr.db.execute("SELECT COUNT(*) FROM advice_log WHERE issued_utc < ?", (cut,)).fetchone()[0] == 0)
+
+with guard("[9] the real 400-day bound, also after a failed write"):
+    scp = Scorecard(":memory:")
+    scp.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)       # creates the table
+    bulk = []
+    for d in range(ADVICE_LOG_RETENTION_DAYS):
+        for k in range(SLOTS_A_DAY):
+            g = (T0 + timedelta(days=d, minutes=57 * k)).isoformat()
+            bulk.extend([("charge_target", "OK", g, "[]", "x"), ("dump_to_grid", "OK", g, "[]", "x")])
+    scp.db.executemany("INSERT INTO advice_log (kind, status, issued_utc, reasons_json, content_hash) VALUES (?,?,?,?,?)", bulk)
+    scp.db.commit()
+    check("non-vacuity: 400 days of 25 slot cycles of 2 kinds is 20 000 rows (plus the first write's two)",
+          n_rows(scp) == 2 * SLOTS_A_DAY * ADVICE_LOG_RETENTION_DAYS + 2, str(n_rows(scp)))
+    scp.db.execute("CREATE TRIGGER boom BEFORE INSERT ON advice_log BEGIN SELECT RAISE(ABORT,'synthetic'); END")
+    scp.db.commit()
+    before = n_rows(scp)
+    t_fail = T0 + timedelta(days=ADVICE_LOG_RETENTION_DAYS + 3)
+    scp.record_advice(payloads(t_fail, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    check("a failed write adds nothing and prunes nothing (the whole write is rolled back) and is counted",
+          n_rows(scp) == before and scp.advice_write_failures == 1, f"{n_rows(scp)} {before}")
+    scp.db.execute("DROP TRIGGER boom")
+    scp.db.commit()
+    t_ok = T0 + timedelta(days=ADVICE_LOG_RETENTION_DAYS + 5)
+    check("the next good write succeeds", scp.record_advice(payloads(t_ok, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30) == 2)
+    cut2 = (t_ok - timedelta(days=ADVICE_LOG_RETENTION_DAYS)).isoformat()
+    check("... and prunes by its own issue time: nothing older than 400 days of it remains",
+          scp.db.execute("SELECT COUNT(*) FROM advice_log WHERE issued_utc < ?", (cut2,)).fetchone()[0] == 0)
+    check("... so the table is within 2 kinds x 26 slot cycles x 400 days", n_rows(scp) <= 2 * 26 * ADVICE_LOG_RETENTION_DAYS,
+          str(n_rows(scp)))
+    scp.db.close()
+
+with guard("[9] the only insert path"):
+    srcs = {}
+    for base_dir in (ROOT / "intelligence", ROOT / "custom_components" / "ecco_intelligence"):
+        for p in base_dir.rglob("*.py"):
+            if "tests" not in p.relative_to(ROOT).parts:
+                srcs[p.relative_to(ROOT).as_posix()] = p.read_text(encoding="utf-8")
+    inserts = sorted(k for k, t in srcs.items() if "INSERT INTO advice_log" in t)
+    callers = sorted(k for k, t in srcs.items() if ".record_advice(" in t)
+    check("the only INSERT into advice_log is in intelligence/scorecard.py (Scorecard.record_advice)",
+          inserts == ["intelligence/scorecard.py"], str(inserts))
+    check("... and the only caller of record_advice outside the scorecard is the runtime store's advice step",
+          callers == ["custom_components/ecco_intelligence/runtime/store.py"], str(callers))
+
+print("== [10] a verified write: the rows just written are read back by their own ids after the commit")
+with guard("[10] verified, neutral"):
+    scv = Scorecard(":memory:")
+    nv = scv.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    check("rows written and found again by their ids: advice_last_verified is True and the two ids are kept",
+          nv == 2 and scv.advice_last_verified is True and len(scv.advice_last_ids) == 2, f"{nv} {scv.advice_last_verified}")
+    check("... nothing is counted as failed or unverified", scv.advice_write_failures == 0 and scv.advice_unverified_writes == 0)
+    check("... the ids are the rows' own", sorted(scv.advice_last_ids) == sorted(r["advice_id"] for r in rows(scv)))
+    n0 = scv.record_advice(payloads(T0 + timedelta(minutes=5), valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    check("a call that wrote nothing (the same advice inside its validity) is neutral: nothing to verify",
+          n0 == 0 and scv.advice_last_verified is None and scv.advice_last_ids == [], f"{n0} {scv.advice_last_verified}")
+    check("an empty published set is neutral too", scv.record_advice({}) == 0 and scv.advice_last_verified is None)
+    check("a later write is verified again and the neutral call did not count anything",
+          scv.record_advice(payloads(T0 + timedelta(hours=1), valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30) == 2
+          and scv.advice_last_verified is True and scv.advice_write_failures == 0 and scv.advice_unverified_writes == 0)
+
+with guard("[10] a write that returns without an error but whose rows are not there"):
+    scg = Scorecard(":memory:")
+    scg.db.executescript(ADVICE_LOG_DDL)
+    scg.db.execute("CREATE TRIGGER gone AFTER INSERT ON advice_log BEGIN DELETE FROM advice_log WHERE advice_id = NEW.advice_id; END")
+    scg.db.commit()
+    rg = tried(lambda: scg.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30))
+    check("the write raises nothing, yet the rows are not found again: UNVERIFIED (not verified, and not a failure of the write)",
+          rg == 2 and scg.advice_last_verified is False and scg.advice_unverified_writes == 1 and scg.advice_write_failures == 0,
+          f"{rg} {scg.advice_last_verified} {scg.advice_unverified_writes} {scg.advice_write_failures}")
+    check("... with a fixed code as the reason (an identifier, no message)", scg.advice_last_error == "AdviceReadBackMissing",
+          str(scg.advice_last_error))
+
+with guard("[10] the read-back itself fails"):
+    scf = Scorecard(":memory:")
+    real_rb = getattr(Scorecard, "_read_back_advice", None)
+
+    def rb_boom(self, ids):
+        raise sqlite3.OperationalError("SECRET-readback-message /private/path")
+    Scorecard._read_back_advice = rb_boom
+    try:
+        rf = tried(lambda: scf.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30))
+    finally:
+        if real_rb is not None:
+            Scorecard._read_back_advice = real_rb
+        else:
+            del Scorecard._read_back_advice
+    check("a failing read-back is unverified, nothing is raised, the rows stay, and only the class name is kept",
+          rf == 2 and scf.advice_last_verified is False and scf.advice_last_error == "OperationalError"
+          and "SECRET" not in str(scf.advice_last_error) and n_rows(scf) == 2, f"{rf} {scf.advice_last_verified} {scf.advice_last_error}")
+    check("... and it counts as unverified, not as a failed write", scf.advice_unverified_writes == 1 and scf.advice_write_failures == 0)
+
+with guard("[10] a failed write is not verified"):
+    scx = Scorecard(":memory:")
+    scx.db.executescript(ADVICE_LOG_DDL)
+    scx.db.execute("CREATE TRIGGER boom BEFORE INSERT ON advice_log BEGIN SELECT RAISE(ABORT,'synthetic'); END")
+    scx.db.commit()
+    check("a write that raises: 0 rows, counted, advice_last_verified is False and the reason is the class name",
+          scx.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S)) == 0 and scx.advice_write_failures == 1
+          and scx.advice_last_verified is False and scx.advice_last_ids == [] and scx.advice_unverified_writes == 0
+          and scx.advice_last_error == "IntegrityError", f"{scx.advice_last_verified} {scx.advice_last_error}")
+
+print("== [11] the incident table")
+KEPT = getattr(scmod, "ADVICE_INCIDENTS_KEPT", None)
+SECRET = "boom: SECRET-1234 /private/path sensor.test_secret_entity"
+
+
+def inc(n: int, reason: str = "OperationalError", closed: bool = True) -> dict:
+    t = T0 + timedelta(days=n)
+    return {"first_failed_utc": t.isoformat(), "last_failed_utc": (t + timedelta(hours=2)).isoformat(), "failed_count": 3,
+            "missed_slots": 3, "reason": reason, "first_reason": reason, "first_issued_utc": t.isoformat(),
+            "last_issued_utc": (t + timedelta(hours=2)).isoformat(),
+            "recovered_utc": (t + timedelta(hours=3)).isoformat() if closed else None, "rows_since": 2}
+
+
+with guard("[11] lazily created, closed incidents only"):
+    check("the bound is a small named constant", isinstance(KEPT, int) and 1 <= KEPT <= 50, str(KEPT))
+    sci = Scorecard(":memory:")
+    check("opening the scorecard creates no incident table, and reading gives no rows",
+          not has_table(sci.db, "advice_incident") and sci.advice_incidents() == [])
+    sci.record_advice(payloads(T0, valid_s=PROPOSED_ADVICE_VALIDITY_S), dump_duration_min=30)
+    check("an advice write creates the advice table and still no incident table", has_table(sci.db) and not has_table(sci.db, "advice_incident"))
+    meta0 = [tuple(r) for r in sci.db.execute("SELECT * FROM schema_meta ORDER BY key")]
+    adv0 = [tuple(r) for r in sci.db.execute("SELECT * FROM advice_log ORDER BY advice_id")]
+    res = sci.persist_advice_incidents([inc(1), inc(2, closed=False)], T0 + timedelta(days=3))
+    check("persisting writes the closed incident and creates the table only now; an open incident is neither written nor reported",
+          res.get("persisted") == [inc(1)["first_failed_utc"]] and res.get("error") is None and has_table(sci.db, "advice_incident")
+          and sci.db.execute("SELECT COUNT(*) FROM advice_incident").fetchone()[0] == 1, str(res))
+    check("... the old tables, schema_meta and the advice rows are exactly as they were",
+          [tuple(r) for r in sci.db.execute("SELECT * FROM schema_meta ORDER BY key")] == meta0
+          and [tuple(r) for r in sci.db.execute("SELECT * FROM advice_log ORDER BY advice_id")] == adv0
+          and all(sci.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0 for t in ("model_runs", "forecasts", "recommendations")))
+    got = sci.advice_incidents()
+    check("... it reads back as stored (counts, class name, times) with the time it was recorded",
+          len(got) == 1 and {k: got[0][k] for k in inc(1)} == inc(1) and got[0].get("recorded_utc") == (T0 + timedelta(days=3)).isoformat(),
+          str(got))
+    sci.persist_advice_incidents([inc(1)], T0 + timedelta(days=4))
+    check("persisting the same incident again replaces it (one row)", sci.db.execute("SELECT COUNT(*) FROM advice_incident").fetchone()[0] == 1)
+
+with guard("[11] a file that never had the table"):
+    old2 = tmp / "old2.db"
+    c2 = sqlite3.connect(old2)
+    c2.executescript(DDL)
+    c2.execute("INSERT INTO schema_meta VALUES ('schema_version', '1')")
+    c2.commit()
+    t_before = {r[0] for r in c2.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    c2.close()
+    sco = Scorecard(str(old2))
+    t_open = {r[0] for r in sco.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check("opening an old file adds neither an advice nor an incident table", t_open == t_before, str(t_open ^ t_before))
+    sco.persist_advice_incidents([inc(1)], T0)
+    t_after = {r[0] for r in sco.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check("the first persisted incident adds only advice_incident", t_after - t_before == {"advice_incident"} and t_before <= t_after,
+          str(t_after ^ t_before))
+    sco.db.close()
+
+with guard("[11] bounded to the newest ADVICE_INCIDENTS_KEPT"):
+    scb = Scorecard(":memory:")
+    allinc = [inc(n) for n in range(1, KEPT + 6)]
+    for i_ in allinc:
+        scb.persist_advice_incidents([i_], T0 + timedelta(days=100))
+    got = scb.advice_incidents()
+    check(f"after {len(allinc)} incidents the table holds exactly the newest {KEPT}", len(got) == KEPT
+          and [g["first_failed_utc"] for g in got] == [i_["first_failed_utc"] for i_ in reversed(allinc)][:KEPT], str(len(got)))
+    scb2 = Scorecard(":memory:")
+    scb2.persist_advice_incidents(allinc, T0 + timedelta(days=100))
+    check("... also when they arrive in one call", scb2.db.execute("SELECT COUNT(*) FROM advice_incident").fetchone()[0] == KEPT)
+
+with guard("[11] failures are isolated and only a class name is kept"):
+    sch = Scorecard(":memory:")
+    sch.db.execute("CREATE TABLE advice_incident (foo TEXT)")
+    sch.db.execute("INSERT INTO advice_incident VALUES ('x')")
+    sch.db.commit()
+    rr = tried(lambda: sch.persist_advice_incidents([inc(1)], T0))
+    check("an advice_incident table of another shape: nothing raised, nothing persisted, counted, the table untouched, the old paths work",
+          isinstance(rr, dict) and rr.get("persisted") == [] and rr.get("error") == "DatabaseError" and sch.incident_write_failures == 1
+          and [tuple(r) for r in sch.db.execute("SELECT * FROM advice_incident")] == [("x",)] and old_paths(sch) == "ok", str(rr))
+    check("... reading it gives no rows, not an exception", tried(lambda: sch.advice_incidents()) == [])
+    real_idl = scmod.ADVICE_INCIDENT_DDL
+    scmod.ADVICE_INCIDENT_DDL = "CREATE TABLE advice_incident (;"
+    try:
+        scd = Scorecard(":memory:")
+        rd = tried(lambda: scd.persist_advice_incidents([inc(1)], T0))
+        check("a DDL that raises: nothing raised, nothing persisted, counted, the old paths work",
+              isinstance(rd, dict) and rd.get("persisted") == [] and isinstance(rd.get("error"), str) and rd["error"].isidentifier()
+              and scd.incident_write_failures == 1 and old_paths(scd) == "ok", str(rd))
+    finally:
+        scmod.ADVICE_INCIDENT_DDL = real_idl
+    sce = Scorecard(":memory:")
+    sce.persist_advice_incidents([inc(1, reason=SECRET), {**inc(2), "first_reason": SECRET}], T0)
+    stored = json.dumps(sce.advice_incidents())
+    check("a reason that is not a class name is never stored (only an identifier, or UnknownError)",
+          "SECRET" not in stored and "private" not in stored and "sensor." not in stored and "UnknownError" in stored, stored[:200])
+    scz = Scorecard(":memory:")
+    bad_time = {**inc(1), "first_failed_utc": "not a time"}
+    rz = tried(lambda: scz.persist_advice_incidents([bad_time], T0))
+    check("a malformed incident is swallowed and counted too", isinstance(rz, dict) and rz.get("persisted") == []
+          and scz.incident_write_failures == 1, str(rz))
+
+with guard("[11] read-only reading: the library and the command line"):
+    dbi = tmp / "inc.db"
+    scs = Scorecard(str(dbi))
+    scs.persist_advice_incidents([inc(1), inc(2)], T0)
+    scs.db.close()
+    b_before = dbi.read_bytes()
+    check("the exporter's column list is the scorecard's", advice_export.INCIDENT_COLUMNS == scmod.ADVICE_INCIDENT_COLUMNS)
+    lib = advice_export.read_incidents(str(dbi))
+    check("read_incidents returns the stored incidents, newest first, and does not change the file",
+          [x["first_failed_utc"] for x in lib] == [inc(2)["first_failed_utc"], inc(1)["first_failed_utc"]] and dbi.read_bytes() == b_before)
+    out_i = io.StringIO()
+    with redirect_stdout(out_i):
+        rc_i = advice_export.main([str(dbi), "--incidents"])
+    check("the command line prints them (exit 0)", rc_i == 0 and [x["first_failed_utc"] for x in json.loads(out_i.getvalue())]
+          == [x["first_failed_utc"] for x in lib])
+    no_tab = tmp / "no_inc.db"
+    sn = Scorecard(str(no_tab))
+    sn.db.close()
+    check("a database without the table gives [] and creates nothing", advice_export.read_incidents(str(no_tab)) == []
+          and "advice_incident" not in {r[0] for r in sqlite3.connect(no_tab).execute("SELECT name FROM sqlite_master")})
+    err_i = io.StringIO()
+    with contextlib.redirect_stderr(err_i):
+        rc_m = advice_export.main([str(tmp / "missing_inc.db"), "--incidents"])
+    check("a missing database exits 2 and creates no file", rc_m == 2 and not (tmp / "missing_inc.db").exists())
 
 print("")
 if FAILURES:

@@ -2,11 +2,16 @@
 """Read-only bridge from the scorecard store to the Ghost: print the `advice` list of the ghost export format.
 
     python intelligence/tools/advice_export.py scorecard.db --from 2026-11-01 --to 2026-11-15 [--kind charge_target]
+    python intelligence/tools/advice_export.py scorecard.db --incidents
 
 Opens the database read-only (SQLite URI mode=ro; it never creates, alters or writes anything), reads `advice_log` for rows
 issued in [from, to) (UTC; dates or ISO times; both optional) and prints a JSON list of AdviceRecord objects (the `advice`
 member of the export described in tools/ghost_report.py) to stdout. A database without the table gives []. Exit 0 on
-success, 2 on an unreadable database or bad arguments."""
+success, 2 on an unreadable database or bad arguments.
+
+With --incidents it prints instead the advice-log INCIDENTS the runtime persisted (table `advice_incident`, newest first: when a
+failure began and ended, how many attempts and slot cycles were missed, the exception class name, the rows of the recovering
+write). Every row of the advice log is exported as it is: nothing is deduplicated here."""
 
 from __future__ import annotations
 
@@ -53,15 +58,34 @@ def read_advice(db_path: str, start: str | None = None, end: str | None = None, 
         db.close()
 
 
+INCIDENT_COLUMNS = ("first_failed_utc", "last_failed_utc", "failed_count", "missed_slots", "reason", "first_reason",
+                    "first_issued_utc", "last_issued_utc", "recovered_utc", "rows_since", "recorded_utc")
+
+
+def read_incidents(db_path: str) -> list[dict]:
+    """The persisted advice-log incidents, newest first (read-only). A database without the table gives []; a table of another
+    shape raises sqlite3.Error."""
+    uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+    db = sqlite3.connect(uri, uri=True)
+    try:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='advice_incident'").fetchone() is None:
+            return []
+        got = db.execute(f"SELECT {','.join(INCIDENT_COLUMNS)} FROM advice_incident ORDER BY first_failed_utc DESC").fetchall()
+        return [dict(zip(INCIDENT_COLUMNS, r)) for r in got]
+    finally:
+        db.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("db")
     ap.add_argument("--from", dest="start")
     ap.add_argument("--to", dest="end")
     ap.add_argument("--kind", choices=("charge_target", "dump_to_grid"))
+    ap.add_argument("--incidents", action="store_true", help="print the persisted advice-log incidents instead of the advice")
     a = ap.parse_args(argv)
     try:
-        rows = read_advice(a.db, a.start, a.end, a.kind)
+        rows = read_incidents(a.db) if a.incidents else read_advice(a.db, a.start, a.end, a.kind)
     except (sqlite3.Error, ValueError) as e:
         print(f"advice_export: {e}", file=sys.stderr)
         return 2

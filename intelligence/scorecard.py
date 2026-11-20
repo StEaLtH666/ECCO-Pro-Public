@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS recommendations (
 # What is written: for each of the two kinds, one row per slot cycle (the integration's slot cycles run 26 times a day, so at most
 # about 52 rows a day, about 21 000 rows over the 400-day retention, a few MB). An identical re-publish is skipped only while the
 # latest row of its kind is still current (its validity end, for the dump its window); the engine's validity is at most 900 s and
-# slots are an hour apart, so in practice every slot cycle writes its two rows. Nothing else is written.
+# slots are an hour apart, so in practice every slot cycle writes its two rows. Nothing else is written here (the incident table
+# below is written only by persist_advice_incidents, after a verified advice write).
 ADVICE_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS advice_log (
     advice_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,14 +132,59 @@ ADVICE_LOG_COLUMNS = ("advice_id", "kind", "status", "issued_utc", "valid_until_
                       "export_kw_avg", "dump_advisable", "duration_min", "confidence", "reasons_json", "run_id", "content_hash")
 ADVICE_LOG_MISSING, ADVICE_LOG_INCOMPATIBLE, ADVICE_LOG_OK = "MISSING", "INCOMPATIBLE", "OK"
 
+# The advice log's INCIDENTS (additive; a table of its own, never touching the scorecard's tables or advice_log). A failed advice write
+# opens an incident in the runtime's memory (runtime/store.py, AdviceHealth); once the database has taken a LATER advice write and that
+# write has been read back (a verified write), the CLOSED incident is written here so that it survives a restart for diagnosis.
+# The table is created only at that moment: not when the scorecard is opened, not by an advice write, and never while the database
+# cannot take the advice write (only closed incidents are written, and only after a verified write). It keeps the newest
+# ADVICE_INCIDENTS_KEPT incidents (by their first failure) and holds counts, times and an exception CLASS NAME, never a message.
+ADVICE_INCIDENT_DDL = """
+CREATE TABLE IF NOT EXISTS advice_incident (
+    first_failed_utc TEXT PRIMARY KEY,
+    last_failed_utc  TEXT NOT NULL,
+    failed_count     INTEGER NOT NULL,
+    missed_slots     INTEGER NOT NULL,
+    reason           TEXT NOT NULL,
+    first_reason     TEXT NOT NULL,
+    first_issued_utc TEXT,
+    last_issued_utc  TEXT,
+    recovered_utc    TEXT NOT NULL,
+    rows_since       INTEGER NOT NULL,
+    recorded_utc     TEXT NOT NULL
+);
+"""
+ADVICE_INCIDENT_COLUMNS = ("first_failed_utc", "last_failed_utc", "failed_count", "missed_slots", "reason", "first_reason",
+                           "first_issued_utc", "last_issued_utc", "recovered_utc", "rows_since", "recorded_utc")
+ADVICE_INCIDENTS_KEPT = 10                     # the newest incidents kept, in the runtime's memory and in the table
+ADVICE_READ_BACK_MISSING = "AdviceReadBackMissing"   # the reason of a write whose rows were not found again (a code, not an exception)
+UNKNOWN_ERROR = "UnknownError"
+MAX_REASON_CHARS = 40
+
+
+def incident_reason(value: object) -> str:
+    """The only thing an incident keeps of an error: an exception CLASS NAME (an ASCII identifier of at most MAX_REASON_CHARS
+    characters). Anything else (a message, a path, a value, an empty or non-text value) becomes UnknownError."""
+    if isinstance(value, str) and 0 < len(value) <= MAX_REASON_CHARS and value.isascii() and value.isidentifier():
+        return value
+    return UNKNOWN_ERROR
+
+
+def _table_status(db: sqlite3.Connection, table: str, columns: tuple) -> str:
+    cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+    if not cols:
+        return ADVICE_LOG_MISSING
+    return ADVICE_LOG_OK if set(columns) <= cols else ADVICE_LOG_INCOMPATIBLE
+
 
 def advice_log_status(db: sqlite3.Connection) -> str:
     """READ-ONLY (a PRAGMA; safe on a mode=ro connection): MISSING (no advice_log table), INCOMPATIBLE (a table of that name that
     lacks a column this module reads and writes) or OK."""
-    cols = {r[1] for r in db.execute("PRAGMA table_info(advice_log)")}
-    if not cols:
-        return ADVICE_LOG_MISSING
-    return ADVICE_LOG_OK if set(ADVICE_LOG_COLUMNS) <= cols else ADVICE_LOG_INCOMPATIBLE
+    return _table_status(db, "advice_log", ADVICE_LOG_COLUMNS)
+
+
+def advice_incident_status(db: sqlite3.Connection) -> str:
+    """The same for the advice_incident table (read-only; MISSING until an incident has been persisted)."""
+    return _table_status(db, "advice_incident", ADVICE_INCIDENT_COLUMNS)
 
 
 def _num(v):
@@ -194,6 +240,23 @@ def _advice_hash(r: dict) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:24]
 
 
+def _utc_text(value: object) -> str:
+    """An aware ISO time as UTC ISO text (a naive or malformed one raises: it is not stored)."""
+    d = datetime.fromisoformat(str(value))
+    if d.tzinfo is None:
+        raise ValueError("an incident time carries a UTC offset")
+    return _iso(d)
+
+
+def _incident_row(inc: dict, now: datetime) -> tuple:
+    """The advice_incident row (ADVICE_INCIDENT_COLUMNS order) of one closed incident; reasons only as class names."""
+    return (_utc_text(inc["first_failed_utc"]), _utc_text(inc["last_failed_utc"]), int(inc["failed_count"]), int(inc["missed_slots"]),
+            incident_reason(inc.get("reason")), incident_reason(inc.get("first_reason")),
+            _utc_text(inc["first_issued_utc"]) if inc.get("first_issued_utc") else None,
+            _utc_text(inc["last_issued_utc"]) if inc.get("last_issued_utc") else None,
+            _utc_text(inc["recovered_utc"]), int(inc["rows_since"]), _iso(now))
+
+
 # Two-sided Student-t critical values at p = 0.001, i.e. a Bonferroni-style allowance for the ~50 weekday x
 # window-kind comparisons that insights() scans (0.05 / 50). Plain "3 sigma" is not enough with n of 6-10.
 _T_CRIT_P001 = {2: 31.6, 3: 12.9, 4: 8.61, 5: 6.87, 6: 5.96, 7: 5.41, 8: 5.04, 9: 4.78, 10: 4.59, 12: 4.32, 15: 4.07,
@@ -219,6 +282,11 @@ class Scorecard:
         self.db.executescript(DDL)
         self.advice_write_failures = 0                 # the advice log's own failures (record_advice); nothing else counts here
         self.advice_last_error: str | None = None      # the exception class name of the last such failure (never a message)
+        self.advice_unverified_writes = 0              # writes that raised nothing but whose rows were not read back (see record_advice)
+        self.advice_last_verified: bool | None = None  # last record_advice: True verified, False failed or unverified, None no write
+        self.advice_last_ids: list[int] = []           # the advice_id of each row the last record_advice inserted and committed
+        self.incident_write_failures = 0               # the incident table's own failures (persist_advice_incidents)
+        self.incident_last_error: str | None = None    # their exception class name (never a message)
         self.db.execute("INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         self.db.commit()
 
@@ -287,10 +355,19 @@ class Scorecard:
         own paths, because the table is created HERE, on the first write, and not when the scorecard is opened. Returns the rows
         written. A row identical in content to the latest one of its kind is skipped only while that row is still current (the
         dump: its window; the rest: its validity end), so with the engine's validity of at most 900 s and hourly slot cycles every
-        cycle normally writes its rows (one per kind). Rows older than ADVICE_LOG_RETENTION_DAYS are dropped at write time."""
+        cycle normally writes its rows (one per kind). Rows older than ADVICE_LOG_RETENTION_DAYS are dropped at write time.
+
+        VERIFIED WRITE. After the commit the rows just inserted are read back by their own advice_id (an indexed read; kind, issue
+        time and content hash must match) and `advice_last_verified` says what happened: True (every row found), False (the write
+        failed, or it returned without an error but a row was not found again, or the read-back itself failed: the last two are
+        counted in `advice_unverified_writes`, with the code AdviceReadBackMissing or the read-back's exception class name as
+        `advice_last_error`) or None (nothing was written: no advice, or an identical re-publish while current). The ids are kept in
+        `advice_last_ids`. The read-back is part of this call's own isolation: it never raises."""
+        self.advice_last_verified, self.advice_last_ids = None, []
+        ids: list[int] = []
+        expect: list[tuple] = []
         try:
             self._ensure_advice_log()
-            written = 0
             for r in advice_log_rows(published, dump_duration_min=dump_duration_min, run_id=run_id):
                 h = _advice_hash(r)
                 last = self.db.execute("SELECT content_hash, valid_until_utc, window_end_utc FROM advice_log WHERE kind=? "
@@ -303,21 +380,110 @@ class Scorecard:
                     if lim is not None and lim > r["issued_utc"]:
                         continue
                 cols = list(r) + ["content_hash"]
-                self.db.execute(f"INSERT INTO advice_log ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
-                                [r[c] for c in r] + [h])
-                written += 1
+                cur = self.db.execute(f"INSERT INTO advice_log ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                                      [r[c] for c in r] + [h])
+                ids.append(int(cur.lastrowid))
+                expect.append((r["kind"], r["issued_utc"], h))
                 cutoff = _iso(datetime.fromisoformat(r["issued_utc"]) - timedelta(days=ADVICE_LOG_RETENTION_DAYS))
                 self.db.execute("DELETE FROM advice_log WHERE issued_utc < ?", (cutoff,))
             self.db.commit()
-            return written
         except Exception as exc:  # noqa: BLE001 - isolated on purpose: counted, only the class name kept
             self.advice_write_failures += 1
             self.advice_last_error = type(exc).__name__
+            self.advice_last_verified = False
             try:
                 self.db.rollback()
             except Exception:
                 pass
             return 0
+        if not ids:
+            return 0                                       # nothing to write (no advice, or a re-publish while current): neutral
+        self.advice_last_ids = ids
+        self.advice_last_verified = self._verify_advice(ids, expect)
+        return len(ids)
+
+    def _read_back_advice(self, ids: list[int]) -> dict[int, tuple]:
+        """{advice_id: (kind, issued_utc, content_hash)} of the rows that exist, each read by its own id (the primary key)."""
+        found: dict[int, tuple] = {}
+        for advice_id in ids:
+            row = self.db.execute("SELECT kind, issued_utc, content_hash FROM advice_log WHERE advice_id=?", (advice_id,)).fetchone()
+            if row is not None:
+                found[advice_id] = (row["kind"], row["issued_utc"], row["content_hash"])
+        return found
+
+    def _verify_advice(self, ids: list[int], expect: list[tuple]) -> bool:
+        """True when every row just committed is read back as written. Never raises: a read-back that fails, or a row that is not
+        found, is an UNVERIFIED write (counted, only a class name or a code kept) and gives False."""
+        try:
+            found = self._read_back_advice(ids)
+            verified = all(found.get(i) == e for i, e in zip(ids, expect))
+        except Exception as exc:  # noqa: BLE001 - the read-back is isolated like the write; only the class name is kept
+            self.advice_unverified_writes += 1
+            self.advice_last_error = type(exc).__name__
+            return False
+        if not verified:
+            self.advice_unverified_writes += 1
+            self.advice_last_error = ADVICE_READ_BACK_MISSING
+        return verified
+
+    def advice_incident_status(self) -> str:
+        """MISSING, INCOMPATIBLE or OK for the advice_incident table (module function advice_incident_status). Writes nothing."""
+        return advice_incident_status(self.db)
+
+    def _ensure_incident_table(self) -> None:
+        """Make the advice_incident table exist, for persist_advice_incidents only: MISSING -> run the DDL; INCOMPATIBLE -> raise
+        sqlite3.DatabaseError without touching the table; OK -> nothing to do. Opening the scorecard never calls it."""
+        st = advice_incident_status(self.db)
+        if st == ADVICE_LOG_INCOMPATIBLE:
+            raise sqlite3.DatabaseError("advice_incident exists with another shape")
+        if st == ADVICE_LOG_MISSING:
+            self.db.executescript(ADVICE_INCIDENT_DDL)
+
+    def persist_advice_incidents(self, incidents, now: datetime) -> dict:
+        """Write the CLOSED incidents of `incidents` (dicts with the first ten fields of ADVICE_INCIDENT_COLUMNS; an incident without
+        `recovered_utc` is still open and is neither written nor reported) in the advice_incident table, which is created by the
+        first such write, and keep only the newest ADVICE_INCIDENTS_KEPT rows. An incident is identified by its first failure, so
+        writing it again replaces it. The caller calls this only after a verified advice write (the database has just proved
+        that it takes writes). Never raises: a failure (a table of another shape, a failing CREATE, a malformed incident, a full
+        disk) is rolled back, counted in `incident_write_failures` and returned as {"persisted": [], "error": <class name>}.
+        Returns {"persisted": [first_failed_utc, ...], "error": None or a class name}. A reason is stored only when it is an
+        exception class name (incident_reason), otherwise as UnknownError; `now` is the time it is recorded."""
+        out: dict = {"persisted": [], "error": None}
+        try:
+            rows = []
+            for inc in incidents:
+                if not isinstance(inc, dict) or not inc.get("recovered_utc"):
+                    continue
+                rows.append(_incident_row(inc, now))
+            if not rows:
+                return out
+            self._ensure_incident_table()
+            for row in rows:
+                self.db.execute(f"INSERT OR REPLACE INTO advice_incident ({','.join(ADVICE_INCIDENT_COLUMNS)}) "
+                                f"VALUES ({','.join('?' * len(ADVICE_INCIDENT_COLUMNS))})", row)
+            self.db.execute("DELETE FROM advice_incident WHERE first_failed_utc NOT IN "
+                            "(SELECT first_failed_utc FROM advice_incident ORDER BY first_failed_utc DESC LIMIT ?)",
+                            (ADVICE_INCIDENTS_KEPT,))
+            self.db.commit()
+            out["persisted"] = [row[0] for row in rows]
+            return out
+        except Exception as exc:  # noqa: BLE001 - isolated on purpose: counted, only the class name kept
+            self.incident_write_failures += 1
+            self.incident_last_error = type(exc).__name__
+            out["persisted"], out["error"] = [], type(exc).__name__
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+            return out
+
+    def advice_incidents(self) -> list[dict]:
+        """Read-only: the stored incidents, newest first (by their first failure), as dicts of ADVICE_INCIDENT_COLUMNS. A missing
+        or incompatible table gives no rows (advice_incident_status() says which); it never raises for that."""
+        if advice_incident_status(self.db) != ADVICE_LOG_OK:
+            return []
+        got = self.db.execute(f"SELECT {','.join(ADVICE_INCIDENT_COLUMNS)} FROM advice_incident ORDER BY first_failed_utc DESC").fetchall()
+        return [dict(zip(ADVICE_INCIDENT_COLUMNS, tuple(r))) for r in got]
 
     def advice_records(self, start: datetime | None = None, end: datetime | None = None, kind: str | None = None) -> list[dict]:
         """Read-only: the logged advice issued in [start, end) (UTC instants; both optional), oldest first, as the dicts of the
