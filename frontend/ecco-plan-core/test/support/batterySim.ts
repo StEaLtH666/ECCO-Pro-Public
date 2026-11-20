@@ -458,9 +458,9 @@ export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planG
       const stale = rh() < hs.demandStaleProb;
       let household: HouseholdInput = {
         gridImportLimitW: hs.gridLimitW,
-        demandNowW: jitter(trueDemandW(hs, t)), demandAgeMin: stale ? 40 : 0, demandProfile: rebase(hs.demandForecast, t, sc.windowRealMin),
+        demandNowW: jitter(trueDemandW(hs, t)), demandAgeMin: stale ? 40 : 0, demandProfile: rebase(hs.demandForecast, t, sc.windowRealMin), demandProfileAgeMin: 0,
       };
-      if (hs.solarKind !== "none") household = { ...household, solarNowW: jitter(trueSolarW(hs, t)), solarAgeMin: 0, solarProfile: rebase(hs.solarForecast, t, sc.windowRealMin), solarConfidence: hs.solarConf };
+      if (hs.solarKind !== "none") household = { ...household, solarNowW: jitter(trueSolarW(hs, t)), solarAgeMin: 0, solarProfile: rebase(hs.solarForecast, t, sc.windowRealMin), solarProfileAgeMin: 0, solarConfidence: hs.solarConf };
       if (opt.tweak) household = opt.tweak(household, t);
       const d = controller({
         targetSocPct: sc.targetSocPct, bufferMin: sc.bufferMin,

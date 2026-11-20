@@ -34,6 +34,12 @@ export type ParamKind = "PROVISIONAL" | "OWNER_SET" | "MEASURED_REQUIRED";
 export interface NamedCeiling {
   name: string;
   watts: number | null | undefined;
+  /**
+   * Age of this value in real minutes (how long ago it was read or set). Absent or null = not tracked: a static, owner-set value is taken as
+   * current (the v1 behaviour). When given, a value older than `maxCeilingAgeMin`, or an age that is not a number of minutes, is STALE (see
+   * `effectiveCeiling`).
+   */
+  ageMin?: number | null;
 }
 
 /** Battery-side power from a current limit and a voltage (a convenience for the two current-based ceilings); null if either is unknown. */
@@ -77,6 +83,12 @@ export interface GentleParams {
   assumedDemandW: number;
   /** Household demand and solar readings older than this are stale (treated as unknown). */
   maxHouseholdAgeMin: number;
+  /** Demand and solar FORECASTS older than this are stale (treated as unknown). A forecast with no valid age is unknown too. */
+  maxForecastAgeMin: number;
+  /** A named ceiling with an age (`NamedCeiling.ageMin`) older than this is stale: it cannot make a setpoint safe, but a stale lower value still caps. */
+  maxCeilingAgeMin: number;
+  /** A grid import limit with an age (`HouseholdInput.gridImportLimitAgeMin`) older than this is unusable (nothing is recommended). */
+  maxGridLimitAgeMin: number;
   /** Slew limit: a decrease goes down by at most this much per change. At or above hardMaxW it never binds (the v1 behaviour). An increase needed for the deadline may exceed it (JUMP_FOR_DEADLINE). */
   maxDecreaseStepW: number;
 }
@@ -99,6 +111,9 @@ export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
   demandMarginPct: 20,
   assumedDemandW: 2000,
   maxHouseholdAgeMin: 15,
+  maxForecastAgeMin: 120,
+  maxCeilingAgeMin: 60,
+  maxGridLimitAgeMin: 60,
   maxDecreaseStepW: LIMITS.chargePowerMax,
 });
 
@@ -143,6 +158,9 @@ const KINDS: Record<string, readonly [ParamKind, string]> = {
   demandMarginPct: ["PROVISIONAL", "the measured spread of real demand against its forecast"],
   assumedDemandW: ["MEASURED_REQUIRED", "the measured overnight household demand profile (unknown today)"],
   maxHouseholdAgeMin: ["PROVISIONAL", "the real update rate of the demand and solar sensors"],
+  maxForecastAgeMin: ["PROVISIONAL", "the real refresh rate of the demand and solar forecasts"],
+  maxCeilingAgeMin: ["PROVISIONAL", "the real update rate of the live battery and grid-charge limits"],
+  maxGridLimitAgeMin: ["PROVISIONAL", "the real update rate of the grid import limit, when it is read from a device"],
   maxDecreaseStepW: ["PROVISIONAL", "the owner's confirmation (recommended 1000 W; off by default)"],
   fallbackPolicy: ["PROVISIONAL", "the owner's choice"],
   unknownDemandPolicy: ["PROVISIONAL", "the owner's choice"],
@@ -176,17 +194,26 @@ export interface HouseholdInput {
   demandNowW?: number | null;
   /** Age of that reading in real minutes; null or missing counts as stale. */
   demandAgeMin?: number | null;
-  /** Forecast demand over the remaining window. The plan uses its PEAK. */
+  /** Forecast demand over the remaining window. The plan uses its PEAK. It counts only with a fresh `demandProfileAgeMin`. */
   demandProfile?: readonly StepPoint[] | null;
+  /** Age of the demand forecast in real minutes; null or missing counts as stale (an unknown forecast), over `maxForecastAgeMin` too. */
+  demandProfileAgeMin?: number | null;
   /** Available solar now in W, or null when unknown. */
   solarNowW?: number | null;
   solarAgeMin?: number | null;
   /** Forecast solar over the remaining window; counted only with a fresh reading, bounded by the reading and scaled by the confidence. */
   solarProfile?: readonly StepPoint[] | null;
+  /** Age of the solar forecast in real minutes; null or missing counts as stale (the forecast is ignored). */
+  solarProfileAgeMin?: number | null;
   /** 0..1; missing or invalid counts as 0 (solar not counted). */
   solarConfidence?: number | null;
   /** A KNOWN safe grid import limit in W. null or missing means unknown: no grid-headroom constraint is applied and the reason says so; it is never guessed. */
   gridImportLimitW?: number | null;
+  /**
+   * Age of that limit in real minutes. Missing or null = not tracked (a static, owner-set limit). When given and over `maxGridLimitAgeMin`, or not a
+   * number of minutes, the limit is unusable: a limit that was given but cannot be relied on means NO recommendation (fail closed), not "no limit".
+   */
+  gridImportLimitAgeMin?: number | null;
 }
 
 export interface GentleInput {
@@ -260,7 +287,10 @@ export type GentleCode =
   | "HEADROOM_LIMITED"
   | "ABOVE_HEADROOM"
   | "SLEW_LIMITED"
-  | "JUMP_FOR_DEADLINE";
+  | "JUMP_FOR_DEADLINE"
+  | "FORECAST_STALE"
+  | "CEILING_STALE"
+  | "GRID_LIMIT_STALE";
 
 export interface FallbackInfo {
   /** True when the controller could not run its normal plan and the fallback policy was consulted (the status says why). */
@@ -362,6 +392,43 @@ export function smallestKnownCeiling(ceilings: readonly NamedCeiling[]): { watts
     if (best === null || c.watts < best.watts) best = { watts: c.watts, name: String(c.name) };
   }
   return best;
+}
+
+/** True when an age is given and it is not a number of minutes from 0 to the limit (a ceiling with no age counts as current). */
+function ceilingIsStale(c: NamedCeiling, maxAgeMin: number): boolean {
+  return c.ageMin !== undefined && c.ageMin !== null && !fresh(c.ageMin, maxAgeMin);
+}
+
+export interface CeilingResult {
+  /** The ceiling that applies (smallest known, with a fresh one present), or null when no FRESH known ceiling exists. */
+  best: { watts: number; name: string } | null;
+  /** The names of the known ceilings that are stale. */
+  staleNames: string[];
+  /** True when a stale ceiling is the one that applies because it is lower than every fresh one. */
+  staleCaps: boolean;
+}
+
+/**
+ * The ceiling that applies, with ages. A known ceiling is fresh unless its age is given and over `maxAgeMin` (or not a number of minutes). A stale one
+ * counts as UNKNOWN for the purpose of making a setpoint safe: with no fresh known ceiling there is none (NO_SAFE_CEILING, no fallback). It is never
+ * used to RAISE the cap: when a stale value is lower than every fresh one it still applies (a derated limit that went quiet is not forgotten).
+ * `toSetpoint` maps a ceiling to setpoint watts (default: as given).
+ */
+export function effectiveCeiling(ceilings: readonly NamedCeiling[], maxAgeMin: number, toSetpoint: (c: NamedCeiling) => number = (c) => c.watts as number): CeilingResult {
+  let fresh1: { watts: number; name: string } | null = null;
+  let stale1: { watts: number; name: string } | null = null;
+  const staleNames: string[] = [];
+  for (const c of ceilings) {
+    if (!c || !isNum(c.watts) || c.watts < 0) continue;
+    const w = toSetpoint(c);
+    if (ceilingIsStale(c, maxAgeMin)) {
+      staleNames.push(String(c.name));
+      if (stale1 === null || w < stale1.watts) stale1 = { watts: w, name: String(c.name) };
+    } else if (fresh1 === null || w < fresh1.watts) fresh1 = { watts: w, name: String(c.name) };
+  }
+  if (fresh1 === null) return { best: null, staleNames, staleCaps: false };
+  if (stale1 !== null && stale1.watts < fresh1.watts) return { best: stale1, staleNames, staleCaps: true };
+  return { best: fresh1, staleNames, staleCaps: false };
 }
 
 /** BMS acceptance power as a fraction of the ceiling at a SOC: 1 up to the taper start, then linear down to `endFraction` at 100 %. */
@@ -486,6 +553,9 @@ function paramProblem(p: GentleParams): string | null {
   if (p.demandMarginPct < 0 || p.demandMarginPct > 200) return "demandMarginPct must be 0-200.";
   if (p.assumedDemandW < 0 || p.assumedDemandW > 100000) return "assumedDemandW must be 0-100000 W.";
   if (p.maxHouseholdAgeMin <= 0 || p.maxHouseholdAgeMin > 120) return "maxHouseholdAgeMin must be 1-120 minutes.";
+  if (p.maxForecastAgeMin <= 0 || p.maxForecastAgeMin > 1440) return "maxForecastAgeMin must be above 0 and at most 1440 minutes.";
+  if (p.maxCeilingAgeMin <= 0 || p.maxCeilingAgeMin > 1440) return "maxCeilingAgeMin must be above 0 and at most 1440 minutes.";
+  if (p.maxGridLimitAgeMin <= 0 || p.maxGridLimitAgeMin > 1440) return "maxGridLimitAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxDecreaseStepW < p.stepW) return "maxDecreaseStepW must be at least one step.";
   return null;
 }
@@ -611,6 +681,13 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
     return ev;
   }
   if (!isNum(lim) || lim < 0) return bad("HOUSEHOLD_INVALID", "The grid import limit is not a number of watts, 0 or more.");
+  const limAge = h.gridImportLimitAgeMin;
+  if (limAge !== undefined && limAge !== null && !fresh(limAge, p.maxGridLimitAgeMin)) {
+    // A limit that was given but cannot be relied on is not "no limit": nothing is recommended (fail closed).
+    ev.codes.push("HOUSEHOLD_UNUSABLE", "GRID_LIMIT_STALE");
+    ev.problem = "The grid import limit is older than " + p.maxGridLimitAgeMin + " min or its age is not a number of minutes: it counts as unknown, and a limit that was given cannot be skipped.";
+    return ev;
+  }
   ev.limitW = lim;
   const n = Math.max(1, Math.min(Math.ceil(horizonMin), MAX_HORIZON_MIN));
 
@@ -630,7 +707,14 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
   if (dp !== undefined && dp !== null) {
     const why = stepProfileProblem(dp);
     if (why !== null) return bad("HOUSEHOLD_INVALID", "The demand profile is not usable: " + why + ".");
-    if (dp.length > 0) prof = dp;
+    if (dp.length > 0) {
+      if (fresh(h.demandProfileAgeMin, p.maxForecastAgeMin)) prof = dp;
+      else {
+        // A forecast with no fresh age is unknown: it does not cover the window.
+        ev.codes.push("FORECAST_STALE");
+        ev.reasons.push("The demand forecast is older than " + p.maxForecastAgeMin + " min or has no valid age: it counts as unknown.");
+      }
+    }
   }
   const covered = prof !== null && (nowKnown || (prof[0] as StepPoint).fromInMin === 0);
   let peak = nowKnown ? nowW : 0;
@@ -664,7 +748,7 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
   }
   const sp = h.solarProfile;
   if (sp !== undefined && sp !== null && sp.length !== 0) {
-    if (stepProfileProblem(sp) === null) solarProf = sp;
+    if (stepProfileProblem(sp) === null && fresh(h.solarProfileAgeMin, p.maxForecastAgeMin)) solarProf = sp;
     else ignored = true;
   }
   const sc = h.solarConfidence;
@@ -808,8 +892,11 @@ export function planGentle(input: GentleInput): GentleDecision {
   const toDeadline = windowReal - input.bufferMin - input.elapsedMin;
   const toEnd = windowReal - input.elapsedMin;
   const cMin = ceilStep(p.minW, p.stepW);
-  const known = smallestKnownCeiling(input.ceilings);
+  const ceil = effectiveCeiling(input.ceilings, p.maxCeilingAgeMin);
+  const known = ceil.best;
   const cCeil = known === null ? null : floorStep(Math.min(known.watts, p.hardMaxW), p.stepW);
+  const staleCeilingNote = "A named ceiling is stale (" + ceil.staleNames.join(", ") + "; older than " + p.maxCeilingAgeMin + " min or no valid age): a stale value cannot make a setpoint safe on its own" + (ceil.staleCaps ? ", and the stale value is lower than every fresh one, so it still caps" : "") + ".";
+  const agedCeilings = Array.isArray(input.ceilings) && input.ceilings.some((c) => !!c && c.ageMin !== undefined && c.ageMin !== null);
   let hhMemo: HouseholdEval | null = null;
   const hhEval = (): HouseholdEval => (hhMemo ??= evalHousehold(input.household, p, pol, toEnd));
   const mk = (status: GentleStatus, reasons: string[], codes: GentleCode[]) => shell(status, target, reasons, codes, p, used, pol.fallbackPolicy);
@@ -835,7 +922,12 @@ export function planGentle(input: GentleInput): GentleDecision {
 
   // The safe ceiling: the smallest KNOWN one, rounded down to a step, capped at the editor maximum. None known = no recommendation.
   if (known === null || cCeil === null) {
-    return withFallback(mk("NO_SAFE_CEILING", ["No safe power ceiling is known (owner maximum, battery maximum charge power, grid-charge power); no default is guessed and nothing is recommended."], ["NO_CEILING"]), "No safe ceiling is known.", []);
+    const none = mk("NO_SAFE_CEILING", ["No safe power ceiling is known (owner maximum, battery maximum charge power, grid-charge power); no default is guessed and nothing is recommended."], ["NO_CEILING"]);
+    if (ceil.staleNames.length > 0) {
+      none.codes.push("CEILING_STALE");
+      none.reasons.push(staleCeilingNote + " No fresh known ceiling remains.");
+    }
+    return withFallback(none, "No safe ceiling is known.", agedCeilings ? ["maxCeilingAgeMin"] : []);
   }
   const cMax0 = cCeil;
   if (cMax0 < cMin) {
@@ -858,10 +950,10 @@ export function planGentle(input: GentleInput): GentleDecision {
       headroomBinds = true;
     }
   }
-  const householdNames: string[] = hh.given && hh.limitW !== null ? ["demandMarginPct", "maxHouseholdAgeMin", ...(hh.basis === "ASSUMED" ? ["assumedDemandW", "unknownDemandPolicy"] : [])] : [];
+  const householdNames: string[] = hh.given && hh.limitW !== null ? ["demandMarginPct", "maxHouseholdAgeMin", "maxForecastAgeMin", ...(hh.basis === "ASSUMED" ? ["assumedDemandW", "unknownDemandPolicy"] : [])] : [];
   const hold = target >= 100 ? p.topHoldMin : 0;
   const slewNames = p.maxDecreaseStepW < p.hardMaxW ? ["maxDecreaseStepW"] : [];
-  const provNames = [...CORE_NAMES, ...(hold > 0 ? ["topHoldMin"] : []), ...householdNames, ...slewNames];
+  const provNames = [...CORE_NAMES, ...(hold > 0 ? ["topHoldMin"] : []), ...(agedCeilings ? ["maxCeilingAgeMin"] : []), ...householdNames, ...slewNames];
   const summary = (): string => "Grid headroom: limit " + Math.round(hh.limitW as number) + " W, household demand peak " + Math.round(hh.peakW as number) + " W (with the " + p.demandMarginPct + " % margin), least solar counted " + Math.round(hh.solarMinW as number) + " W: the setpoint is capped at " + (capStep as number) + " W.";
   if (cMax < cMin) {
     const d = mk("NO_SAFE_CEILING", ["The grid headroom allows " + (capStep as number) + " W, below the minimum setpoint of " + cMin + " W. " + summary() + " Nothing is recommended."], ["HEADROOM_BELOW_MIN"]);
@@ -898,6 +990,10 @@ export function planGentle(input: GentleInput): GentleDecision {
   const finish = (w: number, maxMin: number, sample = 0) => projectCharge(planSoc, w, target, model, maxMin, sample);
   const done = (): GentleDecision => {
     out.provisionalInUse = provisionalList(provNames, p, pol, input);
+    if (ceil.staleNames.length > 0) {
+      out.codes.push("CEILING_STALE");
+      out.reasons.push(staleCeilingNote);
+    }
     if (hh.given) {
       out.codes.push(...hh.codes);
       out.reasons.push(...hh.reasons);

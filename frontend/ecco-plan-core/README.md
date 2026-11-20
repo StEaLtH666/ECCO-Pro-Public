@@ -79,9 +79,12 @@ provisional ones it used in `provisionalInUse`.
 | `demandMarginPct` | 20 | PROVISIONAL | percent added to the household demand peak | the measured spread of real demand against its forecast |
 | `assumedDemandW` | 2000 W | MEASURED_REQUIRED | floor of the demand peak when demand over the window is not covered and the policy is ASSUME_PROVISIONAL (`ASSUMED_DEMAND`) | the measured overnight household demand profile (unknown today) |
 | `maxHouseholdAgeMin` | 15 min | PROVISIONAL | demand and solar readings older than this are treated as unknown | the real update rate of those sensors |
+| `maxForecastAgeMin` | 120 min | PROVISIONAL | the demand and solar FORECASTS (`demandProfileAgeMin`, `solarProfileAgeMin`) older than this, or with no valid age, are unknown | the real refresh rate of those forecasts |
+| `maxCeilingAgeMin` | 60 min | PROVISIONAL | a named ceiling with an age (`ageMin`) older than this is stale: it cannot make a setpoint safe, but a stale value that is lower than every fresh one still caps | the real update rate of the live battery and grid-charge limits |
+| `maxGridLimitAgeMin` | 60 min | PROVISIONAL | a grid import limit with an age (`gridImportLimitAgeMin`) older than this is unusable: nothing is recommended | the real update rate of the limit, when it is read from a device |
 | `maxDecreaseStepW` | 8000 W | PROVISIONAL | slew limit per decrease; 8000 W never binds, which keeps the v1 behaviour; the recommended gentle value is 1000 W (`GENTLE_RECOMMENDED_PARAMS`) | the owner's confirmation |
 | `fallbackPolicy` | KEEP_CURRENT | PROVISIONAL | what to hold when the plan cannot run: `KEEP_CURRENT`, `USE_STATIC_PLAN` or `NONE` | the owner's choice |
-| `unknownDemandPolicy` | ASSUME_PROVISIONAL | PROVISIONAL | unknown demand with a known grid limit: `ASSUME_PROVISIONAL` or `FALLBACK` | the owner's choice |
+| `unknownDemandPolicy` | FALLBACK | PROVISIONAL | unknown demand with a known grid limit: `FALLBACK` (the default: no recommendation, nothing is guessed) or `ASSUME_PROVISIONAL` (an explicit option: plans from `assumedDemandW`, status `DEGRADED`, never `OK`) | the owner's choice |
 | `targetSocPct` | owner setting | OWNER_SET | the charge target, 10-100; never lowered by the model | the owner's setting |
 | `bufferMin` | 60 min | OWNER_SET | finish-early buffer, 0-120 in 5-minute steps (`GENTLE_DEFAULT_BUFFER_MIN` is the default helpers and tests use) | the owner's setting |
 | `gridImportLimitW` | owner setting or unknown | OWNER_SET | the KNOWN safe grid import limit; unknown means no headroom constraint | the owner's or installer's figure |
@@ -105,8 +108,17 @@ Demand is the household load EXCLUDING the charger (the caller subtracts the pre
   uses the delivered power per minute, `min(setpoint, ceiling x taper acceptance, headroom at that minute)`, not a constant. (For a setpoint inside the cap the headroom is never the smaller term, because the cap is its least value over the window; the term makes the projection honest for any setpoint outside the cap and is covered by its own tests.)
 - Unknown grid limit: no headroom constraint is applied, the reason says so (`NO_GRID_LIMIT`), the limit is never guessed. A limit that is not a
   number is `NO_DATA` (`HOUSEHOLD_INVALID`).
-- Unknown demand with a known limit (no forecast from now and no fresh reading): `ASSUME_PROVISIONAL` uses `assumedDemandW` as the floor of the
-  peak (`ASSUMED_DEMAND`, labelled `assumed, not measured`); `FALLBACK` returns `NO_DATA` (`HOUSEHOLD_UNUSABLE`) and applies the fallback policy.
+- Unknown demand with a known limit (no fresh forecast from now and no fresh reading): the default policy `FALLBACK` returns `NO_DATA`
+  (`HOUSEHOLD_UNUSABLE`) and applies the fallback policy: no guessed constant stands in for an unknown demand under a known safety limit.
+  `ASSUME_PROVISIONAL` is an explicit option: `assumedDemandW` is the floor of the peak (`ASSUMED_DEMAND`, labelled `assumed, not measured`) and
+  the status is `DEGRADED`, never `OK` (a worse status such as `TARGET_AT_RISK` is not softened).
+- Ages (fail closed). A forecast needs a fresh age: `demandProfileAgeMin` and `solarProfileAgeMin` (real minutes) up to `maxForecastAgeMin`; a
+  forecast with no valid age is unknown (`FORECAST_STALE`; a stale solar forecast is ignored, `SOLAR_IGNORED`). A named ceiling may carry an age
+  (`NamedCeiling.ageMin`): one with no age is a static, owner-set value taken as current (the v1 behaviour); one that is older than
+  `maxCeilingAgeMin` is stale (`CEILING_STALE`): with no fresh known ceiling left the status is `NO_SAFE_CEILING` (no fallback), and a stale value
+  that is LOWER than every fresh one still applies (a derated limit that went quiet is not forgotten; a stale value never raises the cap). A grid
+  limit may carry an age (`gridImportLimitAgeMin`): none means a static limit; one older than `maxGridLimitAgeMin` makes the household input
+  unusable (`GRID_LIMIT_STALE`, `NO_DATA`, no recommendation), not "no limit".
 - Anti-flapping, only in this mode: a highest-safe-setpoint recovery (the cap rises again while the target is already at risk) waits for the
   hysteresis and the dwell like a saving; an increase the deadline can wait for (a raise to the maximum after the dwell still makes it with the
   decrease slack) waits out the dwell (`HELD_DWELL`); an increase that cannot wait, and a fall of the cap (`ABOVE_HEADROOM`), are immediate.

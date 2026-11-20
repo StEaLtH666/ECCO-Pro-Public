@@ -9,6 +9,7 @@ import {
 import type { GentleInput, GentleDecision, GentleParams, GentlePolicy, NamedCeiling, ChargeModel, HouseholdInput, StepPoint } from "../src/gentleController.ts";
 import type { ClockDay } from "../src/time.ts";
 import { norm } from "../src/time.ts";
+import * as G4 from "../src/gentleController.ts";   // v3: new helpers are reached through the namespace
 import { rng } from "./fixtures.ts";
 import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1 } from "./support/batterySim.ts";
 
@@ -694,7 +695,16 @@ test("closed loop: a battery already at or above the target is left alone for th
 // Computed ONCE from the v1 module (commit a0d34b8) by v1Fingerprint: 400 seeded closed-loop runs and 4000 random inputs, v1 fields only.
 const GOLDEN_V1_DIGEST = "0449cbd371baaf7748fad96ef6391ebb9aeaf70436e82a8d69e66c29a15827e0";
 const hbase: GentleInput = { ...base, bufferMin: GENTLE_DEFAULT_BUFFER_MIN };
-const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: h, ...over });
+// v3 G4: a forecast counts only with a fresh age. The old checks were written before forecasts had an age, so this helper gives a profile that has no
+// age one of 0 minutes (fresh); the checks of the age rule itself call planGentle directly.
+const withAges = (h: HouseholdInput | undefined): HouseholdInput | undefined => {
+  if (h === undefined || h === null || typeof h !== "object") return h;
+  const o: HouseholdInput = { ...h };
+  if (o.demandProfile && o.demandProfileAgeMin === undefined) o.demandProfileAgeMin = 0;
+  if (o.solarProfile && o.solarProfileAgeMin === undefined) o.solarProfileAgeMin = 0;
+  return o;
+};
+const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: withAges(h), ...over });
 const flat = (watts: number): StepPoint[] => [{ fromInMin: 0, watts }];
 const PLANNING = new Set(["OK", "DEGRADED", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);   // v3 G3: DEGRADED (an assumed demand, asked for explicitly) is a planning status
 const inf = (x: number | null) => (x === null ? Infinity : x);
@@ -1216,8 +1226,8 @@ function randomHousehold(rand: () => number): HouseholdInput | undefined {
   };
   return {
     gridImportLimitW: rand() < 0.15 ? null : 1000 + Math.floor(rand() * 11000),
-    demandNowW: rand() < 0.2 ? null : Math.round(rand() * 4000), demandAgeMin: rand() < 0.15 ? 60 : Math.floor(rand() * 10), demandProfile: profile(4000),
-    solarNowW: rand() < 0.3 ? null : Math.round(rand() * 5000), solarAgeMin: rand() < 0.1 ? 60 : Math.floor(rand() * 10), solarProfile: profile(5000),
+    demandNowW: rand() < 0.2 ? null : Math.round(rand() * 4000), demandAgeMin: rand() < 0.15 ? 60 : Math.floor(rand() * 10), demandProfile: profile(4000), demandProfileAgeMin: rand() < 0.1 ? 600 : Math.floor(rand() * 60),
+    solarNowW: rand() < 0.3 ? null : Math.round(rand() * 5000), solarAgeMin: rand() < 0.1 ? 60 : Math.floor(rand() * 10), solarProfile: profile(5000), solarProfileAgeMin: rand() < 0.1 ? 600 : Math.floor(rand() * 60),
     solarConfidence: rand() < 0.15 ? null : Math.round(rand() * 100) / 100,
   };
 }
@@ -1751,4 +1761,96 @@ test("[v3 G3] unknown demand under a KNOWN grid limit: the default is FALLBACK (
     assert.ok(d.status === "NO_DATA" || d.status === "DEADLINE_PASSED", d.status);
   }
   assert.ok(swept > 300, "swept " + swept);
+});
+
+const HP = (age: unknown, over: Partial<HouseholdInput> = {}) => planGentle({ ...hbase, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: age as number, ...over } });
+const CE = (cs: NamedCeiling[], over: Partial<GentleInput> = {}) => plan({ ceilings: cs, ...over });
+
+test("[v3 G4a] a forecast needs a fresh age: a stale, missing or invalid age counts as unknown (fail closed), never a covered window", () => {
+  // forecast age: exactly the limit is fresh, over it, missing, null, negative, NaN and a string are not
+  for (const ok of [0, 1, 60, 120]) assert.equal(HP(ok).status, "OK", "age " + ok);
+  assert.equal(HP(0).headroomCapW, 5800);
+  for (const bad of [121, 600, undefined, null, -1, NaN, "5"]) {
+    const d = HP(bad);
+    assert.equal(d.status, "NO_DATA", "age " + String(bad));
+    assert.equal(d.setpointW, null, "a forecast with no fresh age does not cover the window");
+    assert.ok(d.codes.includes("HOUSEHOLD_UNUSABLE") && d.codes.includes("FORECAST_STALE"), String(bad) + ": " + d.codes.join(","));
+    assert.equal(d.fallback.applied, true);
+    assert.equal(d.fallback.setpointW, null, "the grid headroom cannot be checked");
+  }
+  // a fresh READING does not rescue a stale forecast (it covers only the first minutes), and an assumed demand degrades the status
+  assert.equal(HP(500, { demandNowW: 600, demandAgeMin: 0 }).status, "NO_DATA");
+  const assumed = planGentle({ ...hbase, policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" }, household: { gridImportLimitW: 9000, demandProfile: flat(1000), demandProfileAgeMin: 500 } });
+  assert.equal(assumed.status, "DEGRADED");
+  assert.equal(assumed.household?.demandBasis, "ASSUMED");
+  assert.ok(assumed.codes.includes("FORECAST_STALE") && assumed.codes.includes("ASSUMED_DEMAND"));
+  assert.equal(assumed.household?.demandPeakW, 2400, "the stale forecast's 1000 W is not used: the assumed 2000 W x 1.2");
+  assert.equal(planGentle({ ...hbase, params: { maxForecastAgeMin: 300 }, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: 300 } }).status, "OK");
+  assert.ok(hplan({ gridImportLimitW: 7000, demandProfile: flat(1000) }).provisionalInUse.some((x) => x.name === "maxForecastAgeMin" && x.kind === "PROVISIONAL" && x.source === "DEFAULT"));
+  assert.ok(!plan().provisionalInUse.some((x) => x.name === "maxCeilingAgeMin" || x.name === "maxForecastAgeMin"), "only where they act");
+});
+
+test("[v3 G4b] the age limits are validated parameters with conservative defaults", () => {
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxForecastAgeMin, 120);
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxCeilingAgeMin, 60);
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxGridLimitAgeMin, 60);
+  for (const params of [{ maxForecastAgeMin: 0 }, { maxForecastAgeMin: -5 }, { maxForecastAgeMin: 1441 }, { maxForecastAgeMin: NaN }, { maxCeilingAgeMin: 0 }, { maxCeilingAgeMin: 5000 }, { maxGridLimitAgeMin: 0 }, { maxGridLimitAgeMin: 1441 }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  for (const params of [{ maxForecastAgeMin: 1 }, { maxForecastAgeMin: 1440 }, { maxCeilingAgeMin: 1440 }, { maxGridLimitAgeMin: 1 }]) assert.equal(plan({ params }).status, "OK", JSON.stringify(params));
+});
+
+test("[v3 G4c] a stale solar forecast is ignored; a stale or invalid grid limit age makes the household input unusable, which is not the same as no limit", () => {
+  // a stale solar forecast is ignored like any untrusted solar
+  const sol = (age: unknown) => planGentle({ ...hbase, household: { gridImportLimitW: 4500, demandProfile: flat(1000), demandProfileAgeMin: 0, solarNowW: 2000, solarAgeMin: 0, solarProfile: flat(4000), solarProfileAgeMin: age as number, solarConfidence: 0.5 } });
+  assert.ok(!sol(0).codes.includes("SOLAR_IGNORED"));
+  for (const bad of [121, undefined, null, NaN]) assert.ok(sol(bad).codes.includes("SOLAR_IGNORED"), "solar forecast age " + String(bad));
+  // the grid limit: no age is a static limit (accepted); an age is enforced; a limit that was GIVEN but is stale is not "no limit"
+  assert.equal(HP(0, { gridImportLimitAgeMin: 60 }).status, "OK");
+  assert.equal(HP(0, { gridImportLimitAgeMin: undefined }).status, "OK");
+  assert.equal(HP(0, { gridImportLimitAgeMin: null }).status, "OK");
+  for (const bad of [61, 999, -1, NaN, "x"]) {
+    const d = HP(0, { gridImportLimitAgeMin: bad as number });
+    assert.equal(d.status, "NO_DATA", "limit age " + String(bad));
+    assert.equal(d.setpointW, null);
+    assert.ok(d.codes.includes("GRID_LIMIT_STALE") && d.codes.includes("HOUSEHOLD_UNUSABLE"));
+    assert.ok(!d.codes.includes("NO_GRID_LIMIT"), "a stale limit is not the same as no limit");
+    assert.equal(d.fallback.setpointW, null);
+  }
+  assert.equal(HP(0, { gridImportLimitAgeMin: 300 }).fallback.applied, true);
+  assert.equal(planGentle({ ...hbase, params: { maxGridLimitAgeMin: 300 }, household: { gridImportLimitW: 7000, gridImportLimitAgeMin: 300, demandProfile: flat(1000), demandProfileAgeMin: 0 } }).status, "OK");
+  // no limit at all: demand and ages are irrelevant, as before
+  assert.equal(planGentle({ ...hbase, household: { demandProfile: flat(1000), demandProfileAgeMin: 9999 } }).status, "OK");
+});
+
+test("[v3 G4d] named ceilings with an age: no age is static (v1); a stale ceiling never raises the cap but a stale LOWER one still lowers it; none fresh is NO_SAFE_CEILING, no fallback", () => {
+  assert.equal(CE([{ name: "owner_maximum", watts: 5000 }]).ceilingW, 5000);
+  assert.equal(CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 6200, ageMin: 60 }]).ceilingW, 5000);
+  const lowStale = CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 3000, ageMin: 61 }]);
+  assert.equal(lowStale.ceilingW, 3000, "a derated limit that went quiet is not forgotten");
+  assert.equal(lowStale.ceilingName, "battery_max_charge");
+  assert.ok(lowStale.codes.includes("CEILING_STALE"));
+  assert.match(lowStale.reasons.join(" "), /still caps/);
+  assert.ok((lowStale.setpointW as number) <= 3000);
+  const highStale = CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 9000, ageMin: 500 }]);
+  assert.equal(highStale.ceilingW, 5000, "a stale value never raises the cap");
+  assert.ok(highStale.codes.includes("CEILING_STALE"));
+  const staleOnlyLower = CE([{ name: "owner_maximum", watts: 5000, ageMin: 90 }, { name: "battery_max_charge", watts: 6200, ageMin: 0 }]);
+  assert.equal(staleOnlyLower.ceilingW, 5000, "the stale owner maximum is lower than the fresh battery limit, so it caps");
+  for (const stale of [[{ name: "a", watts: 5000, ageMin: 61 }], [{ name: "a", watts: 5000, ageMin: NaN }], [{ name: "a", watts: 5000, ageMin: -1 }], [{ name: "a", watts: 5000, ageMin: 90 }, { name: "b", watts: 6000, ageMin: 1000 }]] as NamedCeiling[][]) {
+    const d = CE(stale, { currentSetpointW: 3000, policy: { fallbackPolicy: "KEEP_CURRENT" } });
+    assert.equal(d.status, "NO_SAFE_CEILING", JSON.stringify(stale));
+    assert.equal(d.setpointW, null);
+    assert.equal(d.neededW, null);
+    assert.ok(d.codes.includes("NO_CEILING") && d.codes.includes("CEILING_STALE"));
+    assert.equal(d.fallback.setpointW, null, "no fresh ceiling to check a fallback against");
+    assert.match(d.reasons.join(" "), /stale/);
+  }
+  assert.equal(CE([{ name: "a", watts: 5000, ageMin: 100 }], { params: { maxCeilingAgeMin: 100 } }).status, "OK", "the limit is the owner's parameter");
+  // a fresh ceiling and no ages anywhere: never a stale code
+  assert.ok(!CE([{ name: "a", watts: 5000, ageMin: 5 }]).codes.includes("CEILING_STALE"));
+  assert.ok(!plan().codes.includes("CEILING_STALE"));
+  // the exported helper
+  const r = G4.effectiveCeiling([{ name: "x", watts: 4000, ageMin: 10 }, { name: "y", watts: 3500, ageMin: 99 }, { name: "z", watts: null }], 60);
+  assert.deepEqual({ best: r.best, stale: r.staleNames, caps: r.staleCaps }, { best: { watts: 3500, name: "y" }, stale: ["y"], caps: true });
+  assert.equal(G4.effectiveCeiling([{ name: "y", watts: 3500, ageMin: 99 }], 60).best, null);
+  assert.ok(CE([{ name: "a", watts: 5000, ageMin: 5 }]).provisionalInUse.some((x) => x.name === "maxCeilingAgeMin"), "listed where it acts");
 });
