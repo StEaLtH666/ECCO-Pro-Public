@@ -49,6 +49,15 @@ but it is loaded everywhere until the owner deletes the resource (section 7). So
 and configuration, not what their pages load. Step 4 therefore ends with one look at the production Overview (5.4), and section 9
 lists the known console noise.
 
+**Admin-only is a visibility setting, not a security boundary.** "Require admin" on the new dashboard (A3) is what keeps the page out of a
+non-admin user's sidebar: Home Assistant's frontend hides the panel from, and does not register it for, non-admin users (recalled from Home
+Assistant's behaviour, not verified: no non-admin account was used to confirm it). It is a visibility control for the page. It is **not** a security
+boundary against a non-admin who calls Home Assistant's own API (recalled, not verified: whether such a call can read the stored dashboard text), and
+it does not limit what the module resource (A2) loads: that resource is global (above). What follows: the dashboard configuration holds only
+descriptive text and the Intelligence entity names of the repository's example, no secret, no address and no token (the generator's own privacy scan
+and the pin suite check the text, section 2), so nothing in it needs protecting; and the states the card shows are readable by any signed-in user
+through Home Assistant's own interfaces whether or not this page exists (recalled, not verified), which this update neither widens nor narrows.
+
 **Not touched, by design:** the files and configuration of the production Overview and of every other dashboard, every existing
 resource (the Overview is guarded by the site's dashboard preservation gate; this update never writes a dashboard file, so the
 gate does not apply and is not bypassed), every package, helper, automation, script and entity, the Intelligence integration and
@@ -63,6 +72,26 @@ entry in YAML would need one), and the rollback is two deletions. The catalogue 
 never placed under `/config/www`, which is served without authentication (it names entity ids and texts). The alternative (a
 second view in the existing Intelligence YAML dashboard with an `!include` of the catalogue) is **not prepared**: it needs
 owner-approved edits of two protected assertions and an `!include` read that has never run on the real host.
+
+### 1.1 What U1 preserves, and how that was checked
+
+Checked offline on the exact tip (round 3, section 13). None of it has been observed on a real Home Assistant.
+
+| Preserved | What was checked | Where |
+|---|---|---|
+| the production Overview and the existing Intelligence dashboard (their files and configuration) | no step writes a dashboard file: the deploy tool writes ONE new `.js` file under `/config/www/ecco/` (and its backup folder), the resource and the dashboard are made by the owner in the UI, and step 6 compares the sha256 of every `.storage/lovelace*` file and every file under `ecco/dashboards/` with the baseline | steps 3, 5, 6; 5.6 |
+| the existing Intelligence view | the three cards Production shows (the Intelligence card with its 13 entity options, the watchdog and status entities card with its 4 rows, the pause tile) and the text-fallback markdown card are **deep-equal** to the cards of the existing Intelligence dashboard definition in this repository, in the example and in the generated configuration | `frontend/ecco-mode-shell/examples/`; the generator suite |
+| existing safety alerts and control behaviour | the shell's source has no service call, request, websocket, storage or dynamic code (a word-bounded search of the card source finds none, and the pin suite's forbidden-API rule scans the whole text); it reads only the states, the locale and the theme of Home Assistant's object, and has three click-only actions (open an entity's dialog by the standard event, copy to the clipboard, download a file); no step creates an entity, helper, automation or package, restarts Home Assistant or edits an existing dashboard | `tools/tests/test_ecco_mode_shell_card.py`, rules [2] to [5]; the Node trap on every `hass` function |
+
+**The one write.** The pause tile toggles the pause helper: the same write the existing Intelligence dashboard already offers, now also on a second
+page. The shell itself never writes, and nobody taps the tile during this update (step 7, S2).
+
+**What is different from the existing Intelligence page, all of it by design:** (1) it is a NEW storage-mode dashboard with "Require admin"; the
+existing one is a YAML dashboard that is not edited; (2) the same cards sit inside one shell card, so the page order is the switch and a fixed
+note, the alert strip, the Intelligence card, the watchdog and status card, the one Production sentence and the pause tile, then the text fallback
+outside the shell (the existing page order is the Intelligence card, the pause tile, the watchdog and status card, the text fallback); (3) the shell
+adds the switch, the note, the sentence, the catalogue-driven alert strip (19 rules) and, in Geek Mode, the inspector (17 sources, 344 attribute rows),
+and Geek Mode hides the pause tile and keeps the two read-only cards; (4) one module resource is registered for every page (above).
 
 ## 2. The artefacts and their hashes
 
@@ -100,7 +129,7 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 | 0 | offline gates on the exact commit: the verification table (section 13), the owner's M2 private-pattern scan, the push, draft pull request and CI, the choice D-U1-1 | COORDINATOR (the M2 scan is the owner's tool, run only on the owner's go) | offline (the push and CI touch GitHub only) | read-only on the live system; a push is a GitHub write | **yes**, each of: the M2 scan, the push, the pull request, the choice of commit | the table is green or its failures are named as known; CI green on the pushed tip if the owner chose to push | any new failure; a card or catalogue hash that is not the pinned one |
 | 1 | live read-only baseline (5.1) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; G4 holds | anything of A1 to A3 already present; the Intelligence card's resource missing; Core not running; a copy that is not byte-exact |
 | 2 | the owner's protected full backup in the UI; RG-F3 decision recorded; quiet window confirmed | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists (its name and time recorded offline, never its password) | no protected backup |
-| 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
+| 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
 | 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource`; then one owner look at the production Overview, because the resource is global (5.4) | OWNER (the add, the look), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the look are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; the Overview renders as before with no new console error that names the shell | any other line; any other resource changed; the Overview shows an error that names the shell |
 | 5 | the owner creates the admin-only storage dashboard, makes the two pre-save checks and pastes the generated configuration (5.5) | OWNER | live (UI) | a Home Assistant write by the owner | the owner's action | the dashboard exists, "Require admin" is on, the paste saved in the NEW dashboard | the raw editor is not offered; Home Assistant refuses the text; either pre-save check fails |
 | 6 | read-only after-checks (5.6) | COORDINATOR | live | read-only | **yes** (a live read) | the Overview file and every other dashboard file have their baseline sha256; the resource list differs by exactly one item; the dashboard list by exactly one item; the stored configuration (copied with `scp`) equals the generated one; no new lovelace, frontend or shell line in the log; Intelligence status and pause helper unchanged | any other difference |
@@ -158,7 +187,8 @@ New-Item -ItemType Directory -Force dist\geek-u1 | Out-Null
 
 The first command prints the size and sha256 of the configuration and the resource URL with the card's sha256. The second prints
 `OK: <bytes> bytes, sha256 <64 hex>` and exits 0 only when the file equals a fresh generation byte for byte and the checks pass
-(section 13 lists the size and sha256 for the exact tip). Both need no network and write nothing else. `plan.json` is a small
+(section 13 lists the size and sha256 for the exact tip). Both need no network and write nothing else (the first refuses, exit 2, to replace an
+existing output file whose bytes differ, unless `--overwrite` is added). `plan.json` is a small
 hand-made plan for the existing resource gate (its one card: tag `ecco-mode-shell`, the content-addressed file name, the URL, type
 `module` and the card's sha256); `tools/ecco_deploy_preflight.py` lists its cards in a constant that does not name the shell, so the
 plan is made here and **that safety tool is not edited**.
@@ -206,8 +236,10 @@ foreach ($line in Get-Content "$E\sha-before.txt") {
 (Select-String -Path "$E\www-ecco-before.txt" -SimpleMatch 'ecco-mode-shell').Count
 ```
 
-These are the same read-only forms the repository's own documentation uses (`cat` of the persisted resource list, `sha256sum`,
-`ha core info`, and `scp` for a byte-exact copy). What each file is for: `resources-before.json` is the pre-change capture that
+These are read-only forms that already exist in the repository: the `cat` of the persisted resource list is the capture that
+`docs/user/site-render.md` documents for `verify-resource`, `ha core info` is the call of `tools/ha-status.ps1`, and `sha256sum` and `scp` are what
+`tools/deploy-ha.ps1` itself runs for its hashes and its upload. The `sha256sum` over a file glob and the `scp` of each stored dashboard file are new
+combinations of them and have not been run on the production host. What each file is for: `resources-before.json` is the pre-change capture that
 `verify-resource --before` needs (it must be the raw persisted file, in the same form as the later read-back); `sha-before.txt`
 holds the sha256 of the persisted resource list, the dashboard list, every persisted dashboard configuration and every dashboard
 file (the production Overview and the existing Intelligence dashboard among them); `core-info-before.txt` holds the Home Assistant
@@ -295,12 +327,35 @@ The owner makes a full backup in the Home Assistant UI with a protected (encrypt
 makes a backup over SSH as a substitute (the deploy tool's own backup folder, `/config/ecco-backups/<stamp>/`, holds only a copy of
 the resource list for this update; it is a convenience, not a backup).
 
+**What restoring this backup would do (said plainly, because it is the last resort and never the first rollback).** Restoring a Home Assistant
+backup is a heavy action and the owner's decision: as the Home Assistant interface offers it (recalled, not verified on this host) it restarts Home
+Assistant, and it returns everything the backup holds to its state at the time the backup was made, so that whatever changed or was recorded since
+(settings, helper and control states, the history the database kept, other dashboards, anything an add-on or the owner changed meanwhile) goes back with
+it. The small rollback of section 7 (delete the dashboard, delete the resource, leave or move the file) undoes only this update and restarts nothing.
+The backup is for the case in which section 7 cannot undo what happened (S1 names it), and then only after the owner has weighed what has changed since
+the backup was made.
+
 ### 5.3 Step 3: copy the card (a write: one new file)
 
 The destination is the content-addressed name. `<sha8>` is the first eight hex characters of the card's sha256 (section 13).
 `-Destination` must be given: the tool derives a default only for a `dist` asset or a package or dashboard. The destination is on
 the tool's allowlist (`/config/www/ecco/`); the tool refuses `/config/ecco/site-local/`, `/config/ecco/intelligence/` and
 `/config/ecco/staging/` and, with the shell, nothing there is touched.
+
+**The exact names.** For the pinned card (sha256 `17410163c016...`, so `<sha8>` is `17410163`) three values must agree, character for character,
+in the deploy line, in the owner's resource and in `plan.json`:
+
+| What | Exact value |
+|---|---|
+| the file on the host (A1), the `-Destination` | `/config/www/ecco/ecco-mode-shell.17410163.js` |
+| the resource URL (A2): no host, no query string, no `?v=` | `/local/ecco/ecco-mode-shell.17410163.js` |
+| the resource type (A2) | `module` (the screen shows "JavaScript module") |
+
+`plan.json` carries the URL and the type (`resource_url`, `resource_type`), made from the card file's own bytes, and `verify-served` and
+`verify-resource` check against the plan, not against this text. **The deploy tool does not check that a name equals the content address**: it
+installs the name it is given, inside its allowlist. The name is proven afterwards by `verify-served`, which fetches the plan's URL and compares the
+sha256 (a wrong name is a 404 or a mismatch there, before any resource exists). A card that is not the pinned one has another name, and these three
+values change with it.
 
 ```powershell
 cls
@@ -314,18 +369,23 @@ requires `-Target`, and refuses `Production` for a host that carries the test-in
 
 Preconditions the tool enforces itself: the source is a file inside the checkout, the working tree is clean (the generated files
 under `dist\` are git-ignored), repository validation passes with `-Python`, the SSH probe passes and the target guard proves the
-host is the production one. Never pass `-SkipValidation`, `-AllowDirtyWorkingTree` or `-Restart`. If a local gate pin file
-(`ecco_dashboard_gate.local.txt`, git-ignored) exists in the checkout the run states the pinned gate; a fresh checkout has none, and
-the gate does not apply to a `.js` destination either way.
+host is the production one. Never pass `-SkipValidation`, `-AllowDirtyWorkingTree` or `-Restart`: the tool accepts all three (it does not refuse
+them), so this is a rule of the runbook, and the output shows that it was kept (the line `Running repository validation before deployment...` is
+there, no warning names `-AllowDirtyWorkingTree`, and the result block says `Restart     : no`). If a local gate pin file
+(`ecco_dashboard_gate.local.txt`, git-ignored) exists in the checkout the run states the pinned gate; a fresh checkout has none. The dashboard
+preservation gate does not apply to a `.js` destination, but when the site's protection policy is on the host the tool still reads that policy and
+every protected dashboard it names, as read-only copies into a temporary folder on this PC that it deletes again, before it writes anything (it uses
+`-Python` for this); if one of them cannot be read it stops with a `BLOCKED` message and nothing has been written: record it and stop.
 
 Expected output (from the tool's code). The lines below are a **subset, in this order**: the tool prints more between them (the
-repository validation, the SSH probe, the output of `ha core check`), and those are not listed. `Target : Production - ...`;
+repository validation, the SSH probe, the output of `ha core check`), and those are not listed. `Target      : Production - ...` (the tool pads each
+label with spaces so that the colons line up);
 `Running the dashboard preservation gate (read-only)...` followed by `not a dashboard destination: the dashboard preservation gate
 does not apply`; `No existing remote file;
 rollback will remove the new file if validation fails.`; `Uploading frontend/ecco-mode-shell/ecco-mode-shell.js ->
 /config/www/ecco/ecco-mode-shell.<sha8>.js`; `Upload SHA256 verified: <the card's sha256>`; `Post-install SHA256 verified: <the same>`;
 `Running Home Assistant configuration check...`; `Configuration check passed. Home Assistant was NOT restarted.`; then the block
-`ECCO DEPLOYMENT PASSED` with `Restart : no` and `Backup : none (new file); ...`, and the reminder `RESOURCE NOT REGISTERED
+`ECCO DEPLOYMENT PASSED` with `Restart     : no` and `Backup      : none (new file); ...`, and the reminder `RESOURCE NOT REGISTERED
 ecco-mode-shell: no resource loads this card. This copy is NOT LIVE until a resource with URL /local/ecco/ecco-mode-shell.<sha8>.js
 (JavaScript module) is added.` Nothing a dashboard loads has changed yet.
 
@@ -338,16 +398,20 @@ Set-Location <checkout>
 & $PY -I -B -X utf8 tools\ecco_deploy_preflight.py verify-served --plan dist\geek-u1\plan.json --base-url <HA URL>
 ```
 
-Expected: one `PASS  served ecco-mode-shell.<sha8>.js: sha256 matches` line and exit 0. (It is one GET of the file a browser would
-fetch.)
+Expected: one line `  PASS  served ecco-mode-shell.<sha8>.js: sha256 matches - <content type>; Cache-Control: <value>` and exit 0 (the content type and
+the cache header are what Home Assistant sent: they are printed, not judged). It is one GET of the file a browser would fetch, with no sign-in. A
+`FAIL` line exits 1: `sha256 DIFFERS`, or `GET /local/ecco/... - HTTP Error 404` (the file is not served under that name: compare the name with the
+table above and with the host listing), or a connection or certificate error (Python does not trust the certificate of `<HA URL>`: the tool has no
+option to skip that check and the runbook adds none; use an address whose certificate Python trusts, or stop and ask the owner). Any `FAIL` is a stop.
 
 If the tool prints a rollback message, it removed its own new file and re-ran the configuration check; read the message to the
 end, record it offline and stop. Do not retry without the owner.
 
 ### 5.4 Step 4: the owner adds the one resource; the read-back
 
-The owner opens Settings, Dashboards, the three-dot menu, Resources (advanced mode must be on in the owner's profile), adds a
-resource with the URL `/local/ecco/ecco-mode-shell.<sha8>.js` and the type **JavaScript module**, and saves. **One item, nothing
+The owner opens Settings, Dashboards, the three-dot menu, Resources (advanced mode must be on in the owner's profile; recalled, not verified: use
+what the screen shows), adds a resource with the URL `/local/ecco/ecco-mode-shell.17410163.js` (the exact value of 5.3) and the type **JavaScript
+module**, and saves. **One item, nothing
 else.** No ECCO tool edits resources. A resource is **global**: from the moment it is saved, every dashboard page on every client
 loads this module (section 1), although only the new dashboard places the card; the resource is new and its module loads nothing
 else.
@@ -378,6 +442,31 @@ VERIFIED`, `refused`) is a stop: the owner corrects or deletes the resource and 
 The plan is hand-made because the tool lists its own cards in a constant that does not include this one. No safety tool is edited
 and none is bypassed: the same checks run, on this one resource.
 
+**What "exactly one resource added, none changed" rests on.** `resources-before.json` (step 1) and `resources-now.json` are both the raw persisted
+list, captured the same way. The gate compares them by resource id: the card had no resource in the before list; the new list has exactly one resource
+whose file name is `ecco-mode-shell.<anything>` (a second one, or a leftover, fails); that resource's URL (the whole string, so no `?v=`) and type
+equal the plan's; every other resource has the same id, URL and type as before (none added, removed or edited); the new list's file time is at most 30
+minutes old (`--max-age-minutes`; it is the modification time of the local file the capture wrote, that is, when it was captured); and, with
+`--base-url`, the file served at that URL has the plan's sha256. If anyone changes a resource between step 1 and now, the gate fails and the baseline is
+taken again, by the owner's decision.
+
+**If the URL is wrong** (anything but the one URL of 5.3). Round 3 ran the real gate offline against each case below (the one request replaced by a
+function). Every case exits 1 and ends with `verify-resource FAILED: ...; the switch is not verified and the install must not be reported as done`:
+
+| What was saved | The verdict line | Why |
+|---|---|---|
+| the card's name without the content address, a typo in the eight characters, or `?v=` added | `RESOURCE NOT SWITCHED ecco-mode-shell: still <the saved URL>` | the URL is not the plan's |
+| a name that does not start with `ecco-mode-shell` | `RESOURCE NOT SWITCHED ecco-mode-shell: no resource for this card is registered`, and a `FAIL` that names the added resource | the gate does not see it as this card's resource |
+| the right URL, a type but module (for example `js`) | `RESOURCE NOT VERIFIED ... failed: the resource type is the plan's 'module'` | wrong type |
+| a second resource for the card, or any other resource added, removed or edited | `RESOURCE NOT VERIFIED ...` and the `FAIL` line that names it | not exactly one, or something else changed |
+| the right URL, but the file is not served or its bytes differ | `RESOURCE NOT VERIFIED ... failed: GET ...` or `sha256 DIFFERS from the plan` | step 3 is not finished |
+| a read-back older than 30 minutes | `RESOURCE NOT VERIFIED ...` and `FAIL  the read-back is fresh` | capture the list again |
+
+In Home Assistant itself, a resource with a wrong URL is a failed request on every page of every client, because the resource is global (recalled, not
+verified: the browser logs the failed load of that address and nothing else happens), and the new dashboard would show "Custom element doesn't exist:
+ecco-mode-shell" (section 10). The remedy is always the owner's: correct the URL, or delete the resource (section 7, item 2), capture the list again and
+run the gate again. Nothing proceeds without `RESOURCE VERIFIED`.
+
 **One look at the production Overview (owner, desktop browser, hard refresh with Ctrl+F5).** Because the resource is global, this
 is the first page that loads the new module without using the card. The owner checks, and records yes or no:
 
@@ -398,7 +487,10 @@ The owner opens Settings, Dashboards, Add dashboard, chooses a new dashboard fro
 (first look)`) and a URL (suggested: `ecco-modes-u1`; Home Assistant needs a hyphen), switches **Require admin** on, and creates it.
 Then in that dashboard: Edit dashboard, the three-dot menu, Raw configuration editor, select all, paste the generated text, Save.
 (The menu labels are those of the Home Assistant frontend the author has not seen on the production host: use what the screen shows;
-**stop if the raw configuration editor is not offered for this dashboard**.)
+**stop if the raw configuration editor is not offered for this dashboard**.) A brand-new dashboard may first show an automatically generated page, and
+Home Assistant may ask the owner to "take control" before it offers the raw editor (recalled, not verified). That is acceptable **only** for this new
+dashboard, with its own address in the address bar: never take control of, or open the raw editor of, the production Overview or any other dashboard
+in this update. "Require admin" is a visibility setting, not a security boundary (section 1); step 6 reads the stored flag back.
 
 To put the text on the clipboard without opening a 147 KB file by eye:
 
@@ -439,16 +531,34 @@ ssh $H "cat /config/.storage/lovelace_resources" | Out-File -Encoding utf8 "$E\r
 ssh $H "cat /config/.storage/lovelace_dashboards" | Out-File -Encoding utf8 "$E\dashboards-after.json"
 ssh $H "ls -l /config/www/ecco/ | grep -v '^total'" | Out-File -Encoding utf8 "$E\www-ecco-after.txt"
 ssh $H "ha core info" | Out-File -Encoding utf8 "$E\core-info-after.txt"
-Compare-Object (Get-Content "$E\sha-before.txt") (Get-Content "$E\sha-after.txt")
+function Read-Sums($Path) {
+    $h = @{}
+    foreach ($line in Get-Content $Path) {
+        $p = $line -split '\s+', 2
+        if ($p.Count -eq 2) { $h[$p[1].Trim().TrimStart('*')] = $p[0] }
+    }
+    return $h
+}
+$b = Read-Sums "$E\sha-before.txt"
+$a = Read-Sums "$E\sha-after.txt"
+'changed : ' + ((@($b.Keys | Where-Object { $a.ContainsKey($_) -and $a[$_] -ne $b[$_] }) | Sort-Object) -join ', ')
+'new     : ' + ((@($a.Keys | Where-Object { -not $b.ContainsKey($_) }) | Sort-Object) -join ', ')
+'gone    : ' + ((@($b.Keys | Where-Object { -not $a.ContainsKey($_) }) | Sort-Object) -join ', ')
 Compare-Object (Get-Content "$E\dashboards-before.json") (Get-Content "$E\dashboards-after.json")
 Compare-Object (Get-Content "$E\www-ecco-before.txt") (Get-Content "$E\www-ecco-after.txt")
+$ids = @((Get-Content -Raw -Encoding utf8 "$E\dashboards-before.json" | ConvertFrom-Json).data.items | ForEach-Object { $_.id })
+'--- the new dashboard item (read back from the persisted list):'
+(Get-Content -Raw -Encoding utf8 "$E\dashboards-after.json" | ConvertFrom-Json).data.items | Where-Object { $ids -notcontains $_.id } | Format-List id, url_path, title, require_admin, mode
 ```
 
-The expected differences, and only these: in `sha-after.txt`, the persisted resource list and the persisted dashboard list have new
-hashes and one new line names the new dashboard's own configuration file; **every other line is identical, in particular every file
-under `ecco/dashboards/` (the production Overview and the existing Intelligence dashboard) and every other `.storage/lovelace*`
-file** (a changed hash of any other `.storage/lovelace*` line is a paste into the wrong dashboard: section 7, a mis-pasted
-dashboard). In the dashboard list exactly one item is added, with admin-only set and the storage mode; in `/config/www/ecco/`
+The expected differences, and only these. **The targeting proof** is the `changed` / `new` / `gone` verdict, made from `sha-before.txt` and
+`sha-after.txt`: `changed` is exactly `.storage/lovelace_dashboards` and `.storage/lovelace_resources`; `new` is exactly ONE file,
+`.storage/lovelace.<dashboard id>` (the new dashboard's own configuration); `gone` is empty. So **every other `.storage/lovelace*` file and every
+file under `ecco/dashboards/` (the production Overview and the existing Intelligence dashboard) has its baseline sha256** (a changed hash of any other
+`.storage/lovelace*` file is a paste into the wrong dashboard: section 7, S1). In the dashboard list exactly one item is added, and the listing at the
+end of the block shows it: its `id` (the `<dashboard id>` above), the `url_path` that was chosen, the title, **`require_admin` true** (stop if it is
+not: the page would be visible to every user; the owner turns "Require admin" on, then this is read again) and the storage mode (field names recalled,
+not verified: the read shows what is there); in `/config/www/ecco/`
 exactly one new file (the `total` line is not in the listing, so the comparison shows exactly one line). The resource list differs
 by exactly one added item (`verify-resource` already proved it in step 4; re-run it here with the fresh read-back if more than 30
 minutes have passed: the plan and the `--before` file are the same). `core-info-after.txt` shows Home Assistant Core running and
@@ -535,7 +645,8 @@ Desktop browser, a fresh page load (Ctrl+F5, so the new resource is fetched), th
    dashboard (open that dashboard in a second tab and compare: same figures, same status);
 3. the **alert strip** tells the same story as that card: nothing contradictory (an all-clear card and a critical strip line, or the
    reverse, is a stop); the strip is never blank (a blank strip is a defect: stop);
-4. the Production sentence under the switch is present and plain;
+4. the one plain Production sentence (below the two cards that both modes show, above the pause tile) is present, and so is the fixed note under
+   the switch ("This switch only changes what is shown. It never changes what ECCO does.");
 5. the existing pause tile is present, shows its current state, and is **not tapped**. No other control is touched;
 6. the browser console (F12) shows no error that names the shell or its resource (other cards' messages are noted, not judged);
 7. the page stays responsive (no freeze; the card has a bounded work budget, but real performance is unmeasured: section 9).
@@ -629,8 +740,10 @@ around or weaken a permission prompt or a safety gate.
 
 ## 7. Rollback, in order
 
-Each artefact is rolled back separately, newest first, and only by the owner's action or with the owner's authorisation. Nothing is
-restarted. The tool's own automatic rollback (step 3) already removes the new file and re-runs the configuration check if the copy fails.
+Each artefact is rolled back separately, newest first (the dashboard A3, then the resource A2, then the file A1), and only by the owner's action
+or with the owner's authorisation. Nothing is restarted. **A3 and A2 need only the owner's own action in the Home Assistant UI** (two deletions: no
+tool, no host command, no restart); A1 may simply stay (item 3); the coordinator's part is read-only (item 4). The tool's own automatic rollback
+(step 3) already removes the new file and re-runs the configuration check if the copy fails.
 
 **Two special cases come first, before the order below.**
 
@@ -663,8 +776,9 @@ scp -q "${H}:/config/.storage/<stored file name>" "$E\lovelace-rollback.json"
 ```
 
 Restored means the two sha256 values are equal, or the content prints `SAME CONTENT`. If neither holds, or anything is unclear:
-**restore the protected backup of step 2** (the owner's action in the Home Assistant UI); do not guess. Then continue with the order
-below for the new dashboard.
+**restore the protected backup of step 2** (the owner's action in the Home Assistant UI; read 5.2 first: a restore is a heavy last resort that
+restarts Home Assistant and puts everything back to its state at the time of the backup, so it is the owner's decision and never the first rollback);
+do not guess. Then continue with the order below for the new dashboard.
 
 **S2. The pause tile was tapped by accident** (Production shows it; it toggles the pause helper, the one write the existing tile has
 always made). One more tap undoes it, or the owner sets the helper back to its baseline state (`states-before.json`). Then record
@@ -672,7 +786,8 @@ the time, both changes and the baseline state offline, and re-run step 8: its hi
 session, which are explained, not hidden. Nothing else is touched.
 
 1. **A3, the dashboard.** The owner deletes it (Settings, Dashboards, the new dashboard, Delete). The dashboard list returns to
-   `dashboards-before.json`; the persisted configuration file of that dashboard is gone with it.
+   `dashboards-before.json`; the persisted configuration file of that dashboard is gone with it (recalled, not verified: item 4 shows whether it
+   is; a leftover file that no list names is inert: record it, and never edit `.storage` by hand).
 2. **A2, the resource.** The owner deletes the one resource (Settings, Dashboards, Resources, the item, Delete), then the coordinator
    re-reads the persisted list and compares it with the saved baseline copy:
 
@@ -687,14 +802,45 @@ session, which are explained, not hidden. Nothing else is touched.
    Compare-Object (Get-Content "$E\resources-before.json") (Get-Content "$E\resources-after-rollback.json")
    ```
 
-   No output means equal. The shell element then no longer exists in any page after a hard refresh.
+   No output means the lines are equal (if a line differs, the parsed comparison of item 4 says whether the content is the same). The shell
+   element then no longer exists in any page after a hard refresh.
 3. **A1, the card file.** It may stay: with no resource pointing at it, a file under `/config/www/ecco/` is never loaded (it is
    served on request only). If the owner wants it gone, it is **moved by hand, never deleted**, into a new backup folder, with the owner's
    authorisation. `deploy-ha.ps1 -Action Retire` does not cover it (that action moves only the exact Intelligence files its code lists).
    A plain move (one host command, with `$H` set to the production alias; no `cp -p`, because Home Assistant caches YAML dashboards by file time and this file is not one):
    `ssh $H "mkdir -p /config/ecco-backups/<stamp>-u1-rollback && mv /config/www/ecco/ecco-mode-shell.<sha8>.js /config/ecco-backups/<stamp>-u1-rollback/"`.
-4. **Re-check.** Repeat the sha256 listing of 5.6: the production Overview and every other dashboard file (every `.storage/lovelace*` file other than the removed one, too) have their baseline sha256;
-   the resource list equals the baseline copy; `/config/www/ecco/` equals `www-ecco-before.txt` (or lacks only the moved file).
+4. **Re-check, proving each rollback against the baseline.** The coordinator reads the same lists again into NEW files (the `-rollback` files, so the
+   evidence of step 6 is not overwritten) and compares them with the baseline:
+
+   ```powershell
+   cls
+   $H = '<production alias>'
+   $E = '<OFFLINE_EVIDENCE_DIR>\u1-baseline'
+   $PY = '<PY>'
+   $ErrorActionPreference = 'Stop'
+   [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+   $OutputEncoding = [Console]::OutputEncoding
+   ssh $H "cd /config && sha256sum .storage/lovelace* ecco/dashboards/*.yaml" | Out-File -Encoding utf8 "$E\sha-rollback.txt"
+   ssh $H "cat /config/.storage/lovelace_resources" | Out-File -Encoding utf8 "$E\resources-rollback.json"
+   ssh $H "cat /config/.storage/lovelace_dashboards" | Out-File -Encoding utf8 "$E\dashboards-rollback.json"
+   ssh $H "ls -l /config/www/ecco/ | grep -v '^total'" | Out-File -Encoding utf8 "$E\www-ecco-rollback.txt"
+   '--- sha256 lines that differ from the baseline (none expected after a complete rollback):'
+   Compare-Object (Get-Content "$E\sha-before.txt") (Get-Content "$E\sha-rollback.txt")
+   '--- the two lists compared as parsed items (SAME ITEMS expected):'
+   foreach ($n in 'resources', 'dashboards') {
+       & $PY -I -B -X utf8 -c "import json, sys; a, b = (json.load(open(p, encoding='utf-8-sig'))['data']['items'] for p in sys.argv[1:3]); print(sys.argv[3], 'SAME ITEMS' if a == b else 'DIFFERENT')" "$E\$n-before.json" "$E\$n-rollback.json" $n
+   }
+   '--- /config/www/ecco/ against the baseline (none expected, or only the file left in place):'
+   Compare-Object (Get-Content "$E\www-ecco-before.txt") (Get-Content "$E\www-ecco-rollback.txt")
+   ```
+
+   What each result proves. **A3** is undone when the dashboard list is `SAME ITEMS` and no `.storage/lovelace.<dashboard id>` line is left (it would
+   show as a `=>` line in the first comparison). **A2** is undone when the resource list is `SAME ITEMS` (the comparison of item 2 is the same proof,
+   line for line). **A1** is undone, or left inert on purpose, when the `/config/www/ecco/` comparison is empty (the file was moved) or shows exactly one
+   `=>` line for the card file (left in place). The production Overview, the existing Intelligence dashboard and every other dashboard file (every
+   `.storage/lovelace*` file other than the removed one, too) have their baseline sha256: the first comparison shows no line for them. A single line
+   that differs for `lovelace_resources` or `lovelace_dashboards` while its `SAME ITEMS` line is printed is Home Assistant's own formatting of the same
+   content: record it, it is not a stop. Anything else: stop and ask the owner.
 
 **A later version** of the card is a new file with a new content address and one resource edit (repoint) by the owner, with
 `verify-resource` and the old file left inert: the rollback of a repoint is the owner editing the URL back, then the same read-back.
@@ -725,6 +871,16 @@ Say these plainly in every report about this update.
   card uses) logs a module syntax error on every dashboard page it opens, once the resource exists. It is noise, not a defect of
   the Overview; the card does not work on such a client, and the effect on that client's other resources is unverified.
 - Intelligence is NOT ACCEPTED overall. The look says nothing about forecast accuracy, the solar forecast, R9 or Stage 3.
+- **Admin-only is a visibility setting, not a security boundary** (section 1): it keeps the page out of a non-admin user's sidebar; it does not stop a
+  non-admin who calls Home Assistant's own API, and it does not limit what the global resource (A2) loads.
+- **Recalled from Home Assistant's behaviour, not verified on this host** (each is marked where it is used): the menu labels and the order of the
+  dashboard and resource screens; that a new dashboard may ask the owner to take control before the raw editor is offered; that "Require admin" hides
+  the panel from non-admin users; the field names of the stored lists (`id`, `url`, `type`, `url_path`, `require_admin`) and the dashboard's storage
+  file name (`lovelace.<dashboard id>`, holding `data.config`); that deleting the dashboard removes that file; how a resource with a wrong URL shows
+  in the browser; that restoring a backup restarts Home Assistant.
+- The tools of steps 3 and 4 were read, run with `--help` and run offline (the real `verify-served` and `verify-resource` against the hand-made plan,
+  the one request replaced by a function; section 13, round 3); the PowerShell blocks parse and ran against stand-ins. None of it ran against the
+  real host.
 - Phone and tablet layouts are not part of U1; a desktop look is (the module still loads on a phone or tablet, see above).
 - The state read, the history read and the log reads of 5.1, 5.6 and 5.8 are written from the repository's own tools and from the
   Home Assistant interfaces they use, and have not been run on the production host.
