@@ -28,7 +28,11 @@ THE VERDICT RULE (derived only from numbers in the feed's run, never from an opi
     advice effect < -noise  ADVICE_BEHIND_BEYOND_NOISE
     otherwise               WITHIN_NOISE   (never read as a win or a loss)
     no followable advice    NO_ADVICE_EFFECT; no verified tariff: NOT_ASSESSED_NO_MONEY (no pence figure exists to judge).
-The same rule is applied per day with that day's own components.
+    export price not verified AND the two runs export a different amount (more than EXPORT_DIFF_EPS_KWH): NOT_ASSESSED_EXPORT_UNVERIFIED.
+      Export income is counted as 0 in BOTH runs when the export tariff is not verified, so the income the advice run gave up or
+      gained by exporting differently is missing from every pence figure and the advice effect can be too high or too low: no
+      ahead / behind / within claim is made, and the pence figures stay visible. Where the exports are equal the rule stands.
+The same rule is applied per day with that day's own components (and that day's own export difference).
 
 A failure never raises and never gives a partial figure: a small block with a status and a constant reason code
 (INSUFFICIENT_HISTORY, NO_ADVICE_LOGGED, ERROR; the integration adds UNAVAILABLE), no entity id, no site value, no sensor text.
@@ -83,7 +87,9 @@ V_BEHIND = "ADVICE_BEHIND_BEYOND_NOISE"
 V_WITHIN = "WITHIN_NOISE"
 V_NONE = "NO_ADVICE_EFFECT"
 V_NO_MONEY = "NOT_ASSESSED_NO_MONEY"
-VERDICTS = (V_AHEAD, V_BEHIND, V_WITHIN, V_NONE, V_NO_MONEY)
+V_NOT_ASSESSED_EXPORT = "NOT_ASSESSED_EXPORT_UNVERIFIED"
+VERDICTS = (V_AHEAD, V_BEHIND, V_WITHIN, V_NONE, V_NO_MONEY, V_NOT_ASSESSED_EXPORT)
+EXPORT_DIFF_EPS_KWH = 0.001                   # the resolution of the recorded energies: a smaller export difference is arithmetic noise
 RESERVE_OK = "NO_BREACH"
 RESERVE_BREACH = "BREACH"
 RESERVE_SENSITIVE = "BREACH_ONLY_AT_ALTERED_EFFICIENCY"
@@ -220,7 +226,8 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
     sdays = {tag: {d["date"]: d for d in r["days"]} for tag, (_e, r) in sens.items()}
     breach_dates = set(ready["ghost_below_reserve_dates"])
 
-    rows, counts = [], {V_AHEAD: 0, V_BEHIND: 0, V_WITHIN: 0, V_NONE: 0, V_NO_MONEY: 0}
+    export_unverified = money and feed["tariff"]["export"] != ghost_feed.TARIFF_VERIFIED_LABEL
+    rows, counts = [], {V_AHEAD: 0, V_BEHIND: 0, V_WITHIN: 0, V_NONE: 0, V_NO_MONEY: 0, V_NOT_ASSESSED_EXPORT: 0}
     for d in rep["days"]:
         fd = fdays.get(d["date"], {})
         a_min, g_min = d["actual_min_soc_pct"], d["ghost_min_soc_pct"]
@@ -235,6 +242,8 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
             noise = max(NOISE_FLOOR_P, e_sp + s_sp + abs(d["model_baseline_delta_p"]))
             in_play = d["advice_in_force_slots"] > 0 or abs(eff) > 1e-9
             v = _verdict(eff, noise, in_play)
+            if export_unverified and abs(d["extra_export_kwh_in_ghost"]) > EXPORT_DIFF_EPS_KWH:
+                v = V_NOT_ASSESSED_EXPORT          # the export income of this day's different export is unpriced (0 in both runs)
             row.update({"existing_net_p": _r(d["actual_net_before_wear_p"]), "advice_net_p": _r(d["ghost_net_before_wear_p"]),
                         "advice_effect_p": _r(eff), "noise_p": _r(noise), "verdict": v})
         else:
@@ -268,6 +277,8 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
         b_err = abs(tot["model_baseline_delta_p"])
         noise = max(NOISE_FLOOR_P, e_sp + s_sp + b_err)
         verdict = _verdict(base, noise, followed_n > 0)
+        if export_unverified and sum(abs(d["extra_export_kwh_in_ghost"]) for d in rep["days"]) > EXPORT_DIFF_EPS_KWH:
+            verdict = V_NOT_ASSESSED_EXPORT        # unpriced export income that differs between the runs: no claim either way
         totals.update({"existing_net_p": _r(tot["actual"]["net_before_wear_p"]), "advice_net_p": _r(tot["ghost"]["net_before_wear_p"]),
                        "realised_difference_p": _r(tot["delta_realised_p"]), "stock_adjustment_p": _r(tot["stock_adjustment_p"]),
                        "stock_adjusted_difference_p": _r(tot["delta_headline_p"]), "baseline_p": _r(tot["model_baseline_delta_p"]),
@@ -282,7 +293,7 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
         verdict = V_NO_MONEY
     unc["verdict"] = verdict
     unc["days"] = {"ahead_beyond_noise": counts[V_AHEAD], "behind_beyond_noise": counts[V_BEHIND], "within_noise": counts[V_WITHIN],
-                   "no_advice_effect": counts[V_NONE], "not_assessed": counts[V_NO_MONEY]}
+                   "no_advice_effect": counts[V_NONE], "not_assessed": counts[V_NO_MONEY] + counts[V_NOT_ASSESSED_EXPORT]}
     unc["data_quality_flags"] = dq.get("ghost_model_flags", [])
 
     breach = {t: int(sens[t][1]["ready_for_assisted_evidence"]["ghost_below_reserve_slots"]) for t in ("minus", "plus")}
@@ -336,7 +347,10 @@ def _pair(a: object, b: object, w: int, sign: bool = False) -> str:
 
 VERDICT_TEXT = {V_AHEAD: "advice ahead, beyond the noise", V_BEHIND: "advice behind, beyond the noise",
                 V_WITHIN: "within the noise: not a win, not a loss", V_NONE: "no advice was followed: the advice run equals the "
-                "existing schedule", V_NO_MONEY: "not assessed: no money without a verified tariff"}
+                "existing schedule", V_NO_MONEY: "not assessed: no money without a verified tariff",
+                V_NOT_ASSESSED_EXPORT: "not assessed: the export price is not verified (export income counted as 0 in both runs) "
+                "and the advice run exports a different amount, so the income it gave up or gained is missing from the pence "
+                "figures"}
 NOT_FOLLOWED_TEXT = {"BLOCKED": "the advice was BLOCKED (it carried no number)",
                      "FALLBACK_EXCLUDED": "a conservative fallback target (INSUFFICIENT_DATA), not followed by default",
                      "NO_WINDOW": "no window was logged (dump advice), so it cannot be simulated",
@@ -402,7 +416,7 @@ def render_text(block: Mapping) -> str:
                  f" + baseline {_f(u['components_p']['baseline_error'], 0, 1)}; floor {_f(u['noise_floor_p'], 0, 1)})")
     else:
         L.append("  Money: NO MONEY - no verified import tariff covers the period, so no pence figure exists. Behaviour only.")
-    L.append(f"  VERDICT: {u['verdict']} ({VERDICT_TEXT.get(u['verdict'], '')})")
+    L += _wrap(f"VERDICT: {u['verdict']} ({VERDICT_TEXT.get(u['verdict'], '')})", "  ", "    ")
     L.append(f"  SOC %: minimum existing {_f(t['existing_min_soc_pct'], 0)}, advice {_f(t['advice_min_soc_pct'], 0)} "
              f"({_f(t['min_soc_diff_pct'], 0, 1, True)}); end of the last day existing {_f(t['existing_end_soc_pct'], 0)}, advice "
              f"{_f(t['advice_end_soc_pct'], 0)} ({_f(t['end_soc_diff_pct'], 0, 1, True)})")
@@ -415,7 +429,8 @@ def render_text(block: Mapping) -> str:
     L.append(f"           existing schedule below the reserve: {rv['existing_below_reserve_slots']} slot(s)")
     d = u["days"]
     L.append(f"  Days: {d['ahead_beyond_noise']} ahead beyond noise, {d['behind_beyond_noise']} behind beyond noise, "
-             f"{d['within_noise']} within noise, {d['no_advice_effect']} with no advice effect")
+             f"{d['within_noise']} within noise, {d['no_advice_effect']} with no advice effect"
+             + (f", {d['not_assessed']} not assessed" if money and d.get("not_assessed") else ""))
     L.append("")
     L.append("PER DAY (existing / advice)")
     if money:
@@ -429,7 +444,8 @@ def render_text(block: Mapping) -> str:
                f"{'BREACH' if r['advice_breach'] else '-':<6}  "
                f"{r['advice_followed']}/{sum((r.get('advice_not_followed') or {}).values())}")
         if money:
-            v = {V_AHEAD: "ahead", V_BEHIND: "behind", V_WITHIN: "within noise", V_NONE: "no effect"}.get(r["verdict"], r["verdict"])
+            v = {V_AHEAD: "ahead", V_BEHIND: "behind", V_WITHIN: "within noise", V_NONE: "no effect",
+                 V_NOT_ASSESSED_EXPORT: "not assessed"}.get(r["verdict"], r["verdict"])
             L.append(f"  {r['date']}  {_f(r['existing_net_p'], 10)}  {_f(r['advice_net_p'], 8)}  "
                      f"{_f(r['advice_effect_p'], 8, 1, True)}  {_f(r['noise_p'], 6)}  {v:<12}  {soc}")
         else:

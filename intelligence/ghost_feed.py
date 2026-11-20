@@ -17,7 +17,9 @@ Inputs (all supplied by the caller; nothing is read here):
                  makes the period end there: the longest run of usable hours that the rates cover is used, at least 24 h).
                  Without one there is NO MONEY: no pence figure appears anywhere, only the behaviour comparison (energy
                  flows, SOC, reserve) and the advice followed / not followed; the plan-value module insists on the same.
-                 An unverified export tariff counts export income as 0 (it can only understate the ghost's gain) and says so.
+                 An unverified export tariff counts export income as 0 in BOTH runs and says so: where the ghost exports a different
+                 amount than reality, that export income difference is missing from every pence figure, so the advice effect can be
+                 too high (the ghost exports less) or too low (it exports more). ghost_compare gives no verdict where the exports differ.
 
 What the hourly slots cost (stated, not hidden):
   * the recorded SOC is an hourly MEAN; the SOC at the end of an hour is estimated as the mean of this and the next hour's
@@ -57,6 +59,7 @@ EFFICIENCY_STEP = 0.03                        # sensitivity: round-trip efficien
 UNUSABLE_FLAGS = (F_STALLED, F_IMPLAUSIBLE, F_RESET)
 STATUS_OK = "OK"
 STATUS_INSUFFICIENT = "INSUFFICIENT_HISTORY"
+TARIFF_VERIFIED_LABEL = "VERIFIED_FROM_INTEGRATION"       # the feed's `tariff.import` / `tariff.export` when the rates are verified
 LABEL = ("SIMULATION: arithmetic on recorded hourly data. Intelligence controlled nothing; the real battery did what it did. "
          "Evidence for the owner's decision, never a decision.")
 STOCK_RULES = ("closing stock difference valued two ways, the one less favourable to the ghost used: (a) each run's mixed-tank "
@@ -206,7 +209,9 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
         imp_p = tuple(_price(import_tariff, t) for t in starts)
         exp_p = tuple(_price(export_tariff, t) for t in starts) if export_priced else tuple(0.0 for _ in starts)
         if not export_priced:
-            notes.append("EXPORT_TARIFF_NOT_VERIFIED: export income counted as 0 (understates a ghost that exports)")
+            notes.append("EXPORT_TARIFF_NOT_VERIFIED: export income counted as 0 in both runs, so where the advice run exports a "
+                         "different amount its export income difference is missing from every pence figure (the advice effect can "
+                         "be too high or too low there); no ahead or behind verdict is given where the exports differ")
     else:                                                       # a stand-in price series so the simulation runs; never shown
         imp_p, exp_p = tuple(1.0 for _ in starts), tuple(0.0 for _ in starts)
     tariff = Tariff.make(n, list(imp_p), list(exp_p), True)
@@ -338,8 +343,8 @@ def build_ghost_feed(history: History, advice_rows: Sequence[Mapping], cfg: Site
                                     "cannot be simulated (counted as not followed)"]
     out = {"schema": FEED_SCHEMA, "model_version": ghost.MODEL_VERSION, "simulated": True, "intelligence_controlled_nothing": True,
            "label": LABEL, "status": STATUS_OK, "reason": None, "money_available": money,
-           "tariff": {"import": "VERIFIED_FROM_INTEGRATION" if imp_verified else "NOT_VERIFIED",
-                      "export": "VERIFIED_FROM_INTEGRATION" if export_priced else "NOT_VERIFIED"},
+           "tariff": {"import": TARIFF_VERIFIED_LABEL if imp_verified else "NOT_VERIFIED",
+                      "export": TARIFF_VERIFIED_LABEL if export_priced else "NOT_VERIFIED"},
            "period": {"start": p_start.isoformat(), "end": p_end.isoformat(), "hours": n, "timezone": cfg.tz,
                       "slot_minutes": 60, "longest_usable_run_hours": 0 if longest_data is None else len(longest_data),
                       "soc_start_pct": _r(soc0, 1)},

@@ -7,6 +7,8 @@ house (fictional year 2030), plus the plain-text report on a golden diagnostics 
   [2] no verified tariff: NO MONEY, no pence figure anywhere, the behaviour comparison stays
   [3] the verdict rule: noise = efficiency spread + stock-rule spread + baseline error (floor 0.5 p); beyond noise only; within
       the noise never a win; the boundary; recomputed independently from the block's own numbers on every day
+  [3b] an export price that is NOT verified: where the advice run exports a different amount than the existing schedule its export
+      income difference is unpriced (0 in both runs), so no ahead / behind verdict is given there (review finding G3)
   [4] reserve protection: no breach on a normal run; a breach is flagged (period, day, margin, dates); a breach only at the
       altered efficiencies is told apart; the existing schedule's own dips are reported
   [5] failures are small blocks with a constant reason: no history, too little history, no advice, invalid advice rows only,
@@ -408,6 +410,62 @@ check("a no-advice replay error larger than the effect makes it WITHIN_NOISE", b
 check("the noise is the sum of the three components (here 1 + 90 + 0), never below the 0.5 p floor",
       abs(gap["uncertainty"]["noise_p"] - 91.0) < 0.02 and run_seam(*force(0.0, 0.0))["uncertainty"]["noise_p"] == 0.5)
 
+print("== [3b] an unverified export price: no money verdict where the exports differ (G3)")
+NA_EXPORT = "NOT_ASSESSED_EXPORT_UNVERIFIED"
+
+
+def etariff(history: History, price: float = 15.0) -> TariffResult:
+    first, last = history.first_last()
+    end, slots, t = last + timedelta(hours=1), [], first
+    while t < end:
+        slots.append(RateSlot(t, t + timedelta(minutes=30), price))
+        t += timedelta(minutes=30)
+    return TariffResult("export", VERIFIED_FROM_INTEGRATION, tuple(slots))
+
+
+H_s = house({BAD: 100.0})                                   # the real battery charged to 100 % on the expensive night
+T_s = tariff(H_s, expensive_nights=(BAD,), price=100.0)
+adv_s = night_advice(H_s, 40.0, only=BAD)                   # the advice would have charged to 40 %: it stores less, so it exports less
+det_s: dict = {}
+gf.build_ghost_feed(H_s, adv_s, CFG, import_tariff=T_s, max_bytes=1 << 20, detail=det_s)
+gap_s = {d["date"]: d["extra_export_kwh_in_ghost"] for d in det_s["rep"]["days"]}
+check("non-vacuity: the advice run exports LESS than the existing schedule on the bad night's day (the lost income is unpriced)",
+      gap_s[BAD.isoformat()] < -0.1 and all(abs(v) < 1e-9 for k, v in gap_s.items() if k != BAD.isoformat()), str(gap_s))
+V_ver = gc.build_ghost_comparison(H_s, adv_s, CFG, import_tariff=T_s, export_tariff=etariff(H_s, 15.0))
+U_ver = V_ver["uncertainty"]
+check("non-vacuity: with a VERIFIED export price the same world is AHEAD beyond the noise (the verdict rule itself is unchanged)",
+      V_ver["tariff"]["export"] == "VERIFIED_FROM_INTEGRATION" and U_ver["verdict"] == gc.V_AHEAD, str((V_ver["tariff"], U_ver["verdict"])))
+U_un = gc.build_ghost_comparison(H_s, adv_s, CFG, import_tariff=T_s)
+check("export NOT verified and the advice run exporting a different amount: the period verdict is NOT_ASSESSED_EXPORT_UNVERIFIED, "
+      "not a claim of AHEAD", U_un["tariff"]["export"] == "NOT_VERIFIED" and U_un["money_available"] is True
+      and U_un["uncertainty"]["verdict"] == NA_EXPORT, str(U_un["uncertainty"]["verdict"]))
+check("... the constant is in VERDICTS and counted as not assessed", NA_EXPORT in gc.VERDICTS and U_un["uncertainty"]["days"]["not_assessed"] >= 1,
+      str(U_un["uncertainty"]["days"]))
+days_un = {d["date"]: d["verdict"] for d in U_un["days"]}
+check("... exactly the days whose exports differ are not assessed; every other day keeps the rule's own verdict",
+      days_un[BAD.isoformat()] == NA_EXPORT and all((v == NA_EXPORT) == (abs(gap_s.get(k, 0.0)) > 1e-3) for k, v in days_un.items()),
+      str(days_un))
+check("... the money figures themselves are still shown (the verdict is withheld, not the arithmetic)",
+      "advice_effect_p" in U_un["uncertainty"] and "noise_p" in U_un["uncertainty"] and "advice_effect_p" in U_un["totals"])
+txt_un = gc.render_text(U_un)
+check("the verdict text says why: the export is priced 0 and the exports differ (in the report, and in VERDICT_TEXT)",
+      NA_EXPORT in txt_un and "export price is not verified" in txt_un and "export price is not verified" in gc.VERDICT_TEXT.get(NA_EXPORT, ""),
+      txt_un[:400])
+check("the report's per-day column fits and names it", max(len(x) for x in txt_un.splitlines()) <= 118 and "not assessed" in txt_un)
+M_un = gc.build_ghost_comparison(H0, night_advice(H0, 80.0), CFG, import_tariff=T0)
+check("the rule applies only where the exports differ: matching advice (equal exports) with the export price unverified keeps WITHIN_NOISE",
+      M_un["tariff"]["export"] == "NOT_VERIFIED" and M_un["uncertainty"]["verdict"] == gc.V_WITHIN
+      and all(d["verdict"] in (gc.V_WITHIN, gc.V_NONE) for d in M_un["days"]), str(M_un["uncertainty"]["verdict"]))
+N_un = gc.build_ghost_comparison(H_s, adv_s, CFG, import_tariff=None)
+check("no money at all keeps NOT_ASSESSED_NO_MONEY (the older, more basic reason wins)", N_un["uncertainty"]["verdict"] == gc.V_NO_MONEY)
+f_un = gf.build_ghost_feed(H_s, adv_s, CFG, import_tariff=T_s)
+notes_un = [n for n in f_un["data_quality"]["notes"] if n.startswith("EXPORT_TARIFF_NOT_VERIFIED")]
+check("the feed's note no longer claims an unverified export can only understate the gain: it says both runs count export as 0 and "
+      "that the figure can be too high or too low where the exports differ",
+      len(notes_un) == 1 and "understates a ghost that exports" not in notes_un[0] and "both runs" in notes_un[0]
+      and "too high or too low" in notes_un[0], str(notes_un))
+check("the feed's module text no longer says it can only understate", "can only understate" not in (gf.__doc__ or ""))
+
 print("== [4] reserve protection")
 check("a normal run does not breach: the reserve verdict NO_BREACH, margins non-negative, no day flagged",
       B["reserve"]["verdict"] == gc.RESERVE_OK and B["reserve"]["advice_would_breach"] is False
@@ -622,7 +680,7 @@ if GOLD_JSON.is_file() and TOOL.is_file():
     check("the report of a no-money block says NO MONEY and shows no pence figure or column",
           "NO MONEY" in nomoney_txt and "Money (pence" not in nomoney_txt and "ADVICE EFFECT" not in nomoney_txt
           and "existing p" not in nomoney_txt and "VERDICT: NOT_ASSESSED_NO_MONEY" in nomoney_txt)
-    within_txt = gc.render_text(B if B["uncertainty"]["verdict"] == gc.V_WITHIN else run_seam(force_effect(0.3), None))
+    within_txt = gc.render_text(within)           # the forced WITHIN_NOISE block of [3] (B itself now has an unpriced export difference: [3b])
     check("the report of a within-noise block says it is not a win", "not a win" in within_txt and "WITHIN_NOISE" in within_txt)
     check("the report refuses a foreign object", all(raises(lambda x=x: gc.render_text(x), ValueError) for x in ({}, {"schema": "x"}, [], None)))
 
