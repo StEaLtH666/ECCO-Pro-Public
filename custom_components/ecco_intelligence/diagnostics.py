@@ -17,9 +17,19 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .runtime import ghost_link
-
 TO_REDACT = {"entities", "config_hash", "latitude", "longitude", "git_sha"}
+
+
+def _ghost_unavailable(reason: str) -> dict:
+    """The small UNAVAILABLE block. The Ghost code is imported here, lazily (an import-time fault of it must only affect the download,
+    never the integration's setup); if even that import fails, the same block is built by hand (the schema and the flags of
+    intelligence.ghost_compare.small_block, no banner)."""
+    try:
+        from .runtime import ghost_link
+        return ghost_link.unavailable(reason)
+    except Exception:  # noqa: BLE001 - the Ghost code cannot be imported: a hand-built block, the rest of the download stands
+        return {"schema": "ecco-intel-ghost-diagnostics/1", "simulated": True, "read_only": True,
+                "intelligence_controlled_nothing": True, "status": "UNAVAILABLE", "reason": reason, "money_available": False}
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Any) -> dict[str, Any]:
@@ -30,5 +40,5 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Any) ->
     try:                                    # the Ghost block (diagnostics-only, read-only): never allowed to fail the download
         data["ghost"] = await coordinator.async_ghost_diagnostics()
     except Exception:  # noqa: BLE001 - a failure of the Ghost is a small block, the rest of the download stands
-        data["ghost"] = ghost_link.unavailable("OTHER")
+        data["ghost"] = _ghost_unavailable("OTHER")
     return async_redact_data(data, TO_REDACT)

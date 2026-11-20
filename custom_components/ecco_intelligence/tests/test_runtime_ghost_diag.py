@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""The Ghost's diagnostics block in the integration (Ghost, diagnostics-only): the wiring, proven on a temporary copy.
+"""The Ghost's diagnostics block in the integration (Ghost, diagnostics-only): the wiring, proven in the live tree.
 
-The wiring is a patch, tests/ghost_diag_wiring.patch, NOT applied to the live tree: it makes the integration import
-intelligence.ghost_compare, which the kit's vendor roots (tools/build_ha_integration.py ROOT_MODULES) do not list, and two pinned
-tests list those roots or the runtime modules (test_runtime_build.py ROOTS, test_runtime_import_without_ha.py's module list), so
-applying it is a re-pin only the owner may approve. The patch contains those re-pins (and the doc line), so the copy is consistent.
+The wiring (coordinator, diagnostics, runtime/ghost_link.py, RuntimeStateStore.advice_rows) IS APPLIED to this tree; the patch it
+came from, tests/ghost_diag_wiring.patch, stays UNCHANGED as the record of the wiring as it was first proven, and the live files
+have moved on from it since (review fixes), so it no longer reverses byte for byte. The wiring made the integration import
+intelligence.ghost_compare, so the kit's vendor roots (tools/build_ha_integration.py ROOT_MODULES) list it, and the two tests that
+pin those roots or the runtime modules (test_runtime_build.py ROOTS, test_runtime_import_without_ha.py's module list) were re-pinned.
 
 This suite:
-  [1] the live tree: the patch applies cleanly to a temporary copy of it (and, if it is already applied to the live tree, the L2
-      scenarios run there directly);
-  [2] FAIL-FIRST: on the unpatched copy the L2 scenarios fail (the download has no ghost block);
-  [3] on the patched copy: the untouched runtime boundary suite passes (no write, service call, state or bus write, network or
-      process; the import rules, the vendored copy's rules), the build suite and the runtime-import suite pass with the patch's
-      re-pins, and tests/_ghost_diag_l2.py passes: the block in the download (money with a verified tariff, NO MONEY, insufficient
-      history, no advice, followed and not followed, config not decided, no cycle yet), the failure blocks, the size bound,
-      redaction, no write and no twelfth entity, the time budget, the placeholder window, computed on request only, timing;
+  [1] the live tree: the wiring is detected (the patch reverses cleanly, or runtime/ghost_link.py is there) and the L2 scenarios run
+      in the live tree. For a tree WITHOUT the wiring the older path remains: the patch is applied to a temporary copy, proven to
+      apply cleanly, and the next two steps run on the copy;
+  [2] FAIL-FIRST (the copy path only): on the unpatched copy the L2 scenarios fail (the download has no ghost block);
+  [3] (the copy path only) on the patched copy: the untouched runtime boundary suite passes (no write, service call, state or bus
+      write, network or process; the import rules, the vendored copy's rules), the build suite and the runtime-import suite pass with
+      the patch's re-pins, and tests/_ghost_diag_l2.py passes: the block in the download (money with a verified tariff, NO MONEY,
+      insufficient history, no advice, followed and not followed, config not decided, no cycle yet), the failure blocks, the size
+      bound, redaction, no write and no twelfth entity, the time budget, the placeholder window, computed on request only, timing,
+      an import-time fault of the Ghost code, the job kept only after a published result;
+  [3b] the coordinator and the diagnostics import no Ghost code at import time (static);
   [4] the live tree is unchanged by all of it (nothing here writes into the repository).
 Plain script; exits 1 on any failure. Synthetic data only; no network.
 """
@@ -88,7 +92,7 @@ try:
     reverse = git_apply(REPO, "--check", "-R")
     # The wiring is APPLIED when the patch reverses cleanly on the live tree OR the live tree carries runtime/ghost_link.py (the file
     # the patch adds). After the review fixes the live files have moved on from the patch, which stays UNCHANGED as the record of the
-    # wiring as it was proven (910d975), so it no longer reverses byte for byte. Every other check of this suite is unchanged.
+    # wiring as it was proven, so it no longer reverses byte for byte. Every other check of this suite is unchanged.
     wired = (REPO / "custom_components" / "ecco_intelligence" / "runtime" / "ghost_link.py").is_file()
     already = reverse.returncode == 0 or wired
     print(f"== [1] the patch against the live tree ({'already applied' if already else 'not applied: the integration is not wired yet'})")
@@ -129,6 +133,32 @@ try:
         for ln in l2.stdout.splitlines():
             if "INFO" in ln:
                 print(ln)
+    print("== [3b] import-time safety (G9): the coordinator and the diagnostics import no Ghost code at import time")
+    import ast
+
+    def import_names(path: Path) -> tuple[list[str], list[str]]:
+        """(import-time imports, function-level imports) of a module, as 'module:name' strings (relative level as dots)."""
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        top, deep = [], []
+
+        def walk(node, in_func: bool) -> None:
+            for ch in ast.iter_child_nodes(node):
+                now_in = in_func or isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+                if isinstance(ch, ast.Import):
+                    (deep if in_func else top).extend(f":{a.name}" for a in ch.names)
+                elif isinstance(ch, ast.ImportFrom):
+                    (deep if in_func else top).extend(f"{'.' * ch.level}{ch.module or ''}:{a.name}" for a in ch.names)
+                walk(ch, now_in)
+        walk(tree, False)
+        return top, deep
+    pkg = REPO / "custom_components" / "ecco_intelligence"
+    for fn in ("coordinator.py", "diagnostics.py"):
+        top, deep = import_names(pkg / fn)
+        check(f"{fn}: no import-time import of ghost_compare, ghost_link, ghost_feed or ghost",
+              not [x for x in top if any(w in x for w in ("ghost_compare", "ghost_link", "ghost_feed", ":ghost", ".ghost"))], str(top))
+    c_top, c_deep = import_names(pkg / "coordinator.py")
+    check("non-vacuity: the coordinator still imports ghost_compare and ghost_link, lazily, inside async_ghost_diagnostics",
+          any("ghost_compare" in x for x in c_deep) and any("ghost_link" in x for x in c_deep), str(c_deep))
     print("== [4] the live tree is unchanged")
     check("nothing in the live integration directory changed", tree_digest(REPO / "custom_components" / "ecco_intelligence") == live_before)
 finally:

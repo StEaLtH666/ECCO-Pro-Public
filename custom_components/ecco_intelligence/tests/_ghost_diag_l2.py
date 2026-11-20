@@ -12,7 +12,8 @@ reasons; SITE_CONFIG_NOT_DECIDED; NO_CYCLE_YET); the feed raising leaves a small
 identical; the block's size bound; nothing leaks (entity ids, coordinates, an exception message, advice ids); nothing is written,
 no service is called, the eleven entities are exactly the contract's; the time budget and the one-job-at-a-time rule; the
 placeholder charge window does not matter; the block is computed on request only (a cycle's work and result are unchanged);
-timing on a 30-day recorder table.
+timing on a 30-day recorder table; an import-time fault of the Ghost code only affects the download; the last cycle's job is kept
+only after a published result.
 """
 
 from __future__ import annotations
@@ -522,6 +523,75 @@ try:
     print(f"  INFO  ghost_block on the cached 30-day table: {', '.join(f'{x:.2f}' for x in ts)} s; "
           f"pure comparison only: see test_intel_ghost_compare")
     s11.close()
+
+    print("== S12 an import-time fault of the Ghost code only affects the download (G9)")
+    s12 = Scenario("importfault", advice=nights(5, 1, 80.0))
+    good12 = s12.download()
+    check("non-vacuity: the download carries a real block before the fault", good12["ghost"]["status"] == "OK")
+    RT = importlib.import_module("custom_components.ecco_intelligence.runtime")
+    VX = importlib.import_module("custom_components.ecco_intelligence._vendor.intelligence")
+    MISSING = object()
+
+    def block_import(parent, attr: str, modname: str):
+        """Make `import modname` / `from parent import attr` fail again, as an import-time fault of that module would."""
+        saved_mod, saved_attr = sys.modules.get(modname, MISSING), getattr(parent, attr, MISSING)
+        sys.modules[modname] = None
+        if saved_attr is not MISSING:
+            delattr(parent, attr)
+
+        def restore():
+            if saved_mod is MISSING:
+                sys.modules.pop(modname, None)
+            else:
+                sys.modules[modname] = saved_mod
+            if saved_attr is not MISSING:
+                setattr(parent, attr, saved_attr)
+        return restore
+    keep12 = lambda d: {k: v for k, v in d.items() if k != "ghost"}  # noqa: E731
+    for label, parent, attr, modname in (("runtime/ghost_link", RT, "ghost_link", "custom_components.ecco_intelligence.runtime.ghost_link"),
+                                         ("intelligence.ghost_compare", VX, "ghost_compare",
+                                          "custom_components.ecco_intelligence._vendor.intelligence.ghost_compare")):
+        restore = block_import(parent, attr, modname)
+        try:
+            bad12 = s12.download()
+        finally:
+            restore()
+        gb = bad12.get("ghost", {})
+        check(f"{label} cannot be imported: the download still comes, the Ghost block is a small ERROR / UNAVAILABLE block with a class name only",
+              bad12.get("loaded") is True and gb.get("status") in ("ERROR", "UNAVAILABLE") and "totals" not in gb
+              and gb.get("money_available") is False and (gb.get("error_type") in (None, "ImportError", "ModuleNotFoundError")), str(gb))
+        check(f"... and every other part of the download is the same as without the fault ({label})", keep12(bad12) == keep12(good12),
+              str(set(keep12(bad12)) ^ set(keep12(good12))))
+        check(f"... and the cycle's own state is untouched ({label})", s12.c.counters["exceptions"] == 0 and s12.c._ghost_busy is False)
+    check("once the import works again the next download computes the block", s12.download()["ghost"]["status"] == "OK")
+    mk_fb = getattr(importlib.import_module("custom_components.ecco_intelligence.coordinator"), "_ghost_fallback", None)
+    fb = mk_fb("FEED_EXCEPTION", "ImportError") if mk_fb else {}
+    ref = VEN_GC.small_block("ERROR", "FEED_EXCEPTION", error_type="ImportError")
+    check("the hand-built fallback block (made without importing any Ghost code) is the same schema, flags and reason vocabulary as the real small block",
+          fb.get("schema") == ref["schema"] == VEN_GC.SCHEMA and fb.get("status") == ref["status"] and fb.get("reason") == ref["reason"] in VEN_GC.REASONS
+          and all(fb.get(k) == ref[k] for k in ("simulated", "read_only", "intelligence_controlled_nothing", "money_available")) and set(fb) <= set(ref),
+          f"{fb} {ref}")
+    s12.close()
+
+    print("== S13 the last cycle's job is kept for the Ghost only once its result is published (G10)")
+    s13 = Scenario("jobafterpublish", cycles=0, advice=nights(5, 1, 80.0))
+    s13.c._run_cycle = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("synthetic engine failure"))
+    for _ in range(4):
+        h.set_now(h.now + timedelta(seconds=60))
+        s13.seed(h.now)
+        h.tick(0, settle=20.0)
+    check("non-vacuity: a cycle ran and its engine failed (an exception counted, nothing published)",
+          s13.c.counters["exceptions"] >= 1 and s13.c.counters["runs_published"] == 0, str(s13.c.counters))
+    check("a cycle whose engine failed leaves NO job for the Ghost (it is kept only after a published result)", s13.c._ghost_job is None)
+    check("... so the download says NO_CYCLE_YET", s13.download()["ghost"].get("reason") == "NO_CYCLE_YET")
+    s13.c._run_cycle = None                                     # the engine works again; refreshes are off here, so the next SLOT cycle runs
+    for step in range(4):
+        h.set_now(datetime(2030, 1, 15, 21, 1, tzinfo=UTC) + timedelta(seconds=60 * step))
+        s13.seed(h.now)
+        h.tick(0, settle=20.0)
+    check("after a published result the job is the published cycle's (its time, no rows)", s13.c.counters["runs_published"] >= 1
+          and s13.c._ghost_job is not None and s13.c._ghost_job.statistics is None, str(s13.c.counters))
+    s13.close()
 finally:
     h.loop.close()
     H.rmtree_own(root, PREFIX)

@@ -202,7 +202,6 @@ from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from intelligence import ghost_compare
 from intelligence.advisory_contract import (ENTITY_IDS, INTEGRATION_ENTITY_KEYS, AdvisoryEnvelope, ItemStatus, SystemStatus,
                                             Versions, envelope_summary, paused_envelope, self_test_failed_envelope,
                                             stale_from, starting_envelope, to_entity_payloads, with_last_good,
@@ -217,11 +216,22 @@ from .const import (CPU_WINDOW_S, CYCLE_TASK_NAME, DOMAIN, INTEGRATION_VERSION, 
                     PROPOSED_RECORDER_RETRY_S, PROPOSED_REFRESH_FLOOR_S, PROPOSED_RESULT_MAX_AGE_S,
                     PROPOSED_STALE_BACKOFF_S, PROPOSED_STARTUP_GRACE_S, PROPOSED_TICK_MARGIN_S, PROPOSED_TIME_BUDGET_S,
                     REFRESH_MARGIN_S, SCHEDULE_DAILY_LOCAL, SITE_TZ, SUBMIT_COOLDOWN_S, TICK_JOB_NAME, TICK_S)
-from .runtime import engine_link, gates, ghost_link, history_source, sources
+from .runtime import engine_link, gates, history_source, sources
 from .runtime import store as rstore
 from .runtime.selftest import FAIL, PASS, WARN, SelfTest
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ghost_fallback(reason: str, error_type: str | None = None) -> dict:
+    """A small Ghost block built WITHOUT importing any Ghost code, for the one case where that import itself failed (the Ghost modules
+    are imported lazily, in async_ghost_diagnostics, so an import-time fault there can only affect the download, never the setup).
+    Same schema, flags and reason vocabulary as intelligence.ghost_compare.small_block (a test pins that); no banner."""
+    out = {"schema": "ecco-intel-ghost-diagnostics/1", "simulated": True, "read_only": True, "intelligence_controlled_nothing": True,
+           "status": "ERROR" if error_type else "UNAVAILABLE", "reason": reason, "money_available": False}
+    if error_type:
+        out["error_type"] = error_type if error_type.isidentifier() and len(error_type) <= 40 else "UNKNOWN"
+    return out
 UTC = timezone.utc
 LONDON = ZoneInfo(SITE_TZ)
 PAUSE_ENTITY = ENTITY_IDS["paused"]
@@ -1336,7 +1346,6 @@ class EccoIntelCoordinator:
                 previous=None if self._last_computed is None else envelope_summary(self._last_computed),
                 versions=self.versions, config_liveness_at=config_liveness_at,
                 history_reuse=self._history_reuse)
-            self._ghost_job = replace(job, statistics=None, history_reuse=None, previous=None)   # a reference copy, no rows
             t0 = time_mod.perf_counter()
             env, diag, history = await self._bounded(
                 self._submit(self.hass.async_add_executor_job, engine_link.compute, job, self._run_cycle), deadline)
@@ -1374,6 +1383,10 @@ class EccoIntelCoordinator:
                 self._publish(env, pub_now)
                 outcome = "published"
             self.counters["runs_published"] += 1
+            # the Ghost's reference copy of this cycle's job (no rows), kept only now that its result is published: a cycle that
+            # failed, timed out or was discarded leaves the previous published cycle's job, so the download never pairs new
+            # states with older statistics from a cycle that published nothing
+            self._ghost_job = replace(job, statistics=None, history_reuse=None, previous=None)
             if env.status not in SystemStatus.NULL:
                 self._last_computed = env
             if kind != SLOT:                                    # a refresh writes nothing to the state store
@@ -1515,7 +1528,14 @@ class EccoIntelCoordinator:
         advice, a read-only simulation computed only now, in the executor, from the last cycle's inputs and the cached recorder
         rows. One job at a time (a request while one runs, or one that outlived its time budget, gets BUSY), at most
         PROPOSED_GHOST_BUDGET_S of waiting (then TIME_BUDGET; the thread, which only reads, runs to its end and its result is
-        discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state."""
+        discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state. The Ghost code is
+        imported HERE, not when this module is imported: an import-time fault of it (ghost, ghost_feed, net_value, ghost_compare,
+        runtime/ghost_link) can then only turn the Ghost block into a small ERROR block, never stop the integration's setup."""
+        try:
+            from intelligence import ghost_compare                  # lazy on purpose (see the docstring)
+            from .runtime import ghost_link
+        except Exception as exc:  # noqa: BLE001 - the Ghost code cannot be imported: a block built without it, the class name only
+            return _ghost_fallback("FEED_EXCEPTION", type(exc).__name__)
         try:
             job, hist = self._ghost_job, self._hist
             if self._closed or job is None:
