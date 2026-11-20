@@ -78,6 +78,7 @@ provisional ones it used in `provisionalInUse`.
 | `topHoldMin` | 20 min | MEASURED_REQUIRED | extra minutes reserved after reaching a 100 % target (final taper tail, hold) | the measured time the BMS needs to finish the top of charge |
 | `demandMarginPct` | 20 | PROVISIONAL | percent added to the household demand peak | the measured spread of real demand against its forecast |
 | `assumedDemandW` | 2000 W | MEASURED_REQUIRED | floor of the demand peak when demand over the window is not covered and the policy is ASSUME_PROVISIONAL (`ASSUMED_DEMAND`) | the measured overnight household demand profile (unknown today) |
+| `solarCreditPct` | 0 | PROVISIONAL | percent (0-100) of the bounded solar credited INSIDE the hard grid limit; 0 = none (the cap is the limit minus the demand peak); above 0 only behind a measured forecast skill gate, which does not exist yet | a measured forecast skill gate |
 | `maxHouseholdAgeMin` | 15 min | PROVISIONAL | demand and solar readings older than this are treated as unknown | the real update rate of those sensors |
 | `maxForecastAgeMin` | 120 min | PROVISIONAL | the demand and solar FORECASTS (`demandProfileAgeMin`, `solarProfileAgeMin`) older than this, or with no valid age, are unknown | the real refresh rate of those forecasts |
 | `maxCeilingAgeMin` | 60 min | PROVISIONAL | a named ceiling with an age (`ageMin`) older than this is stale: it cannot make a setpoint safe, but a stale value that is lower than every fresh one still caps | the real update rate of the live battery and grid-charge limits |

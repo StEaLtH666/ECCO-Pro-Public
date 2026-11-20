@@ -768,6 +768,8 @@ test("step profiles: the value in force, the last point holds, nothing before th
   }
 });
 
+const CREDIT: Partial<GentleInput> = { params: { solarCreditPct: 100 } };
+
 test("the grid cap (hand-checked): the PEAK of demand and forecast with the margin, never the mean or the minimum; solar only fresh, bounded and confidence-scaled", () => {
   // peak of {now 600, 500, 2000, 800} = 2000; x1.2 margin = 2400; cap = 6000 - 2400 = 3600 W
   const profile: StepPoint[] = [{ fromInMin: 0, watts: 500 }, { fromInMin: 60, watts: 2000 }, { fromInMin: 120, watts: 800 }];
@@ -789,23 +791,24 @@ test("the grid cap (hand-checked): the PEAK of demand and forecast with the marg
   // the margin is configurable
   assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 600, demandAgeMin: 0, demandProfile: profile }, { params: { demandMarginPct: 0 } }).headroomCapW, 4000);
   assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 600, demandAgeMin: 0, demandProfile: profile }, { params: { demandMarginPct: 50 } }).headroomCapW, 3000);
+  // v3 G2: solar inside the hard limit is an explicit option now (solarCreditPct, 0 by default); these hand-checks keep their arithmetic by asking for 100 %.
   // solar: min(fresh reading, forecast x confidence); 2000 reading, 4000 forecast: confidence 0.4 counts 1600, 0.5 counts 2000, 1 counts only the reading 2000
   const sol = (conf: number | null, extra: Partial<HouseholdInput> = {}): HouseholdInput => ({ gridImportLimitW: 4500, demandProfile: flat(1000), solarNowW: 2000, solarAgeMin: 1, solarProfile: flat(4000), solarConfidence: conf, ...extra });
-  assert.equal(hplan({ ...sol(0.4) }).headroomCapW, 4900);
-  assert.equal(hplan({ ...sol(0.4) }).household?.solarCountedMinW, 1600);
-  assert.equal(hplan({ ...sol(0.5) }).headroomCapW, 5300);
-  assert.equal(hplan({ ...sol(1) }).headroomCapW, 5300, "bounded by the fresh reading");
-  assert.equal(hplan({ ...sol(null) }).headroomCapW, 3300, "no confidence: solar not counted");
-  assert.equal(hplan({ ...sol(0) }).headroomCapW, 3300);
-  assert.equal(hplan({ ...sol(0.5, { solarNowW: null }) }).headroomCapW, 3300, "unknown solar counts as 0");
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: null }) }).headroomCapW, 3300, "no forecast bound: not counted");
-  assert.equal(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }).headroomCapW, 3300, "stale solar counts as 0");
-  assert.ok(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }).codes.includes("SOLAR_IGNORED"));
-  assert.equal(hplan({ ...sol(1.5) }).headroomCapW, 3300, "an impossible confidence is ignored, solar is not counted");
-  assert.equal(hplan({ ...sol(0.5, { solarNowW: -50 }) }).headroomCapW, 3300);
+  assert.equal(hplan({ ...sol(0.4) }, CREDIT).headroomCapW, 4900);
+  assert.equal(hplan({ ...sol(0.4) }, CREDIT).household?.solarCountedMinW, 1600);
+  assert.equal(hplan({ ...sol(0.5) }, CREDIT).headroomCapW, 5300);
+  assert.equal(hplan({ ...sol(1) }, CREDIT).headroomCapW, 5300, "bounded by the fresh reading");
+  assert.equal(hplan({ ...sol(null) }, CREDIT).headroomCapW, 3300, "no confidence: solar not counted");
+  assert.equal(hplan({ ...sol(0) }, CREDIT).headroomCapW, 3300);
+  assert.equal(hplan({ ...sol(0.5, { solarNowW: null }) }, CREDIT).headroomCapW, 3300, "unknown solar counts as 0");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: null }) }, CREDIT).headroomCapW, 3300, "no forecast bound: not counted");
+  assert.equal(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }, CREDIT).headroomCapW, 3300, "stale solar counts as 0");
+  assert.ok(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }, CREDIT).codes.includes("SOLAR_IGNORED"));
+  assert.equal(hplan({ ...sol(1.5) }, CREDIT).headroomCapW, 3300, "an impossible confidence is ignored, solar is not counted");
+  assert.equal(hplan({ ...sol(0.5, { solarNowW: -50 }) }, CREDIT).headroomCapW, 3300);
   // the least solar over the window counts: a forecast that drops to 1000 W later
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 0, watts: 4000 }, { fromInMin: 120, watts: 1000 }] }) }).headroomCapW, 3800, "min over the horizon: 500 W counted -> 4500 - 1200 + 500");
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 30, watts: 4000 }] }) }).headroomCapW, 3300, "no forecast for the first minutes: nothing counted there");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 0, watts: 4000 }, { fromInMin: 120, watts: 1000 }] }) }, CREDIT).headroomCapW, 3800, "min over the horizon: 500 W counted -> 4500 - 1200 + 500");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 30, watts: 4000 }] }) }, CREDIT).headroomCapW, 3300, "no forecast for the first minutes: nothing counted there");
   // a solar surplus never lifts the cap above what the limit allows; the cap never goes below zero
   assert.equal(hplan({ gridImportLimitW: 100, demandProfile: flat(5000) }).headroomCapW, 0);
   assert.equal(hplan({ gridImportLimitW: 100, demandProfile: flat(5000) }).status, "NO_SAFE_CEILING");
@@ -1409,7 +1412,8 @@ test("household closed loop: at least 300 seeded scenarios, demand and solar tha
     if (run.overLimitMin > 0) k.over++;
     if (run.clippedMin > 0) k.clipped++;
     const p = { ...DEFAULT_GENTLE_PARAMS, replanMin: sc.replanMin, maxDecreaseStepW: 1000, ...sc.params };
-    const modelHolds = hs.demandKind !== "exceeds" && hs.solarKind !== "below";
+    // v3 G2: solar is not inside the hard limit, so a solar that falls short of its forecast no longer excuses a crossing: only demand above the forecast and its margin does
+    const modelHolds = hs.demandKind !== "exceeds";
     let bound = false;
     for (const tk of run.ticks) {
       const d = tk.decision;
@@ -1853,4 +1857,87 @@ test("[v3 G4d] named ceilings with an age: no age is static (v1); a stale ceilin
   assert.deepEqual({ best: r.best, stale: r.staleNames, caps: r.staleCaps }, { best: { watts: 3500, name: "y" }, stale: ["y"], caps: true });
   assert.equal(G4.effectiveCeiling([{ name: "y", watts: 3500, ageMin: 99 }], 60).best, null);
   assert.ok(CE([{ name: "a", watts: 5000, ageMin: 5 }]).provisionalInUse.some((x) => x.name === "maxCeilingAgeMin"), "listed where it acts");
+});
+
+test("[v3 G2a] solar is not inside the hard grid limit by default: the cap is the limit minus the demand peak; crediting solar is an explicit, validated parameter and the bounded solar is shown as information", () => {
+  const sol = (conf: number | null, extra: Partial<HouseholdInput> = {}): HouseholdInput => ({ gridImportLimitW: 4500, demandProfile: flat(1000), solarNowW: 2000, solarAgeMin: 1, solarProfile: flat(4000), solarConfidence: conf, ...extra });
+  assert.equal(DEFAULT_GENTLE_PARAMS.solarCreditPct, 0);
+  assert.equal(PARAM_PROVENANCE.solarCreditPct?.kind, "PROVISIONAL");
+  // by default no solar is credited, whatever the confidence: 4500 - 1000 x 1.2 = 3300
+  for (const conf of [0, 0.4, 0.5, 1, null]) {
+    const d = hplan(sol(conf));
+    assert.equal(d.headroomCapW, 3300, "confidence " + conf);
+    assert.equal(d.household?.solarCountedMinW, 0, "nothing is credited");
+    assert.ok(d.codes.includes("SOLAR_NOT_CREDITED"), "the reason says so");
+    assert.match(d.reasons.join(" "), /not counted inside the hard grid limit/);
+    assert.ok((d.setpointW as number) <= 3300);
+  }
+  // the bounded solar is still reported, labelled as information (min of the reading and the scaled forecast)
+  assert.equal(hplan(sol(0.4)).household?.solarPotentialMinW, 1600);
+  assert.equal(hplan(sol(1)).household?.solarPotentialMinW, 2000);
+  assert.equal(hplan(sol(null)).household?.solarPotentialMinW, 0);
+  // an explicit credit: 100 % keeps the old arithmetic (4500 - 1200 + 1600), 50 % credits half of it
+  const full = hplan(sol(0.4), { params: { solarCreditPct: 100 } });
+  assert.equal(full.headroomCapW, 4900);
+  assert.equal(full.household?.solarCountedMinW, 1600);
+  assert.ok(!full.codes.includes("SOLAR_NOT_CREDITED"));
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 50 } }).headroomCapW, 4100);
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 50 } }).household?.solarCountedMinW, 800);
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 0 } }).headroomCapW, 3300);
+  // validated
+  for (const solarCreditPct of [-1, 101, NaN, Infinity, "50" as unknown as number]) assert.equal(plan({ params: { solarCreditPct } }).status, "INVALID", String(solarCreditPct));
+  for (const solarCreditPct of [0, 1, 50, 100]) assert.equal(plan({ params: { solarCreditPct } }).status, "OK", String(solarCreditPct));
+  // without any solar input there is nothing to explain
+  assert.ok(!hplan({ gridImportLimitW: 4500, demandProfile: flat(1000) }).codes.includes("SOLAR_NOT_CREDITED"));
+  // a plentiful solar reading and forecast never lift the setpoint above the limit minus the demand peak
+  for (const w of [500, 3000, 20000]) {
+    const d = hplan(sol(1, { solarNowW: w, solarProfile: flat(w) }), { targetSocPct: 100, socPct: 20 });
+    assert.ok((d.setpointW as number) <= 3300, "solar " + w + ": " + d.setpointW);
+    assert.equal(d.headroomCapW, 3300);
+  }
+  // the hard cap with solar not counted is a function of limit and demand only: the same cap with and without a solar group
+  assert.equal(hplan({ gridImportLimitW: 4500, demandProfile: flat(1000) }).headroomCapW, hplan(sol(0.9)).headroomCapW);
+  // the credit is only ever additive and bounded by the reading: a zero reading credits nothing even at 100 %
+  assert.equal(hplan(sol(1, { solarNowW: 0 }), { params: { solarCreditPct: 100 } }).headroomCapW, 3300);
+});
+
+// A CLOUD scenario: the controller is told it is sunny (a fresh reading of 3000 W and a forecast of the same) but the true solar is a small fraction of that for the whole window.
+const cloudScenario = (variant: number) => {
+  const base0 = makeHouseholdScenario(5);
+  const limit = [6500, 7000, 7500][variant % 3] as number;
+  const fcst = [2500, 3000, 3500][Math.floor(variant / 3) % 3] as number;
+  const trueFrac = [0, 0.03, 0.1][Math.floor(variant / 9) % 3] as number;
+  const nSeg = 8;
+  const sc = {
+    ...base0, kind: "in-band" as const, targetSocPct: 100, bufferMin: 60, clockDay: { changeAtMin: 0, deltaMin: 0 } as ClockDay, windowStartMin: 22 * 60, windowWallMin: 360, windowRealMin: 360,
+    startSocPct: 10, nominalKwh: 30, capacityUpPct: 6, trueCapacityKwh: 30 * 1.03, trueEff: 0.95, trueTaper: { startSocPct: 92, endFraction: 0.2 },
+    ceilings: [{ name: "owner_maximum", watts: 8000 }], ceilW: 8000, readStep: 1, readNoise: 0, staleProb: 0, dips: [], replanMin: 10, paramVariant: "default" as const, params: {}, calm: true,
+    hh: {
+      demandKind: "holds" as const, solarKind: "below" as const, gridLimitW: limit, marginPct: 20, demandForecast: new Array(nSeg).fill(1000) as number[], demandFactor: new Array(nSeg).fill(0.9) as number[], spikes: [],
+      solarForecast: new Array(nSeg).fill(fcst) as number[], solarFactor: new Array(nSeg).fill(trueFrac) as number[], solarConf: 0.9, noise: 0, demandStaleProb: 0, forecastPeakW: 1000, capLowW: limit - 1200,
+    },
+  };
+  const tweak = (h: HouseholdInput) => ({ ...h, solarNowW: fcst, solarAgeMin: 0 });
+  return { sc, tweak, limit };
+};
+
+test("[v3 G2b] closed loop: a cloud, or a solar forecast far too high, cannot push the import over the known limit; asking for the solar credit makes the same loop cross it", () => {
+  let withCredit = 0;
+  let runs = 0;
+  let atRisk = 0;
+  for (let v = 0; v < 27; v++) {
+    const { sc, tweak, limit } = cloudScenario(v);
+    const run = runHouseholdLoop(sc, planGentle, { tweak });
+    runs++;
+    assert.equal(run.overLimitMin, 0, "variant " + v + ": the setpoint plus the true demand stayed inside the limit of " + limit);
+    assert.ok(run.maxImportW <= limit + 1e-6, "variant " + v + ": import " + run.maxImportW);
+    assert.ok(run.ticks.every((tk) => tk.decision.setpointW === null || (tk.decision.headroomCapW as number) <= limit - 1000 * 1.2 + 1e-9), "the cap never counts the solar");
+    if (run.ticks.some((tk) => tk.decision.status === "TARGET_AT_RISK" || tk.decision.status === "TARGET_UNREACHABLE")) atRisk++;
+    // the same world with the credit switched ON shows what the default protects against
+    const credited = runHouseholdLoop(sc, planGentle, { tweak, params: { solarCreditPct: 100 } });
+    if (credited.overLimitMin > 0) withCredit++;
+  }
+  assert.ok(atRisk >= 20, "the shortfall is reported, not hidden: " + atRisk + " of " + runs + " runs flagged at risk or unreachable");
+  assert.ok(withCredit >= 10, "the loop is able to expose the old behaviour: with solarCreditPct 100 the limit was crossed in " + withCredit + " of " + runs + " runs");
+  console.log("[gentle G2] cloud scenarios: " + runs + " runs, solar not credited: limit never crossed; flagged at risk or unreachable in " + atRisk + "; with the credit switched on the limit was crossed in " + withCredit);
 });

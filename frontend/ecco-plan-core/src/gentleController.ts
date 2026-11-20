@@ -81,6 +81,12 @@ export interface GentleParams {
   demandMarginPct: number;
   /** Conservative demand in W used when the demand over the window is not covered and the policy is ASSUME_PROVISIONAL (PROVISIONAL, unmeasured). */
   assumedDemandW: number;
+  /**
+   * Percent (0-100) of the bounded solar that is credited INSIDE the hard grid limit. 0 (the default) counts no solar there: the cap is the limit minus
+   * the demand peak. Anything above 0 is an explicit choice that belongs behind a MEASURED forecast skill gate (none exists today): a cloud or an
+   * over-forecast takes the credited solar away within minutes and the import then crosses the known limit.
+   */
+  solarCreditPct: number;
   /** Household demand and solar readings older than this are stale (treated as unknown). */
   maxHouseholdAgeMin: number;
   /** Demand and solar FORECASTS older than this are stale (treated as unknown). A forecast with no valid age is unknown too. */
@@ -110,6 +116,7 @@ export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
   topHoldMin: 20,
   demandMarginPct: 20,
   assumedDemandW: 2000,
+  solarCreditPct: 0,
   maxHouseholdAgeMin: 15,
   maxForecastAgeMin: 120,
   maxCeilingAgeMin: 60,
@@ -157,6 +164,7 @@ const KINDS: Record<string, readonly [ParamKind, string]> = {
   topHoldMin: ["MEASURED_REQUIRED", "the measured time from the last taper step to the BMS finishing the top of charge"],
   demandMarginPct: ["PROVISIONAL", "the measured spread of real demand against its forecast"],
   assumedDemandW: ["MEASURED_REQUIRED", "the measured overnight household demand profile (unknown today)"],
+  solarCreditPct: ["PROVISIONAL", "a measured forecast skill gate (none exists: 0 means no solar inside the hard grid limit)"],
   maxHouseholdAgeMin: ["PROVISIONAL", "the real update rate of the demand and solar sensors"],
   maxForecastAgeMin: ["PROVISIONAL", "the real refresh rate of the demand and solar forecasts"],
   maxCeilingAgeMin: ["PROVISIONAL", "the real update rate of the live battery and grid-charge limits"],
@@ -198,14 +206,18 @@ export interface HouseholdInput {
   demandProfile?: readonly StepPoint[] | null;
   /** Age of the demand forecast in real minutes; null or missing counts as stale (an unknown forecast), over `maxForecastAgeMin` too. */
   demandProfileAgeMin?: number | null;
-  /** Available solar now in W, or null when unknown. */
+  /**
+   * GROSS solar production now in W (the PV output), or null when unknown. NOT the surplus after the house: the household's own use is already in
+   * `demandNowW`, so passing a surplus here would count it twice. It is bounded by the forecast and, by default, not credited to the hard limit
+   * (`solarCreditPct`).
+   */
   solarNowW?: number | null;
   solarAgeMin?: number | null;
   /** Forecast solar over the remaining window; counted only with a fresh reading, bounded by the reading and scaled by the confidence. */
   solarProfile?: readonly StepPoint[] | null;
   /** Age of the solar forecast in real minutes; null or missing counts as stale (the forecast is ignored). */
   solarProfileAgeMin?: number | null;
-  /** 0..1; missing or invalid counts as 0 (solar not counted). */
+  /** 0..1; missing or invalid counts as 0 (solar not counted). Scales the forecast; it is no substitute for a measured forecast skill. */
   solarConfidence?: number | null;
   /** A KNOWN safe grid import limit in W. null or missing means unknown: no grid-headroom constraint is applied and the reason says so; it is never guessed. */
   gridImportLimitW?: number | null;
@@ -288,6 +300,7 @@ export type GentleCode =
   | "ABOVE_HEADROOM"
   | "SLEW_LIMITED"
   | "JUMP_FOR_DEADLINE"
+  | "SOLAR_NOT_CREDITED"
   | "FORECAST_STALE"
   | "CEILING_STALE"
   | "GRID_LIMIT_STALE";
@@ -315,8 +328,10 @@ export interface HouseholdReport {
   demandBasis: "FORECAST" | "ASSUMED" | "NONE";
   /** The demand peak over the remaining window including the margin (W), or null. */
   demandPeakW: number | null;
-  /** The least solar counted over the remaining window (W), or null. */
+  /** The least solar CREDITED to the hard grid limit over the remaining window (W): 0 unless `solarCreditPct` is set. */
   solarCountedMinW: number | null;
+  /** The least bounded solar the inputs would allow (W): information only, never inside the cap unless credited; null when not computed. */
+  solarPotentialMinW: number | null;
   /** The pessimistic grid import at the recommended setpoint: setpoint + demand peak - least solar counted (W), or null. */
   projectedImportW: number | null;
   note: string;
@@ -552,6 +567,7 @@ function paramProblem(p: GentleParams): string | null {
   if (p.topHoldMin < 0 || p.topHoldMin > 120) return "topHoldMin must be 0-120 minutes.";
   if (p.demandMarginPct < 0 || p.demandMarginPct > 200) return "demandMarginPct must be 0-200.";
   if (p.assumedDemandW < 0 || p.assumedDemandW > 100000) return "assumedDemandW must be 0-100000 W.";
+  if (p.solarCreditPct < 0 || p.solarCreditPct > 100) return "solarCreditPct must be 0-100.";
   if (p.maxHouseholdAgeMin <= 0 || p.maxHouseholdAgeMin > 120) return "maxHouseholdAgeMin must be 1-120 minutes.";
   if (p.maxForecastAgeMin <= 0 || p.maxForecastAgeMin > 1440) return "maxForecastAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxCeilingAgeMin <= 0 || p.maxCeilingAgeMin > 1440) return "maxCeilingAgeMin must be above 0 and at most 1440 minutes.";
@@ -645,14 +661,17 @@ interface HouseholdEval {
   basis: "FORECAST" | "ASSUMED" | "NONE";
   /** The demand peak incl. the margin. */
   peakW: number | null;
+  /** The least solar CREDITED to the cap over the window (0 unless `solarCreditPct` is set). */
   solarMinW: number | null;
+  /** The least bounded solar (min of the fresh reading and the confidence-scaled forecast) over the window: information only, never in the cap. */
+  solarPotentialMinW: number | null;
   /** The smallest per-minute headroom in setpoint watts, before rounding to a step. */
   capW: number | null;
   perMinW: number[] | null;
 }
 
 function noHousehold(): HouseholdEval {
-  return { given: false, limitW: null, problem: null, codes: [], reasons: [], basis: "NONE", peakW: null, solarMinW: null, capW: null, perMinW: null };
+  return { given: false, limitW: null, problem: null, codes: [], reasons: [], basis: "NONE", peakW: null, solarMinW: null, solarPotentialMinW: null, capW: null, perMinW: null };
 }
 
 function fresh(age: unknown, maxAge: number): boolean {
@@ -661,8 +680,8 @@ function fresh(age: unknown, maxAge: number): boolean {
 
 /**
  * The pessimistic household evaluation over the remaining horizon: demand = the PEAK of the fresh reading and the forecast profile plus the margin
- * (an unknown demand follows the policy), solar = min(fresh reading, forecast x confidence) per minute (unknown solar counts as 0), the grid limit
- * = a KNOWN limit only. The per-minute headroom in setpoint watts is the battery-side headroom divided back by the efficiency; its least value is the cap.
+ * (an unknown demand follows the policy), solar = min(fresh reading, forecast x confidence) per minute (unknown solar counts as 0), of which only
+ * `solarCreditPct` percent (0 by default) is credited to the hard limit, the grid limit = a KNOWN limit only. The per-minute headroom in setpoint watts is the battery-side headroom divided back by the efficiency; its least value is the cap.
  */
 function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, pol: GentlePolicy, horizonMin: number): HouseholdEval {
   if (h === undefined || h === null) return noHousehold();
@@ -760,21 +779,33 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
     ev.codes.push("SOLAR_IGNORED");
     ev.reasons.push("A solar input is stale or not usable: solar that cannot be trusted is counted as 0.");
   }
-  const counted = solarKnown && solarProf !== null && conf > 0;
+  // Solar is NOT inside the hard limit by default: a cloud or an over-forecast can take it away faster than a re-plan reacts, and the import would then
+  // cross the known limit. Only the share `solarCreditPct` (0 by default, an explicit and validated parameter that belongs behind a measured forecast
+  // skill gate) of the bounded solar is credited to the cap. The bounded solar is still computed and reported, labelled as information only.
+  const potential = solarKnown && solarProf !== null && conf > 0;
+  const credit = p.solarCreditPct / 100;
   const per: number[] = [];
   let cap = Infinity;
   let solarMin = Infinity;
+  let potentialMin = Infinity;
   for (let t = 0; t < n; t++) {
-    const fc = counted ? stepProfileAt(solarProf as readonly StepPoint[], t) : null;
-    const s = counted ? Math.min(solarNow, (fc ?? 0) * conf) : 0;
+    const fc = potential ? stepProfileAt(solarProf as readonly StepPoint[], t) : null;
+    const pot = potential ? Math.min(solarNow, (fc ?? 0) * conf) : 0;
+    const s = pot * credit;
     const hr = batteryHeadroomW(lim, peakW, s, p.chargeEff) / p.chargeEff;
     per.push(hr);
     if (hr < cap) cap = hr;
     if (s < solarMin) solarMin = s;
+    if (pot < potentialMin) potentialMin = pot;
+  }
+  if (credit === 0 && (sn !== undefined && sn !== null || sp !== undefined && sp !== null && sp.length !== 0 || sc !== undefined && sc !== null)) {
+    ev.codes.push("SOLAR_NOT_CREDITED");
+    ev.reasons.push("Solar is not counted inside the hard grid limit (solarCreditPct is 0, the default): it can fall faster than a re-plan reacts. The bounded solar is shown as information only.");
   }
   ev.perMinW = per;
   ev.capW = cap;
   ev.solarMinW = solarMin;
+  ev.solarPotentialMinW = potentialMin;
   return ev;
 }
 
@@ -1112,6 +1143,7 @@ function householdReport(hh: HouseholdEval, importW: number | null, p: GentlePar
     demandBasis: hh.basis,
     demandPeakW: hh.peakW === null ? null : round1(hh.peakW),
     solarCountedMinW: hh.solarMinW === null ? null : round1(hh.solarMinW),
+    solarPotentialMinW: hh.solarPotentialMinW === null ? null : round1(hh.solarPotentialMinW),
     projectedImportW: importW === null ? null : round1(importW),
     note: note + (hh.basis === "ASSUMED" ? " Demand is the provisional assumption of " + p.assumedDemandW + " W at least." : ""),
   };
