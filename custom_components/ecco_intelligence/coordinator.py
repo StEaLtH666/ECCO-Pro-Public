@@ -430,7 +430,8 @@ class EccoIntelCoordinator:
                          "settle_holds": 0, "settle_held_starts": 0, "settle_residual_starts": 0,
                          "snapshot_holds": 0, "snapshot_residual_reads": 0,
                          "history_parses": 0, "history_reuses": 0, "ticks_deferred": 0, "catchup_ticks": 0,
-                         "tick_start_runs": 0, "tick_deadline_runs": 0, "poll_steps_held_busy": 0}
+                         "tick_start_runs": 0, "tick_deadline_runs": 0, "poll_steps_held_busy": 0,
+                         "advice_write_failures": 0}      # the advice log's own write failures since start (diagnostics only)
         self._run_cycle: Callable | None = None           # None = the vendored shadow_cycle.run_cycle (tests inject)
         self._listeners: list[tuple[str | None, Callable[[], None]]] = []
         self._in_write_failure = False
@@ -469,6 +470,7 @@ class EccoIntelCoordinator:
         self._metrics_ok = False
         self._ghost_job: engine_link.EngineJob | None = None   # the last cycle's job without its rows (the Ghost block, diagnostics)
         self._ghost_busy = False                          # a Ghost block job is running (one at a time)
+        self._advice_error: str | None = None             # the exception class of the last advice log write failure (never a message)
         self._entity_mismatch: dict[str, str] = {}
         self._entities_seen: set[str] = set()
         self._closed = False
@@ -1381,7 +1383,7 @@ class EccoIntelCoordinator:
                 self.last_store = await self._bounded(self._submit(
                     self.hass.async_add_executor_job, self.store.record_cycle, env.scorecard_report, slot, at, history,
                     self.site.base_cfg, self.payloads, DUMP_DURATION_MIN), deadline)
-                self.selftest.record("STORE_RECORD", PASS, "the scorecard step completed")
+                self._note_advice_store()
             except asyncio.TimeoutError:
                 self.selftest.record("STORE_RECORD", WARN, "the scorecard step exceeded the time budget")
             except Exception as exc:  # noqa: BLE001 - the published result stands; the scorecard is only diagnostics
@@ -1409,6 +1411,28 @@ class EccoIntelCoordinator:
                 self._publish_failed(now, {"RUNTIME_EXCEPTION": type(exc).__name__})
         finally:
             self._cycle_end(now, kind, outcome, timing, time_mod.perf_counter() - t_start, trigger, poll_age_s)
+
+    def _note_advice_store(self) -> None:
+        """After a slot cycle's store step: keep the advice log's write failures (cumulative, since start) in the counters and
+        never let STORE_RECORD claim PASS once any has happened: it is WARN, with the count, until the integration is reloaded.
+        One warning is logged at the first failure (the class name only). The scorecard record and every published value are
+        unaffected: the advice write is isolated in the store (runtime/store.py, intelligence/scorecard.py record_advice)."""
+        ls = self.last_store if isinstance(self.last_store, Mapping) else {}
+        failed = ls.get("advice_write_failures")
+        if isinstance(failed, int) and not isinstance(failed, bool) and failed > 0:
+            first = self.counters["advice_write_failures"] == 0
+            self.counters["advice_write_failures"] += failed
+            err = ls.get("advice_error")
+            self._advice_error = err if isinstance(err, str) and err.isidentifier() else self._advice_error
+            if first:
+                _LOGGER.warning("ECCO Intelligence: the advice log write failed (%s); the scorecard and the published advice are "
+                                "unaffected; see the diagnostics (counters, last_store)", self._advice_error or "unknown")
+        n = self.counters["advice_write_failures"]
+        if n > 0:
+            self.selftest.record("STORE_RECORD", WARN, f"the scorecard step completed; the advice log write has failed {n} time(s) "
+                                 f"since start ({self._advice_error or 'unknown'})")
+        else:
+            self.selftest.record("STORE_RECORD", PASS, "the scorecard step completed")
 
     # --- diagnostics -------------------------------------------------------------------------------------------------
     def _cycle_stats_summary(self) -> dict:

@@ -93,8 +93,13 @@ CREATE TABLE IF NOT EXISTS recommendations (
 );
 """
 
-# Durable advice log (additive: a table of its own, created if missing; no existing table or query is touched).
-# One row per published CHANGE of the charge_target / dump_to_grid advice; an identical re-publish is not written again.
+# Durable advice log (additive: a table of its own; no existing table or query is touched). The table is NOT created when the
+# scorecard is opened: record_advice creates it on the first advice write, inside its own try, so a pre-existing table of another
+# shape, a failing CREATE or a full disk can only fail the advice write (counted), never the scorecard's own paths or the store gate.
+# What is written: for each of the two kinds, one row per slot cycle (the integration's slot cycles run 26 times a day, so at most
+# about 52 rows a day, about 21 000 rows over the 400-day retention, a few MB). An identical re-publish is skipped only while the
+# latest row of its kind is still current (its validity end, for the dump its window); the engine's validity is at most 900 s and
+# slots are an hour apart, so in practice every slot cycle writes its two rows. Nothing else is written.
 ADVICE_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS advice_log (
     advice_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +126,19 @@ CREATE INDEX IF NOT EXISTS ix_advice_log_kind_issued ON advice_log (kind, issued
 """
 ADVICE_LOG_KINDS = ("charge_target", "dump_to_grid")
 ADVICE_LOG_RETENTION_DAYS = 400
+ADVICE_LOG_COLUMNS = ("advice_id", "kind", "status", "issued_utc", "valid_until_utc", "window_start_utc", "window_end_utc",
+                      "target_soc_pct", "effective_reserve_pct", "conservative_fallback", "stop_soc_pct", "export_kwh",
+                      "export_kw_avg", "dump_advisable", "duration_min", "confidence", "reasons_json", "run_id", "content_hash")
+ADVICE_LOG_MISSING, ADVICE_LOG_INCOMPATIBLE, ADVICE_LOG_OK = "MISSING", "INCOMPATIBLE", "OK"
+
+
+def advice_log_status(db: sqlite3.Connection) -> str:
+    """READ-ONLY (a PRAGMA; safe on a mode=ro connection): MISSING (no advice_log table), INCOMPATIBLE (a table of that name that
+    lacks a column this module reads and writes) or OK."""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(advice_log)")}
+    if not cols:
+        return ADVICE_LOG_MISSING
+    return ADVICE_LOG_OK if set(ADVICE_LOG_COLUMNS) <= cols else ADVICE_LOG_INCOMPATIBLE
 
 
 def _num(v):
@@ -199,8 +217,8 @@ class Scorecard:
         self.db.row_factory = sqlite3.Row
         self.tz = zone(tz_name)
         self.db.executescript(DDL)
-        self.db.executescript(ADVICE_LOG_DDL)
-        self.advice_write_failures = 0
+        self.advice_write_failures = 0                 # the advice log's own failures (record_advice); nothing else counts here
+        self.advice_last_error: str | None = None      # the exception class name of the last such failure (never a message)
         self.db.execute("INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         self.db.commit()
 
@@ -248,12 +266,30 @@ class Scorecard:
         self.db.commit()
         return run_id
 
+    def advice_log_status(self) -> str:
+        """MISSING, INCOMPATIBLE or OK (module function advice_log_status on this connection). Writes nothing."""
+        return advice_log_status(self.db)
+
+    def _ensure_advice_log(self) -> None:
+        """Make the advice_log table exist, for the advice WRITE path only (record_advice calls it inside its own try; opening the
+        scorecard never does): MISSING -> run the DDL; INCOMPATIBLE (a table of that name with other columns) -> raise
+        sqlite3.DatabaseError without touching it; OK -> nothing to do."""
+        st = advice_log_status(self.db)
+        if st == ADVICE_LOG_INCOMPATIBLE:
+            raise sqlite3.DatabaseError("advice_log exists with another shape")
+        if st == ADVICE_LOG_MISSING:
+            self.db.executescript(ADVICE_LOG_DDL)
+
     def record_advice(self, published: dict, *, dump_duration_min: float | None = None, run_id: int | None = None) -> int:
         """Durably log the advice just published (see advice_log_rows). Never raises and never changes the caller's outputs:
-        any failure is rolled back, counted in `advice_write_failures` and 0 is returned. Returns the rows written (a row
-        identical in content to the latest one of its kind is skipped). Rows older than ADVICE_LOG_RETENTION_DAYS are
-        dropped at write time."""
+        any failure (the table cannot be created or is of another shape, the write fails) is rolled back, counted in
+        `advice_write_failures` (its exception class in `advice_last_error`) and 0 is returned; it cannot affect the scorecard's
+        own paths, because the table is created HERE, on the first write, and not when the scorecard is opened. Returns the rows
+        written. A row identical in content to the latest one of its kind is skipped only while that row is still current (the
+        dump: its window; the rest: its validity end), so with the engine's validity of at most 900 s and hourly slot cycles every
+        cycle normally writes its rows (one per kind). Rows older than ADVICE_LOG_RETENTION_DAYS are dropped at write time."""
         try:
+            self._ensure_advice_log()
             written = 0
             for r in advice_log_rows(published, dump_duration_min=dump_duration_min, run_id=run_id):
                 h = _advice_hash(r)
@@ -274,8 +310,9 @@ class Scorecard:
                 self.db.execute("DELETE FROM advice_log WHERE issued_utc < ?", (cutoff,))
             self.db.commit()
             return written
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - isolated on purpose: counted, only the class name kept
             self.advice_write_failures += 1
+            self.advice_last_error = type(exc).__name__
             try:
                 self.db.rollback()
             except Exception:
@@ -284,7 +321,10 @@ class Scorecard:
 
     def advice_records(self, start: datetime | None = None, end: datetime | None = None, kind: str | None = None) -> list[dict]:
         """Read-only: the logged advice issued in [start, end) (UTC instants; both optional), oldest first, as the dicts of the
-        Ghost's AdviceRecord.from_dict (the same mapping as tools/advice_export.py). Writes nothing."""
+        Ghost's AdviceRecord.from_dict (the same mapping as tools/advice_export.py). Writes nothing. A missing or incompatible
+        advice_log table gives no rows (advice_log_status() says which); it never raises for that."""
+        if advice_log_status(self.db) != ADVICE_LOG_OK:
+            return []
         q, args = "SELECT * FROM advice_log WHERE 1=1", []
         if start is not None:
             q, args = q + " AND issued_utc >= ?", args + [_iso(start)]

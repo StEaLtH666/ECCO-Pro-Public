@@ -12,7 +12,11 @@ Writes: only under <config>/ecco/intelligence/state/, and only
                          transaction), so a process that dies at any point records a slot at most once: a restart in the
                          middle of a run, or a crash between the two writes, never records it twice.
                          The advice just published is also logged (advice_log, additive; record_cycle's `advice`), in its own
-                         transaction after the scorecard work; a failure there is counted and never raised.
+                         transaction after the scorecard work, in the same file: ONE table, two rows per slot cycle at most
+                         (about 52 a day), deleted after PROPOSED_RETENTION_DAYS. The table is created by the first advice write,
+                         not when the store is opened, so a failure there (another table of that name, a failing CREATE, a full
+                         disk) is counted and never raised and cannot touch the scorecard record, the start-up gate or
+                         outcome_metrics. This is a DURABLE write of the integration (the diagnostics download only reads it).
 The parent <config>/ecco/intelligence/ must already exist (the owner places the site file there); this module never creates
 anything above state/. Every path is resolved and checked to lie inside state/ before it is written.
 
@@ -32,7 +36,7 @@ from pathlib import Path
 from typing import Mapping
 
 from intelligence.advisory_contract import OutcomeMetrics
-from intelligence.scorecard import Scorecard
+from intelligence.scorecard import ADVICE_LOG_INCOMPATIBLE, ADVICE_LOG_MISSING, Scorecard, advice_log_status
 
 STORE_SCHEMA = "ecco-intel-runtime-store"
 STORE_SCHEMA_VERSION = 1
@@ -253,6 +257,8 @@ class RuntimeStateStore:
             with closing(self._scorecard()) as sc:
                 out["advice_rows"] = sc.record_advice(dict(advice), dump_duration_min=dump_duration_min)
                 out["advice_write_failures"] = sc.advice_write_failures
+                if sc.advice_last_error:
+                    out["advice_error"] = sc.advice_last_error      # the exception class name only
         except Exception as exc:  # noqa: BLE001 - the advice log is diagnostics only; the type is the whole message
             out["advice_write_failures"] += 1
             out["advice_error"] = type(exc).__name__
@@ -314,15 +320,19 @@ class RuntimeStateStore:
         advice issued in [start, end), oldest first, at most the newest `limit` rows, as the dicts of
         ghost.AdviceRecord.from_dict (the mapping of Scorecard.advice_records and tools/advice_export.py; a test pins that the
         three agree). [] when there is no scorecard file or no advice_log table (nothing logged yet); raises sqlite3.Error /
-        OSError when the file cannot be read, so the caller can tell 'nothing logged' from 'unreadable'."""
+        OSError when the file cannot be read or the table has another shape (an advice_log of other columns), so the caller can
+        tell 'nothing logged' from 'unreadable'."""
         path = self._root / SCORECARD_FILE
         if not path.is_file():
             return []
         con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         try:
-            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='advice_log'").fetchone() is None:
+            st = advice_log_status(con)
+            if st == ADVICE_LOG_MISSING:
                 return []
+            if st == ADVICE_LOG_INCOMPATIBLE:
+                raise sqlite3.DatabaseError("advice_log exists with another shape")
             got = con.execute("SELECT * FROM advice_log WHERE issued_utc >= ? AND issued_utc < ? "
                               "ORDER BY issued_utc DESC, advice_id DESC LIMIT ?", (_iso(start), _iso(end), int(limit))).fetchall()
         finally:

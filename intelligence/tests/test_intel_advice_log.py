@@ -8,6 +8,10 @@
   [5] a write failure is isolated (returns 0, counted, nothing raised, no partial rows)
   [6] export round trip into ghost.parse_export's advice format; the export opens the file read-only
   [7] existing scorecard behaviour is unchanged (tables, row counts, schema version)
+  [8] the advice table cannot break the scorecard (review finding G1): opening the store never touches advice_log (the table is
+      created by the advice WRITE path, inside its own try); an incompatible pre-existing table, a DDL that raises and a write
+      that raises each leave the existing scorecard paths (open, record_run, counts, metrics) working; reading tolerates a missing
+      or incompatible table
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ sys.path.insert(0, str(ROOT))
 
 from intelligence import advisory_contract as ac  # noqa: E402
 from intelligence.ghost import AdviceRecord, parse_export  # noqa: E402
-from intelligence.scorecard import ADVICE_LOG_RETENTION_DAYS, DDL, SCHEMA_VERSION, Scorecard  # noqa: E402
+import intelligence.scorecard as scmod  # noqa: E402
+from intelligence.scorecard import ADVICE_LOG_DDL, ADVICE_LOG_RETENTION_DAYS, DDL, SCHEMA_VERSION, Scorecard  # noqa: E402
 from intelligence.tools import advice_export  # noqa: E402
 
 FAILURES: list[str] = []
@@ -68,9 +73,16 @@ def rows(db_path_or_sc, sql="SELECT * FROM advice_log ORDER BY advice_id"):
     return [dict(r) for r in db_path_or_sc.db.execute(sql)]
 
 
+def has_table(db, name="advice_log") -> bool:
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
 print("== [1] fresh and old databases")
 sc = Scorecard(":memory:")
-check("a fresh store has advice_log, empty", rows(sc) == [])
+check("a fresh store has NO advice_log yet: opening creates nothing for the advice log (G1), and reading advice gives []",
+      not has_table(sc.db) and sc.advice_records() == [])
+sc.record_advice(payloads(T0))
+check("the first advice write creates the table (and only then)", has_table(sc.db) and len(rows(sc)) == 2)
 tmp = Path(tempfile.mkdtemp(prefix="advlog_"))
 old = tmp / "old.db"
 c = sqlite3.connect(old)
@@ -85,9 +97,12 @@ check("export of an old file (no table) is [] and does not create the table (rea
       and "advice_log" not in {r[0] for r in sqlite3.connect(old).execute("SELECT name FROM sqlite_master")})
 sc_old = Scorecard(str(old))
 tables_after = {r[0] for r in sc_old.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-check("opening the old file only adds advice_log", tables_after - tables_before == {"advice_log"}
-      and tables_before <= tables_after, str(tables_after ^ tables_before))
+check("opening the old file adds nothing (G1: the advice table is not created by opening)", tables_after == tables_before,
+      str(tables_after ^ tables_before))
 check("old file records advice", sc_old.record_advice(payloads(T0), dump_duration_min=30) == 2)
+tables_rec = {r[0] for r in sc_old.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+check("the first advice write only adds advice_log", tables_rec - tables_before == {"advice_log"} and tables_before <= tables_rec,
+      str(tables_rec ^ tables_before))
 
 print("== [2] one row per change, idempotent")
 sc = Scorecard(":memory:")
@@ -159,6 +174,7 @@ n = len(rows(sc))
 pay = payloads(T0 + timedelta(hours=1), ct_target=71.0)
 snapshot = json.dumps(pay, sort_keys=True, default=str)
 sc.db.execute("DROP TABLE advice_log")
+sc.db.execute("CREATE TABLE advice_log (x INTEGER)")        # a table the advice write cannot use (not the DDL's shape)
 res, raised = None, False
 try:
     res = sc.record_advice(pay, dump_duration_min=30)
@@ -166,12 +182,18 @@ except Exception:
     raised = True
 check("a broken table: nothing raised, 0 written, failure counted", not raised and res == 0 and sc.advice_write_failures == 1)
 check("the published payloads are untouched", json.dumps(pay, sort_keys=True, default=str) == snapshot)
+sc_d = Scorecard(":memory:")
+sc_d.record_advice(payloads(T0))
+sc_d.db.execute("DROP TABLE advice_log")
+check("a dropped table is simply created again by the next advice write (nothing counted)",
+      sc_d.record_advice(payloads(T0 + timedelta(hours=1))) == 2 and sc_d.advice_write_failures == 0 and len(rows(sc_d)) == 2)
 bad = {"x": ("s", {"kind": "charge_target", "status": "OK", "generated_at": "not a time"}, {})}
 check("malformed input is also swallowed and counted", Scorecard(":memory:").record_advice(bad) == 0)
 sc3 = Scorecard(":memory:")
 sc3.record_advice(bad)
 check("the counter increments", sc3.advice_write_failures == 1)
 sc4 = Scorecard(":memory:")
+sc4.db.executescript(ADVICE_LOG_DDL)                         # the table the trigger needs (the first write would create it)
 sc4.db.execute("CREATE TRIGGER boom BEFORE INSERT ON advice_log WHEN NEW.kind='dump_to_grid' BEGIN SELECT RAISE(ABORT,'boom'); END")
 check("a failure on the second row rolls the first back (no partial rows)", sc4.record_advice(payloads(T0)) == 0
       and rows(sc4) == [] and sc4.advice_write_failures == 1)
@@ -222,13 +244,104 @@ check("a missing database exits 2 and creates no file", rc == 2 and not (tmp / "
 print("== [7] existing scorecard behaviour unchanged")
 sc = Scorecard(":memory:")
 names = {r[0] for r in sc.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-check("the four original tables are all there plus advice_log", {"schema_meta", "model_runs", "forecasts", "recommendations",
-                                                                  "advice_log"} <= names)
+check("the four original tables are all there; advice_log only after the first advice write",
+      {"schema_meta", "model_runs", "forecasts", "recommendations"} <= names and "advice_log" not in names, str(names))
 check("schema version unchanged", sc.db.execute("SELECT value FROM schema_meta").fetchone()[0] == str(SCHEMA_VERSION) == "1")
 sc.record_advice(payloads(T0))
 check("recording advice touches no existing table", all(sc.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0
                                                          for t in ("model_runs", "forecasts", "recommendations")))
 check("opening twice is idempotent", Scorecard(str(db)).db.execute("SELECT COUNT(*) FROM advice_log").fetchone()[0] == 6)
+
+print("== [8] the advice table cannot break the scorecard (G1 fault injection)")
+
+
+def tried(fn):
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 - the test records what happened
+        return f"raised {type(exc).__name__}"
+
+
+def mini_report(issued: datetime) -> dict:
+    recs = []
+    for k in range(2):
+        t0 = issued + timedelta(hours=1 + 24 * k)
+        recs.append({"kind": "load_kwh:day", "unit": "kWh", "horizon_start": t0.isoformat(), "horizon_end": (t0 + timedelta(hours=24)).isoformat(),
+                     "p50": 10.0, "p10": 8.0, "p90": 12.0, "confidence": 0.6, "explanation": {"synthetic": True}})
+    return {"generated_for": issued.isoformat(), "features": {"synthetic": 1}, "model_version": "intel-test", "config_hash": "test",
+            "feature_hash": "f1", "status": "OK", "confidence": {"overall": 0.6}, "mode": "SHADOW", "forecast_records": recs}
+
+
+def old_paths(sc) -> str:
+    """The scorecard's own paths: record_run, counts, metrics. 'ok' or what went wrong."""
+    try:
+        run_id = sc.record_run(mini_report(T0))
+        if not isinstance(run_id, int) or sc.counts() != {"PENDING": 2} or sc.metrics() != []:
+            return f"unexpected {run_id} {sc.counts()}"
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        return f"raised {type(exc).__name__}"
+
+
+def opened(path):
+    try:
+        return Scorecard(path), "ok"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"raised {type(exc).__name__}"
+
+
+# a. an advice_log table that already exists with other columns (a foreign or older shape)
+inc = tmp / "incompatible.db"
+c = sqlite3.connect(inc)
+c.executescript(DDL)
+c.execute("INSERT INTO schema_meta VALUES ('schema_version', '1')")
+c.execute("CREATE TABLE advice_log (foo TEXT, bar INTEGER)")
+c.execute("INSERT INTO advice_log VALUES ('x', 1)")
+c.commit()
+c.close()
+sc_i, why = opened(str(inc))
+check("an incompatible pre-existing advice_log does not stop the scorecard from opening", sc_i is not None, why)
+if sc_i is not None:
+    check("... the existing scorecard paths (record_run, counts, metrics) still work on it", old_paths(sc_i) == "ok", old_paths(sc_i))
+    n0 = sc_i.advice_write_failures
+    res = tried(lambda: sc_i.record_advice(payloads(T0), dump_duration_min=30))
+    check("... an advice write on it fails alone: 0 rows, counted, nothing raised", res == 0 and sc_i.advice_write_failures == n0 + 1, str(res))
+    check("... the odd table is left exactly as it was (its row and its columns)",
+          [tuple(r) for r in sc_i.db.execute("SELECT * FROM advice_log")] == [("x", 1)]
+          and [r[1] for r in sc_i.db.execute("PRAGMA table_info(advice_log)")] == ["foo", "bar"])
+    check("... reading advice from it gives no rows, not an exception", tried(lambda: sc_i.advice_records()) == [])
+    check("... and a clear status says why", tried(lambda: sc_i.advice_log_status()) == "INCOMPATIBLE",
+          str(tried(lambda: sc_i.advice_log_status())))
+    sc_i.db.close()
+
+# b. a DDL that raises (a failing CREATE INDEX or a full disk at the first create look the same to the opener)
+real_ddl = scmod.ADVICE_LOG_DDL
+scmod.ADVICE_LOG_DDL = "CREATE TABLE advice_log (;"
+try:
+    sc_b, why = opened(":memory:")
+    check("a DDL that raises does not stop the scorecard from opening", sc_b is not None, why)
+    if sc_b is not None:
+        check("... the existing scorecard paths still work", old_paths(sc_b) == "ok", old_paths(sc_b))
+        res = tried(lambda: sc_b.record_advice(payloads(T0)))
+        check("... the advice write fails alone: 0 rows, counted, nothing raised", res == 0 and sc_b.advice_write_failures == 1, str(res))
+        sc_b.db.close()
+finally:
+    scmod.ADVICE_LOG_DDL = real_ddl
+
+# c. a write that raises (a trigger): the old paths are unaffected
+sc_c = Scorecard(":memory:")
+sc_c.db.executescript(ADVICE_LOG_DDL)
+sc_c.db.execute("CREATE TRIGGER boom_all BEFORE INSERT ON advice_log BEGIN SELECT RAISE(ABORT,'boom'); END")
+check("a write that raises: 0 rows, counted, nothing raised, and the existing scorecard paths still work",
+      tried(lambda: sc_c.record_advice(payloads(T0))) == 0 and sc_c.advice_write_failures == 1 and old_paths(sc_c) == "ok")
+
+# d. reading tolerates a missing table; the status names the three states
+sc_m = Scorecard(":memory:")
+check("reading a store with no advice table: no rows and the status MISSING",
+      tried(lambda: sc_m.advice_records()) == [] and tried(lambda: sc_m.advice_log_status()) == "MISSING",
+      f"{tried(lambda: sc_m.advice_records())} {tried(lambda: sc_m.advice_log_status())}")
+sc_m.record_advice(payloads(T0))
+check("... and OK once the advice write has created it", tried(lambda: sc_m.advice_log_status()) == "OK")
 
 print("")
 if FAILURES:
