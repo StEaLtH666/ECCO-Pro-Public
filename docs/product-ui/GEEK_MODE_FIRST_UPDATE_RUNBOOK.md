@@ -78,7 +78,7 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 | G2 | the owner has reserved a quiet period, is present, and no other supervised live step is in progress |
 | G3 | the owner has made a fresh **protected** full backup in the Home Assistant UI (step 2). A backup made over SSH is full but UNPROTECTED: no session handles a backup encryption password |
 | G4 | the live baseline (step 1) is saved and shows: Home Assistant Core running and its version noted; the Intelligence status reading SHADOW with a fresh result (or its state noted if not); the pause helper's state noted; no resource, file or dashboard of this update already present; the Intelligence card's resource registered; the control entities of the earlier supervised installs unchanged since their last record |
-| G5 | RG-F3 is recorded: "expose new entities" is ON for Assist and Google Assistant (finding of 17 Nov). This update creates **no entity**, so it is not a blocker for U1, but the owner states in the session whether both are now off or waived for U1. Any later install that creates entities waits for both to be off |
+| G5 | release gate RG-F3 (the two voice-assistant settings "expose new entities", for Assist and for Google Assistant) is recorded: the owner states in the session whether both are off, or consciously waived because this update creates **no entity**. Any later install that creates entities waits for both to be off |
 | G6 | the browser used for the look is a desktop browser whose clock is within five minutes of Home Assistant's clock (section 10) |
 | G7 | the owner agrees in advance that the first look is **Production Mode only**, that Geek Mode follows only after the owner says go, and that the pause tile is never tapped |
 
@@ -95,7 +95,7 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 | 6 | read-only after-checks (5.6) | COORDINATOR | live | read-only | **yes** (a live read) | the Overview file and every other dashboard file have their baseline sha256; the resource list differs by exactly one item; the dashboard list by exactly one item; the stored configuration equals the generated one; no new lovelace or frontend error in the log; Intelligence status and pause helper unchanged | any other difference |
 | 7 | ONE owner look: Production first, then Geek only after the owner says go (5.7) | OWNER | live (browser) | read-only (a presentation toggle). **Never tap the pause tile** | the owner's action; the Geek look needs the owner's separate go | the checks of 5.7 | any of the stop lines of 5.7 or section 10 |
 | 8 | no-write evidence (5.8) | COORDINATOR | live | read-only | **yes** (a live read) | no control entity changed since the start of the look; Intelligence still publishing | any control entity changed |
-| 9 | close-out (5.9) | COORDINATOR | offline | local files and local commits; a bridge post and a push only on the owner's go | **yes** for the bridge post and any push | the evidence is filed | n/a |
+| 9 | close-out (5.9) | COORDINATOR | offline | local files and local commits; a post to the coordination channel and a push only on the owner's go | **yes** for the post and any push | the evidence is filed | n/a |
 
 No step restarts Home Assistant. A step that would need a restart is out of scope and stops the update.
 
@@ -104,7 +104,7 @@ No step restarts Home Assistant. A step that would need a restart is out of scop
 ### 5.0 Step 0: offline gates
 
 Work from a clean checkout of the exact commit, made without line-ending conversion (a CRLF checkout changes the card's bytes and
-therefore its content address; the master status records that the main clone is a CRLF checkout on a Windows host):
+therefore its content address; a Windows clone with automatic line-ending conversion is such a checkout):
 
 ```powershell
 cls
@@ -383,11 +383,11 @@ statement that nothing was tapped.
 
 ### 5.9 Step 9: close-out
 
-- an inbox status update in the private repository (`docs/project-management/status-updates/inbox/`): what ran, when, the hashes,
-  the outcome of each step, the owner's decisions. **Never edit the master status from a working session.**
+- a status update in the owner's project record, by that record's own procedure: what ran, when, the hashes, the outcome of each
+  step, the owner's decisions. **Never edit the master status document from a working session.**
 - the offline evidence in `<OFFLINE_EVIDENCE_DIR>`: the baseline and after files, the `verify-served` and `verify-resource` output, the
   deploy output with its backup folder name, the screenshots, the console text, the times;
-- a bridge post, **counts only** (no value, no entity id, no address), and only on the owner's go; a push likewise.
+- a post to the coordination channel, **counts only** (no value, no entity id, no address), and only on the owner's go; a push likewise.
 
 ## 6. Stop conditions (any step)
 
@@ -482,7 +482,7 @@ in words. The owner may retire the tripwire at the merge.
 | # | Decision | Notes |
 |---|---|---|
 | D-U1-1 | install from the branch commit (after green CI) or merge the draft pull request first (5.0) | the card is content-addressed, so the installed bytes are identified by their sha256 either way |
-| D-U1-2 | RG-F3: "expose new entities" for Assist and Google Assistant, off or waived for U1 | U1 creates no entity |
+| D-U1-2 | RG-F3: the voice-assistant "expose new entities" settings (Assist, Google Assistant), off or waived for U1 | U1 creates no entity |
 | D-U1-3 | the order of the release bookkeeping against R9, Stage 3, grid-loss and F5 | section 11 |
 | D-U1-4 | when to push and open the draft pull request, and when the owner's M2 scan runs | each is its own go |
 | D-U1-5 | the title and URL of the new dashboard, and whether it shows in the sidebar | suggestions in 5.5 |
@@ -490,4 +490,47 @@ in words. The owner may retire the tripwire at the merge.
 
 ## 13. Evidence: the offline verification on the exact tip
 
-Filled after the final verification run; see the end of this file.
+Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node only through a heap-capped, memory-guarded runner with
+`--test-concurrency=2`; the mutation run last and alone), with a Python 3.12 interpreter (`-I -B -X utf8`, and
+`PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). The commit `9586377b1dd5` was extracted with
+`git archive` into a clean folder and verified there; the commit that holds this section differs from it **only in this document**
+(a wording pass over private-record references and this section), so every number below holds for it too. Nothing was pushed,
+merged, installed, registered or deployed, and no live system was contacted.
+
+**The pinned artefacts (the same at both commits):**
+
+| Artefact | Size | sha256 |
+|---|---|---|
+| the card, `frontend/ecco-mode-shell/ecco-mode-shell.js` (git LF) | 155,843 bytes | `17410163c016578f73428900087dc714f89336bbc55cc77ec5cbfc2e240d5775` |
+| the catalogue, `.../catalogue/intelligence.catalogue.json` | 93,873 bytes | `0614de5e21426e46bcdb2b9a1ea2e50a461191a6046167d419d8331cfb5b6316` |
+| the example, `.../examples/intelligence-modes.yaml` | 6,852 bytes | `c891e8fbf22d95eb9cf9a2e166629af84fdaeddfdc1532544aaf5b0308fa035c` |
+| the generated dashboard configuration (`--out`) | 147,178 bytes | `4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167` |
+| the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
+| the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
+
+**Results.** "archive" is the clean `git archive` (no `.git`); "clone" is a clean clone of the same commit made without line-ending
+conversion, used only for the suites that call `git ls-files` or read history (they fail in an archive for want of `.git`, which
+says nothing about the code).
+
+| What | Command (Python: `<PY> -I -B -X utf8`) | rc | Count |
+|---|---|---|---|
+| repository validator | `tools/validate_repo.py` | 0 | PASSED (yaml 52, python 392, json 81, text 650) |
+| workflow policy; write-surface analysis | `tools/check_workflows.py --require-sha-pins`; `tools/analyze_write_surface.py` | 0; 0 | 1 workflow, 0 problems; fails closed, none |
+| HA bundle builder (CI job `ha-bundle`) | `tools/build_ha_bundle.py` | 0 (clone); 2 (archive: it refuses untracked sources) | built (REVIEW ONLY) |
+| CI root `tools/tests` | `tools/run_offline_tests.py --root tools/tests --parallel 1` | 1 in the archive, then 0 for the 5 failing suites in the clone | 18/23 in the archive; the other 5 (deploy preflight, site render, firmware assembly, firmware equivalence, public privacy) pass in the clone: 23/23 |
+| CI root `intelligence/tests` | the same, `--root intelligence/tests` | 0 | 33/33 |
+| CI root `ecco_core/tests`; `health/tests`; `influxdb` | the same | 0; 0; 0 | 6/6; 2/2; 2/2 |
+| CI root `custom_components/ecco_intelligence/tests` | the same | 0 | 16/16 |
+| CI root `home-assistant/tests` | the same | 1 in the archive, then 0 in the clone | 16/18; the other 2 (they pin git-tracked files) pass in the clone: 18/18 |
+| CI root `registry/tests` | the same, 7200 s per suite | 1 in the archive | 69/78 in the archive; 7 more pass in the clone; **2 fail, known and not new**: `test_rtc_policy.py` and `test_fallback_durable_host_compile.py` need a native C++ compiler this PC lacks (they fail identically on the branch base `c6e5a58`): 76/78 |
+| the new pin suite | `tools/tests/test_ecco_mode_shell_card.py` | 0 | 85 checks pass, among them 39 card mutants (and one comment-letter case that only the byte pin catches), 9 catalogue and 5 configuration mutants, each caught by its own rule |
+| the new generator suite | `tools/tests/test_geek_mode_dashboard_config.py` | 0 | 81 checks pass (30 mutants; the plan read by the real `verify-resource`: one correct switch verified, eleven wrong ones refused) |
+| generators | `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check`; `tools/geek_mode_dashboard_config.py --check` | 0; 0; 0 | no drift; no drift; `OK: 147178 bytes, sha256 4abf3b1e...` |
+| Node suites (local; 13 files, one process each) | `node --test --test-concurrency=2 test/<file>.test.mjs` through the guard | all 0 | core 157, element 150, coverage 4, static 60, real-catalogue 159, scan 16, budget 14, async 41, cache 9, differential 5, perf 11, strip-check 14, generated-config 5: **645 tests, 645 pass, 0 skipped** |
+| the mutation proof (local; run last and alone) | `node --test --test-concurrency=2 test/mutations.test.mjs` | 0 | **518/518 mutants killed**; 538 tests, 538 pass; 1,399 s |
+| headless strip check (local; Chrome) | `node preview/check-strip.mjs --require` | 0 | PASS: 6816 of 6816 checks |
+| its self-test | `node preview/check-strip.mjs --selftest --require` | 0 | SELFTEST PASS: the real card passes, 38 of 38 broken copies are caught |
+
+**Not run here, said plainly:** GitHub CI (nothing is pushed), the firmware compile jobs of CI, the PowerShell syntax parse of CI
+(no `.ps1` file is touched), `tools/tests/Test-EccoDeploy.ps1` (no deploy tool is touched), the owner's M2 private-pattern scan
+(owner's go only), and anything on a live system. The two failures above are the only ones, and both predate this change.
