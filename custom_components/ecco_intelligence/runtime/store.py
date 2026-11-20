@@ -13,10 +13,10 @@ Writes: only under <config>/ecco/intelligence/state/, and only
                          middle of a run, or a crash between the two writes, never records it twice.
                          The advice just published is also logged (advice_log, additive; record_cycle's `advice`), in its own
                          transaction after the scorecard work, in the same file: ONE table, two rows per slot cycle at most
-                         (about 52 a day), deleted after PROPOSED_RETENTION_DAYS. The table is created by the first advice write,
+                         (about 52 a day), deleted after PROPOSED_RETENTION_DAYS (a durable write). The table is created by the first advice write,
                          not when the store is opened, so a failure there (another table of that name, a failing CREATE, a full
                          disk) is counted and never raised and cannot touch the scorecard record, the start-up gate or
-                         outcome_metrics. This is a DURABLE write of the integration (the diagnostics download only reads it).
+                         outcome_metrics. This is a durable write of the integration (the diagnostics download only reads it).
 The parent <config>/ecco/intelligence/ must already exist (the owner places the site file there); this module never creates
 anything above state/. Every path is resolved and checked to lie inside state/ before it is written.
 

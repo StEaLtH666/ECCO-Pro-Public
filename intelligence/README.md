@@ -26,7 +26,7 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `ghost.py`, `tools/ghost_report.py` | read-only Intelligence-vs-reality: a simulated ghost battery that follows recorded advice (`AdviceRecord`), both runs valued by `net_value.py`; per-day deltas, divergences in words, losing days, `ready_for_assisted_evidence` (evidence only; ghost below reserve must be 0); JSON export format in the tool docstring |
 | `ghost_feed.py` | pure: builds the Ghost's input from the runtime's hourly `History`, the advice log (`Scorecard.advice_records`), the tariff (`TariffResult`: no verified tariff means no money, behaviour comparison only) and the `SiteConfig`, runs `run_ghost` at 60-minute slots and returns a JSON-safe summary of at most about 8 KB: last 14 days, actual vs ghost, deltas, advice followed or not, `ready_for_assisted_evidence`, uncertainty (stock rules, model baseline, efficiency +/- 3 points); a simulation, Intelligence controlled nothing |
 | `ghost_compare.py`, `tools/ghost_diag_report.py` | pure: the Ghost's diagnostics-only block (the existing schedule against Intelligence's logged advice: money only with a verified tariff, SOC, reserve margin and breach, uncertainty and a within-noise verdict, bounded to 12 KB, failures as small blocks with a constant reason) and its plain-text report on a downloaded diagnostics file; read-only, see the section below |
-| `scorecard.py` `advice_log`, `tools/advice_export.py` | durable advice log (additive table, one row per published charge-target / dump change, 400-day retention, failure-isolated `record_advice`) and a read-only (`mode=ro`) exporter printing the Ghost export's `advice` list; the host calls `Scorecard.record_advice(to_entity_payloads(env), dump_duration_min=...)` after publishing |
+| `scorecard.py` `advice_log`, `tools/advice_export.py` | durable advice log (an additive table created by the first advice write, not when the scorecard is opened; one row per kind per slot cycle, about 52 rows a day at most, 400-day retention, failure-isolated `record_advice`; see "What is written" below) and a read-only (`mode=ro`) exporter printing the Ghost export's `advice` list; the host calls `Scorecard.record_advice(to_entity_payloads(env), dump_duration_min=...)` after publishing |
 
 The V1.1 modules are a foundation: nothing consumes them yet and the V1 report is unchanged. See
 `docs/intelligence/INTELLIGENCE_V1_1_FOUNDATION.md`; their suites are `tests/test_intelligence_v11_*.py`.
@@ -36,14 +36,17 @@ The V1.1 modules are a foundation: nothing consumes them yet and the V1 report i
 
 **It is a simulation.** Intelligence controlled nothing: the real battery did what the owner's existing TOU schedule made it do, and
 the "advice" side is arithmetic on the recorded hourly energies (`ghost.py`, `ghost_feed.py`), applying only the advice that was actually
-logged. It reads, it simulates, it returns a dict. No entity, no contract change, no control authority, nothing written, called or armed.
+logged. The block itself reads, simulates and returns a dict: no entity, no contract change, no control authority, and the download writes, calls and arms nothing. The integration does make ONE durable write for it, the advice log (see "What is written" below).
 
 **What it shows**, for the period and per local day, existing schedule against Intelligence advice (differences are advice minus existing):
 (a) money in pence, only with a verified import tariff covering the period (otherwise `NO MONEY` and the behaviour only);
 (b) SOC: minimum and end of day of both runs, and the difference; (c) reserve protection: the reserve in force, each run's minimum SOC and
-its margin to the reserve, whether the advice run would have gone below it (also at the two altered efficiencies); (d) uncertainty: the two
+its margin to the reserve, whether the advice run would have gone below it (also at the two altered efficiencies; judged on the hourly-mean or
+end-of-hour SOC against the base reserve only, so a dip inside an hour can be missed); (d) uncertainty: the two
 closing-stock rules, the round-trip efficiency band (+/- 3 points), the no-advice baseline replay error, the data-quality flags, and a
-verdict: `ADVICE_AHEAD_BEYOND_NOISE`, `ADVICE_BEHIND_BEYOND_NOISE`, `WITHIN_NOISE`, `NO_ADVICE_EFFECT` or `NOT_ASSESSED_NO_MONEY`. The rule:
+verdict: `ADVICE_AHEAD_BEYOND_NOISE`, `ADVICE_BEHIND_BEYOND_NOISE`, `WITHIN_NOISE`, `NO_ADVICE_EFFECT`, `NOT_ASSESSED_NO_MONEY` or
+`NOT_ASSESSED_EXPORT_UNVERIFIED` (the export tariff is not verified, so export income is counted as 0 in both runs, and the advice run exports a
+different amount: the pence figures stay visible, but no ahead or behind claim is made). The rule:
 noise = efficiency spread + closing-stock rule spread + baseline error (summed, at least 0.5 p); a win or loss is claimed only when the advice
 effect is strictly beyond the noise, so a result inside it is never read as a win. Expect `WITHIN_NOISE` for small effects: the efficiency
 band moves the advice effect a lot when the advice changes how much the battery holds for several days.
@@ -51,13 +54,29 @@ band moves the advice effect a lot when the advice changes how much the battery 
 **How it is computed.** Lazily, only when the diagnostics are downloaded, in the executor, from data the coordinator already holds: the last
 cycle's `EngineJob` (a reference copy without its rows), the cached recorder rows turned into a `History` by a throw-away `HistoryReuse`,
 the engine's own input judgement (`quality.assess_inputs`) for the verified tariffs, the decided `SiteConfig` and the reserve helper, and the
-logged advice read through `RuntimeStateStore.advice_rows` (SQLite `mode=ro`). The poll cycle does no extra work and has no new failure path.
-One job at a time, a 30 s budget (then `TIME_BUDGET`), and the block says which cycle it is as of (`inputs_as_of`). Measured on synthetic
-data: the pure comparison on a 14-day hourly table takes about 0.05 s; the whole job on the cached 30-day table about 0.04 s; a download
-with the block about 0.2 s (0.15 s of it is the integration's fixed job cool-down). The block is at most 12 KB (oldest days dropped, counted).
+logged advice read through `RuntimeStateStore.advice_rows` (SQLite `mode=ro`). The computation adds nothing to the poll, refresh or slot
+cycles: its cost is paid by the download only (the one write the integration makes for it is the advice log, below). One job at a time, a 30 s
+budget (then `TIME_BUDGET`), and the block says which cycle it is as of (`inputs_as_of`). Measured on a development PC: about 0.23 s on 30 days of
+history, 0.64 s on 120 days and 1.7 s with the 5000-row advice cap; a slower Home Assistant host may need several times that (the 30 s budget
+holds). The block is at most 12 KB (oldest days dropped, counted).
 Anything that fails gives a small block with a status (`INSUFFICIENT_HISTORY`, `NO_ADVICE_LOGGED`, `UNAVAILABLE`, `ERROR`) and a constant
 reason code, never an exception or a partial figure; the rest of the download is unchanged. It carries dates, numbers and constant words
-only: no entity id, site value, coordinate, time zone name or sensor text.
+only: no entity id, coordinate, time zone name, secret or sensor text. The numbers ARE site-derived behaviour and money figures (daily pence,
+SOC, kWh, throughput, the reserve percentage, dates and timestamps with an offset): they show when the house charges and discharges and what
+that costs. The diagnostics redaction set is unchanged and does not remove them, so review a downloaded file before sharing it.
+
+**What is written (a durable write).** The Ghost needs the advice that was published, so the slot cycle's store step logs it: ONE table,
+`advice_log`, in the integration's own `state/scorecard.sqlite3` (the same file as the scorecard; no other file, table or entity is added).
+Each slot cycle (26 a day: every full hour and 21:30) adds at most one row per kind (charge target, Dump-to-Grid), so about 52 rows a day at
+most and, at the 400 days kept, about 21 000 rows (a few MB); older rows are deleted at write time. The engine's validity is at most 900 s and
+slots are an hour apart, so the same advice is logged again every slot: the Ghost counts distinct advice (kind, window, target), not rows. The
+table is created by the first advice write, not when the scorecard is opened, and the write runs in its own transaction after the scorecard
+record: if it fails (a table of that name with other columns, a failing create, a full disk) the failure is counted and nothing else is
+affected, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value. Where to look: the diagnostics
+download's `counters.advice_write_failures` (0 when well), `last_store.advice_error` (the exception class) and `self_test.STORE_RECORD`
+(PASS; WARN with the count since start after a failure; one warning is logged too). To roll back: install the previous kit (the table is then
+unused) and, to remove it, drop the table or delete `scorecard.sqlite3` while the integration is stopped. The diagnostics download only reads
+the table.
 
 **What it cannot show.** Dump-to-Grid advice is logged without a window (the engine passes no intended duration), so it is not simulated.
 Money covers only the days the tariff integration's rate table covers (a few days), not the whole 14-day history. SOC is an hourly mean and
@@ -75,7 +94,9 @@ accepts the whole download, a file with a `ghost` key, or the block.
 them were re-pinned in the same step (`test_runtime_build.py` ROOTS and `test_runtime_import_without_ha.py`'s runtime module list). The
 block is computed only when the diagnostics are downloaded; the eleven-entity contract is unchanged. A kit built from this branch is
 deployed only after the Intelligence acceptance run, the M2 scan and the staged approvals. `tests/test_runtime_ghost_diag.py` runs the
-wired scenarios (`tests/_ghost_diag_l2.py`) against this tree; `tests/ghost_diag_wiring.patch` stays as the record of the wiring.
+wired scenarios (`tests/_ghost_diag_l2.py`) against this tree; `tests/ghost_diag_wiring.patch` stays, unchanged, as the record of the wiring as first proven.
+A later BLOCKED row (or a fallback that is not followed) of the same kind withdraws earlier advice from its issue time on, and the Ghost counts
+advice rows and distinct advice separately (`advice.followed` is distinct; `records_in_period` and `not_followed` are rows).
 
 Run the tests (each is a plain script, same convention as `health/tests`):
 

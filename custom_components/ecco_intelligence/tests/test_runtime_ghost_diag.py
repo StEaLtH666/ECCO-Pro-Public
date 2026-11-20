@@ -19,6 +19,7 @@ This suite:
       bound, redaction, no write and no twelfth entity, the time budget, the placeholder window, computed on request only, timing,
       an import-time fault of the Ghost code, the job kept only after a published result;
   [3b] the coordinator and the diagnostics import no Ghost code at import time (static);
+  [3c] the documents and docstrings state the durable advice-log write and the sharing warning, and no longer claim "nothing written";
   [4] the live tree is unchanged by all of it (nothing here writes into the repository).
 Plain script; exits 1 on any failure. Synthetic data only; no network.
 """
@@ -159,6 +160,27 @@ try:
     c_top, c_deep = import_names(pkg / "coordinator.py")
     check("non-vacuity: the coordinator still imports ghost_compare and ghost_link, lazily, inside async_ghost_diagnostics",
           any("ghost_compare" in x for x in c_deep) and any("ghost_link" in x for x in c_deep), str(c_deep))
+    print("== [3c] the documents say what is written (G2) and what the block carries (G8)")
+
+    def doc(rel: str) -> str:
+        return (REPO / rel).read_text(encoding="utf-8")
+    pkg_rel = "custom_components/ecco_intelligence"
+    texts = {"intelligence/README.md": doc("intelligence/README.md"), "docs/intelligence/INTELLIGENCE_HA_RUNTIME.md":
+             doc("docs/intelligence/INTELLIGENCE_HA_RUNTIME.md"), f"{pkg_rel}/runtime/ghost_link.py": doc(f"{pkg_rel}/runtime/ghost_link.py"),
+             f"{pkg_rel}/diagnostics.py": doc(f"{pkg_rel}/diagnostics.py"), f"{pkg_rel}/runtime/store.py": doc(f"{pkg_rel}/runtime/store.py")}
+    wrong = ("no new failure path", "does no extra work", "nothing written")
+    check("no document or docstring of the Ghost wiring still says 'no new failure path', 'does no extra work' or 'nothing written' "
+          "(the slot cycle writes the advice log)", not {k: [w for w in wrong if w in t.lower()] for k, t in texts.items()
+                                                         if any(w in t.lower() for w in wrong)},
+          str({k: [w for w in wrong if w in t.lower()] for k, t in texts.items() if any(w in t.lower() for w in wrong)}))
+    for rel, words in (("intelligence/README.md", ("durable write", "52 rows a day", "400 days", "advice_write_failures", "roll back", "before sharing")),
+                       ("docs/intelligence/INTELLIGENCE_HA_RUNTIME.md", ("durable write", "52 rows a day", "advice_write_failures", "roll back")),
+                       (f"{pkg_rel}/runtime/ghost_link.py", ("advice log", "durable")),
+                       (f"{pkg_rel}/diagnostics.py", ("site-derived", "before sharing")),
+                       (f"{pkg_rel}/runtime/store.py", ("durable write", "52 a day"))):
+        miss = [w for w in words if w not in texts[rel]]
+        check(f"{rel} states the durable advice-log write, its size, its failure counter, the rollback and the sharing warning as relevant to it",
+              not miss, str(miss))
     print("== [4] the live tree is unchanged")
     check("nothing in the live integration directory changed", tree_digest(REPO / "custom_components" / "ecco_intelligence") == live_before)
 finally:

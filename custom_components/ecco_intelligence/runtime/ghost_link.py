@@ -1,6 +1,8 @@
 """The Ghost's diagnostics block from the integration's own data (no homeassistant import; runs in the executor, never on the
 event loop). Read-only: it reads, it simulates, it returns a dict. It writes nothing, calls no service, adds no entity, changes
-no contract and gives no control authority; the block appears only in the diagnostics download.
+no contract and gives no control authority; the block appears only in the diagnostics download. The advice it reads is the advice
+log, a durable write that the SLOT cycle's store step makes (runtime/store.py, intelligence/scorecard.py: one table, at most about
+52 rows a day, failure-isolated); this module only reads it.
 
     ghost_block(job, store) -> dict          (never raises: a failure is a small block with a status and a constant reason)
     unavailable(reason) -> dict              the small block for a failure before any computation
@@ -14,8 +16,8 @@ Where it is computed, and why there. LAZILY, when the owner downloads the diagno
     engine_link.cycle_inputs), so the verified tariffs, the decided battery configuration and the reserve helper are the
     engine's own, not a second opinion;
   * the logged advice, read through RuntimeStateStore.advice_rows (SQLite mode=ro).
-So the poll cycle does no extra work and has no new failure path: the cost is paid by the download only, in the executor, with a
-time budget (PROPOSED_GHOST_BUDGET_S) and one job at a time. The history is as of the LAST cycle (the block says so: inputs_as_of).
+So the computation adds nothing to the poll, refresh or slot cycles: its cost is paid by the download only, in the executor, with a
+time budget (PROPOSED_GHOST_BUDGET_S) and one job at a time (the advice log it reads is written by the slot cycle, not here). The history is as of the LAST cycle (the block says so: inputs_as_of).
 
 The decided SiteConfig comes from site_decisions.apply_to_siteconfig exactly as the engine's cycle builds it, with ONE
 difference: the charge window it insists on is a placeholder (the base configuration's own window), because the Ghost never reads

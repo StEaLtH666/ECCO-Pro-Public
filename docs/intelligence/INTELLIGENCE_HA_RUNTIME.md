@@ -18,6 +18,18 @@ included, for as long as it keeps that record (it purges orphaned deleted-entity
 Home Assistant behaviour, seen on the pinned Core under L3 within minutes; the runbook's section 7 has the recovery from
 an entity-id collision). The integration talks to no device, inverter, dongle, database or network.
 
+**What it writes (a durable write).** Only under `<config>/ecco/intelligence/state/`: `store_meta.json` and the SQLite file
+`scorecard.sqlite3`. That file holds the scorecard (recorded once per schedule slot) and ONE further table, `advice_log`: the slot
+cycle's store step logs the charge-target and Dump-to-Grid advice it has just published, at most one row per kind per slot cycle, so
+about 52 rows a day at most and, at the 400 days kept, about 21 000 rows (a few MB); rows older than the retention are deleted at
+write time. The table is created by the first advice write, not at start-up, and the write is its own transaction after the
+scorecard record: a failure (a table of that name with other columns, a failing create, a full disk) is counted and affects nothing
+else, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value. Look at the diagnostics
+download's `counters.advice_write_failures` (0 when well), `last_store.advice_error` and `self_test.STORE_RECORD` (WARN with the
+count since start after a failure; one warning is logged too). To roll back: install the previous kit (the table is then unused)
+and, to remove it, drop the table or delete `scorecard.sqlite3` while the integration is stopped. The Ghost block of the
+diagnostics download only reads the table (SQLite `mode=ro`). Nothing else is written.
+
 Related: the contracts it implements are in [`INTELLIGENCE_FOUNDATION_CONTRACT.md`](INTELLIGENCE_FOUNDATION_CONTRACT.md)
 (section 13 for the SHADOW v0.1 completion: the grid-charge TOU classification, configuration-poll freshness, the refresh
 margin and the raise-only reserve preference), and the install, pause, acceptance, upgrade, rollback and uninstall steps
@@ -86,7 +98,7 @@ until the entry is reloaded.
 | `ENTITY_IDS` | every entity was registered under its contract id. A different id, for example a `_2` suffix, FAILs. So does a contract entity that Home Assistant never added once the platforms are set up (for example one disabled in the entity registry): the status entity carries `mode` and `applies_nothing`, so a missing entity stops all computing. The text names contract keys only |
 | `ENTITY_WRITE` | a state write of one of its own entities raised (Home Assistant refuses, for example, an ENUM value outside its options). Each entity is updated in its own guard, so the others still follow the envelope; the failure FAILs the self-test and gives `SELF_TEST_FAILED` |
 | `PAUSE_CONTROL` | the pause helper is readable. A missing helper WARNs: not paused, `pause_control: MISSING` |
-| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs |
+| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs. `STORE_RECORD` is also WARN, with the count since start, once an advice log write has failed (`counters.advice_write_failures`); the scorecard record and every published value are unaffected |
 | `CPU_BUDGET` (at run time) | WARN while refreshes are suspended by the CPU guard (section 2.2); PASS again once the rolling hour is back within the budget |
 
 **No site value in a check text.** A check's text reaches the status entity (`self_test`, `blockers`) and the diagnostics

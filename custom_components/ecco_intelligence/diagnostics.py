@@ -7,8 +7,10 @@ by its day and position only (A45, RV9-3: runtime/sources.public_signals), never
 
 The `ghost` block (diagnostics only; no entity, no contract): the existing schedule against Intelligence's advice, a read-only
 SIMULATION computed lazily at the download (runtime/ghost_link.py, intelligence/ghost_compare.py). It carries dates, numbers and
-constant codes only, never an entity id, a site value or a sensor text; any failure gives a small block with a status and a
-constant reason, and the rest of the download is unchanged."""
+constant codes only, never an entity id, a coordinate, a secret or a sensor text. Its numbers ARE site-derived behaviour and money
+figures (daily pence, SOC, kWh, throughput, the reserve percentage, dates and timestamps with an offset), and TO_REDACT does not
+remove them: review a download before sharing it. Any failure gives a small block with a status and a constant reason, and the rest
+of the download is unchanged."""
 
 from __future__ import annotations
 
