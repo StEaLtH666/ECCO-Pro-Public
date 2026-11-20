@@ -232,6 +232,8 @@ def _ghost_fallback(reason: str, error_type: str | None = None) -> dict:
     if error_type:
         out["error_type"] = error_type if error_type.isidentifier() and len(error_type) <= 40 else "UNKNOWN"
     return out
+
+
 UTC = timezone.utc
 LONDON = ZoneInfo(SITE_TZ)
 PAUSE_ENTITY = ENTITY_IDS["paused"]
