@@ -1531,8 +1531,9 @@ class EccoIntelCoordinator:
         rows. One job at a time (a request while one runs, or one that outlived its time budget, gets BUSY), at most
         PROPOSED_GHOST_BUDGET_S of waiting (then TIME_BUDGET; the thread, which only reads, runs to its end and its result is
         discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state. The Ghost code is
-        imported HERE, not when this module is imported: an import-time fault of it (ghost, ghost_feed, net_value, ghost_compare,
-        runtime/ghost_link) can then only turn the Ghost block into a small ERROR block, never stop the integration's setup."""
+        imported HERE, not when this module is imported: an import-time fault of any of its modules (the Ghost's engine and
+        comparison modules, runtime/ghost_link) can then only turn the Ghost block into a small ERROR block, never stop the
+        integration's setup."""
         try:
             from intelligence import ghost_compare                  # lazy on purpose (see the docstring)
             from .runtime import ghost_link
