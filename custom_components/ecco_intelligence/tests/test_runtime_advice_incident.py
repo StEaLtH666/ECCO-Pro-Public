@@ -10,13 +10,18 @@ The cumulative failure counter is history and is never reset.
 
   [A] the ledger (runtime/store.py AdviceHealth), pure: first write; failure; extension; recovery; a second incident; unverified
       (a written row not found, a missing read-back, a failing read-back); a cycle with nothing to write (neutral); a step
-      failure (timeout or exception); the bound and the dropped count; only a class name as a reason; the text fits the check
+      failure (timeout or exception: counted only inside the incident, not in the since-start count of the WARN text); the bound and
+      the dropped count; only a class name as a reason; the text fits the check
   [B] the store, on real files: the verified flag of record_cycle, a row removed by a trigger, the incident table created only when
-      incidents are persisted and never at open or by an advice write, closed incidents only, bounded, idempotent, isolated
+      incidents are persisted and never at open or by an advice write, closed incidents only, bounded, idempotent, isolated; the
+      known limit that incidents are keyed and pruned by the text of their first failure time
   [C] the BUILT kit under the stand-in Home Assistant, a stub engine and real SQLite: first write; failure then recovery; two
       failures then recovery; failure, recovery and a new failure; a table of another shape; an unverified write; a store step
       that raises or times out; a cycle with no advice; a restart; the diagnostics download; N slot cycles with the identical
-      advice are N rows; no published value changes
+      advice are N rows; no published value changes; AFTER a verified write the persist of the closed incident fails (an
+      advice_incident table of another shape), times out or raises: the store step stays a success, STORE_RECORD stays PASS, no
+      published value differs from a reference run, the failure shows only in the persist's own record, and the incident stays
+      pending and listed, is offered again at each later verified write and is persisted exactly once
 
 Plain script; exits 1 on any failure. Synthetic data only (the fictional year 2030); no network.
 """
@@ -282,6 +287,21 @@ with guard("[A9] what still needs persisting"):
     a.note_persisted(["nothing like it"])
     check("an unknown key is ignored", a.pending_incidents() == [])
 
+with guard("[A10] step failures count only inside the incident"):
+    a = AH()
+    feed(a, 0)
+    fail_step(a, 1, "TimeoutError")
+    fail_step(a, 2, "OSError")
+    feed(a, 3, rows=0, failures=1, verified=False, error="OperationalError")
+    o10 = snap(a)["open"]
+    txt10 = a.store_check(1)[1]                    # the coordinator passes advice_write_failures + advice_unverified_writes: 1 here
+    check("two failed steps and one failed write are one incident of three attempts and three missed slot cycles; the WARN text says three "
+          "slot(s) missed but only the one failed write since start: the step failures are in the incident, not in the since-start count",
+          o10["failed_count"] == 3 and o10["missed_slots"] == 3 and "3 slot(s) missed" in txt10 and "1 failed/unverified since start" in txt10,
+          f"{o10} {txt10!r}")
+    check("... and the since-start count is the caller's: given 0 (only step failures so far) the text says 0, never the attempts",
+          "0 failed/unverified since start" in a.store_check(0)[1] and "3 slot(s) missed" in a.store_check(0)[1], a.store_check(0)[1])
+
 # =====================================================================================================================
 print("== [B] the store on real files: the verified flag, and the incident table that exists only once an incident is persisted")
 
@@ -428,6 +448,24 @@ with guard("[B4] reading from a store with no file"):
     sn = STORE.RuntimeStateStore(str(cfg_n))
     check("no state directory at all: [] and nothing created", sn.advice_incidents() == [] and not (cfg_n / "ecco" / "intelligence" / "state").exists())
 
+with guard("[B5] a known limit: incidents are keyed and pruned by the text of their first failure time"):
+    cfg_k = root / "b5"
+    cfg_k.mkdir()
+    H.write_site(cfg_k, H.site_profile())
+    sk = STORE.RuntimeStateStore(str(cfg_k))
+    sk.try_open()
+    newest_n = 10 + (KEPT or 10)
+    for n_ in range(10, newest_n):
+        sk.log_advice_incidents([closed_inc(n_)], at(1))
+    check("non-vacuity: the table holds exactly the newest few", len(sk.advice_incidents()) == KEPT, str(len(sk.advice_incidents())))
+    older = closed_inc(3)                           # a clock stepped backwards: a NEW incident whose first failure is older than every stored one
+    res_k = sk.log_advice_incidents([older], at(2))
+    keys_k = [x["first_failed_utc"] for x in sk.advice_incidents()]
+    check("such an incident is reported persisted (no error) and is pruned at once: it is not in the table, the stored ones are unchanged",
+          res_k.get("persisted") == [older["first_failed_utc"]] and res_k.get("error") is None and older["first_failed_utc"] not in keys_k
+          and keys_k == [closed_inc(n_)["first_failed_utc"] for n_ in range(newest_n - 1, 9, -1)], f"{res_k} {keys_k}")
+    sk.close()
+
 
 # =====================================================================================================================
 print("== [C] the built kit under the stand-in Home Assistant: a stub engine, real SQLite")
@@ -507,6 +545,11 @@ class Scn:
 
     def closed_(self) -> list:
         return self.inc().get("closed") or []
+
+    def ents(self) -> dict:
+        """The published entities as the state-machine stand-in holds them: {entity id: (state, attributes as sorted JSON)}."""
+        return {eid: (st.state, json.dumps(dict(st.attributes), sort_keys=True, default=str))
+                for eid, st in self.hass.states._states.items() if eid.startswith(("sensor.ecco_intel", "binary_sensor.ecco_intel"))}
 
     def download(self) -> dict:
         return h.run(DIAG.async_get_config_entry_diagnostics(self.hass, self.entry), timeout=120.0)
@@ -707,6 +750,10 @@ with guard("[C6] the whole store step raises"):
         s.slot()
         check("a second failed step extends it", s.open_().get("failed_count") == 2 and s.open_().get("missed_slots") == 2
               and s.c.counters["exceptions"] == 0)
+        check("... a failed step is counted only inside the incident: not in advice_write_failures or advice_unverified_writes, which count "
+              "the advice log's own failures; the current-failure flag is 1",
+              s.c.counters["advice_write_failures"] == 0 and s.c.counters["advice_unverified_writes"] == 0
+              and s.c.counters.get("advice_current_failure") == 1, str(s.c.counters))
         flag["raise"] = False
         s.slot()
     finally:
@@ -737,6 +784,9 @@ with guard("[C7] the whole store step times out"):
         check("the existing WARN text is kept and an incident is opened with the class name TimeoutError",
               s.sc() == "WARN: the scorecard step exceeded the time budget" and bool(s.open_())
               and s.open_().get("reason") == "TimeoutError", f"{s.sc()} {s.inc().get('open')}")
+        check("... a timed-out step is counted only inside the incident: not in advice_write_failures or advice_unverified_writes",
+              s.c.counters["advice_write_failures"] == 0 and s.c.counters["advice_unverified_writes"] == 0
+              and s.c.counters.get("advice_current_failure") == 1, str(s.c.counters))
         flag["hang"] = False
         s.slot()
     finally:
@@ -854,6 +904,282 @@ with guard("[C11] N slot cycles through the real engine are N rows of each kind"
     check("... three rows of each kind, and at least one kind logged the identical advice (the same content hash) more than once, so a "
           "deduplicating write would have dropped rows",
           all(len(v) == 3 for v in per_kind.values()) and any(len(set(v)) < 3 for v in per_kind.values()), str(per_kind))
+    s.close()
+
+# =====================================================================================================================
+print("== [C12] to [C14]: AFTER a verified write, the persist of the closed incident fails, times out or raises")
+# The coordinator hands a closed incident to the store only right after a VERIFIED advice write (coordinator._persist_incidents). That
+# call has its own isolation: whatever happens in it must be visible only in the persist's own record (last_persist), must not turn the
+# store step into a failure, must not change STORE_RECORD (PASS) or any published value, and must leave the incident pending so that the
+# next verified write offers it again. A reference run of the identical sequence with a good incident table is the yardstick.
+COUNTER_KEYS = ("exceptions", "budget_exceeded", "advice_write_failures", "advice_unverified_writes", "advice_current_failure")
+AFTER_ONE_FAILURE = {"exceptions": 0, "budget_exceeded": 0, "advice_write_failures": 1, "advice_unverified_writes": 0,
+                     "advice_current_failure": 0}
+
+
+def mark(s: Scn) -> dict:
+    """What a slot cycle left behind: the published entities, STORE_RECORD, the health ledger's outcome and counts, the counters."""
+    led = s.inc()
+    return {"ents": s.ents(), "sc": s.sc(), "outcome": led.get("last_outcome"), "attempts": led.get("attempts"),
+            "failing": led.get("current_failure"), "ctr": {k_: s.c.counters.get(k_) for k_ in COUNTER_KEYS}}
+
+
+def held(marks: list, ref: list, k: int) -> tuple[bool, str]:
+    """Slot cycle k (1-based) shows no trace of a persist problem outside the persist's own record: the published entities and the
+    STORE_RECORD level are those of the reference run, STORE_RECORD is PASS, the cycle is a VERIFIED advice cycle (not a step failure:
+    one attempt per slot cycle), nothing is failing, no cycle exception or budget overrun, and the cumulative counters are exactly what
+    the one real advice failure of cycle 2 left."""
+    m, r = marks[k - 1], ref[k - 1]
+    diff = sorted(e for e in set(m["ents"]) | set(r["ents"]) if m["ents"].get(e) != r["ents"].get(e))
+    ok = (not diff and m["sc"] == r["sc"] == "PASS" and m["outcome"] == "VERIFIED" and m["attempts"] == k and m["failing"] is False
+          and m["ctr"] == AFTER_ONE_FAILURE)
+    return ok, f"cycle {k}: entities differ {diff[:3]}; {m['sc']!r} vs {r['sc']!r}; {m['outcome']} {m['attempts']} {m['failing']} {m['ctr']}"
+
+
+def run_to_failure(s: Scn, marks: list) -> None:
+    """Cycle 1 (verified), cycle 2 (the advice write fails: an incident opens). The fault is cleared at the end, so the next slot cycle
+    is the verified write that closes the incident and offers it for persisting."""
+    s.warm()
+    marks.append(mark(s))
+    s.trigger("boom", BOOM)
+    s.slot()
+    marks.append(mark(s))
+    s.trigger("boom", None)
+
+
+def odd_incident_table(scn) -> None:
+    """An advice_incident table of another shape, in a scorecard file that exists before the integration starts."""
+    d = scn.cfg / "ecco" / "intelligence" / "state"
+    d.mkdir(parents=True, exist_ok=True)
+    sql(d / "scorecard.sqlite3", "CREATE TABLE advice_incident (foo TEXT)", "INSERT INTO advice_incident VALUES ('x')")
+
+
+def incident_table_shape(path: Path):
+    """(column names, rows) of the advice_incident table, read-only; None when the table does not exist."""
+    con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        cols = [r_[1] for r_ in con.execute("PRAGMA table_info(advice_incident)")]
+        return (cols, con.execute("SELECT * FROM advice_incident").fetchall()) if cols else None
+    finally:
+        con.close()
+
+
+def wait_for(pred, secs: float = 10.0) -> bool:
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        if pred():
+            return True
+        h.run(asyncio.sleep(0.2))
+    return bool(pred())
+
+
+class PersistSpy:
+    """Wraps RuntimeStateStore.log_advice_incidents, the call the coordinator makes (on an executor thread) after a verified write.
+    Records every call (the incident keys offered, the mode it ran in, its result) and, by `mode`, passes through ("real"), hangs
+    until `gate` is set and then runs the real call, a late result ("hang"), or raises ("raise"). restore() puts the real method back."""
+
+    def __init__(self) -> None:
+        self.real = STORE.RuntimeStateStore.log_advice_incidents
+        self.mode = "real"
+        self.gate = threading.Event()
+        self.calls: list[dict] = []
+        spy = self
+
+        def wrapped(store, incidents, now):
+            mode = spy.mode
+            rec = {"mode": mode, "keys": [i_.get("first_failed_utc") for i_ in incidents], "result": None}
+            spy.calls.append(rec)
+            if mode == "hang":
+                spy.gate.wait(20.0)
+            elif mode == "raise":
+                raise OSError(SECRET)
+            rec["result"] = spy.real(store, incidents, now)
+            return rec["result"]
+        STORE.RuntimeStateStore.log_advice_incidents = wrapped
+
+    def restore(self) -> None:
+        STORE.RuntimeStateStore.log_advice_incidents = self.real
+        self.gate.set()
+
+
+REF: list = []
+with guard("[C12] reference run: the same sequence with a good incident table"):
+    s = Scn("persist_ref")
+    spy = PersistSpy()
+    try:
+        run_to_failure(s, REF)
+        for _ in range(4):                          # cycles 3 to 6
+            s.slot()
+            REF.append(mark(s))
+    finally:
+        spy.restore()
+    check("reference, non-vacuity: six slot cycles, every contract entity published, the failed write of cycle 2 is WARN, cycles 3 to 6 are "
+          "PASS with one attempt per slot cycle",
+          len(REF) == 6 and len(REF[0]["ents"]) == len(C.INTEGRATION_ENTITY_KEYS) and str(REF[1]["sc"]).startswith("WARN")
+          and all(REF[i_]["sc"] == "PASS" and REF[i_]["attempts"] == i_ + 1 for i_ in (2, 3, 4, 5)) and REF[1]["ents"] != REF[0]["ents"],
+          str([(m_["sc"], m_["attempts"]) for m_ in REF]))
+    check("reference, non-vacuity: the incident is persisted at cycle 3 by one persist call and never offered again, once in the table",
+          len(spy.calls) == 1 and (spy.calls[0]["result"] or {}).get("persisted") == spy.calls[0]["keys"] and len(spy.calls[0]["keys"]) == 1
+          and len(s.stored()) == 1 and all(m_["ctr"] == AFTER_ONE_FAILURE for m_ in REF[2:]), str(spy.calls))
+    s.close()
+
+with guard("[C12] the persist FAILS: an advice_incident table of another shape"):
+    marks: list = []
+    s = Scn("persist_odd", pre=odd_incident_table)
+    spy = PersistSpy()
+    try:
+        run_to_failure(s, marks)
+        check("the start-up gate passes with the odd incident table in place, and cycles 1 and 2 are as in the reference run (the table "
+              "matters only to the persist)", s.c.selftest.as_dict().get("STORE_WRITABLE") == "PASS" and marks[0]["ents"] == REF[0]["ents"]
+              and marks[1]["ents"] == REF[1]["ents"] and marks[1]["sc"] == REF[1]["sc"] and not spy.calls)
+        s.slot()                                    # cycle 3: verified write; the incident closes and is offered; the persist fails
+        marks.append(mark(s))
+        cl3 = s.closed_()
+        lp3 = s.inc().get("last_persist") or {}
+        key = cl3[0]["first_failed_utc"] if cl3 else None
+        check("cycle 3, non-vacuity: a verified write closed the incident and offered exactly it, once, to the store",
+              len(cl3) == 1 and cl3[0]["state"] == "CLOSED" and cl3[0]["reason"] == "IntegrityError" and not s.open_()
+              and len(spy.calls) == 1 and spy.calls[0]["keys"] == [key], f"{cl3} {spy.calls}")
+        check("the persist failure is visible in the persist's own record: its time, nothing persisted, the exception class name only",
+              lp3.get("error") == "DatabaseError" and lp3.get("persisted") == 0 and bool(lp3.get("at")) and no_secret(s.inc()), str(lp3))
+        ok3, why3 = held(marks, REF, 3)
+        check("... and nowhere else: STORE_RECORD stays PASS, the step is a verified one (not a failure), every published entity is "
+              "byte-identical to the reference run's, no cycle exception, the failure counters are as before", ok3, why3)
+        check("... the incident is still pending: closed, listed in the diagnostics, not marked persisted",
+              cl3[0]["persisted"] is False and s.inc().get("current_failure") is False and s.inc().get("verified_writes") == 2, str(cl3))
+        check("... the odd table is as it was (one column, one row), the verified rows are in the log (2 + 2) and the failed write's are not",
+              incident_table_shape(s.db) == (["foo"], [("x",)]) and len(s.rows()) == 4, str((incident_table_shape(s.db), len(s.rows()))))
+        d3 = s.download()
+        check("the download still works: the incident is listed from memory, the stored incidents are a small error block with the class "
+              "name only, no message, entity id or path", d3["loaded"] is True and len(d3["advice_incidents"]["closed"]) == 1
+              and stored_of(d3).get("status") == "ERROR" and stored_of(d3).get("error_type") == "DatabaseError" and no_secret(d3),
+              str(stored_of(d3)))
+        s.slot()                                    # cycle 4: the next verified write offers the same incident again; it fails again
+        marks.append(mark(s))
+        lp4 = s.inc().get("last_persist") or {}
+        check("the next verified write offers the SAME incident again (a second persist call, the same key), it fails the same way and the "
+              "persist record has a later time; still one incident, still pending, nothing duplicated",
+              len(spy.calls) == 2 and spy.calls[1]["keys"] == [key] and lp4.get("error") == "DatabaseError" and lp4.get("persisted") == 0
+              and str(lp4.get("at")) > str(lp3.get("at")) and len(s.closed_()) == 1 and s.closed_()[0]["persisted"] is False
+              and not s.open_() and incident_table_shape(s.db) == (["foo"], [("x",)]), f"{lp3} {lp4} {spy.calls}")
+        ok4, why4 = held(marks, REF, 4)
+        check("... and again nothing but the persist record shows it (STORE_RECORD PASS, entities as the reference run)", ok4, why4)
+        sql(s.db, "DROP TABLE advice_incident")     # the odd table is gone: the state is good again
+        s.slot()                                    # cycle 5: the third offer is persisted
+        marks.append(mark(s))
+        lp5 = s.inc().get("last_persist") or {}
+        cl5 = s.closed_()
+        st5 = s.stored()
+        check("once the odd table is gone, the next verified write persists it: a third persist call with the same key, no error, one "
+              "persisted, the ledger marks it persisted",
+              len(spy.calls) == 3 and spy.calls[2]["keys"] == [key] and (spy.calls[2]["result"] or {}).get("persisted") == [key]
+              and lp5.get("error") is None and lp5.get("persisted") == 1 and len(cl5) == 1 and cl5[0]["persisted"] is True,
+              f"{lp5} {spy.calls[2:]}")
+        check("... it is in the table exactly once, with the counts, times and class name the ledger has",
+              len(st5) == 1 and st5[0]["first_failed_utc"] == key and st5[0]["failed_count"] == cl5[0]["failed_count"]
+              and st5[0]["missed_slots"] == cl5[0]["missed_slots"] and st5[0]["reason"] == cl5[0]["reason"] == "IntegrityError"
+              and st5[0]["recovered_utc"] == cl5[0]["recovered_utc"] and st5[0]["rows_since"] == cl5[0]["rows_since"], str(st5))
+        ok5, why5 = held(marks, REF, 5)
+        check("... with STORE_RECORD PASS and the entities of the reference run", ok5, why5)
+        s.slot()                                    # cycle 6
+        marks.append(mark(s))
+        ok6, why6 = held(marks, REF, 6)
+        check("a later verified write does not offer it again: still three persist calls, one row, PASS, entities as the reference run",
+              len(spy.calls) == 3 and len(s.stored()) == 1 and ok6, why6)
+        check("... every verified slot cycle's rows are there (five of six cycles: ten rows) and the failed one's are not", len(s.rows()) == 10,
+              str(len(s.rows())))
+        check("the download after it: the stored incidents are readable again and hold the one incident", stored_of(s.download()).get("status")
+              == "OK" and len(stored_of(s.download()).get("incidents", [])) == 1)
+    finally:
+        spy.restore()
+    s.close()
+
+with guard("[C13] the persist TIMES OUT"):
+    marks = []
+    s = Scn("persist_timeout")
+    spy = PersistSpy()
+    try:
+        run_to_failure(s, marks)
+        spy.mode = "hang"
+        s.c.time_budget_s = 4.0                     # the cycle's earlier steps take about a second; the hung persist outlasts the rest
+        s.slot()                                    # cycle 3: verified write; the persist call hangs and is abandoned at the time budget
+        s.c.time_budget_s = COORD.PROPOSED_TIME_BUDGET_S
+        marks.append(mark(s))
+        cl3 = s.closed_()
+        lp3 = s.inc().get("last_persist") or {}
+        key = cl3[0]["first_failed_utc"] if cl3 else None
+        check("cycle 3, non-vacuity: the verified write closed the incident, the persist was called with it and had not returned when the "
+              "cycle went on (the table does not exist yet)", len(cl3) == 1 and cl3[0]["state"] == "CLOSED" and len(spy.calls) == 1
+              and spy.calls[0]["mode"] == "hang" and spy.calls[0]["keys"] == [key] and spy.calls[0]["result"] is None
+              and "advice_incident" not in tables(s.db), f"{cl3} {spy.calls}")
+        check("the timeout is visible in the persist's own record: the class name TimeoutError, nothing persisted",
+              lp3.get("error") == "TimeoutError" and lp3.get("persisted") == 0 and bool(lp3.get("at")), str(lp3))
+        ok3, why3 = held(marks, REF, 3)
+        check("... and nowhere else: the store step is a verified one, not a failure (no step incident, no budget overrun, no cycle "
+              "exception), STORE_RECORD stays PASS, every published entity is byte-identical to the reference run's", ok3, why3)
+        check("... the incident is still pending and listed", cl3[0]["persisted"] is False and not s.open_()
+              and s.inc().get("current_failure") is False and s.inc().get("verified_writes") == 2, str(cl3))
+        spy.mode = "real"
+        spy.gate.set()                              # the abandoned job now finishes late and runs the real call
+        late = wait_for(lambda: spy.calls[0]["result"] is not None and s.c.counters.get("late_results_discarded") == 1)
+        h.run(asyncio.sleep(0.5))
+        check("the abandoned job finished late and wrote the incident into the table, but its result is discarded, so the ledger is not told: "
+              "it stays pending in memory (the ledger claims only what it was told)",
+              late and len(s.stored()) == 1 and s.closed_()[0]["persisted"] is False
+              and (s.inc().get("last_persist") or {}).get("error") == "TimeoutError", f"{late} {s.stored()} {s.closed_()}")
+        s.slot()                                    # cycle 4: the next verified write offers it again; the real call is idempotent
+        marks.append(mark(s))
+        lp4 = s.inc().get("last_persist") or {}
+        ok4, why4 = held(marks, REF, 4)
+        check("the next verified write offers the same incident again (a second persist call, the same key) and it is persisted: no error, "
+              "one persisted, the ledger marks it persisted, and the table still holds it exactly once",
+              len(spy.calls) == 2 and spy.calls[1]["keys"] == [key] and spy.calls[1]["mode"] == "real"
+              and (spy.calls[1]["result"] or {}).get("persisted") == [key] and lp4.get("error") is None and lp4.get("persisted") == 1
+              and s.closed_()[0]["persisted"] is True and len(s.stored()) == 1 and s.stored()[0]["first_failed_utc"] == key,
+              f"{lp4} {spy.calls[1:]} {s.stored()}")
+        check("... with STORE_RECORD PASS and the entities of the reference run", ok4, why4)
+        s.slot()                                    # cycle 5
+        marks.append(mark(s))
+        ok5, why5 = held(marks, REF, 5)
+        check("a later verified write does not offer it again: still two persist calls, one row, PASS", len(spy.calls) == 2
+              and len(s.stored()) == 1 and ok5, why5)
+    finally:
+        s.c.time_budget_s = COORD.PROPOSED_TIME_BUDGET_S
+        spy.restore()
+    s.close()
+
+with guard("[C14] the persist RAISES (the store's own promise never to raise broken)"):
+    marks = []
+    s = Scn("persist_raises")
+    spy = PersistSpy()
+    try:
+        run_to_failure(s, marks)
+        spy.mode = "raise"
+        s.slot()                                    # cycle 3
+        marks.append(mark(s))
+        cl3 = s.closed_()
+        lp3 = s.inc().get("last_persist") or {}
+        key = cl3[0]["first_failed_utc"] if cl3 else None
+        check("cycle 3, non-vacuity: the verified write closed the incident and the persist was called with it and raised",
+              len(cl3) == 1 and cl3[0]["state"] == "CLOSED" and len(spy.calls) == 1 and spy.calls[0]["mode"] == "raise"
+              and spy.calls[0]["keys"] == [key] and "advice_incident" not in tables(s.db), f"{cl3} {spy.calls}")
+        check("the failure is visible in the persist's own record with the class name OSError only, never the message",
+              lp3.get("error") == "OSError" and lp3.get("persisted") == 0 and no_secret(s.inc(), s.download()), str(lp3))
+        ok3, why3 = held(marks, REF, 3)
+        check("... and nowhere else: the store step is a verified one, STORE_RECORD stays PASS, the entities are those of the reference run",
+              ok3, why3)
+        check("... the incident is still pending and listed", cl3[0]["persisted"] is False and not s.open_()
+              and s.inc().get("current_failure") is False, str(cl3))
+        spy.mode = "real"
+        s.slot()                                    # cycle 4: offered again, persisted
+        marks.append(mark(s))
+        ok4, why4 = held(marks, REF, 4)
+        check("the next verified write offers it again and it is persisted exactly once, with STORE_RECORD PASS and the reference entities",
+              len(spy.calls) == 2 and spy.calls[1]["keys"] == [key] and (spy.calls[1]["result"] or {}).get("persisted") == [key]
+              and (s.inc().get("last_persist") or {}).get("error") is None and s.closed_()[0]["persisted"] is True
+              and len(s.stored()) == 1 and ok4, why4)
+    finally:
+        spy.restore()
     s.close()
 
 h.loop.close()
