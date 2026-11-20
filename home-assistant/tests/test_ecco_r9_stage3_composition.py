@@ -47,6 +47,8 @@ virtual clock. Every Jinja condition is the package's own text, rendered by that
   [17] sensors    the recheck when the hold sensor or the effective reserve sensor ITSELF reads unavailable, unknown, empty or junk during the wait (the sensor is forced, as in [9]),
                   on the on-time start and the watchdog's rescue, busy and offline: BLOCKED with the right code, no press, alerted, disarmed; two forced-clear controls press once
   [18] mutation   in-memory mutants of the recheck's hold and reserve reads (only `unknown` refused, only `unknown` and `unavailable` refused, an unreadable reserve read as 0) are each caught
+  [19] clock      (R9 clock-change refusal, merged with stage 3) under the real London zone, with a Hold battery running, a skipped or repeated start label is refused at arm time with the
+                  clock-change text before 'must be in the future', the TOU walk and any override read, and the start script never runs for it; in-memory mutants of the branch order are each caught
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the packages against a model of the dongle; it proves nothing about a live
 Home Assistant restart (the capture on the `homeassistant` start event, the restored helper states), the dongle or the inverter.
@@ -57,7 +59,9 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -1137,6 +1141,128 @@ for name, mut in (("the hold sensor refused only when it reads `unknown` (h != '
                   ("the hold sensor refused only when it reads `unknown` or `unavailable` (an empty or junk sensor presses)", m_hold_two_texts),
                   ("an unreadable effective reserve read as 0 (float(-1) becomes float(0))", m_reserve_unreadable_zero)):
     check(f"mutant caught: {name}", not scen_forced(mut))
+
+# ======================================================================================================================
+print("\n[19] clock changes with an active override (owner decision of 20 Nov 2026, R9 proposal P-A): the arm validation refuses a skipped or repeated start label FIRST, before 'must be in the future', "
+      "the TOU walk and any override read")
+# ======================================================================================================================
+# Stage 3 reads the hold and the effective reserve ONLY in the start script (at fire time): the arm validation reads neither. So an active override can neither pre-empt nor follow the clock-change
+# refusal at arm time: whatever the hold reads, a skipped or repeated start label is refused with the clock-change text, the schedule is disarmed, and the start script never sees it. The REAL merged package
+# runs under the real London zone (S.local_zone, as registry/tests/test_ha_r9_missed_runs.py [5] does); the hold sensor is forced to `held` (a Hold battery running), as in [9].
+LON = ZoneInfo("Europe/London")
+CLOCK_TEXT = "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
+ARM_VALIDATION = "ecco_dump_to_grid_schedule_arm_validation"
+START_SCRIPT = "ecco_dump_to_grid_start_scheduled"
+SLOTS_CHARGE = list(zip(("00:00", "02:00", "05:30", "12:00", "17:00", "22:00"), ("None", "Grid", "None", "None", "None", "None")))   # slot 2 (02:00-05:30) has a charge source
+
+
+def _utc(s: str) -> float:
+    return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()
+
+
+def arm_under_london(label: str, boot: str, arm: str, hold: str, slots=(), mutate=None) -> dict:
+    """One arm through the real merged arm validation: Home Assistant booted at `boot` (UTC), the start helper holds `label` exactly as typed, the plan's hold sensor reads `hold`, the schedule is armed
+    at `arm` (UTC). A run that raises is an answer that matches nothing."""
+    try:
+        with S.local_zone(LON):
+            w = S.World(_utc(boot))
+            D.add_ha_filters(w)
+            d = D.DumpDongle(w)
+            pk = yaml.safe_load(DUMP_TEXT)
+            if mutate:
+                mutate(pk)
+            ha = S.HA(w, pk)
+            w.set(START_E, label)
+            w.set(DUR_E, "60.0")
+            w.set(PWR_E, "2000.0")
+            w.set(SOC_E, "40.0")
+            w.set("sensor.ecco_config_maximum_grid_charge_power", "8000")
+            w.set(ARMED, "off")
+            w.set(LAST, "")
+            w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+            w.set(HOLD, hold)
+            w.set(EFF, "20")
+            for i, (t, c) in enumerate(slots, 1):
+                w.set(f"sensor.ecco_clock_dongle_ecco_timezone{i}_time", t)
+                w.set(f"sensor.ecco_clock_dongle_ecco_timezone{i}_charge", c)
+            ha.start()
+            w.run_until(_utc(arm))
+            w.set(ARMED, "on")
+            w.run_until(_utc(arm) + 5)
+            return {"last": w.state(LAST), "armed": w.state(ARMED), "started": [r for r in ha.runs if r[1] == START_SCRIPT], "touched": bool(d.press_log or d.number_log)}
+    except Exception as exc:  # noqa: BLE001
+        return {"last": f"RAISED {type(exc).__name__}: {str(exc)[:80]}", "armed": "?", "started": [], "touched": False}
+
+
+CC_CASES = (   # name, label, boot (UTC), arm (UTC), slots, expected
+    ("spring, a start label in the skipped hour (28 Mar 2027, 01:30)", "2027-03-28 01:30:00", "2027-03-27 20:00", "2027-03-27 20:10", (), "CLOCK"),
+    ("autumn, a start label in the repeated hour (31 Oct 2027, 01:30)", "2027-10-31 01:30:00", "2027-10-30 20:00", "2027-10-30 20:10", (), "CLOCK"),
+    ("autumn, armed in the second 01:xx hour for 01:30 (the future check would call it past)", "2027-10-31 01:30:00", "2027-10-31 00:20", "2027-10-31 01:10", (), "CLOCK"),
+    ("spring, a skipped label whose run window also crosses a charge slot (the TOU walk would refuse it)", "2027-03-28 01:30:00", "2027-03-27 20:00", "2027-03-27 20:10", SLOTS_CHARGE, "CLOCK"),
+    ("control, a valid label (28 Mar 2027, 02:30 BST): armed, the hold is read when the run starts and not when it is armed", "2027-03-28 02:30:00", "2027-03-27 20:00", "2027-03-27 20:10", (), "ARMED"),
+)
+
+
+def clock_rows(mutate=None):
+    rows = []
+    for name, label, boot, arm, slots, want in CC_CASES:
+        r = arm_under_london(label, boot, arm, "held", slots, mutate)
+        ok = (r["last"] == CLOCK_TEXT and r["armed"] == "off" if want == "CLOCK" else r["last"].startswith("ARMED - ") and r["armed"] == "on") and not r["started"] and not r["touched"]
+        rows.append((f"{name}, a Hold battery running: " + ("refused with the clock-change text (not OVERRIDE_ACTIVE, not 'must be in the future', not the TOU text), disarmed, the start script never runs, nothing staged or pressed"
+                                                          if want == "CLOCK" else "armed (ARMED text), the start script not run, nothing staged or pressed"), ok, str(r)))
+    return rows
+
+
+def arm_branches(pk) -> list:
+    return next(s for s in next(a for a in pk["automation"] if a["id"] == ARM_VALIDATION)["actions"] if "choose" in s)["choose"]
+
+
+def branch_at(brs, needle: str) -> int:
+    idx = [i for i, b in enumerate(brs) if needle in dump(b)]
+    assert len(idx) == 1, (needle, idx)
+    return idx[0]
+
+
+_brs = arm_branches(yaml.safe_load(DUMP_TEXT))
+_i_clock, _i_future = branch_at(_brs, "skipped, repeated or unreadable"), branch_at(_brs, "must be in the future")
+_i_free, _i_tou = branch_at(_brs, "overlaps the armed Scheduled Free Power window"), branch_at(_brs, "window overlaps a TOU slot")
+check("static: in the arm validation the clock-change refusal comes before 'must be in the future', the Free Power overlap check and the TOU walk, and every branch that reads the plan's hold or reserve "
+      "(none today: those reads are in the start script) would have to come after it",
+      _i_clock < _i_future < _i_free < _i_tou and all(i > _i_clock for i, b in enumerate(_brs) if re.search(r"ecco_plan_|plan_hold|OVERRIDE|RESERVE", dump(b))),
+      f"clock {_i_clock} future {_i_future} free {_i_free} tou {_i_tou}")
+CLOCK_ROWS = clock_rows()
+for _label, _ok, _detail in CLOCK_ROWS:
+    check(_label, _ok, _detail)
+
+
+def m_clock_after_future(pk):
+    """The clock-change refusal moved behind 'must be in the future'."""
+    brs = arm_branches(pk)
+    b = brs.pop(branch_at(brs, "skipped, repeated or unreadable"))
+    brs.insert(branch_at(brs, "must be in the future") + 1, b)
+
+
+def m_clock_last(pk):
+    """The clock-change refusal moved behind every other arm-time refusal (the Free Power overlap and the TOU walk included)."""
+    brs = arm_branches(pk)
+    brs.append(brs.pop(branch_at(brs, "skipped, repeated or unreadable")))
+
+
+def m_override_read_first(pk):
+    """An override read at arm time put in FRONT of the clock-change refusal: the refusal comes after the override logic."""
+    brs = arm_branches(pk)
+    brs.insert(branch_at(brs, "skipped, repeated or unreadable"), {
+        "conditions": [{"condition": "template", "value_template": "{{ states('sensor.ecco_plan_export_hold') == 'held' }}"}],
+        "sequence": [{"action": "input_boolean.turn_off", "target": {"entity_id": ARMED}},
+                     {"action": "input_text.set_value", "target": {"entity_id": LAST},
+                      "data": {"value": "BLOCKED - a Hold battery, Skip tonight or Prepare for power cut is active; nothing started (reason OVERRIDE_ACTIVE)"}}]})
+
+
+check("control: unmutated, every clock-change case above holds", all(ok for _l, ok, _d in CLOCK_ROWS))
+for name, mut in (("the clock-change refusal moved behind 'must be in the future'", m_clock_after_future),
+                  ("the clock-change refusal moved behind every other arm-time refusal (the Free Power overlap and the TOU walk)", m_clock_last),
+                  ("an override read in front of the clock-change refusal (the refusal after the override logic)", m_override_read_first)):
+    check(f"mutant caught: {name}", not all(ok for _l, ok, _d in clock_rows(mutate=mut)))
 
 if FAILURES:
     print(f"{len(FAILURES)} FAILED, {PASSES} passed")
