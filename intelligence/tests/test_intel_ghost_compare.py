@@ -529,13 +529,15 @@ check("a block built today carries the new limit while the golden block (an olde
 def none_min(rep):
     for d in rep["days"][2:4]:
         d["ghost_min_soc_pct"] = None
+    rep["days"][5]["actual_min_soc_pct"] = None
     rep["totals"]["actual_min_soc_pct"] = None
 
 
 NM = run_seam(none_min, None)
 check("a missing minimum SOC gives a missing margin, not an ERROR block (_diff, not a subtraction of None)",
       NM["status"] == "OK" and NM["days"][2]["advice_reserve_margin_pct"] is None and NM["days"][3]["advice_reserve_margin_pct"] is None
-      and NM["days"][4]["advice_reserve_margin_pct"] is not None and NM["reserve"]["existing_margin_pct"] is None
+      and NM["days"][4]["advice_reserve_margin_pct"] is not None and NM["days"][5]["existing_reserve_margin_pct"] is None
+      and NM["days"][4]["existing_reserve_margin_pct"] is not None and NM["reserve"]["existing_margin_pct"] is None
       and NM["reserve"]["advice_margin_pct"] is not None, str((NM.get("status"), NM.get("reason"), NM.get("error_type"))))
 check("... and the report of such a block still renders", NM["status"] == "OK" and "RESERVE" in gc.render_text(NM))
 
