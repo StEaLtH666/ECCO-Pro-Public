@@ -10,6 +10,36 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Intelligence PV skill gate, planning fix** (offline, SHADOW engine, the gate stays OFF by default; nothing installed, deployed or
+  switched on): with the gate ON a fallback to persistence could LOWER the overnight charge target against the ungated engine (a
+  synthetic bright-spell world: 80 to 70 percent). The published forecast is unchanged (persistence, LOW, the scoreable record,
+  `to_dict()`). Planning now (1) sizes on a band that never exceeds persistence or the ungated corrected value and keeps the ungated spread
+  below the median, so the Planner's pessimistic PV cannot rise (proof in `conservative_band`), and (2) as a guard computes the advice a
+  second time exactly as the gate-OFF engine would have, in the V1 engine and in the shadow cycle's charge target, and publishes the higher
+  recommended target, so the recommended target is never below the gate-OFF one, by construction. A fallback also caps overall confidence at
+  LOW and adds a `PV_SKILL_GATE_FALLBACK` reason (and `PV_SKILL_GATE_UNGATED_KEPT` when the guard published the ungated advice). Written
+  failing-first: `intelligence/tests/test_intel_pv_gate_planning.py` (frozen synthetic generators `_pv_worlds.py` and `_pv_worlds2.py`, 600
+  regression worlds and 600 pre-registered unseen worlds, 57 in-memory mutants; a full run takes about nine minutes). The two earlier PV
+  suites (`test_intel_pv_skill_gate.py`, `test_intel_pv_recent_envelope.py`) now use the repository's check()/FAILURES exit-code style that
+  `registry/tests/test_offline_suite_exit_codes.py` requires, with every check unchanged
+  ([docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md](docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md)). Enabling the gate remains a separate
+  owner authorisation.
+- **Intelligence PV recent-output envelope** (offline, SHADOW engine, OFF by default, a separate change that can be dropped without
+  the persistence-skill gate): `PvModel(..., recent_envelope=True)` tightens the loose `recent_max` ceiling (2.5 x the best of the
+  last 30 days) to the lower of it and 1.25 x the best actual of the last 14 days (at least 7 observed days, else the legacy ceiling stays); a corrected
+  value above it is REJECTED like any other ceiling breach (persistence, LOW). New suite
+  `intelligence/tests/test_intel_pv_recent_envelope.py` (synthetic data, 18 mutants applied in memory). Nothing is switched on.
+- **Intelligence PV persistence-skill gate** (offline, SHADOW engine, OFF by default; nothing installed, deployed or switched on):
+  `PvModel(..., skill_gate=True)` publishes the engine's own persistence estimate (source `persistence`, LOW confidence, one plain
+  note) instead of the corrected PV forecast unless that forecast has beaten persistence (mean absolute error at most 0.9 x) over
+  the trailing 14 days, scored walk-forward without ever reading the target day or later; fewer than 8 comparable days fails
+  closed to persistence; the plausibility guard still runs first; `to_dict`, `PV_TOMORROW_SUMMARY_KEYS`, the 2048-byte summary and
+  the date scoping of 'tomorrow' are unchanged, and a kept forecast is bit-identical to the ungated one. New suite
+  `intelligence/tests/test_intel_pv_skill_gate.py` (synthetic data, 35 mutants applied in memory) and
+  [docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md](docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md), which states the limits: one site,
+  one autumn, designed after seeing a failure; it can only fall back to persistence, never create skill. Enabling it is a separate
+  owner authorisation; with it on, one existing check moves (`test_intelligence_arithmetic.py`, PV band widening), which is why
+  the default is OFF. It is a constructor argument, not a `SiteConfig` field (a new field would change every `config_hash()`).
 - **Dashboard preservation gate** (`tools/ecco_dashboard_guard.py`, fail closed): `deploy-ha.ps1` / `deploy-dashboard.ps1` refuse, before any remote write, a dashboard that drops a site's protected layer (site-local host policy `/config/ecco/site-local/dashboard-protection.json`, never in the repository), a required resource or a custom card type the live dashboard uses, and re-verify after the install; `apply` / `make-policy` carry a site layer onto a new render ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Dashboard preservation gate, hardening**: `deploy-ha.ps1 -AllowDriftRecovery` (guard `check --allow-drift-recovery`) passes, with loud warnings, a candidate that restores the site policy's protected layer exactly over a live file that drifted from it (never a candidate without that layer; without the switch drift still blocks); an optional gate pin (`-ExpectedSiteGate`, or the git-ignored `ecco_dashboard_gate.local.txt`) refuses a dashboard that would pass under any other gate, so a host policy moved aside cannot fall back to `DASHBOARD_PRESERVE_GATE` silently (while the policy is deliberately aside, `-ExpectedSiteGate DASHBOARD_PRESERVE_GATE` is the one-run override; the pin stays); `ecco_deploy_preflight.py plan --site-policy` prints the guard's `apply` step before the dashboard deployment, checks in memory that it will succeed (including the post-condition), and on a re-run into the same `--out` deploys the applied file already there or fails when that file is not `apply`'s output ([docs/user/site-render.md](docs/user/site-render.md)).
 - **Intelligence SHADOW v0.1, contracts** (offline, SHADOW only, applies nothing): the typed decision register I-D1..I-D9 with

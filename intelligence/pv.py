@@ -17,7 +17,39 @@ error or a stale value 10x too high). Three simple ceilings, each reported with 
                  out-of-season value that the all-time maximum would let through)
 A source whose raw value exceeds the physical ceiling, or whose corrected value exceeds the lowest ceiling, is
 REJECTED: it is not used, the notes and `plausibility` say why, and the forecast falls back to persistence at LOW
-confidence. Rejecting is the safe direction for the advisor (less PV assumed => more battery retained)."""
+confidence. Rejecting is the safe direction for the advisor (less PV assumed => more battery retained).
+
+PERSISTENCE-SKILL GATE (offline, switchable; docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md). A source that passes the
+ceilings can still carry no skill at all (a shaded array whose output stays in a narrow band whatever the forecast says: a
+scalar ratio cannot fit that). So, after the source choice and the unchanged plausibility guard, the corrected forecast is
+published only if it would have beaten the model's own persistence estimate over the trailing SKILL_GATE_DAYS days:
+for each of those days the corrected forecast the engine WOULD have published (that day's raw forecast x the median ratio of
+the pairs BEFORE it) and the persistence estimate computed from data BEFORE it are both scored against that day's actual,
+on the days where all three exist. With fewer than SKILL_GATE_MIN_DAYS such days, or when the corrected mean absolute error
+is above SKILL_GATE_MARGIN x the persistence one, persistence is published instead (source "persistence", LOW confidence,
+one plain note). The decision never reads the target day or later (no leakage). When the gate keeps the corrected forecast
+the result is identical to the ungated one. It is a fallback to a plain estimate, never a new forecast: it can only publish
+what `_persistence` already publishes.
+
+PLANNING VALUE OF A GATE FALLBACK (docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md). Persistence can be HIGHER than the corrected
+value (a bright spell followed by a dull day) and its p10 far above a widened corrected p10; sizing a battery target on it would
+have the gate LOWER an overnight target the ungated engine recommends. So the PUBLISHED forecast stays exactly what the gate
+publishes (persistence, LOW, the scoreable record, the contract-pinned `to_dict()`), but the forecast object also carries the PLANNING
+values that the engine and the shadow cycle size energy actions on: p50 and p90 the LOWER of the persistence value and the value the
+UNGATED corrected path would have produced (after the unchanged plausibility guard), and p10 that lower value moved down as far as
+the median was lowered, so the planning band keeps the ungated spread below the median (`PvForecast.planning_band`,
+`conservative_band`, whose docstring has the proof), plus the band-widening factor of the ungated path (`planning_inflation`).
+The Planner's pessimistic PV, p50 - k (p50 - p10), is then never above the ungated one for any k, and the gate can raise a planned
+reserve or target, not lower it. As a second, independent safeguard the engine and the shadow cycle compute the advice twice on a
+fallback day and publish the one with the higher charge target (`prefers_ungated`), so the recommended target is never below what the
+ungated engine would have recommended BY CONSTRUCTION. With the gate OFF, or when it keeps the corrected forecast, the planning values
+are the published ones, nothing is recorded (`gate_fallback` is None) and nothing is computed twice.
+
+RECENT-OUTPUT ENVELOPE (optional, OFF by default, a separate change). The `recent_max` ceiling (2.5 x the best of the last
+pv_recent_days days) is loose: after a bright spell, an out-of-season corrected value can sit just under it for weeks. With
+`PvModel(..., recent_envelope=True)` the recent ceiling becomes the LOWER of the legacy ceiling and RECENT_ENVELOPE_HEADROOM x
+the best actual of the last RECENT_ENVELOPE_DAYS days (needs RECENT_ENVELOPE_MIN_OBS observed days in them; otherwise the
+legacy ceiling stays), so enabling it never loosens the guard, and a corrected value above it is REJECTED exactly like any other ceiling breach (persistence, LOW, the reason in `plausibility`)."""
 
 from __future__ import annotations
 
@@ -36,6 +68,34 @@ RATIO_CLIP = (0.10, 3.0)
 MIN_FORECAST_KWH = 1.0          # ratios from tiny forecasts are noise
 RESIDUAL_DAYS = 90
 PRIOR_REL_SIGMA = 0.45          # used until enough walk-forward residuals exist
+
+# persistence-skill gate (see the module docstring). Fixed in advance of any result, not tuned to one.
+PV_SKILL_GATE_DEFAULT = False   # PvModel(..., skill_gate=None) uses this; True/False to pass it explicitly. OFF because ON moves
+                                # an existing check (test_intelligence_arithmetic.py, band widening): see the gate doc
+SKILL_GATE_DAYS = 14            # trailing days compared (the 14 days before the target day, never the target day)
+SKILL_GATE_MIN_DAYS = 8         # fewer comparable days than this => the comparison cannot be made => persistence
+SKILL_GATE_MARGIN = 0.9         # keep the corrected forecast only if its MAE <= this x the persistence MAE
+GATE_REASON_BEAT = "BEAT_PERSISTENCE"
+GATE_REASON_NOT_BEATEN = "NOT_BEATEN"
+GATE_REASON_TOO_FEW_DAYS = "TOO_FEW_DAYS"
+UNGATED_KEPT_CODE = "PV_SKILL_GATE_UNGATED_KEPT"     # the advice reason when the guard published the ungated advice (higher target)
+
+# recent-output envelope (see the module docstring)
+PV_RECENT_ENVELOPE_DEFAULT = False  # PvModel(..., recent_envelope=None) uses this
+RECENT_ENVELOPE_DAYS = 14           # the best actual of the last 14 days ...
+RECENT_ENVELOPE_HEADROOM = 1.25     # ... times this is the ceiling
+RECENT_ENVELOPE_MIN_OBS = 7         # fewer observed days than this in the window: the legacy ceiling stays
+
+
+def _valid_kwh(x: object) -> bool:
+    """A finite, non-negative number that is not a bool (a kWh value the gate may score)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x >= 0.0
+
+
+def skill_gate_keeps(mae_corrected: float, mae_persistence: float) -> bool:
+    """The gate's one comparison: keep the corrected forecast only if it is at least (1 - margin) better than persistence.
+    A value that is not a number compares False, so the gate fails closed (persistence)."""
+    return mae_corrected <= SKILL_GATE_MARGIN * mae_persistence
 
 
 def actual_pv_kwh(history: History, day: date, tz_name: str) -> float | None:
@@ -60,6 +120,20 @@ class PvForecast:
     notes: list[str] = field(default_factory=list)
     inflation: float = 1.0               # >1 when the band was widened by coverage feedback
     plausibility: dict = field(default_factory=dict)   # verdict + ceilings + any rejected sources (see module docstring)
+    gate_fallback: "GateFallback | None" = None        # set only when the skill gate published persistence in place of a corrected forecast
+
+    @property
+    def planning_band(self) -> tuple[float, float, float]:
+        """(p10, p50, p90) that planning logic sizes energy actions on: the published band, or after a gate fallback the planning band of
+        `conservative_band` (never above persistence or the ungated corrected band, the ungated spread below the median kept). Never
+        published; never in `to_dict()`."""
+        return (self.p10, self.p50, self.p90) if self.gate_fallback is None else self.gate_fallback.planning
+
+    @property
+    def planning_inflation(self) -> float:
+        """The band-widening factor planning leans on: the published one, or after a gate fallback the larger of it and the factor the
+        ungated corrected forecast carried (a band that recently failed to hold makes the pessimistic PV path more cautious)."""
+        return self.inflation if self.gate_fallback is None else max(self.inflation, self.gate_fallback.corrected_inflation)
 
     def to_dict(self) -> dict:
         return {
@@ -74,13 +148,91 @@ class PvForecast:
         }
 
 
-class PvModel:
-    """`forecasts` is {source: {local_date: day-ahead forecast kWh as issued before dawn}}."""
+@dataclass(frozen=True)
+class SkillGateVerdict:
+    """What the persistence-skill gate decided for one (source, day): `keep` is True only when the corrected forecast beat
+    persistence over `n_days` comparable days (`mae_*` are None when the comparison could not be made)."""
+    source: str
+    day: date
+    n_days: int
+    mae_corrected: float | None
+    mae_persistence: float | None
+    keep: bool
+    reason: str                          # GATE_REASON_BEAT / GATE_REASON_NOT_BEATEN / GATE_REASON_TOO_FEW_DAYS
 
-    def __init__(self, history: History, cfg: SiteConfig, forecasts: dict[str, dict[date, float]]):
+
+@dataclass(frozen=True)
+class GateFallback:
+    """The trace of one gate fallback (planning and explanation only; never part of `PvForecast.to_dict()`): what the gate displaced
+    and the planning band that results. `corrected` is what the UNGATED path would have published for the same inputs."""
+    source: str                                          # the forecast source whose corrected forecast the gate refused
+    reason: str                                          # GATE_REASON_NOT_BEATEN or GATE_REASON_TOO_FEW_DAYS
+    n_days: int
+    mae_corrected: float | None
+    mae_persistence: float | None
+    note: str                                            # the plain line published in `notes`
+    corrected: tuple[float, float, float]                # ungated corrected p10 / p50 / p90
+    corrected_inflation: float
+    planning: tuple[float, float, float]                 # the planning band: see `conservative_band`
+    corrected_confidence: float                          # what the ungated forecast's confidence and label would have been: the gate-OFF
+    corrected_label: str                                 # engine's overall confidence (and its PV credit) are computed from them
+
+
+def conservative_band(published: tuple[float, float, float], corrected: tuple[float, float, float]) -> tuple[float, float, float]:
+    """The planning band of a gate fallback (published = persistence's band, corrected = the band the UNGATED path would have published;
+    both sorted). p50 and p90 are the lower of the two. p10 is the lower of the two moved down further by the amount the median was
+    lowered below the corrected one, floored at zero: the planning band keeps AT LEAST the ungated spread below the median.
+
+    Why the spread matters. The Planner's pessimistic PV for a day is  p50 - k (p50 - p10)  floored at zero, with k = band_kappa x 1.5
+    (LOW confidence) x band inflation: above 1 in the common case (0.7071 x 1.5 = 1.06, and up to 1.5 x 1.5 x 1.5 = 3.4). For k above 1 that
+    path DEcreases in p50, so the plain per-quantile minimum (a lowered median with an unlowered p10) can give a pessimistic PV that
+    is HIGHER than the ungated one, and a lower overnight target. Claim: with p50' = min(p50, p50c) and
+    p10' = max(0, min(min(p10, p10c), p10c - (p50c - p50')))  (primed = planning, c = corrected), the planning pessimistic PV is
+    at most the ungated one for EVERY k >= 0. Proof. (1) p50' <= p50c. (2) Without the floor, p10' <= p10c - (p50c - p50'), so the
+    spread s' = p50' - p10' >= p50' - p10c + p50c - p50' = p50c - p10c = s_c. (3) Then p50' - k s' <= p50' - k s_c <= p50c - k s_c
+    for every k >= 0 (the first step because s' >= s_c, the second because p50' <= p50c), which is the ungated pessimistic PV.
+    (4) The floor at zero can raise p10' to 0 and shrink s'. Then s' = p50' and the path is p50' (1 - k). For k <= 1 it is at most
+    p50c (1 - k) <= p50c (1 - k) + k p10c = p50c - k s_c because p10c >= 0 (the corrected band is itself floored at zero); for k > 1 it is
+    negative, and the Planner floors the pessimistic PV at zero, which cannot exceed the (also floored) ungated path. So the floor
+    only ever moves in the conservative direction. (5) Sorting: min(p10, p10c) <= min(p50, p50c) and p50' <= p90' for sorted inputs, so
+    the result is already sorted; `sorted` is defence in depth for unsorted inputs (the proof assumes sorted ones). Every quantile is at
+    or below both inputs at the same rank (p10' <= min(p10, p10c) too), so planning never claims more PV than either source."""
+    lo = [min(a, b) for a, b in zip(published, corrected)]
+    lo[0] = max(0.0, min(lo[0], corrected[0] - max(0.0, corrected[1] - lo[1])))
+    return tuple(sorted(lo))
+
+
+def prefers_ungated(planning_target: object, ungated_target: object) -> bool:
+    """The guard's one decision: publish the advice computed on the UNGATED corrected forecast (what the gate-OFF engine would have
+    answered) instead of the planning one only when its charge target is STRICTLY higher. A tie keeps the planning advice; a target that
+    is not a finite number (None, NaN, inf, a bool, a string) on either side keeps the planning advice (the same blockers apply to both
+    runs, so there is nothing to compare)."""
+    def num(x: object) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    return num(planning_target) and num(ungated_target) and ungated_target > planning_target
+
+
+class PvModel:
+    """`forecasts` is {source: {local_date: day-ahead forecast kWh as issued before dawn}}.
+
+    `skill_gate`: True / False switches the persistence-skill gate (module docstring); None (the default) uses
+    PV_SKILL_GATE_DEFAULT. It is deliberately a constructor argument and not a SiteConfig field: a new config field would
+    change `config_hash()` of every configuration.
+
+    `recent_envelope`: True / False switches the recent-output envelope (module docstring); None uses
+    PV_RECENT_ENVELOPE_DEFAULT."""
+
+    def __init__(self, history: History, cfg: SiteConfig, forecasts: dict[str, dict[date, float]],
+                 skill_gate: bool | None = None, recent_envelope: bool | None = None):
+        if skill_gate is not None and not isinstance(skill_gate, bool):
+            raise ValueError(f"PvModel skill_gate must be True, False or None, got {skill_gate!r}")
+        if recent_envelope is not None and not isinstance(recent_envelope, bool):
+            raise ValueError(f"PvModel recent_envelope must be True, False or None, got {recent_envelope!r}")
         self.history = history
         self.cfg = cfg
         self.forecasts = forecasts
+        self.skill_gate = PV_SKILL_GATE_DEFAULT if skill_gate is None else skill_gate
+        self.recent_envelope = PV_RECENT_ENVELOPE_DEFAULT if recent_envelope is None else recent_envelope
         self._actual: dict[date, float | None] = {}
 
     def actual(self, day: date) -> float | None:
@@ -135,7 +287,62 @@ class PvModel:
         recent = [a for d, a in obs if (day - d).days <= cfg.pv_recent_days]
         if len(recent) >= 10:
             caps["recent_max"] = round(cfg.pv_recent_headroom * max(recent), 2)
+        if self.recent_envelope:
+            env = [a for d, a in obs if (day - d).days <= RECENT_ENVELOPE_DAYS]
+            if len(env) >= RECENT_ENVELOPE_MIN_OBS:
+                envelope = round(RECENT_ENVELOPE_HEADROOM * max(env), 2)
+                # the TIGHTER of the two: with a configured pv_recent_headroom below 1.25 the legacy ceiling can already be
+                # the lower one, and enabling the envelope must never loosen a guard
+                caps["recent_max"] = min(caps["recent_max"], envelope) if "recent_max" in caps else envelope
         return caps
+
+    def skill_gate_verdict(self, source: str, day: date) -> SkillGateVerdict:
+        """Would the corrected forecast of `source` have beaten persistence over the SKILL_GATE_DAYS days before `day`?
+
+        For each of those days d (never `day` itself or later): the corrected forecast is that day's raw forecast x
+        ratio(source, d) (the median ratio of the pairs before d, the engine's own clip and rules), the persistence estimate
+        uses only actuals before d, and both are scored against the actual of d. A day counts only when its forecast is a
+        finite non-negative number, its actual exists, and both estimates exist. Fewer than SKILL_GATE_MIN_DAYS such days
+        => keep=False (the comparison cannot be made: fail closed)."""
+        f = self.forecasts.get(source, {})
+        err_c: list[float] = []
+        err_p: list[float] = []
+        for k in range(1, SKILL_GATE_DAYS + 1):
+            d = day - timedelta(days=k)
+            fc, act = f.get(d), self.actual(d)
+            if not _valid_kwh(fc) or act is None or not math.isfinite(act):
+                continue
+            r, _n = self.ratio(source, d)
+            p = self._persistence_estimate(d)
+            if r is None or p is None:
+                continue
+            err_c.append(abs(act - fc * r))
+            err_p.append(abs(act - p))
+        n = len(err_c)
+        if n < SKILL_GATE_MIN_DAYS:
+            return SkillGateVerdict(source, day, n, None, None, False, GATE_REASON_TOO_FEW_DAYS)
+        mae_c, mae_p = sum(err_c) / n, sum(err_p) / n
+        keep = skill_gate_keeps(mae_c, mae_p)
+        return SkillGateVerdict(source, day, n, mae_c, mae_p, keep, GATE_REASON_BEAT if keep else GATE_REASON_NOT_BEATEN)
+
+    def _gate_fallback(self, day: date, notes: list[str], verdict: dict, gv: SkillGateVerdict,
+                       corrected: PvForecast | None = None) -> PvForecast:
+        """Publish persistence (LOW confidence) because the corrected forecast did not earn its place; one plain note.
+        `corrected` is the forecast the ungated path would have published: it only sets the PLANNING values and the trace."""
+        if gv.reason == GATE_REASON_TOO_FEW_DAYS:
+            note = (f"PV forecast correction could not be compared with persistence ({gv.n_days} of "
+                    f"{SKILL_GATE_MIN_DAYS} comparable days needed); using persistence")
+        else:
+            note = (f"PV forecast correction has not beaten persistence recently (mean error {gv.mae_corrected:.1f} vs "
+                    f"{gv.mae_persistence:.1f} kWh over {gv.n_days} days); using persistence")
+        pf = self._persistence(day, notes + [note], default_note=False)
+        if corrected is not None and pf.label != "INSUFFICIENT":
+            c_band = (corrected.p10, corrected.p50, corrected.p90)
+            pf.gate_fallback = GateFallback(gv.source, gv.reason, gv.n_days, gv.mae_corrected, gv.mae_persistence, note, c_band,
+                                            corrected.inflation, conservative_band((pf.p10, pf.p50, pf.p90), c_band),
+                                            corrected.confidence, corrected.label)
+        pf.plausibility = verdict
+        return pf
 
     def forecast_day(self, day: date, raw_by_source: dict[str, float]) -> PvForecast:
         """Corrected PV for `day` given today's raw forecasts per source. Picks the source with the best
@@ -187,6 +394,18 @@ class PvModel:
                 pf.label = "INSUFFICIENT" if pf.label == "INSUFFICIENT" else "LOW"
             return pf
         _k, src, raw, r, n, mae_c, mae_r = best
+        if self.skill_gate:
+            gv = self.skill_gate_verdict(src, day)
+            if not gv.keep:
+                # what the ungated engine WOULD have published (on a copy of the notes: the published notes stay untouched);
+                # only its numbers reach planning, through the planning band
+                ungated = self._corrected_forecast(day, src, raw, r, n, mae_c, mae_r, list(notes), verdict)
+                return self._gate_fallback(day, notes, verdict, gv, ungated)
+        return self._corrected_forecast(day, src, raw, r, n, mae_c, mae_r, notes, verdict)
+
+    def _corrected_forecast(self, day: date, src: str, raw: float, r: float, n: int, mae_c: float | None, mae_r: float | None,
+                            notes: list[str], verdict: dict) -> PvForecast:
+        """The corrected forecast of the chosen source with its walk-forward band (the ungated result of `forecast_day`)."""
         point = raw * r
         wf = self.walk_forward(src, day, RESIDUAL_DAYS)
         rel = [(a - c) / c for _d, _f, c, a in wf if c > 0.5]
@@ -219,7 +438,8 @@ class PvModel:
         from .usage import confidence_label
         return PvForecast(day, src, raw, r, p10, point, p90, n, mae_c, mae_r, conf, confidence_label(conf), notes, infl, verdict)
 
-    def _persistence(self, day: date, notes: list[str]) -> PvForecast:
+    def _persistence_days(self, day: date) -> list[float]:
+        """The last (up to 30, within 60 days) daily actuals strictly BEFORE `day`, oldest first."""
         days = []
         d = day - timedelta(days=1)
         while len(days) < 30 and d >= day - timedelta(days=60):
@@ -227,14 +447,26 @@ class PvModel:
             if a is not None:
                 days.append(a)
             d -= timedelta(days=1)
-        days = list(reversed(days))
+        return list(reversed(days))
+
+    def _persistence_estimate(self, day: date) -> float | None:
+        """The persistence point estimate for `day` from data before it, or None with fewer than 5 actual days."""
+        days = self._persistence_days(day)
+        if len(days) < 5:
+            return None
+        est, _ = stats.robust_ewma(days, 0.3, 3.0, 28, 0.5)
+        return est
+
+    def _persistence(self, day: date, notes: list[str], default_note: bool = True) -> PvForecast:
+        days = self._persistence_days(day)
         if len(days) < 5:
             from .usage import confidence_label
             return PvForecast(day, "none", None, None, 0.0, 0.0, 0.0, len(days), None, None, 0.0, "INSUFFICIENT",
                               notes + ["no PV history"])
         est, _ = stats.robust_ewma(days, 0.3, 3.0, 28, 0.5)
         sig = max(stats.robust_sigma(days, 1.0), 0.35 * est)
-        notes.append("persistence only: no forecast correction available")
+        if default_note:
+            notes.append("persistence only: no forecast correction available")
         from .usage import confidence_label
         conf = 0.3
         return PvForecast(day, "persistence", None, None, max(0.0, est - 1.2816 * sig), est, est + 1.2816 * sig,

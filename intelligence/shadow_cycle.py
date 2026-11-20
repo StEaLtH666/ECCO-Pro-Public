@@ -76,7 +76,7 @@ from .explain import OK as ADVICE_OK, Advice, Reason, blocked as blocked_advice,
 from .history import History
 from .overnight import NightObservation, OvernightSettings, learn_overnight, nightly_totals
 from .periods import clock_changes, period_profile
-from .pv import PvModel, pv_hour_shape
+from .pv import UNGATED_KEPT_CODE, PvModel, prefers_ungated, pv_hour_shape
 from .quality import DQ_PROPOSED, assess_inputs, prepare_history, well_formed_records as _judged_records
 from .site_decisions import (BLOCK, WARN, CHARGE_WINDOW_ITEMS, CHARGE_WINDOW_KEY, CONFIG_LIVENESS_KEY,
                              CONFIG_POLL_READINGS, DATE_SCOPED_READINGS, DECISION_IDS, DECISION_TITLES,
@@ -1002,9 +1002,12 @@ def _run(inputs: CycleInputs) -> AdvisoryEnvelope:
         except (ValueError, ZeroDivisionError):
             prof, shape = None, [0.0] * 24
         pv_shape = shape
-        pv_days = {d: (fc.p50, shape) for d, fc in pv_fc.items() if fc.label != "INSUFFICIENT"}
+        # the PLANNING band (fc.planning_band): the published one, or after a persistence-skill-gate fallback the planning band
+        # (never above persistence or the ungated corrected band, the ungated spread kept), so the gate can raise a plan's reserve,
+        # not lower it
+        pv_days = {d: (fc.planning_band[1], shape) for d, fc in pv_fc.items() if fc.label != "INSUFFICIENT"}
         tfc = pv_fc.get(tomorrow)
-        pv_band = (tfc.p10, tfc.p50, tfc.p90) if tfc is not None and tfc.label != "INSUFFICIENT" else None
+        pv_band = tfc.planning_band if tfc is not None and tfc.label != "INSUFFICIENT" else None
         view = dp.hourly_view(prof, pv_days, tz, period_band, pv_band) if prof is not None else None
     else:
         horizon_end = None
@@ -1019,12 +1022,19 @@ def _run(inputs: CycleInputs) -> AdvisoryEnvelope:
         items["charge_target"] = _blocked_item("charge_target", blocks)
     else:
         credit, credit_label = None, None
+        ung_credit = None                               # the credit the gate-OFF cycle would have offered; set on a gate fallback only
         pv_day = local_date(cw.end, tz)
         fc = pv_fc.get(pv_day)
-        if fc is not None and fc.label in ("MEDIUM", "HIGH") and cw.end.astimezone(tz).hour < 12:
-            # only the PV after the window end's hour counts (conservative), at its p10
-            share = sum(pv_shape[h] for h in range(cw.end.astimezone(tz).hour + 1, 24)) if len(pv_shape) == 24 else 0.0
-            credit, credit_label = max(0.0, fc.p10 * share), fc.label
+        # only the PV after the window end's hour counts (conservative), at its p10, and only at MEDIUM or HIGH confidence
+        share = sum(pv_shape[h] for h in range(cw.end.astimezone(tz).hour + 1, 24)) if len(pv_shape) == 24 else 0.0
+        if fc is not None and fc.gate_fallback is not None:
+            credit_label = "LOW"                        # the persistence-skill gate published persistence: no PV credit (fail closed)
+            gfb = fc.gate_fallback
+            ung_credit = (None, None)
+            if gfb.corrected_label in ("MEDIUM", "HIGH") and cw.end.astimezone(tz).hour < 12:
+                ung_credit = (max(0.0, gfb.corrected[0] * share), gfb.corrected_label)
+        elif fc is not None and fc.label in ("MEDIUM", "HIGH") and cw.end.astimezone(tz).hour < 12:
+            credit, credit_label = max(0.0, fc.planning_band[0] * share), fc.label
         wl = dp.load_band(usage, "plan_window", max(now, cw.start), cw.end, tz, asof)
         start_soc = None
         if now < cw.start and soc is not None:
@@ -1033,10 +1043,22 @@ def _run(inputs: CycleInputs) -> AdvisoryEnvelope:
                 # planning (p90) drain until the window opens; the battery is taken as held at the effective reserve
                 # (the grid carries the house below it), the same energy account as the baselines
                 start_soc = dp.held_soc_after(cfg, soc, pre.p90, cfg.effective_reserve(ha, rz).effective_pct)
-        target = advise_charge_target(cfg, ChargeTargetInputs(
-            now=now, window=(cw.start, cw.end), demand=overnight, soc_pct=soc, soc_age_s=soc_age, ha_reserve_pct=ha,
-            pv_credit_kwh=credit, pv_credit_label=credit_label, window_load_kwh=None if wl is None else wl.p50,
-            soc_at_window_start_pct=start_soc, reserve_raise_pct=rz))
+
+        def target_for(c, lab) -> Advice:
+            return advise_charge_target(cfg, ChargeTargetInputs(
+                now=now, window=(cw.start, cw.end), demand=overnight, soc_pct=soc, soc_age_s=soc_age, ha_reserve_pct=ha,
+                pv_credit_kwh=c, pv_credit_label=lab, window_load_kwh=None if wl is None else wl.p50,
+                soc_at_window_start_pct=start_soc, reserve_raise_pct=rz))
+        target = target_for(credit, credit_label)
+        if ung_credit is not None:
+            # THE GUARD (belt and braces; a fallback already takes no PV credit): the same advice with the credit the gate-OFF cycle would
+            # have offered, and the one with the strictly higher target is published, a tie keeping the planning advice
+            ung_target = target_for(*ung_credit)
+            if prefers_ungated(*(a.recommendation.get("target_soc_pct") if a.recommendation is not None else None
+                                 for a in (target, ung_target))):
+                target = replace(ung_target, reasons=ung_target.reasons + (Reason(UNGATED_KEPT_CODE, (
+                    "The ungated corrected PV forecast would have given a higher charge target than the planning values did, so the higher "
+                    "target is kept: a persistence fallback never lowers the recommended target.")),))
         _bl, rc = blocks.parts("charge_target")
         items["charge_target"] = finish(_view("charge_target", target, vu_for("charge_target", cw.end), rc))
     ct_ok = items["charge_target"].status == ItemStatus.OK
