@@ -531,6 +531,9 @@ check("a BLOCKED row issued after it and before its window withdraws it: nothing
       in_force(r_wd) == 0 and same_money(r_wd, r_none) and near(r_wd["totals"]["delta_headline_p"], 0.0), f"{in_force(r_wd)}")
 check("... whatever the order of the records in the list", same_money(run_ghost(P7, [blocked(W7 - timedelta(hours=1)), ok7], CFG), r_none)
       and in_force(run_ghost(P7, [blocked(W7 - timedelta(hours=1)), ok7], CFG)) == 0)
+r_tie = run_ghost(P7, [ok7, blocked(ok7.issued_at)], CFG)
+check("a BLOCKED row issued at the very same instant counts as a withdrawal (the safe reading of a tie)",
+      in_force(r_tie) == 0 and same_money(r_tie, r_none), f"{in_force(r_tie)}")
 r_fb = run_ghost(P7, [ok7, blocked(W7 - timedelta(hours=1), status="INSUFFICIENT_DATA", conservative_fallback=True)], CFG)
 check("an INSUFFICIENT_DATA fallback issued later withdraws it too (a fallback is not followed by default)",
       in_force(r_fb) == 0 and same_money(r_fb, r_none))

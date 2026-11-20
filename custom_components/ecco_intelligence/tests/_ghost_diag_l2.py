@@ -592,6 +592,25 @@ try:
     check("after a published result the job is the published cycle's (its time, no rows)", s13.c.counters["runs_published"] >= 1
           and s13.c._ghost_job is not None and s13.c._ghost_job.statistics is None, str(s13.c.counters))
     s13.close()
+
+    print("== S14 an advice_log table of another shape: the block says so, the download is intact (G1, reading)")
+    s14 = Scenario("oddtable", advice=nights(5, 1, 80.0))
+    good14 = s14.download()
+    dbp = s14.cfg / "ecco" / "intelligence" / "state" / "scorecard.sqlite3"
+    import sqlite3
+    con14 = sqlite3.connect(str(dbp))
+    con14.execute("DROP TABLE advice_log")
+    con14.execute("CREATE TABLE advice_log (foo TEXT, bar INTEGER)")
+    con14.commit()
+    con14.close()
+    odd14 = s14.download()
+    check("non-vacuity: with the proper table the block was a real comparison", good14["ghost"]["status"] == "OK")
+    check("with a table of another shape the block is UNAVAILABLE / ADVICE_LOG_UNREADABLE (an unreadable log is not an empty one), no figure, "
+          "nothing raised", odd14["ghost"]["status"] == "UNAVAILABLE" and odd14["ghost"]["reason"] == "ADVICE_LOG_UNREADABLE"
+          and "totals" not in odd14["ghost"], str(odd14["ghost"])[:300])
+    check("... and every other part of the download is the same", {k: v for k, v in odd14.items() if k != "ghost"} ==
+          {k: v for k, v in good14.items() if k != "ghost"})
+    s14.close()
 finally:
     h.loop.close()
     H.rmtree_own(root, PREFIX)
