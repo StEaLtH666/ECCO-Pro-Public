@@ -84,7 +84,9 @@ Checked offline on the exact tip (round 3, section 13). None of it has been obse
 | existing safety alerts and control behaviour | the shell's source has no service call, request, websocket, storage or dynamic code (a word-bounded search of the card source finds none, and the pin suite's forbidden-API rule scans the whole text); it reads only the states, the locale and the theme of Home Assistant's object, and has three click-only actions (open an entity's dialog by the standard event, copy to the clipboard, download a file); no step creates an entity, helper, automation or package, restarts Home Assistant or edits an existing dashboard | `tools/tests/test_ecco_mode_shell_card.py`, rules [2] to [5]; the Node trap on every `hass` function |
 
 **The one write.** The pause tile toggles the pause helper: the same write the existing Intelligence dashboard already offers, now also on a second
-page. The shell itself never writes, and nobody taps the tile during this update (step 7, S2).
+page. The shell itself never writes, and nobody taps the tile during this update (step 7, S2). That statement is scoped to the card's own code and to
+what the dashboard places: the standard more-info dialog (opened by the pause tile's hold action and by the Geek row action for a sensor) keeps Home
+Assistant's own admin settings (entity registry edits), the same as on any dashboard (recalled, not verified). The look does not open it (5.7).
 
 **What is different from the existing Intelligence page, all of it by design:** (1) it is a NEW storage-mode dashboard with "Require admin"; the
 existing one is a YAML dashboard that is not edited; (2) the same cards sit inside one shell card, so the page order is the switch and a fixed
@@ -171,6 +173,10 @@ reviewed one (or it is CRLF).
 
 Run the offline suites exactly as section 13 lists them (the Python roots with `<PY> -I -B -X utf8`; the Node suites, the
 mutation run and the headless strip check only through the memory guard, one process at a time, the mutation run last and alone).
+**One Node suite needs its interpreter named.** `test/generated-config.test.mjs` runs the generator through `ECCO_PYTHON` (else `python`) and, when that
+interpreter has no PyYAML, **skips all 5 of its tests and still exits 0** (its own header says so): a green row that tested nothing. Run it as
+`ECCO_PYTHON=<PY> node --test --test-concurrency=2 test/generated-config.test.mjs` (in PowerShell, `$env:ECCO_PYTHON = '<PY>'` first; through the guard,
+like every Node run) and read the summary: **5 of 5 pass, 0 skipped** is the pass condition, and anything else is not a pass.
 The M2 private-pattern scan is the owner's tool with the owner's pattern file; it runs only when the owner says go, and what is
 reported back is counts only.
 
@@ -505,15 +511,20 @@ catalogue inline: there is no file to include and no address in it.
 **Two checks, every time, before anything is saved.** The paste replaces everything in the editor it lands in, and the raw editor
 of another dashboard looks the same as the new one:
 
-1. **before pasting**, the raw editor shows an empty or default new configuration (a title and at most an empty or placeholder
-   view: a few lines), with no ECCO card in it and nothing near the length of the text about to be pasted;
+1. **before pasting**, the raw editor shows an empty, default or auto-generated configuration of the NEW dashboard: a title with an empty or
+   placeholder view, or the page Home Assistant generated automatically when the owner took control, which may well hold ECCO entity cards because it
+   is built from the entities Home Assistant knows (recalled, not verified). If the editor offers "start with an empty dashboard", the owner may tick
+   it (recalled, not verified). What it must **not** be is the recognisable content of the production Overview, of the existing Intelligence dashboard
+   or of any other existing dashboard (their own title, views and cards, or text near the length of the one about to be pasted). ECCO cards in an
+   auto-generated page of the NEW dashboard do not fail this check, and the address bar of check 2 is the real proof of targeting;
 2. **after pasting and before pressing Save**, the browser's address bar shows the path of the NEW dashboard (the URL chosen above,
    `ecco-modes-u1` if the suggestion was used) and the page header shows its title, and **not** the production Overview, the
    existing Intelligence dashboard or any other dashboard.
 
 If either is not so: **stop, do not Save.** Close the editor without saving (nothing is stored until Save), then open the new
 dashboard from Settings, Dashboards and start again. If a paste was already saved into the wrong dashboard, section 7 (a
-mis-pasted dashboard) is the way back; step 6 would show it as a changed sha256 line of an existing `.storage/lovelace*` file.
+mis-pasted dashboard) is the way back; step 6 would show it as a changed sha256 line of an existing `.storage/lovelace*` file or, when that dashboard
+had no stored file before (an automatically generated one), as a SECOND NEW lovelace file (S1, second case).
 
 ### 5.6 Step 6: read-only after-checks
 
@@ -555,14 +566,30 @@ The expected differences, and only these. **The targeting proof** is the `change
 `sha-after.txt`: `changed` is exactly `.storage/lovelace_dashboards` and `.storage/lovelace_resources`; `new` is exactly ONE file,
 `.storage/lovelace.<dashboard id>` (the new dashboard's own configuration); `gone` is empty. So **every other `.storage/lovelace*` file and every
 file under `ecco/dashboards/` (the production Overview and the existing Intelligence dashboard) has its baseline sha256** (a changed hash of any other
-`.storage/lovelace*` file is a paste into the wrong dashboard: section 7, S1). In the dashboard list exactly one item is added, and the listing at the
+`.storage/lovelace*` file is a paste into the wrong dashboard: section 7, S1). **A `new` list with a SECOND file** (any file but the new dashboard's own
+`lovelace.<dashboard id>`, whose id the listing at the end of the block prints) is the other form of the same mistake: the paste went into a dashboard that
+had no stored file before (an automatically generated one), so it shows as a **second NEW lovelace file**, not as a changed one, and the baseline holds no
+copy of it to paste back (section 7, S1, second case). In the dashboard list exactly one item is added, and the listing at the
 end of the block shows it: its `id` (the `<dashboard id>` above), the `url_path` that was chosen, the title, **`require_admin` true** (stop if it is
 not: the page would be visible to every user; the owner turns "Require admin" on, then this is read again) and the storage mode (field names recalled,
 not verified: the read shows what is there); in `/config/www/ecco/`
 exactly one new file (the `total` line is not in the listing, so the comparison shows exactly one line). The resource list differs
-by exactly one added item (`verify-resource` already proved it in step 4; re-run it here with the fresh read-back if more than 30
-minutes have passed: the plan and the `--before` file are the same). `core-info-after.txt` shows Home Assistant Core running and
+by exactly one added item (`verify-resource` already proved it in step 4; if more than 30 minutes have passed, run it again on the fresh
+read-back with the block below: the plan and the `--before` file are the same). `core-info-after.txt` shows Home Assistant Core running and
 the version of the baseline (`core-info-before.txt`; a newly offered update is noted, not a stop).
+
+If more than 30 minutes have passed since `verify-resource` ran in step 4, run it again now on the fresh read-back that the first block of this step captured
+(`resources-after.json`; the plan, the `--before` file and the address are the same as in 5.4):
+
+```powershell
+cls
+$E = '<OFFLINE_EVIDENCE_DIR>\u1-baseline'
+$PY = '<PY>'
+Set-Location <checkout>
+& $PY -I -B -X utf8 tools\ecco_deploy_preflight.py verify-resource --plan dist\geek-u1\plan.json --resources "$E\resources-after.json" --before "$E\resources-before.json" --base-url <HA URL>
+```
+
+Expected: the same lines as in 5.4 (`RESOURCE VERIFIED ...` and exit 0); any other line is a stop.
 
 Now the stored configuration of the new dashboard, compared with the generated text. This proves the paste arrived exactly as
 generated (the key order and the formatting do not matter; the content does). The file is **copied with `scp`**, not captured
@@ -664,7 +691,7 @@ Desktop browser, a fresh page load (Ctrl+F5, so the new resource is fetched), th
 5. the search box and the filters work; the three buttons (open an entity's dialog for a sensor, copy to the clipboard, download a
    file) are optional and **not part of this look**: nothing needs them;
 6. switch back to Production; the Production body is as it was;
-7. the console is still free of shell errors; nothing was written (step 8 proves it).
+7. the console is still free of shell errors; nothing was written (step 8 checks it, within the limits stated in 5.8).
 
 The pause tile is hidden in Geek Mode: that is by design. Anything the owner sees that is not on these lists is noted, not fixed
 at the look.
@@ -719,6 +746,11 @@ dynamic code, one timer, two window listeners, three click-only actions, and `ha
 the Node suite's trap on every `hass` function (`frontend/ecco-mode-shell/test/generated-config.test.mjs`), and the owner's
 statement that nothing was tapped.
 
+**The scope of the write statement.** The statement that the pause toggle is the only write the dashboard can cause holds for the card's own code and for what
+the dashboard places. It does not remove Home Assistant's standard more-info dialog (opened by the pause tile's hold action and by the Geek row action for a sensor), which
+keeps Home Assistant's own admin settings (entity registry edits), the same as on any dashboard (recalled, not verified). The look does not open it (5.7), and
+step 8 reads states and state history, not the entity registry.
+
 ### 5.9 Step 9: close-out
 
 - a status update in the owner's project record, by that record's own procedure: what ran, when, the hashes, the outcome of each
@@ -748,7 +780,13 @@ tool, no host command, no restart); A1 may simply stay (item 3); the coordinator
 **Two special cases come first, before the order below.**
 
 **S1. A paste went into the wrong dashboard** (the owner noticed it at the pre-save checks of 5.5 too late, or step 6 shows a
-changed sha256 line of an existing `.storage/lovelace*` file). Stop; touch nothing else. The baseline holds a byte-exact copy of
+changed sha256 line of an existing `.storage/lovelace*` file, or a SECOND NEW lovelace file). Stop; touch nothing else.
+
+**Which dashboard is a stored file?** The file `.storage/lovelace.<id>` belongs to the dashboard whose `id` is `<id>` in `dashboards-before.json` or
+`dashboards-after.json` (the dashboard's id gives `lovelace.<id>`; the `url_path` and the title in the same item say which dashboard it is). The file named only
+`.storage/lovelace`, with no id, is the default dashboard's (the stored-list field names and the file naming are recalled, not verified).
+
+**First case: a CHANGED existing file** (a `.storage/lovelace*` file of the baseline has another sha256). The baseline holds a byte-exact copy of
 every such file in `$E\lovelace-before\`. The owner opens the damaged dashboard (Edit dashboard, Raw configuration editor), selects
 all, pastes the saved content and saves. The saved content is the `data.config` of the copy; this puts it on the clipboard as text
 (`<stored file name>` is the damaged dashboard's file name in `lovelace-before\`, for example the one whose sha256 line changed):
@@ -778,7 +816,16 @@ scp -q "${H}:/config/.storage/<stored file name>" "$E\lovelace-rollback.json"
 Restored means the two sha256 values are equal, or the content prints `SAME CONTENT`. If neither holds, or anything is unclear:
 **restore the protected backup of step 2** (the owner's action in the Home Assistant UI; read 5.2 first: a restore is a heavy last resort that
 restarts Home Assistant and puts everything back to its state at the time of the backup, so it is the owner's decision and never the first rollback);
-do not guess. Then continue with the order below for the new dashboard.
+do not guess.
+
+**Second case: a SECOND NEW lovelace file** (the paste went into a dashboard that had NO stored file before, an automatically generated one: step 6 shows it as a
+second new file, not as a changed one; recalled, not verified: such a dashboard has no stored file until its first save). There is no baseline copy of it, because there was no file to copy, so there is nothing to paste back. The way back is
+to clear that dashboard's configuration so that it returns to its automatically generated page. The owner's choice is to delete the stored configuration
+through that dashboard's own UI (recalled, not verified: whether and where Home Assistant's own screens offer it for that dashboard); no tool and no hand edit
+of `.storage` does it. Then the coordinator reads the lists again (the re-check of item 4 below, into the `-rollback` files): the second new file shows as a `=>`
+line until it is gone. If the screens offer no way, or anything is unclear, **restore the protected backup of step 2** (read 5.2 first: it is the heavy last resort).
+
+Then continue with the order below for the new dashboard.
 
 **S2. The pause tile was tapped by accident** (Production shows it; it toggles the pause helper, the one write the existing tile has
 always made). One more tap undoes it, or the owner sets the helper back to its baseline state (`states-before.json`). Then record
@@ -884,7 +931,8 @@ Say these plainly in every report about this update.
   real host.
 - Phone and tablet layouts are not part of U1; a desktop look is (the module still loads on a phone or tablet, see above).
 - The state read, the history read and the log reads of 5.1, 5.6 and 5.8 are written from the repository's own tools and from the
-  Home Assistant interfaces they use, and have not been run on the production host.
+  Home Assistant interfaces they use, and have not been run on the production host; neither have the globbed `sha256sum` and the `scp` of the stored
+  `.storage` files (5.1, 5.6).
 
 ## 10. What a first-look failure looks like, and what it means
 
@@ -904,7 +952,7 @@ Say these plainly in every report about this update.
 | the pause tile is hidden in Production | a defect of the pass-through | stop |
 | the pause tile is visible in Geek | a defect (Geek hides it) | stop |
 | the pause tile was tapped by accident | the toggle of the pause helper, a write the existing tile has always made | one more tap, or set the helper back to its baseline state; record the time and both changes; re-run step 8 (section 7, S2) |
-| the text of the pasted dashboard was saved into a different dashboard | the pre-save checks of 5.5 were missed | stop; section 7, S1: paste the saved content back and compare, else restore the protected backup |
+| the text of the pasted dashboard was saved into a different dashboard | the pre-save checks of 5.5 were missed | stop; section 7, S1: for a changed existing file paste the saved content back and compare; for a second new lovelace file clear that dashboard's stored configuration; else restore the protected backup |
 | `--verify-storage` prints `DIFFERS` and says the console code page explains it | the stored file was captured through `ssh` and `Out-File` (a false failure of the capture) | copy the file with `scp` (5.6) and run it again; not a second paste |
 
 A look that fails stops the update; the rollback is section 7. A look that passes is a first look on one desktop, nothing more.
@@ -980,9 +1028,12 @@ assertion are untouched. What was done:
    other five are the checkout line, the deploy line, the two preflight calls (those tools ran offline as in item 1) and the clipboard copy of the
    147 KB text. The new verdict and rollback blocks also ran against a paste into the wrong dashboard, a dashboard that is not admin-only, a list that
    Home Assistant formats differently and an incomplete rollback, and print what the text says.
-5. **The checklist and its suite.** The suite has 82 checks and 33 in-memory mutants, all killed. It was shown to fail first (a checklist that does not
+5. **The checklist and its suite.** The suite first had 82 checks and 33 in-memory mutants, all killed. It was shown to fail first (a checklist that does not
    exist, and one with a wrong card hash: exit 1) and then to pass on the real checklist (exit 0). Its first run of the mutants exposed two weak spots in
-   the suite itself (an address followed by a full stop was not seen; one mutant changed prose, not the command): both fixed and re-run.
+   the suite itself (an address followed by a full stop was not seen; one mutant changed prose, not the command): both fixed and re-run. An independent review
+   of this round (verdict READY_WITH_MINORS, eight points F1 to F8: mutants the suite let through, the dashboard-targeting text, a green Node row that can test
+   nothing, and five smaller points) is fixed in two later commits: the suite now has 357 checks and 167 in-memory mutants (79 of the checklist, 85 of the
+   runbook, 3 of the Node test's source), all killed, and the runbook has 20 PowerShell blocks (the new one, the re-run of the gate in 5.6, was parsed, not run).
 
 Not run, said plainly: GitHub CI (nothing is pushed), the owner's M2 private-pattern scan (the owner's go only), the other CI roots, the other twelve
 Node suites, the 518-mutant run and the headless strip check (the card, the catalogue, the example and the generator's output are byte-identical to
@@ -996,12 +1047,12 @@ rounds 1 and 2, so nothing they test changed), and anything on a live system.
 | CI root `tools/tests`, every suite, serially | `tools/run_offline_tests.py --root tools/tests --parallel 1` | 0 | 24/24 passed (230 s); round 2: 23/23, the new suite is the 24th |
 | the pin suite | `tools/tests/test_ecco_mode_shell_card.py` | 0 | 107 PASS, 0 FAIL, 0 SKIP (unchanged) |
 | the generator suite | `tools/tests/test_geek_mode_dashboard_config.py` | 0 | 104 PASS, 0 FAIL (unchanged) |
-| the new consistency suite | `tools/tests/test_geek_mode_checklist.py` | 0 | 82 PASS, 0 FAIL; 33 mutants (28 of the checklist, 5 of the runbook), all killed |
+| the new consistency suite | `tools/tests/test_geek_mode_checklist.py` | 0 | 357 PASS, 0 FAIL; 167 mutants (79 of the checklist, 85 of the runbook, 3 of the Node test's source), all killed (82 PASS and 33 mutants before the review's fixes) |
 | neighbours | `test_geek_mode_example.py`; `test_intelligence_card.py`; `test_geek_mode_privacy.py`; `test_geek_mode_catalogue.py`; `test_geek_mode_coverage.py`; `test_geek_mode_fixtures.py`; `test_geek_mode_ledger.py` | 0 each | 35; 81; 195; 134; 219; 102; 68 PASS, 0 FAIL |
 | privacy suite (without the owner's pattern file) | `tools/tests/test_public_privacy.py` | 0 | 25 PASS, 1 SKIP (the owner's private pattern file) |
 | generators | `tools/geek_mode_dashboard_config.py --check`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check` | 0; 0; 0 | `OK: 147178 bytes, sha256 4abf3b1e...` (unchanged); no drift; no drift |
-| the Node suite that runs the generator (local, guarded) | `node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass |
-| PowerShell blocks | the Windows PowerShell 5.1 parser over every fenced block | 0 | 19 of the runbook and 2 of the checklist parse; 14 of the runbook's ran against stand-ins |
+| the Node suite that runs the generator (local, guarded; the interpreter named, 5.0) | `ECCO_PYTHON=<PY> node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass, 0 skipped |
+| PowerShell blocks | the Windows PowerShell 5.1 parser over every fenced block | 0 | 20 of the runbook and 2 of the checklist parse (the 20th, the re-run of the gate in 5.6, was parsed only); 14 of the runbook's ran against stand-ins |
 
 **Round 2 results** (a clean clone of `f188a5a`; Python: `<PY> -I -B -X utf8`):
 
@@ -1014,7 +1065,7 @@ rounds 1 and 2, so nothing they test changed), and anything on a live system.
 | neighbours | `tools/tests/test_geek_mode_example.py`; `tools/tests/test_intelligence_card.py` | 0; 0 | 35 PASS (its tripwire untouched and passing); 81 PASS |
 | privacy suite (without the owner's pattern file) | `tools/tests/test_public_privacy.py` | 0 | 25 PASS, 1 SKIP (the owner's private pattern file: the M2 scan is the owner's own step and was not run) |
 | generators | `tools/geek_mode_dashboard_config.py --check`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check` | 0; 0; 0 | `OK: 147178 bytes, sha256 4abf3b1e...` (unchanged); no drift; no drift |
-| the Node suite that runs the generator (local, guarded) | `node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass (the generator's output is unchanged byte for byte; no other Node suite is affected, none was re-run) |
+| the Node suite that runs the generator (local, guarded; the interpreter named, 5.0) | `ECCO_PYTHON=<PY> node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass, 0 skipped (the generator's output is unchanged byte for byte; no other Node suite is affected, none was re-run) |
 | the runbook's PowerShell blocks (this PC, stand-ins for `ssh` and `scp`, no network) | the 18 blocks of sections 5 and 7 | 0 | all 18 parse; the baseline, entity list, state read, log, after, stored-configuration, state comparison and history blocks run against stand-ins and print what the text says; the two Python one-liners of section 7 run on sample files |
 
 **Not re-run in round 2, said plainly:** the other CI roots (`intelligence/tests`, `ecco_core/tests`, `health/tests`, `influxdb`,
@@ -1042,7 +1093,7 @@ superseded by round 2 (107 and 104).
 | the new pin suite | `tools/tests/test_ecco_mode_shell_card.py` | 0 | 85 checks pass, among them 39 card mutants (and one comment-letter case that only the byte pin catches), 9 catalogue and 5 configuration mutants, each caught by its own rule |
 | the new generator suite | `tools/tests/test_geek_mode_dashboard_config.py` | 0 | 81 checks pass (30 mutants; the plan read by the real `verify-resource`: one correct switch verified, eleven wrong ones refused) |
 | generators | `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check`; `tools/geek_mode_dashboard_config.py --check` | 0; 0; 0 | no drift; no drift; `OK: 147178 bytes, sha256 4abf3b1e...` |
-| Node suites (local; 13 files, one process each) | `node --test --test-concurrency=2 test/<file>.test.mjs` through the guard | all 0 | core 157, element 150, coverage 4, static 60, real-catalogue 159, scan 16, budget 14, async 41, cache 9, differential 5, perf 11, strip-check 14, generated-config 5: **645 tests, 645 pass, 0 skipped** |
+| Node suites (local; 13 files, one process each) | `node --test --test-concurrency=2 test/<file>.test.mjs` through the guard (`generated-config` with `ECCO_PYTHON=<PY>` in front, 5.0) | all 0 | core 157, element 150, coverage 4, static 60, real-catalogue 159, scan 16, budget 14, async 41, cache 9, differential 5, perf 11, strip-check 14, generated-config 5: **645 tests, 645 pass, 0 skipped** |
 | the mutation proof (local; run last and alone) | `node --test --test-concurrency=2 test/mutations.test.mjs` | 0 | **518/518 mutants killed**; 538 tests, 538 pass; 1,399 s |
 | headless strip check (local; Chrome) | `node preview/check-strip.mjs --require` | 0 | PASS: 6816 of 6816 checks |
 | its self-test | `node preview/check-strip.mjs --selftest --require` | 0 | SELFTEST PASS: the real card passes, 38 of 38 broken copies are caught |

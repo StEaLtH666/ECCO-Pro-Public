@@ -28,7 +28,9 @@ Intelligence stays NOT ACCEPTED and in SHADOW (advice only); no firmware, invert
 
 **Not touched:** the production Overview; the existing Intelligence dashboard and integration; packages, helpers, automations, scripts and safety alerts;
 firmware, dongle, inverter, InfluxDB. No entity is created and Home Assistant is not restarted. The one write the new page can cause is the existing
-pause tile's toggle, the same write the existing Intelligence dashboard already offers; nobody taps it (runbook 1.1).
+pause tile's toggle, the same write the existing Intelligence dashboard already offers; nobody taps it (runbook 1.1). That statement is scoped to the card's own
+code and what the page places: the standard more-info dialog keeps Home Assistant's own admin settings (entity registry edits), as on any dashboard (recalled,
+not verified).
 
 ## 3. The five checks of your directive
 
@@ -38,7 +40,7 @@ pause tile's toggle, the same write the existing Intelligence dashboard already 
 | **Admin-only dashboard setup** | "Require admin" on at creation; step 6 reads `require_admin` back from the stored list (runbook 5.5, 5.6) | `require_admin` not true; no raw editor offered |
 | **Backup** | your protected full backup in the UI before any live write; byte-exact copies of every `.storage/lovelace*` file, each hash-checked `EXACT` (runbook 5.1, 5.2) | no protected backup; a copy `NOT EXACT` |
 | **Rollback** | section 6: dashboard, resource, file, each separate, no restart; re-read and compared with the baseline (runbook 7) | a re-check that is not equal |
-| **Correct-dashboard targeting** | two checks before Save (a new empty configuration; the new dashboard's address in the address bar), then a changed/new/gone verdict: exactly one new `.storage/lovelace.<id>` file, every other dashboard file at its baseline hash (runbook 5.5, 5.6) | a failed pre-save check (do not Save); any other file changed (runbook 7, S1) |
+| **Correct-dashboard targeting** | two checks before Save (an empty, default or auto-generated configuration of the NEW dashboard, never an existing one's content; the new dashboard's address in the address bar), then a changed/new/gone verdict: exactly one new `.storage/lovelace.<id>` file, every other dashboard file at its baseline hash (runbook 5.5, 5.6) | a failed pre-save check (do not Save); any other file changed, or a SECOND new lovelace file (runbook 7, S1) |
 
 ## 4. The installation sequence
 
@@ -60,6 +62,7 @@ Each live step needs your own go, given at the time; a go for one step is not a 
 ```powershell
 cls
 $PY = '<PY>'; Set-Location <checkout>
+New-Item -ItemType Directory -Force dist\geek-u1 | Out-Null
 & $PY -I -B -X utf8 tools\geek_mode_dashboard_config.py --out dist\geek-u1\dashboard-config.json --resource-plan dist\geek-u1\plan.json
 & $PY -I -B -X utf8 tools\geek_mode_dashboard_config.py --check dist\geek-u1\dashboard-config.json
 ```
@@ -79,21 +82,22 @@ forms: each runbook block sets `$H`, `$E`, `$PY` and the checkout folder itself,
 ## 5. After the install (all read-only)
 
 1. The production Overview renders as before and the console shows no error that names the shell (runbook 5.4).
-2. The new dashboard is listed once, `require_admin` true, and the verdict is as expected: `changed` is the two lists, `new` is one file (runbook 5.6).
+2. The new dashboard is listed once, `require_admin` true, and the verdict is as expected: `changed` is the two lists, `new` is one file; a second new file is a stop (runbook 5.6).
 3. `STORED CONFIGURATION EQUALS THE GENERATED ONE`; no new lovelace, frontend or shell line in the log (runbook 5.6).
 4. Production look: the shell starts in Production; the Intelligence card and the watchdog card read as on the existing Intelligence dashboard;
    the alert strip is never blank and does not contradict them (runbook 5.7).
 5. Geek look, after your go: 17 source rows in five groups; the pause tile is hidden (runbook 5.7).
 6. No control entity changed and each shows one history row (runbook 5.8). If anything fails: runbook 10 says what it means.
 
-## 6. Rollback, in this order (runbook 7); nothing is restarted
+## 6. Rollback, newest first: A3 the dashboard, A2 the resource, A1 the file (runbook 7); nothing is restarted
 
 1. **A3, the dashboard.** You delete it in the UI. Proven by re-reading: the dashboard list equals the baseline and no `lovelace.<id>` file is left.
 2. **A2, the resource.** You delete the one resource in the UI. Proven: the resource list equals the baseline (compared as parsed items).
 3. **A1, the card file.** It may stay (it is inert without a resource); if you want it gone it is moved by hand, never deleted.
 4. **Re-check.** Every other dashboard file has its baseline sha256; `/config/www/ecco/` equals the baseline or lacks only the moved file.
 
-Special cases: S1, a paste into the wrong dashboard (paste the saved byte-exact copy back and compare); S2, the pause tile tapped (tap it again,
+Special cases: S1, a paste into the wrong dashboard (a changed file: paste the saved byte-exact copy back and compare; a SECOND new lovelace file: no
+baseline copy exists, so clear that dashboard's stored configuration through its own UI, else the protected backup); S2, the pause tile tapped (tap it again,
 or set the helper back, and record both). Restoring the Home Assistant backup is a heavy last resort: it restarts Home Assistant and returns
 everything the backup holds to its state at backup time. It is your decision and never the first rollback (runbook 5.2).
 
@@ -117,11 +121,16 @@ private-pattern scan has not run; D-U1-1 and D-U1-2 are not decided; the host re
 - The shell has never run in a real Home Assistant or a real browser: it ran in Node with a stand-in page and in headless Chrome against a stand-in
   state. How the real frontend nests its child cards, real theme variables, console cleanliness and real speed are unknown until the look.
 - A module resource is global: once it is registered, every dashboard page on every client loads the shell module, whatever the admin-only setting says
-  (the production Overview is looked at once for that reason; an old phone web view logs a harmless module error).
+  (the production Overview is looked at once for that reason; an old phone web view logs a harmless module error). Phone and tablet layouts are not part of U1.
 - Require admin is a visibility setting for the page, not a security boundary against a non-admin who calls Home Assistant's own API. It keeps the page
   out of a non-admin sidebar (recalled from Home Assistant's behaviour, not verified). The text holds no secret.
 - 42 of the 344 declared attribute rows are conditional and read "Not present" until their condition holds; the catalogue was compared with one live
   capture of 14 Nov only, and one helper was not checked live.
 - The pause tile still writes when tapped: the same write as on the existing Intelligence dashboard, now on a second page.
+- A service call that changes no state leaves no durable record, so the no-write proof of step 8 has that limit (runbook 5.8): it also rests on the card's
+  source having no service call and on your word that nothing was tapped.
+- CI runs no Node: the Node suites, the mutation proof and the headless check ran on one PC only; CI's guard is the Python pin suite (runbook 9).
+- The deploy and preflight tools and the host reads (the globbed `sha256sum`, the `scp` of the `.storage` files, the Supervisor state, history and log
+  reads) have never run against the real host (runbook 9).
 - Several Home Assistant screen names and stored-file details are recalled, not verified (runbook 9).
 - Nothing here says anything about forecast accuracy. Intelligence stays NOT ACCEPTED and in SHADOW; R9, Stage 3, Ghost and the PV gate are separate.
