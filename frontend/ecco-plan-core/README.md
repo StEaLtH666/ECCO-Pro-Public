@@ -304,8 +304,9 @@ An independent review on 18 Nov 2026 found the items below, and a second review 
 item 23. The fixes for the clock-change
 day, the press-time recheck, the rounded-up reserve and the five surviving mutants are in. The items here were NOT fixed, except item 20 (fixed on 19 Nov 2026 by owner
 decisions r14 and r15, and kept in the list with what changed) and item 19 (mitigated offline the same day by an absolute epoch record, and kept in the list with what is still unproven), and item 23 (the card; fixed offline on 19 Nov 2026 by owner decision r15,
-and kept in the list with what is not claimed). Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15): it is kept in the list with its findings,
-nothing was changed and its proposals are not implemented. All the items are written down so that nobody
+and kept in the list with what is not claimed). Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15) and updated on 20 Nov 2026 (owner decision r30): it is kept in the list with its findings;
+two of its proposals, P-A (the refusal of a skipped, repeated or unreadable start label at arm time) and P-B (the arm-time TOU overlap walk on the real instants),
+are implemented offline in R9 (not installed), that is not verified on a real Home Assistant, and everything else in it is unchanged. All the items are written down so that nobody
 reads more into the overrides than they do. "Fail open" means the override protects less than its name suggests; "fail closed" means a start is refused or held.
 None was seen on a live Home Assistant. Unless an item says otherwise it was read from the code and the offline models; items 9, 10 and 19 to 23 say, in their
 own text, what was reproduced offline, what was only reasoned or recalled, and what was not examined. Items 13 to 18 are smaller or informational.
@@ -347,24 +348,57 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
    (item 8). Reasoned, not examined: how real Home Assistant renders and parses a tiny number that a template hands on as text. The effective reserve sensor
    publishes whole numbers only, so a tiny number reaches a script only through a forced test value or a tiny staged Stop SOC on the dongle's own number. Direction:
    unknown until checked in real Home Assistant (no failure was reproduced offline). You would see: nothing, in the model.
-10. **The schedule packages' start-time reads on the clock-change day were EXAMINED offline on 19 Nov 2026 (owner decision r15); there are findings and nothing was changed.** Method:
-    a zone-aware (Europe/London) harness ran the packages' own template expressions and the repository's simulators on 28 Mar 2027 (spring forward: the local hour
-    01:00 to 01:59 does not exist), 31 Oct 2027 (fall back: that hour happens twice) and the past 25 Oct 2026, each with an ordinary-day control. EXACT (reproduced):
-    every window end, retry deadline, run length and plan override expiry is epoch arithmetic, so no deadline is silently extended or shortened, nothing starts twice,
-    and restarts around the change behave in epoch terms. NOT fail closed (reproduced): (a) a start time typed as a skipped or repeated local label is read as the
-    first reading of that label and is NOT refused: a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30) and a
-    repeated 01:30 starts once, at its first occurrence; (b) the TOU overlap check of the Dump to Grid arm validation walks the window as continuous wall-clock
-    minutes, so on the spring day a run that spans the gap can miss an overlap with a charging slot after it (a false accept) and on the autumn day a clear window can
-    be refused (a false refusal; older than R9); the dongle firmware's start gate walks the same way (reasoned from the code, not run), so there is no backstop. FAIL
-    CLOSED (reproduced): arming in the second 01:xx hour for a time inside it is refused with a misleading text ("must be in the future"); a Home Assistant start in
-    the second 01:xx hour is never captured for R9 (the dongle's time text has no offset), so for that boot the missed-run guard fails closed and the watchdog does
-    not rescue a lost on-time start; Skip tonight pressed 07:00 to 07:59 on the day before the autumn change is refused (EXPIRY_ABOVE_CAP, a 25 hour night). An
-    override expiry in the repeated hour is covered by item 19. The Free Power schedule package behaves identically. NOT EXAMINABLE offline: the real Home Assistant
-    time-trigger rule, whether its process time zone equals the configured zone for the naive-string read, whether a date-and-time helper accepts a skipped time, its
-    restore after a restart, and the dongle's timers and TOU gate across a clock change. PROPOSED and NOT implemented (each needs the owner's decision): refuse a
-    skipped, repeated or unreadable start label at arm time; an epoch-correct TOU walk or a refusal when the window spans the change; documentation of the second-hour
-    capture loss and of the Skip tonight cap; a supervised read-only template check of the three conversions. Direction: mixed, as listed. You would see: a start that
-    fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine. The next clock change is 28 Mar 2027.
+10. **The schedule packages' start-time reads on the clock-change day: two proposals of the 19 Nov 2026 examination (P-A and P-B) are implemented offline in R9 (owner decision r30, 20 Nov 2026); that is not verified on a real Home Assistant, and the rest is unchanged.**
+
+    Method of the examination (owner decision r15): limitation 10 was EXAMINED offline on 19 Nov 2026 with a zone-aware (Europe/London) harness that ran the packages' own
+    template expressions and the repository's simulators on 28 Mar 2027 (spring forward: the local hour 01:00 to 01:59 does not exist), 31 Oct 2027 (fall back: that hour
+    happens twice) and the past 25 Oct 2026, each with an ordinary-day control. On 20 Nov 2026 (owner decision r30) R9 was merged into this branch and implements two of the
+    proposals of that examination, offline. The parts below are kept apart on purpose: (a) IMPLEMENTED OFFLINE in R9, (b) NOT VERIFIED ON A REAL HOME ASSISTANT, (c) NOT
+    CHANGED by R9, (d) what you would see.
+
+    (a) IMPLEMENTED OFFLINE in R9 (owner decision r30, 20 Nov 2026; not installed on any Home Assistant). P-A (refuse a skipped, repeated or unreadable start label at arm
+    time) is implemented offline in both schedule packages: arming now refuses a start time that is a skipped local time, a repeated one or one that cannot be read, with
+    the text "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time", BEFORE "must be in the future", so arming in the
+    second 01:xx hour for a 01:xx start is still refused (fail closed) but now with that text and no longer with a misleading one. P-B (an epoch-correct TOU walk or a
+    refusal when the window spans the change; R9 chose the walk) is implemented offline in the Export to Grid package only: its arm-time TOU overlap check now walks the run
+    on the real instants (each minute of the run is converted to its local time of day), so a window that crosses a clock change checks the slots it really covers, and a
+    minute whose local time cannot be read refuses the arm; the Charge Battery (Free Power) package has no such check. What the offline proof is, and that it is only that:
+    the repository's own simulators run the real package text under the real Europe/London zone; an independent oracle (every real UTC minute of each change day walked,
+    counting how often each wall-clock label occurs) is compared with the real arm validation minute by minute, for both packages and under both readings of a naive local
+    string: exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026 are refused with the clock-change text and none on an ordinary day; the
+    TOU walk is compared with an independent truth over every quarter hour around those days and two ordinary days; the new checks fail on the unchanged packages
+    (failing-first) and mutants of both changes are killed (registry/tests/test_ha_r9_missed_runs.py [5]; with a Hold battery running,
+    home-assistant/tests/test_ecco_r9_stage3_composition.py [19]). That is an offline proof of the offline model only, not a test on a real Home Assistant.
+
+    As examined on 19 Nov 2026, before R9, these two were NOT fail closed, as reproduced then: a start time typed as a skipped or repeated local label was read as the first
+    reading of that label and was not refused (a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30) and a repeated
+    01:30 starts once, at its first occurrence), and the TOU overlap check of the Dump to Grid arm validation walked the window as continuous wall-clock minutes, so on the
+    spring day a run that spans the gap could miss an overlap with a charging slot after it (a false accept) and on the autumn day a clear window could be refused (a false
+    refusal). Arming in the second 01:xx hour for a time inside it was already fail closed but was refused with a misleading text ("must be in the future").
+
+    (b) NOT VERIFIED ON A REAL HOME ASSISTANT (and NOT EXAMINABLE offline): how Home Assistant's template functions read a naive local time (the first occurrence of a
+    repeated time, the offset in force before the change for a skipped one) and which time zone they use are recalled, not verified (the offline suite models both readings
+    of a repeated time and the check refuses a repeated time on either one); the real Home Assistant time-trigger rule; whether its process time zone equals the configured
+    zone for the naive-string read; whether a date-and-time helper accepts a skipped time; its restore after a restart (item 19); and the dongle's timers and TOU gate
+    across a clock change. P-F (a supervised read-only template check of the three conversions on the owner's Home Assistant) is still open: until it is done, everything in
+    (a) stays not verified on a real Home Assistant.
+
+    (c) NOT CHANGED by R9: the dongle firmware's START gate is not changed (a flash is a separate decision) and, read from its text (reasoned from the code, not run), still
+    walks the TOU window the old way, as continuous wall-clock minutes, so it does not follow the real instants: on the spring day the arm-time check of (a) is the only one
+    that sees a charge slot after the skipped hour. The checks of (a) run only when the schedule is armed (the arm validation is triggered by the armed switch turning on
+    and by nothing else): a start helper edited while the schedule is armed is not checked again. The repeated-time probe shifts the label by a constant one hour: right for
+    the UK clock change only, not for a zone that changes by another amount, and only Europe/London was modelled. EXACT (reproduced), unchanged: every window end, retry
+    deadline, run length and plan override expiry is epoch arithmetic, so no deadline is silently extended or shortened, nothing starts twice, and restarts around the
+    change behave in epoch terms. FAIL CLOSED (reproduced) and unchanged: a Home Assistant start in the second 01:xx hour is never captured for R9 (the dongle's time text
+    has no offset), so for that boot the missed-run guard fails closed and the watchdog does not rescue a lost on-time start; Skip tonight pressed 07:00 to 07:59 on the day
+    before the autumn change is refused (EXPIRY_ABOVE_CAP, a 25 hour night). An override expiry in the repeated hour is covered by item 19. The Free Power schedule package
+    behaves identically in each unchanged finding; it has the same P-A refusal and no TOU overlap check.
+
+    (d) Direction: mixed, as listed. You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine,
+    for as long as R9 is not installed (today); with R9 installed (offline only so far), arming a start time in the skipped or repeated hour refused with the clock-change
+    text and the schedule switched off, and a Dump to Grid window that crosses the change checked against the slots it really covers, while the firmware's own gate, a start
+    helper edited after arming and the unchanged findings above stay as they are. The next clock change is 28 Mar 2027.
+
 11. **The expiry read uses the helper's `timestamp` attribute, which is modelled, not live-proven.** The offline models set it from an aware datetime and treat it
     as the true instant, also in the repeated hour of the autumn clock change; real Home Assistant was not checked (how the attribute is held after a restart is item
     19). A supervised check is needed. Since owner decision r14 (19 Nov 2026) the attribute is only one of two sources: each expiry is also an absolute epoch record (an

@@ -53,11 +53,15 @@ the dongle's own button, and the helpers are plain helpers an administrator or a
                 UNCONFIRMED text), the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'the same fallback as the old one') is gone, what is still true is stated (the Free Power schedule package
                 is unchanged, a FAILED text can be a false negative), the package CODE is pinned statically (one UNCONFIRMED text within 255 characters, the STARTED test and the FAILED, BLOCKED or CANCELLED test once each, no
                 unconditional STARTED OK write), item 23 carries its two review notes, RG-ST3 stands once per place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
-  [13] item 10  (owner decision r15, 19 Nov 2026; additive) limitation 10, the schedule packages' start-time reads on the clock-change day, was EXAMINED offline on 19 Nov 2026 and is rewritten: findings, what is NOT
-                fail closed, what is FAIL CLOSED, what is NOT EXAMINABLE offline and the proposals that are PROPOSED and NOT implemented; nothing was changed. This REPLACES the [7] requirement of the old item 10
-                wording ('Shown by reading', 'Not examined: what those reads give', 'not reproduced and is not claimed', which is now false) by the new wording, and the old wording ('were not examined for the clock-change
-                day', 'Direction: unknown (not examined)' ...) is a forbidden text and a killed mutant. Item 10 is still numbered 10 and names the clock-change day, the item count is still 23, the Known limitations
-                introduction and a new CHANGELOG bullet say so, the item is ASCII and names no address or token, the RG-ST3 sentence stands once per place, nothing says 'fully enforced'; mutants and a control
+  [13] item 10  (owner decision r15, 19 Nov 2026, rewritten by owner decision r30, 20 Nov 2026; additive) limitation 10, the schedule packages' start-time reads on the clock-change day, was EXAMINED offline on 19 Nov 2026;
+                R9 (merged) now implements, OFFLINE, P-A (arming refuses a skipped, repeated or unreadable start label, both schedule packages) and P-B (the Export to Grid arm-time TOU overlap walk uses the real instants).
+                Item 10 says, in separate places, what is implemented offline and what the offline proof is, what is NOT verified on a real Home Assistant (P-F open), what is NOT changed (the firmware START gate, arm
+                time only, the one-hour UK probe, the unchanged findings) and what you would see; the Known limitations introduction and two CHANGELOG bullets agree (the r15 bullet stays the record of 19 Nov 2026, its
+                superseded sentences marked). This REPLACES the r15 requirements that R9 made false ('there are findings and nothing was changed', 'PROPOSED and NOT implemented', 'NOT fail closed (reproduced)', 'is NOT
+                refused', 'its proposals are not implemented', 'so there is no backstop'): they are forbidden texts and killed mutants, every other old requirement is kept, and the new facts are pinned one by one. The claims
+                about the packages are tied to the package text; every 'implemented' is qualified ('offline' or 'not'), every 'verified' or 'proven' is 'not verified' or 'unverified'; nothing says 'fully enforced', 'guarantee'
+                or 'safe to'. Item 10 is still numbered 10 and names the clock-change day, the item count is still 23, the item and the bullets are ASCII and name no address or token, the RG-ST3 sentence stands once per place;
+                mutants and a control
 
 Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
 overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
@@ -635,8 +639,9 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 ITEM_STATUS = {   # item number -> phrases its body must carry (what was reproduced, what was only reasoned or recalled, what was not examined)
     9: ("NOT reproduced", "Run now against the current packages and simulators", "Reasoned, not examined"),
     # r15 (19 Nov 2026): item 10 was EXAMINED offline. The old requirement ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed") is false now and is replaced by the new
-    # wording; the old wording is forbidden and a killed mutant in [13] (OLD10_ITEM).
-    10: ("EXAMINED offline on 19 Nov 2026", "NOT fail closed", "FAIL CLOSED", "NOT EXAMINABLE", "PROPOSED and NOT implemented", "28 Mar 2027"),
+    # wording; the old wording is forbidden and a killed mutant in [13] (OLD10_ITEM). r30 (20 Nov 2026): R9 implements P-A and P-B OFFLINE, so the old requirement "PROPOSED and NOT implemented" (false for those two) is
+    # replaced by "implemented offline" and "not verified on a real Home Assistant" (the old phrase is forbidden in [13]); every other phrase is kept.
+    10: ("EXAMINED offline on 19 Nov 2026", "NOT fail closed", "FAIL CLOSED", "NOT EXAMINABLE", "implemented offline", "not verified on a real Home Assistant", "28 Mar 2027"),
     1: ("RETAINED since owner decision r14", "fail closed for the unreadable power-cut record"),
     11: ("modelled, not live-proven", "stricter than the earlier state-string read", "the two are read raise-only, the later valid instant winning"),
     17: ("input_number restores an exact ten-digit epoch", "whether `input_number.set_value` accepts a value that large"),
@@ -738,7 +743,7 @@ def drop_in_item(readme: str, num: int, phrase: str) -> str:
 
 s2_helper, s2_schedule, s2_changelog = text_of(PLAN_HELPERS_PKG), text_of(SCHEDULE_PKG), text_of(CHANGELOG)
 s2_readme = w6["plan-core README"]
-check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (EXAMINED offline since r15: findings, nothing changed), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
+check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (EXAMINED offline since r15; P-A and P-B implemented offline since r30, not verified on a real Home Assistant), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
       "not examined)", not status_problems(s2_readme), str(status_problems(s2_readme)))
 check("the plan-core README has the four items of the second review (19 restart in the repeated hour, 20 overwritten BLOCKED text, 21 momentary unreadable sensor, 22 leftover staging) "
       "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if 19 <= n <= 22] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
@@ -1301,48 +1306,118 @@ check("control: the untouched tree is not flagged by the startup recovery checks
 
 # ===========================================================================
 print("")
-print("[13] known limitation 10 (owner decision r15, 19 Nov 2026; additive): the schedule packages' start-time reads on the clock-change day were EXAMINED offline; item 10 and a new CHANGELOG bullet say what was found and what is not implemented")
+print("[13] known limitation 10 (owner decision r15, 19 Nov 2026; rewritten by owner decision r30, 20 Nov 2026; additive): the schedule packages' start-time reads on the clock-change day: P-A and P-B are implemented OFFLINE in R9, "
+      "that is not verified on a real Home Assistant, the rest is unchanged; item 10, the introduction and two CHANGELOG bullets say so")
 # ===========================================================================
-# Item 10 used to say that these reads "were not examined for the clock-change day" (and [7] required that wording). The owner approved an offline examination (decision r15, item 4) and it was done on 19 Nov 2026:
-# a zone-aware (Europe/London) harness ran the packages' own template expressions and the repository's simulators on 28 Mar 2027, 31 Oct 2027 and the past 25 Oct 2026, each with an ordinary-day control. Item 10 now
-# states the method, what is EXACT, what is NOT fail closed, what is FAIL CLOSED, what is NOT EXAMINABLE offline and the proposals that are PROPOSED and NOT implemented; nothing in the packages was changed. These checks are
-# ADDITIVE to [6] to [12]: they require the new wording (and replace the [7] requirement of the old wording, which is false now), FORBID the old wording (a forbidden text and a killed mutant, as for items 20 and 23), keep item 10
-# numbered 10 with its subject, the item count at 23, the RG-ST3 sentence once per place and every 'fully enforced' claim out, and make the item and the CHANGELOG bullet ASCII and free of an address or token.
-NEW10_TITLE = "The schedule packages' start-time reads on the clock-change day were EXAMINED offline on 19 Nov 2026 (owner decision r15); there are findings and nothing was changed."
+# 19 Nov 2026 (owner decision r15): item 10 was EXAMINED offline (a zone-aware Europe/London harness, 28 Mar 2027, 31 Oct 2027, 25 Oct 2026, each with an ordinary-day control) and rewritten with findings and PROPOSALS
+# that were NOT implemented; nothing in the packages was changed, and [13] required that wording. 20 Nov 2026 (owner decision r30): R9 is merged into this branch and implements, OFFLINE, P-A (arming refuses a skipped,
+# repeated or unreadable start label, in both schedule packages, before 'must be in the future') and P-B (the Export to Grid package's arm-time TOU overlap walk uses the real instants). The owner approved updating limitation
+# 10 "to reflect which clock-change fixes are implemented in R9, while clearly distinguishing offline proof from real HA verification" and "do not weaken either branch's pin protection". So the old statements that are
+# now false ('there are findings and nothing was changed', 'PROPOSED and NOT implemented', 'NOT fail closed (reproduced)' for the start label and the TOU walk, 'is NOT refused', 'its proposals are not implemented',
+# 'so there is no backstop') are FORBIDDEN texts and killed mutants; every old requirement that is still true is KEPT; and the new facts are pinned one by one: P-A and P-B 'implemented offline', 'not verified on a real
+# Home Assistant', the firmware START gate unchanged, arm time only, the one-hour (UK) probe, P-F open, the offline proof described as offline. The claims the item makes about the packages (the refusal text, its order before
+# 'must be in the future', the fixed one-hour probe, the single arm trigger, the walk on the real instants, no TOU check in the Free Power package, the firmware not changed, P-F open) are tied to the package text
+# statically. Over-claim guards: in item 10, the Known limitations introduction and the two CHANGELOG bullets every 'implemented' is qualified ('offline' or 'not'), every 'verified' or 'proven' is preceded by 'not ' or 'un',
+# and 'fully enforced', 'guarantee' and 'safe to' are absent (item 10 also carries neither 'fixed' nor 'safe').
+FREE_PKG = ROOT / "home-assistant" / "packages" / "ecco_free_power_schedule.yaml"
+DUMP_DOC = ROOT / "docs" / "DUMP_TO_GRID_V1.md"
+CLOCK_TEXT = "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
+FUTURE_VALUE = 'value: "REJECTED - scheduled start must be in the future"'
+NEW10_TITLE = ("The schedule packages' start-time reads on the clock-change day: two proposals of the 19 Nov 2026 examination (P-A and P-B) are implemented offline in R9 (owner decision r30, 20 Nov 2026); "
+               "that is not verified on a real Home Assistant, and the rest is unchanged.")
+R15_TITLE = "The schedule packages' start-time reads on the clock-change day were EXAMINED offline on 19 Nov 2026 (owner decision r15); there are findings and nothing was changed."   # false since R9
 OLD10_TITLE = "The schedule packages' naive start-time reads were not examined for the clock-change day."
-OLD10_ITEM = (   # the old wording of item 10 (false now): none of it may stand in the item
+OLD10_ITEM = (   # none of it may stand in item 10: the [7]-era wording (not examined) and the r15 wording that R9 made false
     "were not examined for the clock-change day", "naive start-time reads were not examined", "Shown by reading: the scheduled Dump to Grid package reads its",
     "no running check that was read for this item covers a start time inside the repeated or the skipped hour", "Not examined: what those reads give", "not reproduced and is not claimed",
     "Direction: unknown (not examined)", "possibly a missed or refused scheduled start",
+    # r15 wording that is false since R9 (owner decision r30):
+    "there are findings and nothing was changed", "nothing was changed", "PROPOSED and NOT implemented", "NOT fail closed (reproduced)", "is NOT refused", "walks the window as continuous wall-clock minutes",
+    "(a false refusal; older than R9)", "so there is no backstop", "its proposals are not implemented",
 )
-OLD10_README = ("were not examined for the clock-change day", "Not examined: what those reads give", "Direction: unknown (not examined)")   # and none of the three may stand anywhere in the README
-ITEM10_R15 = (
-    NEW10_TITLE, "EXAMINED offline on 19 Nov 2026", "owner decision r15", "there are findings and nothing was changed", "a zone-aware (Europe/London) harness", "the packages' own template expressions and the repository's simulators",
+OLD10_README = ("were not examined for the clock-change day", "Not examined: what those reads give", "Direction: unknown (not examined)",
+                "PROPOSED and NOT implemented", "its proposals are not implemented", "there are findings and nothing was changed", "NOT fail closed (reproduced)")   # and none may stand anywhere in the README
+ITEM10_SCOPE = (   # the examination of 19 Nov 2026, kept (still true) and the two decisions
+    NEW10_TITLE, "EXAMINED offline on 19 Nov 2026", "owner decision r15", "owner decision r30", "a zone-aware (Europe/London) harness", "the packages' own template expressions and the repository's simulators",
     "28 Mar 2027 (spring forward: the local hour 01:00 to 01:59 does not exist)", "31 Oct 2027 (fall back: that hour happens twice)", "the past 25 Oct 2026", "each with an ordinary-day control",
-    "EXACT (reproduced)", "is epoch arithmetic", "nothing starts twice",
-    "NOT fail closed (reproduced)", "is NOT refused", "a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30)", "a repeated 01:30 starts once, at its first occurrence",
-    "walks the window as continuous wall-clock minutes", "(a false accept)", "(a false refusal; older than R9)", "(reasoned from the code, not run), so there is no backstop",
-    "FAIL CLOSED (reproduced)", 'refused with a misleading text ("must be in the future")', "is never captured for R9", "the watchdog does not rescue a lost on-time start",
-    "(EXPIRY_ABOVE_CAP, a 25 hour night)", "is covered by item 19", "The Free Power schedule package behaves identically",
-    "NOT EXAMINABLE offline", "the real Home Assistant time-trigger rule", "whether a date-and-time helper accepts a skipped time", "the dongle's timers and TOU gate across a clock change",
-    "PROPOSED and NOT implemented (each needs the owner's decision)", "refuse a skipped, repeated or unreadable start label at arm time", "an epoch-correct TOU walk or a refusal when the window spans the change",
-    "a supervised read-only template check of the three conversions",
-    "Direction: mixed, as listed.", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "The next clock change is 28 Mar 2027.",
+    "(a) IMPLEMENTED OFFLINE in R9", "(b) NOT VERIFIED ON A REAL HOME ASSISTANT", "(c) NOT CHANGED by R9", "(d) what you would see",
 )
-INTRO10_R15 = ("Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15)", "its proposals are not implemented")
-CHANGELOG_R15D = (
+ITEM10_IMPL = (   # (a) what R9 implements, offline
+    "not installed on any Home Assistant", "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented offline", "in both schedule packages",
+    'BEFORE "must be in the future"', "arming in the second 01:xx hour for a 01:xx start is still refused (fail closed) but now with that text",
+    "P-B (an epoch-correct TOU walk or a refusal when the window spans the change; R9 chose the walk) is implemented offline", "in the Export to Grid package only",
+    "walks the run on the real instants", "a minute whose local time cannot be read refuses the arm", "the Charge Battery (Free Power) package has no such check",
+)
+ITEM10_PROOF = (   # what the offline proof is, and that it is only that
+    "an independent oracle", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026", "both readings of a naive local string",
+    "failing-first", "mutants of both changes", "registry/tests/test_ha_r9_missed_runs.py [5]", "home-assistant/tests/test_ecco_r9_stage3_composition.py [19]",
+    "an offline proof of the offline model only, not a test on a real Home Assistant",
+)
+ITEM10_BEFORE = (   # the findings of 19 Nov 2026, kept as the record of what R9 changed
+    "before R9, these two were NOT fail closed", "was read as the first reading of that label and was not refused", "a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30)", "a repeated 01:30 starts once, at its first occurrence",
+    "walked the window as continuous wall-clock minutes", "(a false accept)", "(a false refusal)", 'refused with a misleading text ("must be in the future")',
+)
+ITEM10_UNVERIFIED = (   # (b)
+    "NOT EXAMINABLE offline", "recalled, not verified", "the real Home Assistant time-trigger rule", "whether its process time zone equals the configured zone for the naive-string read",
+    "whether a date-and-time helper accepts a skipped time", "its restore after a restart (item 19)", "the dongle's timers and TOU gate across a clock change",
+    "P-F (a supervised read-only template check of the three conversions", "is still open", "everything in (a) stays not verified on a real Home Assistant",
+)
+ITEM10_UNCHANGED = (   # (c)
+    "the dongle firmware's START gate is not changed (a flash is a separate decision)", "(reasoned from the code, not run)", "the arm-time check of (a) is the only one that sees a charge slot after the skipped hour",
+    "only when the schedule is armed", "a start helper edited while the schedule is armed is not checked again", "shifts the label by a constant one hour", "right for the UK clock change only", "only Europe/London was modelled",
+    "EXACT (reproduced)", "is epoch arithmetic", "nothing starts twice",
+    "FAIL CLOSED (reproduced)", "is never captured for R9", "the watchdog does not rescue a lost on-time start", "(EXPIRY_ABOVE_CAP, a 25 hour night)", "is covered by item 19",
+    "The Free Power schedule package behaves identically",
+)
+ITEM10_SEE = (   # (d)
+    "Direction: mixed, as listed.", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "with R9 installed (offline only so far)",
+    "The next clock change is 28 Mar 2027.",
+)
+ITEM10_ALL = ITEM10_SCOPE + ITEM10_IMPL + ITEM10_PROOF + ITEM10_BEFORE + ITEM10_UNVERIFIED + ITEM10_UNCHANGED + ITEM10_SEE
+INTRO10 = ("Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15)", "updated on 20 Nov 2026 (owner decision r30)", "P-A (the refusal of a skipped, repeated or unreadable start label at arm time)",
+           "P-B (the arm-time TOU overlap walk on the real instants)", "are implemented offline in R9", "that is not verified on a real Home Assistant", "everything else in it is unchanged")
+INTRO10_OLD = ("its proposals are not implemented", "nothing was changed", "PROPOSED and NOT implemented")   # false since R9: forbidden in the introduction
+R15_MARK = "- **Stage 3: known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten"
+R30_MARK = "- **Stage 3: known limitation 10 now says which clock-change refusals and checks R9 implements offline"
+CHANGELOG_R15D = (   # the r15 bullet stays the record of 19 Nov 2026, with its superseded sentences marked
     "known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten", "owner decision r15", "documentation only", "zone-aware (Europe/London)",
-    "28 Mar 2027", "31 Oct 2027", "25 Oct 2026", "Reproduced and exact", "NOT fail closed", "FAIL CLOSED", "there is no backstop", "NOT EXAMINABLE offline", "PROPOSED and NOT implemented, each needing the owner's decision",
+    "28 Mar 2027", "31 Oct 2027", "25 Oct 2026", "Reproduced and exact", "NOT fail closed", "FAIL CLOSED", "there was no backstop on 19 Nov 2026", "NOT EXAMINABLE offline",
+    "SUPERSEDED IN PART on 20 Nov 2026 (owner decision r30, see the next bullet)", "this bullet records what was true on 19 Nov 2026, before R9",
+    "PROPOSED on 19 Nov 2026, each needing the owner's decision", "were implemented offline by R9 on 20 Nov 2026", "the others are not implemented",
     "This supersedes the sentences of the earlier bullets", "not reviewed or not examined for the clock-change day", "no package, card, bundle, pin assertion, scan, gate, threshold or hash of a frozen file was edited",
     "still not bound by any override (RG-ST3)",
 )
+CHANGELOG_R15D_OLD = ("PROPOSED and NOT implemented", "Reproduced and NOT fail closed", "so there is no backstop", "its proposals are not implemented")
+CHANGELOG_R30 = (
+    "known limitation 10 now says which clock-change refusals and checks R9 implements offline (P-A, P-B), what is not verified on a real Home Assistant and what is unchanged", "owner decision r30, 20 Nov 2026",
+    "documentation and its static check only, nothing installed", "keeping offline proof and real Home Assistant verification apart",
+    "Implemented offline in R9: P-A", "before 'must be in the future'", "still fails closed but with the clock-change text", "P-B (the Export to Grid package's arm-time TOU overlap check walks the run on the real instants",
+    "the Charge Battery package has no such check", "The proof is offline only", "an independent oracle", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026",
+    "failing-first runs on the unchanged packages and mutants", "Not verified on a real Home Assistant", "recalled, not verified", "P-F, the supervised read-only template check, is still open",
+    "Unchanged: the dongle firmware's START gate", "a flash is a separate decision", "the arm-time-only check (a start helper edited while the schedule is armed is not checked again)",
+    "the repeated-time probe (a constant one-hour shift: the UK only)", "the second-hour capture loss", "the Skip tonight cap", "the epoch arithmetic of every deadline",
+    "This supersedes, for P-A and P-B, the sentences of the r15 bullet above", "the r15 bullet stays the record of 19 Nov 2026",
+    "the pin of the wording is stricter", "No package, card, bundle, scan, gate, threshold, pin-chain declaration or hash of a frozen file was edited", "still not bound by any override (RG-ST3)",
+)
+EVERYWHERE_OLD = ("PROPOSED and NOT implemented", "its proposals are not implemented", "there are findings and nothing was changed", "NOT fail closed (reproduced)")   # in none of the files that carry the wording
+DOC_PROBE_OPEN = "(proposal P-F) is still open"
+
+
+def bullet_of(changelog: str, marker: str) -> str:
+    """The CHANGELOG bullet that starts with `marker` (up to the next top-level bullet); empty when it is not there exactly once."""
+    if changelog.count(marker) != 1:
+        return ""
+    a = changelog.index(marker)
+    b = changelog.find("\n- **", a + 1)
+    return changelog[a:b] if b > a else ""
 
 
 def bullet_r15d(changelog: str) -> str:
-    """The CHANGELOG bullet of owner decision r15 for known limitation 10 (up to the next bullet); empty when it is not there."""
-    a = changelog.find("- **Stage 3: known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten")
-    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
-    return changelog[a:b] if a >= 0 and b > a else ""
+    return bullet_of(changelog, R15_MARK)
+
+
+def bullet_r30(changelog: str) -> str:
+    return bullet_of(changelog, R30_MARK)
 
 
 def limitations_intro(readme: str) -> str:
@@ -1352,79 +1427,255 @@ def limitations_intro(readme: str) -> str:
     return flat(readme[h:e]) if h >= 0 and e > h else ""
 
 
-def examined10_problems(readme: str, changelog: str) -> list[str]:
+def overclaim_problems(name: str, body: str, strict: bool = False) -> list[str]:
+    """No unqualified 'implemented' (it needs 'offline' after it or 'not ' before it), no 'verified' or 'proven' that is not 'not verified' / 'unverified' / 'unproven', no 'fully enforced', 'guarantee', 'safe to'.
+    `strict` (item 10 only) also bans 'fixed', 'safe' and 'guaranteed' for the real system."""
+    out = []
+    for m in re.finditer(r"(?i)\bimplemented\b", body):
+        if not (re.search(r"(?i)\bnot $", body[:m.start()]) or body[m.end():].lower().startswith(" offline")):
+            out.append(f"{name}: 'implemented' is not qualified by 'offline' or 'not': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    for m in re.finditer(r"(?i)\b(?:verified|proven)\b", body):
+        if not re.search(r"(?i)\bnot $", body[:m.start()]):
+            out.append(f"{name}: '{m.group(0)}' is not preceded by 'not ' or 'un': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    if FULL_CLAIM.search(body):
+        out.append(f"{name}: a 'fully enforced' claim")
+    if re.search(r"(?i)guarantee|safe to", body):
+        out.append(f"{name}: 'guarantee' or 'safe to'")
+    if strict and re.search(r"(?i)\b(?:fixed|safe|safely)\b", body):
+        out.append(f"{name}: 'fixed' or 'safe'")
+    if not body.isascii():
+        out.append(f"{name} is not ASCII")
+    if re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", body, re.I):
+        out.append(f"{name} names an address, token or password")
+    return out
+
+
+def package_tie_problems(dump: str, free: str) -> list[str]:
+    """What item 10 says about the two schedule packages, read from the package text (static): the refusal text, its place before 'must be in the future', the fixed one-hour probe, the single arm trigger (arm time
+    only), the walk on the real instants (Export to Grid only), no TOU check in the Free Power package, the firmware not changed, P-F open."""
+    out = []
+    for name, pk in (("Export to Grid", dump), ("Charge Battery (Free Power)", free)):
+        refusal = f'value: "{CLOCK_TEXT}"'
+        a, f = pk.find(refusal), pk.find(FUTURE_VALUE)
+        if pk.count(refusal) != 1 or pk.count(FUTURE_VALUE) != 1 or not 0 <= a < f:
+            out.append(f"{name}: the clock-change refusal is not in the package once, before the 'must be in the future' refusal")
+        for probe in ("(t + 3600) | timestamp_custom(f, true, 'unreadable')) == s", "(t - 3600) | timestamp_custom(f, true, 'unreadable')) == s", "{{ t <= 0"):
+            if pk.count(probe) != 1:
+                out.append(f"{name}: the label test lacks: {probe}")
+        m = re.search(r"- id: \S+_schedule_arm_validation\n    alias: .*\n    mode: restart\n    triggers:\n((?:      .*\n)+?)    actions:", pk)
+        if not m or not re.fullmatch(r'      - trigger: state\n        entity_id: \S+_schedule_armed\n        to: "on"\n', m.group(1)):
+            out.append(f"{name}: the arm validation is not triggered by the armed switch turning on, and by nothing else")
+        if "(proposal P-F) is still open" not in flat_yaml(pk):
+            out.append(f"{name}: the header no longer says that P-F is still open")
+    if dump.count("k * 60) | timestamp_local") != 1 or "range(0, dur + 1)" not in dump:
+        out.append("Export to Grid: the TOU overlap walk is not on the real instants")
+    if "is NOT changed here (a firmware change is a separate flash)" not in flat_yaml(dump):
+        out.append("Export to Grid: the header no longer says that the firmware is not changed")
+    if "charge source set" in free:
+        out.append("Charge Battery (Free Power): it has a TOU overlap check now (item 10 says it has none)")
+    return out
+
+
+def item10_problems(readme: str, changelog: str, dump: str = "", free: str = "") -> list[str]:
     out = []
     item10 = item_bodies(readme).get(10, "")
-    fr, fb, intro = flat(readme), flat(bullet_r15d(changelog)), limitations_intro(readme)
+    fr, intro, b15, b30 = flat(readme), limitations_intro(readme), flat(bullet_r15d(changelog)), flat(bullet_r30(changelog))
     if not item10:
         out.append("item 10 is not there")
     if len(re.findall(r"(?m)^10\. \*\*" + re.escape(NEW10_TITLE) + r"\*\*", readme)) != 1:
         out.append("item 10 does not stand once, numbered 10, under its new title")
-    out.extend(f"item 10 lacks: {p}" for p in ITEM10_R15 if p not in item10)
+    out.extend(f"item 10 lacks: {p}" for p in ITEM10_ALL if p not in item10)
     out.extend(f"item 10 still says: {p}" for p in OLD10_ITEM if p in item10)
     out.extend(f"the plan-core README still says: {p}" for p in OLD10_README if p in fr)
-    out.extend(f"the Known limitations introduction lacks: {p}" for p in INTRO10_R15 if p not in intro)
-    out.extend(f"the CHANGELOG bullet of r15 (item 10) lacks: {p}" for p in CHANGELOG_R15D if p not in fb)
-    for name, body in (("item 10", item10), ("the CHANGELOG bullet of r15 (item 10)", fb)):
-        if re.search(r"(?i)(?<!not )\bimplemented", body):
-            out.append(f"{name} says that something is implemented (the proposals are NOT implemented)")
-        if not body.isascii():
-            out.append(f"{name} is not ASCII")
-        if re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", body, re.I):
-            out.append(f"{name} names an address, token or password")
-    if FULL_CLAIM.search(item10 + " " + fb + " " + intro):
-        out.append("a 'fully enforced' claim stands in item 10, the introduction or the CHANGELOG bullet")
+    out.extend(f"the Known limitations introduction lacks: {p}" for p in INTRO10 if p not in intro)
+    out.extend(f"the Known limitations introduction still says: {p}" for p in INTRO10_OLD if p in intro)
+    if not b15:
+        out.append("the CHANGELOG bullet of r15 (item 10) is not there exactly once")
+    if not b30:
+        out.append("the CHANGELOG bullet of r30 (item 10) is not there exactly once")
+    if b15 and b30 and changelog.index(R15_MARK) > changelog.index(R30_MARK):
+        out.append("the r30 bullet comes before the r15 bullet it supersedes")
+    out.extend(f"the CHANGELOG bullet of r15 (item 10) lacks: {p}" for p in CHANGELOG_R15D if p not in b15)
+    out.extend(f"the CHANGELOG bullet of r15 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b15)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) lacks: {p}" for p in CHANGELOG_R30 if p not in b30)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b30)
+    out.extend(overclaim_problems("item 10", item10, strict=True))
+    out.extend(overclaim_problems("the Known limitations introduction", intro))
+    out.extend(overclaim_problems("the CHANGELOG bullet of r15 (item 10)", b15))
+    out.extend(overclaim_problems("the CHANGELOG bullet of r30 (item 10)", b30))
+    if dump and free:
+        out.extend(package_tie_problems(dump, free))
+        if flat(CLOCK_TEXT) not in item10:
+            out.append("item 10 does not quote the clock-change refusal text of the packages exactly")
     return out
 
 
+def everywhere_problems(files: dict[str, str]) -> list[str]:
+    """None of the files that carry the wording (README, CHANGELOG, the Export to Grid doc, both schedule packages) says that P-A or P-B are not implemented, or the other r15 sentences R9 made false."""
+    return [f"{n} still says: {p}" for n, t in files.items() for p in EVERYWHERE_OLD if p in flat(t)]
+
+
+def in_item(readme: str, num: int, fn) -> str:
+    """The README with limitation item `num` replaced by fn(its text)."""
+    h = readme.index(LIMITS_HEADING)
+    a = readme.index(f"\n{num}. **", h)
+    b = readme.find(f"\n{num + 1}. **", a)
+    if b < 0:
+        b = readme.find("\n### ", a)
+    return readme[:a] + fn(readme[a:b]) + readme[b:]
+
+
+def in_intro(readme: str, fn) -> str:
+    h = readme.index(LIMITS_HEADING)
+    e = readme.index("\n1. **", h)
+    return readme[:h] + fn(readme[h:e]) + readme[e:]
+
+
+def in_bullet(changelog: str, marker: str, fn) -> str:
+    a = changelog.index(marker)
+    b = changelog.find("\n- **", a + 1)
+    return changelog[:a] + fn(changelog[a:b]) + changelog[b:]
+
+
+def sw(text: str, phrase: str, repl: str) -> str:
+    """`text` with every occurrence of `phrase` (whitespace in it may match a line wrap) replaced by `repl`; asserts that it was there."""
+    pat = r"\s+".join(re.escape(w) for w in phrase.split())
+    new, n = re.subn(pat, lambda m: repl, text)
+    assert n >= 1, phrase
+    return new
+
+
 n_readme, n_changelog = s2_readme, s2_changelog
-check("limitation 10 is EXAMINED offline in the words of item 10 (method, EXACT, NOT fail closed, FAIL CLOSED, NOT EXAMINABLE, PROPOSED and NOT implemented, 28 Mar 2027), the Known limitations introduction and the new CHANGELOG bullet; "
-      "the old wording ('were not examined for the clock-change day' and the rest) is gone; the item and the bullet are ASCII and name no address or token", not examined10_problems(n_readme, n_changelog), str(examined10_problems(n_readme, n_changelog)))
+n_dump, n_free, n_doc = text_of(SCHEDULE_PKG), text_of(FREE_PKG), text_of(DUMP_DOC)
+n_files = {"the plan-core README": n_readme, "the CHANGELOG": n_changelog, "docs/DUMP_TO_GRID_V1.md": n_doc, "the Export to Grid package": n_dump, "the Charge Battery (Free Power) package": n_free}
+
+
+def all10(rd=None, cl=None, dp=None, fp=None) -> list[str]:
+    return item10_problems(n_readme if rd is None else rd, n_changelog if cl is None else cl, n_dump if dp is None else dp, n_free if fp is None else fp)
+
+
+check("limitation 10 says what R9 implements OFFLINE (P-A, P-B), what the offline proof is, what is NOT VERIFIED on a real Home Assistant (P-F open), what is NOT CHANGED (the firmware START gate, arm time only, the one-hour UK probe, "
+      "the unchanged findings) and what you would see; the Known limitations introduction and both CHANGELOG bullets agree; the r15 findings stay as the record of 19 Nov 2026", not all10(), str(all10()))
+check("the claims item 10 makes about the packages hold in the package text (the refusal text exactly, before 'must be in the future', the fixed one-hour probe, ONE arm trigger, the walk on the real instants, no TOU check in "
+      "the Free Power package, the firmware not changed, P-F open)", not package_tie_problems(n_dump, n_free) and flat(CLOCK_TEXT) in item_bodies(n_readme).get(10, ""), str(package_tie_problems(n_dump, n_free)))
+check("no file that carries the wording still says that P-A or P-B are not implemented, or any other r15 sentence R9 made false (the README, the CHANGELOG, docs/DUMP_TO_GRID_V1.md, both schedule packages)",
+      not everywhere_problems(n_files), str(everywhere_problems(n_files)))
 check("item 10 is present and numbered 10, still names the clock-change day in its title, and the 23 numbered items are all still listed (the count did not change); its direction is 'mixed, as listed' (allowed for item 10 only)",
       [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and LIMIT_ITEMS[9] == (10, "clock-change day") and sorted(item_bodies(n_readme)) == list(range(1, 24)) and not limitations_problems(n_readme)
       and DIRECTION_MIXED_ITEMS == (10,), str(limitations_problems(n_readme)))
 check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
-check("nothing claims the overrides are fully enforced (item 10, the Known limitations introduction, the CHANGELOG bullet, the plan-core README, the card sources and bundle, both package headers)",
-      not FULL_CLAIM.search(" ".join([n_readme, flat(bullet_r15d(n_changelog)), texts["card bundle"], texts["card README"], flat_yaml(s2_helper), flat_yaml(s2_schedule)] + list(card_sources.values()))))
+check("nothing claims the overrides are fully enforced (item 10, the Known limitations introduction, both CHANGELOG bullets, the plan-core README, the card sources and bundle, both package headers)",
+      not FULL_CLAIM.search(" ".join([n_readme, flat(bullet_r15d(n_changelog)), flat(bullet_r30(n_changelog)), texts["card bundle"], texts["card README"], flat_yaml(s2_helper), flat_yaml(s2_schedule)] + list(card_sources.values()))))
 check("the earlier checks of items 9, 11, 19, 20 and 23 still hold in their wording (additive), and item 10 no longer needs the old [7] wording",
       not status_problems(n_readme) and not mitigated19_problems(n_readme, s2_helper, n_changelog) and not fixed23_problems(n_readme, s2_helper, n_changelog) and not last_path_problems(n_readme, s2_schedule, n_changelog)
       and not fixed20_problems(n_readme, s2_schedule, n_changelog) and not extended20_problems(n_readme, s2_schedule, n_changelog) and "Not examined: what those reads give" not in flat(n_readme), "")
 
 # ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
-for ph in ITEM10_R15:
-    check(f"mutant caught: item 10 loses '{ph[:48]}'", bool(examined10_problems(drop_in_item(n_readme, 10, ph), n_changelog)))
-for ph in INTRO10_R15:
-    check(f"mutant caught: the Known limitations introduction loses '{ph[:48]}'", bool(examined10_problems(drop_phrase(n_readme, ph), n_changelog)))
+for ph in ITEM10_ALL:
+    check(f"mutant caught: item 10 loses '{ph[:48]}'", bool(all10(rd=drop_in_item(n_readme, 10, ph))))
+for ph in INTRO10:
+    check(f"mutant caught: the Known limitations introduction loses '{ph[:48]}'", bool(all10(rd=in_intro(n_readme, lambda s, ph=ph: drop_phrase(s, ph)))))
 for ph in CHANGELOG_R15D:
-    check(f"mutant caught: the CHANGELOG bullet of r15 (item 10) loses '{ph[:48]}'", bool(examined10_problems(n_readme, drop_phrase(n_changelog, ph))))
-check("mutant caught: the CHANGELOG bullet of r15 (item 10) removed", bool(examined10_problems(n_readme, drop_phrase(n_changelog, CHANGELOG_R15D[0]))))
-check("mutant caught: the old wording restored (item 10 titled 'naive start-time reads were not examined for the clock-change day' again)", bool(examined10_problems(n_readme.replace(NEW10_TITLE, OLD10_TITLE), n_changelog)))
-check("mutant caught: the old wording added to item 10 (every required phrase still there: the forbidden text alone kills it)",
-      bool(examined10_problems(n_readme.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + OLD10_TITLE), n_changelog)))
-check("mutant caught: the old 'Not examined: what those reads give' added to item 10", bool(examined10_problems(n_readme.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. Not examined: what those reads give."), n_changelog)))
-check("mutant caught: the old direction 'unknown (not examined)' restored in item 10", bool(examined10_problems(n_readme.replace("Direction: mixed, as listed.", "Direction: unknown (not examined)."), n_changelog)))
-check("mutant caught: the proposals sentence turned into 'implemented'", bool(examined10_problems(n_readme.replace("PROPOSED and NOT implemented (each needs the owner's decision)", "PROPOSED and implemented (each needs the owner's decision)"), n_changelog)))
-check("mutant caught: the proposals sentence turned into 'IMPLEMENTED in this change'", bool(examined10_problems(n_readme.replace("PROPOSED and NOT implemented (each needs the owner's decision)", "IMPLEMENTED in this change"), n_changelog)))
-check("mutant caught: 'NOT fail closed' removed (the finding turned into a fail-closed one)", bool(examined10_problems(drop_in_item(n_readme, 10, "NOT fail closed"), n_changelog)))
-check("mutant caught: 'NOT fail closed (reproduced)' softened to 'fail closed (reproduced)'", bool(examined10_problems(n_readme.replace("NOT fail closed (reproduced)", "fail closed (reproduced)"), n_changelog)))
-check("mutant caught: 'is NOT refused' softened to 'is refused'", bool(examined10_problems(n_readme.replace("is NOT refused", "is refused"), n_changelog)))
-check("mutant caught: 'NOT EXAMINABLE offline' turned into 'EXAMINED offline'", bool(examined10_problems(n_readme.replace("NOT EXAMINABLE offline:", "EXAMINED offline:"), n_changelog)))
-check("mutant caught: the proposals sentence of the CHANGELOG bullet turned into 'implemented'", bool(examined10_problems(n_readme, n_changelog.replace("PROPOSED and NOT implemented, each needing the owner's decision", "PROPOSED and implemented, each needing the owner's decision"))))
+    check(f"mutant caught: the CHANGELOG bullet of r15 (item 10) loses '{ph[:48]}'", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s, ph=ph: drop_phrase(s, ph)))))
+for ph in CHANGELOG_R30:
+    check(f"mutant caught: the CHANGELOG bullet of r30 (item 10) loses '{ph[:48]}'", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s, ph=ph: drop_phrase(s, ph)))))
+check("mutant caught: the CHANGELOG bullet of r15 (item 10) removed", bool(all10(cl=drop_phrase(n_changelog, CHANGELOG_R15D[0]))))
+check("mutant caught: the CHANGELOG bullet of r30 (item 10) removed", bool(all10(cl=drop_phrase(n_changelog, R30_MARK))))
+check("mutant caught: the r30 bullet moved before the r15 bullet it supersedes",
+      bool(all10(cl=n_changelog.replace(bullet_r15d(n_changelog), "@@R15@@").replace(bullet_r30(n_changelog), bullet_r15d(n_changelog)).replace("@@R15@@", bullet_r30(n_changelog)))))
+# the owner's named mutants
+check("mutant caught: the r15 wording restored (item 10 titled 'were EXAMINED offline ... there are findings and nothing was changed' again)", bool(all10(rd=n_readme.replace(NEW10_TITLE, R15_TITLE))))
+check("mutant caught: the [7]-era wording restored (item 10 titled 'naive start-time reads were not examined for the clock-change day' again)", bool(all10(rd=n_readme.replace(NEW10_TITLE, OLD10_TITLE))))
+for old in OLD10_ITEM:
+    check(f"mutant caught: the old sentence '{old[:48]}' added to item 10 (every required phrase still there: the forbidden text alone kills it)",
+          bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + old))))
+check("mutant caught: 'not verified on a real Home Assistant' dropped from item 10 (every place)", bool(all10(rd=drop_in_item(n_readme, 10, "not verified on a real Home Assistant"))))
+check("mutant caught: 'not verified on a real Home Assistant' dropped from the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: drop_phrase(s, "not verified on a real Home Assistant")))))
+check("mutant caught: 'implemented' left unqualified in item 10 (every required phrase still there: the over-claim guard alone kills it)",
+      bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. P-A is implemented."))))
+check("mutant caught: 'P-A is implemented offline' softened to 'P-A is implemented' in item 10", bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented offline", "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented")))))
+check("mutant caught: 'are implemented offline in R9' softened to 'are implemented in R9' in the introduction", bool(all10(rd=in_intro(n_readme, lambda s: sw(s, "are implemented offline in R9", "are implemented in R9")))))
+check("mutant caught: 'implemented' left unqualified in the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "Implemented offline in R9: P-A", "Implemented in R9: P-A")))))
+check("mutant caught: 'implemented' left unqualified in the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "were implemented offline by R9", "were implemented by R9")))))
+check("mutant caught: the proposals turned into 'IMPLEMENTED in this change' (unqualified) in item 10", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. IMPLEMENTED in this change."))))
+check("mutant caught: 'NOT fail closed' removed from item 10 (the finding turned into a fail-closed one)", bool(all10(rd=drop_in_item(n_readme, 10, "NOT fail closed"))))
+check("mutant caught: 'before R9, these two were NOT fail closed' softened to 'were fail closed'", bool(all10(rd=sw(n_readme, "these two were NOT fail closed", "these two were fail closed"))))
+check("mutant caught: 'was read as the first reading of that label and was not refused' softened to 'was refused' (the record of 19 Nov 2026 falsified)",
+      bool(all10(rd=sw(n_readme, "was read as the first reading of that label and was not refused", "was refused"))))
+check("mutant caught: 'NOT EXAMINABLE offline' turned into 'EXAMINED offline'", bool(all10(rd=sw(n_readme, "(and NOT EXAMINABLE offline)", "(and EXAMINED offline)"))))
+check("mutant caught: 'is still open' (P-F) turned into 'is done' in item 10", bool(all10(rd=sw(n_readme, "is still open: until it is done", "is done: since it was done"))))
+check("mutant caught: 'fully enforced' added to item 10", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: s + " The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The overrides are fully enforced."))))
+for word, text in (("verified", "P-A is verified on a real Home Assistant."), ("proven", "P-B is proven."), ("guaranteed", "The refusal is guaranteed."), ("safe to", "It is safe to install."),
+                   ("fixed", "The clock-change reads are fixed."), ("safe", "The start is safe.")):
+    check(f"mutant caught: '{word}' added to item 10 (an over-claim for the real system)", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + text))))
+for word, text in (("verified", "P-A is verified."), ("proven", "P-B is proven."), ("guarantee", "It gives a guarantee."), ("safe to", "It is safe to install.")):
+    check(f"mutant caught: '{word}' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s, text=text: s + " " + text))))
+    check(f"mutant caught: '{word}' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s, text=text: s + " " + text))))
+    check(f"mutant caught: '{word}' added to the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s, text=text: s + " " + text))))
+check("control: 'not verified' and 'unverified' are accepted by the over-claim guard", not overclaim_problems("x", "It is not verified on a real Home Assistant, it is unverified and unproven; P-A is implemented offline; it is not implemented.", strict=True))
+check("mutant caught: the offline proof described as a test on a real Home Assistant",
+      bool(all10(rd=drop_in_item(n_readme, 10, "an offline proof of the offline model only, not a test on a real Home Assistant").replace("REMOVED", "a proof on a real Home Assistant"))))
+check("mutant caught: the P-F sentence dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "P-F (a supervised read-only template check of the three conversions"))))
+check("mutant caught: the firmware START gate sentence dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "the dongle firmware's START gate is not changed (a flash is a separate decision)"))))
+check("mutant caught: the firmware START gate called changed in item 10", bool(all10(rd=sw(n_readme, "the dongle firmware's START gate is not changed (a flash is a separate decision)", "the dongle firmware's START gate is changed (a flash is a separate decision)"))))
+check("mutant caught: 'arm time only' dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "a start helper edited while the schedule is armed is not checked again"))))
+check("mutant caught: the one-hour (UK only) limit of the probe dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "right for the UK clock change only"))))
+check("mutant caught: the proposals sentence of the r15 bullet restored ('PROPOSED and NOT implemented, each needing the owner's decision')",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "PROPOSED on 19 Nov 2026, each needing the owner's decision", "PROPOSED and NOT implemented, each needing the owner's decision")))))
+check("mutant caught: the proposals sentence 'PROPOSED and NOT implemented' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " PROPOSED and NOT implemented."))))
+check("mutant caught: 'its proposals are not implemented' restored in the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " its proposals are not implemented."))))
+check("mutant caught: 'its proposals are not implemented' (README sentence) restored", bool(all10(rd=sw(n_readme, "everything else in it is unchanged", "nothing was changed and its proposals are not implemented"))))
+check("mutant caught: 'there was no backstop on 19 Nov 2026' turned back into 'there is no backstop' in the r15 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "there was no backstop on 19 Nov 2026", "there is no backstop")))))
+check("mutant caught: the r15 finding restored without its date ('Reproduced and NOT fail closed') in the r15 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: s + " Reproduced and NOT fail closed: a start time typed as a skipped local label is not refused."))))
 check("mutant caught: item 10 removed (22 items)", bool(limitations_problems(n_readme[:n_readme.index("\n10. **", n_readme.index(LIMITS_HEADING))] + n_readme[n_readme.index("\n11. **", n_readme.index(LIMITS_HEADING)):])))
-check("mutant caught: item 10 renumbered", bool(examined10_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE), n_changelog)) or bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
-check("mutant caught: item 10 loses its direction of failure", bool(limitations_problems(n_readme.replace("Direction: mixed, as listed.", "Note: as listed."))))
+check("mutant caught: item 10 renumbered", bool(all10(rd=n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))) or bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
+check("mutant caught: item 10 renumbered (the limitations check alone)", bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
+_h13 = n_readme.index(LIMITS_HEADING)
+_e13 = n_readme.index("\n### ", _h13 + 1)
+check("mutant caught: the item count changed (a 24th item added)", bool(limitations_problems(n_readme[:_e13] + "\n24. **A new item.** Direction: neutral. You would see: nothing.\n" + n_readme[_e13:])))
+check("mutant caught: the item count changed (item 23 removed)", bool(limitations_problems(n_readme[:n_readme.index("\n23. **", n_readme.index(LIMITS_HEADING))] + "\n\n" + n_readme[n_readme.index("\n### ", n_readme.index("\n23. **", n_readme.index(LIMITS_HEADING))):])))
+check("mutant caught: item 10 loses its direction of failure", bool(limitations_problems(sw(n_readme, "Direction: mixed, as listed.", "Note: as listed."))))
 check("mutant caught: item 10 loses its 'You would see'", bool(limitations_problems(drop_in_item(n_readme, 10, "You would see:"))))
-check("mutant caught: item 10 loses 'clock-change day' from its title", bool(limitations_problems(n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))))
+check("mutant caught: item 10 loses 'clock-change day' from its title", bool(limitations_problems(n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))) and bool(all10(rd=n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))))
 check("mutant caught: 'mixed, as listed' is NOT accepted as the direction of any other item (item 1)",
-      bool(limitations_problems(n_readme.replace("Direction: fail open for that one number", "Direction: mixed, as listed. That one number"))))
-check("mutant caught: item 10 claims the overrides are fully enforced", bool(examined10_problems(n_readme.replace("The Free Power schedule package behaves identically.", "The Free Power schedule package behaves identically (fully enforced)."), n_changelog)))
-check("mutant caught: the CHANGELOG bullet of r15 (item 10) claims full enforcement", bool(examined10_problems(n_readme, n_changelog.replace("The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. The overrides are fully enforced."))))
-check("mutant caught: item 10 is not ASCII", bool(examined10_problems(n_readme.replace("a 25 hour night", "a 25 hour night " + chr(0x2013)), n_changelog)))
-check("mutant caught: item 10 names a token", bool(examined10_problems(n_readme.replace("a 25 hour night", "a 25 hour night, token"), n_changelog)))
+      bool(limitations_problems(sw(n_readme, "Direction: fail open for that one number", "Direction: mixed, as listed. That one number"))))
+check("mutant caught: item 10 is not ASCII", bool(all10(rd=sw(n_readme, "a 25 hour night", "a 25 hour night " + chr(0x2013)))))
+check("mutant caught: item 10 names a token", bool(all10(rd=sw(n_readme, "a 25 hour night", "a 25 hour night, token"))))
+check("mutant caught: the r30 bullet is not ASCII", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " " + chr(0x2013)))))
+check("mutant caught: the clock-change refusal text quoted in item 10 differs from the packages' by one letter", bool(all10(rd=sw(n_readme, CLOCK_TEXT, CLOCK_TEXT.replace("pick another", "pick anothe")))))
 check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
 check("mutant caught: a copy of the Stage 3 limitation sentence added to item 10 (the sentence must stand once)",
       bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("\n10. **" + NEW10_TITLE, "\n10. " + LIMITATION + " **" + NEW10_TITLE)})))
-check("control: the untouched tree is not flagged by the item 10 checks", not examined10_problems(n_readme, n_changelog) and not limitations_problems(n_readme) and not status_problems(n_readme) and not places_problems(texts))
+# the package ties
+check("mutant caught: the clock-change refusal moved after 'must be in the future' in the Export to Grid package",
+      bool(package_tie_problems(n_dump.replace(f'value: "{CLOCK_TEXT}"', "@@C@@").replace(FUTURE_VALUE, f'value: "{CLOCK_TEXT}"').replace("@@C@@", FUTURE_VALUE), n_free)))
+check("mutant caught: the clock-change refusal moved after 'must be in the future' in the Charge Battery package",
+      bool(package_tie_problems(n_dump, n_free.replace(f'value: "{CLOCK_TEXT}"', "@@C@@").replace(FUTURE_VALUE, f'value: "{CLOCK_TEXT}"').replace("@@C@@", FUTURE_VALUE))))
+check("mutant caught: the repeated-time probe is no longer a fixed one hour (3601 s) in the Export to Grid package", bool(package_tie_problems(n_dump.replace("(t + 3600)", "(t + 3601)"), n_free)))
+check("mutant caught: the repeated-time probe is no longer a fixed one hour (3500 s) in the Charge Battery package", bool(package_tie_problems(n_dump, n_free.replace("(t - 3600)", "(t - 3500)"))))
+def with_second_trigger(pk: str) -> str:
+    """The package with a second trigger (a Home Assistant start event) added to its arm validation: arm time only is then no longer true."""
+    new = re.sub(r"(- id: \S+_schedule_arm_validation\n    alias: .*\n    mode: restart\n    triggers:\n(?:      .*\n)+?)(    actions:)", r"\1      - trigger: homeassistant\n        event: start\n\2", pk, count=1)
+    assert new != pk
+    return new
+
+
+check("mutant caught: the Export to Grid arm validation gains a second trigger (arm time only is no longer true)", bool(package_tie_problems(with_second_trigger(n_dump), n_free)))
+check("mutant caught: the Charge Battery arm validation gains a second trigger (arm time only is no longer true)", bool(package_tie_problems(n_dump, with_second_trigger(n_free))))
+check("mutant caught: the Export to Grid TOU walk goes back to wall-clock minutes", bool(package_tie_problems(n_dump.replace("k * 60) | timestamp_local", "k) | timestamp_local"), n_free)))
+check("mutant caught: the Charge Battery package gains a TOU overlap check (item 10 says it has none)", bool(package_tie_problems(n_dump, n_free + "\n# a TOU slot with a charge source set\n")))
+check("mutant caught: the Export to Grid header stops saying that the firmware is not changed", bool(package_tie_problems(n_dump.replace("is NOT changed here (a firmware change is a separate flash)", "is changed here"), n_free)))
+check("mutant caught: the Export to Grid header stops saying that P-F is still open", bool(package_tie_problems(n_dump.replace("(proposal P-F) is still open", "(proposal P-F) is done"), n_free)))
+check("mutant caught: the unreadable-label test removed from the Charge Battery package", bool(package_tie_problems(n_dump, n_free.replace("{{ t <= 0", "{{ false"))))
+check("mutant caught: the r15 sentence 'PROPOSED and NOT implemented' added to a package header", bool(everywhere_problems({**n_files, "the Export to Grid package": n_dump + "\n# PROPOSED and NOT implemented\n"})))
+check("mutant caught: the r15 sentence 'its proposals are not implemented' added to docs/DUMP_TO_GRID_V1.md", bool(everywhere_problems({**n_files, "docs/DUMP_TO_GRID_V1.md": n_doc + "\nits proposals are not implemented.\n"})))
+check("mutant caught: 'NOT fail closed (reproduced)' added to the CHANGELOG", bool(everywhere_problems({**n_files, "the CHANGELOG": n_changelog + "\nNOT fail closed (reproduced)\n"})))
+check("control: the untouched tree is not flagged by the item 10 checks", not all10() and not limitations_problems(n_readme) and not status_problems(n_readme) and not places_problems(texts) and not everywhere_problems(n_files))
 
 print("")
 if FAILURES:
