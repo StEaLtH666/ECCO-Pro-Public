@@ -1534,12 +1534,24 @@ test("household closed loop: at least 300 seeded scenarios, demand and solar tha
   void staOver;
 });
 
+// The at-risk counter of the flap test below: a counted rise must be an INCREASE_FOR_DEADLINE made while the target is at risk, unreachable or past
+// its deadline (a rise toward the ceiling that is a deadline need and is never held). Returns what is wrong with a record, or null.
+const AT_RISK_RISE_STATUSES: readonly string[] = ["TARGET_AT_RISK", "TARGET_UNREACHABLE", "DEADLINE_PASSED"];
+interface AtRiskRiseRecord { change: string; status: string; codes: readonly string[]; recordCode: string }
+function atRiskRiseProblem(r: AtRiskRiseRecord): string | null {
+  if (r.change !== "INCREASE") return "not an increase: " + r.change;
+  if (r.recordCode !== "INCREASE_FOR_DEADLINE" || !r.codes.includes("INCREASE_FOR_DEADLINE")) return "not an INCREASE_FOR_DEADLINE: " + r.recordCode;
+  if (!AT_RISK_RISE_STATUSES.includes(r.status)) return "status " + r.status + " is not TARGET_AT_RISK, TARGET_UNREACHABLE or DEADLINE_PASSED";
+  return null;
+}
+
 test("noisy demand and solar inputs cannot make the setpoint flap: where the headroom does not bind the plan is identical to the exact-input plan, where it binds a decrease is only followed by an increase inside the dwell when the deadline needs it", () => {
   let identical = 0;
   let bindingRuns = 0;
   let reversals = 0;
   let unneeded = 0;
   let atRiskRises = 0;
+  const atRiskRiseRecords: (AtRiskRiseRecord & { where: string })[] = [];
   let noisyRuns = 0;
   let changesNoisy = 0;
   let changesClean = 0;
@@ -1585,7 +1597,10 @@ test("noisy demand and solar inputs cannot make the setpoint flap: where the hea
           // v3 G1: a rise toward the CEILING in an at-risk state (the limit does not bind) is a deadline need and is never held; only a binding cap's
           // recovery waits, so only that case can be an unneeded reversal
           if (tk.decision.neededW === null && tk.decision.limitedBy === "GRID_HEADROOM") unneeded++;
-          else if (tk.decision.neededW === null) atRiskRises++;
+          else if (tk.decision.neededW === null) {
+            atRiskRises++;
+            atRiskRiseRecords.push({ where: "scenario " + id + " seed " + seed + " t " + cur.t, change: tk.decision.change, status: tk.decision.status, codes: tk.decision.codes, recordCode: cur.code });
+          }
         }
       }
     }
@@ -1594,6 +1609,18 @@ test("noisy demand and solar inputs cannot make the setpoint flap: where the hea
   assert.ok(identical >= 150, "enough runs where the headroom never bound: " + identical);
   assert.ok(bindingRuns >= 50, "and enough where it did: " + bindingRuns);
   assert.equal(unneeded, 0, "no flapping: an increase right after a decrease only when the deadline needs it");
+  // The reversals counted as at-risk rises (an unknown needed rate and a limit that is the ceiling, so not held) are printed above; they are also
+  // asserted: each one is an INCREASE_FOR_DEADLINE made while the target is at risk, unreachable or past its deadline, never a plain increase.
+  assert.ok(atRiskRises > 0 && atRiskRiseRecords.length === atRiskRises, "the at-risk counter was exercised and every counted rise was recorded: " + atRiskRises + "/" + atRiskRiseRecords.length);
+  const notDeadlineRises = atRiskRiseRecords.map((r) => ({ where: r.where, problem: atRiskRiseProblem(r) })).filter((x) => x.problem !== null);
+  assert.deepEqual(notDeadlineRises, [], "every counted at-risk rise is an INCREASE_FOR_DEADLINE with status TARGET_AT_RISK, TARGET_UNREACHABLE or DEADLINE_PASSED");
+  // the check itself can fail: the three statuses pass; a plain increase (any other status), a decrease or another code does not
+  const sampleRise: AtRiskRiseRecord = { change: "INCREASE", status: "TARGET_AT_RISK", codes: ["INCREASE_FOR_DEADLINE"], recordCode: "INCREASE_FOR_DEADLINE" };
+  for (const st of AT_RISK_RISE_STATUSES) assert.equal(atRiskRiseProblem({ ...sampleRise, status: st }), null, st);
+  for (const st of ["OK", "DEGRADED", "NOTHING_TO_CHARGE", "NO_DATA", "NO_SAFE_CEILING", "INVALID"]) assert.notEqual(atRiskRiseProblem({ ...sampleRise, status: st }), null, "a plain increase in status " + st + " is not an at-risk rise");
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, change: "DECREASE" }), null);
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, recordCode: "DECREASE_SAVING" }), null);
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, codes: ["HELD_DWELL"] }), null);
   assert.ok(changesNoisy / noisyRuns <= 1.5 * (changesClean / 360) + 0.5, "noise does not multiply the changes: " + changesNoisy / noisyRuns + " per run vs " + changesClean / 360 + " clean");
 });
 

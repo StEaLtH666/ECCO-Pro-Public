@@ -113,11 +113,20 @@ charge draw from a meter reading).
 lease starts, and the inverter's own AC and DC figures differ by several percent. So the basis is explicit: `GRID_AC` (S is grid-side watts: grid
 draw = S), `BATTERY_DC` (S is battery-side watts: grid draw = S / efficiency) or `UNSETTLED` (the default: every cap is the lower of the two readings
 and holds under either convention). The efficiency of that conversion is `setpointConversionEff` (default 0.85: pessimistic, UNMEASURED; not the
-charge-energy `chargeEff`, which only shapes the SOC projection and stays on the pessimistic side in every basis). The cost of the safe default is
+charge-energy `chargeEff`). The cost of the safe default is
 visible: the grid cap is 15 percent lower than a settled grid-side basis would allow. Settle the basis by live proof and measure the ratio to remove it.
 Named ceilings may say which side they are measured on (`NamedCeiling.basis`): an unlabelled ceiling is already in setpoint units (an owner limit in the
 editor's own unit) and is never converted; a `BATTERY_DC` ceiling is never raised to a grid-side equivalent; a `GRID_AC` ceiling is converted DOWN by
 `setpointConversionEff` unless the basis is `GRID_AC`.
+
+**The charge efficiency is a separate, unmeasured assumption.** `chargeEff` (default 0.95) only shapes the state-of-charge projection. The projection
+adds `delivered watts x chargeEff` of stored energy for each minute, the same formula in every basis (the delivered watts are in setpoint units: the least
+of the setpoint, the ceiling times the taper acceptance and, with household input, the headroom at that minute). Under `GRID_AC` the projection therefore gains the setpoint times 0.95: the default is
+on the pessimistic side only if the real grid-to-battery (AC-to-DC) efficiency is at or above 0.95, and if the real figure is below it the projection is
+optimistic (the battery gains less than the plan shows). Under `BATTERY_DC` the setpoint is already in battery-side watts and the code still applies the
+same factor to them, so there it is a further unmeasured factor between those watts and the stored energy, read the same way; under `UNSETTLED` the same
+formula runs on the setpoint as given. The default is not changed here; a measured efficiency is on the list of what is needed before an actuator exists
+(item 4 below).
 
 - Grid import = `S / scale + demand - solarUsed` (`gridImportW`), where `scale` is 1 for `GRID_AC` and `setpointConversionEff` otherwise.
 - The cap on S = `scale x max(0, gridLimit - demandPeak + solarCredited)` (`batteryHeadroomW` gives the battery-side figure for a grid-side limit at the
@@ -217,7 +226,10 @@ Before any actuator exists:
 3. Live proof of the charge-power response at low setpoints and of the BMS current limiting.
 4. Settle the setpoint basis (grid-side watts, battery-side watts, or amps at which voltage) and measure the conversion efficiency. Until then
    `setpointBasis` stays `UNSETTLED` and `setpointConversionEff` pessimistic and unmeasured: the safe default costs about 15 percent of the grid cap.
-5. Measure the BMS taper, the top-of-charge hold and the live BMS limits or derating; carry the age of every ceiling (`NamedCeiling.ageMin`).
+   Measure the charge efficiency (`chargeEff`, default 0.95) too: it is an unmeasured assumption, and the state-of-charge projection is optimistic if the
+   real efficiency is below it.
+5. Measure the BMS taper, the top-of-charge hold and the live BMS limits or derating; carry the age of every ceiling (`NamedCeiling.ageMin`). Until a caller
+   supplies ages, a named ceiling passed without an age is treated as current and trusted, however old the reading behind it is.
 6. A stop-at-target mechanism (Free Power has no SOC stop): the model only says `stopRecommended`, it has no STOP change kind.
 7. The household side: a KNOWN owner-set grid limit (with an age when it is read from a device); unknown demand stays `FALLBACK`; forecasts carry an age;
    no solar inside the hard limit unless a MEASURED forecast skill gate exists (`solarCreditPct` stays 0; the confidence was 0 in November).
@@ -235,8 +247,13 @@ explicit; fallbacks respect the window end; SOC plausibility; an ambiguous clock
 - Demand above its forecast beyond the margin can still cross the grid limit (the closed loop prints how often); the margin is provisional.
 - Where the grid headroom binds and is recovering, a rise waits for the hysteresis and the dwell (anti-flapping): the at-risk state lasts longer than it
   would without the hold. A stale named ceiling that is lower than every fresh one still caps until it is refreshed.
-- The Energy Actions card bundle contains the model's default constants as dead code (the card never calls the model); a rebuild after this change is not
-  byte-identical to the committed bundle, which was therefore NOT rebuilt (an open owner decision: re-pin it, or leave the dead constants stale).
+- The recovery hold also delays a rise toward a BINDING cap in an at-risk state, up to the dwell (30 minutes by default), although the rise never goes above
+  the cap. This is a documented trade-off and an owner parameter decision: hold only after a cap-driven decrease, or shorten the hold while the target is at risk.
+
+Settled, kept here because it was once an open question: the Energy Actions card bundle carries the model's default constants as inert dead code (the card
+never calls the model). The bundle was rebuilt from these sources (commit 87c71f3) and is declared by the pin-chain entry `epc4` (commit 8a7c054). The two
+commits can only be dropped as a pair: dropping both returns to the older bundle that the older pin declares, and each one alone leaves the chain suites
+red. The card's behaviour and its golden renders are unchanged.
 
 ## Run the tests
 
