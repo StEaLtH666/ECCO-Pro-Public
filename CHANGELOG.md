@@ -10,6 +10,20 @@ Development before the first public release happened in a private repository; se
 ## [Unreleased]
 
 ### Added
+- **Intelligence PV skill gate, planning fix** (offline, SHADOW engine, the gate stays OFF by default; nothing installed, deployed or
+  switched on): with the gate ON a fallback to persistence could LOWER the overnight charge target against the ungated engine (a
+  synthetic bright-spell world: 80 to 70 percent). The published forecast is unchanged (persistence, LOW, the scoreable record,
+  `to_dict()`). Planning now (1) sizes on a band that never exceeds persistence or the ungated corrected value and keeps the ungated spread
+  below the median, so the Planner's pessimistic PV cannot rise (proof in `conservative_band`), and (2) as a guard computes the advice a
+  second time exactly as the gate-OFF engine would have, in the V1 engine and in the shadow cycle's charge target, and publishes the higher
+  recommended target, so the recommended target is never below the gate-OFF one, by construction. A fallback also caps overall confidence at
+  LOW and adds a `PV_SKILL_GATE_FALLBACK` reason (and `PV_SKILL_GATE_UNGATED_KEPT` when the guard published the ungated advice). Written
+  failing-first: `intelligence/tests/test_intel_pv_gate_planning.py` (frozen synthetic generators `_pv_worlds.py` and `_pv_worlds2.py`, 600
+  regression worlds and 600 pre-registered unseen worlds, 57 in-memory mutants; a full run takes about nine minutes). The two earlier PV
+  suites (`test_intel_pv_skill_gate.py`, `test_intel_pv_recent_envelope.py`) now use the repository's check()/FAILURES exit-code style that
+  `registry/tests/test_offline_suite_exit_codes.py` requires, with every check unchanged
+  ([docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md](docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md)). Enabling the gate remains a separate
+  owner authorisation.
 - **Intelligence PV recent-output envelope** (offline, SHADOW engine, OFF by default, a separate change that can be dropped without
   the persistence-skill gate): `PvModel(..., recent_envelope=True)` tightens the loose `recent_max` ceiling (2.5 x the best of the
   last 30 days) to the lower of it and 1.25 x the best actual of the last 14 days (at least 7 observed days, else the legacy ceiling stays); a corrected

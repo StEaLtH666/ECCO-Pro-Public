@@ -3,8 +3,16 @@
 Status: source and tests only. **Nothing is installed, deployed or switched on by this change; enabling it anywhere is a separate
 owner authorisation.** SHADOW engine, applies nothing, no new control path.
 
-Code: `intelligence/pv.py` (`PvModel.skill_gate_verdict`, `forecast_day`). Tests: `intelligence/tests/test_intel_pv_skill_gate.py`
-(synthetic data only, with 35 mutants of the implementation applied in memory).
+Code: `intelligence/pv.py` (`PvModel.skill_gate_verdict`, `forecast_day`, and for the planning fix `PvForecast.planning_band`,
+`conservative_band`, `prefers_ungated`), `intelligence/engine.py`, `intelligence/shadow_cycle.py`. Tests: `intelligence/tests/test_intel_pv_skill_gate.py`
+(synthetic data only, with 35 mutants of the implementation applied in memory) and, for the planning fix,
+`intelligence/tests/test_intel_pv_gate_planning.py` with the frozen world generators `intelligence/tests/_pv_worlds.py` and
+`intelligence/tests/_pv_worlds2.py` (synthetic data only, 57 mutants applied in memory; a full run takes about nine minutes, nearly all of it
+the property test over 1,200 worlds).
+
+**Status of the planning fix (20 Nov 2026, round 2): complete. With the gate ON the recommended charge target is never below the gate-OFF
+engine's, by construction on the fallback path and verified on unseen worlds. Nothing is enabled or deployed; enabling remains blocked.** See
+"The planning fix" below and "Before it is enabled anywhere".
 
 ## The problem it addresses
 
@@ -40,6 +48,100 @@ corrected forecast the result is bit-identical to the ungated one (no extra note
 The constants (`SKILL_GATE_DAYS` 14, `SKILL_GATE_MIN_DAYS` 8, `SKILL_GATE_MARGIN` 0.9) were fixed before any replay result was looked
 at and are not tuned to one. The gate is a fallback to a plain estimate, never a new forecast: it publishes only what `_persistence` already publishes.
 
+## The planning fix: the gate must not lower a charge target (20 Nov 2026, two rounds)
+
+**The defect.** After a fallback, the published persistence value can be HIGHER than the corrected one (a bright spell followed by a
+dull day) and its p10 far above a widened corrected p10. The engine sized the overnight target on that published value, so with the
+gate ON the target could fall below what the ungated engine recommends: in a synthetic whole-engine world (a source with no skill, a
+bright spell) from 80 to 70 percent, the unsafe direction (less battery retained). A fallback also added no LOW cap and no reason code,
+unlike a rejected forecast. Round 1 fixed most of it (planning on the per-quantile lower of the two values); a validation on fresh
+worlds then lowered the recommended target once more (80 to 75 in 1 of 300) and the unrounded pessimistic-case target in 5 of 300.
+That is why round 2 exists: the owner's requirement is a guarantee, not a rate.
+
+**What is PUBLISHED does not change** (persistence, LOW, 0.3, the scoreable `pv_kwh:day` record, `to_dict()`,
+`PV_TOMORROW_SUMMARY_KEYS`, the 2048-byte summary, the date scoping, `valid_until`, the reason codes of the `pv_tomorrow` item). What
+PLANNING sizes energy actions on does. Two layers, independent of each other:
+
+**Layer 1: the planning band keeps the ungated spread (`conservative_band`).**
+- `PvForecast.planning_band`: p50 and p90 are the LOWER of the persistence value the gate published and the value the UNGATED
+  corrected path would have produced for the same inputs (after the unchanged plausibility guard); p10 is that lower value moved down
+  further by as much as the median was lowered below the corrected median, floored at zero. So the band keeps at least the ungated
+  spread below the median. Why it matters: the Planner's pessimistic PV for a day is `p50 - k (p50 - p10)`, floored at zero, with
+  `k = band_kappa x 1.5 (LOW widening) x band inflation`, which is above 1 in the usual LOW case (0.71 x 1.5 = 1.06, up to 3.4), and
+  then DEcreases when p50 rises. A plain per-quantile minimum (round 1) lowers the median but may leave p10 where it was, and the
+  pessimistic PV can then be HIGHER than the ungated one.
+- Proof (also in the docstring). With p50' <= p50c and spread s' = p50' - p10' >= s_c = p50c - p10c: `p50' - k s' <= p50' - k s_c <= p50c - k s_c`
+  for every k >= 0 (the first step because the spread is at least as wide, the second because the median is not higher). The rule
+  gives s' >= s_c: p10' = min(lower p10, p10c - (p50c - p50')) so s' >= p50' - p10c + p50c - p50' = s_c. The clamp at zero can raise p10' to
+  0 and shrink the spread; then the path is `p50' (1 - k)`, which for k <= 1 is at most `p50c (1 - k) <= p50c - k s_c` (because p10c >= 0) and for
+  k > 1 is negative, which the Planner floors at zero, so the clamp only ever moves in the conservative direction. Every quantile is at or below
+  both inputs at the same rank. The identity holds when the corrected median is the lower one.
+- `planning_inflation` is the larger of the published band inflation and the ungated one (persistence's own is always 1). Today's remaining
+  PV is the LOWER of the re-anchoring on the planning median and on the ungated median (the 2 kWh threshold of the re-anchoring is not
+  monotone in the median, so the planning median alone could otherwise assume MORE remaining PV just below it).
+- A fallback caps overall confidence at 0.45 (LOW) exactly like a rejected forecast, adds `PV_SKILL_GATE_FALLBACK` to
+  `confidence.downgrade_reasons` and one reason and one WATCH uncertainty entry per fallback day to the advice.
+
+**Layer 2: the guard (by construction), in BOTH advisor paths.** On a day set where the gate fell back, the advice is computed TWICE:
+on the planning values (layer 1) and exactly as the gate-OFF engine would have computed it (the ungated corrected PV days, the confidence
+label the OFF engine computes BEFORE the gate's LOW cap, the ungated band inflation, today re-anchored on the ungated median). The advice with
+the strictly HIGHER recommended charge target is published; a tie keeps the planning run (`pv.prefers_ungated`; a target that is not a finite
+number keeps the planning run). When the ungated advice is published the gate's LOW cap, `PV_SKILL_GATE_FALLBACK` and its notes still apply
+and one more plain reason, `PV_SKILL_GATE_UNGATED_KEPT`, says that the ungated corrected forecast would have given the higher target and was kept.
+- V1 engine (`engine.py`): `advise(...)` runs twice on a fallback; the replicated gate-OFF run is checked in every world of the suite to give
+  exactly the gate-OFF engine's overnight target and safe-export block.
+- Shadow cycle (`shadow_cycle.py`): `advise_charge_target` runs twice; the planning run takes no PV credit on a fallback (fail closed, label LOW),
+  the second run takes the credit the gate-OFF cycle would have offered (its p10 and label). Because the planning run takes no credit, its target
+  can only be at or above the other, so in this path the guard is a pure safeguard against a later change of the credit rule (tested with a lowered
+  planning target injected). The V1 target inside the cycle comes from the engine and has the engine's guard.
+- Without a fallback (gate OFF, the gate keeps the corrected forecast, or the forecast is REJECTED) the code path, the output and the cost are
+  those of the pre-fix tree: nothing is computed twice and the whole report is identical with the gate ON and OFF.
+
+**The guarantee, stated precisely.** The recommended charge target (the V1 engine's `recommended_target_soc_pct` and the V1.1 charge target of
+the shadow cycle) with the gate ON is never below what the gate-OFF engine would have recommended for the same inputs: **by construction on the
+fallback path** (the gate-OFF answer is recomputed and the higher target published) and **verified on 600 unseen engine worlds and
+200 unseen shadow-cycle worlds** (0 violations), and on the 600 regression worlds of round 1. The other items of the advice (safe export,
+trajectories, reasons) come from the advice that was published.
+
+**What it does NOT guarantee.**
+- The target may be HIGHER than needed: the gate can only raise a target, and with a LOW label and a fallback it often does (in the real-PV replay
+  below it raised the fictional house's target on 31 of 49 days). More battery is retained, at a cost in cheap-tariff energy that this
+  change does not price.
+- Persistence can lag a regime change (a long dull spell followed by a bright day, or the reverse); the published forecast is still persistence
+  and can be wrong in either direction. Only the energy actions are protected, not the forecast.
+- It is the ADVICE that is protected. It is advisory SHADOW: nothing in this change applies, writes or schedules anything, and nothing is enabled.
+- The guarantee is only as good as the replication of the gate-OFF engine: if a later change alters how the gate-OFF engine builds its Planner
+  without the guard being updated, the equality checks of the suite (the ungated advice IS the gate-OFF answer, in every world) fail.
+- When the ungated advice is published, its other items (safe export, trajectories) are the gate-OFF engine's, computed with the OFF confidence
+  label; the published `confidence` block stays the capped LOW. On the worlds of the suite the guard never needed to fire in the real code (the
+  spread-preserving band was enough: 0 of 1,200 engine worlds and 0 of 200 cycle worlds); it was exercised by injecting broken planning rules.
+- The compute of the planning step is doubled on a fallback day set.
+
+**Evidence (synthetic, written failing-first; counts only).**
+- Failing-first, round 2: the new checks were run against the unchanged round-1 code first: 62 checks failed (world 8077: 80 to 75 with the round-1
+  band and 80 to 70 with persistence unchanged; no guard; the spread not kept: on 4000 random band pairs the round-1 band's pessimistic PV was
+  above the ungated one in 1571 of 32000 pairs x k; no `prefers_ungated`; on the 300 worlds of 8000-8299: I1 1, I3 5, I7 106, I8 202 violations).
+- Seeds 7000-7299 and 8000-8299 (600 worlds) informed the round-2 decision and are BURNED; they stay as regression: with the fixed code 0
+  violations of I1-I8, the recommended target never lowered (raised in 97 and 93 worlds, equal in 203 and 207), the unrounded pessimistic-case
+  target never lowered (round 1: 2 and 5 worlds), what the engine publishes about PV byte-identical to the pre-fix tree in every world.
+- UNSEEN range, pre-registered before the code under test ran on it (`_pv_worlds2.py`, eight regimes: the six of round 1 plus a stale persistence
+  after a long dull spell and a skilled source whose forecast the gate keeps; 600 worlds, seeds 9000-9599; 200 shadow-cycle worlds of the same range):
+  all pre-registered criteria met with ZERO violations: the recommended target with the gate ON was raised in 189 worlds, equal in 411 and lowered in 0 (the gate as it was before any fix lowered it in 212 of the same 600 worlds); the target stayed within [desired minimum, max SOC] with the reserve policy, floor and SHADOW untouched (I2: 0); the unrounded pessimistic-case target never lower (I3: 0); what the engine publishes about PV byte-identical to the pre-fix tree over all 600 worlds in both modes (I4); a world without a fallback day identical ON and OFF (I5: 0); the LOW cap, the code and one reason and one uncertainty entry per fallback day (I6: 0); the planning band, spread and pessimistic PV checks (I7: 0); the guard's consistency (I8: 0). The gate fell back in 375 of the 600 worlds. Shadow cycle: the V1.1 charge target not lowered (I9a) and the V1 target inside the cycle not lowered (I9b) in 200 of 200 worlds (a fallback in 116); the plan's headroom ceiling lower in 0 and the safe-export advice above the gate-OFF one in 0 worlds (informational). The guard itself published the ungated advice in 0 of these worlds (the planning band alone was enough).
+  For scale, the gate as it was before any fix lowered the recommended target in 212 of these 600 worlds (35 percent).
+- Mutation: 57 in-memory mutants of the band and the guard (the old per-quantile minimum, p10 not clamped, the guard missing in the engine and in the cycle,
+  the guard picking the lower target, a flipped tie rule, the ungated run using the LOW label, the ungated PV days or inflation of the planning run, today's
+  re-anchor on the planning median in the ungated run, the guard result without its reason or cap, ...) all killed. One mutant ("the ungated run uses the
+  planning inflation") is equivalent (the planning inflation is by construction the ungated one) and was replaced by one that drops the inflation.
+
+**Real-data replay (offline, counts only; one site, one autumn).** The offline PV series holds daily actuals and the day-ahead blend only: no hourly
+load, no SOC, no tariff windows, no reserve or battery settings. A replay of the SITE's own targets is therefore impossible and was not done. Two
+replays on the 49 target days 27 Sep - 14 Nov, re-run on the final code: (A) the real `PvModel` on the real PV series: the gate fell back on 49 of 49
+days and kept the corrected forecast on 0; the pre-fix gate published a value above the ungated corrected one in some quantile on 33 of them; the
+planning band exceeded the ungated band on 0 days and the published forecast differed from the pre-fix one on 0 days; (B) a HYBRID, the real engine path with
+the real PV days against a fictional house and battery (NOT the site's targets): the pre-fix gate lowered the overnight target on 16 of 49 days (33 percent;
+5 to 35 points), the fixed gate on 0 (raised on 31, equal on 18), the unrounded pessimistic-case target below the ungated one on 0 days (round 1: 1), confidence
+label LOW on all 49 fallback days, the reason code on all 49.
+
 ## Switch and default
 
 `PvModel(history, cfg, forecasts, skill_gate=None)`; `None` takes `PV_SKILL_GATE_DEFAULT`, which is **False** in this change. The
@@ -67,20 +169,26 @@ To turn it on in a test or an offline run pass `skill_gate=True`. Wiring it into
 - 'Tomorrow' is evaluated while the current day is still in progress: today's actual counts only once at least 90 % of its hours exist
   (as for the ratio), so the decision can change between a morning and an evening run on the same day.
 - One 0.9 margin and a 14-day window are one choice among many; the offline tests pin the behaviour around them, not their optimality.
-- **What the replay on real data shows (kept offline): the gate kept the corrected forecast on 0 of 39 days (12 Oct to 19 Nov, one site, one autumn).**
+- **What the replay on real data shows (kept offline): the gate kept the corrected forecast on 0 of 39 days (12 Oct to 19 Nov) and, in the planning replay, on 0 of 49 days (27 Sep to 14 Nov); one site, one autumn.**
   On that data it therefore equals "always publish persistence"; the replay's passes only say that persistence beat the corrected path at that
   site that autumn. There is no real-data evidence of how it behaves where the corrected path has skill (only synthetic tests cover that).
 - A step change in the actuals can fool it: when the actuals step from dull to bright and the persistence baseline lags, a source with no
   skill can briefly beat the lagging baseline and be kept (reproduced on a synthetic world). There is no hysteresis, and no test of flapping near the 0.9 margin.
 - Only the chosen (best-error) source is gated: if it fails but another source would pass, persistence is published (a test pins this).
-- The fallback leaves no structured trace: the gate verdict (day count and the two errors) is only in the note text, the reason codes are identical with it on and off.
-- **Before it is enabled anywhere (advisor effect, not assessed here).** A persistence `pv_tomorrow` can be HIGHER than the corrected value
-  (a bright spell followed by a dull day), and its p10 is far above a widened corrected p10. In a synthetic whole-engine replay (a source with
-  no skill, a bright spell) the overnight charge target was 80 percent with the gate off and 70 percent with it on, the unsafe direction
-  (less battery retained). The engine's overall confidence is capped at 0.545 only, so MEDIUM is still possible, and, unlike a rejected forecast, the
-  gate fallback adds no LOW cap and no reason code. On the real replay the gated p50 was above the actual on 25 of 39 days (18 ungated) because
-  persistence lags the autumn decline, and the gated p10 above the actual on 1 day (2 ungated), so the real data looked safer, but the effect on
-  the overnight target over the acceptance period is NOT replayed. Required before any enable: that replay, a LOW cap or reason code for a gate fallback, and an owner decision.
+- The fallback trace is structured only in the V1 engine report (`PV_SKILL_GATE_FALLBACK` in `downgrade_reasons`, the advice reasons and
+  uncertainty). The published `pv_tomorrow` item and the envelope's top-level reason codes are contract-pinned and carry no code: the gate
+  verdict (day count and the two errors) is only in the note text there.
+- **Before it is enabled anywhere.** What was fixed (20 Nov 2026, two rounds): the advisor effect described under "The planning fix": with the gate
+  ON the recommended charge target is never below what the gate-OFF engine would recommend (a planning band that keeps the ungated spread, a guard that
+  recomputes the gate-OFF advice and publishes the higher target, a LOW cap and reason codes), shown failing-first, on 600 pre-registered unseen
+  synthetic worlds and on the 49 real PV days with a fictional house. What is STILL required before any enable: (1) the owner's go (nothing is enabled
+  or deployed; `PV_SKILL_GATE_DEFAULT` stays False); (2) the independent review of the planning fix, the guard and their limits; (3) the edit of the one
+  arithmetic check the gate moves (`test_intelligence_arithmetic.py`, band widening), which is deliberately NOT edited here; (4) every limit in this
+  list stays true: the gate kept the corrected forecast on none of the 49 real days (so the replays say nothing about a regime where a source has
+  skill), one site and one autumn, designed after seeing the failure, not a guaranteed forecast improvement (the planning fix protects the energy
+  advice from a bad forecast, it does not make the forecast better), and the Q3 reading of the finished acceptance run is unchanged. On the real
+  replay the published gated p50 was above the actual on 25 of 39 days (18 ungated) because persistence lags the autumn decline: the planning value
+  does not change that published number, only what the target is sized on.
 
 ## Optional second change: the recent-output envelope (separate commit, OFF by default)
 

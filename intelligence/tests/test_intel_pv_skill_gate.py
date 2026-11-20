@@ -117,18 +117,28 @@ RAW_T = {"skill": 14.0, "shaded": 10.0, "summer": 28.0}
 SWITCH_AT = 24
 
 
+# The repository's offline-suite convention (registry/tests/test_offline_suite_exit_codes.py): check() records every failure in FAILURES and
+# main() turns FAILURES into a non-zero exit. The loud recorder reports through check(); the quiet one (used by the mutation battery) only collects.
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
+
 class Rec:
     def __init__(self, loud: bool):
         self.loud, self.fails = loud, []
 
     def __call__(self, name: str, ok: bool, detail: str = "") -> None:
-        if ok:
-            if self.loud:
-                print(f"  PASS  {name}")
-        else:
+        if self.loud:
+            check(name, ok, detail)
+        if not ok:
             self.fails.append(name)
-            if self.loud:
-                print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
 
     def section(self, title: str) -> None:
         if self.loud:
@@ -668,14 +678,14 @@ def main() -> int:
     rec = Rec(True)
     battery(REAL, rec)
     sec_cycle(rec)
-    if rec.fails:
+    if FAILURES:
         print("\nmutation checks skipped: the real code fails the checks above")
     else:
         run_mutants(rec)
     print("")
-    if rec.fails:
-        print(f"{len(rec.fails)} check(s) FAILED:")
-        for f in rec.fails:
+    if FAILURES:
+        print(f"{len(FAILURES)} check(s) FAILED:")
+        for f in FAILURES:
             print("  -", f)
         return 1
     print("all PV skill-gate checks passed")

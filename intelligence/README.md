@@ -11,7 +11,7 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `config.py` | site constants and the **battery reserve**: `user_reserve_soc_pct` (default 40 %, chosen per installation) and a separate `technical_min_soc_pct`; `effective_reserve()` = max(user reserve, technical minimum, any HA reserve), never lower, with the reason when something overrides the user |
 | `history.py` | HA statistics → canonical hourly table (counters → kWh, gaps/stalls/flags, source merge), audit |
 | `usage.py` | per-slot robust EWMA, window forecasts, intervals, nowcast, weekday test, expert promotion |
-| `pv.py` | forecast-source correction, hour shape, useful-PV time; an optional persistence-skill gate (OFF by default, `docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md`) |
+| `pv.py` | forecast-source correction, hour shape, useful-PV time; an optional persistence-skill gate (OFF by default; a fallback is published as persistence but planned on a band never above persistence or the ungated corrected value, with a guard that never publishes a lower target than the ungated engine, `docs/intelligence/INTELLIGENCE_PV_SKILL_GATE.md`) |
 | `battery.py`, `advisor.py` | SOC simulation; overnight target, safe export, session cover, reasons |
 | `anomaly.py` | load anomalies, recurring signatures (neutral labels) |
 | `engine.py`, `replay.py`, `backtest.py` | orchestration, leak-free replay, walk-forward backtest |

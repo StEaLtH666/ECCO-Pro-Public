@@ -25,12 +25,24 @@ from .advisor import LiveInputs, PvDay, Planner, TariffInfo, advise, default_che
 from .anomaly import AnomalyReport, detect, hourly_residuals_today
 from .config import SiteConfig
 from .history import History
-from .pv import PvModel, pv_hour_shape, useful_pv_start
+from .pv import UNGATED_KEPT_CODE, PvModel, prefers_ungated, pv_hour_shape, useful_pv_start
 from .timeutil import UTC, day_bounds, local_wall, sun_times, ts, zone
 from .usage import (NOWCAST_HOURS, UsageForecast, UsageModel, confidence_label, fixed_window, next_hour_forecast,
                     standard_windows, weekday_effect, window_sum, baseline_guard)
 
 OFFSET_DAYS = 14
+
+
+def _reanchored(p50: float, done_share: float, so_far: float | None) -> tuple[float, tuple[float, float, float] | None]:
+    """Today's remaining PV: the not-yet-elapsed share of the day's p50, scaled by how today is actually going (forecast
+    re-anchoring). Returns (remaining kWh, (live ratio, weight, factor)), the second None when there is nothing to re-anchor on."""
+    rem = p50 * (1.0 - done_share)
+    if so_far is not None and p50 * done_share >= 2.0:
+        live = max(0.4, min(1.6, so_far / (p50 * done_share)))
+        w = min(0.7, done_share / 0.6)
+        factor = w * live + (1.0 - w)
+        return rem * factor, (live, w, factor)
+    return rem, None
 
 
 def _json_safe(raw: dict) -> dict:
@@ -72,10 +84,17 @@ class IntelligenceEngine:
                 sr + timedelta(hours=stats.quantile(offs, 0.90)))
 
     # ------------------------------------------------------------------------------------------------------
-    def _pv_days(self, inp: LiveInputs, asof: date, horizon_end: datetime, notes: list[str]
+    def _pv_days(self, inp: LiveInputs, asof: date, horizon_end: datetime, notes: list[str], plan: dict | None = None
                  ) -> tuple[dict[date, PvDay], dict]:
+        """The PV days the Planner sizes on, and the PUBLISHED per-day forecasts (`info`, unchanged by the skill gate's planning
+        rule). The PvDay holds `fc.planning_band`: the published band, or after a gate fallback the planning band (never above
+        persistence or the ungated corrected band, the ungated spread kept; `pv.conservative_band`), so the gate can raise a target, not
+        lower it. `plan`, when given, collects {"inflation": [...], "fallbacks": [...]} for the engine's confidence cap and reason codes
+        and {"ungated": {"days", "inflation", "confidence"}}: the PV days, band inflations and confidences EXACTLY as the gate-OFF engine
+        would have built them (the guard in `run` computes the advice a second time on them)."""
         out: dict[date, PvDay] = {}
         info: dict = {}
+        ung = plan.setdefault("ungated", {"days": {}, "inflation": [], "confidence": []}) if plan is not None else None
         now = inp.now
         d = asof
         while d <= horizon_end.astimezone(self.tz).date():
@@ -90,24 +109,42 @@ class IntelligenceEngine:
                 d += timedelta(days=1)
                 continue
             shape = pv_hour_shape(self.history, self.cfg, asof)
-            pvd = PvDay(d, fc.p10, fc.p50, fc.p90, shape)
+            gf = fc.gate_fallback
+            p10, p50, p90 = fc.planning_band
+            pvd = PvDay(d, p10, p50, p90, shape)
+            # what the gate-OFF engine would hand its Planner for this day: the ungated corrected band on a fallback day, else the same
+            u10, u50, u90 = gf.corrected if gf is not None else (fc.p10, fc.p50, fc.p90)
+            upvd = PvDay(d, u10, u50, u90, shape)
+            if plan is not None:
+                plan["inflation"].append(round(fc.planning_inflation, 3))      # rounded like the published inflation it replaces
+                ung["inflation"].append(round(gf.corrected_inflation if gf is not None else fc.inflation, 3))     # as the OFF report rounds it
+                ung["confidence"].append(round(gf.corrected_confidence if gf is not None else fc.confidence, 3))
+                if gf is not None:
+                    plan["fallbacks"].append({"day": d.isoformat(), "published": (fc.p10, fc.p50, fc.p90), "gate": gf})
             if d == asof:
-                # re-anchor the rest of today on how today is actually going (forecast re-anchoring)
+                # re-anchor the rest of today on how today is actually going (forecast re-anchoring); the explanation and the
+                # note describe the PUBLISHED forecast, the remaining PV the Planner uses is re-anchored on the PLANNING p50
                 done_share = sum(shape[h] for h in range(now.astimezone(self.tz).hour))
-                rem = fc.p50 * (1.0 - done_share)
+                rem, anchor = _reanchored(fc.p50, done_share, inp.pv_actual_so_far_kwh)
                 reanchor = None
-                if inp.pv_actual_so_far_kwh is not None and fc.p50 * done_share >= 2.0:
-                    live = max(0.4, min(1.6, inp.pv_actual_so_far_kwh / (fc.p50 * done_share)))
-                    w = min(0.7, done_share / 0.6)
-                    factor = w * live + (1.0 - w)
-                    rem *= factor
+                if anchor is not None:
+                    live, w, factor = anchor
                     reanchor = {"live_ratio": round(live, 3), "weight": round(w, 2), "factor": round(factor, 3)}
                     if live < 0.75 and done_share < 0.85:      # only while there is still PV left to matter
                         notes.append(f"PV is running at {live:.0%} of the corrected forecast so far today")
+                urem = rem                                                    # the gate-OFF engine re-anchors on the ungated (published) p50
+                if gf is not None:
+                    urem, _anchor = _reanchored(u50, done_share, inp.pv_actual_so_far_kwh)
+                    # the lower of the re-anchorings on the planning and on the ungated p50: the 2 kWh threshold of the re-anchoring is
+                    # not monotone in the median, so a planning median just below it could otherwise assume MORE remaining PV
+                    rem = min(_reanchored(p50, done_share, inp.pv_actual_so_far_kwh)[0], urem)
                 pvd.remaining_p50 = max(0.0, rem)
-                pvd.now_local_hour = now.astimezone(self.tz).hour
+                upvd.remaining_p50 = max(0.0, urem)
+                pvd.now_local_hour = upvd.now_local_hour = now.astimezone(self.tz).hour
                 info["today_reanchor"] = reanchor
             out[d] = pvd
+            if ung is not None:
+                ung["days"][d] = upvd
             info[d.isoformat()] = fc.to_dict()
             d += timedelta(days=1)
         return out, info
@@ -260,22 +297,38 @@ class IntelligenceEngine:
         if data_age_h is not None and data_age_h > 6:
             conf = min(conf, 0.3)
             notes.append(f"history is {data_age_h:.0f} h old")
-        pv_days, pv_info = self._pv_days(inp, asof, windows[-1][0] if windows else now + timedelta(days=2), notes)
+        plan_trace: dict = {"inflation": [], "fallbacks": []}
+        pv_days, pv_info = self._pv_days(inp, asof, windows[-1][0] if windows else now + timedelta(days=2), notes, plan_trace)
         report["pv"] = pv_info
         pv_conf = min([pv_info[k]["confidence"] for k in pv_info if k != "today_reanchor"] or [1.0])
-        overall = min(conf, 0.35 + 0.65 * pv_conf) if pv_info else conf
-        if anomalies.abnormal_load_now:
-            overall *= 0.8
         # a PV forecast that had to be rejected as implausible means the PV input was not credible: never above LOW
         pv_rejects = [dict(r, day=k) for k, v in pv_info.items() if k != "today_reanchor"
                       for r in v.get("plausibility", {}).get("rejected", [])]
+        gate_fallbacks = plan_trace["fallbacks"]
+
+        def overall_for(pv_c: float, gate_cap: bool) -> float:
+            """The overall confidence for a PV confidence `pv_c`; `gate_cap` applies the persistence-skill gate's LOW cap. With
+            gate_cap False and the ungated PV confidences it is what the gate-OFF engine computes (the guard needs its label)."""
+            o = min(conf, 0.35 + 0.65 * pv_c) if pv_info else conf
+            if anomalies.abnormal_load_now:
+                o *= 0.8
+            if pv_rejects:
+                o = min(o, 0.45)
+            # the persistence-skill gate published persistence in place of a corrected forecast: planning uses the lower of the two, and
+            # the PV input is not credible enough for more than LOW, exactly like a rejected forecast
+            if gate_cap:
+                o = min(o, 0.45)
+            # a load history that does not look representative (empty house, behaviour shift): never HIGH
+            if guard["active"] and guard["uplift_day_kwh"] > 0.5:
+                o = min(o, 0.70)
+            return o
+        overall = overall_for(pv_conf, bool(gate_fallbacks))
         downgrades = []
         if pv_rejects:
-            overall = min(overall, 0.45)
             downgrades.append("PV_FORECAST_REJECTED")
-        # a load history that does not look representative (empty house, behaviour shift): never HIGH
+        if gate_fallbacks:
+            downgrades.append("PV_SKILL_GATE_FALLBACK")
         if guard["active"] and guard["uplift_day_kwh"] > 0.5:
-            overall = min(overall, 0.70)
             downgrades.append("LOAD_BASELINE_GUARD")
         label = confidence_label(overall)
         report["confidence"] = {"overall": round(overall, 3), "label": label, "usage": round(conf, 3),
@@ -285,11 +338,28 @@ class IntelligenceEngine:
         load_rel = (-0.2, 0.2)
         if lead.p50 > 0:
             load_rel = (lead.p10 / lead.p50 - 1.0, lead.p90 / lead.p50 - 1.0)
-        pv_infl = max([pv_info[k].get("inflation", 1.0) for k in pv_info if k != "today_reanchor"] or [1.0])
-        planner = Planner(cfg, fast.values, load_rel, pv_days, inp, nowcast, label, pv_infl, baseline_profile)
-        advice = advise(cfg, planner, inp, windows, label, anomalies.abnormal_load_now,
-                        (sr_next if (sr_t and now >= sr_t) else sr_t), useful_pv, tariff,
-                        data_stale=bool(data_age_h is not None and data_age_h > 6))
+        # the band-widening factor: the published one, or after a gate fallback the larger of it and the ungated forecast's own
+        pv_infl = max(([pv_info[k].get("inflation", 1.0) for k in pv_info if k != "today_reanchor"] + plan_trace["inflation"]) or [1.0])
+
+        def advice_for(pv_by_day: dict[date, PvDay], lab: str, infl: float) -> dict:
+            return advise(cfg, Planner(cfg, fast.values, load_rel, pv_by_day, inp, nowcast, lab, infl, baseline_profile), inp, windows, lab,
+                          anomalies.abnormal_load_now, (sr_next if (sr_t and now >= sr_t) else sr_t), useful_pv, tariff,
+                          data_stale=bool(data_age_h is not None and data_age_h > 6))
+        advice = advice_for(pv_days, label, pv_infl)
+        # THE GUARD (belt and braces; the planning band already keeps the pessimistic PV at or below the ungated one). On a fallback day
+        # set the advice is computed a SECOND time exactly as the gate-OFF engine would have computed it (the ungated PV days, the
+        # confidence label before the gate's LOW cap, the ungated band inflation, today re-anchored on the ungated median) and the one
+        # with the strictly higher recommended target is published, a tie keeping the planning run: the recommended target is therefore
+        # never below the gate-OFF engine's. The gate's LOW cap, its reason and its notes below apply to either.
+        kept_ungated = None
+        if gate_fallbacks:
+            ung = plan_trace["ungated"]
+            ung_label = confidence_label(overall_for(min(ung["confidence"] or [1.0]), False))
+            ung_advice = advice_for(ung["days"], ung_label, max(ung["inflation"] or [1.0]))
+            t_plan = (advice.get("overnight_target") or {}).get("recommended_target_soc_pct")
+            t_ung = (ung_advice.get("overnight_target") or {}).get("recommended_target_soc_pct")
+            if prefers_ungated(t_plan, t_ung):
+                advice, kept_ungated = ung_advice, (t_plan, t_ung)
         # surface the plausibility rejection and the baseline guard in the advice itself (reason codes, not just notes)
         advice.setdefault("reasons", [])
         advice.setdefault("uncertainty", [])
@@ -299,6 +369,22 @@ class IntelligenceEngine:
                    + f"; {r['reason']}). Falling back to persistence at LOW confidence; no high-confidence advice is based on it.")
             advice["reasons"].append({"code": "PV_FORECAST_REJECTED", "text": txt})
             advice["uncertainty"].append({"code": "PV_FORECAST_REJECTED", "severity": "HIGH", "text": txt})
+        for g in gate_fallbacks:
+            gf, pub = g["gate"], g["published"]
+            txt = (f"PV forecast for {g['day']}: {gf.note}. The published value is persistence at LOW confidence "
+                   f"(p10 {pub[0]:.1f} / p50 {pub[1]:.1f} / p90 {pub[2]:.1f} kWh). For planning the advisor uses the LOWER of persistence and "
+                   f"the value the corrected {gf.source} forecast would have given ({gf.corrected[0]:.1f} / {gf.corrected[1]:.1f} / "
+                   f"{gf.corrected[2]:.1f} kWh) for the median and the upper value, and a lower value for p10 that keeps the corrected spread, "
+                   f"that is {gf.planning[0]:.1f} / {gf.planning[1]:.1f} / {gf.planning[2]:.1f} kWh; it also computes the advice the corrected "
+                   f"forecast would have given and publishes the higher overnight target, so the fallback cannot lower the battery "
+                   f"target; confidence is capped at LOW.")
+            advice["reasons"].append({"code": "PV_SKILL_GATE_FALLBACK", "text": txt})
+            advice["uncertainty"].append({"code": "PV_SKILL_GATE_FALLBACK", "severity": "WATCH", "text": txt})
+        if kept_ungated is not None:
+            advice["reasons"].append({"code": UNGATED_KEPT_CODE, "text": (
+                f"The ungated corrected PV forecast would have given a higher overnight target ({kept_ungated[1]:.0f}%) than the planning "
+                f"values did ({kept_ungated[0]:.0f}%), so the higher target is kept: this advice is the one the corrected forecast gives, "
+                f"and a persistence fallback never lowers the recommended target.")})
         if guard["active"] and guard["uplift_day_kwh"] > 0.5:
             advice["reasons"].append({"code": "LOAD_BASELINE_GUARD", "text": (
                 f"Recent demand ({guard['fast_day_kwh']:.0f} kWh/day on the short-memory profile) is below the longer baseline "

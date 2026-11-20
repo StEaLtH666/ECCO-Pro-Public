@@ -149,7 +149,11 @@ Forecast kinds recorded: `load_kwh:{next_1h,cheap_window,morning,overnight,to_us
   persistence at LOW confidence, overall confidence is capped at LOW (`confidence.downgrade_reasons`), and the recommendation
   carries a `PV_FORECAST_REJECTED` reason and a HIGH uncertainty entry. Rejecting is the safe direction for the advisor.
   A source that passes the ceilings can still have no skill at all; the optional, default-OFF persistence-skill gate publishes
-  persistence unless the corrected forecast recently beat it ([INTELLIGENCE_PV_SKILL_GATE.md](INTELLIGENCE_PV_SKILL_GATE.md)).
+  persistence unless the corrected forecast recently beat it ([INTELLIGENCE_PV_SKILL_GATE.md](INTELLIGENCE_PV_SKILL_GATE.md)). The
+  published forecast is then persistence, but planning (the overnight target) sizes on a band that never exceeds persistence or the
+  ungated corrected value and keeps the ungated spread, the engine also computes the advice the gate-OFF engine would have given and
+  publishes the higher overnight target, overall confidence is capped at LOW and the recommendation carries a `PV_SKILL_GATE_FALLBACK`
+  reason, so the gate can raise a target and not lower it (the guarantee and what it does not cover are in the gate document).
   Non-finite, negative, string or boolean forecast values are ignored the same way. The rule is deliberately simple and
   explainable; it does not try to model weather.
 * **Absence / return-day protection** (`usage.baseline_guard`, `Planner`). The fast profile has a ~5-day memory, so after an
