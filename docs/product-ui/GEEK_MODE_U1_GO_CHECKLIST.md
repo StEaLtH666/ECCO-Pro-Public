@@ -44,18 +44,18 @@ pause tile's toggle, the same write the existing Intelligence dashboard already 
 
 Each live step needs your own go, given at the time; a go for one step is not a go for the next. Any other output than the expected one is a stop.
 
-| Step | Who | What (the full block is in the runbook section named) | Expected |
-|---|---|---|---|
-| 0 | coordinator | offline gates on the chosen commit; the generation below; your M2 scan, push and draft pull request, each on your go (runbook 5.0) | suites green, hashes as pinned, CI green |
-| 1 | coordinator, your go | live read-only baseline: lists, hashes, byte-exact copies, states, log lines (runbook 5.1) | every copy `EXACT`; nothing of A1 to A3 present |
-| 2 | you | protected full backup; RG-F3 recorded; quiet window (runbook 5.2) | a protected backup exists |
-| 3 | coordinator, your go | copy the card with `deploy-ha.ps1`, then `verify-served` (runbook 5.3) | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, `RESOURCE NOT REGISTERED`; one PASS line |
-| 4 | you add, coordinator reads, your go | the one resource, then `verify-resource`, then one look at the production Overview (runbook 5.4) | `RESOURCE VERIFIED`; the Overview as before |
-| 5 | you | create the dashboard, Require admin on, the two checks, paste, Save (runbook 5.5) | the dashboard exists, admin-only |
-| 6 | coordinator, your go | read-only after-checks and `--verify-storage` (runbook 5.6) | verdict as expected; `STORED CONFIGURATION EQUALS THE GENERATED ONE` |
-| 7 | you | ONE look: Production first; Geek only after you say go; never tap the pause tile (runbook 5.7) | the checks of runbook 5.7 |
-| 8 | coordinator, your go | no-write evidence: states and history of the control entities (runbook 5.8) | nothing changed |
-| 9 | coordinator | close-out: the status update; a post or push only on your go (runbook 5.9) | evidence filed |
+| Step | Who | What (the full block is in the runbook section named) | Expected | Stop |
+|---|---|---|---|---|
+| 0 | coordinator | offline gates on the chosen commit; the generation below; your M2 scan, push and draft pull request, each on your go (runbook 5.0) | suites green, hashes as pinned, CI green | any new failure; a hash that is not the pinned one |
+| 1 | coordinator, your go | live read-only baseline: lists, hashes, byte-exact copies, states, log lines (runbook 5.1) | every copy `EXACT`; nothing of A1 to A3 present | anything of A1 to A3 already there; Core not running; a copy that is not `EXACT` |
+| 2 | you | protected full backup; RG-F3 recorded; quiet window (runbook 5.2) | a protected backup exists | no protected backup |
+| 3 | coordinator, your go | copy the card with `deploy-ha.ps1`, then `verify-served` (runbook 5.3) | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, `RESOURCE NOT REGISTERED`; one PASS line | any failure line; a hash mismatch; the tool's own rollback message; more than the one new file |
+| 4 | you add, coordinator reads, your go | the one resource, then `verify-resource`, then one look at the production Overview (runbook 5.4) | `RESOURCE VERIFIED`; the Overview as before | any other line; another resource changed; an Overview error that names the shell |
+| 5 | you | create the dashboard, Require admin on, the two checks, paste, Save (runbook 5.5) | the dashboard exists, admin-only | no raw editor; Home Assistant refuses the text; a failed pre-save check |
+| 6 | coordinator, your go | read-only after-checks and `--verify-storage` (runbook 5.6) | verdict as expected; `STORED CONFIGURATION EQUALS THE GENERATED ONE` | any difference that is not listed |
+| 7 | you | ONE look: Production first; Geek only after you say go; never tap the pause tile (runbook 5.7) | the checks of runbook 5.7 | a freeze, a blank or contradicting strip, a console error that names the shell |
+| 8 | coordinator, your go | no-write evidence: states and history of the control entities (runbook 5.8) | nothing changed | any control entity changed |
+| 9 | coordinator | close-out: the status update; a post or push only on your go (runbook 5.9) | evidence filed | none |
 
 ```powershell
 cls
