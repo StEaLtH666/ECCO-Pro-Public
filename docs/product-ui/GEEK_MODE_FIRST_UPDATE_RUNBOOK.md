@@ -840,7 +840,8 @@ session, which are explained, not hidden. Nothing else is touched.
    `=>` line for the card file (left in place). The production Overview, the existing Intelligence dashboard and every other dashboard file (every
    `.storage/lovelace*` file other than the removed one, too) have their baseline sha256: the first comparison shows no line for them. A single line
    that differs for `lovelace_resources` or `lovelace_dashboards` while its `SAME ITEMS` line is printed is Home Assistant's own formatting of the same
-   content: record it, it is not a stop. Anything else: stop and ask the owner.
+   content: record it, it is not a stop. The same holds for a dashboard file that was put back after S1: its line may differ while the `SAME CONTENT`
+   line of S1 was printed. Anything else: stop and ask the owner.
 
 **A later version** of the card is a new file with a new content address and one resource edit (repoint) by the owner, with
 `verify-resource` and the old file left inert: the rollback of a repoint is the owner editing the URL back, then the same read-back.
