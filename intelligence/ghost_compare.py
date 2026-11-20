@@ -16,7 +16,8 @@ Differences are advice minus existing; positive money means the advice run is ah
 What each side shows: (a) money in pence, ONLY with a verified import tariff covering the period (otherwise NO MONEY and the
 behaviour only, exactly as ghost_feed); (b) SOC: minimum and end-of-day of both runs and the difference; (c) reserve protection:
 the reserve in force, each run's minimum SOC and its margin to it, and whether the advice run would have gone below it (also at
-the two altered efficiencies); (d) uncertainty and a verdict.
+the two altered efficiencies; judged on the hourly mean or end-of-hour SOC against the BASE reserve, so a dip inside an hour, or
+below the advice's own higher reserve, can be missed: RESERVE_TEXT, LIMITS); (d) uncertainty and a verdict.
 
 THE VERDICT RULE (derived only from numbers in the feed's run, never from an opinion):
     noise = efficiency spread + closing-stock rule spread + no-advice baseline replay error, summed (not combined in quadrature,
@@ -33,6 +34,9 @@ THE VERDICT RULE (derived only from numbers in the feed's run, never from an opi
       gained by exporting differently is missing from every pence figure and the advice effect can be too high or too low: no
       ahead / behind / within claim is made, and the pence figures stay visible. Where the exports are equal the rule stands.
 The same rule is applied per day with that day's own components (and that day's own export difference).
+
+The advice counts: `advice.records_in_period` and `not_followed` are LOG ROWS (the slot cycles log the same advice every hour);
+`advice.followed` is the number of DISTINCT (kind, window, target) among the followed rows (ghost_feed).
 
 A failure never raises and never gives a partial figure: a small block with a status and a constant reason code
 (INSUFFICIENT_HISTORY, NO_ADVICE_LOGGED, ERROR; the integration adds UNAVAILABLE), no entity id, no site value, no sensor text.
@@ -94,6 +98,11 @@ RESERVE_OK = "NO_BREACH"
 RESERVE_BREACH = "BREACH"
 RESERVE_SENSITIVE = "BREACH_ONLY_AT_ALTERED_EFFICIENCY"
 RESERVE_VERDICTS = (RESERVE_OK, RESERVE_BREACH, RESERVE_SENSITIVE)
+RESERVE_BASIS = ("judged on the hourly-mean or end-of-hour SOC against the base reserve (not the advice's own reserve), so a dip "
+                 "inside an hour can be missed")
+RESERVE_TEXT = {RESERVE_OK: "no hourly SOC of the advice run went below the reserve; " + RESERVE_BASIS,
+                RESERVE_BREACH: "the advice run's hourly SOC went below the reserve; " + RESERVE_BASIS,
+                RESERVE_SENSITIVE: "below the reserve only at an altered efficiency (+/- 3 points); " + RESERVE_BASIS}
 
 BANNER = ("SIMULATION, read-only. Intelligence controlled nothing; the existing schedule did what it did. The advice run is "
           "arithmetic on recorded hourly data. Evidence for the owner, never a decision.")
@@ -104,6 +113,8 @@ VERDICT_RULE = ("noise = efficiency spread (+/- 3 points) + closing-stock rule s
 LIMITS = ("hourly data: SOC is an hourly mean and advice windows snap to whole hours",
           "only advice that was actually logged is simulated; dump advice has no logged window and is not simulated",
           "spilled PV is unknown (taken as 0); the real battery's own limits are replayed as recorded",
+          "the reserve check judges the hourly-mean or end-of-hour SOC against the base reserve only (not the advice's own reserve), "
+          "so a dip below the reserve inside an hour can be missed and the verdict can still read NO_BREACH",
           "money needs a verified import rate table covering the period: it covers only the days the tariff integration "
           "publishes, so a money period can be much shorter than the history",
           "a simulation of one house over a short period: it is evidence, not proof, and decides nothing")
@@ -251,7 +262,7 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
         counts[v] += 1
         row.update({"existing_min_soc_pct": _r(a_min, 1), "advice_min_soc_pct": _r(g_min, 1), "min_soc_diff_pct": _diff(g_min, a_min),
                     "existing_end_soc_pct": _r(a_end, 1), "advice_end_soc_pct": _r(g_end, 1), "end_soc_diff_pct": _diff(g_end, a_end),
-                    "existing_reserve_margin_pct": _r(a_min - reserve_pct, 1), "advice_reserve_margin_pct": _r(g_min - reserve_pct, 1),
+                    "existing_reserve_margin_pct": _diff(a_min, reserve_pct), "advice_reserve_margin_pct": _diff(g_min, reserve_pct),
                     "advice_breach": d["date"] in breach_dates, "advice_in_force_hours": fd.get("advice_in_force_hours", 0),
                     "advice_followed": fd.get("advice_followed", 0)})
         if fd.get("advice_not_followed"):
@@ -307,8 +318,8 @@ def _build(history, advice_rows, cfg, import_tariff, export_tariff, now, days, h
     recorded = [a.effective_reserve_pct for a in detail["advice"] if a.effective_reserve_pct is not None and detail["reason"](a) is None]
     reserve = {"in_force_pct": _r(reserve_pct, 1), "advice_recorded_max_pct": _r(max(recorded), 1) if recorded else None,
                "existing_min_soc_pct": _r(tot["actual_min_soc_pct"], 1), "advice_min_soc_pct": _r(tot["ghost_min_soc_pct"], 1),
-               "existing_margin_pct": _r(tot["actual_min_soc_pct"] - reserve_pct, 1),
-               "advice_margin_pct": _r(tot["ghost_min_soc_pct"] - reserve_pct, 1),
+               "existing_margin_pct": _diff(tot["actual_min_soc_pct"], reserve_pct),
+               "advice_margin_pct": _diff(tot["ghost_min_soc_pct"], reserve_pct),
                "existing_below_reserve_slots": int(tot["actual_below_reserve_slots"]), "advice_below_reserve_slots": base_breach,
                "advice_below_reserve_days": int(ready["ghost_below_reserve_days"]),
                "advice_below_reserve_dates": list(ready["ghost_below_reserve_dates"]),
@@ -398,8 +409,8 @@ def render_text(block: Mapping) -> str:
     L.append(f"Period {_hhmm(p['start'])} to {_hhmm(p['end'])} ({p['hours']} h). Tariff: import {block['tariff']['import']}, "
              f"export {block['tariff']['export']}")
     nf = ", ".join(f"{k} x{v}" for k, v in sorted(a["not_followed"].items())) or "none"
-    L.append(f"Advice logged in the period: {a['records_in_period']}; followed in the simulation {a['followed']}; "
-             f"not followed: {nf}")
+    L += _wrap(f"Advice log rows in the period: {a['records_in_period']} (one per kind per slot cycle); followed in the simulation: "
+               f"{a['followed']} distinct advice (kind, window, target); rows not followed: {nf}", "", "  ")
     for code in sorted(a["not_followed"]):
         L.append(f"  {code}: {NOT_FOLLOWED_TEXT.get(code, 'not followed')}")
     L += _wrap("EXISTING SCHEDULE = what the battery really did.  INTELLIGENCE ADVICE = the same flows with the logged advice "
@@ -427,6 +438,7 @@ def render_text(block: Mapping) -> str:
              f"day(s); at efficiency -3/+3 points: {rv['advice_below_reserve_slots_at_efficiency']['minus']}/"
              f"{rv['advice_below_reserve_slots_at_efficiency']['plus']}")
     L.append(f"           existing schedule below the reserve: {rv['existing_below_reserve_slots']} slot(s)")
+    L += _wrap(f"{rv['verdict']}: {RESERVE_TEXT.get(rv['verdict'], '')}", "           ", "             ")
     d = u["days"]
     L.append(f"  Days: {d['ahead_beyond_noise']} ahead beyond noise, {d['behind_beyond_noise']} behind beyond noise, "
              f"{d['within_noise']} within noise, {d['no_advice_effect']} with no advice effect"

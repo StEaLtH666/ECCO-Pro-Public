@@ -11,6 +11,8 @@ house (fictional year 2030), plus the plain-text report on a golden diagnostics 
       income difference is unpriced (0 in both runs), so no ahead / behind verdict is given there (review finding G3)
   [4] reserve protection: no breach on a normal run; a breach is flagged (period, day, margin, dates); a breach only at the
       altered efficiencies is told apart; the existing schedule's own dips are reported
+  [4b] the reserve caveat: hourly SOC against the base reserve, a dip inside an hour can be missed (G7); a missing minimum SOC is a
+      missing margin, not an ERROR block (G10)
   [5] failures are small blocks with a constant reason: no history, too little history, no advice, invalid advice rows only,
       an exception (class name only), a non-finite number; the size bound (oldest days dropped, then SIZE_BOUND)
   [6] nothing leaks: hostile advice ids and extra fields, only constant words and dates, JSON-safe, deterministic, inputs unchanged
@@ -506,6 +508,36 @@ check("the existing schedule's own dips below the reserve are reported (negative
       and Lw["reserve"]["advice_would_breach"] is False and any(d["existing_reserve_margin_pct"] < 0 for d in Lw["days"]), str(Lw["reserve"]))
 check("a higher reserve recorded with the advice is shown and is the ghost's floor while it is in force",
       gc.build_ghost_comparison(H0, night_advice(H0, 80.0, reserve=55.0), CFG, import_tariff=T0)["reserve"]["advice_recorded_max_pct"] == 55.0)
+
+print("== [4b] the reserve caveat (G7) and a missing minimum SOC (G10)")
+lim_txt = " ".join(B["limits"])
+check("the limits say the reserve check uses hourly-mean or end-of-hour SOC against the BASE reserve (not the advice's own reserve) "
+      "and that a dip inside an hour can be missed",
+      any("reserve" in x and "base reserve" in x and "hourly" in x and "inside an hour" in x for x in B["limits"]) and "inside an hour" in lim_txt
+      and any("inside an hour" in x for x in gc.LIMITS), str(B["limits"]))
+RTXT = getattr(gc, "RESERVE_TEXT", {})
+check("every reserve verdict has a text that carries the same caveat (a NO_BREACH is not proof there was no dip)",
+      set(RTXT) == set(gc.RESERVE_VERDICTS) and all("inside an hour" in v and "base reserve" in v for v in RTXT.values()), str(RTXT))
+txt_b = gc.render_text(B).splitlines()
+i_res = next(i for i, ln in enumerate(txt_b) if ln.startswith("  RESERVE"))
+check("the report prints the caveat with the reserve verdict", any("inside an hour" in ln for ln in txt_b[i_res:i_res + 6]) and
+      max(len(x) for x in txt_b) <= 118, "\n".join(txt_b[i_res:i_res + 6]))
+check("a block built today carries the new limit while the golden block (an older block) is read as it is",
+      len(B["limits"]) == len(gc.LIMITS) >= 6)
+
+
+def none_min(rep):
+    for d in rep["days"][2:4]:
+        d["ghost_min_soc_pct"] = None
+    rep["totals"]["actual_min_soc_pct"] = None
+
+
+NM = run_seam(none_min, None)
+check("a missing minimum SOC gives a missing margin, not an ERROR block (_diff, not a subtraction of None)",
+      NM["status"] == "OK" and NM["days"][2]["advice_reserve_margin_pct"] is None and NM["days"][3]["advice_reserve_margin_pct"] is None
+      and NM["days"][4]["advice_reserve_margin_pct"] is not None and NM["reserve"]["existing_margin_pct"] is None
+      and NM["reserve"]["advice_margin_pct"] is not None, str((NM.get("status"), NM.get("reason"), NM.get("error_type"))))
+check("... and the report of such a block still renders", NM["status"] == "OK" and "RESERVE" in gc.render_text(NM))
 
 print("== [5] failures are small blocks with a constant reason")
 def small_ok(blk, status, reason) -> bool:
