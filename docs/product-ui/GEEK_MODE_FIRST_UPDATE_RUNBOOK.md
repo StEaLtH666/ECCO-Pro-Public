@@ -319,8 +319,9 @@ host is the production one. Never pass `-SkipValidation`, `-AllowDirtyWorkingTre
 the gate does not apply to a `.js` destination either way.
 
 Expected output (from the tool's code). The lines below are a **subset, in this order**: the tool prints more between them (the
-repository validation, the SSH probe, the output of `ha core check`), and those are not listed. `Target : Production - ...`; `Running the dashboard preservation gate
-(read-only)...` followed by `not a dashboard destination: the dashboard preservation gate does not apply`; `No existing remote file;
+repository validation, the SSH probe, the output of `ha core check`), and those are not listed. `Target : Production - ...`;
+`Running the dashboard preservation gate (read-only)...` followed by `not a dashboard destination: the dashboard preservation gate
+does not apply`; `No existing remote file;
 rollback will remove the new file if validation fails.`; `Uploading frontend/ecco-mode-shell/ecco-mode-shell.js ->
 /config/www/ecco/ecco-mode-shell.<sha8>.js`; `Upload SHA256 verified: <the card's sha256>`; `Post-install SHA256 verified: <the same>`;
 `Running Home Assistant configuration check...`; `Configuration check passed. Home Assistant was NOT restarted.`; then the block
@@ -776,12 +777,19 @@ in words. The owner may retire the tripwire at the merge.
 
 Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node only through a heap-capped, memory-guarded runner with
 `--test-concurrency=2`; the mutation run last and alone), with a Python 3.12 interpreter (`-I -B -X utf8`, and
-`PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). The commit `9586377b1dd5` was extracted with
-`git archive` into a clean folder and verified there; the commit that holds this section differs from it **only in this document**
-(a wording pass over private-record references and this section), so every number below holds for it too. Nothing was pushed,
-merged, installed, registered or deployed, and no live system was contacted.
+`PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). Nothing was pushed, merged, installed, registered or
+deployed, and no live system was contacted.
 
-**The pinned artefacts (the same at both commits):**
+**Two rounds.** Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
+and verified there (its table is kept below as "round 1"). An independent review of that runbook found eight points (F1 to F8);
+they are fixed in four new commits on the same branch: `66009ef` (the generator's `--verify-storage` and its suite), `748e68a`
+(the card's pin suite), `a4fa2d0` (a comment kept ASCII) and `f188a5a` (this runbook). Round 2 was run in a clean clone
+(`git clone --no-hardlinks`, no line-ending conversion) of `f188a5a`; the commit that holds this section differs from `f188a5a`
+**only in this document**, so every number of round 2 holds for it too. Against the base of the review, `de783b4`, only four files
+differ: this runbook, the generator and its two suites. The card, the catalogue, the example and every protected file are
+byte-identical (sha256 below, checked at both ends); no manifest, scope chain, preflight or deploy tool was touched.
+
+**The pinned artefacts (the same at every commit of both rounds):**
 
 | Artefact | Size | sha256 |
 |---|---|---|
@@ -792,9 +800,30 @@ merged, installed, registered or deployed, and no live system was contacted.
 | the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
 | the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
 
-**Results.** "archive" is the clean `git archive` (no `.git`); "clone" is a clean clone of the same commit made without line-ending
-conversion, used only for the suites that call `git ls-files` or read history (they fail in an archive for want of `.git`, which
-says nothing about the code).
+**Round 2 results** (a clean clone of `f188a5a`; Python: `<PY> -I -B -X utf8`):
+
+| What | Command | rc | Count |
+|---|---|---|---|
+| repository validator | `tools/validate_repo.py` | 0 | PASSED (yaml 52, python 392, json 81, text 650) |
+| CI root `tools/tests`, every suite, serially | `tools/run_offline_tests.py --root tools/tests --parallel 1` | 0 | 23/23 passed (219 s) |
+| the pin suite | `tools/tests/test_ecco_mode_shell_card.py` | 0 | 107 PASS, 0 FAIL, 0 SKIP (round 1: 85). New: the redaction vocabulary pinned (6 word lists, 23 value-rule reasons), the member-access rules, 16 rule mutants run with the byte pin off, all caught; the rules find nothing on the unchanged card. Without git on the PATH the one git check prints SKIP and is counted apart: 106 PASS, 1 SKIP, rc 0 |
+| the generator suite | `tools/tests/test_geek_mode_dashboard_config.py` | 0 | 104 PASS, 0 FAIL (round 1: 81). New: six round-trip read-backs (raw UTF-8, escaped, BOM, BOM with CRLF, bare, integers for floats) EQUAL; a changed card and a changed title DIFFER and name the key and path, never card text; console-code-page damage is a DIFFERENCE with its cause named; UTF-16 refused; a boolean is not a number; 4 in-memory mutants of the comparison, 4 of 4 killed. The new checks were run first on the unchanged generator: 8 FAIL |
+| neighbours | `tools/tests/test_geek_mode_example.py`; `tools/tests/test_intelligence_card.py` | 0; 0 | 35 PASS (its tripwire untouched and passing); 81 PASS |
+| privacy suite (without the owner's pattern file) | `tools/tests/test_public_privacy.py` | 0 | 25 PASS, 1 SKIP (the owner's private pattern file: the M2 scan is the owner's own step and was not run) |
+| generators | `tools/geek_mode_dashboard_config.py --check`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check` | 0; 0; 0 | `OK: 147178 bytes, sha256 4abf3b1e...` (unchanged); no drift; no drift |
+| the Node suite that runs the generator (local, guarded) | `node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass (the generator's output is unchanged byte for byte; no other Node suite is affected, none was re-run) |
+| the runbook's PowerShell blocks (this PC, stand-ins for `ssh` and `scp`, no network) | the 18 blocks of sections 5 and 7 | 0 | all 18 parse; the baseline, entity list, state read, log, after, stored-configuration, state comparison and history blocks run against stand-ins and print what the text says; the two Python one-liners of section 7 run on sample files |
+
+**Not re-run in round 2, said plainly:** the other CI roots (`intelligence/tests`, `ecco_core/tests`, `health/tests`, `influxdb`,
+`custom_components/ecco_intelligence/tests`, `home-assistant/tests`, `registry/tests`), the other twelve Node suites, the 518-mutant
+run, the headless strip check and the HA bundle builder: nothing they test changed (the card, the catalogue, the example and the
+generator's output are byte-identical to round 1, and no other file of the repository changed), so the round 1 results below stand.
+The two known registry failures (a native C++ compiler this PC lacks) are as in round 1.
+
+**Round 1 results.** "archive" is the clean `git archive` (no `.git`); "clone" is a clean clone of the same commit made without
+line-ending conversion, used only for the suites that call `git ls-files` or read history (they fail in an archive for want of
+`.git`, which says nothing about the code). The two rows for the pin suite and the generator suite (85 and 81 checks) are
+superseded by round 2 (107 and 104).
 
 | What | Command (Python: `<PY> -I -B -X utf8`) | rc | Count |
 |---|---|---|---|
