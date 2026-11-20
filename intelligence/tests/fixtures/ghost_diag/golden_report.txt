@@ -2,7 +2,8 @@ ECCO Intelligence - Ghost diagnostics (SIMULATION, read-only)
 SIMULATION, read-only. Intelligence controlled nothing; the existing schedule did what it did. The advice run
 is arithmetic on recorded hourly data. Evidence for the owner, never a decision.
 Period 2030-01-14 00:00 to 2030-01-17 00:00 (72 h). Tariff: import VERIFIED_FROM_INTEGRATION, export NOT_VERIFIED
-Advice logged in the period: 3; followed in the simulation 3; not followed: none
+Advice log rows in the period: 3 (one per kind per slot cycle); followed in the simulation: 3 distinct advice
+  (kind, window, target); rows not followed: none
 EXISTING SCHEDULE = what the battery really did.  INTELLIGENCE ADVICE = the same flows with the logged advice
 applied (simulated).
 
@@ -16,6 +17,9 @@ WHOLE PERIOD
   RESERVE 40.0 %: margin to it: existing +0.0, advice +0.0; VERDICT NO_BREACH
            advice below the reserve: 0 slot(s) on 0 day(s); at efficiency -3/+3 points: 0/0
            existing schedule below the reserve: 0 slot(s)
+           NO_BREACH: no hourly SOC of the advice run went below the reserve; judged on the hourly-mean or
+             end-of-hour SOC against the base reserve (not the advice's own reserve), so a dip inside an hour
+             can be missed
   Days: 0 ahead beyond noise, 2 behind beyond noise, 1 within noise, 0 with no advice effect
 
 PER DAY (existing / advice)
