@@ -10,6 +10,7 @@ import type { GentleInput, GentleDecision, GentleParams, GentlePolicy, NamedCeil
 import type { ClockDay } from "../src/time.ts";
 import { norm } from "../src/time.ts";
 import * as G4 from "../src/gentleController.ts";   // v3: new helpers are reached through the namespace
+import * as TIME from "../src/time.ts";
 import { rng } from "./fixtures.ts";
 import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1, acceptW, trueFraction } from "./support/batterySim.ts";
 import type { TrueTaper } from "./support/batterySim.ts";
@@ -921,7 +922,7 @@ test("household inputs that cannot be trusted: a known limit with an invalid dem
   assert.ok(s.codes.includes("SOLAR_IGNORED"));
   for (const policy of [{ fallbackPolicy: "SOMETIMES" }, { unknownDemandPolicy: "GUESS" }] as unknown as Partial<GentlePolicy>[]) assert.equal(hplan({ gridImportLimitW: 6000 }, { policy }).status, "INVALID");
   for (const params of [{ demandMarginPct: -1 }, { demandMarginPct: 300 }, { assumedDemandW: -1 }, { maxHouseholdAgeMin: 0 }, { maxDecreaseStepW: 50 }, { maxDecreaseStepW: NaN }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
-  assert.equal(plan({ params: { maxDecreaseStepW: 100 } }).status, "OK", "one step is the least slew");
+  assert.equal(plan({ params: { maxDecreaseStepW: 100, hysteresisW: 100 } }).status, "OK", "one step is the least slew (v3 G7: with a hysteresis that one step can save)");
 });
 
 test("TARGET_AT_RISK and TARGET_UNREACHABLE under a grid cap: the highest SAFE rate, the late finish projected, the smallest absorbing buffer, never a lower target, 'NOT guaranteed'", () => {
@@ -1065,10 +1066,10 @@ test("slew limit: a decrease goes down by at most maxDecreaseStepW per change; a
   assert.ok(!smallUp.codes.includes("JUMP_FOR_DEADLINE"));
   assert.equal(plan({ currentSetpointW: 1500, lastChangeElapsedMin: 50, elapsedMin: 100, socPct: 35 }).jumpForDeadline, false, "off by default");
   // a safety decrease goes to the safe value at once, whatever the slew
-  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, ceilings: [{ name: "battery_max_charge", watts: 3000 }], params: { maxDecreaseStepW: 100 } });
+  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, ceilings: [{ name: "battery_max_charge", watts: 3000 }], params: { maxDecreaseStepW: 100, hysteresisW: 100 } });
   assert.ok(safety.codes.includes("ABOVE_CEILING"));
   assert.ok((safety.setpointW as number) <= 3000);
-  const hsafe = hplan({ gridImportLimitW: 5000, demandProfile: flat(1000) }, { currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, params: { maxDecreaseStepW: 100 } });
+  const hsafe = hplan({ gridImportLimitW: 5000, demandProfile: flat(1000) }, { currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, params: { maxDecreaseStepW: 100, hysteresisW: 100 } });
   assert.ok(hsafe.codes.includes("ABOVE_HEADROOM"));
   assert.equal(hsafe.setpointW, 3800);
   assert.equal(hsafe.changesUsed, 6, "a safety decrease does not draw on the budget");
@@ -1115,7 +1116,9 @@ test("an increase that the deadline can WAIT for waits out the dwell (no flappin
   assert.equal(wait.setpointW, 3000);
   assert.ok(wait.codes.includes("HELD_DWELL"));
   assert.equal(wait.status, "OK", "waiting is part of a plan that still makes the deadline");
-  assert.ok((wait.marginMin as number) >= 15 - 0.11, "the projection keeps the slack: " + wait.marginMin);
+  // v3 G7 m5: the projection used to assume a raise to the CEILING after the dwell (a margin of at least the 15 min slack); the later raise goes to the
+  // LOWEST step that still makes the deadline, so the margin shown is that one: not negative, and well under the slack a raise to the ceiling would show.
+  assert.ok((wait.marginMin as number) >= -0.11 && (wait.marginMin as number) < 15 - 5, "the projection is the later lowest-step raise's: " + wait.marginMin);
   assert.match(wait.reasons.join(" "), /deadline still holds/);
   assert.equal(wait.changesUsed, 0);
   assert.ok((wait.neededW as number) > 3000, "the increase was wanted");
@@ -2134,4 +2137,225 @@ test("[v3 G6b] closed loop under taper shapes the model does NOT assume: the mis
   assert.ok(unflagged.length <= 0.1 * stat.miss, "a miss that was not flagged before the deadline is rare and printed: " + unflagged.join("; "));
   // the claim that is NOT made here: that the assumed taper is right (it is unmeasured), or that these shapes resemble the real BMS
   assert.match(NO_GUARANTEE_NOTE, /assumed/i);
+});
+
+// ---- G7: the minors ----------------------------------------------------------------------------------------------------------------------
+
+test("[v3 G7 m1] a finish that lands after a FRACTIONAL horizon is late, never on time", () => {
+  const m: ChargeModel = { capacityKwh: 30, chargeEff: 0.95, ceilingW: 8000, taperStartSocPct: 90, taperEndFraction: 0.15 };
+  // 7600 W gives about 0.401 points a minute: from 79.5 to 80 takes 1.2465 minutes
+  const full = projectCharge(79.5, 7600, 80, m, 5).finishMin as number;
+  assert.ok(Math.abs(full - 1.2465) < 0.002, "closed form: " + full);
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1.2).finishMin, null, "1.2465 min is after a horizon of 1.2 min (it used to count as on time)");
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1.2464).finishMin, null);
+  assert.ok(projectCharge(79.5, 7600, 80, m, 1.3).finishMin !== null);
+  assert.equal(projectCharge(79.5, 7600, 80, m, 2).finishMin, full, "a whole-minute horizon is unchanged");
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1).finishMin, null);
+  // through the controller: a fractional elapsed time never lets a late step through as the lowest step, and an at-risk reason is never the budget's when nothing is held
+  let checked = 0;
+  for (let k = 0; k < 900; k++) {
+    const elapsed = 20 + k * 0.31;
+    const socPct = 25 + (k % 37) * 0.7;
+    const d = plan({ elapsedMin: elapsed, socPct, targetSocPct: 90, bufferMin: 60 });
+    if (d.status === "NO_DATA" || d.status === "NOTHING_TO_CHARGE" || d.status === "DEADLINE_PASSED") continue;
+    checked++;
+    if (d.neededW !== null) {
+      assert.equal(d.change, "START");
+      assert.equal(d.status, "OK", "elapsed " + elapsed + " soc " + socPct + ": the lowest step makes the deadline, nothing is held: " + d.reasons.join(" | "));
+      assert.ok((d.marginMin as number) >= -0.11, "margin " + d.marginMin + " at elapsed " + elapsed);
+    }
+  }
+  assert.ok(checked > 400, "checked " + checked);
+});
+
+test("[v3 G7 m2] a fallback never holds anything after the window ends, and says so when it holds a rate inside the buffer", () => {
+  for (const policy of ["KEEP_CURRENT", "USE_STATIC_PLAN"] as const) {
+    for (const elapsedMin of [360, 361, 400]) {
+      const d = plan({ socAgeMin: 99, elapsedMin, currentSetpointW: 3000, staticPlanRateW: 4000, policy: { fallbackPolicy: policy } });
+      assert.equal(d.status, "NO_DATA");
+      assert.equal(d.fallback.applied, true);
+      assert.equal(d.fallback.setpointW, null, policy + " at " + elapsedMin + ": the window is over");
+      assert.match(d.fallback.reason, /window has ended/);
+    }
+    // a household input that cannot be checked after the window end: the same
+    const hh = hplan({ gridImportLimitW: 7000, demandProfile: flat(500), gridImportLimitAgeMin: 999 }, { elapsedMin: 370, currentSetpointW: 3000, staticPlanRateW: 4000, policy: { fallbackPolicy: policy } });
+    assert.equal(hh.fallback.setpointW, null);
+    // an unknown ceiling: still no recommendation (as before)
+    assert.equal(plan({ ceilings: [], elapsedMin: 100, currentSetpointW: 3000, policy: { fallbackPolicy: policy } }).fallback.setpointW, null);
+  }
+  // inside the finish-early buffer (the deadline is minute 300, the window ends at 360): the hold stands, labelled
+  const buf = plan({ socAgeMin: 99, elapsedMin: 310, currentSetpointW: 3000 });
+  assert.equal(buf.fallback.setpointW, 3000);
+  assert.match(buf.fallback.reason, /finish-early deadline has passed/);
+  assert.match(buf.fallback.reason, /does not plan for the deadline/);
+  const st = plan({ socAgeMin: 99, elapsedMin: 310, staticPlanRateW: 4000, policy: { fallbackPolicy: "USE_STATIC_PLAN" } });
+  assert.equal(st.fallback.setpointW, 4000);
+  assert.match(st.fallback.reason, /finish-early deadline has passed/);
+  // before the deadline: no such note, and the answer is the old one
+  const before = plan({ socAgeMin: 99, elapsedMin: 100, currentSetpointW: 3000 });
+  assert.equal(before.fallback.setpointW, 3000);
+  assert.doesNotMatch(before.fallback.reason, /deadline has passed/);
+  assert.equal(plan({ socAgeMin: 99, elapsedMin: 299, currentSetpointW: 3000 }).fallback.setpointW, 3000);
+  assert.equal(plan({ socAgeMin: 99, elapsedMin: 299.5, currentSetpointW: 3000 }).fallback.setpointW, 3000);
+});
+
+test("[v3 G7 m3] every recommended write is counted (the START and a safety decrease included) and none is ever blocked; a slew step smaller than the hysteresis is refused", () => {
+  const start = plan({ changesUsed: 6, totalChangesUsed: 9 });
+  assert.equal(start.change, "START");
+  assert.equal(start.changesUsed, 6, "the START is free in the ordinary budget (v1)");
+  assert.equal(start.totalChangesUsed, 10, "but it is a write: it counts in the total");
+  assert.equal(plan({ changesUsed: 2 }).totalChangesUsed, 3, "missing total = the ordinary count, plus this write");
+  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, totalChangesUsed: 12, ceilings: [{ name: "battery_max_charge", watts: 4000 }] });
+  assert.equal(safety.change, "DECREASE");
+  assert.ok((safety.setpointW as number) <= 4000, "a safety decrease is never blocked by a spent budget");
+  assert.equal(safety.changesUsed, 6);
+  assert.equal(safety.totalChangesUsed, 13, "but it is counted");
+  const inc = plan({ currentSetpointW: 3000, socPct: 35, elapsedMin: 100, changesUsed: 2, totalChangesUsed: 5, lastChangeElapsedMin: 0 });
+  assert.equal(inc.change, "INCREASE");
+  assert.equal(inc.changesUsed, 3);
+  assert.equal(inc.totalChangesUsed, 6);
+  const held = plan({ currentSetpointW: 3000, socPct: 35, elapsedMin: 100, changesUsed: 6, totalChangesUsed: 8, lastChangeElapsedMin: 0 });
+  assert.equal(held.change, "NONE");
+  assert.equal(held.totalChangesUsed, 8, "no write, no count");
+  for (const bad of [{ changesUsed: 3, totalChangesUsed: 2 }, { totalChangesUsed: 1.5 }, { totalChangesUsed: -1 }, { totalChangesUsed: NaN }] as Partial<GentleInput>[]) assert.equal(plan(bad).status, "INVALID", JSON.stringify(bad));
+  assert.equal(plan({ targetSocPct: 9, changesUsed: 3 }).totalChangesUsed, 3);
+  // the slew: a step smaller than the hysteresis could never save the hysteresis
+  for (const params of [{ maxDecreaseStepW: 100 }, { maxDecreaseStepW: 400, hysteresisW: 500 }, { maxDecreaseStepW: 900, hysteresisW: 1000 }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  assert.match(plan({ params: { maxDecreaseStepW: 100 } }).reasons.join(" "), /maxDecreaseStepW must be at least hysteresisW/);
+  for (const params of [{ maxDecreaseStepW: 500, hysteresisW: 500 }, { maxDecreaseStepW: 1000 }, { maxDecreaseStepW: 100, hysteresisW: 0 }, { hysteresisW: 9000 }]) assert.equal(plan({ params }).status, "OK", JSON.stringify(params));
+});
+
+test("[v3 G7 m4] a setpoint in force with nothing (more) to charge or the window over is a STOP, told apart from no data; nothing else changes", () => {
+  const done = plan({ socPct: 85, targetSocPct: 80, currentSetpointW: 4000 });
+  assert.equal(done.status, "NOTHING_TO_CHARGE");
+  assert.equal(done.stopRecommended, true);
+  assert.equal(done.setpointW, null);
+  assert.equal(done.change, "NONE", "the v1 fields are untouched");
+  assert.equal(done.changeRecommended, false);
+  assert.equal(plan({ socPct: 85, targetSocPct: 80, currentSetpointW: null }).stopRecommended, false);
+  assert.equal(plan({ socPct: 85, targetSocPct: 80, currentSetpointW: 0 }).stopRecommended, false);
+  const over = plan({ elapsedMin: 400, currentSetpointW: 3000 });
+  assert.equal(over.status, "DEADLINE_PASSED");
+  assert.equal(over.stopRecommended, true);
+  assert.equal(plan({ elapsedMin: 400, currentSetpointW: null }).stopRecommended, false);
+  // no data is not a stop, and the buffer is not a stop (the ceiling is the best effort there)
+  assert.equal(plan({ socPct: null, currentSetpointW: 3000 }).stopRecommended, false);
+  assert.equal(plan({ elapsedMin: 310, currentSetpointW: 3000 }).stopRecommended, false);
+  assert.equal(plan({ currentSetpointW: 3000, elapsedMin: 100, socPct: 45 }).stopRecommended, false);
+  assert.equal(plan().stopRecommended, false);
+});
+
+test("[v3 G7 m5] a hold that waits out the dwell projects the raise the model will actually make (the lowest step), not a raise to the ceiling", () => {
+  const G: HouseholdInput = { gridImportLimitW: 30000, demandProfile: flat(500) };
+  const st = (soc: number, since: number) => hplan(G, { currentSetpointW: 3000, lastChangeElapsedMin: 60 - since, elapsedMin: 60, socPct: soc });
+  let waits = 0;
+  for (const soc of [32, 33, 34, 35, 36, 37]) {
+    const d = st(soc, 5);
+    if (!d.codes.includes("HELD_DWELL")) continue;
+    waits++;
+    assert.ok((d.marginMin as number) >= -0.11, "soc " + soc + ": " + d.marginMin);
+    assert.ok((d.marginMin as number) < 10, "soc " + soc + ": the margin of a raise to the ceiling would be 15 min or more, this is the lowest step's: " + d.marginMin);
+    assert.equal(d.status, "OK");
+  }
+  assert.ok(waits >= 3, "waits exercised: " + waits);
+});
+
+test("[v3 G7 m6] a second SOC reading must be consistent with the first: not far below it, not further above it than a charge could carry it; a clock that went backwards is INVALID", () => {
+  const PS = (soc: number, prev: { socPct: number; elapsedMin: number } | null | undefined, over: Partial<GentleInput> = {}) => plan({ socPct: soc, previousSoc: prev, elapsedMin: 100, currentSetpointW: 3000, lastChangeElapsedMin: 50, ...over });
+  const prev = { socPct: 40, elapsedMin: 90 };
+  assert.equal(PS(41, prev).status, "OK");
+  assert.equal(PS(37, prev).status, "OK", "exactly the regression tolerance of 3 points is plausible");
+  const down = PS(36.9, prev);
+  assert.equal(down.status, "NO_DATA");
+  assert.ok(down.codes.includes("SOC_IMPLAUSIBLE"));
+  assert.equal(down.setpointW, null);
+  assert.equal(down.fallback.applied, true);
+  assert.match(down.reasons.join(" "), /below the previous one/);
+  // 10 minutes at up to 60 points an hour is 10 points, plus the 1 point resolution and the 3 point tolerance: 14
+  assert.equal(PS(54, prev).status, "OK");
+  const up = PS(54.5, prev);
+  assert.equal(up.status, "NO_DATA");
+  assert.ok(up.codes.includes("SOC_IMPLAUSIBLE"));
+  assert.match(up.reasons.join(" "), /could carry it/);
+  assert.equal(PS(44, { socPct: 40, elapsedMin: 100 }).status, "OK", "the same minute: the resolution and the tolerance only");
+  assert.equal(PS(44.5, { socPct: 40, elapsedMin: 100 }).status, "NO_DATA");
+  assert.equal(PS(60, { socPct: 40, elapsedMin: 40 }).status, "OK", "60 minutes later 20 points is within 60 points an hour");
+  // no previous reading: no check; a stale or unknown current reading is the old NO_DATA with its own code
+  assert.equal(PS(60, null).status, "OK");
+  assert.equal(PS(60, undefined).status, "OK");
+  assert.ok(PS(20, null, { socAgeMin: 99 }).codes.includes("STALE_SOC"));
+  // a bad second reading or a clock that went backwards is INVALID, never guessed around
+  for (const bad of [{ socPct: 40, elapsedMin: 150 }, { socPct: 140, elapsedMin: 90 }, { socPct: NaN, elapsedMin: 90 }, { socPct: 40, elapsedMin: -1 }, "x", { socPct: 40 }] as unknown[]) assert.equal(PS(41, bad as { socPct: number; elapsedMin: number }).status, "INVALID", JSON.stringify(bad));
+  for (const params of [{ socRegressionTolPct: -1 }, { socRegressionTolPct: 51 }, { socJumpPctPerHour: 0 }, { socJumpPctPerHour: 1001 }, { socJumpPctPerHour: NaN }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  assert.equal(DEFAULT_GENTLE_PARAMS.socRegressionTolPct, 3);
+  assert.equal(DEFAULT_GENTLE_PARAMS.socJumpPctPerHour, 60);
+  assert.equal(PS(50, prev, { params: { socJumpPctPerHour: 30 } }).status, "NO_DATA", "the rate is a parameter: 5 + 1 + 3 = 9 points allowed, 10 are not");
+  assert.equal(PS(50, prev, { params: { socJumpPctPerHour: 40 } }).status, "OK", "6.7 + 1 + 3 = 10.7 points allowed");
+});
+
+test("[v3 G7 m7] a window that starts exactly at the clock change, or inside the hour a spring change skips, has an ambiguous real length: unknown, nothing is recommended", () => {
+  const T = TIME as unknown as { ambiguousClockStart: (startMin: number, day: ClockDay) => boolean };
+  // spring forward (the hour 120-179 does not exist), autumn back (the change minute is ambiguous), an ordinary day
+  for (const start of [120, 121, 150, 179]) assert.equal(T.ambiguousClockStart(start, SPRING), true, "spring " + start);
+  for (const start of [119, 180, 0, 22 * 60]) assert.equal(T.ambiguousClockStart(start, SPRING), false, "spring " + start);
+  assert.equal(T.ambiguousClockStart(120, AUTUMN), true);
+  for (const start of [60, 90, 119, 121, 0, 22 * 60]) assert.equal(T.ambiguousClockStart(start, AUTUMN), false, "autumn " + start + " (the repeated hour is read as the first pass: an open ruling)");
+  for (const start of [0, 120, 150, 1439]) assert.equal(T.ambiguousClockStart(start, ORDINARY), false);
+  assert.equal(T.ambiguousClockStart(NaN, SPRING), false);
+  // the window length is unknown for such a start, and an ordinary start is unchanged
+  assert.equal(windowRealMinutes(120, 4 * 60, SPRING), null);
+  assert.equal(windowRealMinutes(150, 4 * 60, SPRING), null);
+  assert.equal(windowRealMinutes(120, 4 * 60, AUTUMN), null);
+  assert.equal(windowRealMinutes(22 * 60, 4 * 60, SPRING), 300);
+  assert.equal(windowRealMinutes(22 * 60, 4 * 60, AUTUMN), 420);
+  assert.equal(windowRealMinutes(60, 4 * 60, AUTUMN), 180 + 60, "inside the repeated hour: read as the first pass, so the repeat is counted");
+  for (const [start, day] of [[120, SPRING], [150, SPRING], [179, SPRING], [120, AUTUMN]] as [number, ClockDay][]) {
+    const d = plan({ chargeWindow: { startMin: start, endMin: 6 * 60, clockDay: day }, currentSetpointW: 3000 });
+    assert.equal(d.status, "INVALID", start + " " + day.deltaMin);
+    assert.equal(d.setpointW, null);
+    assert.equal(d.changeRecommended, false);
+    assert.match(d.reasons.join(" "), /ambiguous/);
+    assert.equal(d.fallback.applied, false, "an invalid input has no fallback");
+  }
+  assert.equal(plan({ chargeWindow: { startMin: 22 * 60, endMin: 6 * 60, clockDay: SPRING } }).status, "OK");
+  assert.equal(plan({ chargeWindow: { startMin: 60, endMin: 6 * 60, clockDay: AUTUMN } }).status, "OK");
+  assert.equal(plan({ chargeWindow: { startMin: 119, endMin: 9 * 60, clockDay: SPRING } }).status, "OK");
+});
+
+test("[v3 G7 m8] the wording claims no more than the model can know: the note does not say 100 percent cannot be reached, the header scopes 'safe limit' to the model's estimate, the README says what is not observed", () => {
+  assert.doesNotMatch(NO_GUARANTEE_NOTE, /cannot be reached/);
+  assert.match(NO_GUARANTEE_NOTE, /NOT guaranteed/);
+  assert.match(NO_GUARANTEE_NOTE, /100 percent/);
+  assert.match(NO_GUARANTEE_NOTE, /not measured/);
+  assert.match(NO_GUARANTEE_NOTE, /fixed rate/);
+  assert.match(NO_GUARANTEE_NOTE, /taper/);
+  assert.match(NO_GUARANTEE_NOTE, /read-only/);
+  const raw = readFileSync(new URL("../src/gentleController.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(raw, /never exceeds a safe limit/);
+  assert.match(raw, /as its inputs and assumptions state it/);
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /follows the real taper/);
+  assert.match(readme, /does not know the real taper or capacity/);
+  assert.doesNotMatch(readme, /cannot be reached at a fixed rate because the BMS tapers/);
+  assert.match(readme, /held back by the changes budget/, "the at-risk case held by the budget is listed with the statuses");
+  assert.match(readme, /model estimate/i);
+  for (const d of [plan(), plan({ socPct: null }), plan({ targetSocPct: 100, socPct: 40 })]) assert.equal(d.guaranteeNote, NO_GUARANTEE_NOTE);
+});
+
+test("[v3 G7 m9] a power ceiling taken from a current limit uses the lowest plausible voltage, and the amps the actuator would set never exceed the limit at any voltage", () => {
+  assert.equal(powerFromCurrent(60, 51.2), 3072, "no minimum voltage: unchanged");
+  assert.equal(powerFromCurrent(60, 56, 48), 2880, "the lower of the two voltages");
+  assert.equal(powerFromCurrent(60, 44, 48), 2640);
+  assert.equal(powerFromCurrent(60, 51.2, null), 3072);
+  for (const bad of [0, -1, NaN, Infinity]) assert.equal(powerFromCurrent(60, 51.2, bad), null, "a minimum voltage that is not a positive number is unknown: " + bad);
+  assert.equal(powerFromCurrent(null, 51.2, 48), null);
+  // at the high voltage the ceiling asks for more amps than the limit allows at a lower one: capped
+  const hi = powerFromCurrent(60, 58) as number;
+  assert.equal(hi, 3480);
+  assert.ok(hi / 44 > 60, "the power from a high voltage would be " + (hi / 44).toFixed(1) + " A at 44 V");
+  assert.equal(G4.ampsFromPower(hi, 44, 60), 60);
+  assert.ok(Math.abs((G4.ampsFromPower(2640, 51.2, 60) as number) - 2640 / 51.2) < 1e-12);
+  assert.equal(G4.ampsFromPower(3000, 50, 60), 60);
+  assert.equal(G4.ampsFromPower(0, 50, 60), 0);
+  for (const bad of [[null, 50, 60], [3000, 0, 60], [3000, 50, -1], [3000, NaN, 60], [-5, 50, 60], [3000, 50, null]] as [unknown, unknown, unknown][]) assert.equal(G4.ampsFromPower(bad[0] as number, bad[1] as number, bad[2] as number), null, JSON.stringify(bad));
 });

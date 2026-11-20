@@ -2,13 +2,14 @@
 //
 // At each tick it turns the state into a RECOMMENDED charge-power setpoint: the lowest 100 W step whose forward simulation (pessimistic
 // capacity, assumed BMS taper) reaches the target by the deadline (window end minus the finish-early buffer), then hysteresis, dwell, a
-// slew limit and a changes budget. It never lowers the target, never exceeds a safe limit and never recommends from unknown or stale SOC.
+// slew limit and a changes budget. It never lowers the target, never recommends a setpoint above a safe limit as its inputs and assumptions state it
+// (a model estimate: the real limits may be lower) and never recommends from unknown or stale SOC.
 // Optional household inputs (demand, solar, a KNOWN safe grid import limit) cap the setpoint by the grid headroom, pessimistically.
 //
 // NOTHING HERE ACTUATES. Today's firmware fixes the Free Power rate at START, so a recommended CHANGE cannot be applied: an actuator
 // (a Free Power rate controller on the Dump V1.1 pattern, with a write budget and live proof) does not exist. The module only says what
 // such a controller would do, and labels it "model, not a command". It NEVER guarantees the target (guarantee is always NONE).
-import { elapsedMinutes, span } from "./time.ts";
+import { ambiguousClockStart, elapsedMinutes, span } from "./time.ts";
 import type { ClockDay } from "./time.ts";
 import { LIMITS } from "./settings.ts";
 
@@ -17,7 +18,7 @@ export const ASSUMED_LABEL = "assumed, not measured";
 export const ACTUATION_REASON =
   "Today's firmware fixes the Free Power rate at START and verifies against it; applying a change needs a rate controller that does not exist (it would need a write budget and live proof).";
 export const NO_GUARANTEE_NOTE =
-  "The target is NOT guaranteed. This is a plan from assumed battery behaviour, forecasts and the latest readings, not a promise: 100 percent cannot be reached at a fixed rate because the BMS tapers the charge near full and handles the top of charge itself, and a lost reading, a demand spike or a lower real limit can make it miss. The model is read-only: it recommends and applies nothing.";
+  "The target is NOT guaranteed. This is a plan from assumed battery behaviour, forecasts and the latest readings, not a promise: a 100 percent target is the most at risk, because the BMS is expected to taper the charge near full and to handle the top of charge itself (assumed here, not measured), so a fixed rate is unlikely to finish a full charge on time, and a lost reading, a demand spike or a lower real limit can make any target miss. The model is read-only: it recommends and applies nothing.";
 /** The default finish-early buffer in minutes (the owner's setting; the 0-120 grid in 5-minute steps is unchanged). Used by helpers and tests. */
 export const GENTLE_DEFAULT_BUFFER_MIN = 60;
 
@@ -55,10 +56,24 @@ export interface NamedCeiling {
   basis?: PowerBasis;
 }
 
-/** Battery-side power from a current limit and a voltage (a convenience for the two current-based ceilings); null if either is unknown. */
-export function powerFromCurrent(amps: number | null | undefined, volts: number | null | undefined): number | null {
+/**
+ * Battery-side power from a current limit and a voltage (a convenience for the two current-based ceilings); null if either is unknown. The actuator
+ * turns watts into amps at the voltage the pack has when the rate is applied, so a power ceiling taken at a HIGH voltage can ask for more amps than the
+ * limit allows at a lower one. Pass `minVolts`, the lowest voltage the pack can show then: the lower of the two voltages is used. A `minVolts` that is
+ * not a positive number gives null (unknown), never a guess.
+ */
+export function powerFromCurrent(amps: number | null | undefined, volts: number | null | undefined, minVolts?: number | null): number | null {
   if (typeof amps !== "number" || typeof volts !== "number" || !Number.isFinite(amps) || !Number.isFinite(volts) || amps < 0 || volts <= 0) return null;
-  return amps * volts;
+  if (minVolts === undefined || minVolts === null) return amps * volts;
+  if (typeof minVolts !== "number" || !Number.isFinite(minVolts) || minVolts <= 0) return null;
+  return amps * Math.min(volts, minVolts);
+}
+
+/** The current a power setpoint turns into at a voltage (watts / volts), never above the current limit, whatever the voltage; null if an input is unknown. */
+export function ampsFromPower(watts: number | null | undefined, volts: number | null | undefined, ampLimit: number | null | undefined): number | null {
+  if (typeof watts !== "number" || typeof volts !== "number" || typeof ampLimit !== "number") return null;
+  if (!Number.isFinite(watts) || !Number.isFinite(volts) || !Number.isFinite(ampLimit) || watts < 0 || volts <= 0 || ampLimit < 0) return null;
+  return Math.min(watts / volts, ampLimit);
 }
 
 export interface GentleParams {
@@ -90,6 +105,10 @@ export interface GentleParams {
   taperEndFraction: number;
   /** Extra minutes reserved after reaching a 100 % target (final taper tail and a hold). Not applied to lower targets. */
   topHoldMin: number;
+  /** A SOC reading may be this many points BELOW the previous one before it is called implausible (a second reading is given as `previousSoc`). */
+  socRegressionTolPct: number;
+  /** The most the SOC may plausibly RISE per hour, in percentage points, against the previous reading (plus the resolution and the regression tolerance). */
+  socJumpPctPerHour: number;
   /** Household demand safety margin on top of the peak, percent (PROVISIONAL). */
   demandMarginPct: number;
   /** Conservative demand in W used when the demand over the window is not covered and the policy is ASSUME_PROVISIONAL (PROVISIONAL, unmeasured). */
@@ -134,6 +153,8 @@ export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
   taperStartSocPct: 90,
   taperEndFraction: 0.15,
   topHoldMin: 20,
+  socRegressionTolPct: 3,
+  socJumpPctPerHour: 60,
   demandMarginPct: 20,
   assumedDemandW: 2000,
   solarCreditPct: 0,
@@ -185,6 +206,8 @@ const KINDS: Record<string, readonly [ParamKind, string]> = {
   taperStartSocPct: ["MEASURED_REQUIRED", "the BMS taper curve measured over several full charges"],
   taperEndFraction: ["MEASURED_REQUIRED", "the BMS taper curve measured over several full charges"],
   topHoldMin: ["MEASURED_REQUIRED", "the measured time from the last taper step to the BMS finishing the top of charge"],
+  socRegressionTolPct: ["PROVISIONAL", "the measured noise and update behaviour of the SOC sensor"],
+  socJumpPctPerHour: ["PROVISIONAL", "the measured fastest real charge rate of the battery"],
   demandMarginPct: ["PROVISIONAL", "the measured spread of real demand against its forecast"],
   assumedDemandW: ["MEASURED_REQUIRED", "the measured overnight household demand profile (unknown today)"],
   solarCreditPct: ["PROVISIONAL", "a measured forecast skill gate (none exists: 0 means no solar inside the hard grid limit)"],
@@ -278,8 +301,15 @@ export interface GentleInput {
   currentSetpointW: number | null;
   /** Real minutes since window start at the last setpoint change (null if none yet). */
   lastChangeElapsedMin: number | null;
-  /** Setpoint changes since the START in this window. */
+  /** Ordinary setpoint changes since the START in this window (the budget the START and a safety decrease do not draw on). */
   changesUsed: number;
+  /**
+   * EVERY recommended write since the START, the START and the safety decreases included: what a real actuator's write budget must count. Missing =
+   * `changesUsed`. Counted and reported (`totalChangesUsed`), never a block: a safety decrease is never held back by a budget.
+   */
+  totalChangesUsed?: number;
+  /** The previous accepted SOC reading and when it was taken (real minutes since the window opened), for a plausibility check; absent or null = no check. */
+  previousSoc?: { socPct: number; elapsedMin: number } | null;
   params?: Partial<GentleParams>;
   /** Household demand, solar and the safe grid import limit. Without it the v1 behaviour is unchanged, bit for bit. */
   household?: HouseholdInput;
@@ -325,6 +355,7 @@ export type GentleCode =
   | "ABOVE_HEADROOM"
   | "SLEW_LIMITED"
   | "JUMP_FOR_DEADLINE"
+  | "SOC_IMPLAUSIBLE"
   | "SOLAR_NOT_CREDITED"
   | "FORECAST_STALE"
   | "CEILING_STALE"
@@ -391,6 +422,10 @@ export interface GentleDecision {
   suggestedBufferMin: number | null;
   changesUsed: number;
   changesLeft: number;
+  /** Every recommended write so far including this decision's, the START and safety decreases counted (see `GentleInput.totalChangesUsed`). */
+  totalChangesUsed: number;
+  /** True when a setpoint is in force and the model says there is nothing (more) to charge or the window is over: a STOP, which a real actuator would need a mechanism for (Free Power has no SOC stop). Informational. */
+  stopRecommended: boolean;
   nextReplanInMin: number | null;
   actuationSupported: false;
   actuationReason: string;
@@ -419,9 +454,13 @@ const ceilStep = (x: number, step: number) => Math.ceil(x / step - 1e-9) * step;
 const floorStep = (x: number, step: number) => Math.floor(x / step + 1e-9) * step;
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
-/** The real length of the owner's wall-clock window in minutes (clock-change aware), or null for a zero-length window. */
+/**
+ * The real length of the owner's wall-clock window in minutes (clock-change aware), or null for a zero-length window or an AMBIGUOUS start (exactly at
+ * the change minute, or inside the hour a spring change skips): unknown, never guessed.
+ */
 export function windowRealMinutes(startMin: number, endMin: number, clockDay: ClockDay): number | null {
   if (!isNum(startMin) || !isNum(endMin)) return null;
+  if (ambiguousClockStart(startMin, clockDay)) return null;
   const wall = span(startMin, endMin);
   return wall === 0 ? null : elapsedMinutes(startMin, wall, clockDay);
 }
@@ -561,6 +600,8 @@ export function projectCharge(startSocPct: number, setpointW: number, targetSocP
     }
     if (soc + gain >= targetSocPct - 1e-9) {
       const finish = i - 1 + (targetSocPct - soc) / gain;
+      // A fractional horizon is not rounded UP: a finish that lands after it (inside the last, partial minute) is late, never on time.
+      if (finish > maxMin + 1e-9) return { finishMin: null, points };
       if (sampleEveryMin > 0) points.push({ inMin: round1(finish), socPct: round1(targetSocPct) });
       return { finishMin: finish, points };
     }
@@ -615,6 +656,10 @@ function paramProblem(p: GentleParams): string | null {
   if (p.maxCeilingAgeMin <= 0 || p.maxCeilingAgeMin > 1440) return "maxCeilingAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxGridLimitAgeMin <= 0 || p.maxGridLimitAgeMin > 1440) return "maxGridLimitAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxDecreaseStepW < p.stepW) return "maxDecreaseStepW must be at least one step.";
+  // A slew step smaller than the hysteresis could never save the hysteresis: every slewed decrease would spend a change for less than the rule asks.
+  if (p.maxDecreaseStepW < p.hardMaxW && p.maxDecreaseStepW < p.hysteresisW) return "maxDecreaseStepW must be at least hysteresisW (a slewed decrease must save the hysteresis), or leave the slew off.";
+  if (p.socRegressionTolPct < 0 || p.socRegressionTolPct > 50) return "socRegressionTolPct must be 0-50.";
+  if (p.socJumpPctPerHour <= 0 || p.socJumpPctPerHour > 1000) return "socJumpPctPerHour must be above 0 and at most 1000.";
   return null;
 }
 
@@ -626,11 +671,18 @@ function inputProblem(i: GentleInput): string | null {
   if (i.learnedCapacityKwh !== undefined && i.learnedCapacityKwh !== null && (!isNum(i.learnedCapacityKwh) || i.learnedCapacityKwh <= 0)) return "The learned capacity must be a positive number of kWh or null.";
   if (!isNum(i.elapsedMin) || i.elapsedMin < 0) return "The elapsed minutes must be a number, 0 or more.";
   if (!i.chargeWindow || !isNum(i.chargeWindow.startMin) || !isNum(i.chargeWindow.endMin) || !i.chargeWindow.clockDay) return "The window or the clock day is missing.";
+  if (ambiguousClockStart(i.chargeWindow.startMin, i.chargeWindow.clockDay)) return "The window starts at the clock change or inside the hour the clock skips: its real length is ambiguous (unknown).";
   if (windowRealMinutes(i.chargeWindow.startMin, i.chargeWindow.endMin, i.chargeWindow.clockDay) === null) return "The window has no length.";
   if (!Array.isArray(i.ceilings)) return "The ceilings must be a list.";
   if (i.currentSetpointW !== null && (!isNum(i.currentSetpointW) || i.currentSetpointW < 0)) return "The current setpoint must be a number of watts or null.";
   if (i.lastChangeElapsedMin !== null && (!isNum(i.lastChangeElapsedMin) || i.lastChangeElapsedMin < 0 || i.lastChangeElapsedMin > i.elapsedMin)) return "The last change must be null or between the window start and now.";
   if (!Number.isInteger(i.changesUsed) || i.changesUsed < 0) return "The changes used must be a whole number, 0 or more.";
+  if (i.totalChangesUsed !== undefined && (!Number.isInteger(i.totalChangesUsed) || i.totalChangesUsed < i.changesUsed)) return "The total changes used must be a whole number, at least the changes used.";
+  if (i.previousSoc !== undefined && i.previousSoc !== null) {
+    const q = i.previousSoc;
+    if (typeof q !== "object" || !isNum(q.socPct) || q.socPct < 0 || q.socPct > 100 || !isNum(q.elapsedMin) || q.elapsedMin < 0) return "The previous SOC must be null or a reading of 0-100 % with the real minutes since the window opened.";
+    if (q.elapsedMin > i.elapsedMin) return "The previous SOC reading is from after the elapsed time: the clock count went backwards.";
+  }
   return null;
 }
 
@@ -658,6 +710,8 @@ function shell(status: GentleStatus, targetSocPct: number, reasons: string[], co
     suggestedBufferMin: null,
     changesUsed: isNum(changesUsed) ? changesUsed : 0,
     changesLeft: p ? Math.max(0, p.maxChanges - (isNum(changesUsed) ? changesUsed : 0)) : 0,
+    totalChangesUsed: isNum(changesUsed) ? changesUsed : 0,
+    stopRecommended: false,
     nextReplanInMin: p ? p.replanMin : null,
     actuationSupported: false,
     actuationReason: ACTUATION_REASON,
@@ -930,10 +984,12 @@ function choose(target: number, down: number, cMax: number, cur: number | null, 
 }
 
 /** What the fallback policy holds when the normal plan cannot run. Never above the safe ceiling or the grid headroom cap; a limit that cannot be checked means no recommendation. */
-function computeFallback(input: GentleInput, p: GentleParams, pol: GentlePolicy, why: string, cCeil: number | null, cMin: number, hh: HouseholdEval): FallbackInfo {
+function computeFallback(input: GentleInput, p: GentleParams, pol: GentlePolicy, why: string, cCeil: number | null, cMin: number, hh: HouseholdEval, toEnd: number, toDeadline: number): FallbackInfo {
   const policy = pol.fallbackPolicy;
-  const mk = (setpointW: number | null, reason: string): FallbackInfo => ({ applied: true, policy, setpointW, reason });
+  const after = toDeadline <= 0 && toEnd > 0 ? " The finish-early deadline has passed: this holds a rate inside the buffer, it does not plan for the deadline." : "";
+  const mk = (setpointW: number | null, reason: string): FallbackInfo => ({ applied: true, policy, setpointW, reason: reason + (setpointW !== null ? after : "") });
   if (policy === "NONE") return mk(null, why + " Fallback policy NONE: no recommendation.");
+  if (toEnd <= 0) return mk(null, why + " The charge window has ended: nothing is held after the window end: no recommendation.");
   if (cCeil === null) return mk(null, why + " The safe ceiling is unknown, so no setpoint can be checked against it: no recommendation.");
   if (hh.problem !== null) return mk(null, why + " The grid headroom cannot be checked (the household input is unusable): no recommendation.");
   let cap = cCeil;
@@ -983,7 +1039,7 @@ export function planGentle(input: GentleInput): GentleDecision {
     return d;
   };
   const withFallback = (d: GentleDecision, why: string, names: readonly string[]): GentleDecision => {
-    d.fallback = computeFallback(input, p, pol, why, cCeil, cMin, hhEval());
+    d.fallback = computeFallback(input, p, pol, why, cCeil, cMin, hhEval(), toEnd, toDeadline);
     d.provisionalInUse = provisionalList([...names, "fallbackPolicy"], p, pol, input);
     return d;
   };
@@ -995,9 +1051,19 @@ export function planGentle(input: GentleInput): GentleDecision {
   if (input.socAgeMin === null || !isNum(input.socAgeMin) || input.socAgeMin < 0 || input.socAgeMin > p.maxSocAgeMin) {
     return noData("The SOC reading is stale or its age is unknown (limit " + p.maxSocAgeMin + " min); nothing is recommended.", "STALE_SOC");
   }
+  // A second reading, when given, must be consistent with the first: not far below it, and not further above it than a charge could carry it.
+  const prevSoc = input.previousSoc;
+  if (prevSoc !== undefined && prevSoc !== null) {
+    const dt = input.elapsedMin - prevSoc.elapsedMin;
+    const maxRise = (p.socJumpPctPerHour * dt) / 60 + p.socResolutionPct + p.socRegressionTolPct;
+    if (input.socPct < prevSoc.socPct - p.socRegressionTolPct) return noData("The SOC reading (" + input.socPct + " %) is more than " + p.socRegressionTolPct + " points below the previous one (" + prevSoc.socPct + " %): implausible, nothing is recommended.", "SOC_IMPLAUSIBLE");
+    if (input.socPct > prevSoc.socPct + maxRise) return noData("The SOC reading (" + input.socPct + " %) is further above the previous one (" + prevSoc.socPct + " %, " + Math.round(dt) + " min ago) than a charge could carry it: implausible, nothing is recommended.", "SOC_IMPLAUSIBLE");
+  }
   const soc = input.socPct;
   if (soc >= target) {
+    // A reported reading at or above the target counts as reached (the pessimistic offset applies to the plan only); a setpoint in force then needs a STOP.
     const d = mk("NOTHING_TO_CHARGE", ["The battery is at " + soc + " %, at or above the " + target + " % target."], ["AT_TARGET"]);
+    d.stopRecommended = isNum(input.currentSetpointW) && input.currentSetpointW > 0;
     d.provisionalInUse = provisionalList(["maxSocAgeMin"], p, pol, input);
     return d;
   }
@@ -1053,10 +1119,12 @@ export function planGentle(input: GentleInput): GentleDecision {
   const sinceChange = input.lastChangeElapsedMin === null ? Infinity : input.elapsedMin - input.lastChangeElapsedMin;
   const budgetLeft = p.maxChanges - used;
   const cur = input.currentSetpointW;
+  const totalUsed = isNum(input.totalChangesUsed) ? input.totalChangesUsed : used;
 
   const out = mk("OK", [], []);
   out.ceilingW = cMax0;
   out.ceilingName = known.name;
+  out.totalChangesUsed = totalUsed;
   out.deadlineInMin = toDeadline;
   out.windowEndInMin = toEnd;
   out.headroomCapW = capStep;
@@ -1097,6 +1165,21 @@ export function planGentle(input: GentleInput): GentleDecision {
     }
     return out;
   };
+  // The lowest step whose forward simulation reaches the target by the deadline (finish time is monotone in the setpoint). With a `lead`, the first
+  // `lead.min` minutes run at `lead.w` instead of the step searched for (a raise that waits out the dwell).
+  const avail = toDeadline - hold;
+  const lowestStep = (within: number, lead?: { w: number; min: number }): number | null => {
+    const fin = (w: number): number | null => (lead === undefined ? finish(w, within) : projectCharge(planSoc, w, target, { ...model, leadW: lead.w, leadMin: lead.min }, within)).finishMin;
+    if (within <= 0 || fin(cMax) === null) return null;
+    let lo = cMin;
+    let hi = cMax;
+    while (lo < hi) {
+      const mid = lo + floorStep((hi - lo) / 2, p.stepW);
+      if (fin(mid) !== null) hi = mid;
+      else lo = mid + p.stepW;
+    }
+    return lo;
+  };
   const finalise = (c: Choice) => {
     out.setpointW = c.w;
     out.change = c.change;
@@ -1108,8 +1191,12 @@ export function planGentle(input: GentleInput): GentleDecision {
     // The START and a safety decrease do not draw on the budget; an ordinary increase or decrease does.
     out.changesUsed = used + (c.change === "INCREASE" || c.code === "DECREASE_SAVING" ? 1 : 0);
     out.changesLeft = Math.max(0, p.maxChanges - out.changesUsed);
+    // The write count a real actuator must keep: every recommended change, the START and a safety decrease included (never a block).
+    out.totalChangesUsed = totalUsed + (c.change !== "NONE" ? 1 : 0);
+    // A hold that waits out the dwell projects the raise the model will actually make afterwards: the LOWEST step that still makes the deadline, not the
+    // ceiling, so the margin shown is the one the later raise gives (about none), never the larger one a raise to the ceiling would give.
     const pr = c.lead
-      ? projectCharge(planSoc, cMax, target, { ...model, leadW: c.lead.w, leadMin: c.lead.min }, Math.max(toEnd - hold, 0), 5)
+      ? projectCharge(planSoc, lowestStep(avail, c.lead) ?? cMax, target, { ...model, leadW: c.lead.w, leadMin: c.lead.min }, Math.max(toEnd - hold, 0), 5)
       : finish(c.w, Math.max(toEnd - hold, 0), 5);
     out.finishInMin = pr.finishMin === null ? null : round1(pr.finishMin);
     out.marginMin = pr.finishMin === null ? null : round1(toDeadline - hold - pr.finishMin);
@@ -1126,23 +1213,10 @@ export function planGentle(input: GentleInput): GentleDecision {
       const c = choose(cMax, cMax, cMax, cur, sinceChange, budgetLeft, p, ctx(true));
       finalise(c);
       out.reasons.push("Time is left before the window ends: the " + (headroomBinds ? "safe grid headroom" : "ceiling") + " is the best effort.");
-    }
+    } else out.stopRecommended = isNum(cur) && cur > 0;
     return done();
   }
 
-  // The lowest step whose forward simulation reaches the target by the deadline (finish time is monotone in the setpoint).
-  const avail = toDeadline - hold;
-  const lowestStep = (within: number): number | null => {
-    if (within <= 0 || finish(cMax, within).finishMin === null) return null;
-    let lo = cMin;
-    let hi = cMax;
-    while (lo < hi) {
-      const mid = lo + floorStep((hi - lo) / 2, p.stepW);
-      if (finish(mid, within).finishMin !== null) hi = mid;
-      else lo = mid + p.stepW;
-    }
-    return lo;
-  };
   const neededW = lowestStep(avail);
   out.neededW = neededW;
 
