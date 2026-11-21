@@ -1123,7 +1123,7 @@ Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node on
 `PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). Nothing was pushed, merged, installed, registered or
 deployed, and no live system was contacted.
 
-**Three rounds** (round 3 follows the pinned artefacts). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
+**Four rounds** (rounds 4 and 3 follow the pinned artefacts; round 4 is the newest). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
 and verified there (its table is kept below as "round 1"). An independent review of that runbook found eight points (F1 to F8);
 they are fixed in four new commits on the same branch: `66009ef` (the generator's `--verify-storage` and its suite), `748e68a`
 (the card's pin suite), `a4fa2d0` (a comment kept ASCII) and `f188a5a` (this runbook). Round 2 was run in a clean clone
@@ -1132,7 +1132,7 @@ they are fixed in four new commits on the same branch: `66009ef` (the generator'
 differ: this runbook, the generator and its two suites. The card, the catalogue, the example and every protected file are
 byte-identical (sha256 below, checked at both ends); no manifest, scope chain, preflight or deploy tool was touched.
 
-**The pinned artefacts (the same at every commit of all three rounds):**
+**The pinned artefacts (the same at every commit of all four rounds):**
 
 | Artefact | Size | sha256 |
 |---|---|---|
@@ -1142,6 +1142,55 @@ byte-identical (sha256 below, checked at both ends); no manifest, scope chain, p
 | the generated dashboard configuration (`--out`) | 147,178 bytes | `4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167` |
 | the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
 | the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
+
+**Round 4** (21 Nov 2026: the owner's decision to make U1 the first supervised installation). Docs, one new offline tool with its suite, and the extension of the checklist
+suite; no card, catalogue, example, generator or other pinned file was touched. The five pinned hashes were recomputed before the first edit and again at the end and are
+unchanged (table above). The commits on top of `c03c0a8` are `573c7cc` (the live shape check and its suite), `b4c5e29` (the runbook, the checklist and the checklist
+suite's pins), and the commit that holds this section, which differs from the one before it **only in this section**. What was done:
+
+1. **The owner's decisions (T1).** D-U1-1 (option a: install from the branch commit after green CI; merge is separate and the card's sha256 must be unchanged at the merge),
+   D-U1-2 (RG-F3 resolved for U1 only: the existing voice-assistant exposure settings remain a separately tracked F3 issue because U1 creates no new entity; not acceptance of
+   F3, not permission to introduce new exposed controls) and D-U1-4 (push, draft pull request, the M2 scan on the exact commit, CI) are marked decided on 21 Nov 2026;
+   D-U1-3, D-U1-5 and D-U1-6 keep their defaults; both documents say that no automatic installation or live access is authorised (top of the runbook, sections 3, 5.0, 5.1, 12; checklist 1, 7).
+2. **The exact targets (T2).** Section 1.2 (and checklist 2) hold one table: the card file, the resource URL and type, the dashboard path and title, the `.storage` names read; and the
+   four target checks (a) to (d). Block 1 of 5.1 now prints three more numbers for checks (a) and (b); 5.3 and 5.4 name checks (c) and (d).
+3. **The live shape check (T3).** `tools/geek_mode_live_shape_check.py` converts the states file of block 3 in memory to the value-free listing format, compares it with
+   `geek_mode_coverage.compare_live` (imported) and prints counts and names only; exit 0 / 1 / 2; `--write-shape` only outside the checkout. Its suite (125 checks, 37 of 37 mutants killed)
+   was shown to fail first on a stub that always exits 0 (53 of 60 checks failed; the 7 that pass are the ones a stub cannot fail). The committed 14 Nov listing converted back into states
+   gives exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared, 1 not checked: the verdict `geek_mode_coverage` itself gives. Block 3 keeps
+   every `ecco_intel` entity besides the listed ones; step 1b is a row of both step tables and section 5.1b. Found offline and written down (5.1b): a recorded `self_test` makes its check
+   codes UNDECLARED dotted attributes (the universe declares the attribute, not its keys).
+4. **The write-path statement (T4).** Read in the card (the mode buttons' one handler, `createModeController`, `_applyMode`, `canOpenMoreInfo`) and in the generated configuration
+   (its only actions are the pause tile's `toggle` twice and `more-info` once; no service-call shaped key); run in Node through the guard with `ECCO_PYTHON` set: the generated-config file
+   5 of 5, 0 skipped; the element suite 150 of 150; the core suite 157 of 157. No other write-capable path was found.
+5. **The check of every existing dashboard (T5).** 5.4 replaces the single look at the Overview by a list written from the baseline (`dashboards-to-check.txt`, one new block) and
+   three yes/no questions for each existing dashboard; any no deletes the one resource.
+6. **The baseline, the backup, the rollback and the release gates (T6).** Checklist 6 now says what the rollback is measured against and gives A1 its proof (the gap found); checklist 7 holds the
+   release gates table (G1 to G7).
+7. **The PowerShell blocks.** The runbook has 22 blocks (20 before) and the checklist 2: all parse (Windows PowerShell 5.1 parser). 16 of the 22 ran against stand-ins (ssh and scp replaced
+   by functions, the real generator and the real live shape check, the clipboard stubbed): block 3 on states built from the repository fixtures kept the listed and the `ecco_intel` entities
+   and the tool exited 0; with one more `ecco_intel` entity that no code declares the filter kept it and the tool exited 1 and named it. The six that did not run are the checkout, the deploy
+   line, the two preflight calls, the clipboard copy and the re-run of the gate (parsed only).
+8. **The checklist suite** has 713 checks (357 before) and 342 in-memory mutants (167 before: 146 of the checklist, 185 of the runbook, 3 of the Node test, 8 of the card, example, ledger and
+   Node sources), all killed. Shown to fail first: on the unchanged round 3 documents the new suite fails 168 checks.
+
+Not run, said plainly: GitHub CI (nothing is pushed), the owner's M2 private-pattern scan, the other Node suites, the mutation run, and anything on a live system.
+
+**Round 4 results** (the worktree of the branch; Python: `<PY> -I -B -X utf8`; serially, one process at a time):
+
+| What | Command | rc | Count |
+|---|---|---|---|
+| repository validator | `tools/validate_repo.py` | 0 | PASSED (yaml 52, python 395, json 81, text 654) |
+| CI root `tools/tests`, every suite, serially | `tools/run_offline_tests.py --root tools/tests --parallel 1` | 0 | 25/25 passed (251 s); round 3: 24/24, the live shape suite is the 25th |
+| the live shape check suite (new) | `tools/tests/test_geek_mode_live_shape_check.py` | 0 | 125 PASS, 0 FAIL; 37 of 37 mutants killed (33 of the tool's source, 4 of its static rules); 53 of its checks fail on a stub that always exits 0 |
+| the checklist suite | `tools/tests/test_geek_mode_checklist.py` | 0 | 713 PASS, 0 FAIL (357 before); 342 mutants, all killed (167 before); 168 checks fail on the round 3 documents |
+| the pin suite; the generator suite | `tools/tests/test_ecco_mode_shell_card.py`; `tools/tests/test_geek_mode_dashboard_config.py` | 0; 0 | 107 PASS, 0 FAIL, 1 SKIP check line (git on the PATH); 104 PASS, 0 FAIL (both unchanged) |
+| neighbours | `test_geek_mode_example.py`; `test_geek_mode_privacy.py`; `test_geek_mode_catalogue.py`; `test_geek_mode_coverage.py`; `test_geek_mode_fixtures.py`; `test_geek_mode_ledger.py`; `test_intelligence_card.py` | 0 each | 35; 195; 134; 219; 102; 68; 81 PASS, 0 FAIL |
+| privacy suite (without the owner's pattern file) | `tools/tests/test_public_privacy.py` | 0 | 25 PASS, 1 SKIP (the owner's private pattern file: the M2 scan is not run here) |
+| generators | `tools/geek_mode_dashboard_config.py --check`; `tools/geek_mode_coverage.py --check`; `tools/gen_geek_fixtures.py --check` | 0; 0; 0 | `OK: 147178 bytes, sha256 4abf3b1e...` (unchanged); no drift; no drift |
+| the generated-config Node test (local, guarded; the interpreter named, 5.0) | `ECCO_PYTHON=<PY> node --test --test-concurrency=2 test/generated-config.test.mjs` | 0 | 5 of 5 pass, 0 skipped |
+| the element and core Node suites (local, guarded; they name the mode switch) | `node --test --test-concurrency=2 test/element.test.mjs`; `... test/core.test.mjs` | 0; 0 | 150 of 150 pass, 0 skipped; 157 of 157 pass, 0 skipped |
+| PowerShell blocks | the Windows PowerShell 5.1 parser over every fenced block | 0 | 22 of the runbook and 2 of the checklist parse; 16 of the runbook's ran against stand-ins |
 
 **Round 3** (20 Nov 2026: the owner's directive to make U1 the first deployment candidate). Docs and one new suite only. The commits on top of
 `5b8f29d` are `dc63e2d` (the runbook corrections), `db96c46` (one sentence of them), `4e6fda1` (the GO checklist
