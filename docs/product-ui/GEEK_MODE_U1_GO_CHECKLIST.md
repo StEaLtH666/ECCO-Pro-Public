@@ -3,7 +3,7 @@
 For the owner's decision on the first live Home Assistant update. The full detail is in `GEEK_MODE_FIRST_UPDATE_RUNBOOK.md`, cited here as
 "runbook N" (a section number). Written 20 Nov 2026, updated 21 Nov 2026 for the owner's decision. Nothing in this list has been done.
 Length, said honestly: it was 136 lines; with the decision, the exact targets, the write-path statement, the release gates and the per-dashboard check it is now
-186 lines (its suite allows 200). Every table says what is yours and what is the coordinator's.
+188 lines (its suite allows 200). Every table says what is yours and what is the coordinator's.
 
 ## 1. The answer
 
@@ -78,10 +78,10 @@ Each live step needs your own go, given at the time; a go for one step is not a 
 |---|---|---|---|---|
 | 0 | coordinator | offline gates on the chosen commit; the generation below; the M2 scan on the exact commit, the push, the draft pull request and CI (your decision of 21 Nov, D-U1-4) (runbook 5.0) | suites green, hashes as pinned, M2 clean, CI green | any new failure; a hash that is not the pinned one; a changed commit repeats the checks and scans |
 | 1 | coordinator, your go | live read-only baseline: lists, hashes, byte-exact copies, log lines, target checks (a) and (b) (runbook 5.1) | every copy `EXACT`; nothing of A1 to A3 present; (a) and (b) hold | anything of A1 to A3 already there; the Intelligence card's resource not under `/local/ecco/`; Core not running; a copy that is not `EXACT` |
-| 1b | coordinator, your separate go | live shape check: block 3 (the state read), then the offline tool `geek_mode_live_shape_check.py` on `states-before.json` (runbook 5.1b) | exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained | anything UNDECLARED, a declared entity missing or an unexplained absence: stop and ask you (the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected) |
+| 1b | coordinator, your separate go | live shape check: block 3 (the state read), then the offline tool `geek_mode_live_shape_check.py` on `states-before.json` (runbook 5.1b) | exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained, 0 not checked (a recorded self_test is a note under the proposed default of this row) | anything UNDECLARED, a declared entity missing or an unexplained absence: stop and ask you (the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected); a declared entity not checked is a stop too; proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP |
 | 2 | you | protected full backup; quiet window (runbook 5.2) | a protected backup exists | no protected backup |
 | 3 | coordinator, your go | copy the card with `deploy-ha.ps1`, then `verify-served` (runbook 5.3) | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, `RESOURCE NOT REGISTERED`; one PASS line | any failure line; a hash mismatch; the tool's own rollback message; more than the one new file |
-| 4 | you add, coordinator reads, your go | the one resource, then `verify-resource`, then your check of EACH existing dashboard (runbook 5.4) | `RESOURCE VERIFIED`; every existing dashboard: yes, yes, yes | any other line; another resource changed; a no on any dashboard (you delete the one resource) |
+| 4 | you add, coordinator reads, your go | the one resource, then `verify-resource`, then your check of EACH existing dashboard (runbook 5.4) | `RESOURCE VERIFIED`; every row of `dashboards-to-check.txt` filled yes, yes, yes (every existing dashboard and the catch-all row), confirmed by the coordinator | any other line; another resource changed; a no or an empty cell on any row (you delete the one resource) |
 | 5 | you | create the dashboard, Require admin on, the two checks, paste, Save (runbook 5.5) | the dashboard exists, admin-only | no raw editor; Home Assistant refuses the text; a failed pre-save check |
 | 6 | coordinator, your go | read-only after-checks and `--verify-storage` (runbook 5.6) | verdict as expected; `STORED CONFIGURATION EQUALS THE GENERATED ONE` | any difference that is not listed |
 | 7 | you | ONE look: Production first; Geek only after you say go; never tap the pause tile (runbook 5.7) | the checks of runbook 5.7 | a freeze, a blank or contradicting strip, a console error that names the shell |
@@ -109,13 +109,14 @@ The first block is step 0. The second holds the commands of steps 1b, 3, 4 and 6
 (steps 4 and 5) and the captures that feed them (`states-before.json`, `resources-now.json`, `stored-config.json`) in the runbook blocks. These are the short
 forms: each runbook block sets `$H`, `$E`, `$PY` and the checkout folder itself, and its placeholders are filled in first.
 
-## 5. After the install (all read-only)
+## 5. The read-only checks (item 1 at step 4, before step 5; items 2 to 6 after the install)
 
-1. Every existing dashboard answers yes to three questions: it renders as before (same cards, nothing red, no new error card), the console shows no new error that
-   names the shell or its resource, and the page responds. The list is `dashboards-to-check.txt`, written by the coordinator from the baseline before step 4: the
-   production Overview, the existing Intelligence dashboard, every other dashboard and YAML dashboard file, and any wall or phone client (a note for the known
-   old-web-view error). Any no is a stop: you delete the one resource (rollback A2) and the same list is looked at again. The Overview's file hash stays at
-   its baseline (runbook 5.4, 5.6).
+1. **At step 4, before step 5** (the dashboard does not exist yet), every existing dashboard answers yes to three questions: it renders as before (same cards, nothing
+   red, no new error card), the console shows no new error that names the shell or its resource, and the page responds. The list is `dashboards-to-check.txt`, written by
+   the coordinator from the baseline before step 4: the production Overview, the existing Intelligence dashboard, every other dashboard and YAML dashboard file, one catch-all
+   row for every other sidebar entry (Energy, Map, any YAML dashboard registered elsewhere), and any wall or phone client (a note for the known old-web-view error). Each row has
+   three empty answer columns that you fill yes or no; the coordinator confirms every row is filled yes, yes, yes before step 5 goes ahead, and a single no or an empty cell is the
+   stop. Any no is a stop: you delete the one resource (rollback A2) and the same list is looked at again. The Overview's file hash stays at its baseline (runbook 5.4, 5.6).
 2. The new dashboard is listed once, `require_admin` true, and the verdict is as expected: `changed` is the two lists, `new` is one file; a second new file is a stop (runbook 5.6).
 3. `STORED CONFIGURATION EQUALS THE GENERATED ONE`; no new lovelace, frontend or shell line in the log (runbook 5.6).
 4. Production look: the shell starts in Production; the Intelligence card and the watchdog card read as on the existing Intelligence dashboard;
@@ -143,7 +144,8 @@ everything the backup holds to its state at backup time. It is your decision and
 
 No open defect is known from the offline checks. What stands between this list and a GO: step 0 is the coordinator's (the M2 scan on the exact commit, the push, the
 draft pull request and CI: at the time of this text none of the four had been done); then, at install time, the host reads (state, history, log, the globbed `sha256sum`,
-the stored-file `scp`, the shape check: none has run on the real host), your protected backup and your presence; and your final installation GO.
+the stored-file `scp`, the shape check: none has run on the real host), your protected backup and your presence; and your final installation GO, at which you also
+confirm or change the proposed default of step 1b (a self_test note is recorded, not a stop; you have not ruled on it yet).
 
 | Decision | Status (your decision of 21 Nov 2026) | If undecided |
 |---|---|---|

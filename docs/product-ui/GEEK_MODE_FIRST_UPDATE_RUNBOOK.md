@@ -188,10 +188,10 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 |---|---|---|---|---|---|---|---|
 | 0 | offline gates on the exact commit: the verification table (section 13), the owner's M2 private-pattern scan (generated assets, commit metadata and pull request text included), the push, the draft pull request and CI | COORDINATOR (the M2 scan is the owner's tool) | offline (the push and CI touch GitHub only) | read-only on the live system; a push is a GitHub write | decided by the owner on 21 Nov 2026 (D-U1-4): the M2 scan on the exact commit, the push, the draft pull request, CI; nothing live | the table is green or its failures are named as known; the M2 scan reports no hit; CI green on the pushed tip | any new failure; a card or catalogue hash that is not the pinned one; a change of the commit (the applicable verification and the scans are repeated) |
 | 1 | live read-only baseline (5.1: blocks 1, 2 and 4, with the target checks (a) and (b) of 1.2; the state read, block 3, belongs to step 1b) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; target checks (a) and (b) hold; G4 holds once step 1b has passed | anything of A1 to A3 already present; the Intelligence card's resource missing or not under `/local/ecco/`; Core not running; a copy that is not byte-exact |
-| 1b | live shape check (5.1b): block 3 (the state read, which keeps the listed entities and every `ecco_intel` entity), then the offline tool `tools\geek_mode_live_shape_check.py` on `states-before.json` | COORDINATOR | live (block 3), offline (the tool) | read-only | **yes**, its own go: a separate live read | exit 0 and the counts of 5.1b | any UNDECLARED entity or attribute, any declared entity missing, any unexplained absence: the catalogue is out of date for this host (ask the owner) |
+| 1b | live shape check (5.1b): block 3 (the state read, which keeps the listed entities and every `ecco_intel` entity), then the offline tool `tools\geek_mode_live_shape_check.py` on `states-before.json` | COORDINATOR | live (block 3), offline (the tool) | read-only | **yes**, its own go: a separate live read | exit 0 and the counts of 5.1b (17 of 17 present, NOT_CHECKED 0) | any UNDECLARED entity or attribute (a self_test note excepted, the proposed default of 5.1b), any declared entity missing or not checked, any unexplained absence: the catalogue is out of date for this host (ask the owner) |
 | 2 | the owner's protected full backup in the UI; RG-F3 decision recorded; quiet window confirmed | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists (its name and time recorded offline, never its password) | no protected backup |
 | 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3; target check (c) of 1.2) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS (the folder-to-URL mapping and the bytes, before any resource exists) | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
-| 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource` (target check (d) of 1.2); then the owner checks EACH existing dashboard, because the resource is global (5.4) | OWNER (the add, the checks), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the checks are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; every existing dashboard: yes to all three questions of 5.4 | any other line; any other resource changed; a no for any existing dashboard (the owner deletes the one resource) |
+| 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource` (target check (d) of 1.2); then the owner checks EACH existing dashboard, because the resource is global (5.4) | OWNER (the add, the checks), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the checks are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; every existing dashboard: yes to all three questions of 5.4 (every row of `dashboards-to-check.txt` filled yes, yes, yes, which the coordinator confirms before step 5) | any other line; any other resource changed; a no or an empty cell for any row of the list (the owner deletes the one resource) |
 | 5 | the owner creates the admin-only storage dashboard, makes the two pre-save checks and pastes the generated configuration (5.5) | OWNER | live (UI) | a Home Assistant write by the owner | the owner's action | the dashboard exists, "Require admin" is on, the paste saved in the NEW dashboard | the raw editor is not offered; Home Assistant refuses the text; either pre-save check fails |
 | 6 | read-only after-checks (5.6) | COORDINATOR | live | read-only | **yes** (a live read) | the Overview file and every other dashboard file have their baseline sha256; the resource list differs by exactly one item; the dashboard list by exactly one item; the stored configuration (copied with `scp`) equals the generated one; no new lovelace, frontend or shell line in the log; Intelligence status and pause helper unchanged | any other difference |
 | 7 | ONE owner look: Production first, then Geek only after the owner says go (5.7) | OWNER | live (browser) | read-only (a presentation toggle). **Never tap the pause tile** | the owner's action; the Geek look needs the owner's separate go | the checks of 5.7 | any of the stop lines of 5.7 or section 10 |
@@ -421,21 +421,33 @@ Set-Location <checkout>
 Exit 0: the shape matches (nothing UNDECLARED, no declared entity missing, no unexplained absence); exit 1: it does not, and the lines say which; exit 2: bad
 input (the tool names the cause and nothing of the file's content). **Expected: exit 0, the line `RESULT: MATCH (exit 0)` and the counts:** PRESENT_LIVE 17
 of 17 declared entities (the 14 Nov filter did not cover the reserve helper; this read lists it), NOT_PRESENT_LIVE 0 declared entities missing and 0
-unexplained attribute rows, UNDECLARED 0 entities and 0 attributes, NOT_CHECKED_LIVE 0. The number of conditional attribute rows depends on the day (42 on
-14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop. For reference, the committed 14 Nov listing converted back
-into states gives, offline, exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared and 1 not checked (the
-reserve helper). `--write-shape <path>` also writes the value-free listing, only outside the repository's checkout, never over an existing file unless
-`--overwrite` is given.
+unexplained attribute rows, UNDECLARED 0 entities and 0 attributes, NOT_CHECKED_LIVE 0. In short: expected exit 0, 17 of 17 present, NOT_CHECKED 0. The number of
+conditional attribute rows depends on the day (42 on 14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop.
+NOT_CHECKED_LIVE fails closed: a declared entity that is neither in the states file nor marked absent (a hand-made capture, an edited entity list) is a failure, exit 1,
+unless the caller passes the explicit flag `--allow-not-checked`, which exists for one deliberate case only, the 14 Nov listing converted back (its capture filter did not
+cover the reserve helper); the read of the install day never uses it, and block 3 lists every catalogued entity or marks it absent. For reference, the committed 14 Nov listing converted back
+into states gives, offline, exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared and 1 not checked (the reserve helper), when
+`--allow-not-checked` is given, and exit 1 without it. `--write-shape <path>` also writes the value-free listing, only outside the repository's checkout, never over an existing
+file unless `--overwrite` is given.
 
 **Stop.** Anything UNDECLARED, any declared entity missing and any unexplained absence (exit 1) is a stop: it means the catalogue is out of date for this
-host, so the Geek inspector would be wrong. Production is unaffected. Ask the owner; nothing is changed meanwhile.
+host, so the Geek inspector would be wrong. Production is unaffected. Ask the owner; nothing is changed meanwhile. A declared entity that is NOT_CHECKED_LIVE is a stop too
+(exit 1 without `--allow-not-checked`). A self_test note is not counted as UNDECLARED: it is the proposed default of (2) below.
 
 Three things to know in advance (read from the code and the fixtures; none has been seen on the host). (1) The reserve helper's attributes were never
 confirmed live, because the 14 Nov listing did not include it: this read compares them, and a difference there is the first evidence of their shape. (2) If
-the live status entity's recorded self-test is not empty, its check codes appear as UNDECLARED dotted attributes (`self_test.<check code>`): the code
-universe declares that attribute as a whole, not its keys, and the 14 Nov listing had it empty. The tool prints a hint and still exits 1, so the stop rule
-applies and the owner decides what the finding means; nothing is edited at the look. (3) An entity that reads unavailable or unknown has a partial
+the live status entity's recorded self-test is not empty, its check codes appear as UNDECLARED dotted attributes (`self_test.<check code>`) in the comparison itself: the
+code universe declares that attribute as a whole, not its keys, and the 14 Nov listing had it empty. The tool sets such a path apart from the failures, in a separate
+section titled `NOTE (free-form self-test check codes under the declared self_test attribute; recorded, not a failure)`, with names only, and it does not change the exit
+code. **Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence
+is a STOP.** The default is the coordinator's proposal and the owner has not ruled on it; the tool implements exactly it and does not widen it: a dotted path under any
+other declared attribute (for example `advice.<x>`), a `self_test` attribute on an entity that does not declare it, any other undeclared entity or attribute, a missing
+source entity, an unexplained absence and a NOT_CHECKED_LIVE entity all stay failures. Nothing is edited at the look. (3) An entity that reads unavailable or unknown has a partial
 attribute list: the tool counts such entities in a NOTE, and an absence on them is read with care and the read repeated while Intelligence is publishing.
+
+**Where the output stays.** The names of the `ecco_intel` entities and of the one catalogued helper outside that name filter appear in the tool's output and in a `--write-shape`
+listing (by design: entity ids, attribute names, check codes), so the output stays in the evidence folder (`<OFFLINE_EVIDENCE_DIR>`) and is never pasted into a repository or a chat.
+Values never appear, and neither does any entity id that the catalogue does not declare and that is not named `ecco_intel` (those states are only counted).
 
 ### 5.2 Step 2: the owner's protected backup
 
@@ -596,23 +608,34 @@ cls
 $E = '<OFFLINE_EVIDENCE_DIR>\u1-baseline'
 $ErrorActionPreference = 'Stop'
 $items = @((Get-Content -Raw -Encoding utf8 "$E\dashboards-before.json" | ConvertFrom-Json).data.items)
-$lines = @('the default dashboard (the production Overview)')
-$lines += @($items | ForEach-Object { 'storage dashboard: {0} ({1})' -f $_.url_path, $_.title })
-$lines += @(Get-Content "$E\sha-before.txt" | Where-Object { $_ -match '\S' } | ForEach-Object { ($_ -split '\s+', 2)[1].Trim().TrimStart('*') } | Where-Object { $_ -like 'ecco/dashboards/*' } | ForEach-Object { 'YAML dashboard file: ' + $_ })
-$lines += 'any wall or phone client the owner uses'
+$what = @('the default dashboard (the production Overview)')
+$what += @($items | ForEach-Object { 'storage dashboard: {0} ({1})' -f $_.url_path, $_.title })
+$what += @(Get-Content "$E\sha-before.txt" | Where-Object { $_ -match '\S' } | ForEach-Object { ($_ -split '\s+', 2)[1].Trim().TrimStart('*') } | Where-Object { $_ -like 'ecco/dashboards/*' } | ForEach-Object { 'YAML dashboard file: ' + $_ })
+$what += 'every other sidebar entry (Energy, Map, any YAML dashboard registered elsewhere)'
+$what += 'any wall or phone client the owner uses'
+$lines = @('| open this | renders as before | no console error naming the shell | responds |')
+$lines += @($what | ForEach-Object { '| {0} |  |  |  |' -f $_ })
 $lines | Out-File -Encoding utf8 "$E\dashboards-to-check.txt"
 $lines
 ```
 
-`dashboards-to-check.txt` holds the production Overview (the default dashboard), the existing Intelligence dashboard (it is one of the next two groups), every
-other dashboard of `dashboards-before.json` and every YAML dashboard file listed in `sha-before.txt`, then the wall and phone clients. After the resource is
-added, with a hard refresh (Ctrl+F5) and the browser console (F12) open, the owner opens EACH of them and records yes or no for each of three questions:
+`dashboards-to-check.txt` is a table of rows with three empty answer columns (renders as before, no console error naming the shell, responds); a filled row reads
+`| storage dashboard: <url path> (<title>) | yes | yes | yes |`. It holds the production Overview (the default dashboard), the existing Intelligence dashboard (it is one of
+the next two groups), every other dashboard of `dashboards-before.json` and every YAML dashboard file listed in `sha-before.txt`, then one catch-all row,
+`every other sidebar entry (Energy, Map, any YAML dashboard registered elsewhere)`, and the wall and phone clients. Why the catch-all row: the list is built from two
+sources only, the stored dashboard list and the YAML dashboard files under `ecco/dashboards`, so a YAML dashboard registered from another path, and Home Assistant's own panels
+that can also load global resources (Energy, Map and similar sidebar entries; recalled, not verified), would not be in it; for that row the owner goes through the whole
+sidebar and answers for every entry that is not already a row. After the resource is added, with a hard refresh (Ctrl+F5) and the browser console (F12) open, the owner opens
+EACH of them and records yes or no for each of three questions in the three empty columns of its row (the owner types the answers into the file, or says them and the
+coordinator types them in):
 
 1. it renders as before (the same cards, nothing red, no new error card);
 2. the console shows no new error that names the shell or its resource (messages of other cards are noted, not judged);
 3. the page responds (no freeze, no blank page).
 
-For any wall or phone client the owner uses, the result is a note, not a stop, when it is only the known old-web-view module error below. **Any no is a stop:**
+**The coordinator confirms every row is filled yes, yes, yes before step 5 goes ahead; a single no or an empty cell is the STOP of 5.4**, so that a row skipped by a
+tired owner is seen and not assumed. For any wall or phone client the owner uses, the result is a note, not a stop, when it is only the known old-web-view module error below
+(the owner writes note in that row's console cell instead of no, the one cell that may hold anything but yes). **Any no is a stop:**
 record the text and the page, the owner deletes the one resource (rollback A2, section 7, item 2), and then the same list is looked at again; do not go on to
 step 5. The production Overview's file hash stays at its baseline, and step 6 proves it.
 
@@ -1123,7 +1146,7 @@ Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node on
 `PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). Nothing was pushed, merged, installed, registered or
 deployed, and no live system was contacted.
 
-**Four rounds** (rounds 4 and 3 follow the pinned artefacts; round 4 is the newest). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
+**Five rounds** (rounds 5, 4 and 3 follow the pinned artefacts; round 5 is the newest). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
 and verified there (its table is kept below as "round 1"). An independent review of that runbook found eight points (F1 to F8);
 they are fixed in four new commits on the same branch: `66009ef` (the generator's `--verify-storage` and its suite), `748e68a`
 (the card's pin suite), `a4fa2d0` (a comment kept ASCII) and `f188a5a` (this runbook). Round 2 was run in a clean clone
@@ -1132,7 +1155,7 @@ they are fixed in four new commits on the same branch: `66009ef` (the generator'
 differ: this runbook, the generator and its two suites. The card, the catalogue, the example and every protected file are
 byte-identical (sha256 below, checked at both ends); no manifest, scope chain, preflight or deploy tool was touched.
 
-**The pinned artefacts (the same at every commit of all four rounds):**
+**The pinned artefacts (the same at every commit of all five rounds):**
 
 | Artefact | Size | sha256 |
 |---|---|---|
@@ -1142,6 +1165,13 @@ byte-identical (sha256 below, checked at both ends); no manifest, scope chain, p
 | the generated dashboard configuration (`--out`) | 147,178 bytes | `4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167` |
 | the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
 | the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
+
+**Round 5** (21 Nov 2026: the fixes of the independent review of round 4, verdict READY_WITH_MINORS, points F1 to F6): the check of every existing dashboard (5.4, checklist 5) gets one catch-all row for
+every other sidebar entry, three empty answer columns per row and the coordinator's yes, yes, yes confirmation before step 5, and the checklist says that it is done at step 4, before step 5 (F1, F5); block 3's
+append of the undeclared `ecco_intel` states is pinned line by line and in order (F2); the live shape check fails closed on a declared entity that is not checked unless `--allow-not-checked` is given (F3);
+a recorded `self_test` is a note, not a failure, under a proposed default that the owner confirms or changes at the final GO (F4); and 5.1b says that the names of the entities stay in the evidence folder (F6);
+only the live shape check, its suite, the checklist suite, the runbook and the checklist changed (the five pinned hashes were recomputed first and last and are unchanged), the live shape suite has 160 checks
+(125 before) and 49 of 49 mutants killed (37 before), and the checklist suite has 837 checks (713 before) and 404 of 404 mutants killed (342 before).
 
 **Round 4** (21 Nov 2026: the owner's decision to make U1 the first supervised installation). Docs, one new offline tool with its suite, and the extension of the checklist
 suite; no card, catalogue, example, generator or other pinned file was touched. The five pinned hashes were recomputed before the first edit and again at the end and are
@@ -1157,9 +1187,10 @@ suite's pins), and the commit that holds this section, which differs from the on
 3. **The live shape check (T3).** `tools/geek_mode_live_shape_check.py` converts the states file of block 3 in memory to the value-free listing format, compares it with
    `geek_mode_coverage.compare_live` (imported) and prints counts and names only; exit 0 / 1 / 2; `--write-shape` only outside the checkout. Its suite (125 checks, 37 of 37 mutants killed)
    was shown to fail first on a stub that always exits 0 (53 of 60 checks failed; the 7 that pass are the ones a stub cannot fail). The committed 14 Nov listing converted back into states
-   gives exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared, 1 not checked: the verdict `geek_mode_coverage` itself gives. Block 3 keeps
+   gives exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared, 1 not checked: the verdict `geek_mode_coverage` itself gives (round 5: that exit is 0 only with
+   `--allow-not-checked`; without it the tool now exits 1 on that one not checked entity). Block 3 keeps
    every `ecco_intel` entity besides the listed ones; step 1b is a row of both step tables and section 5.1b. Found offline and written down (5.1b): a recorded `self_test` makes its check
-   codes UNDECLARED dotted attributes (the universe declares the attribute, not its keys).
+   codes UNDECLARED dotted attributes (the universe declares the attribute, not its keys; round 5: the tool now records them as a note, a proposed default that the owner confirms or changes at the final GO).
 4. **The write-path statement (T4).** Read in the card (the mode buttons' one handler, `createModeController`, `_applyMode`, `canOpenMoreInfo`) and in the generated configuration
    (its only actions are the pause tile's `toggle` twice and `more-info` once; no service-call shaped key); run in Node through the guard with `ECCO_PYTHON` set: the generated-config file
    5 of 5, 0 skipped; the element suite 150 of 150; the core suite 157 of 157. No other write-capable path was found.
@@ -1169,7 +1200,9 @@ suite's pins), and the commit that holds this section, which differs from the on
    release gates table (G1 to G7).
 7. **The PowerShell blocks.** The runbook has 22 blocks (20 before) and the checklist 2: all parse (Windows PowerShell 5.1 parser). 16 of the 22 ran against stand-ins (ssh and scp replaced
    by functions, the real generator and the real live shape check, the clipboard stubbed): block 3 on states built from the repository fixtures kept the listed and the `ecco_intel` entities
-   and the tool exited 0; with one more `ecco_intel` entity that no code declares the filter kept it and the tool exited 1 and named it. The six that did not run are the checkout, the deploy
+   and the tool exited 0; with one more `ecco_intel` entity that no code declares the filter kept it and the tool exited 1 and named it. Round 5 qualification: the fixture-built states exit 0
+   including the self_test note, and the 14 Nov listing converted back exits 0 only with `--allow-not-checked`. **Proposed default (the owner confirms or changes it at the final GO): a self_test note
+   is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP.** The six that did not run are the checkout, the deploy
    line, the two preflight calls, the clipboard copy and the re-run of the gate (parsed only).
 8. **The checklist suite** has 713 checks (357 before) and 342 in-memory mutants (167 before: 146 of the checklist, 185 of the runbook, 3 of the Node test, 8 of the card, example, ledger and
    Node sources), all killed. Shown to fail first: on the unchanged round 3 documents the new suite fails 168 checks.
