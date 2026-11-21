@@ -295,6 +295,11 @@ class InverterConversion:
 LOSSLESS_CONVERSION = InverterConversion()
 
 
+def inverter_conversion_stated(facts: object) -> bool:
+    """True when any of the three inverter conversion facts is present (not None), valid or not."""
+    return any(getattr(facts, n, None) is not None for n in INVERTER_CONVERSION_FACTS)
+
+
 def inverter_conversion(facts: object) -> tuple[InverterConversion, tuple[str, ...]]:
     """(the conversion the balance check applies, the problems), judged from a SiteFacts (any object: a missing attribute
     reads as absent). All three facts absent (None): (lossless, ()). All three present, finite numbers inside their bounds

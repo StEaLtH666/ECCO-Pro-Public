@@ -101,6 +101,9 @@ def sig(hw: float, p: float, b: float, g: float) -> dict:
 print("== [1] the facts: absent, valid, invalid, the bounds")
 conv0, prob0 = sd.inverter_conversion(cf.FACTS)
 check("no inverter facts (all None): lossless and no problem", conv0 == sd.LOSSLESS_CONVERSION and conv0.lossless and prob0 == ())
+check("inverter_conversion_stated: False for none, True for any one present (a valid or an invalid value alike)",
+      not sd.inverter_conversion_stated(cf.FACTS) and not sd.inverter_conversion_stated(None)
+      and all(sd.inverter_conversion_stated(replace(cf.FACTS, **{n: v})) for n in sd.INVERTER_CONVERSION_FACTS for v in (0.9, "x", float("nan"))))
 check("the default SiteFacts carries the three facts as None",
       all(getattr(ac.SiteFacts(), n) is None for n in sd.INVERTER_CONVERSION_FACTS)
       and sd.INVERTER_CONVERSION_FACTS == ("inverter_dc_to_ac_factor", "inverter_ac_to_dc_factor", "inverter_standby_w"))

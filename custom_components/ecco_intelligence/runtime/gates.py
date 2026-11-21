@@ -35,7 +35,7 @@ from intelligence.advisory_contract import MODE, SiteFacts
 from intelligence.config import SiteConfig
 from intelligence.periods import AUTUMN_BACK, SPRING_FORWARD, period_profile
 from intelligence.site_decisions import (INVERTER_CONVERSION_FACTS, DecisionSet, DecisionStatus, inverter_conversion,
-                                         site_hints_ignored)
+                                         inverter_conversion_stated, site_hints_ignored)
 
 from . import history_source, sources
 from .selftest import FAIL, INFO, PASS, WARN, Check
@@ -222,7 +222,7 @@ def load_site(raw: bytes | None, read_problem: str | None = None, *, latitude: o
             checks.append(Check("SITE_INVERTER_CONVERSION", WARN, "incomplete or invalid (the lossless balance stays; the "
                                 "export and Dump items BLOCK)"))
             details.append(("SITE_INVERTER_CONVERSION", ", ".join(problems)))
-        elif any(getattr(facts, k) is not None for k in INVERTER_CONVERSION_FACTS):
+        elif inverter_conversion_stated(facts):
             checks.append(Check("SITE_INVERTER_CONVERSION", PASS, "the inverter conversion facts are valid: the power balance "
                                 "is loss-aware"))
     return SiteLoad(profile, decisions, emap, plan, facts, cfg, config_hash, tuple(checks), tuple(details))
