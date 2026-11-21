@@ -17,7 +17,7 @@ Design: `docs/intelligence/ECCO_INTELLIGENCE_V1_ARCHITECTURE.md`. Evidence: `doc
 | `engine.py`, `replay.py`, `backtest.py` | orchestration, leak-free replay, walk-forward backtest |
 | `scorecard.py` | SQLite forecast/outcome store, metrics, bias insights |
 | `synthetic.py` | seeded synthetic houses for tests |
-| `tools/` | read-only HA statistics exporter, quality report, HA-sensor renderer, dashboard preview, `make_examples.py` (synthetic examples) |
+| `tools/` | read-only HA statistics exporter, quality report, HA-sensor renderer, dashboard preview, `make_examples.py` (synthetic examples), `power_balance_fit.py` (offline fit of the optional inverter conversion site facts from recorded history) |
 | `inputs.py` | the one reading of system state: an `ecco_core` Snapshot -> `LiveInputs` (replays build their snapshot from History) |
 | `explain.py` | V1.1: the `Advice` answer format (status, confidence factors, reasons, assumptions, blockers, input ages; SHADOW only) |
 | `overnight.py` | V1.1: overnight demand learning, with conservative fallback and the return-from-away regime check |
