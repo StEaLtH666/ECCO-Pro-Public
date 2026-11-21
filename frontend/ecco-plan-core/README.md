@@ -297,7 +297,9 @@ package index exports changes that bundle (measured), so import it from `./gentl
 
 What it is not: it does not make the target certain (`guarantee: 'NONE'`), it does not know the real taper, top-of-charge behaviour, efficiency or low-rate
 response (assumptions, see the parameter table), and nothing here applies a rate. The offline replay tool `intelligence/tools/gentle_replay.py` runs this
-advice against recorded nights and prints what the battery did next to what would have been advised. What would have to be proven independently before
+advice against recorded nights and prints what the battery did next to what would have been advised. It reaches the one implementation through
+`tools/adviseBatch.ts` (standard input to standard output; outside `src/` because the sources must never touch either; Node 22.18 or newer), so there is no
+second copy of the logic in Python. What would have to be proven independently before
 any live use is in [`GENTLE_LIVE_ACTUATION_PROOF.md`](GENTLE_LIVE_ACTUATION_PROOF.md).
 
 ## Run the tests
