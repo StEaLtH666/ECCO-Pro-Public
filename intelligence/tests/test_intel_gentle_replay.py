@@ -158,14 +158,12 @@ def stub_factory(calls: list):
 
 
 def node_ok() -> bool:
-    exe = shutil.which("node")
-    if exe is None:
-        return False
+    """Node with type stripping is installed (the driver's own check): when it is not, the Node checks are SKIPPED, and said so."""
     try:
-        major = int(subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30).stdout.strip().lstrip("v").split(".")[0])
-    except (OSError, ValueError, subprocess.SubprocessError):
+        drv.node_backend()
+    except gr.ToolError:
         return False
-    return major >= 22
+    return True
 
 
 # ===========================================================================
@@ -550,7 +548,7 @@ with tempfile.TemporaryDirectory() as td:
     check("a results file that does not exist is refused", raises(lambda: gr.results_backend(tdp / "nope.json")))
 
 if not node_ok():
-    print("  Node 22.18 or newer is not installed: the Node checks are SKIPPED")
+    print("  Node 22.6 or newer is not installed: the Node checks are SKIPPED")
 else:
     be = drv.node_backend()
     case = {"id": "x", "input": {"targetSocPct": 80, "bufferMin": 60, "chargeWindow": {"startMin": 1320, "endMin": 240, "clockDay": {"changeAtMin": 0, "deltaMin": 0}}, "elapsedMin": 0, "socPct": 20,

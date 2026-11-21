@@ -35,12 +35,13 @@ def node_backend(node: str = "node", runner: Path = RUNNER) -> gr.Backend:
         raise gr.ToolError(f"{node!r} was not found: the advice runs in Node (22.18 or newer)")
     try:
         ver = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30, check=True).stdout.strip()
-        major = int(ver.lstrip("v").split(".")[0])
+        major, minor = (int(x) for x in ver.lstrip("v").split(".")[:2])
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise gr.ToolError(f"cannot run {exe}: {exc}") from exc
-    if major < 22:
-        raise gr.ToolError(f"Node {ver} is too old (type stripping needs 22.18 or newer)")
-    flags = ["--experimental-strip-types", "--disable-warning=ExperimentalWarning"] if major < 24 else ["--disable-warning=ExperimentalWarning"]
+    if (major, minor) < (22, 6):
+        raise gr.ToolError(f"Node {ver} is too old (type stripping needs 22.6 or newer, 22.18 or newer without a flag)")
+    # type stripping is on by default from Node 22.18 and 23.6; before that it is behind a flag
+    flags = ["--disable-warning=ExperimentalWarning"] if (major, minor) >= (22, 18) and not (major == 23 and minor < 6) else ["--experimental-strip-types", "--disable-warning=ExperimentalWarning"]
 
     def run(cases: list[dict]) -> list[dict]:
         proc = subprocess.run([exe, *flags, str(runner)], input=json.dumps({"cases": cases}), capture_output=True, text=True, timeout=300)
