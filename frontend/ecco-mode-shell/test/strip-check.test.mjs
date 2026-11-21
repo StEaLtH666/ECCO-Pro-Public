@@ -1,0 +1,344 @@
+// The logic of the headless-browser check of the alert strip, tested OFFLINE with synthetic measurements (review round 3). The browser itself is exercised by
+// `node preview/check-strip.mjs` (opt-in; it prints SKIPPED loudly when no Chrome or Edge is installed) and by `node preview/check-strip.mjs --selftest`.
+// What is tested here: the colour and contrast arithmetic, that a healthy measurement passes every check, that a measurement of a strip hidden in each way the
+// reviewers found fails at least one check (so the check cannot pass what it was written to catch), that the two modes are compared, that the browser search
+// order is right, and that the self-test's table of broken cards cannot rot (every entry's text is found once in the card; every stylesheet entry is also
+// refused by the static nets, so the static net and the browser net agree).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { cardDir, loadCard } from './helpers.mjs';
+import { parseColour, over, luminance, contrastRatio, effectiveBackground, evaluateState, compareModes, compareSettled, evaluateAll } from '../preview/strip-check-lib.mjs';
+import { findBrowser, BROKEN } from '../preview/check-strip.mjs';
+import { pinProblems, stripProblems } from './css-guard.mjs';
+
+const { STYLE } = await loadCard('strip-check');
+
+const approx = (a, b, d = 0.02) => assert.ok(Math.abs(a - b) <= d, `${a} is not within ${d} of ${b}`);
+
+test('parseColour reads what the browser reports, and nothing else', () => {
+  assert.deepEqual(parseColour('rgb(1, 2, 3)'), { r: 1, g: 2, b: 3, a: 1 });
+  assert.deepEqual(parseColour('rgba(1, 2, 3, 0.5)'), { r: 1, g: 2, b: 3, a: 0.5 });
+  assert.deepEqual(parseColour('rgb(1 2 3 / 50%)'), { r: 1, g: 2, b: 3, a: 0.5 });
+  assert.deepEqual(parseColour('rgba(0, 0, 0, 0)'), { r: 0, g: 0, b: 0, a: 0 });
+  assert.deepEqual(parseColour('transparent'), { r: 0, g: 0, b: 0, a: 0 });
+  assert.deepEqual(parseColour('color(srgb 0.5 0.25 1 / 0.5)'), { r: 127.5, g: 63.75, b: 255, a: 0.5 });
+  for (const bad of ['', 'red', '#fff', 'rgb(1,2)', null, undefined, 5, 'hsl(0 0% 0%)']) assert.equal(parseColour(bad), null, String(bad));
+});
+
+test('contrast arithmetic: black on white is 21, equal colours are 1, the usual grey borderline is where WCAG puts it', () => {
+  const black = { r: 0, g: 0, b: 0, a: 1 };
+  const white = { r: 255, g: 255, b: 255, a: 1 };
+  approx(contrastRatio(black, white), 21, 0.001);
+  approx(contrastRatio(white, white), 1, 0.001);
+  approx(contrastRatio({ r: 119, g: 119, b: 119, a: 1 }, white), 4.48, 0.02);
+  approx(contrastRatio({ r: 118, g: 118, b: 118, a: 1 }, white), 4.54, 0.02);
+  approx(luminance(white), 1, 0.0001);
+  approx(luminance(black), 0, 0.0001);
+});
+
+test('compositing: a half-transparent colour over another, and the colour behind text from its ancestors', () => {
+  const c = over({ r: 255, g: 0, b: 0, a: 0.5 }, { r: 0, g: 0, b: 255, a: 1 });
+  approx(c.r, 127.5, 0.01);
+  approx(c.b, 127.5, 0.01);
+  assert.equal(c.a, 1);
+  assert.deepEqual(over({ r: 9, g: 9, b: 9, a: 0 }, { r: 1, g: 2, b: 3, a: 1 }), { r: 1, g: 2, b: 3, a: 1 });
+  // nearest first: the text sits on a transparent span, in an opaque card, in a page
+  const bg = effectiveBackground(['rgba(0, 0, 0, 0)', 'rgb(23, 33, 51)', 'rgb(11, 18, 32)']);
+  assert.deepEqual([Math.round(bg.r), Math.round(bg.g), Math.round(bg.b), bg.a], [23, 33, 51, 1]);
+  const none = effectiveBackground(['rgba(0, 0, 0, 0)']);
+  assert.deepEqual([none.r, none.g, none.b], [255, 255, 255], 'a page with no background paints on white');
+});
+
+// ---- a healthy synthetic measurement, and the ways it can go wrong ----
+const R = (x, y, width, height) => ({ x, y, width, height });
+// review round 4: the accessibility attributes the page measures (an absent attribute is null)
+const NO_A11Y = { role: null, 'aria-hidden': null, 'aria-live': null, 'aria-label': null, 'aria-atomic': null, 'aria-relevant': null, 'aria-busy': null, inert: null, hidden: null };
+const STRIP_A11Y = { ...NO_A11Y, role: 'region', 'aria-live': 'polite', 'aria-label': 'Safety and status alerts' };
+const NEUTRAL_NODE = { tag: 'div', cls: '', isHost: false, display: 'grid', visibility: 'visible', contentVisibility: 'visible', opacity: 1, transform: 'none', rotate: 'none', scale: 'none', translate: 'none',
+  filter: 'none', clipPath: 'none', maskImage: 'none', backdropFilter: 'none', overflowX: 'visible', overflowY: 'visible', contain: 'none', rect: R(12, 12, 390, 400), a11y: NO_A11Y };
+function healthy(over = {}) {
+  const line = (id, quiet = false) => ({ id, quiet, severity: quiet ? null : 'critical', role: quiet ? null : 'alert', lineA11y: { ...NO_A11Y, role: quiet ? null : 'alert' }, part: 'head',
+    text: quiet ? 'No active alerts.' : 'Critical: The self-test failed.', textBox: R(60, 90, 200, 20), fontSize: '14px', lineHeight: '20px',
+    color: 'rgb(27, 35, 48)', textFill: 'rgb(27, 35, 48)', bgLayers: ['rgb(255, 255, 255)', 'rgba(0, 0, 0, 0)'], hit: { inside: true, tag: 'div.alert' }, icon: { color: 'rgb(168, 32, 26)', rect: R(24, 88, 22, 22) } });
+  return {
+    id: 'alerts|light|ha|production|w390|v1084', scenario: 'alerts', theme: 'light', vars: 'ha', mode: 'production', width: 390, expectAlerts: null, viewport: { w: 1084, h: 1500 },
+    host: R(12, 12, 390, 400), shell: { mode: 'production' },
+    strip: { present: true, rect: R(12, 80, 390, 60), a11y: STRIP_A11Y,
+      chain: [{ ...NEUTRAL_NODE, tag: 'div', cls: 'alerts', rect: R(12, 80, 390, 60), a11y: STRIP_A11Y }, { ...NEUTRAL_NODE, tag: 'div', cls: 'shell' }, { ...NEUTRAL_NODE, tag: 'ecco-mode-shell', isHost: true, display: 'block' }] },
+    alerts: [line('a1'), { ...line('a1'), part: 'action', text: 'What to do: wait.', icon: null, textBox: R(60, 112, 200, 20) }],
+    bodies: { production: { shown: true, rect: R(12, 150, 390, 200) }, geek: { shown: false, rect: R(0, 0, 0, 0) } },
+    ...over,
+  };
+}
+const failing = (m) => evaluateState(m).filter((c) => !c.ok).map((c) => c.name);
+const withStrip = (patch) => { const m = healthy(); m.strip = { ...m.strip, ...patch }; return m; };
+const withChain0 = (patch) => { const m = healthy(); m.strip.chain = [{ ...m.strip.chain[0], ...patch }, ...m.strip.chain.slice(1)]; return m; };
+const withLine = (patch) => { const m = healthy(); m.alerts = m.alerts.map((a, i) => (i === 0 ? { ...a, ...patch } : a)); return m; };
+
+test('a healthy strip passes every check, and the report names what was looked at', () => {
+  const checks = evaluateState(healthy());
+  assert.ok(checks.length >= 30, `${checks.length} checks`);
+  assert.deepEqual(checks.filter((c) => !c.ok), []);
+  assert.ok(checks.some((c) => /opacity/.test(c.name)) && checks.some((c) => /contrast/.test(c.name)) && checks.some((c) => /same|covers/.test(c.name)));
+});
+
+test('a strip that is hidden, moved, shrunk, faded, filtered, clipped, covered or unreadable fails at least one check, whichever way it was done (negative controls)', () => {
+  const cases = {
+    'no strip at all': { ...healthy(), strip: { present: false } },
+    'zero height': withStrip({ rect: R(12, 80, 390, 0) }),
+    'a 2 px sliver': withStrip({ rect: R(12, 80, 390, 2) }),
+    'zero width': withStrip({ rect: R(12, 80, 0, 60) }),
+    'below the viewport (order, margin)': withStrip({ rect: R(12, 4000, 390, 60) }),
+    'left of the viewport (negative margin)': withStrip({ rect: R(-3000, 80, 390, 60) }),
+    'right of its card (offset)': withStrip({ rect: R(900, 80, 390, 60) }),
+    'shifted sideways by 60 px': withStrip({ rect: R(72, 80, 390, 60) }),
+    'display none on an ancestor': withChain0({ display: 'none' }),
+    'visibility hidden': withChain0({ visibility: 'hidden' }),
+    'content-visibility hidden': withChain0({ contentVisibility: 'hidden' }),
+    'opacity .02': withChain0({ opacity: 0.02 }),
+    'opacity .5': withChain0({ opacity: 0.5 }),
+    'transform rotateX': withChain0({ transform: 'matrix3d(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)' }),
+    'transform scale': withChain0({ transform: 'matrix(0.001, 0, 0, 0.001, 0, 0)' }),
+    'rotate property': withChain0({ rotate: '90deg' }),
+    'scale property': withChain0({ scale: '0.001' }),
+    'translate property': withChain0({ translate: '0px -999px' }),
+    'blur filter': withChain0({ filter: 'blur(40px)' }),
+    'clip-path': withChain0({ clipPath: 'circle(0px at 50% 50%)' }),
+    'mask': withChain0({ maskImage: 'linear-gradient(transparent, transparent)' }),
+    'backdrop filter': withChain0({ backdropFilter: 'blur(99px)' }),
+    'size containment': withChain0({ contain: 'size' }),
+    'clipped by an ancestor': (() => { const m = healthy(); m.strip.chain[1] = { ...m.strip.chain[1], overflowX: 'hidden', overflowY: 'hidden', rect: R(12, 12, 390, 20) }; return m; })(),
+    'no lines': { ...healthy(), alerts: [] },
+    'a tiny font': withLine({ fontSize: '0.01px' }),
+    'an 11 px font': withLine({ fontSize: '11px' }),
+    'line height 0': withLine({ lineHeight: '0px' }),
+    'transparent text': withLine({ color: 'rgba(0, 0, 0, 0)', textFill: 'rgba(0, 0, 0, 0)' }),
+    'transparent text fill only': withLine({ textFill: 'rgba(0, 0, 0, 0)' }),
+    'text the colour of its background': withLine({ color: 'rgb(255, 255, 255)', textFill: 'rgb(255, 255, 255)' }),
+    'faint text (3:1)': withLine({ color: 'rgb(150, 150, 150)', textFill: 'rgb(150, 150, 150)' }),
+    'a text box of nothing': withLine({ textBox: R(60, 90, 0, 0) }),
+    'a text box outside the strip': withLine({ textBox: R(60, 900, 200, 20) }),
+    'covered by another element': withLine({ hit: { inside: false, tag: 'div.top' } }),
+    'empty text': withLine({ text: '  ' }),
+    'an icon with no size': withLine({ icon: { color: 'rgb(168, 32, 26)', rect: R(24, 88, 0, 0) } }),
+    'an invisible icon': withLine({ icon: { color: 'rgba(0, 0, 0, 0)', rect: R(24, 88, 22, 22) } }),
+    'a low-contrast icon': withLine({ icon: { color: 'rgb(250, 250, 250)', rect: R(24, 88, 22, 22) } }),
+    'the shell is not in the mode asked for': { ...healthy(), shell: { mode: 'geek' } },
+    'the Production body is hidden in Production': { ...healthy(), bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: false, rect: R(0, 0, 0, 0) } } },
+    'the strip sits below the Production body': { ...healthy(), bodies: { production: { shown: true, rect: R(12, 10, 390, 60) }, geek: { shown: false, rect: R(0, 0, 0, 0) } } },
+  };
+  for (const [what, m] of Object.entries(cases)) assert.notDeepEqual(failing(m), [], `the check accepted: ${what}`);
+  // the expected alerts count is checked when the data calls for a number
+  assert.deepEqual(failing({ ...healthy(), expectAlerts: 1, alerts: [{ ...healthy().alerts[0] }] }), []);
+  assert.notDeepEqual(failing({ ...healthy(), expectAlerts: 3 }), []);
+});
+
+test('review round 4: a strip that is hidden from, or muted for, assistive technology fails whichever way it was done, and the two modes are compared on it (negative controls; reviewer mutants J2, J5)', () => {
+  const withA11y = (patch) => { const m = healthy(); const a = { ...m.strip.a11y, ...patch }; m.strip = { ...m.strip, a11y: a, chain: [{ ...m.strip.chain[0], a11y: a }, ...m.strip.chain.slice(1)] }; return m; };
+  const withAncestor = (i, patch) => { const m = healthy(); m.strip.chain = m.strip.chain.map((c, k) => (k === i ? { ...c, a11y: { ...c.a11y, ...patch } } : c)); return m; };
+  const cases = {
+    'J2 aria-hidden true on the strip': withA11y({ 'aria-hidden': 'true' }),
+    'aria-hidden false on the strip (present at all)': withA11y({ 'aria-hidden': 'false' }),
+    'J5 aria-live off': withA11y({ 'aria-live': 'off' }),
+    'aria-live removed': withA11y({ 'aria-live': null }),
+    'aria-live assertive': withA11y({ 'aria-live': 'assertive' }),
+    'role presentation': withA11y({ role: 'presentation' }),
+    'role none': withA11y({ role: 'none' }),
+    'role removed': withA11y({ role: null }),
+    'label empty': withA11y({ 'aria-label': '' }),
+    'label removed': withA11y({ 'aria-label': null }),
+    'label of one letter': withA11y({ 'aria-label': 'x' }),
+    'inert on the strip': withA11y({ inert: '' }),
+    'hidden on the strip': withA11y({ hidden: '' }),
+    'aria-busy on the strip': withA11y({ 'aria-busy': 'true' }),
+    'aria-relevant on the strip': withA11y({ 'aria-relevant': 'removals' }),
+    'aria-hidden on the shell': withAncestor(1, { 'aria-hidden': 'true' }),
+    'inert on the shell': withAncestor(1, { inert: '' }),
+    'aria-hidden on the host': withAncestor(2, { 'aria-hidden': 'true' }),
+    'inert on the host': withAncestor(2, { inert: '' }),
+    'an ancestor that was not measured': (() => { const m = healthy(); m.strip.chain = m.strip.chain.map((c, k) => (k === 1 ? { ...c, a11y: undefined } : c)); return m; })(),
+    'the strip that was not measured': { ...healthy(), strip: { ...healthy().strip, a11y: undefined } },
+    'an alert line with role presentation': withLine({ role: 'presentation', lineA11y: { ...NO_A11Y, role: 'presentation' } }),
+    'a critical alert that is only a status': withLine({ role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } }),
+    'an alert line with aria-hidden': withLine({ lineA11y: { ...NO_A11Y, role: 'alert', 'aria-hidden': 'true' } }),
+    'an alert line with inert': withLine({ lineA11y: { ...NO_A11Y, role: 'alert', inert: '' } }),
+    'an alert line whose role was not measured': withLine({ role: undefined }),
+  };
+  assert.ok(Object.keys(cases).length >= 25);
+  for (const [what, m] of Object.entries(cases)) assert.notDeepEqual(failing(m), [], `the check accepted: ${what}`);
+  assert.ok(failing(cases['J2 aria-hidden true on the strip']).some((n) => /not shut out/.test(n)));
+  assert.ok(failing(cases['J5 aria-live off']).some((n) => /announced politely/.test(n)));
+  assert.ok(failing(cases['a critical alert that is only a status']).some((n) => /its role is alert/.test(n)));
+  // the quiet line is plain text: a role on it is a change too
+  const quiet = healthy();
+  quiet.alerts = [{ ...quiet.alerts[0], id: 'quiet', quiet: true, severity: null, role: null, lineA11y: NO_A11Y, text: 'No active alerts.' }];
+  assert.deepEqual(failing(quiet), []);
+  assert.notDeepEqual(failing({ ...quiet, alerts: [{ ...quiet.alerts[0], role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } }] }), []);
+  // the two modes are compared: each state alone could be acceptable, but they must be identical (a label that changes with the mode, a role that does, an ancestor that does)
+  const p = healthy();
+  const geekOf = (patch) => healthy({ mode: 'geek', shell: { mode: 'geek' }, ...patch });
+  assert.deepEqual(compareModes(p, geekOf({})).filter((c) => !c.ok), []);
+  const stripA = (patch) => ({ ...p.strip, a11y: { ...p.strip.a11y, ...patch } });
+  for (const [what, g] of Object.entries({
+    'J2 aria-hidden in Geek Mode': geekOf({ strip: stripA({ 'aria-hidden': 'true' }) }),
+    'J5 aria-live off in Geek Mode': geekOf({ strip: stripA({ 'aria-live': 'off' }) }),
+    'a different label in Geek Mode': geekOf({ strip: stripA({ 'aria-label': 'Safety alerts' }) }),
+    'a different role in Geek Mode': geekOf({ strip: stripA({ role: 'group' }) }),
+  })) assert.ok(compareModes(p, g).some((c) => !c.ok && /same accessibility attributes/.test(c.name)), `the pair was accepted: ${what}`);
+  const shellHidden = geekOf({ strip: { ...p.strip, chain: p.strip.chain.map((c, k) => (k === 1 ? { ...c, a11y: { ...c.a11y, 'aria-hidden': 'true' } } : c)) } });
+  assert.ok(compareModes(p, shellHidden).some((c) => !c.ok && /everything around the strip/.test(c.name)));
+  const lineRole = geekOf({ alerts: p.alerts.map((a) => ({ ...a, role: 'status', lineA11y: { ...NO_A11Y, role: 'status' } })) });
+  assert.ok(compareModes(p, lineRole).some((c) => !c.ok && /every alert line/.test(c.name)));
+  // a measurement from before round 4 (no accessibility attributes at all) is not a pass
+  const old = healthy({ strip: { ...p.strip, a11y: undefined, chain: p.strip.chain.map(({ a11y, ...rest }) => rest) } });
+  assert.ok(compareModes(old, old).some((c) => !c.ok), 'both modes unmeasured is not a pass');
+});
+
+test('Geek Mode: the Geek body must be shown and below the strip; a strip pushed below it fails', () => {
+  const geek = healthy({ mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  assert.deepEqual(failing(geek), []);
+  const pushed = { ...geek, strip: { ...geek.strip, rect: R(12, 1100, 390, 60) } };
+  assert.ok(failing(pushed).some((n) => /above the Geek body|inside the viewport/.test(n)));
+  const noGeek = { ...geek, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: false, rect: R(0, 0, 0, 0) } } };
+  assert.ok(failing(noGeek).some((n) => /Geek body is shown/.test(n)));
+});
+
+test('the two modes are compared: the same box and the same lines, or the pair fails', () => {
+  const p = healthy();
+  const g = healthy({ mode: 'geek', shell: { mode: 'geek' } });
+  assert.deepEqual(compareModes(p, g).filter((c) => !c.ok), []);
+  const moved = healthy({ mode: 'geek', shell: { mode: 'geek' }, strip: { ...p.strip, rect: R(12, 400, 390, 60) } });
+  assert.ok(compareModes(p, moved).some((c) => !c.ok && /same box/.test(c.name)));
+  const resized = healthy({ mode: 'geek', shell: { mode: 'geek' }, strip: { ...p.strip, rect: R(12, 80, 390, 30) } });
+  assert.ok(compareModes(p, resized).some((c) => !c.ok));
+  const fewer = healthy({ mode: 'geek', shell: { mode: 'geek' }, alerts: p.alerts.slice(0, 1) });
+  assert.ok(compareModes(p, fewer).some((c) => !c.ok && /same lines/.test(c.name)));
+  const reworded = healthy({ mode: 'geek', shell: { mode: 'geek' }, alerts: p.alerts.map((a) => ({ ...a, text: `${a.text}!` })) });
+  assert.ok(compareModes(p, reworded).some((c) => !c.ok));
+  const lineMoved = healthy({ mode: 'geek', shell: { mode: 'geek' }, alerts: p.alerts.map((a) => ({ ...a, textBox: R(60, 300, 200, 20) })) });
+  assert.ok(compareModes(p, lineMoved).some((c) => !c.ok && /each line/.test(c.name)));
+});
+
+test('evaluateAll pairs each Production state with its Geek twin and counts what failed; a missing twin fails', () => {
+  const p = healthy();
+  const g = healthy({ id: 'alerts|light|ha|geek|w390|v1084', mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  const ok = evaluateAll([p, g]);
+  assert.equal(ok.failed, 0);
+  assert.equal(ok.states.length, 2);
+  assert.equal(ok.pairs.length, 1);
+  assert.ok(ok.total > 60);
+  const lone = evaluateAll([p]);
+  assert.ok(lone.failed > 0, 'a Production state with no Geek twin is a failure, not a pass');
+  const bad = evaluateAll([p, { ...g, strip: { ...g.strip, rect: R(12, 80, 390, 0) } }]);
+  assert.ok(bad.failed > 0);
+});
+
+// ---- review round 9: the strip must be the same strip once everything the card scheduled has run (reviewer mutants E05 and E08 hid it a moment AFTER the switch and passed a check that measured in the same task)
+const settledTwin = (m, patch = {}) => ({ ...m, id: `${m.id}|settled`, phase: 'settled', ...patch });
+
+test('review round 9: the same strip a moment later passes, and a strip that is emptied, hidden, moved, re-worded, muted or re-ordered once everything scheduled has run fails whichever way it was done (negative controls)', () => {
+  const p = healthy();
+  assert.deepEqual(compareSettled(p, settledTwin(p)).filter((c) => !c.ok), [], 'the same measurement twice is the same strip');
+  assert.ok(compareSettled(p, settledTwin(p)).length >= 8, 'the report names what was looked at');
+  const g = healthy({ mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  assert.deepEqual(compareSettled(g, settledTwin(g)).filter((c) => !c.ok), []);
+  const later = (patch) => settledTwin(p, patch);
+  const withStripLater = (patch) => later({ strip: { ...p.strip, ...patch } });
+  const cases = {
+    'no strip any more': later({ strip: { present: false } }),
+    'emptied (no lines: E05, E07, E08)': later({ alerts: [] }),
+    'only the first line left': later({ alerts: p.alerts.slice(0, 1) }),
+    'a line re-worded': later({ alerts: p.alerts.map((a) => ({ ...a, text: `${a.text}.` })) }),
+    'a line given another id': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, id: 'other' } : a)) }),
+    'lines moved': later({ alerts: p.alerts.map((a) => ({ ...a, textBox: R(60, 400, 200, 20) })) }),
+    'the strip box shrunk to nothing': withStripLater({ rect: R(12, 80, 390, 0) }),
+    'the strip box moved down': withStripLater({ rect: R(12, 400, 390, 60) }),
+    'the count says another number': withStripLater({ count: '0' }),
+    'aria-hidden on the strip': withStripLater({ a11y: { ...p.strip.a11y, 'aria-hidden': 'true' } }),
+    'aria-live off': withStripLater({ a11y: { ...p.strip.a11y, 'aria-live': 'off' } }),
+    'role presentation': withStripLater({ a11y: { ...p.strip.a11y, role: 'presentation' } }),
+    'inert on an ancestor': later({ strip: { ...p.strip, chain: p.strip.chain.map((c, i) => (i === 1 ? { ...c, a11y: { ...c.a11y, inert: '' } } : c)) } }),
+    'a line given role presentation': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, role: 'presentation' } : a)) }),
+    'a line hidden from assistive technology': later({ alerts: p.alerts.map((a, i) => (i === 0 ? { ...a, lineA11y: { ...a.lineA11y, 'aria-hidden': 'true' } } : a)) }),
+    'the mode changed by itself': later({ shell: { mode: 'geek' } }),
+    'the Production body hidden after the fact': later({ bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: false, rect: R(0, 0, 0, 0) } } }),
+  };
+  for (const [what, m] of Object.entries(cases)) assert.ok(compareSettled(p, m).some((c) => !c.ok), `the check accepted: ${what}`);
+  // and a strip that was already wrong in the first measurement is not made right by the second
+  assert.ok(compareSettled(p, withStripLater({ present: true })).every((c) => c.ok), 'a harmless difference in an unchecked field is not a failure');
+});
+
+test('review round 9: evaluateAll pairs every measurement with the one made after everything scheduled had run, and a page that did not wait (or lost one of the two) cannot pass', () => {
+  const prodNow = healthy();
+  const geekNow = healthy({ id: 'alerts|light|ha|geek|w390|v1084', mode: 'geek', shell: { mode: 'geek' }, bodies: { production: { shown: false, rect: R(0, 0, 0, 0) }, geek: { shown: true, rect: R(12, 150, 390, 900) } } });
+  const prodLater = settledTwin(prodNow);
+  const geekLater = settledTwin(geekNow);
+  const ok = evaluateAll([prodNow, geekNow, prodLater, geekLater], { requireSettled: true });
+  assert.equal(ok.failed, 0, JSON.stringify(ok.pairs.flatMap((p) => p.checks.filter((c) => !c.ok).map((c) => `${p.id}: ${c.name}`))));
+  assert.equal(ok.states.length, 4);
+  assert.equal(ok.pairs.length, 4, 'Production against Geek twice (immediately, later) and each mode against its own later self');
+  assert.ok(ok.pairs.some((x) => /immediately against after everything scheduled has run/.test(x.id)));
+  // without the second measurement a run that requires it fails; a run that does not require it (the older, synthetic callers) still passes
+  assert.ok(evaluateAll([prodNow, geekNow], { requireSettled: true }).failed > 0, 'no measurement after everything had run: a failure when it is required');
+  assert.equal(evaluateAll([prodNow, geekNow]).failed, 0, 'and still the older behaviour when it is not');
+  // one of the two later measurements missing, or a later one with no first one
+  assert.ok(evaluateAll([prodNow, geekNow, prodLater], { requireSettled: true }).failed > 0);
+  assert.ok(evaluateAll([prodNow, prodLater, geekLater], { requireSettled: true }).failed > 0);
+  // a Geek strip emptied a moment later: the second measurement alone shows an empty strip, and the pair with the first fails too
+  const emptied = settledTwin(geekNow, { alerts: [] });
+  const bad = evaluateAll([prodNow, geekNow, prodLater, emptied], { requireSettled: true });
+  assert.ok(bad.failed > 0);
+  assert.ok(bad.pairs.some((x) => /immediately against/.test(x.id) && x.checks.some((c) => !c.ok)), 'the pair of the first and the later measurement reports it');
+  assert.ok(bad.pairs.some((x) => /Production against Geek/.test(x.id) && x.id.includes('settled') && x.checks.some((c) => !c.ok)), 'and so does the pair of the modes, later');
+});
+
+test('review round 9: the self-test table has the copies that hide the strip a moment AFTER the switch (a microtask, a promise continuation, an async function, a timer of zero, an observer callback, in the renderer; an animation frame is left to the node suites, because a headless run has too few frames to rely on)', () => {
+  const names = BROKEN.map((b) => b[0]);
+  for (const id of ['E04', 'E05 ', 'E05c', 'E07', 'E08', 'E09', 'E14']) assert.ok(names.some((n) => n.startsWith(id)), `no broken copy ${id}`);
+  const real = readFileSync(path.join(cardDir, 'ecco-mode-shell.js'), 'utf8');
+  for (const [id, find, repl] of BROKEN.filter((b) => /^E\d\d/.test(b[0]))) {
+    assert.equal(real.split(find).length - 1, 1, `${id}: found once`);
+    assert.ok(/Promise|async|setTimeout|queueMicrotask|requestAnimationFrame|MutationObserver/.test(repl), `${id}: it defers the change`);
+  }
+});
+
+test('the browser search: ECCO_CHROME first, then the standard places; none means null (the caller prints SKIPPED)', () => {
+  const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Local' };
+  const has = (set) => (p) => set.includes(p);
+  assert.equal(findBrowser({ ...env, ECCO_CHROME: 'D:\\mine\\chrome.exe' }, has(['D:\\mine\\chrome.exe', path.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe')])), 'D:\\mine\\chrome.exe');
+  assert.equal(findBrowser(env, has([path.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe')])), path.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  assert.equal(findBrowser(env, has([path.join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe')])), path.join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+  assert.equal(findBrowser({}, has(['/usr/bin/chromium'])), '/usr/bin/chromium');
+  assert.equal(findBrowser({ ECCO_CHROME: 'D:\\gone\\chrome.exe' }, has([])), null);
+  assert.equal(findBrowser(env, has([])), null);
+});
+
+test('the self-test table cannot rot: every broken copy changes the card in exactly one place, and every stylesheet change is also refused by the pin and by the semantic net', () => {
+  const real = readFileSync(path.join(cardDir, 'ecco-mode-shell.js'), 'utf8');
+  assert.ok(BROKEN.length >= 25);
+  assert.equal(new Set(BROKEN.map((b) => b[0])).size, BROKEN.length, 'unique names');
+  const pin = JSON.parse(readFileSync(path.join(cardDir, 'test', 'fixtures', 'style.pin.json'), 'utf8'));
+  const modes = new Set(['.switch[data-mode="geek"] .thumb']);
+  const strips = new Set(['.alert', '.alert-action', '.alert-head', '.alert.quiet', '.alert.quiet>.ico', '.alert>.ico', '.alert[data-severity="critical"]', '.alert[data-severity="critical"]>.ico',
+    '.alert[data-severity="warning"]', '.alert[data-severity="warning"]>.ico', '.alerts']);
+  let stylesheetOnes = 0;
+  for (const [id, find, repl] of BROKEN) {
+    assert.equal(real.split(find).length - 1, 1, `${id}: the text to break is found once`);
+    assert.notEqual(find, repl, id);
+    const broken = real.replace(find, () => repl);
+    const inStyle = STYLE.includes(find);
+    if (!inStyle) continue;
+    stylesheetOnes += 1;
+    const css = STYLE.replace(find, () => repl);
+    assert.notDeepEqual(pinProblems(css, pin), [], `${id}: the pin accepted it`);
+    assert.notEqual(broken, real);
+    // the semantic net sees the rules that reach the strip. Two kinds are the documented limit of reading CSS and are caught by the pin and by the browser: a colour
+    // choice that is allowed on its own but unreadable next to another, and a rule on a NEIGHBOUR of the strip (the element above it) that overlaps it
+    if (!/text and surface set to the same|text colour equal to the background|faint text colour|covered by a positioned block/.test(id)) {
+      assert.notDeepEqual(stripProblems(css, { modeSelectors: modes, stripSelectors: strips }), [], `${id}: the semantic net accepted it`);
+    }
+  }
+  assert.ok(stylesheetOnes >= 20, `${stylesheetOnes} stylesheet entries`);
+});
