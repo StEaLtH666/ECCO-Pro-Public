@@ -51,6 +51,13 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
       STOP condition of the list holds (both documents); the step 1 and step 1b rows of both step tables point to the rule; the sentence that supersedes the tool's printed `proposed default` line
       is in the checklist and runbook 5.1b; `proposed default` and the old confirm-at-the-final-GO wording appear only in a sentence that says superseded; the pins of the old wording are replaced by
       stricter ones of the new wording, and 'you have not ruled on it yet', 'or its state noted if not' and 'the owner has not ruled on it' are forbidden
+ [20] (round 7, the review of c4e9b8f, M1) the status STOP item is a full test, not the bare words 'SHADOW with a fresh result': in all three places it is 'anything but ALL of' mode SHADOW; applies_nothing
+      strictly true; the contract version the catalogue declares; the fresh and the watchdog binary sensors on; a state that is one of the eight words the catalogue lists and is not STALE, STARTING, PAUSED or
+      SELF_TEST_FAILED (PAUSED is still a STOP that asks the owner); and a last update within the catalogue's freshness limit; each part is pinned, and the contract version, the mode, the failing words and the
+      limit are DERIVED from the catalogue and the contract source (status_facts), so a change there that the documents do not follow fails; STOP item 3 says 'absent, unknown or unavailable' (gate G4
+      of the runbook names the full sense; the step 1 and 1b rows point to the full test; the recorded values include contract_version and the state of the fresh and watchdog sensors)
+[20b] (round 7, M2) no sentence of either document says that an unknown, unavailable, absent or failed state is a note, recorded as a note, harmless, acceptable or a reason to go on, except the canonical NEVER_NOTES
+      sentence, the sentences of the canonical NOTE paragraph and a sentence that carries the marker 'superseded by the owner's ruling of 21 Nov 2026'
  [21] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
       not exist, a forbidden word, a changed rollback order, a dropped statement, a flag that does not exist, a removed step, a quoted tool
       phrase that the tool never prints, an address, a token, an entity id, a runbook with its rollback order changed, a runbook heading that is
@@ -60,7 +67,10 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
       answer columns or its header; block 3 without `+ $more`, with another filter word, without the line, with the append after the write; the tool's source
       without the flag, with another NOTE title, without the fail-closed term, with another proposed-default sentence. Round 6 (the owner's ruling of 21 Nov 2026): each of the nine STOP items dropped in
       each of the three places, the NOTE paragraph, its closing sentence, the values sentence and the SHADOW-with-a-fresh-result words dropped, a safety-relevant state moved into the NOTE list, the
-      old G4 wording and the old confirm-at-the-final-GO wording put back, the supersession sentence dropped, the step 1 and 1b rows pointing to the old shorter list
+      old G4 wording and the old confirm-at-the-final-GO wording put back, the supersession sentence dropped, the step 1 and 1b rows pointing to the old shorter list. Round 7 (the review of c4e9b8f):
+      each part of the status item dropped in each of the three places (applies_nothing, the freshness limit, the watchdog sensor, the failing states, the contract version, 'absent,', the mode), the
+      bare gate G4 wording, the status test's paragraph and its numbers, the recorded values without contract_version, the catalogue and the contract source changed under the documents, and sentences
+      outside the NOTE paragraph that clear an unknown, unavailable, absent or failed state (the two that the review showed survive, and more)
 
 Usage: python tools/tests/test_geek_mode_checklist.py [CHECKLIST_FILE]
 The optional argument names another checklist (this is how the suite is shown to fail on a checklist with a wrong hash).
@@ -84,6 +94,8 @@ EXTRA_REL = {   # round 5: read-only sources the new rules check the documents a
     "element": "frontend/ecco-mode-shell/test/element.test.mjs", "core": "frontend/ecco-mode-shell/test/core.test.mjs", "generated-config": NODE_TEST_REL,
     "card": "frontend/ecco-mode-shell/ecco-mode-shell.js", "example": "frontend/ecco-mode-shell/examples/intelligence-modes.yaml",
     "ledger": "frontend/ecco-mode-shell/catalogue/intelligence.ledger.json",
+    # round 7 (the status STOP item is derived from these two, never typed from memory)
+    "catalogue": "frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json", "contract": "intelligence/advisory_contract.py",
 }
 DASH_URL = "ecco-modes-u1"                # D-U1-5, the default (runbook 5.5 suggests it)
 DASH_TITLE = "ECCO Modes (first look)"    # D-U1-5, the default
@@ -134,15 +146,18 @@ PROPOSED_DEFAULT = ("proposed default (the owner confirms or changes it at the f
                     "anything else UNDECLARED or any unexplained absence is a STOP")
 # ---- round 6 (the owner's ruling of 21 Nov 2026 on the baseline and step 1b stops): the canonical text, word for word as the coordinator wrote it; the documents carry it verbatim
 STOP_LEAD = "STOP (change nothing, ask the owner):"
-STOP_P = ("STOP (change nothing, ask the owner): Core not running; the Intelligence status not SHADOW with a fresh result; the status, freshness or watchdog enti"
-           "ty unknown or unavailable; any self-test check that reads a failure, unknown or unavailable; any control entity of the earlier supervised installs (th"
-           "e write enables, the arm and schedule switches, the manual write counter, the TOU edit helper) or the pause helper absent, unknown or unavailable; the"
-           " shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence); a baseline copy that is not byte-exact;"
-           " anything that cannot be read.")
+STOP_P = ("STOP (change nothing, ask the owner): Core not running; the Intelligence status not SHADOW with a fresh result, that is, anything but ALL of: mode SHADOW; "
+          "applies_nothing strictly true; the contract version the catalogue declares (ecco-intel-entities/1); the fresh and the watchdog binary sensors on; a state that is "
+          "one of the eight words the catalogue lists and is not STALE, STARTING, PAUSED or SELF_TEST_FAILED (PAUSED is the owner's deliberate pause: it is still a STOP that "
+          "asks the owner, because there is no fresh result); and a last update within the catalogue's freshness limit of 1200 seconds (the status source's stale_after_s; the "
+          "other sources that have a limit carry the same number); the status, freshness or watchdog entity absent, unknown or unavailable; any self-test check that reads a "
+          "failure, unknown or unavailable; any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, "
+          "the TOU edit helper) or the pause helper absent, unknown or unavailable; the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an "
+          "unexplained absence); a baseline copy that is not byte-exact; anything that cannot be read.")
 STOP_ITEMS = (   # the nine STOP conditions of the ruling (a control entity of the earlier installs and the pause helper are two), in order
     "Core not running",
-    "the Intelligence status not SHADOW with a fresh result",
-    "the status, freshness or watchdog entity unknown or unavailable",
+    "the Intelligence status not SHADOW with a fresh result, that is, anything but ALL of:",
+    "the status, freshness or watchdog entity absent, unknown or unavailable",
     "any self-test check that reads a failure, unknown or unavailable",
     "any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, the TOU edit helper)",
     "or the pause helper absent, unknown or unavailable",
@@ -150,6 +165,18 @@ STOP_ITEMS = (   # the nine STOP conditions of the ruling (a control entity of t
     "a baseline copy that is not byte-exact",
     "anything that cannot be read",
 )
+# round 7 (the review of c4e9b8f, M1): the status item is the full test below, not the bare words 'SHADOW with a fresh result'. Each part is derived from the catalogue and the contract source
+# (status_facts) and is pinned in all three places; the parts are the six conditions that must ALL hold, in order
+STATUS_PARTS = (
+    "mode SHADOW",
+    "applies_nothing strictly true",
+    "the contract version the catalogue declares (ecco-intel-entities/1)",
+    "the fresh and the watchdog binary sensors on",
+    "a state that is one of the eight words the catalogue lists and is not STALE, STARTING, PAUSED or SELF_TEST_FAILED",
+    "(PAUSED is the owner's deliberate pause: it is still a STOP that asks the owner, because there is no fresh result)",
+    "and a last update within the catalogue's freshness limit of 1200 seconds (the status source's stale_after_s; the other sources that have a limit carry the same number)",
+)
+STATUS_SHORT = "the Intelligence status not SHADOW with a fresh result"   # the bare words: only the lead of the full test now
 NOTE_LEAD = "NOTE (recorded, shown to the owner, never hidden):"
 NOTE_P = ("NOTE (recorded, shown to the owner, never hidden): informational findings only: the names of the check codes under a recorded self_test (shape only, a"
           " note only while every check value reads as passing), the declared conditional attribute rows that are legitimately empty, informational log lines; ea"
@@ -161,9 +188,15 @@ SUPERSEDED_S = ("The live shape tool still prints a line beginning `proposed def
                 " types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026: the tool's note never clears a v"
                 "alue, the coordinator reads the values in `states-before.json` and applies the list, and where the list says STOP nothing proceeds.")
 G4_TEXT = "the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds"   # gate G4, in both documents (it no longer says "or its state noted if not")
-CL_POINTER = "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026)"   # the checklist's step 1 and 1b rows point to the rule
-RB_POINTER = "any STOP condition of the list in 5.1b and section 6 (the owner's ruling of 21 Nov 2026)"   # the runbook's step 1 and 1b rows point to the rule
+CL_POINTER = "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026; its status item is a full test, not only the word SHADOW)"   # the checklist's step 1 and 1b rows point to the rule
+RB_POINTER = "any STOP condition of the list in 5.1b and section 6 (the owner's ruling of 21 Nov 2026; its status item is a full test, not only the word SHADOW)"   # the runbook's step 1 and 1b rows point to the rule
+G4_STATUS = "the Intelligence status reads SHADOW with a fresh result, in the full sense of the status item of the STOP list (all of its conditions hold);"   # runbook gate G4 (round 7)
 OLD_RULE_PHRASES = ("proposed default", "confirms or changes it at the final go", "confirms or changes at the final go", "confirm or change the proposed default")   # lower case: only in a sentence that says superseded
+# round 7 (M2): a sentence that says an unknown, unavailable, absent or failed state is a note, harmless or no reason to stop; only these may (the canonical NEVER_NOTES sentence and the canonical NOTE paragraph's own
+# sentences, and a sentence that carries the supersession marker of the old shape-only wording)
+STATE_WORDS = re.compile(r"unknown|unavailable|absent|absence|fail|missing|\bstale\b|\bpaused\b|\bstarting\b|\bblocked\b|not running|not shadow|not fresh|\boff\b|not true|applies_nothing|contract|mismatch|assisted|autonomous|other than shadow|not recogni[sz]ed|unrecogni[sz]ed|no fresh")   # the spec: unknown, unavailable, absent, fail (any form); and the other states a STOP names
+CLEARS_WORDS = re.compile(r"\bis a note\b|\bare notes?\b|\bas a note\b|\bas notes\b|recorded as a note|\bgoes on\b|\bgo on\b|\bgoing on\b|\bcarries on\b|\bcontinues?\b|\bproceed|\bharmless\b|\bacceptable\b|\bis fine\b|\bignor|informational|not a stop|(?:may|can) be skipped|does not matter|no need to stop|need not stop|does not (?:stop|block)|without stopping|carry on|move on|(?:is|are) accepted|can be accepted|not a problem|no problem|tolerat|is optional|do not stop")
+SUPERSEDED_MARK = "superseded by the owner's ruling of 21 nov 2026"   # lower case: what a sentence that keeps the old shape-only wording says
 BLOCK3_MORE = "$more = @($index.Keys | Where-Object { $_ -like '*ecco_intel*' -and $ids -notcontains $_ } | Sort-Object | ForEach-Object { $index[$_] })"   # round 5 (F2)
 BLOCK3_APPEND = "$out = @($out) + $more"
 BLOCK3_WRITE = "ConvertTo-Json -InputObject $out -Depth 20 | Out-File -Encoding utf8 \"$E\\states-$Tag.json\""
@@ -418,9 +451,9 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "13", "Round 5 (21 Nov 2026: the fixes of the independent review of round 4"),
     # ---- round 6 (the owner's ruling of 21 Nov 2026): these REPLACE the ten pins of the old wording (a self_test note as a proposed default that the owner confirms at the final GO, and its
     # step 1b stop list) with stricter pins of the new wording; the STOP, NOTE and values paragraphs themselves are checked word for word by rule [20], in three places
-    ("checklist", "4", "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026), not only the tool's exit 1 (anything UNDECLARED, a declared entity missing or not checked, an unexplained absence: stop and ask you; the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected)"),
+    ("checklist", "4", "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026; its status item is a full test, not only the word SHADOW), not only the tool's exit 1 (anything UNDECLARED, a declared entity missing or not checked, an unexplained absence: stop and ask you; the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected)"),
     ("checklist", "4", "the tool's note never clears a value"),
-    ("checklist", "4", "and the coordinator reads the values in states-before.json (the status entity's state, mode, applies_nothing and last update; every self_test check value; the freshness and watchdog entities; each control entity and the pause helper: state and last_changed) and finds no STOP condition of the list in 4.1"),
+    ("checklist", "4", "and the coordinator reads the values in states-before.json (the status entity's state, mode, applies_nothing, contract_version and last update, its age inside the limit of 4.1; every self_test check value; the freshness and watchdog binary sensors, which read on; each control entity and the pause helper: state and last_changed) and finds no STOP condition of the list in 4.1"),
     ("checklist", "4.1", "the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence)"),
     ("checklist", "4.1", "a note only while every check value reads as passing"),
     ("checklist", "4.1", "Unknown, unavailable or failed safety-relevant states are never notes."),
@@ -433,13 +466,22 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "3", "the status, freshness and watchdog entities, every control entity of the earlier supervised installs and the pause helper are present and readable (none absent, unknown or unavailable), each with its state and last_changed recorded"),
     ("runbook", "4", "and the coordinator has read the values in states-before.json and finds no STOP condition of the list"),
     ("runbook", "4", "the tool's note, being shape-only, never clears a value"),
-    ("runbook", "5.1", "Record from it, offline, the values that the coordinator reads for the STOP and NOTE list of 5.1b: the Intelligence status entity (its state, its mode and applies_nothing attributes, when it was last updated, and every check value under its self_test attribute)"),
-    ("runbook", "5.1", "the freshness and watchdog entities (state and last_changed), the pause helper (state and last_changed) and each control entity of the earlier installs (state and last_changed)"),
-    ("runbook", "5.1", "An id shown as absent is recorded, not guessed; for the pause helper or a control entity it is a STOP (5.1b)"),
+    ("runbook", "5.1", "Record from it, offline, the values that the coordinator reads for the STOP and NOTE list of 5.1b: the Intelligence status entity (its state, its mode, applies_nothing and contract_version attributes, when it was last updated, and every check value under its self_test attribute)"),
+    ("runbook", "5.1", "the freshness and watchdog binary sensors (state, which must read on, and last_changed), the pause helper (state and last_changed) and each control entity of the earlier installs (state and last_changed)"),
+    ("runbook", "5.1", "Write down the time of the read when block 3 runs: the age of the status entity's last update is measured against it (5.1b)"),
+    ("runbook", "5.1", "An id shown as absent is recorded, not guessed; for the status, freshness or watchdog entity, the pause helper or a control entity it is a STOP (5.1b)"),
     ("runbook", "5.1b", "The tool decides only the shape of the data; these rules decide whether the installation goes on"),
     ("runbook", "5.1b", "Unknown, unavailable or failed safety-relevant states are never notes."),
     ("runbook", "5.1b", "the coordinator reads the values in the captured states and applies this list"),
-    ("runbook", "5.1b", "the coordinator reads and records the status entity's state, mode, applies_nothing, its last update and every self_test check value; the freshness and watchdog entities; each control entity of the earlier installs and the pause helper: state and last_changed"),
+    ("runbook", "5.1b", "the coordinator reads and records the status entity's state, mode, applies_nothing, contract_version, its last update (its last_updated, measured against the time of the read, which the coordinator writes down when block 3 runs) and every self_test check value; the freshness and watchdog binary sensors' state, which must read on; each control entity of the earlier installs and the pause helper: state and last_changed"),
+    # round 7 (M1): where the status test comes from, and the gate G4's status clause
+    ("runbook", "5.1b", "Where the status test comes from (STOP item 2 above; every fact is read from the repository's catalogue and contract source, and the checklist suite derives each from those files, never from memory)"),
+    ("runbook", "5.1b", "The eight words the catalogue lists for the status are OK, NO_ADVICE, BLOCKED, INSUFFICIENT_DATA, STARTING, PAUSED, STALE and SELF_TEST_FAILED (the status source's description; the contract source's status class has the same eight)"),
+    ("runbook", "5.1b", "STALE, STARTING, PAUSED and SELF_TEST_FAILED are the contract's null-rule states, in which no figure is current and there is no fresh result"),
+    ("runbook", "5.1b", "the catalogue raises a critical alert for a mode other than SHADOW, for applies_nothing not true and for a contract version it does not know"),
+    ("runbook", "5.1b", "The freshness limit is the status source's stale_after_s, 1200 seconds; every other catalogue source that has a limit carries the same number, so the limits do not differ"),
+    ("runbook", "5.1b", "The fresh sensor is the integration's own validity flag and the watchdog is Home Assistant's own recent-result check, so both must read on"),
+    ("runbook", "3", G4_STATUS),
     ("runbook", "5.1b", "still prints a line beginning proposed default and calls a self_test note not a failure: that wording is shape-only (names and types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026"),
     ("runbook", "5.1b", "the tool's note never clears a value, the coordinator reads the values in states-before.json and applies the list, and where the list says STOP nothing proceeds"),
     ("runbook", "5.1b", "That is the tool's shape-only wording, superseded as stated above: the names are a note only while every check value in states-before.json reads as passing, and a check that reads a failure, unknown or unavailable is a STOP"),
@@ -479,6 +521,10 @@ FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phras
     ("checklist", None, "the owner has not ruled on it"),
     ("runbook", None, "the states noted"),
     ("checklist", None, "the states noted"),
+    # round 7 (M1): the bare status item (without the full test) is gone; the full test follows 'a fresh result, that is,'
+    ("runbook", None, STATUS_SHORT + ";"),
+    ("checklist", None, STATUS_SHORT + ";"),
+    ("runbook", "3", "the Intelligence status reads SHADOW with a fresh result;"),
 ]
 COVERAGE = [   # (a phrase of a bullet of runbook section 9, the keywords that checklist section 8 must hold for it; lower case)
     ("has never run in a real home assistant or a real browser", ("never run in a real home assistant",)),
@@ -1063,12 +1109,90 @@ def sentences(text: str) -> list[str]:
     return out
 
 
-def stoprules_problems(checklist: str, runbook: str) -> list[str]:
-    """[20] the STOP, NOTE and values paragraphs word for word in the checklist (4.1), runbook 5.1b and runbook 6; each of the nine STOP items in each place; the NOTE paragraph holds no
+def status_facts(extra: dict) -> dict | None:
+    """The facts that the status STOP item is made of, read from the catalogue and from the contract source and never typed from memory (round 7, M1): the contract version, the mode, the eight
+    status words, the four words that have no fresh result (the contract's null rule), the freshness limit of the status source and of every other source that has one, the status attributes the
+    item names and the critical alerts. None when either source cannot be read."""
+    try:
+        cat = json.loads(extra["catalogue"])
+        src = extra["contract"]
+        by_id = {s["id"]: s for s in cat["sources"]}
+        status = by_id["intel.status"]
+        listed = re.search(r"right now: ([A-Z_, ]+ or [A-Z_]+)\.", status["description"]).group(1)
+        alerts = {a["id"]: a for a in cat["alerts"]}
+        block = src[src.index("class SystemStatus:"):src.index("class ItemStatus:")]
+        names = dict(re.findall(r'^    ([A-Z_]+) = "([A-Z_]+)"$', block, re.M))
+        null = re.search(r"^    NULL = \(([A-Z_, ]+)\)", block, re.M).group(1)
+        return {
+            "contract": cat["contract"], "contract_py": re.search(r'^CONTRACT_VERSION = "([^"]+)"', src, re.M).group(1),
+            "mode_py": re.search(r'^MODE = "([^"]+)"', src, re.M).group(1), "mode_alert": alerts["mode_not_shadow"]["when"],
+            "words": set(re.split(r", | or ", listed)), "words_py": set(names.values()), "outside": set(alerts["status_unrecognised"]["when"]["state_outside"]),
+            "null_py": {names[n.strip()] for n in null.split(",")},
+            "limit": status["stale_after_s"], "limits": {s["stale_after_s"] for s in cat["sources"] if s.get("stale_after_s") is not None},
+            "attrs": {a["name"] for a in status["attributes"]}, "ids": set(by_id),
+            "critical": {k: alerts[k]["severity"] == "critical" for k in ("mode_not_shadow", "contract_mismatch", "applies_nothing_false", "applies_nothing_not_true")},
+        }
+    except (KeyError, ValueError, AttributeError, IndexError, TypeError):
+        return None
+
+
+def status_problems(places: tuple, facts: dict | None) -> list[str]:
+    """[20] (round 7, M1) the status STOP item against the catalogue and the contract source: the facts agree among themselves, and each place names the contract version, the mode, the four
+    failing words and the freshness limit that those sources give; the five attributes and sensors the item names exist in the catalogue."""
+    if facts is None:
+        return ["the catalogue or the contract source cannot be read: the status STOP item cannot be checked against them"]
+    p: list[str] = []
+    if facts["contract"] != facts["contract_py"]:
+        p.append(f"the catalogue's contract ({facts['contract']}) and the contract source's CONTRACT_VERSION ({facts['contract_py']}) differ")
+    if facts["mode_py"] != "SHADOW" or facts["mode_alert"] != {"attribute": "mode", "not_in": ["SHADOW"]}:
+        p.append("the mode that the contract source and the catalogue's mode alert name is no longer SHADOW")
+    if len(facts["words"]) != 8 or not (facts["words"] == facts["words_py"] == facts["outside"]):
+        p.append("the eight status words differ between the catalogue's description of the status, its unrecognised-status rule and the contract source")
+    if len(facts["null_py"]) != 4 or not facts["null_py"] <= facts["words_py"]:
+        p.append("the contract's null rule no longer names four of the status words")
+    if len(facts["limits"]) != 1 or facts["limit"] not in facts["limits"]:
+        p.append("the catalogue's sources carry different freshness limits: the text must say which one it uses")
+    if not {"applies_nothing", "mode", "contract_version"} <= facts["attrs"]:
+        p.append("the status source no longer has the attributes applies_nothing, mode and contract_version")
+    if not {"intel.fresh", "intel.watchdog_fresh"} <= facts["ids"]:
+        p.append("the catalogue no longer has the fresh and the watchdog binary sensors")
+    if not all(facts["critical"].values()):
+        p.append("the catalogue no longer raises a critical alert for a mode other than SHADOW, a contract it does not know, or applies_nothing not true")
+    try:
+        lim = f"{int(facts['limit'])}" if float(facts["limit"]) == int(facts["limit"]) else f"{facts['limit']}"
+    except (TypeError, ValueError):
+        return p + ["the status source has no usable freshness limit"]
+    limit_text = f"within the catalogue's freshness limit of {lim} seconds (the status source's stale_after_s;"
+    for label, text in places:
+        if limit_text not in text:
+            p.append(f"{label}: the freshness limit is not '{lim} seconds' (the status source's stale_after_s in the catalogue)")
+        if f"the contract version the catalogue declares ({facts['contract'].lower()})" not in text:
+            p.append(f"{label}: the contract version is not the catalogue's ({facts['contract']})")
+        if f"mode {facts['mode_py'].lower()};" not in text:
+            p.append(f"{label}: the mode is not {facts['mode_py']}")
+        m = re.search(r"and is not ([a-z_]+(?:, [a-z_]+)* or [a-z_]+) \(paused is", text)
+        if not m or {w.upper() for w in re.split(r", | or ", m.group(1))} != facts["null_py"]:
+            p.append(f"{label}: the failing states are not the contract's null-rule states ({', '.join(sorted(facts['null_py']))})")
+        for part in STATUS_PARTS:
+            if plain(part) not in text:
+                p.append(f"{label}: the status part '{part[:50]}' is missing")
+    run = next((t for lab, t in places if lab == "runbook 5.1b"), "")
+    m = re.search(r"the eight words the catalogue lists for the status are ([a-z_, ]+) and ([a-z_]+) \(", run)
+    if not m or {w.upper() for w in re.split(r", ", m.group(1))} | {m.group(2).upper()} != facts["words_py"]:
+        p.append("runbook 5.1b: the eight status words it lists are not the ones the catalogue and the contract source name")
+    if f"the freshness limit is the status source's stale_after_s, {lim} seconds;" not in run:
+        p.append(f"runbook 5.1b: its paragraph on the status test does not give the freshness limit as {lim} seconds")
+    return p
+
+
+def stoprules_problems(checklist: str, runbook: str, extra: dict | None = None) -> list[str]:
+    """[20] the STOP, NOTE and values paragraphs word for word in the checklist (4.1), runbook 5.1b and runbook 6; each of the nine STOP items in each place; the status item in full (round 7: each of its
+    parts, and the contract version, the mode, the four failing words and the freshness limit against the catalogue and the contract source); the NOTE paragraph holds no
     unknown, unavailable or failed state before its closing sentence; gate G4 in both documents; the step 1 and 1b rows point to the rule; the sentence that supersedes the tool's printed
     `proposed default` line; and `proposed default` or the old confirm-at-the-final-GO wording appear only in a sentence that says superseded."""
     p: list[str] = []
     places = (("checklist 4.1", subsection(checklist, "4.1")), ("runbook 5.1b", subsection(runbook, "5.1b")), ("runbook 6", subsection(runbook, "6")))
+    p += status_problems(tuple((label, plain(raw)) for label, raw in places if plain(raw)), status_facts(extra or {}))
     stop, note, vals, never = plain(STOP_P), plain(NOTE_P), plain(VALUES_P), plain(NEVER_NOTES)
     for label, raw in places:
         text = plain(raw)
@@ -1104,6 +1228,8 @@ def stoprules_problems(checklist: str, runbook: str) -> list[str]:
         row = re.search(r"^\| G4 \|.*$", body, re.M)
         if not row or plain(G4_TEXT) not in plain(row.group(0)):
             p.append(f"the {label}'s gate G4 does not say '{G4_TEXT}'")
+        if label == "runbook" and (not row or plain(G4_STATUS) not in plain(row.group(0))):
+            p.append(f"the runbook's gate G4 does not say that the status reads SHADOW with a fresh result in the full sense of the status item ('{G4_STATUS[:60]}...')")
     # the step 1 and 1b rows of both step tables point to the rule
     for label, body, ptr, starts in (("checklist", sections(checklist).get("4", ""), CL_POINTER, ("| 1 | coordinator", "| 1b | coordinator")),
                                      ("runbook", sections(runbook).get("4", ""), RB_POINTER, ("| 1 | live read-only", "| 1b | live shape check"))):
@@ -1123,6 +1249,21 @@ def stoprules_problems(checklist: str, runbook: str) -> list[str]:
             hit = [k for k in OLD_RULE_PHRASES if k in sent]
             if hit and "superseded" not in sent:
                 p.append(f"the {label}: '{hit[0]}' is stated outside a sentence that says it is superseded: '{sent[:70]}'")
+    return p
+
+
+def notescan_problems(checklist: str, runbook: str) -> list[str]:
+    """[20b] (round 7, M2) no sentence of either document says that an unknown, unavailable, absent or failed state (or another state that a STOP names: missing, stale, paused, starting, blocked, off,
+    not shadow, not fresh, applies_nothing, a contract that does not match) is a note, harmless, acceptable or a reason to go on. A sentence is a paragraph, a
+    table row, a numbered item or a bullet, cut after . ! or ?. Exempt: the canonical NEVER_NOTES sentence, the sentences of the canonical NOTE paragraph, and a sentence that carries the supersession
+    marker of the old shape-only wording ('superseded by the owner's ruling of 21 Nov 2026'; the bare word 'superseded' is not enough)."""
+    allowed = {plain(NEVER_NOTES)} | set(sentences(NOTE_P))
+    p: list[str] = []
+    for label, text in (("checklist", checklist), ("runbook", runbook)):
+        for sent in sentences(text):
+            state, clears = STATE_WORDS.search(sent), CLEARS_WORDS.search(sent)
+            if state and clears and sent not in allowed and SUPERSEDED_MARK not in sent:
+                p.append(f"the {label}: a sentence lets a state through ('{state.group(0)}' with '{clears.group(0)}'): '{sent[:90]}'")
     return p
 
 
@@ -1282,12 +1423,14 @@ def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], n
     r["dashboards"] = dashboards_problems(checklist, runbook)
     r["gates"] = gates_problems(checklist, runbook)
     # [20] (round 6)
-    r["stoprules"] = stoprules_problems(checklist, runbook)
+    r["stoprules"] = stoprules_problems(checklist, runbook, extra)
+    # [20b] (round 7)
+    r["notescan"] = notescan_problems(checklist, runbook)
     return r
 
 
 RULES = ("pins", "checks", "sections", "tools", "cls", "statements", "hygiene", "agreement", "commands", "names", "pinned", "node", "coverage",
-         "decisions", "targets", "shape", "writepath", "dashboards", "gates", "stoprules")
+         "decisions", "targets", "shape", "writepath", "dashboards", "gates", "stoprules", "notescan")
 RULE_TITLES = {
     "pins": "[1] the pins are in the checklist exactly as the pin suite holds them",
     "checks": "[2] the five checks of the owner's directive are present by name",
@@ -1308,7 +1451,8 @@ RULE_TITLES = {
     "writepath": "[17] the write-path statement names Node tests that exist, and what it says of the card's mode switch, the more-info domains and the example's actions is true",
     "dashboards": "[18] the check of every existing dashboard: the dashboards-to-check block (catch-all row, header, three empty cells per row, in order) and the step 4 rows",
     "gates": "[19] the release gates G1 to G7 are in the checklist, each marked; the rollback is measured against the baseline and the backup, each step proven",
-    "stoprules": "[20] the owner's ruling of 21 Nov 2026: the STOP (nine items), NOTE and values paragraphs word for word in the checklist 4.1, runbook 5.1b and runbook 6; G4; the step 1 and 1b rows; the supersession of the tool's printed line; the old wording only where superseded",
+    "stoprules": "[20] the owner's ruling of 21 Nov 2026: the STOP (nine items), NOTE and values paragraphs word for word in the checklist 4.1, runbook 5.1b and runbook 6; the status item in full, derived from the catalogue and the contract source; G4; the step 1 and 1b rows; the supersession of the tool's printed line; the old wording only where superseded",
+    "notescan": "[20b] no sentence of either document makes an unknown, unavailable, absent or failed state a note, harmless or a reason to go on (only the canonical NEVER_NOTES and NOTE sentences and a sentence marked superseded may)",
 }
 
 
@@ -1631,7 +1775,7 @@ def make_mutants(pins: dict, checklist: str, runbook: str) -> list[tuple[str, st
         lambda t: on_line(t, "| G4 |", lambda ln: ln.replace(G4_TEXT + " (4.1)", "the live baseline saved (steps 1 and 1b), the shape check exits 0, the states noted")), "stoprules")
     add("runbook", "S16 gate G4 of the runbook no longer says that no STOP condition holds", lambda t: on_line(t, "| G4 |", lambda ln: ln.replace("is saved AND no STOP condition of the list holds", "is saved")), "stoprules")
     add("runbook", "S17 'or its state noted if not' is restored in gate G4 of the runbook",
-        lambda t: on_line(t, "| G4 |", lambda ln: ln.replace("the Intelligence status reads SHADOW with a fresh result;", "the Intelligence status reading SHADOW with a fresh result (or its state noted if not);")), "pinned")
+        lambda t: on_line(t, "| G4 |", lambda ln: ln.replace(G4_STATUS, "the Intelligence status reading SHADOW with a fresh result (or its state noted if not);")), "pinned")
     add("checklist", "S18 'you have not ruled on it yet' is restored in the checklist's section 7", lambda t: t.replace("not an open default.", "you have not ruled on it yet.", 1), "pinned")
     add("runbook", "S19 'the owner has not ruled on it' is restored in runbook 5.1b", lambda t: append_in(t, "5.1b", "The default is the coordinator's proposal and the owner has not ruled on it."), "pinned")
     add("checklist", "S20 the supersession sentence is dropped from the checklist 4.1", lambda t: kill_words(t, SUPERSEDED_S, "4.1"), "stoprules")
@@ -1656,6 +1800,53 @@ def make_mutants(pins: dict, checklist: str, runbook: str) -> list[tuple[str, st
         lambda t: on_line(t, "| 1b | live shape check", lambda ln: ln.replace(", and the tool's note, being shape-only, never clears a value", "")), "stoprules")
     add("runbook", "S31 section 6 keeps the old baseline clause (Core not running or the status not what it was) instead of the list",
         lambda t: t.replace("a STOP condition of the baseline list below holds (and, at any later step, the Intelligence\nstatus is no longer what the baseline recorded)", "the baseline shows Core not running or the Intelligence\nstatus not what it was", 1), "pinned")
+    # --- round 7 (the review of c4e9b8f, M1): the status item is a full test; each part, and each of the five named in the review, is dropped in turn from each of the three places
+    for target, scope, label in places6:
+        for n, part in enumerate(STATUS_PARTS, 1):
+            add(target, f"V{n} the status part '{part[:38]}' dropped from {label}", lambda t, s=scope, pt=part: kill_words(t, pt, s), "stoprules")
+        add(target, f"V8 'applies_nothing strictly true' dropped from {label}", lambda t, s=scope: kill_words(t, "applies_nothing strictly true; ", s), "stoprules")
+        add(target, f"V9 the freshness limit ('of 1200 seconds') dropped from {label}", lambda t, s=scope: kill_words(t, " of 1200 seconds", s), "stoprules")
+        add(target, f"V10 the watchdog sensor dropped from {label}", lambda t, s=scope: kill_words(t, "the fresh and the watchdog binary sensors on", s, "the fresh binary sensor on"), "stoprules")
+        add(target, f"V11 'STALE, STARTING, PAUSED or SELF_TEST_FAILED' dropped from {label}", lambda t, s=scope: kill_words(t, "STALE, STARTING, PAUSED or SELF_TEST_FAILED", s), "stoprules")
+        add(target, f"V12 'the contract version' dropped from {label}", lambda t, s=scope: kill_words(t, "the contract version the catalogue declares", s, "the catalogue declares"), "stoprules")
+        add(target, f"V13 'absent,' dropped from the status, freshness or watchdog entity item in {label}",
+            lambda t, s=scope: kill_words(t, "watchdog entity absent, unknown or unavailable", s, "watchdog entity unknown or unavailable"), "stoprules")
+        add(target, f"V14 'mode SHADOW' becomes another mode in {label}", lambda t, s=scope: kill_words(t, "mode SHADOW;", s, "mode ASSISTED;"), "stoprules")
+        add(target, f"V15 STALE is dropped from the failing states in {label}", lambda t, s=scope: kill_words(t, "STALE, STARTING, PAUSED or SELF_TEST_FAILED", s, "STARTING, PAUSED or SELF_TEST_FAILED"), "stoprules")
+    add("runbook", "V16 the status clause of gate G4 is the bare 'reads SHADOW with a fresh result;'", lambda t: on_line(t, "| G4 |", lambda ln: ln.replace(G4_STATUS, "the Intelligence status reads SHADOW with a fresh result;")), "stoprules")
+    add("runbook", "V17 the status clause of gate G4 is dropped", lambda t: on_line(t, "| G4 |", lambda ln: ln.replace(G4_STATUS + " ", "")), "stoprules")
+    add("runbook", "V18 the 5.1b paragraph on the status test loses a status word",
+        lambda t: t.replace("SELF_TEST_FAILED (the status source's description", "(the status source's description", 1).replace("STALE and (the status", "STALE (the status", 1), "stoprules")
+    add("runbook", "V19 the 5.1b paragraph on the status test gives another freshness limit", lambda t: t.replace("`stale_after_s`, 1200 seconds;", "`stale_after_s`, 900 seconds;", 1), "stoprules")
+    add("runbook", "V20 the 5.1b paragraph on the status test is dropped", lambda t: kill_words(t, "Where the status test comes from", "5.1b", "A note"), "pinned")
+    add("checklist", "V21 `contract_version` dropped from the values the checklist's step 1b row reads", lambda t: on_line(t, "| 1b | coordinator", lambda ln: ln.replace("`contract_version` ", "")), "pinned")
+    add("checklist", "V22 the sensors' 'read on' dropped from the values the checklist's step 1b row reads", lambda t: on_line(t, "| 1b | coordinator", lambda ln: ln.replace("binary sensors, which read on;", "entities;")), "pinned")
+    add("runbook", "V23 `contract_version` dropped from the values that 5.1 records", lambda t: t.replace("`applies_nothing` and `contract_version` attributes", "`applies_nothing` attributes", 1), "pinned")
+    add("runbook", "V24 `contract_version` dropped from the values that 5.1b reads and records", lambda t: t.replace("`applies_nothing`, `contract_version`,", "`applies_nothing`,", 1), "pinned")
+    add("runbook", "V25 the time of the read is no longer written down (5.1)", lambda t: kill_words(t, "Write down the time of the read when block 3 runs: the age of the status entity's last update is measured against it (5.1b).", "5.1"), "pinned")
+    add("runbook", "V26 a status, freshness or watchdog entity shown as absent is no longer a STOP (5.1)",
+        lambda t: t.replace("for the status, freshness or watchdog entity, the pause helper or a control entity it is a STOP", "for the pause helper or a control entity it is a STOP", 1), "pinned")
+    add("checklist", "V27 the step 1b row of the checklist leaves the status item out of the pointer",
+        lambda t: on_line(t, "| 1b | coordinator", lambda ln: ln.replace("; its status item is a full test, not only the word SHADOW", "")), "stoprules")
+    # --- round 7 (M2): a sentence outside the canonical NOTE paragraph that clears an unknown, unavailable, absent or failed state (the two that the review showed survive, and some of my own)
+    add("runbook", "W1 runbook 5.1b: 'A status entity that reads unknown while Intelligence starts is recorded as a note and the installation goes on.' (the review's survivor)",
+        lambda t: append_in(t, "5.1b", "A status entity that reads unknown while Intelligence starts is recorded as a note and the installation goes on."), "notescan")
+    add("runbook", "W2 the runbook's step 1b row: '; an unknown self-test value is a note' (the review's survivor)",
+        lambda t: on_line(t, "| 1b | live shape check", lambda ln: ln.rstrip().rstrip("|").rstrip() + "; an unknown self-test value is a note |"), "notescan")
+    add("checklist", "W3 checklist 4.1: a failed freshness check is harmless and the installation can proceed", lambda t: append_in(t, "4.1", "A failed freshness check is harmless and the installation can proceed."), "notescan")
+    add("runbook", "W4 runbook section 6: an absent control entity is recorded as a note (a bullet)", lambda t: append_in(t, "6", "- An absent control entity is recorded as a note."), "notescan")
+    add("checklist", "W5 the checklist's step 1b row: a status that reads unavailable is harmless",
+        lambda t: on_line(t, "| 1b | coordinator", lambda ln: ln.rstrip().rstrip("|").rstrip() + "; a status reading unavailable is harmless |"), "notescan")
+    add("runbook", "W6 the bare word 'superseded' does not exempt a sentence", lambda t: append_in(t, "5.1b", "An unknown watchdog state is a note (superseded)."), "notescan")
+    add("runbook", "W7 the runbook's gate G4: an unavailable pause helper is fine", lambda t: on_line(t, "| G4 |", lambda ln: ln.rstrip().rstrip("|").rstrip() + "; an unavailable pause helper is fine |"), "notescan")
+    add("runbook", "W8 runbook section 12: a failed self-test check goes on as a note", lambda t: append_in(t, "12", "A failed self-test check goes on as a note."), "notescan")
+    add("checklist", "W9 checklist section 5: a state that reads unknown is acceptable", lambda t: append_in(t, "5", "A state that reads unknown is acceptable at the baseline."), "notescan")
+    add("checklist", "W10 checklist 4.1: a PAUSED status is acceptable at the baseline", lambda t: append_in(t, "4.1", "A PAUSED status is acceptable at the baseline."), "notescan")
+    add("runbook", "W11 runbook section 6: a watchdog that reads off is fine", lambda t: append_in(t, "6", "A watchdog that reads off is fine."), "notescan")
+    add("checklist", "W12 checklist 4.1: an unknown self-test value is informational", lambda t: append_in(t, "4.1", "An unknown self-test value is informational."), "notescan")
+    add("runbook", "W13 runbook section 6: a stale status does not stop the installation", lambda t: append_in(t, "6", "A stale status does not stop the installation."), "notescan")
+    add("runbook", "W14 runbook 5.1b: applies_nothing false is harmless", lambda t: append_in(t, "5.1b", "A status whose applies_nothing reads false is harmless."), "notescan")
+    add("runbook", "W15 runbook 5.1b: a contract version that differs is recorded as a note", lambda t: append_in(t, "5.1b", "A contract version that differs is recorded as a note."), "notescan")
     # the pinned sentences and the coverage keywords: the removal of each is killed
     for n, (doc, scope, phrase) in enumerate(PINNED, 1):
         add(doc, f"P{n} the sentence '{phrase[:46]}' removed from the {doc} {scope}", lambda t, s=scope, ph=phrase: kill_words(t, ph, s), "pinned")
@@ -1684,6 +1875,17 @@ TOOL_MUTANTS = [   # mutants of the live shape check tool's source (round 5: wha
     ("T4 the tool no longer prints the proposed-default line that the documents call superseded", lambda s: s.replace("anything else UNDECLARED or any unexplained absence is a STOP", "anything else UNDECLARED is a STOP"), "shape"),
 ]
 
+def cat_source(d: dict, source_id: str) -> dict:
+    return next(s for s in d["sources"] if s["id"] == source_id)
+
+
+def cat_edit(text: str, fn) -> str:
+    """A mutant of the catalogue (JSON): parse, change, write again (the rules read it as JSON)."""
+    d = json.loads(text)
+    fn(d)
+    return json.dumps(d, ensure_ascii=True, indent=1)
+
+
 EXTRA_MUTANTS = [   # mutants of the sources the new rules read (the documents say what the card, the example, the ledger and the Node suites hold: these show each claim is checked against them)
     ("E1 the card's mode buttons call a service", "card", lambda s: s.replace("this._ctl.set(mode)", "this._hass.callService('x', 'y')", 1), "writepath"),
     ("E2 the example gains a service action", "example", lambda s: s + "\n            tap_action:\n              action: call-service\n", "writepath"),
@@ -1693,6 +1895,16 @@ EXTRA_MUTANTS = [   # mutants of the sources the new rules read (the documents s
     ("E6 a Node test is renamed", "element", lambda s: s.replace("AC5 the switch never changes helper or service state", "AC5 the switch never changes state", 1), "writepath"),
     ("E7 the example loses an action", "example", lambda s: s.replace("action: more-info", "action: none", 1), "writepath"),
     ("E8 the ledger's not-checked count changes", "ledger", lambda s: re.sub(r'("NOT_CHECKED_LIVE":\s*)1\b', r"\g<1>2", s, count=1), "shape"),
+    # round 7 (M1): the status item is derived from the catalogue and the contract source; a change there that the documents do not follow is caught
+    ("E9 the status source's freshness limit in the catalogue changes", "catalogue", lambda s: cat_edit(s, lambda d: cat_source(d, "intel.status").update(stale_after_s=900.0)), "stoprules"),
+    ("E10 the contract version in the catalogue changes", "catalogue", lambda s: cat_edit(s, lambda d: d.update(contract="ecco-intel-entities/2")), "stoprules"),
+    ("E11 the status description in the catalogue lists another word", "catalogue",
+     lambda s: cat_edit(s, lambda d: cat_source(d, "intel.status").update(description=cat_source(d, "intel.status")["description"].replace("STALE or SELF_TEST_FAILED", "STALE or SELF_TEST_BROKEN"))), "stoprules"),
+    ("E12 the contract source's CONTRACT_VERSION changes", "contract", lambda s: s.replace('CONTRACT_VERSION = "ecco-intel-entities/1"', 'CONTRACT_VERSION = "ecco-intel-entities/2"', 1), "stoprules"),
+    ("E13 the contract's null rule loses a status", "contract", lambda s: s.replace("NULL = (STARTING, PAUSED, STALE, SELF_TEST_FAILED)", "NULL = (STARTING, PAUSED, SELF_TEST_FAILED)", 1), "stoprules"),
+    ("E14 another source of the catalogue gets a different freshness limit", "catalogue", lambda s: cat_edit(s, lambda d: cat_source(d, "intel.fresh").update(stale_after_s=600.0)), "stoprules"),
+    ("E15 the catalogue loses the watchdog source", "catalogue", lambda s: cat_edit(s, lambda d: d["sources"].remove(cat_source(d, "intel.watchdog_fresh"))), "stoprules"),
+    ("E16 the catalogue's mode alert accepts another mode", "catalogue", lambda s: cat_edit(s, lambda d: next(a for a in d["alerts"] if a["id"] == "mode_not_shadow")["when"].update(not_in=["SHADOW", "ASSISTED"])), "stoprules"),
 ]
 
 
@@ -1732,6 +1944,10 @@ def main(argv: list[str]) -> int:
     check(f"runbook section 9 has {len(COVERAGE)} bullets and each one has its keyword in checklist section 8 ({len(items9)} found)", len(items9) == len(COVERAGE) and not result["coverage"])
     check("the nine STOP items are each a part of the canonical STOP paragraph, in order",
           len(STOP_ITEMS) == 9 and all(plain(i) in plain(STOP_P) for i in STOP_ITEMS) and [plain(STOP_P).index(plain(i)) for i in STOP_ITEMS] == sorted(plain(STOP_P).index(plain(i)) for i in STOP_ITEMS))
+    sp = [plain(STOP_P).index(plain(x)) for x in STATUS_PARTS if plain(x) in plain(STOP_P)]
+    check("the seven parts of the status item are each a part of the canonical STOP paragraph, in order, and sit between STOP items 1 and 3",
+          len(STATUS_PARTS) == 7 and len(sp) == 7 and sp == sorted(sp) and plain(STOP_P).index(plain(STOP_ITEMS[1])) < sp[0] and sp[-1] < plain(STOP_P).index(plain(STOP_ITEMS[2])))
+    check("the status item's facts can be derived from the catalogue and the contract source (contract version, mode, eight words, null rule, freshness limit)", status_facts(extra) is not None, "")
     own_bytes = Path(__file__).read_bytes()
     own = own_bytes.decode("utf-8", errors="replace")
     check("this suite's own source is ASCII and holds no address, token or entity id",
