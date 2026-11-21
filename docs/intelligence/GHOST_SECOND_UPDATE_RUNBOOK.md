@@ -2,7 +2,7 @@
 
 **Status: PREPARED OFFLINE, NOT RUN, NOT READY.** Nothing in this document has been done on Home Assistant. The update has
 never run in a real Home Assistant (section 12). It is not ready for a go until the preconditions of section 5 that are marked
-OPEN are closed (P1, P3, P4, P5, P6, P7 and P9 at the time of writing). Every live step below needs its own owner
+OPEN are closed (P1, P4, P5, P7 and P9 at the time of writing; P2, P3, P6 and P8 are closed). Every live step below needs its own owner
 authorisation, in the session, at the time (column "own authorisation" of the step table).
 
 > **Every live step in this runbook is NOT AVAILABLE** until all of these hold:
@@ -37,7 +37,7 @@ The owner's words (20 and 21 Nov 2026), quoted:
 
 | The direction | Where it is met in this runbook |
 |---|---|
-| a separate second update | it is its own update (U2), after the first (a read-only dashboard card, U1) or deliberately independent of it (P6); nothing of U1 is done in the same window |
+| a separate second update | it is its own update (U2), after the first (a read-only dashboard card, U1, installed and verified on 21 Nov 2026: P6 is closed); nothing of U1 is done in the same window |
 | its own backup | step 2 (the owner's protected full backup, made for this update) and the deploy tool's verified backup of the installed folder (step 5) |
 | its own restart | step 7: one restart, approved separately, short (the latch caveat of install runbook 6) |
 | its own rollback verification | section 10: the order, a proof for each, measured against the baseline of step 1 |
@@ -183,7 +183,9 @@ These numbers hold for the kit sources as reviewed. Any change of a kit source (
 store, the vendored modules, anything the build reads) changes them: the suite fails and this document is updated in that
 change, and the reviews, the L3 run (P1) and the owner's acceptance are repeated. The base kit's numbers (53 files; the same
 command without `--git-sha` gives `47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40`) are recorded for the
-baseline comparison and are not pinned.
+baseline comparison and are not pinned. A commit that changes only documents or suites changes neither a kit source nor the rows
+above: the kit built from it differs from the L3-tested kit in the two `VENDOR_MANIFEST.json` lines only, and the build
+comparison of step 0 proves that each time.
 
 ## 4. The owner's acceptance items
 
@@ -199,22 +201,22 @@ Decisions are the owner's. This table lists them; it decides none. "Open" means 
 | D-U2-6 | RG-F3 for U2 | **this update creates no entity** (section 2.5), so no new entity can be exposed; the two voice-assistant exposure settings stay the owner's separately tracked F3 issue | **open**: the owner says whether the treatment decided for U1 carries over; this is not acceptance of F3 and not permission to introduce new exposed controls |
 | D-U2-7 | the withdrawn-before-window treatment of `advice.followed` | a row that is followable but was withdrawn by a later BLOCKED row before its window took effect is still counted as followed in `advice.followed`; what the simulation really acted on is `advice_in_force_hours` | **open**: an owner decision; not decided here |
 | D-U2-8 | `EXPORT_DIFF_EPS_KWH` | 0.001 kWh (the resolution of the recorded energies): below it an export difference is arithmetic noise; above it, with an unverified export price, the verdict is `NOT_ASSESSED_EXPORT_UNVERIFIED` | **open**: an owner decision; not decided here |
-| D-U2-9 | the commit to install from, and the order against U1 | the branch commit after green CI, or the merge commit; U1 first or deliberately independent | **open** |
+| D-U2-9 | the commit to install from, and the window against U1 | the branch commit after green CI, or the merge commit; U1 is already installed and verified (21 Nov 2026), so U2 follows it in a window of its own | **open**: the commit is the owner's choice |
 
 ## 5. Preconditions
 
-The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P1, P3, P4, P5, P6, P7 and P9.
+The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P1, P4, P5, P7 and P9.
 
 | # | Precondition | Status |
 |---|---|---|
 | P1 | **The L3 (WSL) kit-equivalence reference run, repeated on the exact kit.** It has not been repeated since the kit changed. It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit installs through the same route (`deploy-ha-kit.ps1 -Target Test`), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) at least three slot cycles in the real Home Assistant, with two advice rows per slot, `advice_verified` true, STORE_RECORD absent then PASS, and the tables created lazily; (c) **the executor reads in the diagnostics download observed in the real Home Assistant**: the stored-incident read and the Ghost block's read of the advice log run in the executor, within their budgets, with no blocking-I/O or slow-callback warning from the integration; (d) **the log lines observed in the real Home Assistant**: the WARNING when an incident opens and the line when it closes (the close line is logged at INFO, so it shows only if the logger level for the integration allows INFO: the run records the logger level it ran under, and the close line is observed only where that level allows it), class names only, induced on the isolated instance only (never on production); (e) an incident open at a restart is gone after it (only the logged warning remains); (f) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN** |
 | P2 | independent review of the code (the advice log, the verified write, the incident health), findings fixed, the kit unchanged since the reviewed build (proven by the build comparison of section 3) | closed (offline) |
-| P3 | independent review of these documents and their suite | **OPEN** |
-| P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN** |
-| P5 | the owner's M2 private-pattern scan on the exact commit, generated assets, commit metadata and pull request text included | **OPEN** |
-| P6 | U1 finished (its first look done and its record filed), or the owner deliberately decides U2 is independent of it; never both in one window | **OPEN** |
+| P3 | independent review of these documents and their suite | closed (21 Nov 2026, lean mode): one independent review, verdict READY WITH MINORS, eight findings, all fixed and each pinned in the suite; no BLOCKER or MAJOR finding stayed open, so no second round is required. Later edits are status lines and the clarifications of 8.5 and section 10, each checked against the deploy tool's own source (pinned by the suite) and by the mock-root drill; a later change of substance is reviewed again |
+| P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN**: closed only by a green run on the exact commit; any later commit repeats it |
+| P5 | the owner's M2 private-pattern scan on the exact commit, generated assets, commit metadata and pull request text included | **OPEN**: runs before any push; any later commit repeats it |
+| P6 | U1 finished (its first look done and its record filed), or the owner deliberately decides U2 is independent of it; never both in one window | closed (21 Nov 2026): U1 was installed and verified on the owner's Home Assistant and its installation report is filed in the private project record; U1's own remaining optional checks (a phone or wall client, the card's optional buttons) are U1's and not a precondition of U2. U1 and U2 never share a window: U2-G2 still applies |
 | P7 | the owner's rulings on D-U2-1 to D-U2-9 recorded | **OPEN** |
-| P8 | the offline gates green on the exact commit: the suites, the kit build comparison, the mock-root drill with this kit and the PowerShell parse (step 0) | closed at the time of writing; repeated at step 0 |
+| P8 | the offline gates green on the exact commit: the suites, the kit build comparison, the mock-root drill with this kit and the PowerShell parse (step 0) | closed; re-verified on 21 Nov 2026 (the evidence note is filed offline); repeated at step 0 on the commit that is installed |
 | P9 | the reference kit and its `SHA256SUMS` sha256 from P1 recorded offline (the Production route refuses without them) | **OPEN** (follows P1) |
 
 ## 6. Go / no-go on the day
@@ -462,7 +464,8 @@ The Upgrade stages under `/config/ecco/staging/<stamp>/` (never inside `custom_c
 host, backs up the installed folder to `/config/ecco-backups/<stamp>/` and verifies the backup against its `BACKUP_SHA256SUMS`,
 swaps by atomic rename (the replaced tree moves under the staging folder; nothing is deleted), verifies every file in place, and
 runs `ha core check`. A failure from the swap on goes through the tool's one rollback routine ("was rolled back" only when verified).
-**Record the stamp it prints in the backup line: it is the `-BackupStamp` of the rollback.** The tool never restarts Home
+**Record the stamp it prints in the backup line: it is the `-BackupStamp` of the rollback** (its `To undo` line repeats the
+rollback command with the stamp in it, but without `-Python`: add the same `-Python` as the Upgrade used). The tool never restarts Home
 Assistant and tells you to keep the pause helper on until after the restart (lazy imports could otherwise load new modules into the
 old process).
 
@@ -605,7 +608,7 @@ write: **(i) the baseline** of step 1 (the integration folder listing and its ha
 lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's protected full backup** of step 2, the last resort.
 
 1. **RB1, pause.** The owner turns the pause helper on if it is not on (install runbook 11: pause, then roll back). Proof: the status reads
-   PAUSED; the state listing is stable across two reads.
+   PAUSED; the state listing is stable across two reads (the block of 8.4: the same two reads, a minute apart).
 2. **RB2, restore the previous kit.** The coordinator runs the repository's own rollback with the stamp recorded in step 5:
 
    ```powershell
@@ -616,9 +619,13 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
    .\tools\deploy-ha-kit.ps1 -Action Rollback -BackupStamp <stamp> -SshHost $H -Target Production -ExpectedHaVersion <version> -Python $PY
    ```
 
-   It verifies the backup against its `BACKUP_SHA256SUMS`, stages and verifies the restore copy, backs up the current tree, swaps,
-   verifies in place and runs `ha core check`; it never restarts. Proof: the PASSED block (`Restored` and `HA check : passed`), and an
-   independent comparison of the installed folder with the baseline (the block below):
+   Like every action of this tool it needs `<checkout>` clean: it refuses a dirty working tree and runs the repository validation
+   with `-Python` before it sends anything (a refusal on either changes nothing on the host, and `-SkipValidation` is never used
+   here). It verifies the backup against its `BACKUP_SHA256SUMS`, stages and verifies the restore copy, backs up the current tree,
+   swaps, verifies in place, compares the site file and the state folder before and after and rolls itself back if they changed
+   (this is why RB1 comes first) and runs `ha core check`; it never restarts. Proof: the PASSED block (`Restored` names the
+   backup's file count, which is the baseline listing's: 52 if the installed kit was the merged base's; and `HA check : passed`),
+   and an independent comparison of the installed folder with the baseline (the block below):
 
    ```powershell
    cls
@@ -634,7 +641,8 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
 
 3. **RB3, restart.** The restart is the owner's, approved separately, short (the latch caveat). Proof: Core running; the integration loads
    with no repair or error line; the diagnostics download has **no** `advice_incidents` block (the previous code runs) and no FAIL in
-   `self_test`; the entities are the same eleven. **What happens to the two tables.** They stay in the scorecard file, unused, and are
+   `self_test`, read with the block of 8.8 (change `$F` to the download, saved as `diagnostics-rollback.json`): `advice_incidents present
+   False` and `self_test FAIL []`, as the baseline's `diagnostics-before.json` reads the same way; the entities are the same eleven. **What happens to the two tables.** They stay in the scorecard file, unused, and are
    harmless to the previous kit. What was proved, exactly: the drill leaves the state folder byte-identical through every swap
    (a suite check, with a scorecard file that holds both tables); and one offline experiment of this preparation (scratch only,
    synthetic data, not a repository suite) had the previous scorecard and store code open a file holding both tables, pass the
@@ -651,7 +659,8 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
    or a copy read with the integration paused under its own go; never the live file) in a scratch folder and, with the Python 3.12
    interpreter, run the documented statement on the copy: `DROP TABLE IF EXISTS advice_log; DROP TABLE IF EXISTS advice_incident;` (the runtime document: "drop the tables
    `advice_log` and `advice_incident`, or delete `scorecard.sqlite3`, while the integration is stopped"). Proof: `PRAGMA integrity_check`
-   on the copy reads `ok` and the scorecard's own tables keep their row counts. Doing it on the host would need the integration stopped
+   on the copy reads `ok` and the scorecard's own tables keep their row counts (counted on the copy before the statement and after it).
+   Doing it on the host would need the integration stopped
    (its entry disabled), a way to run the statement there and its own authorisation; none is prepared here.
 6. **RB6, the protected backup restore, the heavy last resort.** The owner's decision, never the first rollback: read 8.2 first. It
    restarts Home Assistant and returns everything the backup holds, the scorecard file included, to its state at backup time. Proof:

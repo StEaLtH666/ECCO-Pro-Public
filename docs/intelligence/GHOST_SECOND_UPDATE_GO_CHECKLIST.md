@@ -5,14 +5,15 @@ here as "runbook N" (a section number). Nothing in this list has been done.
 
 ## 1. The answer
 
-**Prepared offline and never run in a real Home Assistant. NOT yet ready for your go.** Open preconditions (runbook 5): P1, P3, P4,
-P5, P6, P7 and P9.
+**Prepared offline and never run in a real Home Assistant. NOT yet ready for your go.** Open preconditions (runbook 5): P1, P4, P5, P7 and P9.
+Closed since the first draft: P2 (code review), P3 (one independent review of these documents and their suite: eight findings fixed and
+pinned, no BLOCKER or MAJOR left open), P6 (U1 was installed and verified on 21 Nov 2026; U1 and U2 never share a window) and P8 (offline
+gates re-verified).
 
 - **P1 (the one that matters most):** the L3 (WSL) kit-equivalence reference run must be repeated on the exact kit. It has not been
   repeated since the kit changed. It must observe the executor reads in the diagnostics download and the log lines in a real Home
   Assistant. P9 (the reference kit's hash, which the Production route requires) follows it.
-- P3 independent review of these documents; P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on that commit; P6 U1
-  finished or deliberately independent; P7 your rulings on section 3.
+- P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on that commit; P7 your rulings on section 3.
 
 **No automatic installation or live access is authorised.** Nothing is installed, restarted or read live until every precondition is
 closed, you have given the final GO on this list, and each live step has had its own go.
@@ -96,7 +97,7 @@ Assistant and returns everything, the scorecard file included, to backup time).
 
 ## 7. Blockers
 
-The open preconditions of section 1 (P1 first). No defect is known from the offline checks. At install time: your reads, your protected backup, your
+The open preconditions of section 1 (P1 first). No defect is known from the offline checks. U1 is already installed: U2 is a window of its own. At install time: your reads, your protected backup, your
 presence, and your go for each step. If another supervised live step is in progress (U1 included), this one waits.
 
 ## 8. What is NOT established

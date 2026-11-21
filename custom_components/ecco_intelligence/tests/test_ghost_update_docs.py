@@ -29,7 +29,8 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
  [10] forbidden: the three phrases the owner ruled out, an entity id, an address, a token, a workstation path, the live host alias, a
       commit id, a hash that is not one of the pinned ones, a non-ASCII character
  [11] preconditions: P1 (the L3 WSL kit-equivalence run on the exact kit) is OPEN and says what it must show (the executor reads in the
-      download and the log lines in a real Home Assistant); the open set is the same in the runbook and the checklist
+      download and the log lines in a real Home Assistant); the open set (P1, P4, P5, P7, P9) AND the closed set (P2, P3, P6, P8) are
+      exact, each closed line gives its reason, and the open set is the same in the runbook and the checklist
  [12] the steps: the same step numbers in both, the same who, an owner go at each live step, the restart with its own approval
  [13] the rollback: RB1 to RB6 in order in both, a proof for each in the runbook, the rollback command with its stamp, the heavy
       last resort that is never the first rollback in both, no bare R-number citation anywhere (the install runbook's items are
@@ -53,6 +54,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
  [24] when the tables are created: advice_log at the first advice-log attempt (even if it writes no row), advice_incident by the
       incident persist after a verified write; the code does so, and the documents say the same in every place that says it
  [25] mutants (all in memory): each is killed by the rule that exists for it
+ [26] the rollback proofs name real reads and real tool behaviour: the paused read of 8.4 (RB1), the clean checkout, the repository
+      validation, the protected-snapshot check and the Restored line (RB2), the load-check read of 8.8 on the rollback download (RB3)
+      and the To undo line (8.5), each checked against the deploy tool's own source
 
 Usage: python custom_components/ecco_intelligence/tests/test_ghost_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
@@ -108,7 +112,9 @@ TOOL_KEYS = {"build_ha_integration.py": "build", "ecco_intel_drill.py": "drill",
              "ha-status.ps1": "status", "ha-logs.ps1": "logs"}
 FIXED_SHA = "0000000"                 # the fixed reference commit of the second build (not a commit: a placeholder)
 BASE_KIT_SUMS = "47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40"   # recorded from the merged base's kit; not pinned
-OPEN_AT_WRITING = ("P1", "P3", "P4", "P5", "P6", "P7", "P9")
+OPEN_AT_WRITING = ("P1", "P4", "P5", "P7", "P9")
+CLOSED_AT_WRITING = ("P2", "P3", "P6", "P8")
+OPEN_LIST_TEXT = "P1, P4, P5, P7 and P9"
 NEW_FILES = ("_vendor/intelligence/ghost.py", "_vendor/intelligence/ghost_compare.py", "_vendor/intelligence/ghost_feed.py",
              "_vendor/intelligence/net_value.py", "runtime/ghost_link.py")
 CHANGED_FILES = ("_vendor/intelligence/scorecard.py", "runtime/store.py", "coordinator.py", "diagnostics.py", "VENDOR_MANIFEST.json")
@@ -536,11 +542,21 @@ def rule_preconditions(rb, cl, S, F):
     got = open_ids(rb)
     if got != set(OPEN_AT_WRITING):
         pr.append(f"the open preconditions are {sorted(got)}, expected {list(OPEN_AT_WRITING)} (closing one is a deliberate edit of this suite)")
-    listed = "P1, P3, P4, P5, P6, P7 and P9"
+    closed = sorted(c[0] for c in table_rows(sec) if re.fullmatch(r"P\d+", c[0]) and P(c[-1]).lower().startswith("closed"))
+    if closed != sorted(CLOSED_AT_WRITING):
+        pr.append(f"the closed preconditions are {closed}, expected {list(CLOSED_AT_WRITING)} (closing or reopening one is a deliberate edit of this suite)")
+    rows = {c[0]: " ".join(c) for c in table_rows(sec) if re.fullmatch(r"P\d+", c[0])}
+    for pid, words in (("P3", ("lean mode", "eight findings", "no BLOCKER or MAJOR finding stayed open", "no second round")),
+                       ("P6", ("U1 was installed and verified", "never share a window")),
+                       ("P8", ("re-verified", "repeated at step 0"))):
+        for w in words:
+            if not has(rows.get(pid, ""), w):
+                pr.append(f"{pid} is closed without its reason: it lacks '{w}'")
+    listed = OPEN_LIST_TEXT
     if not has(rb, "NOT READY") or not has(rb, listed):
         pr.append("the runbook's status does not say NOT READY and list the open preconditions")
     c1 = section(cl, "1")
-    if not has(c1, "NOT yet ready") or not has(c1, "P1, P3, P4, P5, P6, P7 and P9"):
+    if not has(c1, "NOT yet ready") or not has(c1, OPEN_LIST_TEXT):
         pr.append("the checklist does not say NOT yet ready and list the open preconditions")
     for phrase in ("L3 (WSL) kit-equivalence reference run", "executor reads in the diagnostics download", "log lines", "exact kit"):
         if not has(c1, phrase):
@@ -856,13 +872,57 @@ def rule_lazy_tables(rb, cl, S, F):
     return pr
 
 
+def rule_rollback_reads(rb, cl, S, F):
+    """Section 10's proofs name real reads, and what the runbook says about the rollback command is what the deploy tool does."""
+    pr = []
+    s10 = section(rb, "10")
+    items = dict(re.findall(r"^\d+\. \*\*(RB\d)\b(.*?)(?=^\d+\. \*\*RB|\*\*Special cases|\Z)", s10, re.S | re.M))
+    rb1, rb2, rb3 = items.get("RB1", ""), items.get("RB2", ""), items.get("RB3", "")
+    blocks = "\n".join(ps_blocks(rb))
+    if not has(rb1, "the block of 8.4"):
+        pr.append("RB1's proof does not name the paused read of 8.4")
+    for phrase in ("needs <checkout> clean", "it refuses a dirty working tree", "runs the repository validation", "with -Python before it sends anything",
+                   "-SkipValidation is never used", "compares the site file and the state folder before and after",
+                   "rolls itself back if they changed", "this is why RB1 comes first", "Restored names the backup's file count"):
+        if not has(rb2, phrase):
+            pr.append(f"RB2 lacks '{phrase}'")
+    m81 = re.search(r"must be (\d+) if the installed kit is the merged base", P(rb))
+    if m81 is None or not has(rb2, f"{m81.group(1)} if the installed kit was the merged base's"):
+        pr.append("RB2 does not give the file count the baseline's block 1 (8.1) gives")
+    for phrase in ("the block of 8.8", "diagnostics-rollback.json", "advice_incidents present False", "self_test FAIL []", "diagnostics-before.json"):
+        if not has(rb3, phrase):
+            pr.append(f"RB3's proof lacks '{phrase}' (the load-check read of 8.8 on the rollback download, against the baseline download)")
+    for frag in ("advice_incidents present", "self_test FAIL"):
+        if frag not in blocks:
+            pr.append(f"no runbook block prints '{frag}' (RB3 relies on the block of 8.8)")
+    if not has(rb, "its To undo line repeats the rollback command with the stamp in it, but without -Python"):
+        pr.append("the runbook (8.5) does not say that the To undo line repeats the rollback command with the stamp but without -Python")
+    d, m = S["deploy"], S["psm1"]
+    m_common = re.search(r'\$common = "([^"]*)"', d)
+    if m_common is None or "-Python" in m_common.group(1):
+        pr.append("the deploy tool's To undo line carries -Python now (8.5 says it is without -Python)")
+    if not re.search(r"^Assert-EccoCleanWorkingTree -RepoRoot \$repoRoot\s*$", d, re.M):
+        pr.append("the deploy tool does not check the working tree for every action (RB2 says it refuses a dirty one)")
+    if not (re.search(r"if \(-not \$SkipValidation\) \{", d) and "validate-ecco.ps1" in d and "-Python $Python" in d):
+        pr.append("the deploy tool does not run the repository validation with -Python unless -SkipValidation is given")
+    if not re.search(r"To undo\s+: \.\\tools\\deploy-ha-kit\.ps1 -Action Rollback -BackupStamp \$runStamp", d):
+        pr.append("the deploy tool does not print a To undo line with the Rollback command and the stamp")
+    if not re.search(r"Restored\s+: \$\(@\(\$restoreFiles\.Keys\)\.Count\) files from", d):
+        pr.append("the deploy tool does not print a Restored line with the file count of the backup")
+    if "the protected site file or state folder changed during the write" not in m or "Invoke-EccoKitRollback @rollback -Reason $failure" not in m:
+        pr.append("the kit write no longer compares the protected snapshot and rolls itself back when it changed")
+    if "ha core check" not in m:
+        pr.append("the kit write no longer runs ha core check")
+    return pr
+
+
 RULES = {
     "shape": rule_shape, "tools": rule_tools, "kit": rule_kit, "numbers": rule_numbers, "store_record": rule_store_record,
     "no_restart": rule_no_restart, "cls": rule_cls, "quotes": rule_quotes, "sentences": rule_sentences, "forbidden": rule_forbidden,
     "preconditions": rule_preconditions, "steps": rule_steps, "rollback": rule_rollback, "decisions": rule_decisions,
     "no_entity": rule_no_entity, "coverage": rule_coverage, "drill": rule_drill, "phrases": rule_phrases, "vars": rule_vars,
     "cites": rule_cites, "workdir": rule_workdir, "log_lines": rule_log_lines, "write_statement": rule_write_statement,
-    "lazy_tables": rule_lazy_tables,
+    "lazy_tables": rule_lazy_tables, "rollback_reads": rule_rollback_reads,
 }
 RULE_TITLES = {
     "shape": "[1] both documents exist, are ASCII, the checklist has at most 120 lines, the sections are numbered",
@@ -889,6 +949,7 @@ RULE_TITLES = {
     "log_lines": "[22] the first-failure line is a WARNING and the close line is logged at INFO (the coordinator's own levels): the documents say the close line may not show and that its absence is not a failure",
     "write_statement": "[23] the runbook and the checklist list the same writes; neither says the pause helper is the only write outside the scorecard file",
     "lazy_tables": "[24] advice_log is created at the first advice-log attempt, advice_incident by the incident persist after a verified write: the code does so and every place that says it agrees",
+    "rollback_reads": "[26] the rollback proofs name real reads (8.4, 8.8) and what the runbook says the Rollback does (clean checkout, validation, protected snapshot, Restored, To undo) is what the deploy tool does",
 }
 
 
@@ -1056,6 +1117,17 @@ def make_mutants(F):
     add("rb", "a table name misspelled", lambda t: t.replace("advice_incident`", "advice_incidnt`"), "numbers")
     add("rb", "the export epsilon changed in the runbook", lambda t: t.replace("0.001 kWh", "0.01 kWh"), "numbers")
     add("rb", "the L3 precondition closed", lambda t: re.sub(r"(\| P1 \|.*?)\*\*OPEN\*\*", r"\1closed", t, count=1, flags=re.S), "preconditions")
+    add("rb", "P3 reopened", lambda t: sub1(t, "closed (21 Nov 2026, lean mode)", "**OPEN** (21 Nov 2026, lean mode)"), "preconditions")
+    add("rb", "P6 reopened", lambda t: sub1(t, "closed (21 Nov 2026): U1 was installed and verified", "**OPEN**: U1 was installed and verified"), "preconditions")
+    add("rb", "P8 reopened", lambda t: sub1(t, "| closed; re-verified on 21 Nov 2026", "| **OPEN**; re-verified on 21 Nov 2026"), "preconditions")
+    add("rb", "P3 closed without its reason", lambda t: sub1(t, "no BLOCKER or MAJOR finding stayed open", "nothing stayed open"), "preconditions")
+    add("cl", "the checklist lists P6 as open again", lambda t: t.replace(OPEN_LIST_TEXT, "P1, P4, P5, P6, P7 and P9"), "preconditions")
+    add("rb", "RB1 no longer names the paused read of 8.4", lambda t: sub1(t, "(the block of 8.4: the same two reads, a minute apart)", ""), "rollback_reads")
+    add("rb", "RB2 no longer says the tool refuses a dirty working tree", lambda t: sub1(t, "it refuses a dirty working tree", "it accepts any working tree"), "rollback_reads")
+    add("rb", "RB2 no longer says the tool compares the protected snapshot", lambda t: sub1(t, "rolls itself back if they changed", "carries on"), "rollback_reads")
+    add("rb", "RB2 gives another file count than the baseline block", lambda t: sub1(t, "52 if the installed kit was the merged base", "50 if the installed kit was the merged base"), "rollback_reads")
+    add("rb", "RB3 no longer names the block of 8.8", lambda t: sub1(t, "read with the block of 8.8", "read"), "rollback_reads")
+    add("rb", "the To undo line misnamed", lambda t: sub1(t, "its `To undo` line repeats", "its `To undoo` line repeats"), "rollback_reads")
     add("rb", "the L3 precondition no longer asks for the executor reads", lambda t: t.replace("executor reads in the diagnostics download", "reads"), "preconditions")
     add("cl", "the checklist drops the WSL run", lambda t: t.replace("L3 (WSL) kit-equivalence reference run", "reference run"), "preconditions")
     add("cl", "the checklist claims it is ready", lambda t: t.replace("NOT yet ready", "ready"), "preconditions")
@@ -1190,8 +1262,16 @@ def make_source_mutants():
     def reader_creates_table(src):
         return src.replace("    def advice_incidents(self) -> list[dict]:", "    def advice_incidents(self) -> list[dict]:\n        self._ensure_advice_log()", 1)
 
+    def no_tree_check(src):
+        return src.replace("Assert-EccoCleanWorkingTree -RepoRoot $repoRoot\n", "", 1)
+
+    def no_snapshot_check(src):
+        return src.replace("the protected site file or state folder changed during the write", "the protected files changed", 1)
+
     return [
         ("deploy", "the deploy tool without the -ReferenceKit parameter", drop_param, "tools"),
+        ("deploy", "the deploy tool no longer checks the working tree", no_tree_check, "rollback_reads"),
+        ("psm1", "the kit write no longer compares the protected snapshot", no_snapshot_check, "rollback_reads"),
         ("build", "the build tool without the --git-sha flag", drop_gitsha, "tools"),
         ("psm1", "the module no longer prints ROLLBACK NOT CONFIRMED", drop_phrase, "phrases"),
         ("deploy", "the deploy tool's ValidateSet without Upgrade", drop_validate, "tools"),
@@ -1233,7 +1313,7 @@ try:
         result = analyse(RB, CL, S0, F)
         for name in RULES:
             check(RULE_TITLES[name], not result[name], "; ".join(result[name][:4]))
-        check("the open preconditions are exactly P1, P3, P4, P5, P6, P7 and P9 at the time of writing", open_ids(RB) == set(OPEN_AT_WRITING),
+        check("the open preconditions are exactly P1, P4, P5, P7 and P9 at the time of writing (P2, P3, P6 and P8 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
               str(sorted(open_ids(RB))))
         base_ok = not fired(result)
         check("the unmutated documents pass every rule (the baseline of the mutants)", base_ok, str(sorted(fired(result))))
