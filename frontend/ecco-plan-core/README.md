@@ -533,12 +533,13 @@ own text, what was reproduced offline, what was only reasoned or recalled, and w
 ### Install order for the owner (each step needs its own authorisation; nothing here is installed)
 
 1. Review and merge through the usual route.
-2. Install `ecco_plan_helpers.yaml` (restart). The first start seeds the accepted limits; the switch stays off.
-3. Look at the eight limits on the helpers page; turn on `ecco_plan_overrides_enabled`.
-4. Install `ecco_dump_to_grid_guarded_start.yaml` and the changed `ecco_dump_to_grid_schedule.yaml` (restart). They refuse every start while the plan sensors cannot be read, so step 2 comes first.
-5. Copy the rebuilt card bundle (`frontend_assets` entry; resource already registered), clear the browser cache, set `show_plan: true` and `dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`.
-6. Supervised check: start and cancel Hold battery; a scheduled start that must be refused; the manual start refused during an override and accepted after.
-7. Optional, after the acceptance run ends: map Intelligence's `reserve.ha_minimum_soc` to `sensor.ecco_plan_effective_reserve` (site check first).
+2. R9 first: its two schedule packages (`ecco_free_power_schedule.yaml` and `ecco_dump_to_grid_schedule.yaml`) with a FULL Home Assistant restart, as R9's own installation notes say. The changed `ecco_dump_to_grid_schedule.yaml` of this change contains R9's text, so R9's packages go in before this change or in the same deployment, never after it: R9's own copy of that file, installed over this one, would undo this change.
+3. Before any step that creates entities (R9 adds two helpers; this change adds the plan helpers, three scripts and two sensors): decide how Home Assistant's voice assistants treat new entities (release gate RG-F3) and read the exposure list read-only. Nothing created here is meant to be exposed to an assistant.
+4. Install `ecco_plan_helpers.yaml`, `ecco_dump_to_grid_guarded_start.yaml` and the changed `ecco_dump_to_grid_schedule.yaml` in the SAME deployment, then ONE full Home Assistant restart. The order of the three copies does not matter: until the plan helpers are installed and Home Assistant has restarted fully, every scheduled start and every guarded start is refused (fail closed). The first start seeds the accepted limits; the confirmation switch stays off.
+5. Look at the eight limits on the helpers page; turn on `ecco_plan_overrides_enabled`.
+6. Copy the rebuilt card bundle (`frontend_assets` entry; resource already registered), clear the browser cache, set `show_plan: true` and `dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`. Until `dump_to_grid.guarded_start` is set, the card's own Start button presses the dongle's button directly (known limitation 5), so no override binds it.
+7. Supervised check: start and cancel Hold battery; a scheduled start that must be refused; the manual start refused during an override and accepted after.
+8. Optional, after the acceptance run ends: map Intelligence's `reserve.ha_minimum_soc` to `sensor.ecco_plan_effective_reserve` (site check first).
 
 ### What is the owner's
 

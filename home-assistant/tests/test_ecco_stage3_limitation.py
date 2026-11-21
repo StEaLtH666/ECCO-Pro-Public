@@ -1934,6 +1934,66 @@ check("no mutant of this suite was a no-op: every phrase it drops or swaps, and 
       "never as an exception inside a helper)", not NOOP_MUTANTS, str(NOOP_MUTANTS[:6]))
 
 print("")
+print("[14] the plan-core README's install order agrees with the pinned manifest (review of 21 Nov 2026; additive): R9's packages first, the voice-assistant decision (RG-F3) before any entity is created, the three Stage 3 packages in the SAME deployment with ONE full restart and no copy-order claim, the guarded-start setting named")
+IO_HEAD = "### Install order for the owner"
+
+
+def install_order_section(rd: str) -> str:
+    """The text of the install-order section of the plan-core README (from its heading to the next heading); empty when it is not there exactly once."""
+    if rd.count(IO_HEAD) != 1:
+        return ""
+    a = rd.index(IO_HEAD)
+    m = re.search(r"\n### ", rd[a + len(IO_HEAD):])
+    return rd[a: a + len(IO_HEAD) + (m.start() if m else len(rd))]
+
+
+def install_order_problems(rd: str) -> list[str]:
+    out = []
+    sec = install_order_section(rd)
+    if not sec:
+        return ["the install-order section is not there exactly once"]
+    flat_sec = " ".join(sec.split())
+    for ph in ("R9 first", "FULL Home Assistant restart", "never after it", "release gate RG-F3", "read the exposure list read-only",
+               "in the SAME deployment, then ONE full Home Assistant restart", "The order of the three copies does not matter",
+               "every scheduled start and every guarded start is refused (fail closed)", "`dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`",
+               "Until `dump_to_grid.guarded_start` is set, the card's own Start button presses the dongle's button directly (known limitation 5), so no override binds it", 
+               "the confirmation switch stays off"):
+        if flat_sec.count(ph) != 1:
+            out.append(f"'{ph}' appears {flat_sec.count(ph)}x (expected once)")
+    for bad in ("so step 2 comes first", "(restart)", "installed first", "comes first", "fully enforced"):
+        if bad in flat_sec:
+            out.append(f"the old or over-claiming wording '{bad}' is back")
+    at = {k: flat_sec.find(k) for k in ("R9 first", "release gate RG-F3", "in the SAME deployment", "Look at the eight limits", "Copy the rebuilt card bundle")}
+    if not (0 <= at["R9 first"] < at["release gate RG-F3"] < at["in the SAME deployment"] < at["Look at the eight limits"] < at["Copy the rebuilt card bundle"]):
+        out.append(f"the steps are out of order: {at}")
+    if len(re.findall(r"(?m)^\d+\. ", sec)) != 8:
+        out.append("the section does not list exactly 8 steps")
+    return out
+
+
+_io_readme = texts["plan-core README"]
+_io_problems = install_order_problems(_io_readme)
+check("14: the install-order section is stated as reviewed (R9 first, RG-F3 before any entity, one deployment and ONE full restart, no copy order, the guarded start named)", not _io_problems, str(_io_problems[:4]))
+check("14: the old two-restart sequence is gone ('Install `ecco_plan_helpers.yaml` (restart)', 'so step 2 comes first') and the Stage 3 limitation sentence still stands exactly once in the plan-core README",
+      "so step 2 comes first" not in _io_readme and "`ecco_plan_helpers.yaml` (restart)" not in _io_readme and len(LIMITATION_RE.findall(_io_readme)) == 1)
+_io_sec = install_order_section(_io_readme)
+_R9_LINE = [ln for ln in _io_sec.split("\n") if ln.startswith("2. R9 first")][0]
+_io_mutants = {
+    "the old step 2 and step 4 restored": _io_readme.replace("4. Install `ecco_plan_helpers.yaml`, `ecco_dump_to_grid_guarded_start.yaml` and the changed `ecco_dump_to_grid_schedule.yaml` in the SAME deployment, then ONE full Home Assistant restart.",
+                                                           "4. Install `ecco_plan_helpers.yaml` (restart). They refuse every start while the plan sensors cannot be read, so step 2 comes first."),
+    "'in the SAME deployment' dropped": _io_readme.replace("in the SAME deployment, then ONE full", "then ONE full"),
+    "the RG-F3 step dropped": _io_readme.replace("release gate RG-F3", "a later gate"),
+    "'never after it' dropped": _io_readme.replace("never after it", "in any order"),
+    "the copy-order claim added": _io_readme.replace("The order of the three copies does not matter", "The plan helpers come first"),
+    "the guarded-start setting no longer named as the reason the card's Start is unguarded": _io_readme.replace("Until `dump_to_grid.guarded_start` is set,", "Until it is set,"),
+    "a second install-order heading": _io_readme + "\n" + IO_HEAD + " (copy)\n",
+    "the R9 step moved after the plan helpers step": _io_readme.replace(_io_sec, _io_sec.replace(_R9_LINE, "").rstrip("\n") + "\n" + _R9_LINE + "\n\n"),
+}
+for _n, _m in _io_mutants.items():
+    check(f"14: mutant caught: {_n}", _m != _io_readme and bool(install_order_problems(_m)))
+check("14: the untouched README is not flagged (control)", install_order_problems(_io_readme) == [])
+
+print("")
 if FAILURES:
     print(f"{len(FAILURES)} check(s) FAILED:")
     for n in FAILURES:
