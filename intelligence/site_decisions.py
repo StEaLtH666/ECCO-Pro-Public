@@ -242,6 +242,84 @@ class ProposedThresholds:
 PROPOSED = ProposedThresholds()
 
 # ---------------------------------------------------------------------------------------------------------------------
+# the inverter conversion (OPTIONAL site facts of the live power-balance check; PROPOSED engineering bounds)
+# ---------------------------------------------------------------------------------------------------------------------
+# PV power and battery power are DC-side readings, while the house power is the inverter's AC output plus the grid CT, so
+# the balance house = PV + battery + grid is out by the inverter's conversion loss and its own draw. Three optional site
+# facts (the `site` block of the site file, never the repository) let the check expect that loss. Absent = the lossless
+# balance, exactly as before. Every value is a PROPOSED engineering parameter calibrated per site (intelligence/tools/
+# power_balance_fit.py), never an owner decision. Present = all three, each inside its bound; anything else is reported
+# (POWER_LOSS_FACTS_INVALID) and the lossless balance stays in force: an invalid fact never loosens the check.
+INVERTER_CONVERSION_FACTS = ("inverter_dc_to_ac_factor", "inverter_ac_to_dc_factor", "inverter_standby_w")
+INVERTER_FACTOR_BOUNDS = (0.85, 1.0)             # both conversion factors, inclusive
+INVERTER_STANDBY_BOUNDS_W = (0.0, 150.0)         # the inverter's own draw, inclusive
+
+
+def _conversion_bounds(name: str) -> tuple[float, float]:
+    return INVERTER_STANDBY_BOUNDS_W if name == "inverter_standby_w" else INVERTER_FACTOR_BOUNDS
+
+
+@dataclass(frozen=True)
+class InverterConversion:
+    """What the power-balance check expects of the inverter: `dc_to_ac` (the share of the net DC-side power, PV + battery,
+    that reaches the AC side when that net power is positive), `ac_to_dc` (the share of the AC power that reaches the DC
+    side when the net DC-side power is negative, i.e. the battery charges from the AC side) and `standby_w` (the inverter's
+    own draw, taken off the AC side). The default is lossless (1, 1, 0 W): the expectation is then exactly PV + battery +
+    grid. Construction refuses a value outside its bound (use `inverter_conversion` to judge site facts)."""
+    dc_to_ac: float = 1.0
+    ac_to_dc: float = 1.0
+    standby_w: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name, v in (("inverter_dc_to_ac_factor", self.dc_to_ac), ("inverter_ac_to_dc_factor", self.ac_to_dc),
+                        ("inverter_standby_w", self.standby_w)):
+            lo, hi = _conversion_bounds(name)
+            if not (finite_number(v) and lo <= v <= hi):
+                raise ValueError(f"{name} must be a finite number from {lo} to {hi}")
+
+    @property
+    def lossless(self) -> bool:
+        return self.dc_to_ac == 1.0 and self.ac_to_dc == 1.0 and self.standby_w == 0.0
+
+    def expected_house_w(self, pv_w: float, battery_w: float, grid_w: float) -> float:
+        """The house power the readings imply: grid + the DC-side net power converted - the standby draw. Battery positive =
+        discharging, grid positive = importing. With the net DC-side power d = PV + battery: d >= 0 gives
+        grid + dc_to_ac x d - standby; d < 0 gives grid + d / ac_to_dc - standby. Continuous at d = 0; the lossless default
+        returns PV + battery + grid as before."""
+        if self.lossless:
+            return pv_w + battery_w + grid_w
+        d = pv_w + battery_w
+        return grid_w + (self.dc_to_ac * d if d >= 0.0 else d / self.ac_to_dc) - self.standby_w
+
+
+LOSSLESS_CONVERSION = InverterConversion()
+
+
+def inverter_conversion(facts: object) -> tuple[InverterConversion, tuple[str, ...]]:
+    """(the conversion the balance check applies, the problems), judged from a SiteFacts (any object: a missing attribute
+    reads as absent). All three facts absent (None): (lossless, ()). All three present, finite numbers inside their bounds
+    (inclusive): (that conversion, ()). Anything else (a partial set, a value that is not a finite number, a value outside
+    its bound): (LOSSLESS, ("<fact>:<missing | not_a_number | out_of_bounds>", ...)), so the stricter, lossless check stays
+    in force and the caller reports the problem. A problem names the fact and the reason, never the value."""
+    raw = {n: getattr(facts, n, None) for n in INVERTER_CONVERSION_FACTS}
+    if all(v is None for v in raw.values()):
+        return LOSSLESS_CONVERSION, ()
+    problems: list[str] = []
+    for name, v in raw.items():
+        if v is None:
+            problems.append(f"{name}:missing")
+        elif not finite_number(v):
+            problems.append(f"{name}:not_a_number")
+        else:
+            lo, hi = _conversion_bounds(name)
+            if not lo <= v <= hi:
+                problems.append(f"{name}:out_of_bounds")
+    if problems:
+        return LOSSLESS_CONVERSION, tuple(problems)
+    return InverterConversion(float(raw["inverter_dc_to_ac_factor"]), float(raw["inverter_ac_to_dc_factor"]),
+                              float(raw["inverter_standby_w"])), ()
+
+# ---------------------------------------------------------------------------------------------------------------------
 # freshness (a mirror of ecco_core.freshness's ADVISORY catalogue; a drift test compares them)
 # ---------------------------------------------------------------------------------------------------------------------
 

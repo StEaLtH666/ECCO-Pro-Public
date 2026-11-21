@@ -24,7 +24,9 @@ DATA_QUALITY_METHOD.md has the table):
     not used either, except a dongle-sourced one, whose age the caller cannot know (the poll-text liveness decides);
   * every item whose required inputs (site_decisions.required_inputs) are not all fresh is blocked;
   * content rules: SOC false zero, SOC sources disagreeing, online flags that cannot time out, the live power balance
-    (CT sign reversal), the native-load false zero, LiveInputs against the snapshot, supervision, the I-D4 capacity band,
+    (CT sign reversal; lossless unless the site file carries the optional inverter conversion facts, in which case the
+    expected house power allows for the inverter's conversion loss and its own draw), the native-load false zero,
+    LiveInputs against the snapshot, supervision, the I-D4 capacity band,
     SOC near protection, the inverter clock offset against a TOU-derived charge window, tariff and event presence, and the
     history rules (flaps, gaps, coverage, stalls, catch-up jumps, energy balance over the whole history, the learning
     lookback and the most recent hours, clock-change nights, prolonged zero PV against its forecast).
@@ -65,9 +67,9 @@ from .periods import clock_changes
 from .site_decisions import (BLOCK, CAPACITY_READING_BY_KIND, CONDITIONAL_D4_ITEMS, CONFIG_LIVENESS_KEY,
                              CONFIG_POLL_READINGS, DATE_SCOPED_READINGS, DEFAULT_ACCEPT_PROVENANCE, DONGLE_READINGS,
                              DONGLE_SIGNALS, EXCLUDE, EXCLUDE_PRE_CUTOVER, INFO, ITEMS, KEEP_AFTER_COUNTER_CHECK,
-                             KEEP_NON_EXPORTING_ONLY, LIVENESS_KEY, LIVENESS_KEYS, OWNER_STATEMENT, PROPOSED,
-                             REQUIRED_SIGNALS, WARN, DecisionSet, Finding, InputState, capacity_sources_context, finding,
-                             freshness_limits, required_inputs)
+                             KEEP_NON_EXPORTING_ONLY, LIVENESS_KEY, LIVENESS_KEYS, LOSSLESS_CONVERSION, OWNER_STATEMENT,
+                             PROPOSED, REQUIRED_SIGNALS, WARN, DecisionSet, Finding, InputState, InverterConversion,
+                             capacity_sources_context, finding, freshness_limits, inverter_conversion, required_inputs)
 from .timeutil import HOUR, UTC, day_bounds, local_date, local_wall, zone
 
 QUALITY_VERSION = "intel-quality-0.3.1-cfg"
@@ -170,7 +172,7 @@ RULE_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "SITE_READINGS_MALFORMED": (_S,), "SITE_READING_DUPLICATE": (_S,), "SNAPSHOT_MALFORMED": (_S,),
     "SNAPSHOT_IN_FUTURE": (_S,), "SNAPSHOT_STALE": (_S,), "LIVE_INPUTS_MALFORMED": (_S,), "CALLER_ASSESSMENT_MALFORMED": (_S,),
     "CALLER_ASSESSMENT_INCONSISTENT": (_S,), "CALLER_ASSESSMENT_CONFLICT": (_S,), "CALLER_FRESHNESS_DISAGREES": (_S,),
-    "SITE_FACT_MISSING": (_S,),
+    "SITE_FACT_MISSING": (_S,), "POWER_LOSS_FACTS_INVALID": (_S,),
     # the decision register's own findings, passed through (site_decisions.freshness_limits)
     "DECISION_D6_INVALID": (_S,), "FRESHNESS_OVERRIDE_INVALID": (_S,), "FRESHNESS_OVERRIDE_UNKNOWN_KEY": (_S,),
     "FRESHNESS_OVERRIDE_ABOVE_CEILING": (_S,), "FRESHNESS_OVERRIDE_REFUSED": (_S,),
@@ -676,7 +678,7 @@ def _assess(inputs: CycleInputs) -> QualityResult:
     _charge_window_rules(c, per_item)
     _soc_rules(c)
     _online_flag_rules(c, snap, live)
-    _power_rules(c)
+    _power_rules(c, getattr(inputs, "site_facts", None))
     _live_inputs_rules(c, getattr(inputs, "live", None), snap, snap_items)
     _supervision_rules(c, by_key, live)
     _tariff_rules(c)
@@ -831,8 +833,17 @@ def _online_flag_rules(c: _Ctx, snap: Snapshot | None, live: _Liveness) -> None:
         c.block(HEALTH_ITEMS, "INVERTER_NOT_HEALTHY", "the inverter does not report normal operation")
 
 
-def _power_rules(c: _Ctx) -> None:
-    """The live power balance: house = PV + battery (positive = discharging) + grid (positive = importing)."""
+def _power_rules(c: _Ctx, site_facts: object = None) -> None:
+    """The live power balance: house = PV + battery (positive = discharging) + grid (positive = importing), lossless by
+    default. With the optional inverter conversion site facts (all three valid) the expected house power allows for the
+    inverter's conversion loss and its own draw (site_decisions.InverterConversion), in the balance and in both
+    sign-reversal tests alike; the tolerance, the native-load false zero and the negative load are unchanged. Facts that are
+    incomplete or invalid BLOCK the items resting on the balance (POWER_LOSS_FACTS_INVALID) and leave the lossless balance
+    in force: an invalid fact never loosens the check."""
+    conv, problems = inverter_conversion(site_facts)
+    if problems:
+        c.block(POWER_ITEMS, "POWER_LOSS_FACTS_INVALID", "the inverter conversion site facts are incomplete or invalid: the "
+                "balance is judged without them and the items resting on it are withheld", problems=problems)
     vals = {k: _num(c, k, fresh_only=False) for k in ("house.power", "pv.power", "battery.power", "grid.power")}
     h, p, b, g = vals["house.power"], vals["pv.power"], vals["battery.power"], vals["grid.power"]
     if h is not None and h < -DQ_PROPOSED.load_zero_max_w:
@@ -845,19 +856,39 @@ def _power_rules(c: _Ctx) -> None:
         c.block(POWER_ITEMS, "LOAD_FALSE_ZERO", "the house load reads zero while inverter and grid show a load (the native "
                 "load false zero; HD1)", flow_w=round(flow, 1))
         return
-    tol = max(PROPOSED.power_agree_w, PROPOSED.power_agree_fraction * max(abs(h), abs(p), abs(b), abs(g)))
-    resid = h - flow
-    if abs(resid) <= tol:
+    code, resid, tol = power_balance_verdict(h, p, b, g, conv)
+    if code is None:
         return
-    if abs(h - (p + b - g)) <= tol and abs(g) > tol / 2.0:
-        c.block(POWER_ITEMS, "CT_SIGN_REVERSED", "the power balance fits only with the grid CT sign reversed",
-                residual_w=round(resid, 1), tolerance_w=round(tol, 1))
-    elif abs(h - (p - b + g)) <= tol and abs(b) > tol / 2.0:
-        c.block(POWER_ITEMS, "BATTERY_SIGN_REVERSED", "the power balance fits only with the battery power sign reversed",
-                residual_w=round(resid, 1), tolerance_w=round(tol, 1))
-    else:
-        c.block(POWER_ITEMS, "POWER_BALANCE_INCONSISTENT", "house, PV, battery and grid power do not balance",
-                residual_w=round(resid, 1), tolerance_w=round(tol, 1))
+    ev = {} if conv.lossless else {"balance": "loss_aware"}      # the evidence of a lossless balance is as it always was
+    c.block(POWER_ITEMS, code, _BALANCE_TEXT[code], residual_w=round(resid, 1), tolerance_w=round(tol, 1), **ev)
+
+
+_BALANCE_TEXT = {
+    "CT_SIGN_REVERSED": "the power balance fits only with the grid CT sign reversed",
+    "BATTERY_SIGN_REVERSED": "the power balance fits only with the battery power sign reversed",
+    "POWER_BALANCE_INCONSISTENT": "house, PV, battery and grid power do not balance",
+}
+
+
+def power_balance_verdict(house_w: float, pv_w: float, battery_w: float, grid_w: float,
+                          conv: InverterConversion = LOSSLESS_CONVERSION) -> tuple[str | None, float, float]:
+    """The balance rule alone, on four finite readings (battery positive = discharging, grid positive = importing):
+    (None, residual, tolerance) when the house power is within the tolerance of what the readings imply; otherwise
+    (CT_SIGN_REVERSED | BATTERY_SIGN_REVERSED | POWER_BALANCE_INCONSISTENT, residual, tolerance). The tolerance is the
+    larger of the PROPOSED floor and the PROPOSED fraction of the largest magnitude; the expectation is the same loss-aware
+    (or lossless) expectation in the balance and in both sign-reversal tests. A sign-reversal fit counts only when the
+    reversed reading is more than half the tolerance. The fitting tool (intelligence/tools/power_balance_fit.py) calls this
+    function, so it can never judge a history by another rule than the engine's."""
+    h, p, b, g = house_w, pv_w, battery_w, grid_w
+    tol = max(PROPOSED.power_agree_w, PROPOSED.power_agree_fraction * max(abs(h), abs(p), abs(b), abs(g)))
+    resid = h - conv.expected_house_w(p, b, g)
+    if abs(resid) <= tol:
+        return None, resid, tol
+    if abs(h - conv.expected_house_w(p, b, -g)) <= tol and abs(g) > tol / 2.0:
+        return "CT_SIGN_REVERSED", resid, tol
+    if abs(h - conv.expected_house_w(p, -b, g)) <= tol and abs(b) > tol / 2.0:
+        return "BATTERY_SIGN_REVERSED", resid, tol
+    return "POWER_BALANCE_INCONSISTENT", resid, tol
 
 
 LIVE_PAIRS = (("soc_pct", "battery.soc"), ("load_w", "house.power"), ("pv_w", "pv.power"), ("inverter_ok", "inverter.healthy"),
