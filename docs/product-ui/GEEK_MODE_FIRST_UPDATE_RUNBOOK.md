@@ -6,14 +6,21 @@ time (column "own authorisation" of the step table).
 
 > **Every live step in this runbook is NOT AVAILABLE** until all of these hold:
 >
-> 1. The offline gates of step 0 are green on the exact commit that will be installed, and the owner has chosen that commit
->    (decision D-U1-1, section 12).
+> 1. The offline gates of step 0 are green on the exact commit that will be installed (the branch commit, after the draft pull
+>    request's CI is green: decision D-U1-1, decided by the owner on 21 Nov 2026, section 12).
 > 2. The owner has reserved a quiet period, is present for steps 2 to 7, and has made a fresh **protected** full backup (step 2).
 > 3. The owner has given the go for each live step, one by one. A go for one step is not a go for the next.
 >
 > No firmware is flashed, no inverter register is written, no Home Assistant restart is made, no entity is created, no package,
 > helper, automation or existing dashboard is edited, and Intelligence stays SHADOW (advice only). ASSISTED and AUTONOMOUS are not
 > touched.
+
+**The owner's decision of 21 Nov 2026, and what it does not authorise.** The owner approved pushing the branch `dev/geek-mode-u1` and opening a
+DRAFT pull request (the M2 private-pattern scan on the exact commit first, including the generated assets, the commit metadata and the pull request
+text; then CI), and named Production / Geek Mode as the first supervised Home Assistant installation. **No automatic installation or live access is
+authorised by that approval.** Nothing is installed and no live system is touched until the owner gives the final installation GO, after the completed
+checklist (`GEEK_MODE_U1_GO_CHECKLIST.md`) has been presented, and each live step below still needs its own go. If anything changes after the scans, the
+applicable verification and the privacy scans are repeated. Ghost diagnostics stays the second update, with its own restart and rollback requirements.
 
 **What U1 is.** The first low-risk, read-only user-interface update after the Intelligence acceptance run: one new, admin-only
 dashboard that shows the ECCO Intelligence view through the Production / Geek Mode shell card. Production Mode is the existing
@@ -46,7 +53,7 @@ secret, host, address, token, entity id or site value: it names roles.
 non-admin users, and wall and phone clients included, even though only the new dashboard places the card. The module only defines
 the element and its card-picker entry (it creates no entity, sends nothing and reads nothing until a dashboard places the card),
 but it is loaded everywhere until the owner deletes the resource (section 7). So "other dashboards are untouched" means their files
-and configuration, not what their pages load. Step 4 therefore ends with one look at the production Overview (5.4), and section 9
+and configuration, not what their pages load. Step 4 therefore ends with a check of every existing dashboard (5.4), and section 9
 lists the known console noise.
 
 **Admin-only is a visibility setting, not a security boundary.** "Require admin" on the new dashboard (A3) is what keeps the page out of a
@@ -88,12 +95,63 @@ page. The shell itself never writes, and nobody taps the tile during this update
 what the dashboard places: the standard more-info dialog (opened by the pause tile's hold action and by the Geek row action for a sensor) keeps Home
 Assistant's own admin settings (entity registry edits), the same as on any dashboard (recalled, not verified). The look does not open it (5.7).
 
+**Write-path statement (checked again in round 4; no change to the card).**
+
+(a) *Switching Production and Geek invokes no service.* Read in the card's source: each of the two mode buttons has one click handler, `this._ctl.set(mode)`;
+the controller (`createModeController`) keeps the mode in a closure, has no reference to `hass` and can only remember a presentation choice; its `onChange`
+runs `_applyMode`, which sets presentation attributes and the `hidden` flags and builds or disposes the Geek surface (a read of the states snapshot). Run in
+Node (through the memory guard, `ECCO_PYTHON` set): the test "generated config: both modes and a state change touch nothing but hass.states, locale and
+themes (no service, no websocket, no storage, no network)" uses the real generated dashboard configuration, traps every `hass` function and every
+network, storage and window API, switches Production to Geek and back, and finds no call and no hit (that file: 5 of 5 pass, 0 skipped); the element test
+"AC5 the switch never changes helper or service state: Production-only and always cards see no extra hass call from a mode change" clicks the switch three
+times and the child cards see nothing.
+
+(b) *The pause tile is the only write-capable control the page places.* The card's own code has no service call, fetch, websocket, storage or dynamic
+code (the pin suite's forbidden-API rule and the Node traps). The one write-capable control the page places is the existing pause tile (an input boolean
+toggle: the same tile and the same write as on the existing Intelligence dashboard). The generated configuration has no other writing tile, button or
+action: its only actions are `toggle` (the tile's tap and icon tap) and `more-info` (the tile's hold action), and it has no service-call shaped key (read
+in round 4). Geek Mode's "Open in Home Assistant" dispatches Home Assistant's own more-info event only for sensor, binary sensor and event entities
+(`canOpenMoreInfo`: the element tests "AC16 [r1] Geek Mode opens a dialog only for read-only domains: over every domain the real catalogue discovers no
+writable one offers it, and none dispatches hass-more-info" and "AC16 [r1] the guard is also in the dispatch itself: _openEntity sends hass-more-info
+for a read-only domain and never for a writable, malformed or non-text id"); every other domain gets "Copy entity id" instead. That dialog is Home
+Assistant's own and, for an administrator, keeps Home Assistant's own settings (entity registry edits), as on any dashboard (recalled, not verified):
+this is not an ECCO write path and not part of the first look, which presses none of Open in Home Assistant, Copy, JSON or CSV. Geek Mode hides the pause
+tile (the tests "generated config: Geek Mode shows the 17 sources and the 344 declared attribute rows, and the Production-only tile is hidden" and, in the
+core suite, "AC16 validateChildCards: the read-only Intelligence card passes; the pause tile (a toggle) is refused in a Geek-visible region").
+
 **What is different from the existing Intelligence page, all of it by design:** (1) it is a NEW storage-mode dashboard with "Require admin"; the
 existing one is a YAML dashboard that is not edited; (2) the same cards sit inside one shell card, so the page order is the switch and a fixed
 note, the alert strip, the Intelligence card, the watchdog and status card, the one Production sentence and the pause tile, then the text fallback
 outside the shell (the existing page order is the Intelligence card, the pause tile, the watchdog and status card, the text fallback); (3) the shell
 adds the switch, the note, the sentence, the catalogue-driven alert strip (19 rules) and, in Geek Mode, the inspector (17 sources, 344 attribute rows),
 and Geek Mode hides the pause tile and keeps the two read-only cards; (4) one module resource is registered for every page (above).
+
+### 1.2 The exact targets, and how each is verified
+
+Every target of this update, in one place. The card's content address is the first eight characters of its sha256 (`17410163`); section 5.3 repeats the
+file, URL and type for the deploy line, the resource and `plan.json`, and the three must agree.
+
+| Target | Exact value | Written or read by |
+|---|---|---|
+| the card file on the host (A1) | `/config/www/ecco/ecco-mode-shell.17410163.js` | written once by `deploy-ha.ps1` (step 3) |
+| the Lovelace resource URL (A2): no host, no query string | `/local/ecco/ecco-mode-shell.17410163.js` | added by the owner (step 4) |
+| the Lovelace resource type (A2) | `module` (the screen shows "JavaScript module") | added by the owner (step 4) |
+| the new dashboard's URL path (A3; D-U1-5, the default) | `ecco-modes-u1` | created by the owner (step 5) |
+| the new dashboard's title (A3; D-U1-5, the default) | `ECCO Modes (first look)` | created by the owner (step 5) |
+| the `.storage` files read, and never written by any tool | `.storage/lovelace_resources`, `.storage/lovelace_dashboards`, every `.storage/lovelace*` file (hash and byte-exact copy) and, after step 5, `.storage/lovelace.<dashboard id>` | the coordinator, read-only (steps 1, 4, 6) |
+| the dashboard files hashed, and never written | every file under `ecco/dashboards/` (`*.yaml`) | the coordinator, read-only (steps 1, 6) |
+| the folder listed | `/config/www/ecco/` | the coordinator, read-only (steps 1, 6) |
+
+**Verify the targets** (four checks, each a read, a fetch of what Home Assistant serves, or a comparison; an unmet check stops the update at that step):
+
+- **(a) step 1.** The baseline shows that the existing Intelligence card's resource URL uses the same `/local/ecco/` form, so `/config/www/ecco/` is the
+  right folder. Block 1 of 5.1 prints how many of the baseline's resources are under `/local/ecco/` and name the Intelligence card: at least 1. A 0 is a
+  stop (the folder or the URL form is not what this runbook assumes).
+- **(b) step 1.** The dashboard URL path `ecco-modes-u1` is not already in the dashboard list, and the resource URL is not already in the resource list.
+  Block 1 prints 0 and 0 for the two. Anything else is a stop (something already has the name). The stored-list field names are those of 5.6 (recalled,
+  not verified).
+- **(c) step 3.** `verify-served` proves the mapping from `/config/www/ecco/` to `/local/ecco/` and the bytes **before any resource exists** (5.3).
+- **(d) step 4.** `verify-resource` proves that the registered resource URL and type equal the plan's (5.4).
 
 ## 2. The artefacts and their hashes
 
@@ -116,11 +174,11 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 
 | # | Criterion |
 |---|---|
-| G1 | step 0 is green on the exact commit (section 13), and the owner has chosen the commit to install from (D-U1-1) |
+| G1 | step 0 is green on the exact commit (section 13): the suites, the owner's M2 scan, the push and the draft pull request's CI; the commit to install from is the branch commit after green CI (D-U1-1, decided by the owner on 21 Nov 2026, option a) |
 | G2 | the owner has reserved a quiet period, is present, and no other supervised live step is in progress |
 | G3 | the owner has made a fresh **protected** full backup in the Home Assistant UI (step 2). A backup made over SSH is full but UNPROTECTED: no session handles a backup encryption password |
-| G4 | the live baseline (step 1) is saved and shows: Home Assistant Core running and its version noted; the Intelligence status reading SHADOW with a fresh result (or its state noted if not); the pause helper's state noted; no resource, file or dashboard of this update already present; the Intelligence card's resource registered; the control entities of the earlier supervised installs unchanged since their last record |
-| G5 | release gate RG-F3 (the two voice-assistant settings "expose new entities", for Assist and for Google Assistant) is recorded: the owner states in the session whether both are off, or consciously waived because this update creates **no entity**. Any later install that creates entities waits for both to be off |
+| G4 | the live baseline (steps 1 and 1b) is saved, the live shape check of step 1b exits 0, and the baseline shows: Home Assistant Core running and its version noted; the Intelligence status reading SHADOW with a fresh result (or its state noted if not); the pause helper's state noted; no resource, file or dashboard of this update already present; the Intelligence card's resource registered; the control entities of the earlier supervised installs unchanged since their last record |
+| G5 | release gate RG-F3 (the two voice-assistant settings "expose new entities", for Assist and for Google Assistant) is **resolved for U1 only**, by the owner on 21 Nov 2026 (D-U1-2): the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates **no new entity**. This is not acceptance of F3 and not permission to introduce new exposed controls: any later install that creates an entity still needs both settings off |
 | G6 | the browser used for the look is a desktop browser whose clock is within five minutes of Home Assistant's clock (section 10) |
 | G7 | the owner agrees in advance that the first look is **Production Mode only**, that Geek Mode follows only after the owner says go, and that the pause tile is never tapped |
 
@@ -128,11 +186,12 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 
 | Step | What | Who | Offline / live | Read-only / write | Own owner authorisation | Expected result | Stop condition |
 |---|---|---|---|---|---|---|---|
-| 0 | offline gates on the exact commit: the verification table (section 13), the owner's M2 private-pattern scan, the push, draft pull request and CI, the choice D-U1-1 | COORDINATOR (the M2 scan is the owner's tool, run only on the owner's go) | offline (the push and CI touch GitHub only) | read-only on the live system; a push is a GitHub write | **yes**, each of: the M2 scan, the push, the pull request, the choice of commit | the table is green or its failures are named as known; CI green on the pushed tip if the owner chose to push | any new failure; a card or catalogue hash that is not the pinned one |
-| 1 | live read-only baseline (5.1) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; G4 holds | anything of A1 to A3 already present; the Intelligence card's resource missing; Core not running; a copy that is not byte-exact |
+| 0 | offline gates on the exact commit: the verification table (section 13), the owner's M2 private-pattern scan (generated assets, commit metadata and pull request text included), the push, the draft pull request and CI | COORDINATOR (the M2 scan is the owner's tool) | offline (the push and CI touch GitHub only) | read-only on the live system; a push is a GitHub write | decided by the owner on 21 Nov 2026 (D-U1-4): the M2 scan on the exact commit, the push, the draft pull request, CI; nothing live | the table is green or its failures are named as known; the M2 scan reports no hit; CI green on the pushed tip | any new failure; a card or catalogue hash that is not the pinned one; a change of the commit (the applicable verification and the scans are repeated) |
+| 1 | live read-only baseline (5.1: blocks 1, 2 and 4, with the target checks (a) and (b) of 1.2; the state read, block 3, belongs to step 1b) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; target checks (a) and (b) hold; G4 holds once step 1b has passed | anything of A1 to A3 already present; the Intelligence card's resource missing or not under `/local/ecco/`; Core not running; a copy that is not byte-exact |
+| 1b | live shape check (5.1b): block 3 (the state read, which keeps the listed entities and every `ecco_intel` entity), then the offline tool `tools\geek_mode_live_shape_check.py` on `states-before.json` | COORDINATOR | live (block 3), offline (the tool) | read-only | **yes**, its own go: a separate live read | exit 0 and the counts of 5.1b | any UNDECLARED entity or attribute, any declared entity missing, any unexplained absence: the catalogue is out of date for this host (ask the owner) |
 | 2 | the owner's protected full backup in the UI; RG-F3 decision recorded; quiet window confirmed | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists (its name and time recorded offline, never its password) | no protected backup |
-| 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
-| 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource`; then one owner look at the production Overview, because the resource is global (5.4) | OWNER (the add, the look), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the look are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; the Overview renders as before with no new console error that names the shell | any other line; any other resource changed; the Overview shows an error that names the shell |
+| 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3; target check (c) of 1.2) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS (the folder-to-URL mapping and the bytes, before any resource exists) | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
+| 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource` (target check (d) of 1.2); then the owner checks EACH existing dashboard, because the resource is global (5.4) | OWNER (the add, the checks), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the checks are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; every existing dashboard: yes to all three questions of 5.4 | any other line; any other resource changed; a no for any existing dashboard (the owner deletes the one resource) |
 | 5 | the owner creates the admin-only storage dashboard, makes the two pre-save checks and pastes the generated configuration (5.5) | OWNER | live (UI) | a Home Assistant write by the owner | the owner's action | the dashboard exists, "Require admin" is on, the paste saved in the NEW dashboard | the raw editor is not offered; Home Assistant refuses the text; either pre-save check fails |
 | 6 | read-only after-checks (5.6) | COORDINATOR | live | read-only | **yes** (a live read) | the Overview file and every other dashboard file have their baseline sha256; the resource list differs by exactly one item; the dashboard list by exactly one item; the stored configuration (copied with `scp`) equals the generated one; no new lovelace, frontend or shell line in the log; Intelligence status and pause helper unchanged | any other difference |
 | 7 | ONE owner look: Production first, then Geek only after the owner says go (5.7) | OWNER | live (browser) | read-only (a presentation toggle). **Never tap the pause tile** | the owner's action; the Geek look needs the owner's separate go | the checks of 5.7 | any of the stop lines of 5.7 or section 10 |
@@ -177,8 +236,9 @@ mutation run and the headless strip check only through the memory guard, one pro
 interpreter has no PyYAML, **skips all 5 of its tests and still exits 0** (its own header says so): a green row that tested nothing. Run it as
 `ECCO_PYTHON=<PY> node --test --test-concurrency=2 test/generated-config.test.mjs` (in PowerShell, `$env:ECCO_PYTHON = '<PY>'` first; through the guard,
 like every Node run) and read the summary: **5 of 5 pass, 0 skipped** is the pass condition, and anything else is not a pass.
-The M2 private-pattern scan is the owner's tool with the owner's pattern file; it runs only when the owner says go, and what is
-reported back is counts only.
+The M2 private-pattern scan is the owner's tool with the owner's pattern file. The owner decided on 21 Nov 2026 (D-U1-4) that it runs on the exact
+commit before the push, including the generated assets, the commit metadata and the pull request text, and that CI runs on the draft pull request; what is
+reported back is counts only. If anything changes after a scan, the applicable verification and the privacy scans are repeated.
 
 Make the generated files, outside any tracked folder (`dist\` is git-ignored):
 
@@ -199,12 +259,12 @@ hand-made plan for the existing resource gate (its one card: tag `ecco-mode-shel
 `module` and the card's sha256); `tools/ecco_deploy_preflight.py` lists its cards in a constant that does not name the shell, so the
 plan is made here and **that safety tool is not edited**.
 
-**D-U1-1, the commit to install from.** Because the card file is content-addressed, what is installed is identified by its
-sha256, not by a commit. (a) Install from the branch commit after the draft pull request's CI is green, and merge afterwards: the
-merged file must have the same sha256 (re-check at the merge; a different one is a new content address, so a new U-step). (b) Merge
-first, then install from the merge commit: the installed bytes then always equal the repository's main. The owner decides; neither
-is assumed. If the card file changes in review, nothing already installed is overwritten (a new name; the resource is repointed;
-section 7 covers the repoint and its rollback).
+**D-U1-1, the commit to install from: decided by the owner on 21 Nov 2026, option (a).** Because the card file is content-addressed, what is
+installed is identified by its sha256, not by a commit. (a) **Install from the branch commit after the draft pull request's CI is green**; the card file
+is content-addressed, so the installed bytes equal the reviewed card whatever later commits do. **Merge is a separate later decision, and the card's sha256
+must be unchanged at the merge** (re-check at the merge; a different one is a new content address, so a new U-step). (b) Merge first, then install from
+the merge commit, was the other option and is not chosen. If the card file changes in review, nothing already installed is overwritten (a new name; the
+resource is repointed; section 7 covers the repoint and its rollback).
 
 ### 5.1 Step 1: the live read-only baseline
 
@@ -240,6 +300,11 @@ foreach ($line in Get-Content "$E\sha-before.txt") {
 (Select-String -Path "$E\resources-before.json" -SimpleMatch 'ecco-intelligence-card').Count
 (Select-String -Path "$E\resources-before.json" -SimpleMatch 'ecco-mode-shell').Count
 (Select-String -Path "$E\www-ecco-before.txt" -SimpleMatch 'ecco-mode-shell').Count
+$res = @((Get-Content -Raw -Encoding utf8 "$E\resources-before.json" | ConvertFrom-Json).data.items)
+$dash = @((Get-Content -Raw -Encoding utf8 "$E\dashboards-before.json" | ConvertFrom-Json).data.items)
+@($res | Where-Object { $_.url -like '/local/ecco/*ecco-intelligence-card*' }).Count
+@($res | Where-Object { $_.url -eq '/local/ecco/ecco-mode-shell.17410163.js' }).Count
+@($dash | Where-Object { $_.url_path -eq 'ecco-modes-u1' }).Count
 ```
 
 These are read-only forms that already exist in the repository: the `cat` of the persisted resource list is the capture that
@@ -252,8 +317,11 @@ file (the production Overview and the existing Intelligence dashboard among them
 version; `www-ecco-before.txt` lists the card folder (the `total` line is left out, as it changes with any file).
 `lovelace-before\` holds **a byte-exact copy of each persisted `.storage/lovelace*` file**, so that a paste into the wrong
 dashboard can be pasted back (section 7): each copy is checked against its sha256 line and must print `EXACT`; a `NOT EXACT` line
-is a stop. The three counts at the end must be at least 1 (the Intelligence card's resource is registered: the new dashboard reuses
-it) and then 0 and 0 (nothing of this update exists yet). The host's Home Assistant `.storage` file names are those of Home
+is a stop. The first three counts at the end must be at least 1 (the Intelligence card's resource is registered: the new dashboard reuses
+it) and then 0 and 0 (nothing of this update exists yet). The last three are the target checks (a) and (b) of 1.2, read from the two saved lists: the number
+of the baseline's resources that are under `/local/ecco/` and name the Intelligence card (at least 1: a 0 means that card is not served from the folder this
+runbook uses, so stop), then 0 for the new resource URL already being in the resource list and 0 for the dashboard URL path `ecco-modes-u1` already being
+in the dashboard list (anything else is a stop: something already has that name). The host's Home Assistant `.storage` file names are those of Home
 Assistant itself (`lovelace_resources`, `lovelace_dashboards`, `lovelace.<dashboard id>`); the first read shows what is there, and
 any name that does not match is reported, not guessed.
 
@@ -273,9 +341,10 @@ Set-Location <checkout>
 Then the owner opens `u1-entities.txt` and adds, one id per line, the control entities exactly as their earlier baselines list
 them.
 
-**Block 3: the state read.** One read-only GET of the states through the Supervisor on the host, the same remote script as
-`tools/ecco-snapshot.ps1` and the flight recorder use (the token is read on the host and is never printed, passed on a command
-line or written to a file). Only the listed entities are kept:
+**Block 3: the state read** (the live read of step 1b, run under its own go: 5.1b). One read-only GET of the states through the Supervisor on the host,
+the same remote script as `tools/ecco-snapshot.ps1` and the flight recorder use (the token is read on the host and is never printed, passed on a command
+line or written to a file). The listed entities are kept, and so is every entity whose id contains `ecco_intel` (so that step 1b can find what the
+catalogue does not declare). The file holds values: it stays in `<OFFLINE_EVIDENCE_DIR>` and never enters a repository:
 
 ```powershell
 cls
@@ -296,6 +365,8 @@ if ($null -ne $all.PSObject.Properties['data']) { $all = $all.data }
 $index = @{}
 foreach ($s in $all) { $index[[string]$s.entity_id] = $s }
 $out = @(foreach ($id in $ids) { if ($index.ContainsKey($id)) { $index[$id] } else { [pscustomobject]@{ entity_id = $id; absent = $true } } })
+$more = @($index.Keys | Where-Object { $_ -like '*ecco_intel*' -and $ids -notcontains $_ } | Sort-Object | ForEach-Object { $index[$_] })
+$out = @($out) + $more
 ConvertTo-Json -InputObject $out -Depth 20 | Out-File -Encoding utf8 "$E\states-$Tag.json"
 $out | Select-Object entity_id, state, last_changed, absent | Format-Table -AutoSize
 ```
@@ -323,8 +394,48 @@ Each file holds the last 400 log lines that match (or the tool's "No matches" li
 `Write-Host`. If the log is busy and 400 lines do not reach back far enough, raise `-Lines` (the tool allows up to 2000) for the
 baseline and for step 6 alike.
 
-The owner reads the two voice-assistant exposure settings (Settings, Voice assistants, Expose: "expose new entities" for Assist and
-for Google Assistant) and states the RG-F3 decision (G5).
+RG-F3 (G5) is resolved for U1 only, by the owner on 21 Nov 2026 (section 12, D-U1-2): the existing voice-assistant exposure settings (Settings, Voice
+assistants, Expose: "expose new entities" for Assist and for Google Assistant) remain a separately tracked F3 issue because this installation creates no
+new entity. Reading them is not a gate for U1; the owner may read and note them. This is not acceptance of F3, and both settings must be off for any later
+install that creates an entity.
+
+### 5.1b Step 1b: the live shape check
+
+A live read, and it needs the owner's own go, separate from the go for step 1: block 3 of 5.1 is its live read. The owner's directive of 21 Nov 2026
+asks for the live entity shape to be verified by this separately approved read-only check before the installation. Why: the Geek inspector is built from the
+catalogue, and the catalogue from the code; the one comparison with a running Home Assistant so far is the listing of 14 Nov (names, types and sizes, no
+value). This step makes it again, with the host as it is on the install day. Production does not depend on it.
+
+Run block 3 of 5.1 with `$Tag = 'before'`, then the offline tool on the file that block wrote. The tool converts the states **in memory** to the value-free
+listing format (attribute names, types, encoded sizes and the first-level keys of dict attributes: no value is kept), compares it with the code universe by
+calling `compare_live` of `tools/geek_mode_coverage.py` (imported, not copied), prints counts and names and never a value, and writes nothing:
+
+```powershell
+cls
+$E = '<OFFLINE_EVIDENCE_DIR>\u1-baseline'
+$PY = '<PY>'
+Set-Location <checkout>
+& $PY -I -B -X utf8 tools\geek_mode_live_shape_check.py "$E\states-before.json"
+```
+
+Exit 0: the shape matches (nothing UNDECLARED, no declared entity missing, no unexplained absence); exit 1: it does not, and the lines say which; exit 2: bad
+input (the tool names the cause and nothing of the file's content). **Expected: exit 0, the line `RESULT: MATCH (exit 0)` and the counts:** PRESENT_LIVE 17
+of 17 declared entities (the 14 Nov filter did not cover the reserve helper; this read lists it), NOT_PRESENT_LIVE 0 declared entities missing and 0
+unexplained attribute rows, UNDECLARED 0 entities and 0 attributes, NOT_CHECKED_LIVE 0. The number of conditional attribute rows depends on the day (42 on
+14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop. For reference, the committed 14 Nov listing converted back
+into states gives, offline, exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared and 1 not checked (the
+reserve helper). `--write-shape <path>` also writes the value-free listing, only outside the repository's checkout, never over an existing file unless
+`--overwrite` is given.
+
+**Stop.** Anything UNDECLARED, any declared entity missing and any unexplained absence (exit 1) is a stop: it means the catalogue is out of date for this
+host, so the Geek inspector would be wrong. Production is unaffected. Ask the owner; nothing is changed meanwhile.
+
+Three things to know in advance (read from the code and the fixtures; none has been seen on the host). (1) The reserve helper's attributes were never
+confirmed live, because the 14 Nov listing did not include it: this read compares them, and a difference there is the first evidence of their shape. (2) If
+the live status entity's recorded self-test is not empty, its check codes appear as UNDECLARED dotted attributes (`self_test.<check code>`): the code
+universe declares that attribute as a whole, not its keys, and the 14 Nov listing had it empty. The tool prints a hint and still exits 1, so the stop rule
+applies and the owner decides what the finding means; nothing is edited at the look. (3) An entity that reads unavailable or unknown has a partial
+attribute list: the tool counts such entities in a NOTE, and an absence on them is read with care and the read repeated while Intelligence is publishing.
 
 ### 5.2 Step 2: the owner's protected backup
 
@@ -409,6 +520,8 @@ the cache header are what Home Assistant sent: they are printed, not judged). It
 `FAIL` line exits 1: `sha256 DIFFERS`, or `GET /local/ecco/... - HTTP Error 404` (the file is not served under that name: compare the name with the
 table above and with the host listing), or a connection or certificate error (Python does not trust the certificate of `<HA URL>`: the tool has no
 option to skip that check and the runbook adds none; use an address whose certificate Python trusts, or stop and ask the owner). Any `FAIL` is a stop.
+This is target check (c) of 1.2: `verify-served` proves the mapping from `/config/www/ecco/` to `/local/ecco/` and the bytes **before any resource exists**,
+so a 404 or a mismatch here is the wrong folder, name or file, never a resource problem.
 
 If the tool prints a rollback message, it removed its own new file and re-ran the configuration check; read the message to the
 end, record it offline and stop. Do not retry without the owner.
@@ -442,8 +555,9 @@ Expected: the check lines, then `RESOURCE VERIFIED ecco-mode-shell -> /local/ecc
 read back at <UTC>)` and `verify-resource PASSED: 1 card(s) verified; not checked: nothing`, exit 0. The gate checks that exactly
 one resource loads the card, that its URL and type are the plan's, that the card had no resource before (so this is a new entry),
 that **no other resource was added, removed or changed** since the baseline, that the bytes served at that URL hash to the plan's
-sha256, and that the read-back is fresh. Report the resource as live only after this exit 0. Any other line (`NOT SWITCHED`, `NOT
-VERIFIED`, `refused`) is a stop: the owner corrects or deletes the resource and the gate is run again; nothing proceeds.
+sha256, and that the read-back is fresh. Report the resource as live only after this exit 0. This is target check (d) of 1.2: it proves that the registered
+resource URL and type equal the plan's. Any other line (`NOT SWITCHED`, `NOT VERIFIED`, `refused`) is a stop: the owner corrects or deletes the resource
+and the gate is run again; nothing proceeds.
 
 The plan is hand-made because the tool lists its own cards in a constant that does not include this one. No safety tool is edited
 and none is bypassed: the same checks run, on this one resource.
@@ -473,14 +587,34 @@ verified: the browser logs the failed load of that address and nothing else happ
 ecco-mode-shell" (section 10). The remedy is always the owner's: correct the URL, or delete the resource (section 7, item 2), capture the list again and
 run the gate again. Nothing proceeds without `RESOURCE VERIFIED`.
 
-**One look at the production Overview (owner, desktop browser, hard refresh with Ctrl+F5).** Because the resource is global, this
-is the first page that loads the new module without using the card. The owner checks, and records yes or no:
+**The check of every existing dashboard (owner, desktop browser, hard refresh with Ctrl+F5, console open).** Because the resource is global, every existing
+dashboard page now loads the new module without using the card, so "the other dashboards still work" is looked at, not assumed. Before this step the
+coordinator writes the list of what to look at from the baseline into the evidence folder, so that no dashboard is forgotten:
 
-1. the Overview renders as it did before (the same cards, nothing red, no new error card);
-2. the browser console (F12) shows no new error that names the shell module or its resource (messages of other cards are noted,
-   not judged);
-3. if the Overview shows anything of the shell, or an error names it: **stop**, record the text, and the owner deletes the resource
-   (section 7, item 2); do not go on to step 5.
+```powershell
+cls
+$E = '<OFFLINE_EVIDENCE_DIR>\u1-baseline'
+$ErrorActionPreference = 'Stop'
+$items = @((Get-Content -Raw -Encoding utf8 "$E\dashboards-before.json" | ConvertFrom-Json).data.items)
+$lines = @('the default dashboard (the production Overview)')
+$lines += @($items | ForEach-Object { 'storage dashboard: {0} ({1})' -f $_.url_path, $_.title })
+$lines += @(Get-Content "$E\sha-before.txt" | Where-Object { $_ -match '\S' } | ForEach-Object { ($_ -split '\s+', 2)[1].Trim().TrimStart('*') } | Where-Object { $_ -like 'ecco/dashboards/*' } | ForEach-Object { 'YAML dashboard file: ' + $_ })
+$lines += 'any wall or phone client the owner uses'
+$lines | Out-File -Encoding utf8 "$E\dashboards-to-check.txt"
+$lines
+```
+
+`dashboards-to-check.txt` holds the production Overview (the default dashboard), the existing Intelligence dashboard (it is one of the next two groups), every
+other dashboard of `dashboards-before.json` and every YAML dashboard file listed in `sha-before.txt`, then the wall and phone clients. After the resource is
+added, with a hard refresh (Ctrl+F5) and the browser console (F12) open, the owner opens EACH of them and records yes or no for each of three questions:
+
+1. it renders as before (the same cards, nothing red, no new error card);
+2. the console shows no new error that names the shell or its resource (messages of other cards are noted, not judged);
+3. the page responds (no freeze, no blank page).
+
+For any wall or phone client the owner uses, the result is a note, not a stop, when it is only the known old-web-view module error below. **Any no is a stop:**
+record the text and the page, the owner deletes the one resource (rollback A2, section 7, item 2), and then the same list is looked at again; do not go on to
+step 5. The production Overview's file hash stays at its baseline, and step 6 proves it.
 
 Known console noise, not a defect of the card: a client with an old mobile web view (iOS Safari before 16.4 cannot read the regular
 expression look-behind the card uses) logs a module syntax error on every dashboard page it opens. Only that module fails to load
@@ -766,7 +900,7 @@ from its pin; a read finds something of this update already present; the baselin
 status not what it was; the resource gate does not exit 0; the dashboard list or the resource list differs by more than the one item
 the step added; any file under `ecco/dashboards/` changes, or any `.storage/lovelace*` file other than the new dashboard's and the
 two lists; a copy of the baseline that is not byte-exact; either pre-save check of 5.5 fails; a control entity changes; the
-production Overview shows an error naming the shell; the look shows a strip that contradicts the existing card, a blank strip, a
+existing dashboard (the production Overview included) shows an error naming the shell or no longer renders as before; the look shows a strip that contradicts the existing card, a blank strip, a
 freeze, or an error naming the shell; a step would need a restart. Never retry a live write without the owner. Never approve, work
 around or weaken a permission prompt or a safety gate.
 
@@ -907,14 +1041,14 @@ Say these plainly in every report about this update.
   card helpers, the real theme variables, console cleanliness, and real performance on the real data.
 - **42 of the 344 declared attribute rows are conditional** and were absent in the one live capture (14 Nov): they are expected to read
   "Not present" on the real host until the condition holds. One declared helper (the reserve helper) is **NOT_CHECKED_LIVE**: the
-  capture's filter did not cover its name. The catalogue is compared with the live shape of 14 Nov only; run the comparison again
-  after any contract change.
+  capture's filter did not cover its name. The catalogue has been compared with the live shape of 14 Nov only; step 1b (5.1b) compares it again on the
+  install day, and the comparison is to be run again after any contract change.
 - The pins and the mutation proof are offline. The Node suites, the 518-mutant run and the headless strip check run on this PC only; CI
   runs no Node. CI's guard is the Python static pin suite.
 - A service call that changes no state leaves no durable record (5.8).
 - **The resource is global.** After step 4 every dashboard page on every client loads the 155 KB shell module: the production
-  Overview, non-admin users, and wall and phone clients included (section 1). The look at the production Overview (5.4) is the one
-  check made; nothing is known about the wall or phone clients before the owner looks at one.
+  Overview, non-admin users, and wall and phone clients included (section 1). The per-dashboard check of 5.4 (every existing dashboard, yes or no for
+  three questions) is the check made; nothing is known about the wall or phone clients before the owner looks at one.
 - **Known console noise:** an old mobile web view (iOS Safari before 16.4, which cannot read the regular-expression look-behind the
   card uses) logs a module syntax error on every dashboard page it opens, once the resource exists. It is noise, not a defect of
   the Overview; the card does not work on such a client, and the effect on that client's other resources is unverified.
@@ -967,16 +1101,20 @@ install does not need any of them: the deploy tool does not read `deployment/ha-
 dashboard, the changelog) that names the shell by its hyphenated name: this change keeps to it, and the changelog entry says "shell card"
 in words. The owner may retire the tripwire at the merge.
 
-## 12. Decisions the owner must make
+## 12. Decisions of the owner: decided, and keeping their defaults
 
-| # | Decision | Notes |
+The owner's decision of 21 Nov 2026 settled D-U1-1, D-U1-2 and D-U1-4; D-U1-3, D-U1-5 and D-U1-6 keep their defaults. **None of it authorises an installation
+or a live access**: no automatic installation or live access is authorised, and each live step still needs its own go after the owner's final installation GO
+(the top of this document).
+
+| # | Decision | Status and notes |
 |---|---|---|
-| D-U1-1 | install from the branch commit (after green CI) or merge the draft pull request first (5.0) | the card is content-addressed, so the installed bytes are identified by their sha256 either way |
-| D-U1-2 | RG-F3: the voice-assistant "expose new entities" settings (Assist, Google Assistant), off or waived for U1 | U1 creates no entity |
-| D-U1-3 | the order of the release bookkeeping against R9, Stage 3, grid-loss and F5 | section 11 |
-| D-U1-4 | when to push and open the draft pull request, and when the owner's M2 scan runs | each is its own go |
-| D-U1-5 | the title and URL of the new dashboard, and whether it shows in the sidebar | suggestions in 5.5 |
-| D-U1-6 | whether the Geek look follows the Production look in the same session | H5: only after the owner says go |
+| D-U1-1 | install from the branch commit (after green CI) or merge the draft pull request first (5.0) | **DECIDED by the owner on 21 Nov 2026: option (a), install from the branch commit after the draft pull request's CI is green.** The card file is content-addressed, so the installed bytes equal the reviewed card whatever later commits do. Merge is a separate later decision, and the card's sha256 must be unchanged at the merge |
+| D-U1-2 | RG-F3: the voice-assistant "expose new entities" settings (Assist, Google Assistant) | **DECIDED by the owner on 21 Nov 2026, for U1 only:** the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates no new entity. This is not acceptance of F3 and not permission to introduce new exposed controls: any later install that creates an entity still needs both settings off |
+| D-U1-3 | the order of the release bookkeeping against R9, Stage 3, grid-loss and F5 | keeps its default: deferred until after the first look (section 11); the install needs none of it, and the merge waits |
+| D-U1-4 | when to push and open the draft pull request, and when the owner's M2 scan runs | **DECIDED by the owner on 21 Nov 2026:** push `dev/geek-mode-u1`, open a DRAFT pull request, run the complete M2 scan on the exact commit first (generated assets, commit metadata and pull request text included) and run CI; genuine failures are fixed without weakening a safety assertion |
+| D-U1-5 | the title and URL of the new dashboard, and whether it shows in the sidebar | keeps its default (5.5): `ECCO Modes (first look)`, `ecco-modes-u1`, shown in the sidebar (admin-only) |
+| D-U1-6 | whether the Geek look follows the Production look in the same session | keeps its default (H5): only after the Production look passes and the owner says go |
 
 ## 13. Evidence: the offline verification on the exact tip
 

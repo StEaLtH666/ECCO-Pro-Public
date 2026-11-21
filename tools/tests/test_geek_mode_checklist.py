@@ -30,7 +30,17 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
  [12] the Node generated-config test is named with ECCO_PYTHON and "0 skipped" wherever the runbook names it, and what the runbook says of
       that test is true of its source (it takes its interpreter from ECCO_PYTHON and skips five tests without one)
  [13] checklist section 8 covers every bullet of runbook section 9 (a keyword per bullet; a new bullet without a keyword fails)
- [14] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
+ [14] (round 5, the owner's decision of 21 Nov 2026) the decisions: D-U1-1, D-U1-2 and D-U1-4 are marked decided and D-U1-3, D-U1-5 and D-U1-6 keep their defaults,
+      in both documents; "no automatic installation or live access is authorised" is said in both; RG-F3 is resolved for U1 only, in the owner's words
+ [15] the exact targets: one table in the runbook (1.2) and the checklist (2) holds the file, the URL, the type, the dashboard path and title and the `.storage`
+      names read, derived from the card's pin and the generator's plan code; the four target checks (a) to (d) are in both; block 1 of 5.1 makes checks (a) and (b)
+ [16] the live shape check (step 1b): the step row in both step tables, the runbook section 5.1b and its command line, the extended block 3, the reference counts of
+      the 14 Nov listing (derived from the committed ledger), and the stop text; the tool it names exists and has the flags and exit codes the documents say
+ [17] the write-path statement: every Node test it names exists under that exact name; what it says of the card's mode switch, the `canOpenMoreInfo` domains and
+      the actions of the example is true of their sources
+ [18] the check of every existing dashboard after the global resource: the block that writes `dashboards-to-check.txt` from the baseline, and the three questions
+ [19] the release gates (G1 to G7 of runbook 3, each marked) and what the rollback is measured against (the baseline, the protected backup)
+ [20] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
       not exist, a forbidden word, a changed rollback order, a dropped statement, a flag that does not exist, a removed step, a quoted tool
       phrase that the tool never prints, an address, a token, an entity id, a runbook with its rollback order changed, a runbook heading that is
       gone, and (round 4) every mutant of the review of round 3 (a forbidden deploy flag, a mistyped sha8 in each place it is written, a wrong
@@ -45,6 +55,7 @@ Test-only, no network. Reads repository files; writes nothing.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -54,17 +65,34 @@ CHECKLIST_REL = "docs/product-ui/GEEK_MODE_U1_GO_CHECKLIST.md"
 RUNBOOK_REL = "docs/product-ui/GEEK_MODE_FIRST_UPDATE_RUNBOOK.md"
 PINS_REL = "tools/tests/test_ecco_mode_shell_card.py"
 NODE_TEST_REL = "frontend/ecco-mode-shell/test/generated-config.test.mjs"
+EXTRA_REL = {   # round 5: read-only sources the new rules check the documents against
+    "element": "frontend/ecco-mode-shell/test/element.test.mjs", "core": "frontend/ecco-mode-shell/test/core.test.mjs", "generated-config": NODE_TEST_REL,
+    "card": "frontend/ecco-mode-shell/ecco-mode-shell.js", "example": "frontend/ecco-mode-shell/examples/intelligence-modes.yaml",
+    "ledger": "frontend/ecco-mode-shell/catalogue/intelligence.ledger.json",
+}
+DASH_URL = "ecco-modes-u1"                # D-U1-5, the default (runbook 5.5 suggests it)
+DASH_TITLE = "ECCO Modes (first look)"    # D-U1-5, the default
+SHAPE_LINE = r'& $PY -I -B -X utf8 tools\geek_mode_live_shape_check.py "$E\states-before.json"'
+WRITE_TESTS = [   # (the Node file, the exact test name, named by the checklist too): what the write-path statement points at
+    ("generated-config", "generated config: both modes and a state change touch nothing but hass.states, locale and themes (no service, no websocket, no storage, no network)", True),
+    ("element", "AC5 the switch never changes helper or service state: Production-only and always cards see no extra hass call from a mode change", True),
+    ("generated-config", "generated config: Geek Mode shows the 17 sources and the 344 declared attribute rows, and the Production-only tile is hidden", True),
+    ("element", "AC16 [r1] Geek Mode opens a dialog only for read-only domains: over every domain the real catalogue discovers no writable one offers it, and none dispatches hass-more-info", True),
+    ("element", "AC16 [r1] the guard is also in the dispatch itself: _openEntity sends hass-more-info for a read-only domain and never for a writable, malformed or non-text id", False),
+    ("core", "AC16 validateChildCards: the read-only Intelligence card passes; the pause tile (a toggle) is refused in a Geek-visible region", False),
+]
 TOOLS = {   # the name as it is written in a command, its kind, its source
     "geek_mode_dashboard_config.py": ("py", "tools/geek_mode_dashboard_config.py"),
     "ecco_deploy_preflight.py": ("py", "tools/ecco_deploy_preflight.py"),
     "deploy-ha.ps1": ("ps", "tools/deploy-ha.ps1"),
     "ha-logs.ps1": ("ps", "tools/ha-logs.ps1"),
+    "geek_mode_live_shape_check.py": ("py", "tools/geek_mode_live_shape_check.py"),
 }
 EXTRA_SOURCES = ("tools/EccoDeploy.psm1",)   # printed by deploy-ha.ps1 through its module
 
 FAILURES: list[str] = []
 PASSED = [0]
-MAX_CHECKLIST_LINES = 140   # "at most about 130 lines": a short document stays short
+MAX_CHECKLIST_LINES = 200   # round 5: it was 136 lines and may grow to about 200 with the exact targets, the release gates and the per-dashboard check; no more
 FENCE = "`" * 3
 
 
@@ -171,11 +199,138 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "9", "neither have the globbed sha256sum and the scp of the stored .storage files (5.1, 5.6)"),
     # F5: step 8 checks within limits and does not prove
     ("runbook", "5.7", "step 8 checks it, within the limits stated in 5.8"),
+    # ---- round 5 (the owner's decision of 21 Nov 2026): T1 the decisions, nothing authorised by the approval
+    ("runbook", None, "No automatic installation or live access is authorised by that approval."),
+    ("checklist", None, "No automatic installation or live access is authorised by that approval:"),
+    ("runbook", None, "each live step below still needs its own go"),
+    ("checklist", "1", "each live step needs its own go"),
+    ("checklist", "1", "nothing is installed and nothing live is touched until your final installation GO"),
+    ("runbook", None, "Nothing is installed and no live system is touched until the owner gives the final installation GO"),
+    ("runbook", None, "Ghost diagnostics stays the second update, with its own restart and rollback requirements"),
+    ("checklist", "1", "Ghost stays the second update, with its own restart and rollback requirements"),
+    ("runbook", "3", "resolved for U1 only, by the owner on 21 Nov 2026 (D-U1-2): the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates no new entity"),
+    ("runbook", "3", "This is not acceptance of F3 and not permission to introduce new exposed controls: any later install that creates an entity still needs both settings off"),
+    ("runbook", "5.1", "RG-F3 (G5) is resolved for U1 only, by the owner on 21 Nov 2026"),
+    ("runbook", "12", "DECIDED by the owner on 21 Nov 2026, for U1 only: the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates no new entity"),
+    ("runbook", "12", "This is not acceptance of F3 and not permission to introduce new exposed controls: any later install that creates an entity still needs both settings off"),
+    ("runbook", "12", "DECIDED by the owner on 21 Nov 2026: option (a), install from the branch commit after the draft pull request's CI is green"),
+    ("runbook", "12", "Merge is a separate later decision, and the card's sha256 must be unchanged at the merge"),
+    ("runbook", "12", "so the installed bytes equal the reviewed card whatever later commits do"),
+    ("runbook", "12", "DECIDED by the owner on 21 Nov 2026: push dev/geek-mode-u1, open a DRAFT pull request, run the complete M2 scan on the exact commit first (generated assets, commit metadata and pull request text included) and run CI"),
+    ("runbook", "12", "keeps its default: deferred until after the first look (section 11)"),
+    ("runbook", "12", "keeps its default (5.5): ECCO Modes (first look), ecco-modes-u1, shown in the sidebar (admin-only)"),
+    ("runbook", "12", "keeps its default (H5): only after the Production look passes and the owner says go"),
+    ("runbook", "5.0", "D-U1-1, the commit to install from: decided by the owner on 21 Nov 2026, option (a)"),
+    ("runbook", "5.0", "Install from the branch commit after the draft pull request's CI is green"),
+    ("runbook", "5.0", "Merge is a separate later decision, and the card's sha256 must be unchanged at the merge"),
+    ("runbook", "5.0", "the card file is content-addressed, so the installed bytes equal the reviewed card whatever later commits do"),
+    ("runbook", "5.0", "it runs on the exact commit before the push, including the generated assets, the commit metadata and the pull request text"),
+    ("runbook", "5.0", "If anything changes after a scan, the applicable verification and the privacy scans are repeated"),
+    ("checklist", "1", "Push dev/geek-mode-u1, open a DRAFT pull request, run the complete M2 private-pattern scan on the exact commit first (generated assets, commit metadata and pull request text included), run CI (D-U1-4)"),
+    ("checklist", "1", "Install from the branch commit after green CI; merge is a separate later decision and the card's sha256 must be unchanged at the merge (D-U1-1, option a)"),
+    ("checklist", "1", "RG-F3 (D-U1-2) is resolved for U1 only: the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates no new entity"),
+    ("checklist", "1", "That is not acceptance of F3 and not permission to introduce new exposed controls; any later install that creates an entity still needs both settings off"),
+    ("checklist", "7", "decided, option (a): the branch commit after green CI on the draft pull request"),
+    ("checklist", "7", "decided, for U1 only: the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates no new entity; not acceptance of F3 and not permission to introduce new exposed controls"),
+    ("checklist", "7", "decided: push, a DRAFT pull request, the complete M2 scan on the exact commit first (generated assets, commit metadata, pull request text), CI"),
+    ("checklist", "7", "default: defer it all until after the first look"),
+    ("checklist", "7", "default: ECCO Modes (first look), ecco-modes-u1, shown in the sidebar (admin-only)"),
+    ("checklist", "7", "default: yes, only after the Production look passes and you say go"),
+    # ---- T2 the exact targets and the four target checks
+    ("runbook", "1.2", "(a) step 1. The baseline shows that the existing Intelligence card's resource URL uses the same /local/ecco/ form, so /config/www/ecco/ is the right folder"),
+    ("runbook", "1.2", "(b) step 1. The dashboard URL path ecco-modes-u1 is not already in the dashboard list, and the resource URL is not already in the resource list"),
+    ("runbook", "1.2", "(c) step 3. verify-served proves the mapping from /config/www/ecco/ to /local/ecco/ and the bytes before any resource exists (5.3)"),
+    ("runbook", "1.2", "(d) step 4. verify-resource proves that the registered resource URL and type equal the plan's (5.4)"),
+    ("runbook", "1.2", "an unmet check stops the update at that step"),
+    ("runbook", "5.1", "the number of the baseline's resources that are under /local/ecco/ and name the Intelligence card (at least 1: a 0 means that card is not served from the folder this runbook uses, so stop)"),
+    ("runbook", "5.1", "then 0 for the new resource URL already being in the resource list and 0 for the dashboard URL path ecco-modes-u1 already being in the dashboard list"),
+    ("runbook", "5.3", "This is target check (c) of 1.2: verify-served proves the mapping from /config/www/ecco/ to /local/ecco/ and the bytes before any resource exists"),
+    ("runbook", "5.3", "so a 404 or a mismatch here is the wrong folder, name or file, never a resource problem"),
+    ("runbook", "5.4", "This is target check (d) of 1.2: it proves that the registered resource URL and type equal the plan's"),
+    ("checklist", "2", "(a) step 1: the baseline shows the existing Intelligence card's resource URL under /local/ecco/ too, so /config/www/ecco/ is the right folder"),
+    ("checklist", "2", "(b) step 1: the dashboard path ecco-modes-u1 and the resource URL are not already in the baseline lists"),
+    ("checklist", "2", "(c) step 3: verify-served proves the /config/www/ecco/ to /local/ecco/ mapping and the bytes before any resource exists"),
+    ("checklist", "2", "(d) step 4: verify-resource proves the registered URL and type equal the plan"),
+    ("checklist", "2", "an unmet check is a stop at that step"),
+    # ---- T3 the live shape check (step 1b)
+    ("runbook", "5.1b", "A live read, and it needs the owner's own go, separate from the go for step 1: block 3 of 5.1 is its live read"),
+    ("runbook", "5.1b", "converts the states in memory to the value-free listing format (attribute names, types, encoded sizes and the first-level keys of dict attributes: no value is kept)"),
+    ("runbook", "5.1b", "calling compare_live of tools/geek_mode_coverage.py (imported, not copied), prints counts and names and never a value, and writes nothing"),
+    ("runbook", "5.1b", "Exit 0: the shape matches (nothing UNDECLARED, no declared entity missing, no unexplained absence); exit 1: it does not, and the lines say which; exit 2: bad input"),
+    ("runbook", "5.1b", "Expected: exit 0, the line RESULT: MATCH (exit 0) and the counts: PRESENT_LIVE 17 of 17 declared entities"),
+    ("runbook", "5.1b", "NOT_PRESENT_LIVE 0 declared entities missing and 0 unexplained attribute rows, UNDECLARED 0 entities and 0 attributes, NOT_CHECKED_LIVE 0"),
+    ("runbook", "5.1b", "The number of conditional attribute rows depends on the day (42 on 14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop"),
+    ("runbook", "5.1b", "Anything UNDECLARED, any declared entity missing and any unexplained absence (exit 1) is a stop: it means the catalogue is out of date for this host, so the Geek inspector would be wrong. Production is unaffected. Ask the owner"),
+    ("runbook", "5.1b", "The reserve helper's attributes were never confirmed live, because the 14 Nov listing did not include it"),
+    ("runbook", "5.1b", "its check codes appear as UNDECLARED dotted attributes (self_test.<check code>)"),
+    ("runbook", "5.1b", "The tool prints a hint and still exits 1, so the stop rule applies and the owner decides what the finding means"),
+    ("runbook", "5.1b", "--write-shape <path> also writes the value-free listing, only outside the repository's checkout, never over an existing file unless --overwrite is given"),
+    ("runbook", "5.1", "The listed entities are kept, and so is every entity whose id contains ecco_intel (so that step 1b can find what the catalogue does not declare)"),
+    ("runbook", "5.1", "The file holds values: it stays in <OFFLINE_EVIDENCE_DIR> and never enters a repository"),
+    ("checklist", "4", "live shape check: block 3 (the state read), then the offline tool geek_mode_live_shape_check.py on states-before.json (runbook 5.1b)"),
+    ("checklist", "4", "exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained"),
+    ("checklist", "4", "anything UNDECLARED, a declared entity missing or an unexplained absence: stop and ask you (the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected)"),
+    ("checklist", "4", "The second holds the commands of steps 1b, 3, 4 and 6"),
+    # ---- T4 the write-path statement
+    ("runbook", "1.1", "Write-path statement (checked again in round 4; no change to the card)"),
+    ("runbook", "1.1", "(a) Switching Production and Geek invokes no service"),
+    ("runbook", "1.1", "each of the two mode buttons has one click handler, this._ctl.set(mode)"),
+    ("runbook", "1.1", "has no reference to hass and can only remember a presentation choice"),
+    ("runbook", "1.1", "traps every hass function and every network, storage and window API, switches Production to Geek and back, and finds no call and no hit (that file: 5 of 5 pass, 0 skipped)"),
+    ("runbook", "1.1", "(b) The pause tile is the only write-capable control the page places"),
+    ("runbook", "1.1", "The one write-capable control the page places is the existing pause tile (an input boolean toggle: the same tile and the same write as on the existing Intelligence dashboard)"),
+    ("runbook", "1.1", "its only actions are toggle (the tile's tap and icon tap) and more-info (the tile's hold action), and it has no service-call shaped key"),
+    ("runbook", "1.1", "dispatches Home Assistant's own more-info event only for sensor, binary sensor and event entities"),
+    ("runbook", "1.1", "every other domain gets \"Copy entity id\" instead"),
+    ("runbook", "1.1", "this is not an ECCO write path and not part of the first look, which presses none of Open in Home Assistant, Copy, JSON or CSV"),
+    ("runbook", "1.1", "Geek Mode hides the pause tile (the tests"),
+    ("checklist", "2", "Write-path statement (runbook 1.1; no card change)"),
+    ("checklist", "2", "(a) Switching Production and Geek invokes no service: the switch handler only sets a presentation choice"),
+    ("checklist", "2", "that file ran 5 of 5, 0 skipped"),
+    ("checklist", "2", "element suite 150 of 150, core suite 157 of 157"),
+    ("checklist", "2", "(b) The pause tile is the only write-capable control the page places"),
+    ("checklist", "2", "the one write-capable control is the existing pause tile (an input boolean toggle: the same tile and write as on the existing Intelligence dashboard)"),
+    ("checklist", "2", "Geek Mode hides it"),
+    ("checklist", "2", "opens Home Assistant's own more-info dialog only for sensor, binary sensor and event entities (every other domain gets \"Copy entity id\""),
+    ("checklist", "2", "not an ECCO write path and not part of the first look, which presses none of Open in Home Assistant, Copy, JSON or CSV"),
+    # ---- T5 the check of every existing dashboard
+    ("runbook", "5.4", "The check of every existing dashboard (owner, desktop browser, hard refresh with Ctrl+F5, console open)"),
+    ("runbook", "5.4", "the coordinator writes the list of what to look at from the baseline into the evidence folder, so that no dashboard is forgotten"),
+    ("runbook", "5.4", "every other dashboard of dashboards-before.json and every YAML dashboard file listed in sha-before.txt"),
+    ("runbook", "5.4", "the owner opens EACH of them and records yes or no for each of three questions"),
+    ("runbook", "5.4", "it renders as before (the same cards, nothing red, no new error card)"),
+    ("runbook", "5.4", "the console shows no new error that names the shell or its resource"),
+    ("runbook", "5.4", "the page responds (no freeze, no blank page)"),
+    ("runbook", "5.4", "For any wall or phone client the owner uses, the result is a note, not a stop, when it is only the known old-web-view module error below"),
+    ("runbook", "5.4", "Any no is a stop: record the text and the page, the owner deletes the one resource (rollback A2, section 7, item 2), and then the same list is looked at again"),
+    ("runbook", "5.4", "The production Overview's file hash stays at its baseline, and step 6 proves it"),
+    ("runbook", "4", "then the owner checks EACH existing dashboard, because the resource is global (5.4)"),
+    ("runbook", "4", "every existing dashboard: yes to all three questions of 5.4"),
+    ("runbook", "6", "existing dashboard (the production Overview included) shows an error naming the shell or no longer renders as before"),
+    ("checklist", "5", "Every existing dashboard answers yes to three questions: it renders as before (same cards, nothing red, no new error card), the console shows no new error that names the shell or its resource, and the page responds"),
+    ("checklist", "5", "The list is dashboards-to-check.txt, written by the coordinator from the baseline before step 4"),
+    ("checklist", "5", "and any wall or phone client (a note for the known old-web-view error)"),
+    ("checklist", "5", "Any no is a stop: you delete the one resource (rollback A2) and the same list is looked at again"),
+    ("checklist", "5", "The Overview's file hash stays at its baseline"),
+    ("checklist", "4", "then your check of EACH existing dashboard (runbook 5.4)"),
+    # ---- T6 the baseline, the backup, the rollback proofs, the release gates
+    ("checklist", "6", "Measured against two things made before any live write: (i) the baseline, the read-only reads of runbook 5.1"),
+    ("checklist", "6", "with a byte-exact copy of each .storage/lovelace* file, each hash-checked EXACT"),
+    ("checklist", "6", "and (ii) your protected full backup, made in the Home Assistant UI (runbook 5.2), the last resort"),
+    ("checklist", "6", "Proven: /config/www/ecco/ equals the baseline, or differs by only that file when it is left in place"),
+    ("checklist", "6", "the production Overview and the existing Intelligence dashboard among them (the -rollback reads of runbook 7)"),
+    ("checklist", "7", "Release gates (runbook 3). Only G1 is met by the offline work, and only in part"),
 ]
 FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phrase that must be gone)
     ("runbook", None, "step 8 proves it"),
     ("checklist", None, "step 8 proves it"),
     ("runbook", "5.5", "with no ecco card in it"),
+    # round 5: what the owner's decision of 21 Nov replaced
+    ("runbook", None, "one look at the production Overview"),
+    ("checklist", None, "one look at the production Overview"),
+    ("checklist", None, "D-U1-1 and D-U1-2 are not decided"),
+    ("checklist", None, "you record the voice-assistant setting"),
+    ("runbook", "3", "consciously waived"),
 ]
 COVERAGE = [   # (a phrase of a bullet of runbook section 9, the keywords that checklist section 8 must hold for it; lower case)
     ("has never run in a real home assistant or a real browser", ("never run in a real home assistant",)),
@@ -540,10 +695,207 @@ def coverage_problems(checklist: str, runbook: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------
+# round 5 rules: the owner's decision of 21 Nov 2026 (T1 to T6)
+# ---------------------------------------------------------------------------------------------------------------------------------
+def decisions_problems(checklist: str, runbook: str) -> list[str]:
+    """[14] D-U1-1, D-U1-2 and D-U1-4 are decided and D-U1-3, D-U1-5 and D-U1-6 keep their defaults (both documents); nothing is authorised by the approval."""
+    p = []
+    top = {"runbook": re.split(r"^## 1\. ", runbook, maxsplit=1, flags=re.M)[0], "checklist": sections(checklist).get("1", "")}   # where the sentence belongs: the top of the runbook, checklist section 1
+    for label, text in (("checklist", top["checklist"]), ("runbook", top["runbook"]), ("runbook section 12", subsection(runbook, "12"))):
+        if "no automatic installation or live access is authorised" not in plain(text):
+            p.append(f"the {label} does not say, where it belongs, that no automatic installation or live access is authorised")
+    for label, body, status_col in (("runbook", subsection(runbook, "12"), 2), ("checklist", sections(checklist).get("7", ""), 1)):
+        for n in range(1, 7):
+            m = re.search(r"^\| D-U1-" + str(n) + r"[ |].*$", body, re.M)
+            if not m:
+                p.append(f"the {label} has no row for D-U1-{n}")
+                continue
+            cells = [c.strip() for c in m.group(0).strip().strip("|").split("|")]
+            row = plain(cells[status_col]) if len(cells) > status_col else ""   # the status cell: the decision's second column (checklist) or third (runbook)
+            if n in (1, 2, 4) and "decided" not in row:
+                p.append(f"the {label} D-U1-{n} status is not marked decided")
+            if n in (3, 5, 6) and ("default" not in row or "decided" in row):
+                p.append(f"the {label} D-U1-{n} status does not keep its default (or is marked decided)")
+    if "resolved for u1 only" not in plain(subsection(runbook, "3")):
+        p.append("runbook section 3: G5 does not say that RG-F3 is resolved for U1 only")
+    return p
+
+
+def targets_problems(checklist: str, runbook: str, names: dict | None) -> list[str]:
+    """[15] the exact targets (runbook 1.2, checklist 2) and the four target checks."""
+    if names is None:
+        return ["the exact names could not be derived from the pin suite, the generator and the deploy tool"]
+    p: list[str] = []
+    sec = subsection(runbook, "1.2")
+    if not sec:
+        return ["the runbook has no section 1.2 (the exact targets)"]
+    cells = {plain(m.group(1)): m.group(2) for m in re.finditer(r"^\| (.+?) \| (.+?) \| (.+?) \|$", sec, re.M)}
+
+    def cell(prefix: str) -> str:
+        return next((v for k, v in cells.items() if k.startswith(prefix)), "")
+    for prefix, value in (("the card file on the host (a1)", names["dest"]), ("the lovelace resource url (a2)", names["url"]), ("the lovelace resource type (a2)", names["type"]),
+                          ("the new dashboard's url path", DASH_URL), ("the new dashboard's title", DASH_TITLE)):
+        if f"`{value}`" not in cell(prefix):
+            p.append(f"runbook 1.2: the row '{prefix}' does not hold `{value}`")
+    for prefix, values in (("the .storage files read", (".storage/lovelace_resources", ".storage/lovelace_dashboards", ".storage/lovelace*", ".storage/lovelace.<dashboard id>")),
+                           ("the dashboard files hashed", ("ecco/dashboards/",)), ("the folder listed", ("/config/www/ecco/",))):
+        for v in values:
+            if v not in cell(prefix):
+                p.append(f"runbook 1.2: the row '{prefix}' does not hold {v}")
+    for letter, step in (("a", "1"), ("b", "1"), ("c", "3"), ("d", "4")):
+        if not re.search(r"^- \*\*\(" + letter + r"\) step " + step + r"\.\*\*", sec, re.M):
+            p.append(f"runbook 1.2: the target check ({letter}) of step {step} is missing")
+        if f"({letter}) step {step}:" not in plain(sections(checklist).get("2", "")):
+            p.append(f"checklist section 2: the target check ({letter}) of step {step} is missing")
+    a3 = next((m.group(0) for m in re.finditer(r"^\| A3 \|.*$", checklist, re.M)), "")
+    if f"`{DASH_URL}`" not in a3 or f"`{DASH_TITLE}`" not in a3:
+        p.append("the checklist's A3 row does not hold the dashboard's URL path and title (D-U1-5)")
+    rd = next((m.group(0) for m in re.finditer(r"^\| read \|.*$", checklist, re.M)), "")
+    for v in (".storage/lovelace_resources", ".storage/lovelace_dashboards", "ecco/dashboards/*.yaml", "/config/www/ecco/"):
+        if v not in rd:
+            p.append(f"the checklist's read row does not hold {v}")
+    if fold(DASH_URL) not in fold(subsection(runbook, "5.5")) or fold(DASH_TITLE) not in fold(subsection(runbook, "5.5")):
+        p.append("runbook 5.5 no longer suggests the dashboard URL path and title that the targets table holds")
+    b1 = next((b for b in powershell_blocks(subsection(runbook, "5.1")) if "lovelace-before" in b), "")
+    for need in ("-like '/local/ecco/*ecco-intelligence-card*'", f"-eq '{names['url']}'", f"-eq '{DASH_URL}'"):
+        if need not in b1:
+            p.append(f"runbook 5.1 block 1 does not make the target checks (a) and (b): {need} is missing")
+    return p
+
+
+def shape_problems(checklist: str, runbook: str, pins: dict, extra: dict, sources: dict[str, str]) -> list[str]:
+    """[16] step 1b: the rows, the section, the command line, the extended block 3, the reference counts of the 14 Nov listing, the tool's flags and exit codes."""
+    p: list[str] = []
+    for label, body, keys in (
+            ("runbook", sections(runbook).get("4", ""), ("geek_mode_live_shape_check.py", "states-before.json", "block 3", "its own go", "undeclared", "unexplained", "out of date for this host")),
+            ("checklist", sections(checklist).get("4", ""), ("your separate go", "geek_mode_live_shape_check.py", "states-before.json", "undeclared", "unexplained", "out of date for this host", "production is unaffected"))):
+        row = re.search(r"^\| 1b \|.*$", body, re.M)
+        if not row:
+            p.append(f"the {label}'s step table has no step 1b row")
+            continue
+        for k in keys:
+            if k not in plain(row.group(0)):
+                p.append(f"the {label}'s step 1b row does not say '{k}'")
+    if not re.search(r"^### 5\.1b Step 1b: the live shape check$", runbook, re.M):
+        p.append("the runbook has no section '5.1b Step 1b: the live shape check'")
+    sec = subsection(runbook, "5.1b")
+    if SHAPE_LINE not in "\n".join(powershell_blocks(sec)):
+        p.append("runbook 5.1b: no PowerShell block holds the command line of the live shape check")
+    if SHAPE_LINE not in "\n".join(powershell_blocks(checklist)):
+        p.append("the checklist's PowerShell blocks do not hold the command line of the live shape check")
+    b3 = next((b for b in powershell_blocks(subsection(runbook, "5.1")) if "core/api/states" in b), "")
+    for need in ("-like '*ecco_intel*'", "$ids -notcontains $_", "ConvertTo-Json -InputObject $out -Depth 20"):
+        if need not in b3:
+            p.append(f"runbook 5.1 block 3 (the state read) no longer keeps every ecco_intel entity: {need} is missing")
+    src = sources.get("geek_mode_live_shape_check.py", "")
+    if not src:
+        p.append("the live shape check tool is missing")
+    else:
+        if "return 2" not in src or "G.compare_live(" not in src or "def compare_live" in src:
+            p.append("the live shape check tool does not exit 2 on bad input, or does not call compare_live of geek_mode_coverage, or copies it")
+        for fl in sorted(set(re.findall(r"(?<![\w-])--[a-z][a-z-]+", plain(sec)))):
+            if f'"{fl}"' not in src:
+                p.append(f"runbook 5.1b names the flag {fl}, which the tool does not have")
+    try:
+        led = json.loads(extra["ledger"])
+        live, tl = led["live"]["live_entities"], led["totals"]["live"]
+        declared = pins.get("sources") or "?"
+        reference = (f"exit 0 with {live} of {declared} present, {tl['PRESENT_LIVE'] - live} attribute rows present, {tl['NOT_PRESENT_LIVE']} conditional, "
+                     f"0 unexplained, 0 undeclared and {tl['NOT_CHECKED_LIVE']} not checked")
+        if plain(reference) not in plain(sec):
+            p.append(f"runbook 5.1b: the reference counts of the committed 14 Nov listing are not '{reference}' (derived from the committed ledger)")
+        if f"present_live {declared} of {declared} declared entities" not in plain(sec):
+            p.append("runbook 5.1b: the expected PRESENT_LIVE count is not 'all of the declared entities'")
+    except (KeyError, ValueError, TypeError):
+        p.append("the committed ledger could not be read for the reference counts")
+    return p
+
+
+def writepath_problems(checklist: str, runbook: str, extra: dict) -> list[str]:
+    """[17] the write-path statement: every test it names exists under that exact name; what it says of the card and the example is true of their sources."""
+    p: list[str] = []
+    rbf, clf = fold(runbook), fold(checklist)
+    for key, name, in_checklist in WRITE_TESTS:
+        if f"'{name}'" not in extra.get(key, ""):
+            p.append(f"the Node test '{name[:60]}...' does not exist under that exact name in the {key} suite")
+        if fold(name) not in rbf:
+            p.append(f"the runbook does not name the test '{name[:60]}...' exactly")
+        if in_checklist and fold(name) not in clf:
+            p.append(f"the checklist does not name the test '{name[:60]}...' exactly")
+    card = extra.get("card", "")
+    if "on(b, 'click', () => this._ctl.set(mode))" not in card:
+        p.append("the card's mode buttons no longer have the one click handler this._ctl.set(mode) that the runbook names")
+    if "export const MORE_INFO_DOMAINS = Object.freeze(['sensor', 'binary_sensor', 'event']);" not in card:
+        p.append("the card's more-info domains are no longer sensor, binary_sensor and event")
+    m = re.search(r"export function createModeController\(.*?\n}\n", card, re.S)
+    if not m or re.search(r"hass|callService|call_service|fetch\(", m.group(0)):
+        p.append("createModeController is missing, or it now touches hass, a service or the network")
+    example = extra.get("example", "")
+    if sorted(re.findall(r"^\s*action:\s*([a-z-]+)\s*$", example, re.M)) != ["more-info", "toggle", "toggle"]:
+        p.append("the example's actions are no longer the pause tile's toggle (tap and icon tap) and more-info (hold)")
+    if re.search(r"^\s*(?:service|perform_action|target|navigation_path|url_path)\s*:", example, re.M):
+        p.append("the example holds a service-call shaped key")
+    sec11 = plain(subsection(runbook, "1.1"))
+    for word in ("createmodecontroller", "canopenmoreinfo", "_applymode"):
+        if word not in sec11:
+            p.append(f"runbook 1.1 does not name {word}")
+    if "createmodecontroller" not in plain(checklist):
+        p.append("the checklist does not name createModeController")
+    return p
+
+
+def dashboards_problems(checklist: str, runbook: str) -> list[str]:
+    """[18] the check of every existing dashboard: the block that writes the list from the baseline, and the step 4 rows."""
+    p: list[str] = []
+    blk = next((b for b in powershell_blocks(subsection(runbook, "5.4")) if "dashboards-to-check.txt" in b), "")
+    if not blk:
+        p.append("runbook 5.4 has no block that writes dashboards-to-check.txt")
+    else:
+        for need in ("$E = ", "dashboards-before.json", "sha-before.txt", "ecco/dashboards/*", "url_path"):
+            if need not in blk:
+                p.append(f"the dashboards-to-check block does not use {need}")
+    for label, body in (("runbook", sections(runbook).get("4", "")), ("checklist", sections(checklist).get("4", ""))):
+        row = re.search(r"^\| 4 \|.*$", body, re.M)
+        if not row or "each existing dashboard" not in plain(row.group(0)):
+            p.append(f"the {label}'s step 4 row does not say that the owner checks EACH existing dashboard")
+    return p
+
+
+def gates_problems(checklist: str, runbook: str) -> list[str]:
+    """[19] the release gates G1 to G7 of runbook 3 are in the checklist, each marked; the rollback is measured against the baseline and the backup, each step proven."""
+    p: list[str] = []
+    rb_gates = sorted(int(m.group(1)) for m in re.finditer(r"^\| G(\d) \|", subsection(runbook, "3"), re.M))
+    if rb_gates != list(range(1, 8)):
+        p.append(f"runbook section 3 has the gates {rb_gates}, not G1 to G7")
+    rows = {int(m.group(1)): plain(m.group(0)) for m in re.finditer(r"^\| G(\d)\b.*$", sections(checklist).get("7", ""), re.M)}
+    if sorted(rows) != rb_gates:
+        p.append(f"the checklist's release gates are {sorted(rows)}, the runbook's {rb_gates}")
+    for n, row in rows.items():
+        if n == 1 and "satisfied by the offline work" not in row:
+            p.append("checklist gate G1 is not marked 'satisfied by the offline work'")
+        elif n == 5 and "resolved for u1 by the owner on 21 nov: separately tracked f3, no new entity" not in row:
+            p.append("checklist gate G5 (RG-F3) is not marked 'resolved for U1 by the owner on 21 Nov: separately tracked F3, no new entity'")
+        elif n not in (1, 5) and "yours at install time" not in row:
+            p.append(f"checklist gate G{n} is not marked 'yours at install time'")
+    sec6 = sections(checklist).get("6", "")
+    for key in ("(i) the baseline", "byte-exact copy", "(ii) your protected full backup"):
+        if key not in plain(sec6):
+            p.append(f"checklist section 6 does not say '{key}'")
+    items = re.findall(r"^\d\. \*\*(A[123])\b(.*)$", sec6, re.M)
+    if [a for a, _ in items] != ROLLBACK_ORDER:
+        p.append("checklist section 6 does not list the rollback A3, A2, A1")
+    for a, rest in items:
+        if "proven" not in rest.lower():
+            p.append(f"checklist section 6: the rollback step {a} has no proof")
+    return p
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
 # the analysis: every rule gives the list of its problems; an empty list is a pass
 # ---------------------------------------------------------------------------------------------------------------------------------
-def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], node_src: str = "") -> dict[str, list[str]]:
+def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], node_src: str = "", extra: dict | None = None) -> dict[str, list[str]]:
     r: dict[str, list[str]] = {}
+    extra = extra or {}
     cl, rb = fold(checklist), fold(runbook)
     csec, rsec = sections(checklist), sections(runbook)
 
@@ -640,6 +992,9 @@ def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], n
         p.append("checklist: a hash-like blob that is not a pinned hash")
     if len(checklist.splitlines()) > MAX_CHECKLIST_LINES:
         p.append(f"the checklist has {len(checklist.splitlines())} lines (limit {MAX_CHECKLIST_LINES})")
+    claim = re.search(r"it is now\s+(\d+)\s+lines", checklist)
+    if not claim or int(claim.group(1)) != len(checklist.splitlines()):
+        p.append(f"the checklist says it is now {claim.group(1) if claim else '?'} lines; it has {len(checklist.splitlines())}")
     r["hygiene"] = p
 
     # [8] the checklist and the runbook agree
@@ -683,10 +1038,18 @@ def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], n
     r["pinned"] = pinned_problems(checklist, runbook)
     r["node"] = node_problems(runbook, node_src)
     r["coverage"] = coverage_problems(checklist, runbook)
+    # [14] to [19] (round 5)
+    r["decisions"] = decisions_problems(checklist, runbook)
+    r["targets"] = targets_problems(checklist, runbook, exact)
+    r["shape"] = shape_problems(checklist, runbook, pins, extra, sources)
+    r["writepath"] = writepath_problems(checklist, runbook, extra)
+    r["dashboards"] = dashboards_problems(checklist, runbook)
+    r["gates"] = gates_problems(checklist, runbook)
     return r
 
 
-RULES = ("pins", "checks", "sections", "tools", "cls", "statements", "hygiene", "agreement", "commands", "names", "pinned", "node", "coverage")
+RULES = ("pins", "checks", "sections", "tools", "cls", "statements", "hygiene", "agreement", "commands", "names", "pinned", "node", "coverage",
+         "decisions", "targets", "shape", "writepath", "dashboards", "gates")
 RULE_TITLES = {
     "pins": "[1] the pins are in the checklist exactly as the pin suite holds them",
     "checks": "[2] the five checks of the owner's directive are present by name",
@@ -701,6 +1064,12 @@ RULE_TITLES = {
     "pinned": "[11] the sentences added after the review of round 3 are in their sections and the claims they replaced are gone",
     "node": "[12] the Node generated-config test is named with ECCO_PYTHON and 0 skipped, and the runbook's claims about it are true of its source",
     "coverage": "[13] checklist section 8 covers every bullet of runbook section 9",
+    "decisions": "[14] D-U1-1, D-U1-2 and D-U1-4 are decided, D-U1-3, D-U1-5 and D-U1-6 keep their defaults, and nothing is authorised by the approval (both documents)",
+    "targets": "[15] the exact targets table and the four target checks are in the runbook (1.2) and the checklist (2), derived from the pins; block 1 makes checks (a) and (b)",
+    "shape": "[16] step 1b: the rows, the section, the command line, the extended block 3, the 14 Nov reference counts (from the ledger) and the tool's flags and exit codes",
+    "writepath": "[17] the write-path statement names Node tests that exist, and what it says of the card's mode switch, the more-info domains and the example's actions is true",
+    "dashboards": "[18] the check of every existing dashboard: the dashboards-to-check block and the step 4 rows",
+    "gates": "[19] the release gates G1 to G7 are in the checklist, each marked; the rollback is measured against the baseline and the backup, each step proven",
 }
 
 
@@ -917,6 +1286,65 @@ def make_mutants(pins: dict, checklist: str, runbook: str) -> list[tuple[str, st
     # --- F4: a new section 9 bullet without coverage
     add("runbook", "F4 a new bullet in runbook section 9 that the checklist does not cover", lambda t: t.replace("\n## 10.", "\n- A new limit that nobody has written into the checklist.\n\n## 10.", 1), "coverage")
     add("runbook", "F4 a section 9 bullet whose words changed so that its keyword no longer matches", lambda t: t.replace("Known console noise:", "Known browser noise:", 1), "coverage")
+    # --- round 5: the owner's decision of 21 Nov 2026 (T1 to T6), one structural mutant for each rule's own checks (the pinned sentences are killed one by one below)
+    def drop_row(text: str, first_cell: str) -> str:
+        return re.sub(r"^\| " + re.escape(first_cell) + r" \|.*\n", "", text, count=1, flags=re.M)
+
+    no_auto = "No automatic installation or live access is authorised"
+    shape_cmd = "geek_mode_live_shape_check.py"
+    for name, fn, rule in [
+        ("G1 the checklist's A3 row names another dashboard path", lambda t: on_line(t, "| A3 |", lambda ln: ln.replace(DASH_URL, "ecco-modes-u2")), "targets"),
+        ("G2 the checklist's A3 row loses the dashboard title", lambda t: on_line(t, "| A3 |", lambda ln: ln.replace(DASH_TITLE, "ECCO Modes")), "targets"),
+        ("G3 the checklist's read row loses the resource list", lambda t: on_line(t, "| read |", lambda ln: ln.replace("`.storage/lovelace_resources`, ", "")), "targets"),
+        ("G4 the checklist's read row is dropped", lambda t: drop_row(t, "read"), "targets"),
+        ("G5 the target check (c) of the checklist is mislabelled", lambda t: t.replace("(c) step 3:", "(c) step 4:", 1), "targets"),
+        ("G6 the checklist's step 1b row is removed", lambda t: drop_row(t, "1b"), "shape"),
+        ("G7 the live shape command line is dropped from the checklist's blocks", lambda t: edit_block(t, shape_cmd, lambda b: re.sub(r"^[^\n]*" + shape_cmd + r"[^\n]*\n", "", b, flags=re.M)), "shape"),
+        ("G8 the checklist's step 1b row loses its separate go", lambda t: on_line(t, "| 1b |", lambda ln: ln.replace("your separate go", "your go")), "shape"),
+        ("G9 the checklist's step 4 row checks only the Overview", lambda t: on_line(t, "| 4 | you add", lambda ln: ln.replace("EACH existing dashboard", "the production Overview")), "dashboards"),
+        ("G10 the checklist's G3 gate row is removed", lambda t: drop_row(t, "G3"), "gates"),
+        ("G11 G5 (RG-F3) is marked as yours at install time", lambda t: on_line(t, "| G5, RG-F3 |", lambda ln: ln.replace("resolved for U1 by the owner on 21 Nov: separately tracked F3, no new entity", "yours at install time")), "gates"),
+        ("G12 G1 is marked as yours at install time", lambda t: on_line(t, "| G1 |", lambda ln: ln.replace("satisfied by the offline work", "yours at install time")), "gates"),
+        ("G13 the rollback step A1 loses its proof", lambda t: on_line(t, "3. **A1, the card file.**", lambda ln: ln.replace("Proven:", "Checked:")), "gates"),
+        ("G14 the baseline is no longer named in the rollback section", lambda t: t.replace("(i) the baseline", "(i) a list", 1), "gates"),
+        ("G15 D-U1-4 is no longer marked decided", lambda t: on_line(t, "| D-U1-4 ", lambda ln: ln.replace("**decided:**", "**open:**")), "decisions"),
+        ("G16 D-U1-6 is marked decided instead of keeping its default", lambda t: on_line(t, "| D-U1-6 ", lambda ln: ln.replace("default: yes", "decided: yes")), "decisions"),
+        ("G17 the claimed length of the checklist is wrong", lambda t: re.sub(r"it is now\s+\d+\s+lines", "it is now 150 lines", t), "hygiene"),
+        ("G18 the no-automatic-installation sentence is dropped from the checklist", lambda t: kill_words(t, no_auto, None), "decisions"),
+        ("G19 a write-path test name is mistyped in the checklist", lambda t: t.replace("generated config: both modes and a state change touch nothing", "generated config: both modes and a state change touch nothin", 1), "writepath"),
+        ("G20 the checklist no longer names createModeController", lambda t: t.replace("`createModeController`", "`createController`", 1), "writepath"),
+    ]:
+        add("checklist", name, fn, rule)
+    for name, fn, rule in [
+        ("H1 the runbook's 1.2 dashboard path is changed", lambda t: on_line(t, "| the new dashboard's URL path", lambda ln: ln.replace(DASH_URL, "ecco-modes-u2")), "targets"),
+        ("H2 the runbook's 1.2 dashboard title is changed", lambda t: on_line(t, "| the new dashboard's title", lambda ln: ln.replace(DASH_TITLE, "ECCO Modes")), "targets"),
+        ("H3 the sha8 is mistyped in the runbook's 1.2 resource URL row", lambda t: on_line(t, "| the Lovelace resource URL (A2)", lambda ln: ln.replace(sha8, wrong8)), "targets"),
+        ("H4 the runbook's 1.2 .storage row loses the dashboard list", lambda t: on_line(t, "| the `.storage` files read", lambda ln: ln.replace("`.storage/lovelace_dashboards`, ", "")), "targets"),
+        ("H5 the target check (c) of the runbook is mislabelled", lambda t: t.replace("- **(c) step 3.**", "- **(c) step 4.**", 1), "targets"),
+        ("H6 block 1 loses the count of Intelligence-card resources under /local/ecco/", lambda t: t.replace("@($res | Where-Object { $_.url -like '/local/ecco/*ecco-intelligence-card*' }).Count\n", "", 1), "targets"),
+        ("H7 block 1 checks another dashboard path", lambda t: edit_block(t, "lovelace-before", lambda b: b.replace("-eq 'ecco-modes-u1'", "-eq 'ecco-modes-u2'")), "targets"),
+        ("H8 the runbook's 5.5 suggests another dashboard title", lambda t: t.replace("(suggested: `ECCO Modes\n(first look)`)", "(suggested: `ECCO Modes\n(look)`)", 1), "targets"),
+        ("H9 the runbook's step 1b row is removed", lambda t: drop_row(t, "1b"), "shape"),
+        ("H10 block 3 no longer keeps every ecco_intel entity", lambda t: t.replace("-like '*ecco_intel*'", "-like '*ecco_x*'", 1), "shape"),
+        ("H11 the 293 reference count of 5.1b is changed", lambda t: t.replace("293 attribute rows present", "292 attribute rows present", 1), "shape"),
+        ("H12 the 42 reference count of 5.1b is changed", lambda t: on_line(t, "into states gives, offline, exit 0 with 16 of 17 present", lambda ln: ln.replace("42 conditional", "41 conditional")), "shape"),
+        ("H13 the tool name is mistyped in the 5.1b block", lambda t: edit_block(t, shape_cmd, lambda b: b.replace("shape_check", "shape_chek")), "shape"),
+        ("H14 5.1b names a flag that the tool does not have", lambda t: t.replace("`--write-shape <path>`", "`--write-shapes <path>`", 1), "shape"),
+        ("H15 the 5.1b heading is renamed", lambda t: t.replace("### 5.1b Step 1b: the live shape check", "### 5.1b Step 1b: a check", 1), "shape"),
+        ("H16 the expected PRESENT_LIVE count of 5.1b is not all of the declared entities", lambda t: t.replace("PRESENT_LIVE 17\nof 17", "PRESENT_LIVE 16\nof 17", 1), "shape"),
+        ("H17 the runbook's step 4 row checks only the Overview", lambda t: on_line(t, "| 4 | the owner adds ONE module resource", lambda ln: ln.replace("EACH existing dashboard", "the production Overview")), "dashboards"),
+        ("H18 the dashboards-to-check block reads another baseline file", lambda t: edit_block(t, "dashboards-to-check.txt", lambda b: b.replace("sha-before.txt", "sha-after.txt")), "dashboards"),
+        ("H19 the dashboards-to-check file is renamed", lambda t: edit_block(t, "dashboards-to-check.txt", lambda b: b.replace("dashboards-to-check.txt", "list.txt")), "dashboards"),
+        ("H20 G7 is removed from the runbook's gates", lambda t: drop_row(t, "G7"), "gates"),
+        ("H21 RG-F3 is waived instead of resolved in the runbook's G5", lambda t: t.replace("**resolved for U1 only**", "**waived for U1 only**", 1), "decisions"),
+        ("H22 D-U1-2 is no longer marked decided in the runbook", lambda t: on_line(t, "| D-U1-2 |", lambda ln: ln.replace("**DECIDED by the owner on 21 Nov 2026, for U1 only:**", "**to decide:**")), "decisions"),
+        ("H23 D-U1-3 is marked decided in the runbook", lambda t: on_line(t, "| D-U1-3 |", lambda ln: ln.replace("keeps its default", "DECIDED")), "decisions"),
+        ("H24 a write-path test name is mistyped in the runbook", lambda t: t.replace("AC5 the switch never changes helper or service state", "AC5 the switch never changes helper or service stat", 1), "writepath"),
+        ("H25 the runbook drops a write-path test it must name", lambda t: kill_words(t, WRITE_TESTS[5][1], "1.1"), "writepath"),
+        ("H26 the no-automatic-installation sentence is dropped from the runbook", lambda t: kill_words(t, no_auto, None), "decisions"),
+        ("H27 the runbook's 1.1 no longer names canOpenMoreInfo", lambda t: t.replace("(`canOpenMoreInfo`:", "(`canOpen`:", 1), "writepath"),
+    ]:
+        add("runbook", name, fn, rule)
     # the pinned sentences and the coverage keywords: the removal of each is killed
     for n, (doc, scope, phrase) in enumerate(PINNED, 1):
         add(doc, f"P{n} the sentence '{phrase[:46]}' removed from the {doc} {scope}", lambda t, s=scope, ph=phrase: kill_words(t, ph, s), "pinned")
@@ -938,6 +1366,17 @@ NODE_MUTANTS = [   # mutants of the Node test's source (the runbook says what it
     ("N3 the Node test no longer says SKIPPED", lambda s: s.replace("SKIPPED", "not run"), "node"),
 ]
 
+EXTRA_MUTANTS = [   # mutants of the sources the new rules read (the documents say what the card, the example, the ledger and the Node suites hold: these show each claim is checked against them)
+    ("E1 the card's mode buttons call a service", "card", lambda s: s.replace("this._ctl.set(mode)", "this._hass.callService('x', 'y')", 1), "writepath"),
+    ("E2 the example gains a service action", "example", lambda s: s + "\n            tap_action:\n              action: call-service\n", "writepath"),
+    ("E3 the more-info domains gain switch", "card", lambda s: s.replace("['sensor', 'binary_sensor', 'event']", "['sensor', 'switch', 'event']", 1), "writepath"),
+    ("E4 the mode controller reads hass", "card", lambda s: s.replace("  let mode = DEFAULT_MODE;\n  const api = {", "  let mode = DEFAULT_MODE;\n  const hass = null;\n  const api = {", 1), "writepath"),
+    ("E5 the ledger's conditional count changes", "ledger", lambda s: re.sub(r'("NOT_PRESENT_LIVE":\s*)42\b', r"\g<1>43", s, count=1), "shape"),
+    ("E6 a Node test is renamed", "element", lambda s: s.replace("AC5 the switch never changes helper or service state", "AC5 the switch never changes state", 1), "writepath"),
+    ("E7 the example loses an action", "example", lambda s: s.replace("action: more-info", "action: none", 1), "writepath"),
+    ("E8 the ledger's not-checked count changes", "ledger", lambda s: re.sub(r'("NOT_CHECKED_LIVE":\s*)1\b', r"\g<1>2", s, count=1), "shape"),
+]
+
 
 # ---------------------------------------------------------------------------------------------------------------------------------
 # main
@@ -948,6 +1387,7 @@ def main(argv: list[str]) -> int:
     node_src = read(NODE_TEST_REL)
     sources = {tool: read(rel) for tool, (_kind, rel) in TOOLS.items()}
     sources["deploy-ha.ps1"] += "\n" + "\n".join(read(rel) for rel in EXTRA_SOURCES)
+    extra = {key: read(rel) for key, rel in EXTRA_REL.items()}
     path = Path(argv[1]) if len(argv) > 1 else ROOT / CHECKLIST_REL
     print(f"checklist: {path}")
     if not path.is_file():
@@ -956,7 +1396,7 @@ def main(argv: list[str]) -> int:
     checklist = path.read_bytes().decode("utf-8", errors="replace")
     check("the pins could be read from the pin suite", all(pins[k] for k in ("card_size", "card_sha256", "config_size", "config_sha256", "sources", "attribute_rows")), str(pins))
 
-    result = analyse(checklist, runbook, pins, sources, node_src)
+    result = analyse(checklist, runbook, pins, sources, node_src, extra)
     for rule in RULES:
         check(RULE_TITLES[rule], not result[rule], "; ".join(result[rule][:4]))
 
@@ -989,23 +1429,30 @@ def main(argv: list[str]) -> int:
         mutated = mutate(base)
         check(f"{name}: the mutation changes the text", mutated != base)
         if target == "checklist":
-            got = fired(analyse(mutated, runbook, pins, sources, node_src))
+            got = fired(analyse(mutated, runbook, pins, sources, node_src, extra))
         else:
-            got = fired(analyse(checklist, mutated, pins, sources, node_src))
+            got = fired(analyse(checklist, mutated, pins, sources, node_src, extra))
         ok = rule in got
         killed += ok
         check(f"{name}: killed by the rule [{rule}] (fired: {', '.join(sorted(got)) or 'none'})", ok)
     for name, mutate, rule in NODE_MUTANTS:
         mutated = mutate(node_src)
         check(f"{name}: the mutation changes the text", mutated != node_src)
-        got = fired(analyse(checklist, runbook, pins, sources, mutated))
+        got = fired(analyse(checklist, runbook, pins, sources, mutated, extra))
         ok = rule in got
         killed += ok
         check(f"{name}: killed by the rule [{rule}] (fired: {', '.join(sorted(got)) or 'none'})", ok)
-    total = len(mutants) + len(NODE_MUTANTS)
+    for name, key, mutate, rule in EXTRA_MUTANTS:
+        mutated = mutate(extra[key])
+        check(f"{name}: the mutation changes the text", mutated != extra[key])
+        got = fired(analyse(checklist, runbook, pins, sources, node_src, {**extra, key: mutated}))
+        ok = rule in got
+        killed += ok
+        check(f"{name}: killed by the rule [{rule}] (fired: {', '.join(sorted(got)) or 'none'})", ok)
+    total = len(mutants) + len(NODE_MUTANTS) + len(EXTRA_MUTANTS)
     n_cl = sum(1 for m in mutants if m[0] == "checklist")
-    check(f"at least six mutants are run, and every one is killed ({killed} of {total}: {n_cl} of the checklist, {len(mutants) - n_cl} of the runbook, {len(NODE_MUTANTS)} of the Node test)",
-          total >= 6 and killed == total)
+    check(f"at least six mutants are run, and every one is killed ({killed} of {total}: {n_cl} of the checklist, {len(mutants) - n_cl} of the runbook, {len(NODE_MUTANTS)} of the Node test, "
+          f"{len(EXTRA_MUTANTS)} of the card, the example, the ledger and the Node suites)", total >= 6 and killed == total)
     return finish()
 
 
