@@ -449,6 +449,8 @@ def _readiness(load, sd, q, tt) -> tuple[dict, list[str]]:
         for fact in ri.site_facts:
             if getattr(load.site_facts, fact, None) is None:
                 blockers.append(f"SITE_FACT_MISSING:{fact}")
+        if item in q.POWER_ITEMS and sd.inverter_conversion(load.site_facts)[1]:
+            blockers.append("POWER_LOSS_FACTS_INVALID")
         out[item] = _dedupe(blockers)
     unlimited = sorted(k for k in set(emap.readings) | set(emap.signals)
                        if k in sd.FRESHNESS_OVERRIDE_KEYS and limits.get(k) is None)
@@ -466,6 +468,7 @@ def site_check_report(raw: bytes, name: str) -> dict:
                            "the site file is larger than the runtime's safety cap" if too_big else None)
     checks = [{"code": c.code, "level": c.level, "text": c.text} for c in load.checks]
     problems += [f"{c['code']} FAIL" for c in checks if c["level"] == "FAIL"]
+    problems += [f"{c['code']} INVALID" for c in checks if c["code"] == "SITE_INVERTER_CONVERSION" and c["level"] == "WARN"]
     decisions = load.decisions
     drows = _decision_rows(decisions, sd) if decisions is not None else {}
     problems += [f"{lab} INVALID" for lab, row in drows.items() if row["status"] == sd.DecisionStatus.INVALID]

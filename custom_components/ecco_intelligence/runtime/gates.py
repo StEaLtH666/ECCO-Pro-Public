@@ -9,7 +9,9 @@
                      loads with DecisionSet.from_mapping(..., source='site_local') (the only way the runtime ever
                      obtains decisions);
                      its `shadow_runtime` entity map is strict; the V1 `sources` / `forecasts` give the history plan; the
-                     reserve hints in `site` are ignored by the SHADOW path (INFO SITE_HINT_IGNORED)
+                     reserve hints in `site` are ignored by the SHADOW path (INFO SITE_HINT_IGNORED); the optional inverter
+                     conversion facts in `site` (SITE_INVERTER_CONVERSION: no such key, no check; valid, PASS; incomplete or
+                     invalid, WARN naming no value) reach the engine as SiteFacts
     vendor_gate      the kit's VENDOR_MANIFEST.json matches the sha256 of every vendored module and integration file in place
     versions_check   the Home Assistant version and what can be said about the Python version (recorded, never a gate)
 
@@ -32,7 +34,8 @@ from zoneinfo import ZoneInfo
 from intelligence.advisory_contract import MODE, SiteFacts
 from intelligence.config import SiteConfig
 from intelligence.periods import AUTUMN_BACK, SPRING_FORWARD, period_profile
-from intelligence.site_decisions import DecisionSet, DecisionStatus, site_hints_ignored
+from intelligence.site_decisions import (INVERTER_CONVERSION_FACTS, DecisionSet, DecisionStatus, inverter_conversion,
+                                         site_hints_ignored)
 
 from . import history_source, sources
 from .selftest import FAIL, INFO, PASS, WARN, Check
@@ -136,16 +139,26 @@ class SiteLoad:
 
 def _facts(profile: Mapping | None, latitude: object, longitude: object) -> tuple[SiteFacts, SiteConfig]:
     """Site facts only (never the example battery values): the PV array size from the site file, the location from Home
-    Assistant's own configuration, the zone Europe/London."""
+    Assistant's own configuration, the zone Europe/London, and the optional inverter conversion (`site` block keys
+    INVERTER_CONVERSION_FACTS): a key that is absent or null is None, a number is carried as it is (the quality layer judges
+    its bound), and any other JSON value (a string, true / false, a list, an object) is carried as NaN, which can never be
+    a usable value: it is reported, never silently read as absent."""
     def fin(v: object) -> float | None:
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+    def conversion_fact(site_block: object, key: str) -> float | None:
+        v = site_block.get(key) if isinstance(site_block, Mapping) else None
+        if v is None:
+            return None
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else math.nan
     site = profile.get("site") if isinstance(profile, Mapping) else None
     kwp = fin(site.get("pv_array_kwp")) if isinstance(site, Mapping) else None
     kwp = kwp if kwp is not None and kwp > 0 else None
     lat, lon = fin(latitude), fin(longitude)
     lat = lat if lat is not None and -90.0 <= lat <= 90.0 else None
     lon = lon if lon is not None and -180.0 <= lon <= 180.0 else None
-    facts = SiteFacts(pv_array_kwp=kwp, latitude=lat, longitude=lon, tz=SITE_TZ)
+    facts = SiteFacts(pv_array_kwp=kwp, latitude=lat, longitude=lon, tz=SITE_TZ,
+                      **{k: conversion_fact(site, k) for k in INVERTER_CONVERSION_FACTS})
     if lat is not None and lon is not None:
         return facts, SiteConfig(tz=SITE_TZ, pv_array_kwp=kwp, latitude=lat, longitude=lon)
     return facts, SiteConfig(tz=SITE_TZ, pv_array_kwp=kwp)
@@ -202,6 +215,16 @@ def load_site(raw: bytes | None, read_problem: str | None = None, *, latitude: o
                             plan.problem or (f"{len(plan.skipped)} invalid statistic ids are never queried" if plan.skipped
                                              else f"{len(plan.statistic_ids)} statistic ids")))
     facts, cfg = _facts(profile, latitude, longitude)
+    if profile is not None:
+        _conv, problems = inverter_conversion(facts)
+        if problems:
+            # never a value: the fact names and reasons only (WARN, like an INVALID decision: it blocks what it gates)
+            checks.append(Check("SITE_INVERTER_CONVERSION", WARN, "incomplete or invalid (the lossless balance stays; the "
+                                "export and Dump items BLOCK)"))
+            details.append(("SITE_INVERTER_CONVERSION", ", ".join(problems)))
+        elif any(getattr(facts, k) is not None for k in INVERTER_CONVERSION_FACTS):
+            checks.append(Check("SITE_INVERTER_CONVERSION", PASS, "the inverter conversion facts are valid: the power balance "
+                                "is loss-aware"))
     return SiteLoad(profile, decisions, emap, plan, facts, cfg, config_hash, tuple(checks), tuple(details))
 
 
