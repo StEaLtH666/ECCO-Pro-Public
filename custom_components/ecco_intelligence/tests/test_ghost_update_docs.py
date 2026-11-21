@@ -15,10 +15,12 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
   [3] the kit: tools/build_ha_integration.py is run into temporary directories (outside the repository), with no commit and with the
       fixed reference commit; the two SHA256SUMS sha256 values, the file counts and the new and changed file names the documents state
       are those the build produces
-  [4] numbers and names: the two table names, the retention bound, the rows a day (kinds x 26), the incident list size, the two read
-      budgets and the export epsilon are those of the sources
+  [4] numbers and names: the two table names, the retention bound, the rows a day (kinds x the slot cycles of the clock-change day),
+      the incident list size, the two read budgets and the export epsilon are those of the sources, and EVERY mention in either
+      document of a retention period, a rows-a-day figure and the incident list size equals the source constant
   [5] STORE_RECORD: the documents state the semantics (INFO, WARN while an incident is open, PASS only after a verified write, the
-      incident kept) and quote texts the store really produces; the runtime document says the same
+      incident kept) and quote texts the store really produces; the runtime document says the same; the download shows a passing
+      check as the word PASS only (the self-test export), and the runbook says so and says what to look for instead
   [6] no automatic restart: no restart flag or command in any block, the deploy tool has no restart parameter, the restart is the
       owner's, approved separately, and says nothing in the documents restarts Home Assistant
   [7] every PowerShell block starts with cls
@@ -29,7 +31,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
  [11] preconditions: P1 (the L3 WSL kit-equivalence run on the exact kit) is OPEN and says what it must show (the executor reads in the
       download and the log lines in a real Home Assistant); the open set is the same in the runbook and the checklist
  [12] the steps: the same step numbers in both, the same who, an owner go at each live step, the restart with its own approval
- [13] the rollback: RB1 to RB6 in order in both, a proof for each in the runbook, the rollback command with its stamp
+ [13] the rollback: RB1 to RB6 in order in both, a proof for each in the runbook, the rollback command with its stamp, the heavy
+      last resort that is never the first rollback in both, no bare R-number citation anywhere (the install runbook's items are
+      named in full), and the case of a rollback before any restart (S6: ask the owner)
  [14] the owner's items D-U2-1 to D-U2-9 are open in both, never decided here; the two named questions carry the source's own facts
  [15] no entity: the platforms are sensor and binary sensor only, the integration has eleven contract entities, and the files directly
       under the kit's package are the known set (a new platform file would be a new entity)
@@ -40,7 +44,15 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
  [18] quoted tool phrases exist in the tools' sources
  [19] every block sets the variables it uses
  [20] every section the checklist cites exists in the runbook, and every install-runbook row or section the documents cite exists
- [21] mutants (all in memory): each is killed by the rule that exists for it
+ [21] every PowerShell block that calls a tool under tools/ sets its working folder first
+ [22] the incident log lines: the first-failure line is a WARNING and the close line is logged at INFO (derived from the coordinator),
+      so the close line may not show in the log read: the runbook and the checklist say so, say its absence is not a failure and
+      say that P1 and the after-checks record the logger level
+ [23] the write statement: the runbook and the checklist list the same writes (the integration folder, the staging and backup folders,
+      the two tables, store_meta.json, the pause helper) and neither says the pause helper is the only write outside the scorecard file
+ [24] when the tables are created: advice_log at the first advice-log attempt (even if it writes no row), advice_incident by the
+      incident persist after a verified write; the code does so, and the documents say the same in every place that says it
+ [25] mutants (all in memory): each is killed by the rule that exists for it
 
 Usage: python custom_components/ecco_intelligence/tests/test_ghost_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
@@ -90,7 +102,7 @@ SOURCES = {
     "scorecard": "intelligence/scorecard.py", "ghost_compare": "intelligence/ghost_compare.py", "ghost_feed": "intelligence/ghost_feed.py",
     "store": PKG + "/runtime/store.py", "ghost_link": PKG + "/runtime/ghost_link.py", "coordinator": PKG + "/coordinator.py",
     "const": PKG + "/const.py", "drill_suite": PKG + "/tests/test_install_drill.py",
-    "runtime_doc": RUNTIME_DOC_REL, "install": INSTALL_REL,
+    "runtime_doc": RUNTIME_DOC_REL, "install": INSTALL_REL, "selftest": PKG + "/runtime/selftest.py",
 }
 TOOL_KEYS = {"build_ha_integration.py": "build", "ecco_intel_drill.py": "drill", "deploy-ha-kit.ps1": "deploy",
              "ha-status.ps1": "status", "ha-logs.ps1": "logs"}
@@ -136,6 +148,14 @@ TOKEN_RE = re.compile(r"ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{12
 PATH_RE = re.compile(r"\b[A-Za-z]:\\|/[cC]/" + "Users/|(?<![A-Za-z])/" + "Users/|" + r"\\" + "Users" + r"\\")
 COMMIT_RE = re.compile(r"(?<![0-9A-Za-z_])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}(?![0-9A-Za-z_])")
 HEX64_RE = re.compile(r"(?<![0-9A-Za-z_])[0-9a-f]{64}(?![0-9A-Za-z_])")
+TOOL_CALL_RE = re.compile(r"(?<![\w-])tools\\[A-Za-z0-9_.-]+\.(?:py|ps1|psm1)")       # a tool called by its relative path
+BARE_R_RE = re.compile(r"(?<![A-Za-z0-9_-])R[1-8](?![A-Za-z0-9_])")                  # R1 to R8: never this runbook's items (RB1 to RB6)
+MENTIONS = (   # (what, the patterns that capture one mention each in plain text, the key of the source's own constant)
+    ("a retention period", (r"(?<![\d.])(\d+)[- ]days?\b",), "retention"),
+    ("a rows-a-day figure", (r"\b(\d+) rows a day", r"\bat most (\d+) a day\b"), "rows_max"),
+    ("the rows of a normal day", (r"\((\d+) on a normal day\)",), "rows_normal"),
+    ("the incident list size", (r"\bnewest (\d+)\b", r"\bat most (\d+) incidents\b", r"advice_incident \(at most (\d+) rows\)"), "kept"),
+)
 
 DOCS_ROOT = REPO
 if "--docs-root" in sys.argv:
@@ -348,25 +368,39 @@ def rule_kit(rb, cl, S, F):
     return pr
 
 
+def mentions(text: str, patterns) -> list[int]:
+    """Every number the patterns capture in a document's plain text (one capture group each; a thousands space is allowed)."""
+    return [int(m.group(1).replace(" ", "")) for rx in patterns for m in re.finditer(rx, text, re.I)]
+
+
 def rule_numbers(rb, cl, S, F):
     pr = []
     f = F["facts"]
     for label, doc in (("runbook", rb), ("checklist", cl)):
         if not has(doc, f"{f['retention']} days"):
             pr.append(f"{label} lacks the retention bound of {f['retention']} days")
-        if not has(doc, f"{f['kinds'] * 26} rows a day"):
-            pr.append(f"{label} lacks '{f['kinds'] * 26} rows a day'")
+        if not has(doc, f"{f['rows_max']} rows a day"):
+            pr.append(f"{label} lacks '{f['rows_max']} rows a day'")
         for t in f["tables"]:
             if f"`{t}`" not in doc:
                 pr.append(f"{label} lacks the table name `{t}`")
         if not has(doc, f"{f['eps']} kWh"):
             pr.append(f"{label} lacks the export epsilon {f['eps']} kWh")
+        text = P(doc)       # EVERY mention equals the source's constant (not only one of them)
+        for what, patterns, key in MENTIONS:
+            wrong = sorted({n for n in mentions(text, patterns) if n != f[key]})
+            if wrong:
+                pr.append(f"{label}: {what} {wrong} is not the source's {f[key]}")
+        want = f["retention"] * f["rows_max"]
+        for n in mentions(text, (r"\babout (\d+(?: \d{3})+) rows",)):
+            if abs(n - want) > 0.05 * want:
+                pr.append(f"{label}: the table size estimate {n} is not near {want} (the retention x the rows a day)")
     if sorted(f["tables"]) != ["advice_incident", "advice_log"]:
         pr.append(f"the sources create the tables {f['tables']}")
     if not has(rb, f"newest {f['kept']}") or not has(cl, f"at most {f['kept']} incidents"):
         pr.append(f"the incident list size {f['kept']} is not stated")
-    if not has(rb, "25 slot cycles a day") or not has(rb, "26 on the day the clocks go back"):
-        pr.append("the runbook lacks the 25 and 26 slot cycles a day")
+    if not has(rb, f"{f['slots']} slot cycles a day") or not has(rb, f"{f['slots'] + 1} on the day the clocks go back"):
+        pr.append(f"the runbook lacks the {f['slots']} and {f['slots'] + 1} slot cycles a day")
     if not has(rb, f"at most {f['stored_budget']:g} s") or not has(rb, f"at most {f['ghost_budget']:g} s"):
         pr.append(f"the read budgets {f['stored_budget']:g} s and {f['ghost_budget']:g} s are not stated")
     return pr
@@ -391,6 +425,16 @@ def rule_store_record(rb, cl, S, F):
     for phrase in ("returns to PASS only after a verified write", "not a durability or fsync proof"):
         if not has(S["runtime_doc"], phrase):
             pr.append(f"the runtime document lacks '{phrase}'")
+    # the download shows a passing check as the word PASS only: the self-test export returns a text for INFO, WARN and FAIL
+    if "c.level if c.level == PASS else" not in S["selftest"]:
+        pr.append("the self-test export no longer returns only the level for a passing check (the runbook says the download shows PASS only)")
+    for phrase in ("shows a passing check as the single word PASS, without any text", "is not exported anywhere in the download",
+                   "STORE_RECORD: PASS", "advice_incidents.verified_writes", "last_store.advice_verified"):
+        if not has(rb, phrase):
+            pr.append(f"runbook lacks '{phrase}'")
+    for old in ('PASS with "the advice log write is verified"', "(its text:"):
+        if has(rb, old):
+            pr.append(f"runbook still says the PASS text is visible in the download ('{old}')")
     return pr
 
 
@@ -567,6 +611,24 @@ def rule_rollback(rb, cl, S, F):
             pr.append(f"{label} lacks the rollback command with its stamp")
     if not has(s10, "against the baseline") or not has(s10, "the owner's protected full backup"):
         pr.append("the runbook's rollback is not measured against the baseline and the protected backup")
+    for label, doc in (("runbook", rb), ("checklist", cl)):
+        bare = sorted(set(BARE_R_RE.findall(P(doc))))
+        if bare:
+            pr.append(f"{label}: bare R-number citation(s) {bare}: this runbook's items are RB1 to RB6 and an install-runbook item is named in full")
+        for phrase in ("heavy last resort", "never the first rollback"):       # RB6 is the last resort, whatever the wording elsewhere
+            if not has(doc, phrase):
+                pr.append(f"{label} lacks '{phrase}' (the protected backup restore)")
+    if not has(s10, "install runbook's section 7 go / no-go for the first observed runs"):
+        pr.append("RB4 does not name the install runbook's first-run go / no-go in full")
+    # a rollback before any restart: the case is written down, with the owner asked and the reason why
+    if "*S6," not in s10:
+        pr.append("the runbook's special cases have no S6 (a rollback before the restart of step 7)")
+    for phrase in ("before the restart of step 7", "the old code is still running", "RB3 applies", "ask the owner", "recalled, not verified",
+                   "whether RB3 is then needed is S6's question"):
+        if not has(s10, phrase):
+            pr.append(f"the runbook's section 10 lacks '{phrase}' (the rollback before any restart)")
+    if not (has(section(cl, "6"), "before the restart of step 7") and re.search(r"\bS6\b", section(cl, "6"))):
+        pr.append("the checklist's rollback does not say that a rollback before the restart of step 7 leaves RB3 to the owner (S6)")
     return pr
 
 
@@ -692,16 +754,105 @@ def rule_cites(rb, cl, S, F):
     install = S["install"]
     install_heads = {n for _h, n in headings(install)}
     for label, doc in (("runbook", rb), ("checklist", cl)):
-        for tok in re.findall(r"install runbook(?:'s)? ([GRTQ]\d+|\d+)", P(doc)):
+        for tok in re.findall(r"install runbook(?:'s)? (?:section )?([GRTQ]\d+|\d+)", P(doc)):
             if re.fullmatch(r"\d+", tok):
                 ok = tok in install_heads
             else:
                 ok = re.search(r"^\| " + tok + r" \|", install, re.M) is not None
             if not ok:
                 pr.append(f"{label} cites install runbook {tok}, which does not exist")
-    for num in re.findall(r"\bsection (\d+(?:\.\d+)?)", rb):
+    for num in re.findall(r"(?<!install runbook's )(?<!install runbook )\bsection (\d+(?:\.\d+)?)", rb):    # the install runbook's own are checked above
         if num not in heads:
             pr.append(f"the runbook cites its section {num}, which has no heading")
+    return pr
+
+
+def rule_workdir(rb, cl, S, F):
+    """A block is run alone in a fresh console: the first line that calls a tool by its relative path comes after a Set-Location."""
+    pr = []
+    for label, doc in (("runbook", rb), ("checklist", cl)):
+        for i, b in enumerate(ps_blocks(doc), 1):
+            lines = logical_lines(b)
+            for j, ln in enumerate(lines):
+                if TOOL_CALL_RE.search(ln):
+                    if not any(re.match(r"\s*Set-Location\s+\S", earlier) for earlier in lines[:j]):
+                        pr.append(f"{label}: block {i} calls a tool under tools/ before it sets its working folder")
+                    break
+    return pr
+
+
+def rule_log_lines(rb, cl, S, F):
+    pr = []
+    levels = {}
+    for key, text in (("open", "the advice log write failed or could not be verified"), ("close", "the advice log write is verified again")):
+        m = re.search(r'_LOGGER\.(\w+)\(\s*"ECCO Intelligence: ' + re.escape(text), S["coordinator"])
+        levels[key] = m.group(1).upper() if m else None
+    if None in levels.values():
+        return ["the coordinator's incident log lines (the one when an incident opens, the one when it closes) were not found"]
+    opened, closed = levels["open"], levels["close"]
+    for phrase in (f"the first-failure line is a {opened}", f"the close line is logged at {closed}",
+                   f"only if the logger level for the integration allows {closed}", "recalled, not verified for the pinned Core",
+                   f"absence of the {closed} close line is not a failure", "a closed incident is read from the diagnostics download"):
+        if not has(section(rb, "2.3"), phrase):         # where the owner reads what to expect (not only somewhere in the runbook)
+            pr.append(f"runbook 2.3 lacks '{phrase}'")
+    p1 = next((c for c in table_rows(section(rb, "5")) if c[0] == "P1"), None)
+    if p1 is None or not (has(" ".join(p1), "records the logger level") and has(" ".join(p1), f"close line is logged at {closed}")):
+        pr.append("P1 does not say that the close line is logged at INFO and that the run records the logger level")
+    if not has(section(rb, "12"), f"close line is logged at {closed}"):
+        pr.append(f"runbook 12 does not say that the close line is logged at {closed}")
+    if not has(section(rb, "8.10"), "logger level") or not has(section(rb, "8.10"), "not a failure"):
+        pr.append("8.10 does not say that the after-checks record the logger level and that a missing close line is not a failure")
+    if not any(has(" ".join(c), "close line") and has(" ".join(c), "logger level") for c in table_rows(section(rb, "11"))):
+        pr.append("section 11 has no row for a close line that does not show")
+    c2 = section(cl, "2")
+    for phrase in (f"close line logged at {closed}", "its absence is not a failure"):
+        if not has(c2, phrase):
+            pr.append(f"the checklist's section 2 lacks '{phrase}'")
+    if not has(section(cl, "5"), "logger level"):
+        pr.append("the checklist's verification does not say that the log is read at a noted logger level")
+    return pr
+
+
+def rule_write_statement(rb, cl, S, F):
+    """The same list of writes in both documents, and never 'the only write outside the scorecard file is the pause helper'."""
+    pr = []
+    for label, text in (("runbook 2.4", section(rb, "2.4")), ("checklist 2", section(cl, "2"))):
+        for phrase in ("the integration folder", "the staging and backup folders", "scorecard file", "store_meta.json", "pause helper"):
+            if not has(text, phrase):
+                pr.append(f"{label} does not list '{phrase}' among the writes")
+    for label, doc in (("runbook", rb), ("checklist", cl)):
+        if has(doc, "only write outside the scorecard file"):
+            pr.append(f"{label} says the only write outside the scorecard file is the pause helper (the update also replaces the integration folder, "
+                      "writes the staging and backup folders, and store_meta.json is still written)")
+    return pr
+
+
+def rule_lazy_tables(rb, cl, S, F):
+    pr = []
+    sc = S["scorecard"]
+    if not re.search(r"def record_advice\(.*?self\._ensure_advice_log\(\)\s*\n\s*for r in advice_log_rows\(", sc, re.S) \
+            or sc.count("self._ensure_advice_log()") != 1:
+        pr.append("record_advice no longer creates advice_log first, once, before it looks at any row (the documents say: at the first "
+                  "advice-log attempt, even if it writes no row)")
+    if sc.count("self._ensure_incident_table()") != 1 or not re.search(r"def persist_advice_incidents\(.*?self\._ensure_incident_table\(\)", sc, re.S):
+        pr.append("advice_incident is created somewhere other than the incident persist (the documents say: by the incident persist after a verified write)")
+    a_rows = {c[0]: " ".join(c) for c in table_rows(section(rb, "2.1")) if re.fullmatch(r"A\d", c[0])}
+    d2 = {"runbook": " ".join(next((c for c in table_rows(section(rb, "4")) if c[0] == "D-U2-2"), [])),
+          "checklist": " ".join(next((c for c in table_rows(section(cl, "3")) if c[0] == "D-U2-2"), []))}
+    places = (("runbook A2", a_rows.get("A2", ""), ("first advice-log attempt", "even if that attempt writes no row")),
+              ("runbook A3", a_rows.get("A3", ""), ("incident persist", "verified advice write")),
+              ("runbook 2.3", section(rb, "2.3"), ("first advice-log attempt", "even if that attempt writes no row", "incident persist")),
+              ("runbook D-U2-2", d2["runbook"], ("first advice-log attempt", "even if that attempt writes no row", "incident persist")),
+              ("checklist 2", section(cl, "2"), ("first advice-log attempt", "even if that attempt writes no row", "incident persist")),
+              ("checklist D-U2-2", d2["checklist"], ("first advice-log attempt", "even if that attempt writes no row", "incident persist")))
+    for where, text, phrases in places:
+        for phrase in phrases:
+            if not has(text, phrase):
+                pr.append(f"{where} lacks '{phrase}'")
+    for label, doc in (("runbook", rb), ("checklist", cl)):
+        for old in ("first advice write", "by an advice write", "not by the advice write"):
+            if has(doc, old):
+                pr.append(f"{label} still says '{old}' (advice_log is created at the first advice-log attempt, even if it writes no row)")
     return pr
 
 
@@ -710,14 +861,15 @@ RULES = {
     "no_restart": rule_no_restart, "cls": rule_cls, "quotes": rule_quotes, "sentences": rule_sentences, "forbidden": rule_forbidden,
     "preconditions": rule_preconditions, "steps": rule_steps, "rollback": rule_rollback, "decisions": rule_decisions,
     "no_entity": rule_no_entity, "coverage": rule_coverage, "drill": rule_drill, "phrases": rule_phrases, "vars": rule_vars,
-    "cites": rule_cites,
+    "cites": rule_cites, "workdir": rule_workdir, "log_lines": rule_log_lines, "write_statement": rule_write_statement,
+    "lazy_tables": rule_lazy_tables,
 }
 RULE_TITLES = {
     "shape": "[1] both documents exist, are ASCII, the checklist has at most 120 lines, the sections are numbered",
     "tools": "[2] every tool, flag, sub-command and -Action value the documents name exists in the tool's source; Plan, Upgrade and Rollback carry the right flags",
     "kit": "[3] the SHA256SUMS sha256 of both reference builds, the file counts and the new and changed file names are what the build produces",
-    "numbers": "[4] the table names, retention bound, rows a day, incident list size, read budgets and export epsilon are the sources' own",
-    "store_record": "[5] the STORE_RECORD semantics are stated, quote texts the store produces, and agree with the runtime document",
+    "numbers": "[4] the table names, retention bound, rows a day, incident list size, read budgets and export epsilon are the sources' own, in EVERY mention",
+    "store_record": "[5] the STORE_RECORD semantics are stated, quote texts the store produces, and agree with the runtime document; the download shows PASS only",
     "no_restart": "[6] no restart flag or command anywhere; the restart is the owner's, approved separately",
     "cls": "[7] every PowerShell block starts with cls",
     "quotes": "[8] the owner's three quotes are in the runbook, their substance in the checklist",
@@ -725,14 +877,18 @@ RULE_TITLES = {
     "forbidden": "[10] none of the three forbidden phrases, an entity id, an address, a token, a workstation path, a commit id or an unexplained hash",
     "preconditions": "[11] P1 (the L3 WSL run on the exact kit) is OPEN and says what it must show; the open set agrees in both documents",
     "steps": "[12] the same steps and who in both, an owner go at each live step, the restart with its own approval",
-    "rollback": "[13] RB1 to RB6 in order in both, a proof for each, the rollback command with its stamp",
+    "rollback": "[13] RB1 to RB6 in order in both, a proof for each, the rollback command with its stamp, no bare R-number, the heavy last resort, S6",
     "decisions": "[14] D-U2-1 to D-U2-9 are open in both; the two named questions carry the source's own facts",
     "no_entity": "[15] the update creates no entity: the platforms, eleven contract entities, the package's file set",
     "coverage": "[16] every bullet of 'what is NOT established' has a keyword, and the checklist says each",
     "drill": "[17] the drill's statement is made and true: the real drill leaves a state folder with both tables byte-identical",
     "phrases": "[18] the tool phrases the runbook quotes are printed by the tools",
     "vars": "[19] every PowerShell block sets the variables it uses",
-    "cites": "[20] every section and install-runbook row the documents cite exists",
+    "cites": "[20] every section and install-runbook section or row the documents cite exists",
+    "workdir": "[21] every PowerShell block that calls a tool under tools/ sets its working folder first",
+    "log_lines": "[22] the first-failure line is a WARNING and the close line is logged at INFO (the coordinator's own levels): the documents say the close line may not show and that its absence is not a failure",
+    "write_statement": "[23] the runbook and the checklist list the same writes; neither says the pause helper is the only write outside the scorecard file",
+    "lazy_tables": "[24] advice_log is created at the first advice-log attempt, advice_incident by the incident persist after a verified write: the code does so and every place that says it agrees",
 }
 
 
@@ -768,9 +924,16 @@ def kit_facts(base: Path) -> dict:
 def real_facts() -> dict:
     from intelligence import advisory_contract as ac
     from intelligence import scorecard as sc
-    consts = re.search(r"PLATFORMS = \(([^)]*)\)", read_src(SOURCES["const"]))
+    const_src = read_src(SOURCES["const"])
+    consts = re.search(r"PLATFORMS = \(([^)]*)\)", const_src)
+    sched = re.search(r"SCHEDULE_DAILY_LOCAL = \((\d+), (\d+)\)", const_src)
+    slots = 0          # a slot cycle at every full hour, plus the daily time when it is not on the hour
+    if sched:
+        slots = 24 + (1 if int(sched.group(2)) != 0 else 0)
+    kinds = len(sc.ADVICE_LOG_KINDS)
     return {
-        "retention": sc.ADVICE_LOG_RETENTION_DAYS, "kept": sc.ADVICE_INCIDENTS_KEPT, "kinds": len(sc.ADVICE_LOG_KINDS),
+        "slots": slots, "rows_normal": kinds * slots, "rows_max": kinds * (slots + 1),     # the day the clocks go back has one more hour
+        "retention": sc.ADVICE_LOG_RETENTION_DAYS, "kept": sc.ADVICE_INCIDENTS_KEPT, "kinds": kinds,
         "tables": re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", sc.ADVICE_LOG_DDL + sc.ADVICE_INCIDENT_DDL),
         "eps": re.search(r"EXPORT_DIFF_EPS_KWH = ([0-9.]+)", read_src(SOURCES["ghost_compare"])).group(1),
         "ghost_budget": float(re.search(r"PROPOSED_GHOST_BUDGET_S = ([0-9.]+)", read_src(SOURCES["ghost_link"])).group(1)),
@@ -856,6 +1019,12 @@ def sub1(text: str, old: str, new: str) -> str:
     return text.replace(old, new, 1)
 
 
+def subw(text: str, old: str, new: str) -> str:
+    """sub1, but the phrase may wrap over lines: any run of whitespace in the text matches a space of `old` (the first match is replaced)."""
+    rx = r"\s+".join(re.escape(w) for w in old.split())
+    return re.sub(rx, lambda _m: new, text, count=1)
+
+
 def drop_line(text: str, needle: str) -> str:
     return "\n".join(ln for ln in text.split("\n") if needle not in ln)
 
@@ -926,6 +1095,66 @@ def make_mutants(F):
     add("cl", "the checklist grows past 120 lines", lambda t: t + "\n" * 30 + "\n".join(["- more"] * 30), "shape")
     add("cl", "the checklist cites a runbook section that does not exist", lambda t: t.replace("(runbook 10;", "(runbook 77;"), "cites")
     add("rb", "an install runbook row that does not exist is cited", lambda t: sub1(t, "install runbook G4", "install runbook G44"), "cites")
+
+    # --- the second review round: a block's working folder (F1)
+    add("rb", "step 8's log read without its working folder", lambda t: sub1(t, "Set-Location <checkout>\n& $PY -I -B -X utf8 -c", "& $PY -I -B -X utf8 -c"), "workdir")
+    add("rb", "the kit build block without its working folder",
+        lambda t: sub1(t, "Set-Location <checkout>\n& $PY -I -B -X utf8 tools\\build_ha_integration.py --out $KIT --git-sha 0000000",
+                       "& $PY -I -B -X utf8 tools\\build_ha_integration.py --out $KIT --git-sha 0000000"), "workdir")
+    # the incident-close line is logged at INFO (F2)
+    add("rb", "the INFO level of the close line no longer stated", lambda t: subw(t, "the close line is logged at INFO, so it shows", "the close line shows"), "log_lines")
+    add("rb", "the missing close line no longer called not a failure",
+        lambda t: subw(t, "The absence of the INFO close line is not a failure:", "The absence of the INFO close line matters:"), "log_lines")
+    add("rb", "P1 no longer records the logger level", lambda t: subw(t, "the run records the logger level it ran under", "the run records the lines"), "log_lines")
+    add("rb", "the section 11 row for a close line that does not show removed", lambda t: drop_line(t, "| no INFO close line in the log"), "log_lines")
+    add("cl", "the checklist no longer says the close line may not show",
+        lambda t: subw(t, "a close line logged at INFO that may not show at your logger level (its absence is not a failure; runbook 2.3)", "a close line"), "log_lines")
+    # the download shows PASS only (F3)
+    add("rb", "the PASS text said to be visible in the download",
+        lambda t: subw(t, "PASS only after a verified write.", 'PASS only after a verified write (its text: "the scorecard step completed; the advice log write is verified").'),
+        "store_record")
+    add("rb", "the PASS text no longer said to be unexported", lambda t: subw(t, "is not exported anywhere in the download", "is exported"), "store_record")
+    # this runbook's items are RB1 to RB6; an install-runbook item is named in full (F4)
+    add("rb", "RB4's listing comparison cited as R2", lambda t: subw(t, "the listing comparison of RB2 is still empty", "the listing comparison of R2 is still empty"), "rollback")
+    add("rb", "the drill note cites R3 for the previous-code experiment", lambda t: subw(t, "(section 10, RB3)", "(section 10, R3)"), "rollback")
+    add("rb", "RB4 cites the install runbook's R1 and R4 again",
+        lambda t: subw(t, "the install runbook's section 7 go / no-go for the first observed runs: supervision", "the install runbook's R1 and R4: supervision"), "rollback")
+    add("rb", "an install runbook section that does not exist is cited (section 77)",
+        lambda t: subw(t, "install runbook's section 7 go / no-go", "install runbook's section 77 go / no-go"), "cites")
+    # a rollback before any restart (F5)
+    add("rb", "S6 no longer asks the owner", lambda t: subw(t, "So **ask the owner** before skipping RB3", "So skip RB3"), "rollback")
+    add("rb", "S6 removed", lambda t: subw(t, "*S6, a no-go at step 6", "*S9, a no-go at step 6"), "rollback")
+    add("cl", "the checklist no longer leaves RB3 to the owner before the restart", lambda t: subw(t, "runbook 10, S6", "runbook 10"), "rollback")
+    # the writes of the update (F6)
+    add("cl", "the false sentence restored (the only write outside the scorecard file is the pause helper)",
+        lambda t: subw(t, "The one helper the procedure touches is the existing pause helper, which you turn on and off.",
+                       "The only write outside the scorecard file is the pause helper, which you turn on and off (runbook 2.4)."), "write_statement")
+    add("rb", "the staging and backup folders left out of the write statement",
+        lambda t: subw(t, "the staging and backup folders of the Upgrade (A4)", "the Upgrade's folders (A4)"), "write_statement")
+    add("cl", "store_meta.json left out of the checklist's writes", lambda t: subw(t, "with `store_meta.json` still written as before", "with nothing else"), "write_statement")
+    # every mention of a constant, and the RB6 wording (F7)
+    add("rb", "the retention changed in the runbook's bounds row only (D-U2-3)", lambda t: subw(t, "an age bound of 400 days (PROPOSED", "an age bound of 300 days (PROPOSED"), "numbers")
+    add("cl", "the retention changed in the checklist's bounds row only (D-U2-3)", lambda t: subw(t, "the 400-day age bound", "the 300-day age bound"), "numbers")
+    add("rb", "the rows a day changed in section 12 only", lambda t: subw(t, "At most 52 a day", "At most 60 a day"), "numbers")
+    add("cl", "the rows a day changed in the bounds row only (D-U2-3)", lambda t: subw(t, "D-U2-3 | at most 52 rows a day", "D-U2-3 | at most 60 rows a day"), "numbers")
+    add("rb", "the rows of a normal day changed", lambda t: subw(t, "(50 on a normal day)", "(40 on a normal day)"), "numbers")
+    add("rb", "the incident list size changed in 2.3 only", lambda t: subw(t, "(the newest 10)", "(the newest 12)"), "numbers")
+    add("cl", "the incident list size changed in the second table's row only", lambda t: subw(t, "`advice_incident` (at most 10 rows)", "`advice_incident` (at most 12 rows)"), "numbers")
+    add("rb", "the table size estimate changed", lambda t: subw(t, "about 21 000 rows", "about 41 000 rows"), "numbers")
+    add("rb", "'heavy' removed everywhere from the runbook (the protected backup restore)", lambda t: t.replace("heavy ", ""), "rollback")
+    add("cl", "'heavy' removed everywhere from the checklist (the protected backup restore)", lambda t: t.replace("heavy ", ""), "rollback")
+    add("rb", "'never the first rollback' removed everywhere", lambda t: t.replace("never the first rollback", "the last step"), "rollback")
+    add("cl", "'never the first rollback' removed", lambda t: t.replace("never the first rollback", "not the first"), "rollback")
+    # when the tables are created (F8)
+    add("rb", "A2 back to 'created by the first advice write'",
+        lambda t: subw(t, "created at the first advice-log attempt of the running integration, even if that attempt writes no row",
+                       "created by the first advice write of the running integration"), "lazy_tables")
+    add("rb", "D-U2-2 loses the incident persist",
+        lambda t: subw(t, "`advice_incident` by the incident persist that runs right after a verified write, only when",
+                       "`advice_incident` only after the first verified write, only when"), "lazy_tables")
+    add("cl", "the checklist's second table loses the incident persist",
+        lambda t: subw(t, "created by the incident persist that runs right after a verified write", "created only after a verified write"), "lazy_tables")
+    add("rb", "A3 says 'not by an advice write' again", lambda t: subw(t, "not by the advice-log attempt itself", "not by an advice write"), "lazy_tables")
     return out
 
 
@@ -948,6 +1177,19 @@ def make_source_mutants():
     def drop_store_text(src):
         return src.replace("PASS needs a verified write", "PASS needs a write")
 
+    def close_line_warning(src):
+        return src.replace('_LOGGER.info("ECCO Intelligence: the advice log write is verified again',
+                           '_LOGGER.warning("ECCO Intelligence: the advice log write is verified again')
+
+    def pass_text_exported(src):
+        return src.replace('c.level if c.level == PASS else f"{c.level}: {c.short}"', 'f"{c.level}: {c.short}"')
+
+    def no_early_create(src):
+        return src.replace("self._ensure_advice_log()\n            for r in advice_log_rows(", "for r in advice_log_rows(")
+
+    def reader_creates_table(src):
+        return src.replace("    def advice_incidents(self) -> list[dict]:", "    def advice_incidents(self) -> list[dict]:\n        self._ensure_advice_log()", 1)
+
     return [
         ("deploy", "the deploy tool without the -ReferenceKit parameter", drop_param, "tools"),
         ("build", "the build tool without the --git-sha flag", drop_gitsha, "tools"),
@@ -955,6 +1197,10 @@ def make_source_mutants():
         ("deploy", "the deploy tool's ValidateSet without Upgrade", drop_validate, "tools"),
         ("drill_suite", "the drill suite without the check the runbook relies on", drop_drill_check, "drill"),
         ("store", "the store no longer says PASS needs a verified write", drop_store_text, "store_record"),
+        ("coordinator", "the close line is logged at WARNING", close_line_warning, "log_lines"),
+        ("selftest", "the self-test export returns the text of a passing check", pass_text_exported, "store_record"),
+        ("scorecard", "record_advice no longer creates advice_log before it looks at any row", no_early_create, "lazy_tables"),
+        ("scorecard", "a reader creates advice_log too", reader_creates_table, "lazy_tables"),
     ]
 
 

@@ -62,8 +62,8 @@ not U1, R9, Stage 3 or the PV gate, each of which has its own track.
 | # | Artefact | Where | How it gets there | Reversible by |
 |---|---|---|---|---|
 | A1 | the Intelligence integration folder, replaced as a whole by the kit (57 files; 5 new, 5 changed, 47 identical to a kit built from the merged base) | `/config/custom_components/ecco_intelligence/` | `tools/deploy-ha-kit.ps1 -Action Upgrade` (stage, verified backup, atomic swap, `ha core check`; no restart) | `-Action Rollback -BackupStamp` (section 10) |
-| A2 | the table `advice_log`, created by the first advice write of the running integration | inside `/config/ecco/intelligence/state/scorecard.sqlite3` | the running integration, at a slot cycle's store step; no tool creates it | it stays, unused, after a rollback (section 10) |
-| A3 | the table `advice_incident` (at most 10 rows), created only after a verified advice write that follows an incident | the same file | the running integration; not at start-up, not when the file is opened, not by an advice write | the same |
+| A2 | the table `advice_log`, created at the first advice-log attempt of the running integration, even if that attempt writes no row | inside `/config/ecco/intelligence/state/scorecard.sqlite3` | the running integration, at a slot cycle's store step; no tool creates it | it stays, unused, after a rollback (section 10) |
+| A3 | the table `advice_incident` (at most 10 rows), created by the incident persist that runs right after a verified advice write, and only when a closed incident is to be written | the same file | the running integration; not at start-up, not when the file is opened, not by the advice-log attempt itself | the same |
 | A4 | the staging folder and the backup folder of the Upgrade run | `/config/ecco/staging/<stamp>/` and `/config/ecco-backups/<stamp>/` | the deploy tool; nothing is ever deleted | kept; the owner cleans up when the owner decides |
 
 Not written by this update: the site file, any helper, entity, automation, package, schedule, dashboard, resource, firmware,
@@ -104,19 +104,25 @@ Assistant log. Nothing new appears on a dashboard and no entity is added.
   full hour and 21:30, local time), 26 on the day the clocks go back, so at most 52 rows a day (50 on a normal day). Rows older
   than an age bound of 400 days are deleted at write time, so the table settles near 21 000 rows (a few MB). Every slot cycle's
   advice is its own row, also when it equals the last (no deduplication; the one skip is the same advice published again inside
-  the validity of its own previous row within one slot cycle). The table is created by the first advice write, not at start-up.
+  the validity of its own previous row within one slot cycle). The table is created at the first advice-log attempt, even if that
+  attempt writes no row, not at start-up.
 - **A verified write.** After the commit, the connection that wrote the rows reads each back by its id and compares kind, issue
   time and content hash. That proves exactly this much and is **not** a durability or fsync proof (section 12).
 - **STORE_RECORD** (a self-test check in the download). Before a slot cycle has run after the start it is not shown. INFO (never
-  PASS) while a run has written and verified nothing yet. PASS only after a verified write (its text: "the scorecard step
-  completed; the advice log write is verified"). **WARN while an advice write incident is open** ("advice log not verified (`<class name>`): `<n>`
-  slot(s) missed, `<n>` failed/unverified since start; PASS needs a verified write"): the failure is shown honestly. It
-  returns to PASS only after a **later verified write**. A slot cycle that wrote nothing changes nothing. After a restart nothing
-  is assumed: PASS shows only after that run's own first verified write.
+  PASS) while a run has written and verified nothing yet. PASS only after a verified write. **The download shows a passing check as
+  the single word PASS, without any text:** the self-test export (`runtime/selftest.py`, `as_dict`) returns a text only for INFO,
+  WARN and FAIL. The store does record a longer text for that PASS ("the scorecard step completed; the advice log write is
+  verified"), but it is not exported anywhere in the download, so an installer cannot read it there. What to look for:
+  `STORE_RECORD: PASS` and, as the proof that it follows a verified write, `advice_incidents.verified_writes` of at least 1 and
+  `last_store.advice_verified` true (check 3 of 8.10). **WARN while an advice write incident is open** (exported in full: "advice log
+  not verified (`<class name>`): `<n>` slot(s) missed, `<n>` failed/unverified since start; PASS needs a verified write"): the
+  failure is shown honestly. It returns to PASS only after a **later verified write**. A slot cycle that wrote nothing changes
+  nothing. After a restart nothing is assumed: PASS shows only after that run's own first verified write.
 - **Incidents.** A failed or unverified advice write (or a store step that times out or raises) opens an incident, kept in memory
   (the newest 10): when it began and last failed, the attempts, the slot cycles missed, the exception class name as the reason
   (never a message) and the issue times of the advice that could not be written. After a later verified write the incident is
-  closed and **kept**, and written to `advice_incident` (a plain commit, not read back). The download shows `advice_incidents`
+  closed and **kept**, and written to `advice_incident` by the incident persist that runs right after that verified write (a plain
+  commit, not read back). The download shows `advice_incidents`
   (the open incident, the closed ones, `verified_writes`, `last_persist`) and, in its `stored` member, what the table holds
   (read-only, in the executor, at most 5 s). The counters `advice_write_failures` and `advice_unverified_writes` are history and
   are never reset; `advice_current_failure` is 1 while an incident is open.
@@ -124,10 +130,15 @@ Assistant log. Nothing new appears on a dashboard and no entity is added.
   schedule against Intelligence's logged advice. It says `NO_ADVICE_LOGGED` or `INSUFFICIENT_HISTORY` until enough advice and history
   are logged (the block needs at least a day): that is expected for the first day and is not a failure. Its numbers are site-derived (dates, pence, SOC, kWh): a
   download is kept in `<OFFLINE_EVIDENCE_DIR>` and reviewed before it is shared.
-- **Log lines** (class names only, never a message, a path or a value): one warning when an incident opens and one line when it
-  closes.
+- **Log lines** (class names only, never a message, a path or a value): one line when an incident opens and one when it closes.
+  The first-failure line is a WARNING and shows at the usual log level; the close line is logged at INFO, so it shows in the log
+  read only if the logger level for the integration allows INFO. What the usual level is, and how the pinned Core treats a custom
+  integration's lines, is recalled, not verified for the pinned Core. **The absence of the INFO close line is not a failure:** a
+  closed incident is read from the diagnostics download (`advice_incidents`, its `closed` list and its `stored` member), which
+  does not depend on the logger. P1 and the after-checks (8.10) record the logger level their log reads ran under.
 - **Slot cycle time.** The advice write and its read-back run inside the slot cycle's store step, so a slot cycle's `store_s` grows by
-  the write's own time. The install runbook's R3 bounds (slot `total_s` p95 at most 30 s, maximum at most 60 s) still apply.
+  the write's own time. The cycle-time bounds of the install runbook's section 7 go / no-go for the first observed runs (slot
+  `total_s` p95 at most 30 s, maximum at most 60 s) still apply.
 
 ### 2.4 The write statement
 
@@ -136,7 +147,10 @@ scorecard file, as before. The new writes are the advice rows (A2) and the incid
 else. It writes nothing to Home Assistant entities, helpers, schedules, the inverter or the dongle, calls no service, and fires no
 event; the Ghost block and the stored-incident read open the file read-only (`mode=ro`). The old scorecard behaviour and the
 store's start-up are unchanged: opening the file creates neither table. The deploy tool writes A1 and A4 only, and never touches
-the site file or the state folder (it reads their hashes before and after and refuses if they changed).
+the site file or the state folder (it reads their hashes before and after and refuses if they changed). In one line, the writes of
+this update are the integration folder (A1, replaced by the kit), the staging and backup folders of the Upgrade (A4), and, at run
+time, the two tables in the scorecard file (A2 and A3) with `store_meta.json` written as before. The one helper the procedure
+touches is the existing pause helper, which the owner switches (2.1); the integration itself writes to no helper.
 
 ### 2.5 What does not change
 
@@ -178,7 +192,7 @@ Decisions are the owner's. This table lists them; it decides none. "Open" means 
 | # | Item | What it is, as built | Status |
 |---|---|---|---|
 | D-U2-1 | the durable write | the integration newly writes advice rows to `advice_log` in the scorecard file (one per kind per slot cycle) | **open**: nothing is installed without the owner's acceptance; the owner directed per-slot records with bounded retention and no deduplication |
-| D-U2-2 | the lazily created tables | `advice_log` at the first advice write, `advice_incident` only after the first verified write that follows an incident, neither at start-up | **open** |
+| D-U2-2 | the lazily created tables | `advice_log` at the first advice-log attempt, even if that attempt writes no row; `advice_incident` by the incident persist that runs right after a verified write, only when a closed incident is to be written; neither at start-up | **open** |
 | D-U2-3 | per-slot logging and its bounds | at most 52 rows a day, an age bound of 400 days (PROPOSED: an engineering suggestion, not an owner value), at most 10 incidents kept | **open**: confirm or change; a change is a code change, so a new kit, new hashes, and the reviews, P1 and this document repeated |
 | D-U2-4 | STORE_RECORD semantics | INFO before the first verified write, WARN while an incident is open, PASS only after a verified write, the incident kept (section 2.3) | **open**: confirm the wording and that it is the behaviour the owner directed |
 | D-U2-5 | the restart | one restart, short, approved separately, the owner watching; an outage of more than about 5 minutes sets the supervision latch (install runbook 6) | **open**: the owner chooses the window |
@@ -193,7 +207,7 @@ The update is **NOT READY** while any line below is OPEN. At the time of writing
 
 | # | Precondition | Status |
 |---|---|---|
-| P1 | **The L3 (WSL) kit-equivalence reference run, repeated on the exact kit.** It has not been repeated since the kit changed. It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit installs through the same route (`deploy-ha-kit.ps1 -Target Test`), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) at least three slot cycles in the real Home Assistant, with two advice rows per slot, `advice_verified` true, STORE_RECORD absent then PASS, and the tables created lazily; (c) **the executor reads in the diagnostics download observed in the real Home Assistant**: the stored-incident read and the Ghost block's read of the advice log run in the executor, within their budgets, with no blocking-I/O or slow-callback warning from the integration; (d) **the log lines observed in the real Home Assistant**: the warning when an incident opens and the line when it closes, class names only, induced on the isolated instance only (never on production); (e) an incident open at a restart is gone after it (only the logged warning remains); (f) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN** |
+| P1 | **The L3 (WSL) kit-equivalence reference run, repeated on the exact kit.** It has not been repeated since the kit changed. It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit installs through the same route (`deploy-ha-kit.ps1 -Target Test`), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) at least three slot cycles in the real Home Assistant, with two advice rows per slot, `advice_verified` true, STORE_RECORD absent then PASS, and the tables created lazily; (c) **the executor reads in the diagnostics download observed in the real Home Assistant**: the stored-incident read and the Ghost block's read of the advice log run in the executor, within their budgets, with no blocking-I/O or slow-callback warning from the integration; (d) **the log lines observed in the real Home Assistant**: the WARNING when an incident opens and the line when it closes (the close line is logged at INFO, so it shows only if the logger level for the integration allows INFO: the run records the logger level it ran under, and the close line is observed only where that level allows it), class names only, induced on the isolated instance only (never on production); (e) an incident open at a restart is gone after it (only the logged warning remains); (f) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN** |
 | P2 | independent review of the code (the advice log, the verified write, the incident health), findings fixed, the kit unchanged since the reviewed build (proven by the build comparison of section 3) | closed (offline) |
 | P3 | independent review of these documents and their suite | **OPEN** |
 | P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN** |
@@ -293,7 +307,7 @@ Set-Content -Encoding utf8 (Join-Path $MOCK '.ecco_mock_config_root') 'mock'
 **What the drill proves, exactly.** On a mock root, the swap steps (install, upgrade, rollback, uninstall) leave the site file, the state
 folder (with whatever scorecard file it holds, the two new tables included) and every other integration byte-identical: their hashes
 are compared before and after each step. The suite of this runbook repeats that with a scorecard file that really holds both
-tables. The drill does **not** run the previous kit on such a file; that was checked once, offline, on synthetic data (section 10, R3).
+tables. The drill does **not** run the previous kit on such a file; that was checked once, offline, on synthetic data (section 10, RB3).
 It never touches a real Home Assistant.
 
 Run the offline suites of install runbook 2 on the exact commit (the runtime root and the engine root, one at a time), the
@@ -504,11 +518,15 @@ A live read, with the owner's own go. The owner downloads the diagnostics as `di
 
 ```powershell
 cls
+$H = '<production alias>'
 $PY = '<PY>'
 $E = '<OFFLINE_EVIDENCE_DIR>\u2-baseline'
 $F = "$E\diagnostics-restart.json"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
+Set-Location <checkout>
 & $PY -I -B -X utf8 -c "import json, sys; d = json.load(open(sys.argv[1], encoding='utf-8-sig')); d = d.get('data', d); c = d.get('counters', {}); a = d.get('advice_incidents') or {}; s = a.get('stored') or {}; print('status', d.get('status')); print('self_test FAIL', [k for k, v in (d.get('self_test') or {}).items() if str(v).startswith('FAIL')]); print('STORE_RECORD', (d.get('self_test') or {}).get('STORE_RECORD')); print('advice counters', c.get('advice_write_failures'), c.get('advice_unverified_writes'), c.get('advice_current_failure')); print('advice_incidents present', bool(a), 'verified_writes', a.get('verified_writes'), 'open', a.get('open') is not None, 'closed', len(a.get('closed') or []), 'stored', s.get('status'), len(s.get('incidents') or [])); print('last_store advice', {k: v for k, v in (d.get('last_store') or {}).items() if k.startswith('advice')}); print('budget_exceeded', c.get('budget_exceeded'), 'exceptions', c.get('exceptions'))" $F
-.\tools\ha-logs.ps1 -SshHost '<production alias>' -Lines 400 -Pattern ecco_intelligence 6>&1 | Out-File -Encoding utf8 "$E\log-restart.txt"
+.\tools\ha-logs.ps1 -SshHost $H -Lines 400 -Pattern ecco_intelligence 6>&1 | Out-File -Encoding utf8 "$E\log-restart.txt"
 ```
 
 Expected while paused: status PAUSED; `self_test FAIL []` (the VENDOR_MANIFEST check passes on the new kit, STORE_WRITABLE passes);
@@ -529,12 +547,15 @@ poll-driven step or the next minute's tick (install runbook 7, step 3); the firs
 
 Wait for at least the next two slot times (allow about two and a half hours), then the owner downloads the diagnostics as
 `diagnostics-after-1.json` (and again as `-2` after the second slot cycle), and the coordinator reads each with the block of 8.8 (change
-`$F`), and the log again with `-Pattern ecco_intelligence` into `log-after.txt`. Expected, and each a check:
+`$F`), and the log again with `-Pattern ecco_intelligence` into `log-after.txt`. The log read notes the logger level it ran under (the
+owner states it; with no logger setting made it is Home Assistant's own default, recalled, not verified for the pinned Core). Expected, and
+each a check:
 
 1. **Status SHADOW with a fresh computed result.** `status` is a computed one (an item without its decisions or fresh inputs is BLOCKED, as
    before), `mode` SHADOW, `applies_nothing` true; no `SELF_TEST_FAILED`; `budget_exceeded` and `exceptions` 0.
-2. **STORE_RECORD as designed.** Absent before the first slot cycle; after it, PASS with "the advice log write is verified" (INFO only if
-   that slot cycle had nothing to write); never WARN unless an incident is open, which is the designed honest failure (section 11).
+2. **STORE_RECORD as designed.** Absent before the first slot cycle; after it, `PASS` (the download shows the word only, without text: see
+   2.3; that the PASS follows a verified write is read in check 3) (INFO only if that slot cycle had nothing to write); never WARN
+   unless an incident is open, which is the designed honest failure (section 11).
 3. **The advice rows grow by two per slot cycle.** In the download, `last_store` shows `advice_rows` 2 and `advice_verified` true for the
    latest slot cycle, and `advice_incidents.verified_writes` has grown by one per slot cycle since the un-pause (one verified write of
    two rows each). The table itself is not read in these steps.
@@ -546,8 +567,10 @@ Wait for at least the next two slot times (allow about two and a half hours), th
    explained by the inputs (time, tariff, readings), never by this update. Offline, the L2 suites pin the published entities
    byte-identical to a reference run of the same inputs; live, this is a reading, not a proof.
 7. **No error or budget line.** The log shows no warning or error from the integration (in particular none about the advice log and no
-   blocking-I/O warning); `cadence.refresh_suspended_cpu` false; `cycle_stats` slot rows within the install runbook's R3 bounds, with
-   `store_s` read beside `total_s` (the update adds the write to the slot cycle).
+   blocking-I/O warning); `cadence.refresh_suspended_cpu` false; `cycle_stats` slot rows within the cycle-time bounds of the install
+   runbook's section 7 go / no-go for the first observed runs (slot `total_s` p95 at most 30 s, maximum at most 60 s), with `store_s`
+   read beside `total_s` (the update adds the write to the slot cycle). The INFO close line of a closed incident need not show (2.3):
+   its absence is not a failure.
 8. **The write statement holds.** Supervision stays SUPERVISED and stable with the heartbeat age nominal, every write enable, arm and
    schedule is as in the baseline, the manual write counter is unchanged, and the pause helper is off: nothing in this update
    writes to a Home Assistant entity, helper, schedule, the inverter or the dongle (section 2.4).
@@ -595,7 +618,7 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
 
    It verifies the backup against its `BACKUP_SHA256SUMS`, stages and verifies the restore copy, backs up the current tree, swaps,
    verifies in place and runs `ha core check`; it never restarts. Proof: the PASSED block (`Restored` and `HA check : passed`), and an
-   independent comparison of the installed folder with the baseline (RB2 below):
+   independent comparison of the installed folder with the baseline (the block below):
 
    ```powershell
    cls
@@ -616,11 +639,13 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
    (a suite check, with a scorecard file that holds both tables); and one offline experiment of this preparation (scratch only,
    synthetic data, not a repository suite) had the previous scorecard and store code open a file holding both tables, pass the
    start-up writable gate, record and score further slots and report its counts, with `PRAGMA integrity_check` ok and both tables
-   unchanged. It has not been run live, and no suite runs the previous code. A live check after R3: STORE_WRITABLE passes, the first slot
+   unchanged. It has not been run live, and no suite runs the previous code. A live check after RB3: STORE_WRITABLE passes, the first slot
    cycle records, and no new incident of the previous kit appears.
 4. **RB4, un-pause and re-read.** After the checks of RB3 the owner turns the pause helper off; the status computes again; the baseline's UI
-   reads (the install runbook's R1 and R4: supervision, write enables, the counter) are as before. Proof: the status is a
-   computed SHADOW one, and the listing comparison of R2 is still empty.
+   reads (the install runbook's section 7 go / no-go for the first observed runs: supervision stays SUPERVISED and stable with the
+   heartbeat age nominal, and nothing else changed, that is the manual write counter, every write enable, arm and schedule, and the
+   TOU slots, as in the baseline) are as before. Proof: the status is a computed SHADOW one, and the listing comparison of RB2 is
+   still empty.
 5. **RB5, optionally drop the two tables, on a copy only.** No tool in this repository drops them on the host and this runbook invents
    none: the tables may stay (a few MB at most). To see the documented statement work, use a copy of the scorecard file (the owner's file taken out of the protected backup by the owner,
    or a copy read with the integration paused under its own go; never the live file) in a scratch folder and, with the Python 3.12
@@ -635,10 +660,20 @@ lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's p
 
 **Special cases.** *S1, the Upgrade stops before the swap* ("nothing installed changed"): nothing to roll back; record the message,
 un-pause. *S2, the tool rolled itself back after the swap* ("was rolled back", verified): compare the installed folder with the baseline
-as in R2; no restart is needed because no restart has happened; un-pause. *S3, ROLLBACK NOT CONFIRMED*: stop; touch nothing; the staging
-and backup folders are kept; the owner decides (R2 with the stamp, or R6). *S4, the restart outage exceeds about 5 minutes*: the
-supervision latch may be set; recovery is a supervised dongle reboot by the owner (install runbook 6), then R1 to R4 if the owner chooses.
-*S5, the pause helper was left on or turned off by mistake*: record the time and the state, put it back, and re-read the status.
+as in RB2; no restart has happened since the swap, so whether RB3 is then needed is S6's question; un-pause only after the owner has
+answered it. *S3, ROLLBACK NOT CONFIRMED*: stop; touch nothing; the staging and backup folders are kept; the owner decides (RB2 with
+the stamp, or RB6). *S4, the restart outage exceeds about 5 minutes*: the supervision latch may be set; recovery is a supervised
+dongle reboot by the owner (install runbook 6), then RB1 to RB4 if the owner chooses. *S5, the pause helper was left on or turned off
+by mistake*: record the time and the state, put it back, and re-read the status. *S6, a no-go at step 6, or any rollback after the
+swap and before the restart of step 7*: RB1 and RB2 follow as always. If Home Assistant has not restarted since the swap, the old
+code is still running in the process (custom integrations load only at start-up: the install runbook's section 6, and the deploy
+tool's own line says Home Assistant loads or forgets custom integration code only at a restart), the same reasoning as S2, and RB3
+would not be needed to take the new code out; if a restart has happened (step 7 or later), RB3 applies as written. The install
+runbook does not say that a rollback before any restart needs none: its section 11 says "Restart with approval, then verify" after
+a rollback, and the deploy tool prints RESTART REQUIRED after a Rollback too. Nor does anything offline show that the running
+process loaded no module of the new kit between the swap and the rollback (recalled, not verified). So **ask the owner** before
+skipping RB3, record the answer, and read the proofs of RB3 (no `advice_incidents` block, no FAIL in `self_test`, the same eleven
+entities) either way.
 
 ## 11. What a first-look failure looks like, and what it means
 
@@ -650,6 +685,7 @@ supervision latch may be set; recovery is a supervised dongle reboot by the owne
 | STORE_RECORD WARN "advice log not verified (`<class name>`)" | an advice write failed or could not be read back: the designed honest display; no published value is affected | record the class name and the counts; read `advice_incidents`; whether to roll back is the owner's decision |
 | STORE_RECORD WARN "the scorecard step exceeded the time budget" or "failed" | the slot cycle's store step timed out or raised (the real database's write latency is unknown); an incident is open | record `store_s` of the slot rows and the class name; owner's decision |
 | STORE_RECORD stays INFO after several slot cycles | nothing was written: no advice to log, or no slot cycle has computed | read the status and the reason codes; not a defect by itself |
+| no INFO close line in the log although an incident closed | the close line is logged at INFO and shows only if the logger level for the integration allows INFO (2.3) | not a failure: read the closed incident from the diagnostics download (`advice_incidents`, `closed` and `stored`) and record the logger level |
 | `advice_incidents.stored` says ERROR or UNAVAILABLE | the read-only read of the incident table failed or timed out (a class name or `TIME_BUDGET`) | record it; diagnostics only; the integration is unaffected |
 | `ghost` says `NO_ADVICE_LOGGED` or `INSUFFICIENT_HISTORY` | not enough logged advice or history yet | wait a day; expected |
 | `ghost` says `UNAVAILABLE` with `BUSY` or `TIME_BUDGET`, or `ERROR` | a download asked while a Ghost job ran, or it outlived its 30 s budget, or it failed (a constant reason, never a message) | download again; record the reason; diagnostics only |
@@ -675,7 +711,8 @@ Say these plainly in every report about this update.
   then lives only in the one warning logged when it opened (the class name) and, until the restart, in memory and the download.
   An incident written to the table can be pruned: the table keeps the newest 10 by the text of the first failure time, so after the clock
   has been stepped backwards a new, older incident is reported persisted and pruned at once (a known limit, diagnostics only).
-- **The log lines** (the warning when an incident opens, the line when it closes) have never been seen in a real Home Assistant.
+- **The log lines** (the warning when an incident opens, the line when it closes) have never been seen in a real Home Assistant, and the
+  close line is logged at INFO, so it may not show at the logger level in use.
 - **The diagnostics download's executor reads** (the stored-incident read and the Ghost block) have never run in a real Home Assistant:
   a blocking-I/O warning is not excluded until P1.
 - **Rows per day on the real engine are unmeasured.** At most 52 a day is a bound, not a measurement; BLOCKED rows are logged too. The

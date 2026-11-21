@@ -34,20 +34,22 @@ The kit you install is built with its own commit: it differs from these in two `
 |---|---|
 | the integration's code | the folder `/config/custom_components/ecco_intelligence/` is replaced by the kit (5 new files, 5 changed, 47 identical to the merged base's) |
 | a Home Assistant restart | one, yours, approved separately, short (an outage over about 5 minutes sets the supervision latch) |
-| a durable write | per-slot advice rows in `advice_log` inside the existing scorecard file: at most 52 rows a day, an age bound of 400 days, about 21 000 rows (a few MB) |
-| a second small table | `advice_incident` (at most 10 rows), created only after a verified write that follows a failed one |
-| what you will see | STORE_RECORD INFO then PASS after the first verified write, **WARN while an incident is open**, PASS again only after a later verified write; an `advice_incidents` block and the Ghost block in the diagnostics download; two log lines |
+| a durable write | per-slot advice rows in `advice_log` inside the existing scorecard file: at most 52 rows a day, an age bound of 400 days, about 21 000 rows (a few MB); the table is created at the first advice-log attempt, even if that attempt writes no row |
+| a second small table | `advice_incident` (at most 10 rows), created by the incident persist that runs right after a verified write that follows a failed one, only when a closed incident is to be written |
+| what you will see | STORE_RECORD INFO then PASS after the first verified write (the download shows the word PASS only), **WARN while an incident is open**, PASS again only after a later verified write; an `advice_incidents` block and the Ghost block in the diagnostics download; two log lines: the incident-open WARNING, and a close line logged at INFO that may not show at your logger level (its absence is not a failure; runbook 2.3) |
 
 **Not changed:** the eleven entities and every published value, the mode, helpers, schedules, packages, dashboards, the site file, the dongle,
-the inverter, the time-series database. **No entity, helper or service is created** (RG-F3: section 3). The only write outside the scorecard
-file is the pause helper, which you turn on and off (runbook 2.4).
+the inverter, the time-series database. **No entity, helper or service is created** (RG-F3: section 3). The writes of this update, in one
+line (runbook 2.1 and 2.4): the integration folder (replaced by the kit), the staging and backup folders of the Upgrade, and, at run time,
+the two tables in the scorecard file, with `store_meta.json` still written as before. The one helper the procedure touches is the existing
+pause helper, which you turn on and off.
 
 ## 3. Your acceptance items (I decide none)
 
 | # | Item | Your ruling |
 |---|---|---|
 | D-U2-1 | the new durable write (advice rows in the scorecard file) | open |
-| D-U2-2 | both tables created lazily, neither at start-up | open |
+| D-U2-2 | both tables created lazily, neither at start-up: `advice_log` at the first advice-log attempt (even if that attempt writes no row), `advice_incident` by the incident persist after a verified write | open |
 | D-U2-3 | at most 52 rows a day, the 400-day age bound (PROPOSED, not your value), at most 10 incidents; a change means a new kit and a repeat of P1 | open |
 | D-U2-4 | the STORE_RECORD wording above is what you directed | open |
 | D-U2-5 | the restart window | open |
@@ -77,17 +79,19 @@ file is the pause helper, which you turn on and off (runbook 2.4).
 
 Status SHADOW and fresh; STORE_RECORD absent, then PASS after the first verified write; `last_store` shows 2 advice rows and verified for each slot
 cycle, `verified_writes` +1 per slot cycle; no incident, no failure counter; eleven entities and no suffix; the log has no error, budget or
-blocking-I/O line; slot cycle times within the install runbook's R3 bounds; every published value read against the baseline (a difference is
+blocking-I/O line, read at a noted logger level (the INFO close line of a closed incident may not show: not a failure); slot cycle times
+within the cycle-time bounds of the install runbook's section 7 (slot `total_s` p95 at most 30 s, maximum at most 60 s); every published value read against the baseline (a difference is
 explained by the inputs); supervision, write enables and the manual write counter as in the baseline. A deliberate-failure drill is
 **offline only**.
 
 ## 6. Rollback, in order (runbook 10; each proven against the step 1 baseline)
 
 1. **RB1 pause** (pause helper on). 2. **RB2 restore the previous kit:** `deploy-ha-kit.ps1 -Action Rollback -BackupStamp <stamp>`; proof: the
-installed folder's hashes equal the baseline's. 3. **RB3 restart** (yours, separate approval); proof: no `advice_incidents` block, no FAIL. The two tables
+installed folder's hashes equal the baseline's. 3. **RB3 restart** (yours, separate approval; if the rollback comes before the restart of step 7, whether it is needed is your call:
+runbook 10, S6); proof: no `advice_incidents` block, no FAIL. The two tables
 stay, unused, harmless to the previous kit (the drill proves the state folder is untouched; one offline experiment on synthetic data opened such a file
 with the previous code). 4. **RB4 un-pause and re-read:** a computed SHADOW status; the comparison still empty. 5. **RB5 optionally drop the two tables, on a
-copy only:** no host tool exists; the tables may stay. 6. **RB6 the protected backup restore:** your decision, the heavy last resort (it restarts Home
+copy only:** no host tool exists; the tables may stay. 6. **RB6 the protected backup restore:** your decision, the heavy last resort and never the first rollback (it restarts Home
 Assistant and returns everything, the scorecard file included, to backup time).
 
 ## 7. Blockers
