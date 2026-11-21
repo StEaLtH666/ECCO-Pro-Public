@@ -883,7 +883,15 @@ def main() -> int:
               own.isascii() and not IPV4.search(own_text) and not TOKEN_SHAPE.search(own_text) and not ENTITY_ID_LITERAL.search(own_text) and not USER_PATH.search(own_text))
     finally:
         sc.close()
-    return finish()
+    print("")
+    print(f"{PASSED[0]} PASS, {len(FAILURES)} FAIL")
+    if FAILURES:
+        print(f"{len(FAILURES)} check(s) FAILED:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        return 1
+    print("all checks passed")
+    return 0
 
 
 def finish() -> int:

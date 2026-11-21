@@ -1570,7 +1570,15 @@ def main(argv: list[str]) -> int:
     n_cl = sum(1 for m in mutants if m[0] == "checklist")
     check(f"at least six mutants are run, and every one is killed ({killed} of {total}: {n_cl} of the checklist, {len(mutants) - n_cl} of the runbook, {len(NODE_MUTANTS)} of the Node test, "
           f"{len(EXTRA_MUTANTS)} of the card, the example, the ledger and the Node suites, {len(TOOL_MUTANTS)} of the live shape check tool)", total >= 6 and killed == total)
-    return finish()
+    print("")
+    print(f"{PASSED[0]} PASS, {len(FAILURES)} FAIL")
+    if FAILURES:
+        print(f"{len(FAILURES)} check(s) FAILED:")
+        for f in FAILURES:
+            print(f"  - {f}")
+        return 1
+    print("all checks passed")
+    return 0
 
 
 def finish() -> int:
