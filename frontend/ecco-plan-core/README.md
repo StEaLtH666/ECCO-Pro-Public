@@ -294,6 +294,10 @@ package index exports changes that bundle (measured), so import it from `./gentl
   test pins the banned words and the one import). It changes no published entity, helper, schedule or mode, and says `actuationSupported: false`.
 - **A current instead of a rate**: with `battery: { volts, minVolts, maxChargeAmps }` the advice also carries `rateAmps`, the rate at the lowest given
   voltage, never above the current limit; none without a valid voltage.
+- **Cautions that ride along** (`warnings`; they never change the rate, the outcome or the reason): `CEILING_AGE_UNKNOWN` (a safe ceiling given with no
+  age is taken as current, the open item "a named ceiling passed without an age is trusted" above, now said where the advice is read) and
+  `TOP_OF_CHARGE_TAIL` (at a 100 % target the battery may keep charging for a while after the reading reaches 100; the plan only reserves that time before the
+  deadline, and stopping at the first reading of 100 would cut it off: `NOTHING_TO_CHARGE` at 100 is a statement about the reading, not a stop order).
 
 What it is not: it does not make the target certain (`guarantee: 'NONE'`), it does not know the real taper, top-of-charge behaviour, efficiency or low-rate
 response (assumptions, see the parameter table), and nothing here applies a rate. The offline replay tool `intelligence/tools/gentle_replay.py` runs this

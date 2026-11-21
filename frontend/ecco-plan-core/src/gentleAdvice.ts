@@ -40,6 +40,14 @@ export type AdviceReason =
   | "INVALID_INPUT"
   | "NO_SETPOINT";
 
+/** A caution that rides along with the advice and never changes it (the rate, the outcome and the reason are the same with or without it). */
+export type AdviceWarningCode = "CEILING_AGE_UNKNOWN" | "TOP_OF_CHARGE_TAIL";
+
+export interface AdviceWarning {
+  code: AdviceWarningCode;
+  text: string;
+}
+
 /** Every reason the advice can carry (a closed list; the tests pin that nothing else is ever returned). */
 export const ADVICE_REASONS: readonly AdviceReason[] = [
   "RATE_GENTLEST", "RATE_AT_PRACTICAL_MINIMUM", "RATE_AT_SAFE_MAXIMUM", "BEST_EFFORT_AT_RISK", "BEST_EFFORT_UNREACHABLE", "BEST_EFFORT_DEADLINE_PASSED",
@@ -117,6 +125,8 @@ export interface GentleAdvice {
   explanation: string[];
   /** Every code of the underlying decision, the primary one included. */
   codes: GentleCode[];
+  /** Cautions about a labelled limitation that applies to this input (none changes the advice): a ceiling taken as current without an age, a 100 % target's tail. */
+  warnings: AdviceWarning[];
   /** The underlying decision, for audit. */
   decision: GentleDecision;
   actuationSupported: false;
@@ -146,6 +156,27 @@ function currentFrom(rateW: number | null, b: BatteryElectrics | null | undefine
   const limit = isNum(b.maxChargeAmps) && b.maxChargeAmps >= 0 ? b.maxChargeAmps : Number.MAX_VALUE;
   const amps = ampsFromPower(rateW, lowest, limit);
   return amps === null ? null : round1(amps);
+}
+
+/**
+ * The labelled limitations that apply to this input, said where the reader sees the advice. Nothing here changes a rate: a safe ceiling given with no age is
+ * trusted as current (a limit that changed or went quiet is not noticed), and at a 100 % target the battery may go on charging after the reading reaches 100.
+ */
+function warningsOf(input: GentleAdviceInput): AdviceWarning[] {
+  const out: AdviceWarning[] = [];
+  if (input === null || typeof input !== "object") return out;
+  const ceilings: unknown[] = Array.isArray(input.ceilings) ? input.ceilings : [];
+  const undated: string[] = [];
+  for (const c of ceilings as Array<{ name?: unknown; watts?: unknown; ageMin?: unknown } | null>) {
+    if (c !== null && typeof c === "object" && isNum(c.watts) && c.watts >= 0 && (c.ageMin === undefined || c.ageMin === null)) undated.push(String(c.name));
+  }
+  if (undated.length > 0) {
+    out.push({ code: "CEILING_AGE_UNKNOWN", text: "These safe ceilings came with no age and are taken as current: " + undated.join(", ") + ". A limit that changed, or a reading that went quiet, would not be noticed." });
+  }
+  if (isNum(input.targetSocPct) && input.targetSocPct >= 100) {
+    out.push({ code: "TOP_OF_CHARGE_TAIL", text: "At a 100 % target the battery may keep charging for a while after the reading reaches 100 (the top of charge is the BMS's own business). The plan only reserves that time before the deadline; stopping at the first reading of 100 would cut it off." });
+  }
+  return out;
 }
 
 function marginsOf(input: GentleAdviceInput, d: GentleDecision): AdviceMargins {
@@ -233,6 +264,7 @@ export function adviceFromDecision(d: GentleDecision, input: GentleAdviceInput):
     summary: "",
     explanation: d.reasons.slice(),
     codes: d.codes.slice(),
+    warnings: warningsOf(input),
     decision: d,
     actuationSupported: false,
     actuationReason: ACTUATION_REASON,

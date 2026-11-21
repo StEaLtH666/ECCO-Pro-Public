@@ -432,6 +432,55 @@ test("monotone through the unmodified gentle profile and with a learned capacity
   }
 });
 
+// ---- the cautions that ride along --------------------------------------------------------------------------------------------------------
+
+test("warnings: a safe ceiling given with no age is said to be taken as current (and only those); a dated one is not; the advice itself does not change", () => {
+  const plain = advise();
+  assert.deepEqual(plain.warnings.map((w) => w.code), ["CEILING_AGE_UNKNOWN"]);
+  assert.match(plain.warnings[0]!.text, /owner_maximum, battery_max_charge/);
+  assert.doesNotMatch(plain.warnings[0]!.text, /grid_charge_current/, "an unknown ceiling is not a ceiling that is trusted");
+  const dated = advise({ ceilings: [{ name: "a", watts: 5000, ageMin: 0 }, { name: "b", watts: 6200, ageMin: 5 }, { name: "c", watts: null }] });
+  assert.deepEqual(dated.warnings, []);
+  const mixed = advise({ ceilings: [{ name: "a", watts: 5000, ageMin: 3 }, { name: "b", watts: 6200 }, { name: "c", watts: 7000, ageMin: null }] });
+  assert.match(mixed.warnings[0]!.text, /: b, c\./);
+  assert.equal(advise({ ceilings: [{ name: "a", watts: 5000, ageMin: 3 }, { name: "b", watts: 6200 }] }).rateW, advise({ ceilings: [{ name: "a", watts: 5000, ageMin: 3 }, { name: "b", watts: 6200, ageMin: 3 }] }).rateW, "a warning never changes the rate");
+  assert.equal(plain.rateW, 4100);
+  assert.match(advise({ ceilings: [{ name: "z", watts: 0 }] }).warnings[0]!.text, /: z\./, "a ceiling of zero is a known ceiling");
+  assert.deepEqual(advise({ ceilings: [] }).warnings, [], "no ceiling at all, nothing taken as current");
+  assert.deepEqual(advise({ ceilings: [{ name: "x", watts: -5 }, { name: "y", watts: Number.NaN }] }).warnings, [], "an invalid figure is not a ceiling that is trusted");
+});
+
+test("warnings: a 100 percent target carries the top-of-charge caution on every kind of advice, a lower target does not", () => {
+  const dated: NamedCeiling[] = [{ name: "a", watts: 6000, ageMin: 1 }];
+  for (const over of [{}, { socPct: 100 }, { socPct: null }, { ceilings: [{ name: "a", watts: 1500, ageMin: 1 }] }, { elapsedMin: 360 }] as Partial<GentleAdviceInput>[]) {
+    const a = advise({ targetSocPct: 100, ceilings: dated, ...over });
+    assert.ok(a.warnings.some((w) => w.code === "TOP_OF_CHARGE_TAIL"), JSON.stringify(over));
+    assert.match(a.warnings.find((w) => w.code === "TOP_OF_CHARGE_TAIL")!.text, /keep charging for a while after the reading reaches 100/);
+  }
+  assert.deepEqual(advise({ targetSocPct: 99, ceilings: dated }).warnings, []);
+  assert.deepEqual(advise({ targetSocPct: 80, ceilings: dated }).warnings, []);
+  const both = advise({ targetSocPct: 100 });
+  assert.deepEqual(both.warnings.map((w) => w.code), ["CEILING_AGE_UNKNOWN", "TOP_OF_CHARGE_TAIL"]);
+});
+
+test("warnings never change the advice: with and without the cautions' triggers the rate, the outcome and the reason are the model's, and bad input has none", () => {
+  const r = rng(2468);
+  for (let n = 0; n < 300; n++) {
+    const input = randomInput(r);
+    const a = adviseGentleRate(input);
+    const dated = adviseGentleRate({ ...input, ceilings: input.ceilings.map((c) => ({ ...c, ageMin: 1 })) });
+    assert.equal(a.rateW, dated.rateW);
+    assert.equal(a.reason, dated.reason);
+    assert.equal(a.outcome, dated.outcome);
+    assert.ok(Array.isArray(a.warnings));
+    assert.ok(a.warnings.every((w) => (w.code === "CEILING_AGE_UNKNOWN" || w.code === "TOP_OF_CHARGE_TAIL") && w.text.length > 20));
+    assert.ok(!dated.warnings.some((w) => w.code === "CEILING_AGE_UNKNOWN"));
+  }
+  assert.deepEqual(adviseGentleRate(null as unknown as GentleAdviceInput).warnings, []);
+  assert.deepEqual(adviseGentleRate({ ...base, ceilings: "x" as unknown as NamedCeiling[] }).warnings, []);
+  assert.deepEqual(adviseGentleRate({ ...base, ceilings: [null, 3] as unknown as NamedCeiling[] }).warnings, []);
+});
+
 // ---- the rate as a current -------------------------------------------------------------------------------------------------------------
 
 test("the same rate as a current: at the lowest pack voltage, never above the current limit, null when the voltage is unknown or invalid", () => {

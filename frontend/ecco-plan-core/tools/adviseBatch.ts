@@ -5,7 +5,7 @@
 //
 //   in : { "cases": [ { "id": "any string", "input": <GentleAdviceInput> }, ... ] }
 //   out: { "results": [ { "id", "advice", "reason", "outcome", "status", "rateW", "rateAmps", "neededW", "minRateW", "safeMaxW", "limitedBy",
-//                         "deadlineInMin", "finishInMin", "marginMin", "targetWillBeMissed", "degraded", "codes", "summary" } | { "id", "error" } ] }
+//                         "deadlineInMin", "finishInMin", "marginMin", "targetWillBeMissed", "degraded", "codes", "warnings", "summary" } | { "id", "error" } ] }
 //
 // Run with Node 22.18+ or 24 (type stripping): node frontend/ecco-plan-core/tools/adviseBatch.ts < cases.json
 import { readFileSync } from "node:fs";
@@ -57,6 +57,7 @@ for (const c of cases) {
       targetWillBeMissed: a.targetWillBeMissed,
       degraded: a.degraded,
       codes: a.codes,
+      warnings: a.warnings.map((w) => w.code),
       summary: a.summary,
     });
   } catch (e) {
