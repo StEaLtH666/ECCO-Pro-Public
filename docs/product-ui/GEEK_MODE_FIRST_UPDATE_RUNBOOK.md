@@ -1208,7 +1208,7 @@ the step 1 and 1b rows, G4, section 7) and the runbook (G4 of section 3, the ste
 values rule word for word, where an unknown, unavailable or failed safety-relevant state is never a note, and the round 4 and round 5 statements that made a recorded
 self_test a note under a proposed default are kept as the record of those rounds and marked superseded; only the two documents and the checklist suite changed (no code
 and no generated asset: the five pinned hashes were recomputed first and last and are unchanged, and the live shape check and its suite are as reviewed), the checklist
-is 200 lines (188 before, limit 200), and the checklist suite has 1226 checks (1041 at the first commit of round 6, 837 before it) and 596 of 596 mutants killed (505 at the first commit, 404 before it).
+is 200 lines (188 before, limit 200), and the checklist suite has 1289 checks (1226 at the second commit of round 6, 1041 at the first, 837 before it) and 626 of 626 mutants killed (596, 505, 404).
 A focused independent review of that first commit (verdict NOT_READY, one MAJOR) then found three things, all fixed in the same documents and suite: the STOP item for the status was too vague, so it now
 reads anything but ALL of mode SHADOW, `applies_nothing` strictly true, the contract version the catalogue declares, the fresh and the watchdog binary sensors on, a state that is one of the eight words the
 catalogue lists and is not STALE, STARTING, PAUSED or SELF_TEST_FAILED (PAUSED stays a STOP that asks the owner) and a last update within the catalogue's freshness limit of 1200 seconds, with `absent` added
