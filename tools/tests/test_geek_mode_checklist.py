@@ -37,21 +37,30 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
  [16] the live shape check (step 1b): the step row in both step tables, the runbook section 5.1b and its command line, the extended block 3, the reference counts of
       the 14 Nov listing (derived from the committed ledger), and the stop text; the tool it names exists and has the flags and exit codes the documents say.
       Round 5 (the review of round 4): block 3's append of the undeclared ecco_intel states is pinned line by line and in its order (F2); NOT_CHECKED_LIVE fails
-      closed unless --allow-not-checked, the self_test NOTE title and the proposed default are the tool's own words (F3, F4: each claim is checked against the tool's source)
+      closed unless --allow-not-checked, the self_test NOTE title and the tool's printed `proposed default` line are the tool's own words (F3, F4: each claim is checked against the tool's source;
+      round 6: the documents call that wording superseded, the tool is preserved as reviewed)
  [17] the write-path statement: every Node test it names exists under that exact name; what it says of the card's mode switch, the `canOpenMoreInfo` domains and
       the actions of the example is true of their sources
  [18] the check of every existing dashboard after the global resource: the block that writes `dashboards-to-check.txt` from the baseline, and the three questions.
       Round 5 (F1): the catch-all row, the header of three answer columns and the three empty cells of every row are pinned line by line in that block, and the rule that the
       coordinator confirms every row yes, yes, yes before step 5 is pinned in 5.4, in both step 4 rows and in checklist 5 (F5: item 1 says it is done at step 4, before step 5)
  [19] the release gates (G1 to G7 of runbook 3, each marked) and what the rollback is measured against (the baseline, the protected backup)
- [20] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
+ [20] (round 6, the owner's ruling of 21 Nov 2026 on the baseline and step 1b stops) the STOP, NOTE and values paragraphs are in the checklist (4.1), runbook 5.1b and runbook 6 word for
+      word; each of the nine STOP items is in each place; the NOTE paragraph lists no unknown, unavailable or failed state before its closing sentence 'Unknown, unavailable or failed
+      safety-relevant states are never notes.'; the values sentence (the shape tool never clears a value; the coordinator reads the values) is there; gate G4 says the baseline is saved AND no
+      STOP condition of the list holds (both documents); the step 1 and step 1b rows of both step tables point to the rule; the sentence that supersedes the tool's printed `proposed default` line
+      is in the checklist and runbook 5.1b; `proposed default` and the old confirm-at-the-final-GO wording appear only in a sentence that says superseded; the pins of the old wording are replaced by
+      stricter ones of the new wording, and 'you have not ruled on it yet', 'or its state noted if not' and 'the owner has not ruled on it' are forbidden
+ [21] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
       not exist, a forbidden word, a changed rollback order, a dropped statement, a flag that does not exist, a removed step, a quoted tool
       phrase that the tool never prints, an address, a token, an entity id, a runbook with its rollback order changed, a runbook heading that is
       gone, and (round 4) every mutant of the review of round 3 (a forbidden deploy flag, a mistyped sha8 in each place it is written, a wrong
       type, a dropped Require admin or --before or stop, a swapped order wording) and a removal of each pinned sentence and of each coverage
       keyword: each is killed by the rule that exists for it. Round 5 (review of round 4): the dashboards-to-check block without its catch-all row, its
       answer columns or its header; block 3 without `+ $more`, with another filter word, without the line, with the append after the write; the tool's source
-      without the flag, with another NOTE title, without the fail-closed term, with another proposed-default sentence
+      without the flag, with another NOTE title, without the fail-closed term, with another proposed-default sentence. Round 6 (the owner's ruling of 21 Nov 2026): each of the nine STOP items dropped in
+      each of the three places, the NOTE paragraph, its closing sentence, the values sentence and the SHADOW-with-a-fresh-result words dropped, a safety-relevant state moved into the NOTE list, the
+      old G4 wording and the old confirm-at-the-final-GO wording put back, the supersession sentence dropped, the step 1 and 1b rows pointing to the old shorter list
 
 Usage: python tools/tests/test_geek_mode_checklist.py [CHECKLIST_FILE]
 The optional argument names another checklist (this is how the suite is shown to fail on a checklist with a wrong hash).
@@ -120,8 +129,41 @@ def read(rel: str) -> str:
 # ---------------------------------------------------------------------------------------------------------------------------------
 FORBIDDEN_WORDS = ("fully enforced", "guaranteed", "safe to install")
 NOTE_TITLE = "NOTE (free-form self-test check codes under the declared self_test attribute; recorded, not a failure)"   # round 5 (F4): the tool prints it, the runbook quotes it
+# the live shape check tool's own printed line, preserved as reviewed: the documents call that wording superseded by the owner's ruling of 21 Nov 2026 (round 6)
 PROPOSED_DEFAULT = ("proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; "
                     "anything else UNDECLARED or any unexplained absence is a STOP")
+# ---- round 6 (the owner's ruling of 21 Nov 2026 on the baseline and step 1b stops): the canonical text, word for word as the coordinator wrote it; the documents carry it verbatim
+STOP_LEAD = "STOP (change nothing, ask the owner):"
+STOP_P = ("STOP (change nothing, ask the owner): Core not running; the Intelligence status not SHADOW with a fresh result; the status, freshness or watchdog enti"
+           "ty unknown or unavailable; any self-test check that reads a failure, unknown or unavailable; any control entity of the earlier supervised installs (th"
+           "e write enables, the arm and schedule switches, the manual write counter, the TOU edit helper) or the pause helper absent, unknown or unavailable; the"
+           " shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence); a baseline copy that is not byte-exact;"
+           " anything that cannot be read.")
+STOP_ITEMS = (   # the nine STOP conditions of the ruling (a control entity of the earlier installs and the pause helper are two), in order
+    "Core not running",
+    "the Intelligence status not SHADOW with a fresh result",
+    "the status, freshness or watchdog entity unknown or unavailable",
+    "any self-test check that reads a failure, unknown or unavailable",
+    "any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, the TOU edit helper)",
+    "or the pause helper absent, unknown or unavailable",
+    "the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence)",
+    "a baseline copy that is not byte-exact",
+    "anything that cannot be read",
+)
+NOTE_LEAD = "NOTE (recorded, shown to the owner, never hidden):"
+NOTE_P = ("NOTE (recorded, shown to the owner, never hidden): informational findings only: the names of the check codes under a recorded self_test (shape only, a"
+          " note only while every check value reads as passing), the declared conditional attribute rows that are legitimately empty, informational log lines; ea"
+          "ch note is written in the evidence with why it is informational. Unknown, unavailable or failed safety-relevant states are never notes.")
+NEVER_NOTES = "Unknown, unavailable or failed safety-relevant states are never notes."
+NOTE_BAD_WORDS = ("unknown", "unavailable", "failed", "failure", "absent", "missing", "not running", "not shadow")   # none may be a note: the NOTE paragraph holds none before its closing sentence
+VALUES_P = "The shape tool sees only names and types, so it can never clear a value: the coordinator reads the values in the captured states and applies this list."
+SUPERSEDED_S = ("The live shape tool still prints a line beginning `proposed default` and calls a self_test note `not a failure`: that wording is shape-only (names and"
+                " types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026: the tool's note never clears a v"
+                "alue, the coordinator reads the values in `states-before.json` and applies the list, and where the list says STOP nothing proceeds.")
+G4_TEXT = "the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds"   # gate G4, in both documents (it no longer says "or its state noted if not")
+CL_POINTER = "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026)"   # the checklist's step 1 and 1b rows point to the rule
+RB_POINTER = "any STOP condition of the list in 5.1b and section 6 (the owner's ruling of 21 Nov 2026)"   # the runbook's step 1 and 1b rows point to the rule
+OLD_RULE_PHRASES = ("proposed default", "confirms or changes it at the final go", "confirms or changes at the final go", "confirm or change the proposed default")   # lower case: only in a sentence that says superseded
 BLOCK3_MORE = "$more = @($index.Keys | Where-Object { $_ -like '*ecco_intel*' -and $ids -notcontains $_ } | Sort-Object | ForEach-Object { $index[$_] })"   # round 5 (F2)
 BLOCK3_APPEND = "$out = @($out) + $more"
 BLOCK3_WRITE = "ConvertTo-Json -InputObject $out -Depth 20 | Out-File -Encoding utf8 \"$E\\states-$Tag.json\""
@@ -288,7 +330,6 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "5.1", "The file holds values: it stays in <OFFLINE_EVIDENCE_DIR> and never enters a repository"),
     ("checklist", "4", "live shape check: block 3 (the state read), then the offline tool geek_mode_live_shape_check.py on states-before.json (runbook 5.1b)"),
     ("checklist", "4", "exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained"),
-    ("checklist", "4", "anything UNDECLARED, a declared entity missing or an unexplained absence: stop and ask you (the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected)"),
     ("checklist", "4", "The second holds the commands of steps 1b, 3, 4 and 6"),
     # ---- T4 the write-path statement
     ("runbook", "1.1", "Write-path statement (checked again in round 4; no change to the card)"),
@@ -366,17 +407,8 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "4", "any declared entity missing or not checked"),
     ("runbook", "4", "exit 0 and the counts of 5.1b (17 of 17 present, NOT_CHECKED 0)"),
     ("checklist", "4", "exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained, 0 not checked"),
-    ("checklist", "4", "a declared entity not checked is a stop too"),
     ("runbook", "5.1b", "The tool sets such a path apart from the failures, in a separate section titled NOTE (free-form self-test check codes under the declared self_test attribute; recorded, not a failure), with names only, and it does not change the exit code"),
-    ("runbook", "5.1b", "Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP"),
-    ("runbook", "5.1b", "The default is the coordinator's proposal and the owner has not ruled on it; the tool implements exactly it and does not widen it"),
     ("runbook", "5.1b", "a dotted path under any other declared attribute (for example advice.<x>), a self_test attribute on an entity that does not declare it, any other undeclared entity or attribute, a missing source entity, an unexplained absence and a NOT_CHECKED_LIVE entity all stay failures"),
-    ("runbook", "5.1b", "A self_test note is not counted as UNDECLARED: it is the proposed default of (2) below"),
-    ("runbook", "4", "a self_test note excepted, the proposed default of 5.1b"),
-    ("checklist", "4", "Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP"),
-    ("checklist", "4", "a recorded self_test is a note under the proposed default of this row"),
-    ("checklist", "7", "you also confirm or change the proposed default of step 1b"),
-    ("runbook", "13", "Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP"),
     ("runbook", "13", "the fixture-built states exit 0 including the self_test note"),
     ("runbook", "13", "the 14 Nov listing converted back exits 0 only with --allow-not-checked"),
     ("runbook", "13", "that exit is 0 only with --allow-not-checked; without it the tool now exits 1 on that one not checked entity"),
@@ -384,6 +416,49 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "5.1b", "so the output stays in the evidence folder (<OFFLINE_EVIDENCE_DIR>) and is never pasted into a repository or a chat"),
     ("runbook", "5.1b", "Values never appear, and neither does any entity id that the catalogue does not declare and that is not named ecco_intel (those states are only counted)"),
     ("runbook", "13", "Round 5 (21 Nov 2026: the fixes of the independent review of round 4"),
+    # ---- round 6 (the owner's ruling of 21 Nov 2026): these REPLACE the ten pins of the old wording (a self_test note as a proposed default that the owner confirms at the final GO, and its
+    # step 1b stop list) with stricter pins of the new wording; the STOP, NOTE and values paragraphs themselves are checked word for word by rule [20], in three places
+    ("checklist", "4", "any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026), not only the tool's exit 1 (anything UNDECLARED, a declared entity missing or not checked, an unexplained absence: stop and ask you; the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected)"),
+    ("checklist", "4", "the tool's note never clears a value"),
+    ("checklist", "4", "and the coordinator reads the values in states-before.json (the status entity's state, mode, applies_nothing and last update; every self_test check value; the freshness and watchdog entities; each control entity and the pause helper: state and last_changed) and finds no STOP condition of the list in 4.1"),
+    ("checklist", "4.1", "the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence)"),
+    ("checklist", "4.1", "a note only while every check value reads as passing"),
+    ("checklist", "4.1", "Unknown, unavailable or failed safety-relevant states are never notes."),
+    ("checklist", "4.1", "the coordinator reads the values in the captured states and applies this list"),
+    ("checklist", "4.1", "still prints a line beginning proposed default and calls a self_test note not a failure: that wording is shape-only (names and types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026"),
+    ("checklist", "4.1", "the tool's note never clears a value, the coordinator reads the values in states-before.json and applies the list, and where the list says STOP nothing proceeds"),
+    ("checklist", "7", "the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds"),
+    ("checklist", "7", "the stop and note rules of 4.1 are your ruling of 21 Nov 2026, not an open default"),
+    ("runbook", "3", "the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds"),
+    ("runbook", "3", "the status, freshness and watchdog entities, every control entity of the earlier supervised installs and the pause helper are present and readable (none absent, unknown or unavailable), each with its state and last_changed recorded"),
+    ("runbook", "4", "and the coordinator has read the values in states-before.json and finds no STOP condition of the list"),
+    ("runbook", "4", "the tool's note, being shape-only, never clears a value"),
+    ("runbook", "5.1", "Record from it, offline, the values that the coordinator reads for the STOP and NOTE list of 5.1b: the Intelligence status entity (its state, its mode and applies_nothing attributes, when it was last updated, and every check value under its self_test attribute)"),
+    ("runbook", "5.1", "the freshness and watchdog entities (state and last_changed), the pause helper (state and last_changed) and each control entity of the earlier installs (state and last_changed)"),
+    ("runbook", "5.1", "An id shown as absent is recorded, not guessed; for the pause helper or a control entity it is a STOP (5.1b)"),
+    ("runbook", "5.1b", "The tool decides only the shape of the data; these rules decide whether the installation goes on"),
+    ("runbook", "5.1b", "Unknown, unavailable or failed safety-relevant states are never notes."),
+    ("runbook", "5.1b", "the coordinator reads the values in the captured states and applies this list"),
+    ("runbook", "5.1b", "the coordinator reads and records the status entity's state, mode, applies_nothing, its last update and every self_test check value; the freshness and watchdog entities; each control entity of the earlier installs and the pause helper: state and last_changed"),
+    ("runbook", "5.1b", "still prints a line beginning proposed default and calls a self_test note not a failure: that wording is shape-only (names and types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026"),
+    ("runbook", "5.1b", "the tool's note never clears a value, the coordinator reads the values in states-before.json and applies the list, and where the list says STOP nothing proceeds"),
+    ("runbook", "5.1b", "That is the tool's shape-only wording, superseded as stated above: the names are a note only while every check value in states-before.json reads as passing, and a check that reads a failure, unknown or unavailable is a STOP"),
+    ("runbook", "5.1b", "the tool counts such entities in a NOTE, which is shape-only and clears nothing"),
+    ("runbook", "5.1b", "a note of the list below only while the rows are legitimately empty: an entity that reads unknown or unavailable is judged by the STOP list, never by this count"),
+    ("runbook", "5.1b", "for any other entity the coordinator reads an absence on it with care, repeats the read while Intelligence is publishing, and stops and asks the owner when it cannot tell"),
+    ("runbook", "5.1b", "If the entity is one that the STOP list names (the status, freshness or watchdog entity, a control entity of the earlier installs, the pause helper), unknown or unavailable is a STOP"),
+    ("runbook", "5.1b", "Stop and note rules, the owner's ruling of 21 Nov 2026 (the same text is in section 6 and in checklist 4.1)"),
+    ("runbook", "6", "The baseline STOP and NOTE rules, the owner's ruling of 21 Nov 2026 (the same text is in 5.1b and in checklist 4.1)"),
+    ("checklist", "4.1", "Stop and note rules, the owner's ruling of 21 Nov 2026"),
+    ("runbook", "6", "a STOP condition of the baseline list below holds (and, at any later step, the Intelligence status is no longer what the baseline recorded)"),
+    ("runbook", "6", "Unknown, unavailable or failed safety-relevant states are never notes."),
+    ("runbook", "6", "the coordinator reads the values in the captured states and applies this list"),
+    ("runbook", "12", "The owner also ruled on 21 Nov 2026 on the stop and note rules of the baseline and step 1b (5.1b, section 6, checklist 4.1): decided, not an open default"),
+    ("runbook", "13", "Round 6 (21 Nov 2026: the owner's ruling on the baseline and step 1b stops, put into the documents before the installation)"),
+    ("runbook", "13", "where an unknown, unavailable or failed safety-relevant state is never a note"),
+    ("runbook", "13", "under a proposed default that the owner confirms or changes at the final GO (F4; superseded by the owner's ruling of 21 Nov 2026 (5.1b))"),
+    ("runbook", "13", "a proposed default that the owner confirms or changes at the final GO, superseded by the owner's ruling of 21 Nov 2026 (5.1b))"),
+    ("runbook", "13", "Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP, superseded by the owner's ruling of 21 Nov 2026 (5.1b)"),
 ]
 FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phrase that must be gone)
     ("runbook", None, "step 8 proves it"),
@@ -395,6 +470,15 @@ FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phras
     ("checklist", None, "D-U1-1 and D-U1-2 are not decided"),
     ("checklist", None, "you record the voice-assistant setting"),
     ("runbook", "3", "consciously waived"),
+    # round 6: the wording the owner's ruling of 21 Nov 2026 replaced ('proposed default' and the confirm-at-the-final-GO wording only inside a sentence that says superseded: rule [20])
+    ("runbook", None, "you have not ruled on it yet"),
+    ("checklist", None, "you have not ruled on it yet"),
+    ("runbook", None, "or its state noted if not"),
+    ("checklist", None, "or its state noted if not"),
+    ("runbook", None, "the owner has not ruled on it"),
+    ("checklist", None, "the owner has not ruled on it"),
+    ("runbook", None, "the states noted"),
+    ("checklist", None, "the states noted"),
 ]
 COVERAGE = [   # (a phrase of a bullet of runbook section 9, the keywords that checklist section 8 must hold for it; lower case)
     ("has never run in a real home assistant or a real browser", ("never run in a real home assistant",)),
@@ -867,7 +951,7 @@ def shape_problems(checklist: str, runbook: str, pins: dict, extra: dict, source
         if NOTE_TITLE not in src:
             p.append("the live shape check tool does not print the NOTE title that runbook 5.1b quotes")
         if PROPOSED_DEFAULT not in src:
-            p.append("the live shape check tool does not print the proposed-default sentence that the documents say")
+            p.append("the live shape check tool no longer prints the proposed-default line that the documents call superseded (the tool is preserved as reviewed)")
         mm = re.search(r"\ndef exit_code\(.*?(?=\n\ndef |\Z)", src, re.S)
         if not mm or 'rep["not_checked"]' not in mm.group(0) or "not allow_not_checked" not in mm.group(0):
             p.append("the tool's exit code does not fail closed on NOT_CHECKED_LIVE unless --allow-not-checked is given, as runbook 5.1b says")
@@ -964,6 +1048,81 @@ def gates_problems(checklist: str, runbook: str) -> list[str]:
     for a, rest in items:
         if "proven" not in rest.lower():
             p.append(f"checklist section 6: the rollback step {a} has no proof")
+    return p
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# round 6 rule: the owner's ruling of 21 Nov 2026 on the baseline and step 1b stops
+# ---------------------------------------------------------------------------------------------------------------------------------
+def sentences(text: str) -> list[str]:
+    """The sentences of a document as plain text: a paragraph, a table row, a numbered item and a bullet are each a unit of their own (so a table without full stops is not one long sentence), and a unit is cut after . ! or ?"""
+    out: list[str] = []
+    for par in re.split(r"\n\s*\n", text):
+        for unit in re.split(r"\n(?=\|)|\n(?=\s*\d+\. )|\n(?=\s*[-*] )", par):
+            out += re.split(r"(?<=[.!?])\s+", plain(unit))
+    return out
+
+
+def stoprules_problems(checklist: str, runbook: str) -> list[str]:
+    """[20] the STOP, NOTE and values paragraphs word for word in the checklist (4.1), runbook 5.1b and runbook 6; each of the nine STOP items in each place; the NOTE paragraph holds no
+    unknown, unavailable or failed state before its closing sentence; gate G4 in both documents; the step 1 and 1b rows point to the rule; the sentence that supersedes the tool's printed
+    `proposed default` line; and `proposed default` or the old confirm-at-the-final-GO wording appear only in a sentence that says superseded."""
+    p: list[str] = []
+    places = (("checklist 4.1", subsection(checklist, "4.1")), ("runbook 5.1b", subsection(runbook, "5.1b")), ("runbook 6", subsection(runbook, "6")))
+    stop, note, vals, never = plain(STOP_P), plain(NOTE_P), plain(VALUES_P), plain(NEVER_NOTES)
+    for label, raw in places:
+        text = plain(raw)
+        if not text:
+            p.append(f"{label}: the section is missing")
+            continue
+        if stop not in text:
+            p.append(f"{label}: the STOP paragraph of the owner's ruling is not there word for word")
+        for item in STOP_ITEMS:
+            if plain(item) not in text:
+                p.append(f"{label}: the STOP item '{item[:44]}' is missing")
+        if note not in text:
+            p.append(f"{label}: the NOTE paragraph of the owner's ruling is not there word for word")
+        if never not in text:
+            p.append(f"{label}: the sentence '{NEVER_NOTES}' is missing")
+        if vals not in text:
+            p.append(f"{label}: the values sentence (the shape tool never clears a value; the coordinator reads the values) is missing")
+        lead_ok = False
+        for par in re.split(r"\n\s*\n", raw):
+            pt = plain(par)
+            if pt.startswith(plain(NOTE_LEAD)):
+                lead_ok = True
+                head = pt.split(never)[0]
+                bad = [w for w in NOTE_BAD_WORDS if w in head]
+                if bad:
+                    p.append(f"{label}: the NOTE paragraph lists a safety-relevant state as a note ({', '.join(bad)})")
+        if not lead_ok:
+            p.append(f"{label}: no paragraph starts with '{NOTE_LEAD}'")
+        if not any(plain(par).startswith(plain(STOP_LEAD)) for par in re.split(r"\n\s*\n", raw)):
+            p.append(f"{label}: no paragraph starts with '{STOP_LEAD}'")
+    # gate G4, in both documents
+    for label, body in (("checklist", sections(checklist).get("7", "")), ("runbook", subsection(runbook, "3"))):
+        row = re.search(r"^\| G4 \|.*$", body, re.M)
+        if not row or plain(G4_TEXT) not in plain(row.group(0)):
+            p.append(f"the {label}'s gate G4 does not say '{G4_TEXT}'")
+    # the step 1 and 1b rows of both step tables point to the rule
+    for label, body, ptr, starts in (("checklist", sections(checklist).get("4", ""), CL_POINTER, ("| 1 | coordinator", "| 1b | coordinator")),
+                                     ("runbook", sections(runbook).get("4", ""), RB_POINTER, ("| 1 | live read-only", "| 1b | live shape check"))):
+        for start in starts:
+            row = next((ln for ln in body.split("\n") if ln.startswith(start)), "")
+            if not row or plain(ptr) not in plain(row):
+                p.append(f"the {label}'s step row '{start[2:4].strip()}' does not point to the rule ('{ptr}')")
+            elif "1b" in start and "never clears a value" not in plain(row):
+                p.append(f"the {label}'s step 1b row does not say that the tool's note never clears a value")
+    # the sentence that supersedes the tool's printed line
+    for label, text in (("checklist 4.1", subsection(checklist, "4.1")), ("runbook 5.1b", subsection(runbook, "5.1b"))):
+        if plain(SUPERSEDED_S) not in plain(text):
+            p.append(f"{label}: the sentence that says the tool's printed `proposed default` wording is superseded by the owner's ruling is missing or changed")
+    # the old wording only inside a sentence that says superseded (the history of rounds 4 and 5 is kept, marked)
+    for label, text in (("checklist", checklist), ("runbook", runbook)):
+        for sent in sentences(text):
+            hit = [k for k in OLD_RULE_PHRASES if k in sent]
+            if hit and "superseded" not in sent:
+                p.append(f"the {label}: '{hit[0]}' is stated outside a sentence that says it is superseded: '{sent[:70]}'")
     return p
 
 
@@ -1122,11 +1281,13 @@ def analyse(checklist: str, runbook: str, pins: dict, sources: dict[str, str], n
     r["writepath"] = writepath_problems(checklist, runbook, extra)
     r["dashboards"] = dashboards_problems(checklist, runbook)
     r["gates"] = gates_problems(checklist, runbook)
+    # [20] (round 6)
+    r["stoprules"] = stoprules_problems(checklist, runbook)
     return r
 
 
 RULES = ("pins", "checks", "sections", "tools", "cls", "statements", "hygiene", "agreement", "commands", "names", "pinned", "node", "coverage",
-         "decisions", "targets", "shape", "writepath", "dashboards", "gates")
+         "decisions", "targets", "shape", "writepath", "dashboards", "gates", "stoprules")
 RULE_TITLES = {
     "pins": "[1] the pins are in the checklist exactly as the pin suite holds them",
     "checks": "[2] the five checks of the owner's directive are present by name",
@@ -1147,6 +1308,7 @@ RULE_TITLES = {
     "writepath": "[17] the write-path statement names Node tests that exist, and what it says of the card's mode switch, the more-info domains and the example's actions is true",
     "dashboards": "[18] the check of every existing dashboard: the dashboards-to-check block (catch-all row, header, three empty cells per row, in order) and the step 4 rows",
     "gates": "[19] the release gates G1 to G7 are in the checklist, each marked; the rollback is measured against the baseline and the backup, each step proven",
+    "stoprules": "[20] the owner's ruling of 21 Nov 2026: the STOP (nine items), NOTE and values paragraphs word for word in the checklist 4.1, runbook 5.1b and runbook 6; G4; the step 1 and 1b rows; the supersession of the tool's printed line; the old wording only where superseded",
 }
 
 
@@ -1182,8 +1344,8 @@ def edit_block(text: str, marker: str, fn) -> str:
     return re.sub(r"^( *)" + FENCE + r"powershell\n(.*?)^\1" + FENCE, sub, text, flags=re.S | re.M)
 
 
-def kill_words(text: str, phrase: str, scope: str | None = None) -> str:
-    """Replace the first occurrence of a phrase (whatever its line breaks and markup between the words), inside a section if one is named."""
+def kill_words(text: str, phrase: str, scope: str | None = None, repl: str = "REMOVED") -> str:
+    """Replace the first occurrence of a phrase (whatever its line breaks and markup between the words), inside a section if one is named, by REMOVED (or by repl)."""
     # markdown emphasis and code ticks may sit between any two characters of the raw text (`**Save**,` is the plain `save,`)
     rx = "".join(r"[\s*`]+" if ch == " " else re.escape(ch) + r"[*`]*" for ch in plain(phrase))
     lo, hi = 0, len(text)
@@ -1192,7 +1354,7 @@ def kill_words(text: str, phrase: str, scope: str | None = None) -> str:
         if span is None:
             return text
         lo, hi = span
-    return text[:lo] + re.sub(rx, "REMOVED", text[lo:hi], count=1, flags=re.I) + text[hi:]
+    return text[:lo] + re.sub(rx, lambda _m: repl, text[lo:hi], count=1, flags=re.I) + text[hi:]
 
 
 def kill_stop(text: str, title: str, key: str) -> str:
@@ -1447,6 +1609,53 @@ def make_mutants(pins: dict, checklist: str, runbook: str) -> list[tuple[str, st
     add("runbook", "F2 the $more line of block 3 is dropped", block3(lambda b: b.replace(BLOCK3_MORE + "\n", "")), "shape")
     add("runbook", "F2 the $more line of block 3 no longer leaves out the listed ids", lambda t: t.replace(" -and $ids -notcontains $_ }", " }", 1), "shape")
     add("runbook", "F2 the append of block 3 comes after the write of the file", block3(lambda b: b.replace(BLOCK3_APPEND + "\n", "", 1).replace("$out | Select-Object", BLOCK3_APPEND + "\n$out | Select-Object", 1)), "shape")
+    # --- round 6 (the owner's ruling of 21 Nov 2026): the STOP, NOTE and values rule word for word in three places; each of the nine STOP items dropped in turn
+    def append_in(text: str, scope: str, line: str) -> str:
+        span = subsection_span(text, scope)
+        if span is None:   # the section is not there: nothing to append to (the mutation then does not change the text, and the suite says so)
+            return text
+        return text[:span[1]] + "\n" + line + "\n" + text[span[1]:]
+
+    places6 = (("checklist", "4.1", "the checklist 4.1"), ("runbook", "5.1b", "runbook 5.1b"), ("runbook", "6", "runbook 6"))
+    for target, scope, label in places6:
+        for n, item in enumerate(STOP_ITEMS, 1):
+            add(target, f"S{n} STOP item {n} ('{item[:34]}') dropped from {label}", lambda t, s=scope, it=item: kill_words(t, it, s), "stoprules")
+        add(target, f"S10 the NOTE paragraph dropped from {label}", lambda t, s=scope: kill_words(t, NOTE_P, s), "stoprules")
+        add(target, f"S11 'never notes' (the closing sentence of the NOTE paragraph) dropped from {label}", lambda t, s=scope: kill_words(t, NEVER_NOTES, s), "stoprules")
+        add(target, f"S12 the values sentence dropped from {label}", lambda t, s=scope: kill_words(t, VALUES_P, s), "stoprules")
+        add(target, f"S13 'SHADOW with a fresh result' becomes 'SHADOW' in {label}",
+            lambda t, s=scope: kill_words(t, "the Intelligence status not SHADOW with a fresh result", s, "the Intelligence status not SHADOW"), "stoprules")
+        add(target, f"S14 a safety-relevant state (unknown) is moved into the NOTE list in {label}",
+            lambda t, s=scope: kill_words(t, "informational findings only: the names of the check codes", s, "informational findings only: unknown states, the names of the check codes"), "stoprules")
+    add("checklist", "S15 gate G4 of the checklist is back to 'the states noted'",
+        lambda t: on_line(t, "| G4 |", lambda ln: ln.replace(G4_TEXT + " (4.1)", "the live baseline saved (steps 1 and 1b), the shape check exits 0, the states noted")), "stoprules")
+    add("runbook", "S16 gate G4 of the runbook no longer says that no STOP condition holds", lambda t: on_line(t, "| G4 |", lambda ln: ln.replace("is saved AND no STOP condition of the list holds", "is saved")), "stoprules")
+    add("runbook", "S17 'or its state noted if not' is restored in gate G4 of the runbook",
+        lambda t: on_line(t, "| G4 |", lambda ln: ln.replace("the Intelligence status reads SHADOW with a fresh result;", "the Intelligence status reading SHADOW with a fresh result (or its state noted if not);")), "pinned")
+    add("checklist", "S18 'you have not ruled on it yet' is restored in the checklist's section 7", lambda t: t.replace("not an open default.", "you have not ruled on it yet.", 1), "pinned")
+    add("runbook", "S19 'the owner has not ruled on it' is restored in runbook 5.1b", lambda t: append_in(t, "5.1b", "The default is the coordinator's proposal and the owner has not ruled on it."), "pinned")
+    add("checklist", "S20 the supersession sentence is dropped from the checklist 4.1", lambda t: kill_words(t, SUPERSEDED_S, "4.1"), "stoprules")
+    add("runbook", "S21 the supersession sentence is dropped from runbook 5.1b", lambda t: kill_words(t, SUPERSEDED_S, "5.1b"), "stoprules")
+    add("checklist", "S22 'proposed default' is stated again outside a sentence that says superseded (checklist)", lambda t: append_in(t, "4.1", "The self_test note is a proposed default of the shape check."), "stoprules")
+    add("runbook", "S23 'proposed default' is stated again outside a sentence that says superseded (runbook 5.1b)", lambda t: append_in(t, "5.1b", "The self_test note is a proposed default of the shape check."), "stoprules")
+    add("runbook", "S24 the confirm-at-the-final-GO wording is stated again without 'superseded' (runbook 5.1b)", lambda t: append_in(t, "5.1b", "The owner confirms or changes it at the final GO."), "stoprules")
+    add("runbook", "S25 the round 5 sentence loses its supersession marker (section 13, the F4 sentence)",
+        lambda t: t.replace("(F4; superseded by the owner's ruling of 21 Nov 2026 (5.1b));", "(F4);", 1), "stoprules")
+    add("runbook", "S26 the round 4 sentence loses its supersession marker (section 13, item 3)",
+        lambda t: t.replace("at the final GO, superseded by the owner's ruling of 21 Nov 2026 (5.1b)).", "at the final GO).", 1), "stoprules")
+    add("runbook", "S27 the round 4 sentence of item 7 loses its supersession marker (section 13)",
+        lambda t: t.replace("is a STOP, superseded by the owner's ruling of 21 Nov 2026 (5.1b).**", "is a STOP.**", 1), "stoprules")
+    for target, pointer, who, starts in (("checklist", CL_POINTER, "checklist", ("| 1 | coordinator", "| 1b | coordinator")),
+                                         ("runbook", RB_POINTER, "runbook", ("| 1 | live read-only", "| 1b | live shape check"))):
+        for start in starts:
+            add(target, f"S28 the {who}'s step {start[2:4].strip()} row lists the old shorter stops instead of pointing to the rule",
+                lambda t, st=start, ptr=pointer: on_line(t, st, lambda ln: ln.replace(ptr, "Core not running; a copy that is not byte-exact")), "stoprules")
+    add("checklist", "S29 the checklist's step 1b row no longer says that the tool's note never clears a value",
+        lambda t: on_line(t, "| 1b | coordinator", lambda ln: ln.replace("; the tool's note never clears a value", "")), "stoprules")
+    add("runbook", "S30 the runbook's step 1b row no longer says that the tool's note never clears a value",
+        lambda t: on_line(t, "| 1b | live shape check", lambda ln: ln.replace(", and the tool's note, being shape-only, never clears a value", "")), "stoprules")
+    add("runbook", "S31 section 6 keeps the old baseline clause (Core not running or the status not what it was) instead of the list",
+        lambda t: t.replace("a STOP condition of the baseline list below holds (and, at any later step, the Intelligence\nstatus is no longer what the baseline recorded)", "the baseline shows Core not running or the Intelligence\nstatus not what it was", 1), "pinned")
     # the pinned sentences and the coverage keywords: the removal of each is killed
     for n, (doc, scope, phrase) in enumerate(PINNED, 1):
         add(doc, f"P{n} the sentence '{phrase[:46]}' removed from the {doc} {scope}", lambda t, s=scope, ph=phrase: kill_words(t, ph, s), "pinned")
@@ -1472,7 +1681,7 @@ TOOL_MUTANTS = [   # mutants of the live shape check tool's source (round 5: wha
     ("T1 the tool has no --allow-not-checked flag", lambda s: s.replace('"--allow-not-checked"', '"--allow-checked"'), "shape"),
     ("T2 the tool's NOTE title is not the one the runbook quotes", lambda s: s.replace("NOTE (free-form self-test", "NOTE (free self-test"), "shape"),
     ("T3 the tool's exit code no longer fails closed on NOT_CHECKED_LIVE", lambda s: s.replace('(rep["not_checked"] and not allow_not_checked)', "False"), "shape"),
-    ("T4 the tool's proposed-default sentence differs from the documents'", lambda s: s.replace("anything else UNDECLARED or any unexplained absence is a STOP", "anything else UNDECLARED is a STOP"), "shape"),
+    ("T4 the tool no longer prints the proposed-default line that the documents call superseded", lambda s: s.replace("anything else UNDECLARED or any unexplained absence is a STOP", "anything else UNDECLARED is a STOP"), "shape"),
 ]
 
 EXTRA_MUTANTS = [   # mutants of the sources the new rules read (the documents say what the card, the example, the ledger and the Node suites hold: these show each claim is checked against them)
@@ -1521,6 +1730,8 @@ def main(argv: list[str]) -> int:
           exact is not None and exact["url"].startswith("/local/ecco/") and exact["type"] == "module" and exact["dest"].startswith("/config/www/ecco/"))
     items9 = bullets(sections(runbook).get("9", ""))
     check(f"runbook section 9 has {len(COVERAGE)} bullets and each one has its keyword in checklist section 8 ({len(items9)} found)", len(items9) == len(COVERAGE) and not result["coverage"])
+    check("the nine STOP items are each a part of the canonical STOP paragraph, in order",
+          len(STOP_ITEMS) == 9 and all(plain(i) in plain(STOP_P) for i in STOP_ITEMS) and [plain(STOP_P).index(plain(i)) for i in STOP_ITEMS] == sorted(plain(STOP_P).index(plain(i)) for i in STOP_ITEMS))
     own_bytes = Path(__file__).read_bytes()
     own = own_bytes.decode("utf-8", errors="replace")
     check("this suite's own source is ASCII and holds no address, token or entity id",

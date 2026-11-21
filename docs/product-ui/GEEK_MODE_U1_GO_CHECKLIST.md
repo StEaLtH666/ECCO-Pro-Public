@@ -2,8 +2,8 @@
 
 For the owner's decision on the first live Home Assistant update. The full detail is in `GEEK_MODE_FIRST_UPDATE_RUNBOOK.md`, cited here as
 "runbook N" (a section number). Written 20 Nov 2026, updated 21 Nov 2026 for the owner's decision. Nothing in this list has been done.
-Length, said honestly: it was 136 lines; with the decision, the exact targets, the write-path statement, the release gates and the per-dashboard check it is now
-188 lines (its suite allows 200). Every table says what is yours and what is the coordinator's.
+Length, said honestly: it was 136 lines; with the decision, the exact targets, the write-path statement, the release gates, the per-dashboard check and the stop and note rules it is now
+200 lines (its suite allows 200). Every table says what is yours and what is the coordinator's.
 
 ## 1. The answer
 
@@ -77,8 +77,8 @@ Each live step needs your own go, given at the time; a go for one step is not a 
 | Step | Who | What (the full block is in the runbook section named) | Expected | Stop |
 |---|---|---|---|---|
 | 0 | coordinator | offline gates on the chosen commit; the generation below; the M2 scan on the exact commit, the push, the draft pull request and CI (your decision of 21 Nov, D-U1-4) (runbook 5.0) | suites green, hashes as pinned, M2 clean, CI green | any new failure; a hash that is not the pinned one; a changed commit repeats the checks and scans |
-| 1 | coordinator, your go | live read-only baseline: lists, hashes, byte-exact copies, log lines, target checks (a) and (b) (runbook 5.1) | every copy `EXACT`; nothing of A1 to A3 present; (a) and (b) hold | anything of A1 to A3 already there; the Intelligence card's resource not under `/local/ecco/`; Core not running; a copy that is not `EXACT` |
-| 1b | coordinator, your separate go | live shape check: block 3 (the state read), then the offline tool `geek_mode_live_shape_check.py` on `states-before.json` (runbook 5.1b) | exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained, 0 not checked (a recorded self_test is a note under the proposed default of this row) | anything UNDECLARED, a declared entity missing or an unexplained absence: stop and ask you (the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected); a declared entity not checked is a stop too; proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP |
+| 1 | coordinator, your go | live read-only baseline: lists, hashes, byte-exact copies, log lines, target checks (a) and (b) (runbook 5.1) | every copy `EXACT`; nothing of A1 to A3 present; (a) and (b) hold | anything of A1 to A3 already there; the Intelligence card's resource not under `/local/ecco/`; any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026) |
+| 1b | coordinator, your separate go | live shape check: block 3 (the state read), then the offline tool `geek_mode_live_shape_check.py` on `states-before.json` (runbook 5.1b) | exit 0; 17 of 17 declared entities present, 0 undeclared, 0 unexplained, 0 not checked; and the coordinator reads the values in `states-before.json` (the status entity's state, `mode`, `applies_nothing` and last update; every `self_test` check value; the freshness and watchdog entities; each control entity and the pause helper: state and `last_changed`) and finds no STOP condition of the list in 4.1 | any STOP condition of the list in 4.1 (the owner's ruling of 21 Nov 2026), not only the tool's exit 1 (anything UNDECLARED, a declared entity missing or not checked, an unexplained absence: stop and ask you; the catalogue is out of date for this host, so the Geek inspector would be wrong; Production is unaffected); the tool's note never clears a value |
 | 2 | you | protected full backup; quiet window (runbook 5.2) | a protected backup exists | no protected backup |
 | 3 | coordinator, your go | copy the card with `deploy-ha.ps1`, then `verify-served` (runbook 5.3) | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, `RESOURCE NOT REGISTERED`; one PASS line | any failure line; a hash mismatch; the tool's own rollback message; more than the one new file |
 | 4 | you add, coordinator reads, your go | the one resource, then `verify-resource`, then your check of EACH existing dashboard (runbook 5.4) | `RESOURCE VERIFIED`; every row of `dashboards-to-check.txt` filled yes, yes, yes (every existing dashboard and the catch-all row), confirmed by the coordinator | any other line; another resource changed; a no or an empty cell on any row (you delete the one resource) |
@@ -108,6 +108,18 @@ cls
 The first block is step 0. The second holds the commands of steps 1b, 3, 4 and 6 in the order they are run, with the owner's own actions between them
 (steps 4 and 5) and the captures that feed them (`states-before.json`, `resources-now.json`, `stored-config.json`) in the runbook blocks. These are the short
 forms: each runbook block sets `$H`, `$E`, `$PY` and the checkout folder itself, and its placeholders are filled in first.
+
+### 4.1 Stop and note rules, the owner's ruling of 21 Nov 2026
+
+**STOP (change nothing, ask the owner):** Core not running; the Intelligence status not SHADOW with a fresh result; the status, freshness or watchdog entity unknown or unavailable; any self-test check that reads a failure, unknown or unavailable; any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, the TOU edit helper) or the pause helper absent, unknown or unavailable; the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence); a baseline copy that is not byte-exact; anything that cannot be read.
+
+**NOTE (recorded, shown to the owner, never hidden):** informational findings only: the names of the check codes under a recorded self_test (shape only, a note only while every check value reads as passing), the declared conditional attribute rows that are legitimately empty, informational log lines; each note is written in the evidence with why it is informational. Unknown, unavailable or failed safety-relevant states are never notes.
+
+The shape tool sees only names and types, so it can never clear a value: the coordinator reads the values in the captured states and applies this list.
+
+The live shape tool still prints a line beginning `proposed default` and calls a self_test note `not a failure`: that wording is shape-only (names and types,
+never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026: the tool's note never clears a value, the
+coordinator reads the values in `states-before.json` and applies the list, and where the list says STOP nothing proceeds.
 
 ## 5. The read-only checks (item 1 at step 4, before step 5; items 2 to 6 after the install)
 
@@ -144,8 +156,8 @@ everything the backup holds to its state at backup time. It is your decision and
 
 No open defect is known from the offline checks. What stands between this list and a GO: step 0 is the coordinator's (the M2 scan on the exact commit, the push, the
 draft pull request and CI: at the time of this text none of the four had been done); then, at install time, the host reads (state, history, log, the globbed `sha256sum`,
-the stored-file `scp`, the shape check: none has run on the real host), your protected backup and your presence; and your final installation GO, at which you also
-confirm or change the proposed default of step 1b (a self_test note is recorded, not a stop; you have not ruled on it yet).
+the stored-file `scp`, the shape check: none has run on the real host), your protected backup and your presence; and your final installation GO. The stop and note
+rules of 4.1 are your ruling of 21 Nov 2026, not an open default.
 
 | Decision | Status (your decision of 21 Nov 2026) | If undecided |
 |---|---|---|
@@ -163,7 +175,7 @@ confirm or change the proposed default of step 1b (a self_test note is recorded,
 | G1 | step 0 green on the exact commit: the suites, the M2 scan, the push, the draft pull request's CI; the commit chosen | satisfied by the offline work (suites, hashes, the choice D-U1-1); the M2 scan and CI run on the exact commit before your GO |
 | G2 | a quiet period reserved, you present, no other live step running | yours at install time |
 | G3 | a fresh protected full backup made in the Home Assistant UI | yours at install time |
-| G4 | the live baseline saved (steps 1 and 1b), the shape check exits 0, the states noted | yours at install time (your go for each read) |
+| G4 | the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds (4.1) | yours at install time (your go for each read) |
 | G5, RG-F3 | the voice-assistant "expose new entities" settings | resolved for U1 by the owner on 21 Nov: separately tracked F3, no new entity |
 | G6 | a desktop browser whose clock is within five minutes of Home Assistant's | yours at install time |
 | G7 | the first look is Production only, Geek only after you say go, the pause tile never tapped | yours at install time |

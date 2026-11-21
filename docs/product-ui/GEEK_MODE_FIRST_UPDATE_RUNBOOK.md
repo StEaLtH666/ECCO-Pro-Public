@@ -177,7 +177,7 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 | G1 | step 0 is green on the exact commit (section 13): the suites, the owner's M2 scan, the push and the draft pull request's CI; the commit to install from is the branch commit after green CI (D-U1-1, decided by the owner on 21 Nov 2026, option a) |
 | G2 | the owner has reserved a quiet period, is present, and no other supervised live step is in progress |
 | G3 | the owner has made a fresh **protected** full backup in the Home Assistant UI (step 2). A backup made over SSH is full but UNPROTECTED: no session handles a backup encryption password |
-| G4 | the live baseline (steps 1 and 1b) is saved, the live shape check of step 1b exits 0, and the baseline shows: Home Assistant Core running and its version noted; the Intelligence status reading SHADOW with a fresh result (or its state noted if not); the pause helper's state noted; no resource, file or dashboard of this update already present; the Intelligence card's resource registered; the control entities of the earlier supervised installs unchanged since their last record |
+| G4 | the live baseline (steps 1 and 1b) is saved AND no STOP condition of the list holds (5.1b and section 6, the owner's ruling of 21 Nov 2026): the live shape check of step 1b exits 0; Home Assistant Core is running and its version is noted; the Intelligence status reads SHADOW with a fresh result; the status, freshness and watchdog entities, every control entity of the earlier supervised installs and the pause helper are present and readable (none absent, unknown or unavailable), each with its state and `last_changed` recorded; no self-test check reads a failure, unknown or unavailable; no resource, file or dashboard of this update is already present; the Intelligence card's resource is registered; the control entities of the earlier supervised installs are unchanged since their last record |
 | G5 | release gate RG-F3 (the two voice-assistant settings "expose new entities", for Assist and for Google Assistant) is **resolved for U1 only**, by the owner on 21 Nov 2026 (D-U1-2): the existing voice-assistant exposure settings remain a separately tracked F3 issue because this installation creates **no new entity**. This is not acceptance of F3 and not permission to introduce new exposed controls: any later install that creates an entity still needs both settings off |
 | G6 | the browser used for the look is a desktop browser whose clock is within five minutes of Home Assistant's clock (section 10) |
 | G7 | the owner agrees in advance that the first look is **Production Mode only**, that Geek Mode follows only after the owner says go, and that the pause tile is never tapped |
@@ -187,8 +187,8 @@ Go only when **every** line holds. Otherwise stop: this is a no-go.
 | Step | What | Who | Offline / live | Read-only / write | Own owner authorisation | Expected result | Stop condition |
 |---|---|---|---|---|---|---|---|
 | 0 | offline gates on the exact commit: the verification table (section 13), the owner's M2 private-pattern scan (generated assets, commit metadata and pull request text included), the push, the draft pull request and CI | COORDINATOR (the M2 scan is the owner's tool) | offline (the push and CI touch GitHub only) | read-only on the live system; a push is a GitHub write | decided by the owner on 21 Nov 2026 (D-U1-4): the M2 scan on the exact commit, the push, the draft pull request, CI; nothing live | the table is green or its failures are named as known; the M2 scan reports no hit; CI green on the pushed tip | any new failure; a card or catalogue hash that is not the pinned one; a change of the commit (the applicable verification and the scans are repeated) |
-| 1 | live read-only baseline (5.1: blocks 1, 2 and 4, with the target checks (a) and (b) of 1.2; the state read, block 3, belongs to step 1b) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; target checks (a) and (b) hold; G4 holds once step 1b has passed | anything of A1 to A3 already present; the Intelligence card's resource missing or not under `/local/ecco/`; Core not running; a copy that is not byte-exact |
-| 1b | live shape check (5.1b): block 3 (the state read, which keeps the listed entities and every `ecco_intel` entity), then the offline tool `tools\geek_mode_live_shape_check.py` on `states-before.json` | COORDINATOR | live (block 3), offline (the tool) | read-only | **yes**, its own go: a separate live read | exit 0 and the counts of 5.1b (17 of 17 present, NOT_CHECKED 0) | any UNDECLARED entity or attribute (a self_test note excepted, the proposed default of 5.1b), any declared entity missing or not checked, any unexplained absence: the catalogue is out of date for this host (ask the owner) |
+| 1 | live read-only baseline (5.1: blocks 1, 2 and 4, with the target checks (a) and (b) of 1.2; the state read, block 3, belongs to step 1b) | COORDINATOR | live | read-only | **yes** (a live read) | the baseline files saved offline, among them a byte-exact copy of each `.storage/lovelace*` file; target checks (a) and (b) hold; G4 holds once step 1b has passed | anything of A1 to A3 already present; the Intelligence card's resource missing or not under `/local/ecco/`; any STOP condition of the list in 5.1b and section 6 (the owner's ruling of 21 Nov 2026) |
+| 1b | live shape check (5.1b): block 3 (the state read, which keeps the listed entities and every `ecco_intel` entity), then the offline tool `tools\geek_mode_live_shape_check.py` on `states-before.json` | COORDINATOR | live (block 3), offline (the tool) | read-only | **yes**, its own go: a separate live read | exit 0 and the counts of 5.1b (17 of 17 present, NOT_CHECKED 0); and the coordinator has read the values in `states-before.json` and finds no STOP condition of the list | any STOP condition of the list in 5.1b and section 6 (the owner's ruling of 21 Nov 2026): the tool's exit 1 is one of them (any UNDECLARED entity or attribute, any declared entity missing or not checked, any unexplained absence: the catalogue is out of date for this host, ask the owner), and the tool's note, being shape-only, never clears a value |
 | 2 | the owner's protected full backup in the UI; RG-F3 decision recorded; quiet window confirmed | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists (its name and time recorded offline, never its password) | no protected backup |
 | 3 | copy the card with `deploy-ha.ps1` to the content-addressed destination, then `verify-served` (5.3; target check (c) of 1.2) | COORDINATOR | live | **write** (one new file under `/config/www/ecco/`, its backup folder) | **yes** | `ECCO DEPLOYMENT PASSED`, `Restart     : no`, a `RESOURCE NOT REGISTERED` reminder; `verify-served` PASS (the folder-to-URL mapping and the bytes, before any resource exists) | any failure line; a hash mismatch; the tool's own rollback message; anything but the one new file |
 | 4 | the owner adds ONE module resource by hand; the coordinator reads the persisted list and runs `verify-resource` (target check (d) of 1.2); then the owner checks EACH existing dashboard, because the resource is global (5.4) | OWNER (the add, the checks), COORDINATOR (the read-back) | live | the add is a Home Assistant write by the owner; the read-back and the checks are read-only | the owner's action; **yes** for the read-back | `RESOURCE VERIFIED ecco-mode-shell -> ...` and exit 0; the list differs from the baseline by exactly one added item; every existing dashboard: yes to all three questions of 5.4 (every row of `dashboards-to-check.txt` filled yes, yes, yes, which the coordinator confirms before step 5) | any other line; any other resource changed; a no or an empty cell for any row of the list (the owner deletes the one resource) |
@@ -371,9 +371,10 @@ ConvertTo-Json -InputObject $out -Depth 20 | Out-File -Encoding utf8 "$E\states-
 $out | Select-Object entity_id, state, last_changed, absent | Format-Table -AutoSize
 ```
 
-Record from it, offline: the Intelligence status entity (its state, `mode` and `applies_nothing` attributes and when it was last
-updated), the freshness and watchdog entities, the pause helper's state and its `last_changed`, and every control entity. An id
-shown as absent is noted, not guessed. (This route was not run on the production host by the author: if it prints the
+Record from it, offline, the values that the coordinator reads for the STOP and NOTE list of 5.1b: the Intelligence status entity (its state, its `mode` and
+`applies_nothing` attributes, when it was last updated, and every check value under its `self_test` attribute), the freshness and watchdog entities (state and
+`last_changed`), the pause helper (state and `last_changed`) and each control entity of the earlier installs (state and `last_changed`). An id shown as absent is
+recorded, not guessed; for the pause helper or a control entity it is a STOP (5.1b). (This route was not run on the production host by the author: if it prints the
 no-supervisor-token message or an error, stop; the same states can be read by hand in the Home Assistant UI, Developer tools,
 States, and written down offline.)
 
@@ -422,7 +423,8 @@ Exit 0: the shape matches (nothing UNDECLARED, no declared entity missing, no un
 input (the tool names the cause and nothing of the file's content). **Expected: exit 0, the line `RESULT: MATCH (exit 0)` and the counts:** PRESENT_LIVE 17
 of 17 declared entities (the 14 Nov filter did not cover the reserve helper; this read lists it), NOT_PRESENT_LIVE 0 declared entities missing and 0
 unexplained attribute rows, UNDECLARED 0 entities and 0 attributes, NOT_CHECKED_LIVE 0. In short: expected exit 0, 17 of 17 present, NOT_CHECKED 0. The number of
-conditional attribute rows depends on the day (42 on 14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop.
+conditional attribute rows depends on the day (42 on 14 Nov: the live item is not OK, or a parent attribute is empty); it is information, never a stop (a note of the list below only while the rows are legitimately empty:
+an entity that reads unknown or unavailable is judged by the STOP list, never by this count).
 NOT_CHECKED_LIVE fails closed: a declared entity that is neither in the states file nor marked absent (a hand-made capture, an edited entity list) is a failure, exit 1,
 unless the caller passes the explicit flag `--allow-not-checked`, which exists for one deliberate case only, the 14 Nov listing converted back (its capture filter did not
 cover the reserve helper); the read of the install day never uses it, and block 3 lists every catalogued entity or marks it absent. For reference, the committed 14 Nov listing converted back
@@ -430,20 +432,39 @@ into states gives, offline, exit 0 with 16 of 17 present, 293 attribute rows pre
 `--allow-not-checked` is given, and exit 1 without it. `--write-shape <path>` also writes the value-free listing, only outside the repository's checkout, never over an existing
 file unless `--overwrite` is given.
 
-**Stop.** Anything UNDECLARED, any declared entity missing and any unexplained absence (exit 1) is a stop: it means the catalogue is out of date for this
+**Stop and note rules, the owner's ruling of 21 Nov 2026** (the same text is in section 6 and in checklist 4.1). The tool decides only the shape of the data; these rules
+decide whether the installation goes on:
+
+**STOP (change nothing, ask the owner):** Core not running; the Intelligence status not SHADOW with a fresh result; the status, freshness or watchdog entity unknown or unavailable; any self-test check that reads a failure, unknown or unavailable; any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, the TOU edit helper) or the pause helper absent, unknown or unavailable; the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence); a baseline copy that is not byte-exact; anything that cannot be read.
+
+**NOTE (recorded, shown to the owner, never hidden):** informational findings only: the names of the check codes under a recorded self_test (shape only, a note only while every check value reads as passing), the declared conditional attribute rows that are legitimately empty, informational log lines; each note is written in the evidence with why it is informational. Unknown, unavailable or failed safety-relevant states are never notes.
+
+The shape tool sees only names and types, so it can never clear a value: the coordinator reads the values in the captured states and applies this list.
+
+**The tool's exit 1.** Anything UNDECLARED, any declared entity missing and any unexplained absence (exit 1) is a stop: it means the catalogue is out of date for this
 host, so the Geek inspector would be wrong. Production is unaffected. Ask the owner; nothing is changed meanwhile. A declared entity that is NOT_CHECKED_LIVE is a stop too
-(exit 1 without `--allow-not-checked`). A self_test note is not counted as UNDECLARED: it is the proposed default of (2) below.
+(exit 1 without `--allow-not-checked`).
+
+**What the coordinator reads and records.** From `states-before.json` (block 3) the coordinator reads and records the status entity's state, `mode`, `applies_nothing`,
+its last update and every `self_test` check value; the freshness and watchdog entities; each control entity of the earlier installs and the pause helper: state and
+`last_changed`.
+
+**The tool's printed wording.** The live shape tool still prints a line beginning `proposed default` and calls a self_test note `not a failure`: that wording is
+shape-only (names and types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026: the tool's note never clears
+a value, the coordinator reads the values in `states-before.json` and applies the list, and where the list says STOP nothing proceeds.
 
 Three things to know in advance (read from the code and the fixtures; none has been seen on the host). (1) The reserve helper's attributes were never
 confirmed live, because the 14 Nov listing did not include it: this read compares them, and a difference there is the first evidence of their shape. (2) If
 the live status entity's recorded self-test is not empty, its check codes appear as UNDECLARED dotted attributes (`self_test.<check code>`) in the comparison itself: the
 code universe declares that attribute as a whole, not its keys, and the 14 Nov listing had it empty. The tool sets such a path apart from the failures, in a separate
 section titled `NOTE (free-form self-test check codes under the declared self_test attribute; recorded, not a failure)`, with names only, and it does not change the exit
-code. **Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence
-is a STOP.** The default is the coordinator's proposal and the owner has not ruled on it; the tool implements exactly it and does not widen it: a dotted path under any
+code. That is the tool's shape-only wording, superseded as stated above: the names are a note only while every check value in `states-before.json` reads as passing, and a check that
+reads a failure, unknown or unavailable is a STOP. The tool does not widen even the shape note: a dotted path under any
 other declared attribute (for example `advice.<x>`), a `self_test` attribute on an entity that does not declare it, any other undeclared entity or attribute, a missing
 source entity, an unexplained absence and a NOT_CHECKED_LIVE entity all stay failures. Nothing is edited at the look. (3) An entity that reads unavailable or unknown has a partial
-attribute list: the tool counts such entities in a NOTE, and an absence on them is read with care and the read repeated while Intelligence is publishing.
+attribute list: the tool counts such entities in a NOTE, which is shape-only and clears nothing. If the entity is one that the STOP list names (the status, freshness or watchdog entity,
+a control entity of the earlier installs, the pause helper), unknown or unavailable is a STOP; for any other entity the coordinator reads an absence on it with care, repeats the read
+while Intelligence is publishing, and stops and asks the owner when it cannot tell.
 
 **Where the output stays.** The names of the `ecco_intel` entities and of the one catalogued helper outside that name filter appear in the tool's output and in a `--write-shape`
 listing (by design: entity ids, attribute names, check codes), so the output stays in the evidence folder (`<OFFLINE_EVIDENCE_DIR>`) and is never pasted into a repository or a chat.
@@ -919,13 +940,21 @@ step 8 reads states and state history, not the entity registry.
 ## 6. Stop conditions (any step)
 
 Stop, change nothing more, record the state, and ask the owner, when: a tool prints anything but the expected line; a hash differs
-from its pin; a read finds something of this update already present; the baseline shows Core not running or the Intelligence
-status not what it was; the resource gate does not exit 0; the dashboard list or the resource list differs by more than the one item
+from its pin; a read finds something of this update already present; a STOP condition of the baseline list below holds (and, at any later step, the Intelligence
+status is no longer what the baseline recorded); the resource gate does not exit 0; the dashboard list or the resource list differs by more than the one item
 the step added; any file under `ecco/dashboards/` changes, or any `.storage/lovelace*` file other than the new dashboard's and the
-two lists; a copy of the baseline that is not byte-exact; either pre-save check of 5.5 fails; a control entity changes; the
+two lists; either pre-save check of 5.5 fails; a control entity changes; the
 existing dashboard (the production Overview included) shows an error naming the shell or no longer renders as before; the look shows a strip that contradicts the existing card, a blank strip, a
 freeze, or an error naming the shell; a step would need a restart. Never retry a live write without the owner. Never approve, work
 around or weaken a permission prompt or a safety gate.
+
+**The baseline STOP and NOTE rules, the owner's ruling of 21 Nov 2026** (the same text is in 5.1b and in checklist 4.1):
+
+**STOP (change nothing, ask the owner):** Core not running; the Intelligence status not SHADOW with a fresh result; the status, freshness or watchdog entity unknown or unavailable; any self-test check that reads a failure, unknown or unavailable; any control entity of the earlier supervised installs (the write enables, the arm and schedule switches, the manual write counter, the TOU edit helper) or the pause helper absent, unknown or unavailable; the shape tool exiting 1 (anything undeclared, a declared entity missing or not checked, an unexplained absence); a baseline copy that is not byte-exact; anything that cannot be read.
+
+**NOTE (recorded, shown to the owner, never hidden):** informational findings only: the names of the check codes under a recorded self_test (shape only, a note only while every check value reads as passing), the declared conditional attribute rows that are legitimately empty, informational log lines; each note is written in the evidence with why it is informational. Unknown, unavailable or failed safety-relevant states are never notes.
+
+The shape tool sees only names and types, so it can never clear a value: the coordinator reads the values in the captured states and applies this list.
 
 ## 7. Rollback, in order
 
@@ -1128,7 +1157,7 @@ in words. The owner may retire the tripwire at the merge.
 
 The owner's decision of 21 Nov 2026 settled D-U1-1, D-U1-2 and D-U1-4; D-U1-3, D-U1-5 and D-U1-6 keep their defaults. **None of it authorises an installation
 or a live access**: no automatic installation or live access is authorised, and each live step still needs its own go after the owner's final installation GO
-(the top of this document).
+(the top of this document). The owner also ruled on 21 Nov 2026 on the stop and note rules of the baseline and step 1b (5.1b, section 6, checklist 4.1): decided, not an open default.
 
 | # | Decision | Status and notes |
 |---|---|---|
@@ -1146,7 +1175,7 @@ Verified on 20 Nov 2026, offline, serially (one heavy process at a time; Node on
 `PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1` for the suites the runner starts). Nothing was pushed, merged, installed, registered or
 deployed, and no live system was contacted.
 
-**Five rounds** (rounds 5, 4 and 3 follow the pinned artefacts; round 5 is the newest). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
+**Six rounds** (rounds 6, 5, 4 and 3 follow the pinned artefacts; round 6 is the newest). Round 1 is the first verification: the commit `9586377b1dd5` was extracted with `git archive` into a clean folder
 and verified there (its table is kept below as "round 1"). An independent review of that runbook found eight points (F1 to F8);
 they are fixed in four new commits on the same branch: `66009ef` (the generator's `--verify-storage` and its suite), `748e68a`
 (the card's pin suite), `a4fa2d0` (a comment kept ASCII) and `f188a5a` (this runbook). Round 2 was run in a clean clone
@@ -1155,7 +1184,7 @@ they are fixed in four new commits on the same branch: `66009ef` (the generator'
 differ: this runbook, the generator and its two suites. The card, the catalogue, the example and every protected file are
 byte-identical (sha256 below, checked at both ends); no manifest, scope chain, preflight or deploy tool was touched.
 
-**The pinned artefacts (the same at every commit of all five rounds):**
+**The pinned artefacts (the same at every commit of all six rounds):**
 
 | Artefact | Size | sha256 |
 |---|---|---|
@@ -1166,10 +1195,17 @@ byte-identical (sha256 below, checked at both ends); no manifest, scope chain, p
 | the resource plan (`--resource-plan`) | 483 bytes | `8c216cfef4804c04cfd1f2e5614196d5679f227e0680010e5fc9e6dadf3d7c8f` |
 | the destination file name | | `ecco-mode-shell.17410163.js` (so `<sha8>` is `17410163`) |
 
+**Round 6** (21 Nov 2026: the owner's ruling on the baseline and step 1b stops, put into the documents before the installation): the checklist (the new subsection 4.1,
+the step 1 and 1b rows, G4, section 7) and the runbook (G4 of section 3, the step 1 and 1b rows, 5.1, 5.1b, section 6, section 12) now carry the owner's STOP, NOTE and
+values rule word for word, where an unknown, unavailable or failed safety-relevant state is never a note, and the round 4 and round 5 statements that made a recorded
+self_test a note under a proposed default are kept as the record of those rounds and marked superseded; only the two documents and the checklist suite changed (no code
+and no generated asset: the five pinned hashes were recomputed first and last and are unchanged, and the live shape check and its suite are as reviewed), the checklist
+is 200 lines (188 before, limit 200), and the checklist suite has 1041 checks (837 before) and 505 of 505 mutants killed (404 before).
+
 **Round 5** (21 Nov 2026: the fixes of the independent review of round 4, verdict READY_WITH_MINORS, points F1 to F6): the check of every existing dashboard (5.4, checklist 5) gets one catch-all row for
 every other sidebar entry, three empty answer columns per row and the coordinator's yes, yes, yes confirmation before step 5, and the checklist says that it is done at step 4, before step 5 (F1, F5); block 3's
 append of the undeclared `ecco_intel` states is pinned line by line and in order (F2); the live shape check fails closed on a declared entity that is not checked unless `--allow-not-checked` is given (F3);
-a recorded `self_test` is a note, not a failure, under a proposed default that the owner confirms or changes at the final GO (F4); and 5.1b says that the names of the entities stay in the evidence folder (F6);
+a recorded `self_test` is a note, not a failure, under a proposed default that the owner confirms or changes at the final GO (F4; superseded by the owner's ruling of 21 Nov 2026 (5.1b)); and 5.1b says that the names of the entities stay in the evidence folder (F6);
 only the live shape check, its suite, the checklist suite, the runbook and the checklist changed (the five pinned hashes were recomputed first and last and are unchanged), the live shape suite has 160 checks
 (125 before) and 49 of 49 mutants killed (37 before), and the checklist suite has 837 checks (713 before) and 404 of 404 mutants killed (342 before).
 
@@ -1190,7 +1226,7 @@ suite's pins), and the commit that holds this section, which differs from the on
    gives exit 0 with 16 of 17 present, 293 attribute rows present, 42 conditional, 0 unexplained, 0 undeclared, 1 not checked: the verdict `geek_mode_coverage` itself gives (round 5: that exit is 0 only with
    `--allow-not-checked`; without it the tool now exits 1 on that one not checked entity). Block 3 keeps
    every `ecco_intel` entity besides the listed ones; step 1b is a row of both step tables and section 5.1b. Found offline and written down (5.1b): a recorded `self_test` makes its check
-   codes UNDECLARED dotted attributes (the universe declares the attribute, not its keys; round 5: the tool now records them as a note, a proposed default that the owner confirms or changes at the final GO).
+   codes UNDECLARED dotted attributes (the universe declares the attribute, not its keys; round 5: the tool now records them as a note, a proposed default that the owner confirms or changes at the final GO, superseded by the owner's ruling of 21 Nov 2026 (5.1b)).
 4. **The write-path statement (T4).** Read in the card (the mode buttons' one handler, `createModeController`, `_applyMode`, `canOpenMoreInfo`) and in the generated configuration
    (its only actions are the pause tile's `toggle` twice and `more-info` once; no service-call shaped key); run in Node through the guard with `ECCO_PYTHON` set: the generated-config file
    5 of 5, 0 skipped; the element suite 150 of 150; the core suite 157 of 157. No other write-capable path was found.
@@ -1202,7 +1238,7 @@ suite's pins), and the commit that holds this section, which differs from the on
    by functions, the real generator and the real live shape check, the clipboard stubbed): block 3 on states built from the repository fixtures kept the listed and the `ecco_intel` entities
    and the tool exited 0; with one more `ecco_intel` entity that no code declares the filter kept it and the tool exited 1 and named it. Round 5 qualification: the fixture-built states exit 0
    including the self_test note, and the 14 Nov listing converted back exits 0 only with `--allow-not-checked`. **Proposed default (the owner confirms or changes it at the final GO): a self_test note
-   is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP.** The six that did not run are the checkout, the deploy
+   is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP, superseded by the owner's ruling of 21 Nov 2026 (5.1b).** The six that did not run are the checkout, the deploy
    line, the two preflight calls, the clipboard copy and the re-run of the gate (parsed only).
 8. **The checklist suite** has 713 checks (357 before) and 342 in-memory mutants (167 before: 146 of the checklist, 185 of the runbook, 3 of the Node test, 8 of the card, example, ledger and
    Node sources), all killed. Shown to fail first: on the unchanged round 3 documents the new suite fails 168 checks.
