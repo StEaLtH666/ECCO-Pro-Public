@@ -16,6 +16,7 @@ rules on the server (stage 3, below). Offline and unreleased: nothing is install
 | `overridePolicy.ts` | the owner's expiry durations, caps and power-cut reserve validated into the `OverridePolicy` (fails closed), hard ceilings, "until local time" expiry choices (clock-change aware), starting under a valid policy, and the owner's accepted limits as data (see "Stage 3") |
 | `chargePlanner.ts` | gentle overnight charge: lowest 100 W step that finishes by window end minus the buffer, stress-tested; "buffer too small" is reported, the target is never lowered; labelled "simulated, not measured" |
 | `gentleController.ts` | read-only controller MODEL for dynamic gentle charging: a recommended charge-power setpoint per tick, capped by the safe ceiling and, with household inputs, by the grid headroom; safe fallbacks, a slew limit, parameter provenance (see "Gentle charge controller model"); never guarantees the target and never actuates |
+| `gentleAdvice.ts` | read-only, stateless gentle RATE ADVICE over the model: the lowest rate that still reaches the target by the deadline, one reason code, an outcome, the practical minimum and the safe maximum, no advice (and why) on missing or stale data (see "Gentle rate advice"); NOT exported by the package index; never actuates |
 | `tomorrow.ts` | Tomorrow's Plan model; every number comes from the inputs, a missing one is an explicit "unknown" |
 | `guards.ts` | safety checks as functions (Stop SOC, export start under a lock, honest applied claims, compile invariants) |
 
@@ -254,6 +255,50 @@ Settled, kept here because it was once an open question: the Energy Actions card
 never calls the model). The bundle was rebuilt from these sources (commit 87c71f3) and is declared by the pin-chain entry `epc4` (commit 8a7c054). The two
 commits can only be dropped as a pair: dropping both returns to the older bundle that the older pin declares, and each one alone leaves the chain suites
 red. The card's behaviour and its golden renders are unchanged.
+
+## Gentle rate advice (read only, offline, unreleased)
+
+`adviseGentleRate(input)` (`src/gentleAdvice.ts`) is the stateless question over the model above: with nothing in force yet, what is the **gentlest
+charge rate that still reaches the chosen target SOC by the deadline**, from the state given? It is a thin layer over `planGentle`, not a second
+controller: it calls the model with no setpoint in force (so no hysteresis, dwell, slew or changes budget) and no fallback, and returns
+`{ advice, reason, outcome, rateW, rateAmps, neededW, minRateW, safeMaxW, marginMin, margins, summary, codes, decision }` labelled
+`model, not a command`. Call it at every re-plan tick with the latest readings; the anti-flapping rules for a rate that is already in force stay in
+`planGentle`. It is **not re-exported by `src/index.ts`**: the Energy Actions card bundle is declared by the pin-chain entry `epc4` and any module the
+package index exports changes that bundle (measured), so import it from `./gentleAdvice.ts` (a test pins this).
+
+| `advice` | Meaning | `rateW` |
+|---|---|---|
+| `RATE` | the lowest 100 W step that reaches the target by the deadline (`outcome` `ON_TIME`) | the step, never above the smallest known safe ceiling or the grid cap, never below the practical minimum |
+| `BEST_EFFORT` | no safe rate reaches it in time: the highest safe rate, and **the target will be missed** (`LATE` inside the buffer, `MISSED` not before the window ends) | the highest safe rate |
+| `NOTHING_TO_CHARGE` | at or above the target | null |
+| `NO_ADVICE` | unknown, stale or implausible data, no safe ceiling, an unusable household input, an invalid input, or the window is over: nothing is recommended and `reason` and `explanation` say why | null |
+
+- **One reason per decision** (`reason`, a closed list: `ADVICE_REASONS`): `RATE_GENTLEST`, `RATE_AT_PRACTICAL_MINIMUM` (the minimum already reaches the
+  target in time and nothing gentler is offered), `RATE_AT_SAFE_MAXIMUM` (nothing gentler reaches it), `BEST_EFFORT_AT_RISK`, `BEST_EFFORT_UNREACHABLE`,
+  `BEST_EFFORT_DEADLINE_PASSED`, `AT_TARGET`, `NO_SOC`, `STALE_SOC`, `SOC_IMPLAUSIBLE`, `NO_SAFE_CEILING`, `CEILING_BELOW_MIN`, `HEADROOM_BELOW_MIN`,
+  `HOUSEHOLD_UNUSABLE`, `HOUSEHOLD_INVALID`, `GRID_LIMIT_STALE`, `WINDOW_ENDED`, `INVALID_INPUT` and the fail-closed default `NO_SETPOINT`. The other codes of the
+  underlying decision are in `codes`; the full decision is in `decision` for audit.
+- **Hard limits** (random sweeps in `test/gentleAdvice.test.ts`): the rate is never above the smallest known safe ceiling, the grid headroom cap or the
+  editor's maximum; for a `RATE` it equals the lowest step that makes the deadline (a linear search with the model's own projection agrees, and one step
+  lower misses), so it is never above what is needed; it is never below the practical minimum (`minRateW`, rounded up to a step): when no safe rate even
+  reaches the minimum (`CEILING_BELOW_MIN`, `HEADROOM_BELOW_MIN`) there is no advice and the outcome is `MISSED`.
+- **Margins it already carries** (`margins`): the finish-early buffer, the capacity band, the half-resolution SOC offset, the top-of-charge hold for a 100 %
+  target and the assumed taper; `marginMin` is the projected minutes to spare. They are inputs or stated assumptions, none is added on top of the lowest step.
+- **Monotone** (seeded sweeps): a higher SOC never raises the rate; a higher target, less time left, a longer buffer, a larger capacity or capacity band
+  never lowers it. (Not claimed for the ceiling or the household inputs: a lower ceiling can turn a rate into a best effort at that ceiling.)
+- **No advice on bad data**: unknown, stale (older than `maxSocAgeMin`) or implausible SOC; no fresh known ceiling; a known grid limit that is stale or
+  has no covering demand forecast (the default policy `FALLBACK`; `ASSUME_PROVISIONAL` is an explicit option and the advice is then `degraded`). No
+  fallback rate is ever advised.
+- **No memory and no side effects**: the stateful fields of the full model are not inputs (passing them changes nothing), the input is never changed
+  (tests run it on frozen input), the same input gives the same advice, and the module has no service call, network, file, clock or randomness (a static
+  test pins the banned words and the one import). It changes no published entity, helper, schedule or mode, and says `actuationSupported: false`.
+- **A current instead of a rate**: with `battery: { volts, minVolts, maxChargeAmps }` the advice also carries `rateAmps`, the rate at the lowest given
+  voltage, never above the current limit; none without a valid voltage.
+
+What it is not: it does not make the target certain (`guarantee: 'NONE'`), it does not know the real taper, top-of-charge behaviour, efficiency or low-rate
+response (assumptions, see the parameter table), and nothing here applies a rate. The offline replay tool `intelligence/tools/gentle_replay.py` runs this
+advice against recorded nights and prints what the battery did next to what would have been advised. What would have to be proven independently before
+any live use is in [`GENTLE_LIVE_ACTUATION_PROOF.md`](GENTLE_LIVE_ACTUATION_PROOF.md).
 
 ## Run the tests
 
