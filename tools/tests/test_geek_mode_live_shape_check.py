@@ -7,7 +7,9 @@ Home Assistant states (the file block 3 of the U1 runbook writes) with the catal
   [2] the verdicts (in-process, on states built from the repository's own fixtures): the healthy set exits 0; an undeclared attribute,
       an undeclared ecco_intel entity, a missing source entity, a missing non-conditional attribute and an undeclared nested key each
       exit 1 and are named; a null parent and an unrelated control entity do not; a helper outside the name filter is NOT_CHECKED_LIVE
-      unless the read marked it absent
+      unless the read marked it absent, and NOT_CHECKED_LIVE fails closed (exit 1) unless --allow-not-checked is given (round 5, F3); a
+      recorded self_test (the repository's healthy fixture as it is) is a NOTE with names only and exits 0, and that rule does not widen to
+      any other undeclared path (round 5, F4: the coordinator's proposed default, which the owner confirms or changes at the final GO)
   [3] no value anywhere: a planted fake value, a planted entity-id-like string, a number, a state text, an unusual attribute name and an
       unusual dict key never appear in stdout, stderr or the written listing; the listing holds only names, types, sizes, dates and
       fixed texts (a walk over every string of it); the hostile fixture goes through the same way
@@ -17,11 +19,13 @@ Home Assistant states (the file block 3 of the U1 runbook writes) with the catal
       a folder that is missing and anything inside this repository's checkout (a tracked folder), by the real command line and by
       the function; --overwrite alone is a usage error
   [6] the real command line (python -I -B -X utf8): exit codes, stdout, stderr; the committed 14 Nov listing converted back into
-      states gives the verdict geek_mode_coverage itself gives on that listing (16 present, 42 conditional, 1 not checked, exit 0)
-  [7] mutants (all in memory): the exit-code logic (six), the conditional rule (two), the undeclared and missing checks (five), the value-free
-      conversion leaking a value, a state, a name or a key (four), the scope (two), the overwrite and checkout guards (three), the
-      capture date, the type order, the input rules (six) and the notes (three), and four of the static rules: each is killed by a
-      running check
+      states gives the verdict geek_mode_coverage itself gives on that listing (16 present, 42 conditional, 1 not checked): exit 1 without
+      --allow-not-checked and exit 0 with it; the help names the flag
+  [7] mutants (all in memory): the exit-code logic (ten, among them the dropped not-checked term, the flag that allows everything and the note
+      that changes the exit code), the --allow-not-checked flag ignored or removed (two), the conditional rule (two), the undeclared and
+      missing checks (five), the value-free conversion leaking a value, a state, a name or a key (four), the scope (two), the overwrite and
+      checkout guards (three), the capture date, the type order, the input rules (six), the notes (two) and the self_test note rule widened,
+      dropped or stripped of a check (four), and six of the static rules: each is killed by a running check
 
 Usage: python tools/tests/test_geek_mode_live_shape_check.py
 The environment variable ECCO_LIVE_SHAPE_TOOL names another tool (this is how the suite is shown to fail on a stub that always exits 0).
@@ -96,8 +100,12 @@ U = G.build_universe()
 BY_KIND = {}
 for _e in U.entities:
     BY_KIND.setdefault(_e.kind, []).append(_e)
-STATUS = BY_KIND["status"][0].entity_id
+STATUS_ENT = BY_KIND["status"][0]
+STATUS = STATUS_ENT.entity_id
 RESERVE = BY_KIND["reserve_helper"][0].entity_id
+NOTE_TITLE = "NOTE (free-form self-test check codes under the declared self_test attribute; recorded, not a failure)"
+PROPOSED = ("proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; "
+            "anything else UNDECLARED or any unexplained absence is a STOP")
 FX_DIR = ROOT / G.FIXTURE_DIR_REL
 COMMITTED_SHAPE_PATH = ROOT / G.SHAPE_REL
 COMMITTED_SHAPE = json.loads(COMMITTED_SHAPE_PATH.read_bytes())
@@ -107,13 +115,13 @@ def fixture(name: str) -> dict:
     return json.loads((FX_DIR / f"intelligence.states.{name}.json").read_bytes())
 
 
-def live_like(name: str = "healthy") -> list:
+def live_like(name: str = "healthy", keep_self_test: bool = False) -> list:
     """A states list as block 3 writes it, from a repository fixture. The fixtures' status entity carries a recorded self_test (a dict of check codes);
-    the live listing of 14 Nov had it empty (null), so it is emptied here and the populated form is tested on its own."""
+    the live listing of 14 Nov had it empty (null), so it is emptied here unless keep_self_test asks for the fixture as it is (round 5: that form is a NOTE)."""
     out = []
     for k, v in fixture(name).items():
         st = copy.deepcopy(v)
-        if k == STATUS and isinstance(st["attributes"].get("self_test"), dict):
+        if not keep_self_test and k == STATUS and isinstance(st["attributes"].get("self_test"), dict):
             st["attributes"]["self_test"] = None
         out.append({"entity_id": k, **st})
     return out
@@ -159,6 +167,33 @@ def run_cli(args: list, cwd: Path | None = None) -> tuple[int, str, str]:
 def line_count(out: str, label: str) -> str:
     m = re.search(r"^" + re.escape(label) + r"\s*: (.*)$", out, re.M)
     return m.group(1) if m else ""
+
+
+def note_section(out: str) -> list[str]:
+    """The names listed under the NOTE title of the self_test check codes (the indented lines right after it, up to the proposed-default line)."""
+    lines = out.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.startswith(NOTE_TITLE):
+            names = []
+            for nxt in lines[i + 1:]:
+                if not nxt.startswith("  ") or nxt.strip().startswith("proposed default"):
+                    break
+                names.append(nxt.strip())
+            return names
+    return []
+
+
+def back_states() -> list:
+    """The committed 14 Nov listing converted back into states (a value made up from each type and size): the one deliberate partial capture."""
+    back = []
+    for r in COMMITTED_SHAPE["ecco_intel"]:
+        attrs = {}
+        for n, i in r["attributes"].items():
+            t = i["type"]
+            attrs[n] = (None if t == "null" else True if t == "bool" else 7 if t == "int" else 0.5 if t == "float" else "x" * max(0, i["bytes"] - 2) if t == "str"
+                        else ["x"] * int(t[5:-1]) if t.startswith("list[") else {k: 0 for k in (i["top_keys"] or [])})
+        back.append({"entity_id": r["entity_id"], "state": "y" * r["state_len"], "attributes": attrs, "last_updated": COMMITTED_SHAPE["_provenance"]["captured"] + "T10:00:00+00:00"})
+    return back
 
 
 class Scratch:
@@ -243,6 +278,11 @@ def static_problems(src: str) -> list[str]:
             p.append(f"the comparison's own text is copied: {text}")
     if "geek_mode_coverage" not in names or not re.search(r"\bG\.compare_live\(", src):
         p.append("compare_live of geek_mode_coverage is not called")
+    doc = ast.get_docstring(tree) or ""
+    if "proposed default" not in doc or "confirms or changes" not in doc:
+        p.append("the docstring no longer says that the self_test note is a proposed default that the owner confirms or changes")
+    if "--allow-not-checked" not in doc:
+        p.append("the docstring no longer names --allow-not-checked")
     if not src.isascii():
         p.append("non-ASCII text")
     return p
@@ -261,6 +301,8 @@ def make_scenarios(mod, sc: Scratch, fake_repo: Path):
                 "notchecked": line_count(out, "NOT_CHECKED_LIVE")}
 
     base = live_like("healthy")
+    healthy_raw = live_like("healthy", keep_self_test=True)   # the repository's healthy fixture as it is: a recorded self_test with its check codes
+    codes = sorted(fixture("healthy")[STATUS]["attributes"]["self_test"])
     out_list: list[tuple[str, object]] = []
 
     def scenario(name: str):
@@ -337,11 +379,43 @@ def make_scenarios(mod, sc: Scratch, fake_repo: Path):
         return (rc == 1 and f"MISSING entity (declared, not in Home Assistant): {RESERVE}" in out and counts(out)["notchecked"].startswith("0 declared entities")
                 and "NOT CHECKED entity" not in out)
 
-    @scenario("the helper outside the name filter, simply not in the read, is NOT_CHECKED_LIVE (counted, named) and the exit is 0")
+    reserve_missing = [x for x in copy.deepcopy(base) if x["entity_id"] != RESERVE]
+
+    @scenario("the helper outside the name filter, simply not in the read, is NOT_CHECKED_LIVE (counted, named) and fails closed: exit 1, RESULT: DIFFERENT, with the line that says why")
     def _():
-        s = [x for x in copy.deepcopy(base) if x["entity_id"] != RESERVE]
-        rc, out, _err = go(s)
-        return rc == 0 and counts(out)["notchecked"].startswith("1 declared entities") and f"NOT CHECKED entity: {RESERVE}" in out and counts(out)["present"].startswith(f"{len(U.entities) - 1} of")
+        rc, out, _err = go(reserve_missing)
+        return (rc == 1 and counts(out)["notchecked"].startswith("1 declared entities") and f"NOT CHECKED entity: {RESERVE}" in out
+                and counts(out)["present"].startswith(f"{len(U.entities) - 1} of") and "RESULT: DIFFERENT (exit 1)" in out and "unless --allow-not-checked is given" in out
+                and "RESULT: MATCH" not in out)
+
+    @scenario("the same read with --allow-not-checked exits 0: the entity is still counted and named as not checked, and the RESULT line says that it was allowed")
+    def _():
+        rc, out, _err = go(reserve_missing, "--allow-not-checked")
+        return (rc == 0 and counts(out)["notchecked"].startswith("1 declared entities") and f"NOT CHECKED entity: {RESERVE}" in out
+                and "RESULT: MATCH (exit 0) WITH 1 DECLARED ENTITIES NOT CHECKED (--allow-not-checked was given)" in out)
+
+    @scenario("--allow-not-checked allows nothing else: an undeclared attribute, an undeclared entity, a missing source and an unexplained absence still exit 1 with it (also next to a not-checked entity), and with nothing not checked it changes nothing")
+    def _():
+        s1 = copy.deepcopy(base)
+        entity(s1, STATUS)["attributes"]["zz_extra_probe"] = FAKE
+        s2 = [x for x in copy.deepcopy(base) if x["entity_id"] != STATUS]
+        s3 = copy.deepcopy(base)
+        entity(s3, STATUS)["attributes"].pop("mode")
+        s4 = copy.deepcopy(base) + [{"entity_id": UNDECLARED_ENTITY, "state": "on", "attributes": {"friendly_name": "x"}}]
+        s5 = copy.deepcopy(reserve_missing)
+        entity(s5, STATUS)["attributes"]["zz_extra_probe"] = FAKE
+        rcs = [go(s, "--allow-not-checked")[0] for s in (s1, s2, s3, s4, s5)]
+        plain_rc, plain_out, _e = go(base)
+        flag_rc, flag_out, _e2 = go(base, "--allow-not-checked")
+        norm = lambda t: re.sub(r"^input .*$", "", t, flags=re.M)  # noqa: E731
+        return rcs == [1, 1, 1, 1, 1] and plain_rc == flag_rc == 0 and norm(plain_out) == norm(flag_out) and "NOT CHECKED" not in flag_out.replace("NOT_CHECKED_LIVE", "")
+
+    @scenario("the committed 14 Nov listing converted back into states: exit 1 without --allow-not-checked (the reserve helper is not checked), exit 0 with it, the same counts either way")
+    def _():
+        back = back_states()
+        rc1, out1, _e1 = go(back)
+        rc2, out2, _e2 = go(back, "--allow-not-checked")
+        return rc1 == 1 and rc2 == 0 and counts(out1) == counts(out2) and counts(out1)["notchecked"].startswith("1 declared entities") and counts(out1)["undeclared"] == "0 entities, 0 attributes"
 
     @scenario("the helper outside the name filter, present in the read, is converted and PRESENT_LIVE (declared entities are in scope whatever their name)")
     def _():
@@ -376,14 +450,64 @@ def make_scenarios(mod, sc: Scratch, fake_repo: Path):
         s = copy.deepcopy(base)
         entity(s, eid)["attributes"]["advice"]["zz_nested"] = FAKE
         rc, out, err = go(s)
-        return rc == 1 and f"{eid} advice.zz_nested" in out and FAKE not in out + err
+        return rc == 1 and f"{eid} advice.zz_nested" in out and FAKE not in out + err and NOTE_TITLE not in out
 
-    @scenario("a recorded self_test (its check codes are not declared) exits 1 with the hint; the same read with it empty exits 0")
+    @scenario("the repository's healthy fixture as it is (a recorded self_test with its check codes) exits 0 and says MATCH; the codes are listed in the NOTE section by name, the UNDECLARED count stays 0, the proposed default is printed")
+    def _():
+        rc, out, err = go(healthy_raw)
+        names = note_section(out)
+        want = [f"{STATUS} self_test.{c}" for c in codes]
+        title_line = next((ln for ln in out.split("\n") if ln.startswith(NOTE_TITLE)), "")
+        return (len(want) >= 2 and rc == 0 and "RESULT: MATCH (exit 0)" in out and names == want and counts(out)["undeclared"] == "0 entities, 0 attributes"
+                and f": {len(want)} names" in title_line and ("  " + PROPOSED) in out and "HINT" not in out and err == "")
+
+    @scenario("the NOTE section appears only when a check code is recorded: a null self_test (the 14 Nov state) has no NOTE section and no proposed-default line")
+    def _():
+        rc, out, _err = go(base)
+        return rc == 0 and NOTE_TITLE not in out and PROPOSED not in out
+
+    @scenario("a self_test note changes no other verdict: with an undeclared attribute the exit is 1, the attribute is in the UNDECLARED block, the check codes are in the NOTE section only")
+    def _():
+        s = copy.deepcopy(healthy_raw)
+        entity(s, STATUS)["attributes"]["zz_extra_probe"] = FAKE
+        rc, out, err = go(s)
+        failing = [ln for ln in out.split("\n") if ln.startswith("  UNDECLARED attribute")]
+        return (rc == 1 and counts(out)["undeclared"] == "0 entities, 1 attributes" and len(failing) == 1 and "zz_extra_probe" in failing[0]
+                and not any("self_test." in ln for ln in failing) and len(note_section(out)) == len(codes) and FAKE not in out + err and "RESULT: DIFFERENT (exit 1)" in out)
+
+    @scenario("the note rule does not widen to another declared dict of the status entity: a new key under it exits 1 as an UNDECLARED attribute and is no note")
+    def _():
+        parent = next(p.split(".")[0] for p in STATUS_ENT.attrs if "." in p and isinstance(entity(base, STATUS)["attributes"].get(p.split(".")[0]), dict))
+        s = copy.deepcopy(healthy_raw)
+        entity(s, STATUS)["attributes"][parent]["zz_nested"] = FAKE
+        rc, out, err = go(s)
+        failing = [ln for ln in out.split("\n") if ln.startswith("  UNDECLARED attribute")]
+        return (rc == 1 and any(ln.endswith(f"{STATUS} {parent}.zz_nested") for ln in failing) and not any("zz_nested" in n for n in note_section(out)) and FAKE not in out + err)
+
+    @scenario("a self_test on an entity that does not declare that attribute is no note: the attribute and its key are both UNDECLARED, exit 1, no NOTE section")
+    def _():
+        other = next(e.entity_id for e in U.entities if e.kind == "fresh" and "self_test" not in e.attrs)
+        s = copy.deepcopy(base)
+        entity(s, other)["attributes"]["self_test"] = {"zz_code": 1}
+        rc, out, _err = go(s)
+        failing = [ln for ln in out.split("\n") if ln.startswith("  UNDECLARED attribute")]
+        return (rc == 1 and counts(out)["undeclared"] == "0 entities, 2 attributes" and any(ln.endswith(f"{other} self_test") for ln in failing)
+                and any(ln.endswith(f"{other} self_test.zz_code") for ln in failing) and NOTE_TITLE not in out)
+
+    @scenario("only the status entity declares self_test today (the documents say a recorded self_test on the status entity), so the declared-parent check is what makes a note")
+    def _():
+        return [e.kind for e in U.entities if "self_test" in e.attrs] == ["status"] and not any(p.startswith("self_test.") for p in STATUS_ENT.attrs)
+
+    @scenario("no value leaves the tool through the note: a planted value and an unusual key inside a recorded self_test are in no output, the key is a numbered placeholder, the check codes are names")
     def _():
         s = copy.deepcopy(base)
-        entity(s, STATUS)["attributes"]["self_test"] = {"CHECK_ONE": "PASS", "CHECK_TWO": "PASS"}
-        rc, out, _err = go(s)
-        return rc == 1 and f"{STATUS} self_test.CHECK_ONE" in out and "HINT: the keys of a recorded self_test" in out and go(base)[0] == 0
+        entity(s, STATUS)["attributes"]["self_test"] = {"CHECK_ONE": FAKE, FAKE_KEY: FAKE_ID, "CHECK_TWO": {"inner": FAKE_NUM}}
+        listing = sc.out()
+        rc, out, err = go(s, "--write-shape", listing)
+        text = (out + err + (listing.read_text(encoding="utf-8") if listing.exists() else "")).lower()
+        names = note_section(out)
+        return (rc == 0 and len(names) == 3 and f"{STATUS} self_test.CHECK_ONE" in names and f"{STATUS} self_test.CHECK_TWO" in names
+                and any(n.startswith(f"{STATUS} self_test.<unusual-name-") for n in names) and not any(t.lower() in text for t in TOKENS))
 
     @scenario("an entity that reads unavailable is counted in a NOTE (a count, no value)")
     def _():
@@ -544,18 +668,26 @@ def make_scenarios(mod, sc: Scratch, fake_repo: Path):
 # ---------------------------------------------------------------------------------------------------------------------------------
 # mutants of the tool's source: (name, [(old, new), ...], "scenario" or "static")
 # ---------------------------------------------------------------------------------------------------------------------------------
-EXIT_LINE = 'return 1 if (rep["undeclared_entities"] or rep["undeclared_attrs"] or rep["missing"] or rep["unexplained"]) else 0'
+EXIT_LINE = ('return 1 if (rep["undeclared_entities"] or rep["undeclared_attrs"] or rep["missing"] or rep["unexplained"] '
+             'or (rep["not_checked"] and not allow_not_checked)) else 0')
+NOTE_RULE_LINE = 'return dot == "." and key != "" and "." not in key and parent == SELF_TEST_PARENT and SELF_TEST_PARENT in declared_attrs'
 MUTANTS = [
     ("X1 the exit code is always 0", [(EXIT_LINE, "return 0")]),
-    ("X2 the exit code is inverted", [("return 1 if (rep[", "return 0 if (rep["), ('rep["unexplained"]) else 0', 'rep["unexplained"]) else 1')]),
+    ("X2 the exit code is inverted", [("return 1 if (rep[", "return 0 if (rep["), ('not allow_not_checked)) else 0', 'not allow_not_checked)) else 1')]),
     ("X3 an undeclared entity no longer fails the exit code", [('rep["undeclared_entities"] or ', "")]),
     ("X4 an undeclared attribute no longer fails the exit code", [('rep["undeclared_attrs"] or ', "")]),
     ("X5 a missing entity no longer fails the exit code", [('rep["missing"] or ', "")]),
-    ("X6 an unexplained absence no longer fails the exit code", [(' or rep["unexplained"])', ")")]),
+    ("X6 an unexplained absence no longer fails the exit code", [(' or rep["unexplained"]', "")]),
+    ("X7 a not-checked entity no longer fails the exit code (the dropped term)", [(' or (rep["not_checked"] and not allow_not_checked)', "")]),
+    ("X8 the flag is ignored by the verdict: a not-checked entity fails the exit code even with --allow-not-checked", [('(rep["not_checked"] and not allow_not_checked)', 'rep["not_checked"]')]),
+    ("X9 the flag allows everything: with --allow-not-checked no finding fails the exit code", [("return 1 if (rep[", "return 1 if not allow_not_checked and (rep[")]),
+    ("X10 the self_test note fails the exit code", [(' or rep["unexplained"]', ' or rep["unexplained"] or rep["self_test_notes"]')]),
+    ("F1 the flag is parsed and then ignored in main", [("    allow = args.allow_not_checked\n", "    allow = False\n")]),
+    ("F2 the flag is not an option of the tool (an unknown option is a usage error)", [('"--allow-not-checked"', '"--allow-checked"'), ("    allow = args.allow_not_checked\n", "    allow = False\n")]),
     ("C1 every absent attribute row is called conditional (the unexplained list is empty)", [('unexplained = [r for r in absent_rows if not r["why"].startswith("conditional:")]', "unexplained = []")]),
     ("C2 the conditional count takes every absent row", [('conditional = [r for r in absent_rows if r["why"].startswith("conditional:")]', "conditional = list(absent_rows)")]),
     ("U1 undeclared entities are never collected", [('undeclared_entities = sorted(r["entity_id"] for r in live["undeclared"] if r["path"] is None)', "undeclared_entities = []")]),
-    ("U2 undeclared attributes are never collected", [('undeclared_attrs = sorted((r["entity_id"], r["path"]) for r in live["undeclared"] if r["path"] is not None)', "undeclared_attrs = []")]),
+    ("U2 undeclared attributes are never collected", [('    for e, p in sorted((r["entity_id"], r["path"]) for r in live["undeclared"] if r["path"] is not None):', "    for e, p in []:")]),
     ("U3 a declared entity marked absent by the read is no longer missing", [('    missing += sorted(eid for eid in live["not_checked_live"] if eid in absent_ids)\n', "    pass\n")]),
     ("U4 a declared entity marked absent is also counted as not checked", [('not_checked = [eid for eid in live["not_checked_live"] if eid not in absent_ids]', 'not_checked = list(live["not_checked_live"])')]),
     ("U5 the missing entities are never collected", [('missing = sorted({r["entity_id"] for r in live["not_present_live"] if r["path"] is None})', "missing = []")]),
@@ -578,14 +710,20 @@ MUTANTS = [
     ("I2 the data envelope is not unwrapped", [('if isinstance(obj, dict) and "data" in obj:', "if False:")]),
     ("I3 UTF-16 is not recognised", [('if data[:2] in (b"\\xff\\xfe", b"\\xfe\\xff"):', "if False:")]),
     ("I4 an empty list is accepted", [("    if not obj:\n", "    if False:\n")]),
-    ("N1 the self_test hint is gone", [('if any(p.startswith("self_test.") for _e, p in rep["undeclared_attrs"]):', 'if False and any(p.startswith("self_test.") for _e, p in rep["undeclared_attrs"]):')]),
+    ("N1 the NOTE section of the self_test check codes is never printed", [('    if notes:\n        lines.append(f"{NOTE_TITLE}', '    if False:\n        lines.append(f"{NOTE_TITLE}')]),
     ("N2 the unavailable note is gone", [('if e["state"] in ("unavailable", "unknown"):', "if False:")]),
+    ("A1 the note rule is widened to any dotted path", [(NOTE_RULE_LINE, 'return dot == "."')]),
+    ("A2 the note rule is dropped (a recorded self_test is a failure again)", [(NOTE_RULE_LINE, "return False")]),
+    ("A3 the note rule no longer names self_test (any declared parent of an entity that declares self_test)", [(" and parent == SELF_TEST_PARENT", "")]),
+    ("A4 the note rule no longer asks that the entity declares self_test", [(" and SELF_TEST_PARENT in declared_attrs", "")]),
 ]
 STATIC_MUTANTS = [
     ("T1 a second copy of compare_live is added", lambda s: s + "\n\ndef compare_live(u, shape):\n    return {}\n"),
     ("T2 a network module is imported", lambda s: s.replace("import argparse\n", "import argparse\nimport urllib.request\n", 1)),
     ("T3 a third-party module is imported", lambda s: s.replace("import argparse\n", "import argparse\nimport requests\n", 1)),
     ("T4 the comparison of geek_mode_coverage is no longer called", lambda s: s.replace("G.compare_live(", "G.compare_live_not(", 1)),
+    ("T5 the docstring no longer says the self_test note is a proposed default", lambda s: s.replace("proposed default", "rule")),
+    ("T6 the docstring no longer names --allow-not-checked", lambda s: s.replace("--allow-not-checked", "--allow-x")),
 ]
 
 
@@ -623,13 +761,19 @@ def main() -> int:
             except (Exception, SystemExit) as exc:  # noqa: BLE001 - a broken tool fails the scenario, it does not stop the suite
                 ok, detail = False, f"{type(exc).__name__}: {exc}"
             check(name, ok, detail)
-        check(f"the scenarios are run ({len(scenarios)}; 32 are expected)", len(scenarios) >= 32)
+        check(f"the scenarios are run ({len(scenarios)}; 41 are expected)", len(scenarios) >= 41)
 
         # [6] the real command line
         print("[6] the real command line (python -I -B -X utf8)")
         healthy = sc.put(live_like("healthy"))
         rc, out, err = run_cli([healthy])
         check("healthy fixture states: exit 0, RESULT: MATCH, nothing on stderr, stdout is ASCII", rc == 0 and "RESULT: MATCH (exit 0)" in out and err == "" and out.isascii(), f"rc={rc} {err[:120]}")
+        raw_codes = sorted(fixture("healthy")[STATUS]["attributes"]["self_test"])
+        rc_r, out_r, err_r = run_cli([sc.put(live_like("healthy", keep_self_test=True))])
+        check("the healthy fixture as it is (a recorded self_test): exit 0, the NOTE section names its check codes, the proposed default is printed, nothing on stderr, stdout is ASCII",
+              rc_r == 0 and err_r == "" and out_r.isascii() and note_section(out_r) == [f"{STATUS} self_test.{c}" for c in raw_codes] and ("  " + PROPOSED) in out_r, f"rc={rc_r} {err_r[:120]}")
+        rc_h, out_h, err_h = run_cli(["--help"])
+        check("the help names --allow-not-checked and says it is for a deliberate partial capture", rc_h == 0 and "--allow-not-checked" in out_h and "deliberate" in out_h.replace("\n", " ") and err_h == "", f"rc={rc_h}")
         check("the counts are printed: PRESENT_LIVE, NOT_PRESENT_LIVE with conditional and unexplained, UNDECLARED, NOT_CHECKED_LIVE",
               all(re.search(r"^" + w + r"\s*: ", out, re.M) for w in ("PRESENT_LIVE", "NOT_PRESENT_LIVE", "UNDECLARED", "NOT_CHECKED_LIVE")) and " conditional, " in out and " unexplained)" in out)
         bad = live_like("healthy")
@@ -661,29 +805,25 @@ def main() -> int:
         check("--write-shape outside the checkout writes; a second run refuses to overwrite (exit 2); --overwrite replaces",
               rc == 0 and listing.exists() and rc2 == 2 and "exists" in err2 and rc3 == 0, f"{rc} {rc2} {rc3}")
         # the committed 14 Nov listing converted back into states
-        back = []
-        for r in COMMITTED_SHAPE["ecco_intel"]:
-            attrs = {}
-            for n, i in r["attributes"].items():
-                t = i["type"]
-                attrs[n] = (None if t == "null" else True if t == "bool" else 7 if t == "int" else 0.5 if t == "float" else "x" * max(0, i["bytes"] - 2) if t == "str"
-                            else ["x"] * int(t[5:-1]) if t.startswith("list[") else {k: 0 for k in (i["top_keys"] or [])})
-            back.append({"entity_id": r["entity_id"], "state": "y" * r["state_len"], "attributes": attrs, "last_updated": COMMITTED_SHAPE["_provenance"]["captured"] + "T10:00:00+00:00"})
+        back = back_states()
         direct = G.compare_live(U, COMMITTED_SHAPE)
         direct_cond = [r for r in direct["not_present_live"] if r["path"] is not None]
         back_listing = sc.out()
-        rc, out, err = run_cli([sc.put(back), "--write-shape", back_listing])
+        rc_nf, out_nf, err_nf = run_cli([sc.put(back)])
+        rc, out, err = run_cli([sc.put(back), "--allow-not-checked", "--write-shape", back_listing])
         got = json.loads(back_listing.read_text(encoding="utf-8")) if back_listing.exists() else {"ecco_intel": []}
         shape_of = lambda s: [(r["entity_id"], r["state_len"], {n: (i["type"], i["top_keys"]) for n, i in r["attributes"].items()}) for r in s["ecco_intel"]]  # noqa: E731
         parts = {
-            "rc 0": rc == 0,
+            "rc 0 with --allow-not-checked": rc == 0,
+            "rc 1 without it, the not-checked entity named, RESULT: DIFFERENT": rc_nf == 1 and "NOT CHECKED entity" in out_nf and "RESULT: DIFFERENT (exit 1)" in out_nf and err_nf == "",
+            "the flagged run says it was allowed": "RESULT: MATCH (exit 0) WITH 1 DECLARED ENTITIES NOT CHECKED (--allow-not-checked was given)" in out,
             "the comparison on the committed listing itself: 0 undeclared, 1 not checked, 42 conditional": len(direct["undeclared"]) == 0 and len(direct["not_checked_live"]) == 1 and len(direct_cond) == 42,
             "the same conditional count, none unexplained": re.search(r"\(%d conditional, 0 unexplained\)" % len(direct_cond), out) is not None,
             "none undeclared": line_count(out, "UNDECLARED") == "0 entities, 0 attributes",
             "one not checked": line_count(out, "NOT_CHECKED_LIVE").startswith("1 declared entities"),
             "present": line_count(out, "PRESENT_LIVE").startswith("%d of %d" % (len(COMMITTED_SHAPE["ecco_intel"]), len(direct["entities"]))),
         }
-        check("the committed 14 Nov listing converted back into states: exit 0 and the verdict geek_mode_coverage itself gives on that listing "
+        check("the committed 14 Nov listing converted back into states: exit 1 without --allow-not-checked, exit 0 with it, and the verdict geek_mode_coverage itself gives on that listing "
               f"({len(direct['entities'])} declared, {len(direct_cond)} conditional absences, {len(direct['not_checked_live'])} not checked, {len(direct['undeclared'])} undeclared)",
               all(parts.values()), str([k for k, v in parts.items() if not v]))
         check("and the listing the tool writes from them equals the committed listing in entity ids, state lengths, attribute names, types and dict keys",
