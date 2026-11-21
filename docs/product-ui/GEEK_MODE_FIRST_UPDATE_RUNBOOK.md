@@ -1213,7 +1213,8 @@ A focused independent review of that first commit (verdict NOT_READY, one MAJOR)
 reads anything but ALL of mode SHADOW, `applies_nothing` strictly true, the contract version the catalogue declares, the fresh and the watchdog binary sensors on, a state that is one of the eight words the
 catalogue lists and is not STALE, STARTING, PAUSED or SELF_TEST_FAILED (PAUSED stays a STOP that asks the owner) and a last update within the catalogue's freshness limit of 1200 seconds, with `absent` added
 to the item for the status, freshness or watchdog entity, with `contract_version` and the state of the two sensors among the recorded values, and with the contract version, the mode, the four failing words and
-the limit derived by the checklist suite from the catalogue and the contract source; a sentence added outside the NOTE paragraph could still clear such a state, so the suite now scans both documents for one;
+the limit derived by the checklist suite from the catalogue and the contract source; a sentence added outside the NOTE paragraph could still clear such a state, so the suite now runs a vocabulary scan over both documents
+for the common wordings of such a sentence: defence in depth, not a proof that no clearing sentence can be written;
 and the checklist was exactly at its limit, which it still is (200 lines, no headroom).
 
 **Round 5** (21 Nov 2026: the fixes of the independent review of round 4, verdict READY_WITH_MINORS, points F1 to F6): the check of every existing dashboard (5.4, checklist 5) gets one catch-all row for

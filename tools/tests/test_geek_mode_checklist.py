@@ -46,7 +46,8 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
       coordinator confirms every row yes, yes, yes before step 5 is pinned in 5.4, in both step 4 rows and in checklist 5 (F5: item 1 says it is done at step 4, before step 5)
  [19] the release gates (G1 to G7 of runbook 3, each marked) and what the rollback is measured against (the baseline, the protected backup)
  [20] (round 6, the owner's ruling of 21 Nov 2026 on the baseline and step 1b stops) the STOP, NOTE and values paragraphs are in the checklist (4.1), runbook 5.1b and runbook 6 word for
-      word; each of the nine STOP items is in each place; the NOTE paragraph lists no unknown, unavailable or failed state before its closing sentence 'Unknown, unavailable or failed
+      word (round 8: each is the whole markdown paragraph of its place, up to the blank line, and EQUAL to the canonical text: the checklist's paragraph is the one source, it equals the typed constants of
+      this suite, and the runbook's two places equal it; a sentence appended in one place fails); each of the nine STOP items is in each place; the NOTE paragraph lists no unknown, unavailable or failed state before its closing sentence 'Unknown, unavailable or failed
       safety-relevant states are never notes.'; the values sentence (the shape tool never clears a value; the coordinator reads the values) is there; gate G4 says the baseline is saved AND no
       STOP condition of the list holds (both documents); the step 1 and step 1b rows of both step tables point to the rule; the sentence that supersedes the tool's printed `proposed default` line
       is in the checklist and runbook 5.1b; `proposed default` and the old confirm-at-the-final-GO wording appear only in a sentence that says superseded; the pins of the old wording are replaced by
@@ -56,7 +57,7 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
       SELF_TEST_FAILED (PAUSED is still a STOP that asks the owner); and a last update within the catalogue's freshness limit; each part is pinned, and the contract version, the mode, the failing words and the
       limit are DERIVED from the catalogue and the contract source (status_facts), so a change there that the documents do not follow fails; STOP item 3 says 'absent, unknown or unavailable' (gate G4
       of the runbook names the full sense; the step 1 and 1b rows point to the full test; the recorded values include contract_version and the state of the fresh and watchdog sensors)
-[20b] (round 7, M2) no sentence of either document says that an unknown, unavailable, absent or failed state is a note, recorded as a note, harmless, acceptable or a reason to go on, except the canonical NEVER_NOTES
+[20b] (round 7, M2; round 8, H2) no sentence of either document says that an unknown, unavailable, absent or failed state is a note, recorded as a note, harmless, acceptable, allowed or a reason to go on, except the canonical NEVER_NOTES
       sentence, the sentences of the canonical NOTE paragraph and a sentence that carries the marker 'superseded by the owner's ruling of 21 Nov 2026'
  [21] mutants (all in memory): a wrong sha8, a wrong card or configuration hash, a missing check, a dropped `cls`, a cited section that does
       not exist, a forbidden word, a changed rollback order, a dropped statement, a flag that does not exist, a removed step, a quoted tool
@@ -70,7 +71,10 @@ checklist and the runbook as text (no Home Assistant, no network, no Node, no gi
       old G4 wording and the old confirm-at-the-final-GO wording put back, the supersession sentence dropped, the step 1 and 1b rows pointing to the old shorter list. Round 7 (the review of c4e9b8f):
       each part of the status item dropped in each of the three places (applies_nothing, the freshness limit, the watchdog sensor, the failing states, the contract version, 'absent,', the mode), the
       bare gate G4 wording, the status test's paragraph and its numbers, the recorded values without contract_version, the catalogue and the contract source changed under the documents, and sentences
-      outside the NOTE paragraph that clear an unknown, unavailable, absent or failed state (the two that the review showed survive, and more)
+      outside the NOTE paragraph that clear an unknown, unavailable, absent or failed state (the two that the review showed survive, and more). Round 8 (the narrow re-check of d893bce): a sentence appended to,
+      and one character changed in, each of the three canonical paragraphs in each of the three places; the review's seven sentences that clear a state and passed the vocabulary scan, and three more; each
+      wording the scan now knows is checked as a word; the changed section 13 sentence (the scan is a vocabulary scan, defence in depth, not a proof) pinned and the old wording forbidden. The scan of [20b] is a
+      VOCABULARY scan: it catches the common wordings and does not prove that no sentence that clears a state can be written; the canonical paragraphs, the pins and the derivation are the guard
 
 Usage: python tools/tests/test_geek_mode_checklist.py [CHECKLIST_FILE]
 The optional argument names another checklist (this is how the suite is shown to fail on a checklist with a wrong hash).
@@ -184,6 +188,8 @@ NOTE_P = ("NOTE (recorded, shown to the owner, never hidden): informational find
 NEVER_NOTES = "Unknown, unavailable or failed safety-relevant states are never notes."
 NOTE_BAD_WORDS = ("unknown", "unavailable", "failed", "failure", "absent", "missing", "not running", "not shadow")   # none may be a note: the NOTE paragraph holds none before its closing sentence
 VALUES_P = "The shape tool sees only names and types, so it can never clear a value: the coordinator reads the values in the captured states and applies this list."
+VALUES_LEAD = "The shape tool sees only"   # round 8 (H1): the lead that finds the values paragraph in each place
+PAR_KINDS = (("STOP", STOP_LEAD, STOP_P), ("NOTE", NOTE_LEAD, NOTE_P), ("values", VALUES_LEAD, VALUES_P))   # round 8 (H1): the three canonical paragraphs: what to call it, the lead that finds the markdown paragraph in a place, the typed text
 SUPERSEDED_S = ("The live shape tool still prints a line beginning `proposed default` and calls a self_test note `not a failure`: that wording is shape-only (names and"
                 " types, never a value), its code is preserved as reviewed, and it is SUPERSEDED by the owner's ruling of 21 Nov 2026: the tool's note never clears a v"
                 "alue, the coordinator reads the values in `states-before.json` and applies the list, and where the list says STOP nothing proceeds.")
@@ -195,7 +201,11 @@ OLD_RULE_PHRASES = ("proposed default", "confirms or changes it at the final go"
 # round 7 (M2): a sentence that says an unknown, unavailable, absent or failed state is a note, harmless or no reason to stop; only these may (the canonical NEVER_NOTES sentence and the canonical NOTE paragraph's own
 # sentences, and a sentence that carries the supersession marker of the old shape-only wording)
 STATE_WORDS = re.compile(r"unknown|unavailable|absent|absence|fail|missing|\bstale\b|\bpaused\b|\bstarting\b|\bblocked\b|not running|not shadow|not fresh|\boff\b|not true|applies_nothing|contract|mismatch|assisted|autonomous|other than shadow|not recogni[sz]ed|unrecogni[sz]ed|no fresh")   # the spec: unknown, unavailable, absent, fail (any form); and the other states a STOP names
-CLEARS_WORDS = re.compile(r"\bis a note\b|\bare notes?\b|\bas a note\b|\bas notes\b|recorded as a note|\bgoes on\b|\bgo on\b|\bgoing on\b|\bcarries on\b|\bcontinues?\b|\bproceed|\bharmless\b|\bacceptable\b|\bis fine\b|\bignor|informational|not a stop|(?:may|can) be skipped|does not matter|no need to stop|need not stop|does not (?:stop|block)|without stopping|carry on|move on|(?:is|are) accepted|can be accepted|not a problem|no problem|tolerat|is optional|do not stop")
+# round 8 (the narrow re-check of d893bce, H2): the wordings that the first list did not know. A sentence that holds a state word and one of them is flagged like the older ones. It is a VOCABULARY scan: it catches the
+# common wordings of a sentence that clears a state, it does not prove that no such sentence can be written (defence in depth; the canonical paragraphs, the pins and the derivation are the guard)
+CLEARS_MORE = ("anyway", "go ahead", "goes ahead", "going ahead", "allowed", "is ok", "is okay", "is fine", "may start", "may proceed", "counts as", "needs no", "no owner answer", "still proceeds", "nothing to stop")
+CLEARS_EXCEPT = {"needs no": r"(?! restart)"}   # 'needs no restart' is a design fact of the new dashboard (runbook section 1: '...confines any failure to one new dashboard, needs no restart'), not a sentence that clears a state
+CLEARS_WORDS = re.compile(r"\bis a note\b|\bare notes?\b|\bas a note\b|\bas notes\b|recorded as a note|\bgoes on\b|\bgo on\b|\bgoing on\b|\bcarries on\b|\bcontinues?\b|\bproceed|\bharmless\b|\bacceptable\b|\bis fine\b|\bignor|informational|not a stop|(?:may|can) be skipped|does not matter|no need to stop|need not stop|does not (?:stop|block)|without stopping|carry on|move on|(?:is|are) accepted|can be accepted|not a problem|no problem|tolerat|is optional|do not stop|" + "|".join(r"\b" + re.escape(w) + r"\b" + CLEARS_EXCEPT.get(w, "") for w in CLEARS_MORE))
 SUPERSEDED_MARK = "superseded by the owner's ruling of 21 nov 2026"   # lower case: what a sentence that keeps the old shape-only wording says
 BLOCK3_MORE = "$more = @($index.Keys | Where-Object { $_ -like '*ecco_intel*' -and $ids -notcontains $_ } | Sort-Object | ForEach-Object { $index[$_] })"   # round 5 (F2)
 BLOCK3_APPEND = "$out = @($out) + $more"
@@ -501,6 +511,8 @@ PINNED = [   # (document, heading number of the section the sentence is in, a ph
     ("runbook", "13", "under a proposed default that the owner confirms or changes at the final GO (F4; superseded by the owner's ruling of 21 Nov 2026 (5.1b))"),
     ("runbook", "13", "a proposed default that the owner confirms or changes at the final GO, superseded by the owner's ruling of 21 Nov 2026 (5.1b))"),
     ("runbook", "13", "Proposed default (the owner confirms or changes it at the final GO): a self_test note is recorded, not a stop; anything else UNDECLARED or any unexplained absence is a STOP, superseded by the owner's ruling of 21 Nov 2026 (5.1b)"),
+    # round 8 (the narrow re-check of d893bce, H2): the scan for a note that clears a state is said to be what it is, a vocabulary scan, not a proof
+    ("runbook", "13", "so the suite now runs a vocabulary scan over both documents for the common wordings of such a sentence: defence in depth, not a proof that no clearing sentence can be written"),
 ]
 FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phrase that must be gone)
     ("runbook", None, "step 8 proves it"),
@@ -525,6 +537,8 @@ FORBIDDEN_PHRASES = [   # (document, section or None for the whole text, a phras
     ("runbook", None, STATUS_SHORT + ";"),
     ("checklist", None, STATUS_SHORT + ";"),
     ("runbook", "3", "the Intelligence status reads SHADOW with a fresh result;"),
+    # round 8 (H2): the old wording said the suite scans both documents for such a sentence, as if the scan proved there was none
+    ("runbook", None, "scans both documents for one"),
 ]
 COVERAGE = [   # (a phrase of a bullet of runbook section 9, the keywords that checklist section 8 must hold for it; lower case)
     ("has never run in a real home assistant or a real browser", ("never run in a real home assistant",)),
@@ -549,6 +563,27 @@ def fold(text: str) -> str:
 def plain(text: str) -> str:
     """Lower case, whitespace folded, markdown emphasis and code ticks removed: what a sentence says, whatever its markup."""
     return re.sub(r"\s+", " ", text.replace("*", "").replace("`", "")).strip().lower()
+
+
+def plain_cs(text: str) -> str:
+    """Like plain, but the case is kept (a paragraph is compared whole): markdown emphasis and code ticks removed, whitespace folded."""
+    return re.sub(r"\s+", " ", text.replace("*", "").replace("`", "")).strip()
+
+
+def lead_paragraphs(raw: str, lead: str) -> list[str]:
+    """The markdown paragraphs of a section (each up to the blank line that ends it) that start with `lead` (markup and case ignored in the lead), as plain text with the case kept."""
+    return [plain_cs(par) for par in re.split(r"\n\s*\n", raw) if plain(par).startswith(plain(lead))]
+
+
+def first_diff(want: str, got: str) -> str:
+    """Where two plain paragraphs part: the text that is appended or cut at the end, or the character position and a short excerpt of each."""
+    n = min(len(want), len(got))
+    i = next((k for k in range(n) if want[k] != got[k]), n)
+    if i == n and len(got) > len(want):
+        return f"text appended after character {n}: '{got[n:n + 60]}'"
+    if i == n:
+        return f"text cut after character {n}"
+    return f"first difference at character {i}: expected '{want[max(i - 12, 0):i + 24]}', found '{got[max(i - 12, 0):i + 24]}'"
 
 
 def sections(text: str) -> dict[str, str]:
@@ -1186,7 +1221,8 @@ def status_problems(places: tuple, facts: dict | None) -> list[str]:
 
 
 def stoprules_problems(checklist: str, runbook: str, extra: dict | None = None) -> list[str]:
-    """[20] the STOP, NOTE and values paragraphs word for word in the checklist (4.1), runbook 5.1b and runbook 6; each of the nine STOP items in each place; the status item in full (round 7: each of its
+    """[20] the STOP, NOTE and values paragraphs word for word in the checklist (4.1), runbook 5.1b and runbook 6, each place's whole markdown paragraph EQUAL to the canonical text (round 8: the checklist's paragraph
+    is the one source and equals the typed constants; an appended sentence fails); each of the nine STOP items in each place; the status item in full (round 7: each of its
     parts, and the contract version, the mode, the four failing words and the freshness limit against the catalogue and the contract source); the NOTE paragraph holds no
     unknown, unavailable or failed state before its closing sentence; gate G4 in both documents; the step 1 and 1b rows point to the rule; the sentence that supersedes the tool's printed
     `proposed default` line; and `proposed default` or the old confirm-at-the-final-GO wording appear only in a sentence that says superseded."""
@@ -1194,6 +1230,13 @@ def stoprules_problems(checklist: str, runbook: str, extra: dict | None = None) 
     places = (("checklist 4.1", subsection(checklist, "4.1")), ("runbook 5.1b", subsection(runbook, "5.1b")), ("runbook 6", subsection(runbook, "6")))
     p += status_problems(tuple((label, plain(raw)) for label, raw in places if plain(raw)), status_facts(extra or {}))
     stop, note, vals, never = plain(STOP_P), plain(NOTE_P), plain(VALUES_P), plain(NEVER_NOTES)
+    # round 8 (H1): the canonical text is derived from ONE source, the checklist's own paragraph (which must equal the typed constant); the two places of the runbook must equal it
+    canonical: dict[str, str] = {}
+    for kind, lead, typed in PAR_KINDS:
+        own = lead_paragraphs(places[0][1], lead)
+        canonical[kind] = own[0] if len(own) == 1 else plain_cs(typed)
+        if len(own) == 1 and own[0] != plain_cs(typed):
+            p.append(f"{places[0][0]}: the {kind} paragraph is not the typed canonical text of this suite ({first_diff(plain_cs(typed), own[0])})")
     for label, raw in places:
         text = plain(raw)
         if not text:
@@ -1210,19 +1253,19 @@ def stoprules_problems(checklist: str, runbook: str, extra: dict | None = None) 
             p.append(f"{label}: the sentence '{NEVER_NOTES}' is missing")
         if vals not in text:
             p.append(f"{label}: the values sentence (the shape tool never clears a value; the coordinator reads the values) is missing")
-        lead_ok = False
-        for par in re.split(r"\n\s*\n", raw):
-            pt = plain(par)
-            if pt.startswith(plain(NOTE_LEAD)):
-                lead_ok = True
-                head = pt.split(never)[0]
-                bad = [w for w in NOTE_BAD_WORDS if w in head]
-                if bad:
-                    p.append(f"{label}: the NOTE paragraph lists a safety-relevant state as a note ({', '.join(bad)})")
-        if not lead_ok:
-            p.append(f"{label}: no paragraph starts with '{NOTE_LEAD}'")
-        if not any(plain(par).startswith(plain(STOP_LEAD)) for par in re.split(r"\n\s*\n", raw)):
-            p.append(f"{label}: no paragraph starts with '{STOP_LEAD}'")
+        for kind, lead, typed in PAR_KINDS:   # round 8 (H1): the whole markdown paragraph is the canonical text and nothing else (a substring test lets an appended sentence through)
+            pars = lead_paragraphs(raw, lead)
+            if not pars:
+                p.append(f"{label}: no paragraph starts with '{lead}'")
+            elif len(pars) > 1:
+                p.append(f"{label}: {len(pars)} paragraphs start with '{lead}' (one is expected)")
+            elif pars[0] != canonical[kind]:
+                p.append(f"{label}: the {kind} paragraph is not the canonical text and nothing else ({first_diff(canonical[kind], pars[0])})")
+            if kind == "NOTE":
+                for par in pars:
+                    bad = [w for w in NOTE_BAD_WORDS if w in par.lower().split(never)[0]]
+                    if bad:
+                        p.append(f"{label}: the NOTE paragraph lists a safety-relevant state as a note ({', '.join(bad)})")
     # gate G4, in both documents
     for label, body in (("checklist", sections(checklist).get("7", "")), ("runbook", subsection(runbook, "3"))):
         row = re.search(r"^\| G4 \|.*$", body, re.M)
@@ -1253,7 +1296,7 @@ def stoprules_problems(checklist: str, runbook: str, extra: dict | None = None) 
 
 
 def notescan_problems(checklist: str, runbook: str) -> list[str]:
-    """[20b] (round 7, M2) no sentence of either document says that an unknown, unavailable, absent or failed state (or another state that a STOP names: missing, stale, paused, starting, blocked, off,
+    """[20b] (round 7, M2; round 8, H2) a VOCABULARY scan, defence in depth and not a proof that no such sentence can be written: no sentence of either document says that an unknown, unavailable, absent or failed state (or another state that a STOP names: missing, stale, paused, starting, blocked, off,
     not shadow, not fresh, applies_nothing, a contract that does not match) is a note, harmless, acceptable or a reason to go on. A sentence is a paragraph, a
     table row, a numbered item or a bullet, cut after . ! or ?. Exempt: the canonical NEVER_NOTES sentence, the sentences of the canonical NOTE paragraph, and a sentence that carries the supersession
     marker of the old shape-only wording ('superseded by the owner's ruling of 21 Nov 2026'; the bare word 'superseded' is not enough)."""
@@ -1451,8 +1494,8 @@ RULE_TITLES = {
     "writepath": "[17] the write-path statement names Node tests that exist, and what it says of the card's mode switch, the more-info domains and the example's actions is true",
     "dashboards": "[18] the check of every existing dashboard: the dashboards-to-check block (catch-all row, header, three empty cells per row, in order) and the step 4 rows",
     "gates": "[19] the release gates G1 to G7 are in the checklist, each marked; the rollback is measured against the baseline and the backup, each step proven",
-    "stoprules": "[20] the owner's ruling of 21 Nov 2026: the STOP (nine items), NOTE and values paragraphs word for word in the checklist 4.1, runbook 5.1b and runbook 6; the status item in full, derived from the catalogue and the contract source; G4; the step 1 and 1b rows; the supersession of the tool's printed line; the old wording only where superseded",
-    "notescan": "[20b] no sentence of either document makes an unknown, unavailable, absent or failed state a note, harmless or a reason to go on (only the canonical NEVER_NOTES and NOTE sentences and a sentence marked superseded may)",
+    "stoprules": "[20] the owner's ruling of 21 Nov 2026: the STOP (nine items), NOTE and values paragraphs word for word in the checklist 4.1, runbook 5.1b and runbook 6, each a whole paragraph equal to the canonical text; the status item in full, derived from the catalogue and the contract source; G4; the step 1 and 1b rows; the supersession of the tool's printed line; the old wording only where superseded",
+    "notescan": "[20b] a vocabulary scan (defence in depth, not a proof): no sentence of either document makes an unknown, unavailable, absent or failed state a note, harmless, allowed or a reason to go on (only the canonical NEVER_NOTES and NOTE sentences and a sentence marked superseded may)",
 }
 
 
@@ -1499,6 +1542,18 @@ def kill_words(text: str, phrase: str, scope: str | None = None, repl: str = "RE
             return text
         lo, hi = span
     return text[:lo] + re.sub(rx, lambda _m: repl, text[lo:hi], count=1, flags=re.I) + text[hi:]
+
+
+def edit_par(text: str, scope: str, lead: str, fn) -> str:
+    """Apply fn to the raw markdown paragraph (up to the blank line) of the section `scope` that starts with `lead` (markup and case ignored); the rest of the text is untouched."""
+    span = subsection_span(text, scope)
+    if span is None:
+        return text
+    lo, hi = span
+    for m in re.finditer(r"\S.*?(?=\n\s*\n|\Z)", text[lo:hi], re.S):
+        if plain(m.group(0)).startswith(plain(lead)):
+            return text[:lo + m.start()] + fn(m.group(0)) + text[lo + m.end():]
+    return text
 
 
 def kill_stop(text: str, title: str, key: str) -> str:
@@ -1847,6 +1902,29 @@ def make_mutants(pins: dict, checklist: str, runbook: str) -> list[tuple[str, st
     add("runbook", "W13 runbook section 6: a stale status does not stop the installation", lambda t: append_in(t, "6", "A stale status does not stop the installation."), "notescan")
     add("runbook", "W14 runbook 5.1b: applies_nothing false is harmless", lambda t: append_in(t, "5.1b", "A status whose applies_nothing reads false is harmless."), "notescan")
     add("runbook", "W15 runbook 5.1b: a contract version that differs is recorded as a note", lambda t: append_in(t, "5.1b", "A contract version that differs is recorded as a note."), "notescan")
+    # --- round 8 (the narrow re-check of d893bce), H1: a sentence appended INTO a canonical paragraph in only one of the three places passed the substring test; the paragraph must EQUAL the canonical text
+    appended = "The coordinator may overrule this list when the owner is away."   # no state word: only the paragraph rule can see it
+    one_char = {"STOP": ("the TOU edit helper", "the TOU edit helpar"), "NOTE": ("legitimately empty", "legitimately emptx"), "values": ("can never clear a value", "can never clear a valuf")}
+    for n, (target, scope, label, kind) in enumerate(((a, b, c, k) for a, b, c in places6 for k in ("STOP", "NOTE", "values")), 1):
+        lead = next(ld for kd, ld, _t in PAR_KINDS if kd == kind)
+        add(target, f"X{n} a sentence is appended to the {kind} paragraph of {label} only",
+            lambda t, s=scope, ld=lead: edit_par(t, s, ld, lambda par: par + " " + appended), "stoprules")
+        add(target, f"Y{n} one character of the {kind} paragraph of {label} is changed",
+            lambda t, s=scope, ld=lead, ch=one_char[kind]: edit_par(t, s, ld, lambda par: par.replace(ch[0], ch[1], 1)), "stoprules")
+    # --- round 8, H2: the reviewer's seven sentences that clear a state and passed the vocabulary scan, and three of my own (each new wording of CLEARS_MORE is also checked as a word in main)
+    def values_par(sentence: str):
+        return lambda t: edit_par(t, "4.1", VALUES_LEAD, lambda par: par + " " + sentence)
+    add("runbook", "Z1 runbook 6: 'A PAUSED status needs no owner answer: install anyway.' (the review)", lambda t: append_in(t, "6", "A PAUSED status needs no owner answer: install anyway."), "notescan")
+    add("runbook", "Z2 runbook 5.1b: 'If a self-test check reads FAIL, the coordinator still goes ahead with step 2.' (the review)",
+        lambda t: append_in(t, "5.1b", "If a self-test check reads FAIL, the coordinator still goes ahead with step 2."), "notescan")
+    add("runbook", "Z3 runbook 5.1b: 'A status of STARTING counts as a fresh result.' (the review)", lambda t: append_in(t, "5.1b", "A status of STARTING counts as a fresh result."), "notescan")
+    add("checklist", "Z4 the checklist 4.1 values paragraph: '... is allowed' (the review)", values_par("A PAUSED status is allowed."), "notescan")
+    add("checklist", "Z5 the checklist 4.1 values paragraph: '... is OK; step 2 may start' (the review)", values_par("A stale status is OK; step 2 may start."), "notescan")
+    add("checklist", "Z6 the checklist 4.1 values paragraph: 'install anyway' (the review)", values_par("An unavailable status entity: install anyway."), "notescan")
+    add("checklist", "Z7 the checklist 4.1 values paragraph: 'goes ahead' (the review)", values_par("With an absent control entity the coordinator goes ahead."), "notescan")
+    add("runbook", "Z8 runbook 5.1b: 'Nothing to stop if the freshness entity is absent.' (my own)", lambda t: append_in(t, "5.1b", "Nothing to stop if the freshness entity is absent."), "notescan")
+    add("checklist", "Z9 checklist section 5: 'With the watchdog off the coordinator is going ahead.' (my own)", lambda t: append_in(t, "5", "With the watchdog off the coordinator is going ahead."), "notescan")
+    add("runbook", "Z10 runbook section 12: 'A stale status entity: the coordinator may go ahead.' (my own)", lambda t: append_in(t, "12", "A stale status entity: the coordinator may go ahead."), "notescan")
     # the pinned sentences and the coverage keywords: the removal of each is killed
     for n, (doc, scope, phrase) in enumerate(PINNED, 1):
         add(doc, f"P{n} the sentence '{phrase[:46]}' removed from the {doc} {scope}", lambda t, s=scope, ph=phrase: kill_words(t, ph, s), "pinned")
@@ -1948,6 +2026,15 @@ def main(argv: list[str]) -> int:
     check("the seven parts of the status item are each a part of the canonical STOP paragraph, in order, and sit between STOP items 1 and 3",
           len(STATUS_PARTS) == 7 and len(sp) == 7 and sp == sorted(sp) and plain(STOP_P).index(plain(STOP_ITEMS[1])) < sp[0] and sp[-1] < plain(STOP_P).index(plain(STOP_ITEMS[2])))
     check("the status item's facts can be derived from the catalogue and the contract source (contract version, mode, eight words, null rule, freshness limit)", status_facts(extra) is not None, "")
+    def clears_hit(word: str) -> bool:
+        m = CLEARS_WORDS.search(f"a status then {word} here")
+        return m is not None and m.group(0) == word
+    check("the clearing-word vocabulary holds each of the " + str(len(CLEARS_MORE)) + " wordings that the narrow re-check of d893bce named (CLEARS_MORE); it is a vocabulary scan, not a proof",
+          len(CLEARS_MORE) == 15 and all(clears_hit(w) for w in CLEARS_MORE), ", ".join(w for w in CLEARS_MORE if not clears_hit(w)))
+    check("the one exception of the clearing-word vocabulary is narrow: 'needs no restart' (a design fact of the new dashboard) passes, 'needs no owner answer' and 'needs no' with anything else are flagged",
+          CLEARS_WORDS.search("the new dashboard needs no restart") is None and CLEARS_WORDS.search("a paused status needs no owner answer") is not None and CLEARS_WORDS.search("an unknown value needs no check") is not None)
+    check("the three canonical paragraphs (STOP, NOTE, values) are each one markdown paragraph (no blank line) that starts with its lead",
+          len(PAR_KINDS) == 3 and all("\n" not in typed and plain(typed).startswith(plain(lead)) for _k, lead, typed in PAR_KINDS))
     own_bytes = Path(__file__).read_bytes()
     own = own_bytes.decode("utf-8", errors="replace")
     check("this suite's own source is ASCII and holds no address, token or entity id",
