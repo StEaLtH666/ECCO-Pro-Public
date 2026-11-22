@@ -757,7 +757,7 @@ def rule_rollback(rb, cl, S, F):
                 pr.append(f"{label} lacks '{phrase}' (the protected backup restore)")
     if not has(s10, "against the baseline") or not has(s10, "the owner's protected full backup"):
         pr.append("the runbook's rollback is not measured against the baseline and the protected backup")
-    for phrase in ("A facts-only rollback (the kit stays) is RB1, RB2, RB3 and RB6", "A full rollback is RB1, RB2, RB4, RB5 and RB6",
+    for phrase in ("A facts-only rollback (the kit stays) is RB1, RB2, RB3 and RB6", "A full rollback is RB1, RB2 (only if step 9 placed the facts",
                    "The facts go out first, and the previous kit second"):
         if not has(s10, phrase):
             pr.append(f"the runbook's section 10 lacks '{phrase}'")
@@ -1039,7 +1039,7 @@ def rule_rollback_reads(rb, cl, S, F):
                    "needs <checkout> clean"):
         if not has(rb2, phrase):
             pr.append(f"RB2 lacks '{phrase}'")
-    for phrase in ("only when the kit stays", "SITE_INVERTER_CONVERSION is absent", "config_hash equals the baseline's"):
+    for phrase in ("only when the kit stays", "SITE_INVERTER_CONVERSION is absent", "config_hash` equals the first 16 hex digits of the baseline's site-file sha256"):
         if not has(rb3, phrase):
             pr.append(f"RB3 lacks '{phrase}'")
     for phrase in ("needs <checkout> clean", "it refuses a dirty working tree", "runs the repository validation", "with -Python before it sends anything",

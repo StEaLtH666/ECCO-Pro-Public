@@ -64,7 +64,7 @@ in the state folder. The one helper the procedure touches is the existing pause 
 |---|---|---|---|---|
 | 0 | coordinator | offline gates on the exact commit: suites, kit build and compare, drills, the fit and the site-check | hashes as pinned; the drills PASS; facts accepted | any difference |
 | 1 | coordinator + you, **go** | live read-only baseline: Core, listings and hashes, the site file's sha256, log lines, your UI reads of the three outputs, your download | everything saved; SHADOW, fresh; the installed loader is the one read | anything else |
-| 2 | you | the protected full backup in the UI | a protected backup exists | none |
+| 2 | you | the protected full backup in the UI | a protected backup exists | no protected backup |
 | 3 | you, **go** | PAUSE: pause helper on | status PAUSED | not PAUSED |
 | 4 | coordinator, **go** | read the scorecard file's hash and size, twice | stable | it changes |
 | 5 | coordinator, **go** | `deploy-ha-kit.ps1 -Action Plan`, then, on a separate go, `-Action Upgrade` | `ECCO INTELLIGENCE KIT UPGRADE PASSED`, the backup stamp, no restart | any failure line |

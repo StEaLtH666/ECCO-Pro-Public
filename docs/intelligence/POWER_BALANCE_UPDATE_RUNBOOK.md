@@ -176,9 +176,8 @@ eye):
 | `inverter_standby_w` | the inverter's own draw, taken off the AC side | 0 to 100 W |
 
 All three absent (or null) is the lossless rule, the default. Present means all three, each a finite number inside its bound.
-Anything else (one or two of the three, a string, true or false, a list, an object, a number outside its bound, an integer too
-large for a float) is reported and never read as a looser rule: the loader WARNs `SITE_INVERTER_CONVERSION`, and the engine judges
-the balance lossless and BLOCKs the two outputs with `POWER_LOSS_FACTS_INVALID`. The bounds are PROPOSED engineering suggestions,
+Anything else (one or two of the three, a string, true or false, a list, an object, a number outside its bound) is reported and never read as a looser rule: the loader WARNs `SITE_INVERTER_CONVERSION`, and the engine judges
+the balance lossless and BLOCKs the two outputs with `POWER_LOSS_FACTS_INVALID`. A JSON integer too large for a float is not a fact problem but a malformed file: the loader refuses the whole file (`SITE_FILE` FAIL), and the placement tool and the site-check refuse it before it reaches the host. The bounds are PROPOSED engineering suggestions,
 not owner values (D-U3-9). What a wrong set inside the bounds can still hide is stated in section 12 and in
 [`DATA_QUALITY_METHOD.md`](DATA_QUALITY_METHOD.md) section 10.1.
 
@@ -239,7 +238,7 @@ they apply to an upgrade, and its G7 for a site file that already exists.
 | 2 | the owner's protected full backup in the Home Assistant UI; its name and time noted offline, never its password | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists | no protected backup |
 | 3 | PAUSE: the owner turns the pause helper on (install runbook 10 and 11: pause before an upgrade) | OWNER | live (UI) | **write** (the existing pause helper, as always) | **yes** | the status reads PAUSED; the watchdog stays fresh (PAUSED counts as fresh while the helper is on); no cycle is computed | anything but PAUSED within a few minutes |
 | 4 | live read-only: the status reads PAUSED, then, after the longest cycle has ended, the scorecard file's hash and size and the listings again (8.4) | COORDINATOR | live | read-only | **yes** | the state listing is stable across two reads one minute apart | the file changes while paused |
-| 5 | stage the new kit with the repository's own tool and verify hashes: `deploy-ha-kit.ps1 -Action Plan` (read-only), then `-Action Upgrade` (8.5) | COORDINATOR | live | Plan read-only; Upgrade **write** (A1, A3) | **yes**, for the Upgrade separately | `ECCO INTELLIGENCE KIT UPGRADE PASSED`, the backup path printed (record its stamp), `HA check : passed`, **RESTART REQUIRED - separately gated, not performed** | any failure line; NO CHANGE; a hash mismatch; the tool's own rollback message; ROLLBACK NOT CONFIRMED |
+| 5 | stage the new kit with the repository's own tool and verify hashes: `deploy-ha-kit.ps1 -Action Plan` (read-only), then `-Action Upgrade` (8.5) | COORDINATOR | live | Plan read-only; Upgrade **write** (A1, A3) | **yes**, for the Upgrade separately | `ECCO INTELLIGENCE KIT UPGRADE PASSED`, the backup path printed (record its stamp), `HA check    : passed`, **RESTART REQUIRED - separately gated, not performed** | any failure line; NO CHANGE; a hash mismatch; the tool's own rollback message; ROLLBACK NOT CONFIRMED |
 | 6 | live read-only, before any restart: the installed folder equals the kit, the state folder and the site file are untouched (8.6) | COORDINATOR | live | read-only | **yes** | `INSTALLED TREE EQUALS THE KIT`; no line of difference for the state folder; the site file's sha256 is the baseline's | any difference |
 | 7 | **the restart**: the owner restarts Home Assistant, once, short, watching; Core running again before and after the checks of 8.7 | OWNER | live | the owner's restart | **yes, its own approval, separate from the Upgrade** | Core running, the integration loads, no repair or error line, the outage well under 5 minutes | an outage of more than about 5 minutes (the latch: a supervised dongle reboot by the owner); the integration does not load; a repair or error line |
 | 8 | live read-only, still paused: the load checks of the kit alone, with the site file unchanged, and a diagnostics download (8.8) | COORDINATOR (reads), OWNER (the download) | live | read-only | **yes** | status PAUSED; no FAIL in `self_test`; no `SITE_INVERTER_CONVERSION` line; eleven entities, no suffix; watchdog fresh | a FAIL; a new entity; a `_2` suffix; a `SITE_INVERTER_CONVERSION` line (the facts are not supposed to be on the host yet) |
@@ -315,8 +314,7 @@ Set-Location <checkout>
 (Get-FileHash -Algorithm SHA256 (Join-Path $KIT 'SHA256SUMS')).Hash.ToLower()
 ```
 
-The tool prints `built custom_components/ecco_intelligence with 32 vendored modules and 19 integration files; 53 files` and the
-`SHA256SUMS` sha256, and the second line prints the same number again; it must equal the fixed-reference row of section 3. The same
+The tool prints `built custom_components/ecco_intelligence with 32 vendored modules and 19 integration files; 53 files; SHA256SUMS sha256 <hash>` and a `status:` line; the `Get-FileHash` line prints the same hash again, and it must equal the fixed-reference row of section 3. The same
 command without `--git-sha` (into a second new directory) must give the first row. If either differs, stop: the checkout is not
 the reviewed one (after U2, 3 says what changes).
 
@@ -363,7 +361,7 @@ It never touches a real Home Assistant.
 **The facts, offline.** The fit needs a recorded history of the four readings (the house power, the PV power, the battery power and
 the grid power): a CSV of time-aligned samples or the Home Assistant history JSON, one file per reading and period. Reading that
 history from Home Assistant is a live read-only action with its own authorisation; no tool of this runbook does it, and the files
-stay in `<OFFLINE_EVIDENCE_DIR>`. The fitting tool reads the files it is given, prints a report and writes nothing:
+stay in `<OFFLINE_EVIDENCE_DIR>`. Step 0 uses the history already held there; a newer history read, if the owner wants the fit repeated on newer data, is one more live read-only action taken with step 1, with its own authorisation. The fitting tool reads the files it is given, prints a report and writes nothing:
 
 ```powershell
 cls
@@ -418,8 +416,7 @@ $LASTEXITCODE
 
 It must exit 0 and print the load check `PASS  SITE_INVERTER_CONVERSION` and `Result      : OK`; the two outputs then read
 `LIVE_INPUTS_DECIDE` (or a blocker that is not `POWER_LOSS_FACTS_INVALID`). A file that is not usable gives `PROBLEMS`, exit 1, and
-`POWER_LOSS_FACTS_INVALID` on the two outputs. The placement tool and the site-check each refuse every file the loader refuses
-(a byte-order mark, a non-finite number, an integer too large for a float), so a typo cannot reach the host unnoticed. The
+`POWER_LOSS_FACTS_INVALID` on the two outputs. The placement tool refuses every file the loader refuses as a whole (a byte-order mark, a non-finite number, an integer too large for a float) but does not judge the three facts themselves: invalid facts are only a WARN in the loader and would be placed. The site-check (U3-G8) is what catches them, so it runs on the new file before every placement. The
 `config_hash` it prints is what the status entity's `config_hash` attribute shows once the file is loaded (step 11).
 
 Run the offline suites of install runbook 2 on the exact commit (the runtime root and the engine root, one at a time):
@@ -765,7 +762,7 @@ poll-driven step or the next minute's tick (install runbook 7, step 3); the firs
 
 Wait for at least the next two slot times (allow about two and a half hours), then the owner downloads the diagnostics as
 `diagnostics-after-1.json` (and again as `-2` after the second slot cycle), and the coordinator reads each with the block of 8.8
-(change `$F`), and the log again with `-Pattern ecco_intelligence` into `log-after.txt`. **Read while PV or battery power is
+(change `$F`), and the log again with `-Pattern ecco_intelligence` into `log-after.txt`. That block prints only the status, the self-test, the counters and the kept cycle count: read checks 1 (the mode, `applies_nothing`), 2 (the blockers of the two outputs) and 7 (`cadence.refresh_suspended_cpu` and the slot `total_s` p95 and maximum, which the download carries under `cadence` and `cycle_stats`) where the baseline read them, in the owner's UI reads and in the downloaded file. **Read while PV or battery power is
 large**, as the baseline was: with little flow the old rule passed too and a clean read proves nothing. Expected, and each a check:
 
 1. **Status as in the baseline, SHADOW, fresh.** `status` is the computed status the baseline showed (OK while the inputs are
@@ -831,7 +828,7 @@ Each item is the owner's decision to start and needs its own go. The rollback is
 write: **(i) the baseline** of step 1 (the integration folder listing and its hashes, the state folder listing, the site file's
 sha256, Core's version, the log lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's protected full
 backup** of step 2, the last resort. **A facts-only rollback** (the kit stays) is RB1, RB2, RB3 and RB6. **A full rollback** is RB1,
-RB2, RB4, RB5 and RB6. The facts go out first, and the previous kit second (7.1 says why).
+RB2 (only if step 9 placed the facts: after a no-go at step 8 the site file was never changed, and RB2 is skipped), RB4, RB5 and RB6. The facts go out first, and the previous kit second (7.1 says why).
 
 1. **RB1, pause.** The owner turns the pause helper on if it is not on (install runbook 11: pause, then roll back). Proof: the status
    reads PAUSED; the state listing is stable across two reads (the block of 8.4: the same two reads, a minute apart).
@@ -863,7 +860,7 @@ RB2, RB4, RB5 and RB6. The facts go out first, and the previous kit second (7.1 
    and an independent read of the host file's sha256 equal to `site-file-sha-before.txt` (the read of 8.9 with `$NEW` set to the
    baseline's sha256). The placement takes effect only at a reload or a restart: nothing is live yet.
 3. **RB3, reload the entry, only when the kit stays.** The owner downloads the diagnostics, then reloads the entry as in 8.10, paused.
-   Proof: `SITE_INVERTER_CONVERSION` is absent from `self_test` again, the status entity's `config_hash` equals the baseline's, no FAIL;
+   Proof: `SITE_INVERTER_CONVERSION` is absent from `self_test` again, the status entity's `config_hash` equals the first 16 hex digits of the baseline's site-file sha256 (step 1 records that sha256; the loader derives `config_hash` from the raw file bytes, and the download redacts it), no FAIL;
    after RB6 the two outputs read as the baseline's again (the lossless rule is back, so the balance blocker returns while the flow
    is large). In a full rollback this item is skipped: the restart of RB5 reads the file.
 4. **RB4, restore the previous kit (a full rollback).** The coordinator runs the repository's own rollback with the stamp recorded in
@@ -883,7 +880,7 @@ RB2, RB4, RB5 and RB6. The facts go out first, and the previous kit second (7.1 
    swaps, verifies in place, compares the site file and the state folder before and after and rolls itself back if they changed
    (this is why RB1 comes first) and runs `ha core check`;
    it never restarts. Proof: the PASSED block (`Restored` names the backup's file count, which is the baseline listing's: 52 if the
-   installed kit was the merged base's and 57 if it was U2's; and `HA check : passed`), and an independent comparison of the
+   installed kit was the merged base's and 57 if it was U2's; and `HA check    : passed`), and an independent comparison of the
    installed folder with the baseline (the block below):
 
    ```powershell
