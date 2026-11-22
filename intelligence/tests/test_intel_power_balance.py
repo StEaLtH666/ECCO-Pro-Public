@@ -447,13 +447,61 @@ for _ in range(6000):
         if x < tol:
             continue
         err = abs(rule.expected_house_w(pv, b, g) - hw)               # how wrong the rule's expectation is at the true set
-        if err >= tol / 2.0:
+        if err >= 0.79 * tol:
             continue
         margin_tested += 1
         if q.power_balance_verdict(hw, pv, bb, gg, rule)[0] is None:
             margin_hidden.append((pv, b, g, fault))
-check(f"{margin_tested} random reversals (>= the tolerance) judged by a rule whose expectation is wrong by less than half the "
-      "tolerance: none is hidden (the guarantee in DATA_QUALITY_METHOD.md)", margin_tested > 500 and not margin_hidden, str(margin_hidden[:2]))
+check(f"{margin_tested} random reversals (>= the tolerance) judged by a rule whose expectation is wrong by less than 0.79 of the "
+      "tolerance (the guarantee in DATA_QUALITY_METHOD.md is 0.8: a battery reversal moves the expectation by at least 1.8 times "
+      "its reading at these bounds): none is hidden", margin_tested > 1000 and not margin_hidden, str(margin_hidden[:2]))
+# the exact statement: a reversal that the rule lets through is one that the rule's own error absorbs. The grid CT reading g moves
+# the expectation by exactly 2 |g|; a battery reading b by 2 x (the slope over the stretch it crosses) x |b|, a slope between
+# the lowest discharge factor (0.9) and 1 / the lowest charge factor (1.111), so by at least 1.8 |b|. Hidden therefore means
+# |error| >= move - tolerance, for any pair of facts inside the bounds (the true inverter and the rule's)
+LOWEST_SLOPE = LO_F
+slack, n_hidden, n_pairs = [], 0, 0
+rng4 = random.Random(4096)
+for _ in range(12000):
+    true_c = sd.InverterConversion(rng4.uniform(LO_F, HI_F), rng4.uniform(LO_F, HI_F), rng4.uniform(LO_S, HI_S))
+    rule = sd.InverterConversion(rng4.uniform(LO_F, HI_F), rng4.uniform(LO_F, HI_F), rng4.uniform(LO_S, HI_S))
+    pv = rng4.choice((0.0, rng4.uniform(0, 8000)))
+    b = rng4.uniform(-5000, 5000)
+    g = rng4.uniform(-5000, 5000)
+    hw = true_c.expected_house_w(pv, b, g)
+    if hw < 1.0:
+        continue
+    for fault in ("ct", "batt"):
+        gg, bb = (-g, b) if fault == "ct" else (g, -b)
+        n_pairs += 1
+        code, resid, tol = q.power_balance_verdict(hw, pv, bb, gg, rule)
+        if code is not None:
+            continue
+        n_hidden += 1
+        err = abs(rule.expected_house_w(pv, b, g) - hw)
+        move = 2.0 * abs(g) if fault == "ct" else 2.0 * LOWEST_SLOPE * abs(b)
+        if err < move - tol - 1e-6:
+            slack.append((fault, round(err, 1), round(move - tol, 1)))
+check(f"{n_hidden} reversals that two arbitrary sets of facts inside the bounds let through out of {n_pairs}: each one is absorbed "
+      "by the rule's own error (error >= twice the grid reading, or 1.8 times the battery reading, less the tolerance)",
+      n_hidden > 100 and not slack, str(slack[:2]))
+# the most two in-bounds sets can differ in their expectation (the figure DATA_QUALITY_METHOD.md 10.1 quotes), attained at the corners
+corners = [sd.InverterConversion(a, c, e) for a in (LO_F, HI_F) for c in (LO_F, HI_F) for e in (LO_S, HI_S)]
+worst_dis = worst_chg = float("-inf")                               # the largest excess over the stated bound (0 = attained)
+over = []
+for d in (100.0, 500.0, 2000.0, 5000.0, 8000.0):
+    for x in corners:
+        for y in corners:
+            sh_dis = abs(x.expected_house_w(d, 0.0, 0.0) - y.expected_house_w(d, 0.0, 0.0))
+            sh_chg = abs(x.expected_house_w(0.0, -d, 0.0) - y.expected_house_w(0.0, -d, 0.0))
+            worst_dis = max(worst_dis, sh_dis - ((1.0 - LO_F) * d + HI_S))
+            worst_chg = max(worst_chg, sh_chg - ((1.0 / LO_F - 1.0) * d + HI_S))
+            if sh_dis > (1.0 - LO_F) * d + HI_S + 1e-9 or sh_chg > (1.0 / LO_F - 1.0) * d + HI_S + 1e-9:
+                over.append((d, x, y))
+check("two sets inside the bounds differ in their expectation by at most 0.1 x d + 100 W (discharge side) and 0.111 x d + 100 W "
+      "(charge side), reached at the corners of the bounds (at 5000 W of net DC-side power: 600 W and 656 W)",
+      not over and abs(worst_dis) < 1e-9 and abs(worst_chg) < 1e-9
+      and abs(LO_F - 0.9) < 1e-12 and HI_S == 100.0, str((over[:1], worst_dis, worst_chg)))
 
 print("== [7] mutants of the rule are told apart by this suite's case table")
 TOL_FLOOR, TOL_FRAC = sd.PROPOSED.power_agree_w, sd.PROPOSED.power_agree_fraction

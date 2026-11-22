@@ -344,11 +344,49 @@ the days, judged on the second). Refit per season and after any change to the in
 when the hold-out accepts (nearly) every sample, every reversal that matters is blocked, and the fitted values lie inside the
 bounds. The tool's output holds site values: keep it with the site's offline evidence.
 
-**What it guarantees, and what it does not.** A rule whose expectation is wrong by less than half the tolerance at a sample
-cannot hide a sign reversal of at least the tolerance on it (a reversal moves the expectation by twice the reversed
-reading), and `test_intel_power_balance.py` checks this over random sets. The bounds, however, allow errors larger than
-that: at the loosest values the bounds permit (both factors 0.90, standby 100 W) some reversals can pass, which is why the
-values must come from the fit and the fault-injection row of the report must be read, not assumed. A reversal that leaves
+**What it guarantees.** A reversal moves the expectation by an amount that can be stated exactly. Reversing the grid CT
+reading g moves it by 2 x |g|. Reversing the battery reading b moves it by 2 x s x |b|, where s is the slope of the expectation in
+the net DC-side power over the stretch the reversal crosses: the discharge factor on the discharge side, 1 divided by the charge
+factor on the charge side. At the bounds s lies between 0.90 and 1.11, so a battery reversal moves the expectation by between
+1.8 and 2.22 times its reading (2 times only for a lossless rule; below 2 times on the discharge side of a lossy one), not by
+twice the reading as for the grid CT. A reversal passes only if the rule's own expectation error at that sample is at least the
+move less the tolerance: at least the tolerance for a grid CT reversal of at least the tolerance, at least 0.8 of it for a
+battery reversal. So **a rule whose expectation is wrong by less than 0.8 of the tolerance at a sample cannot hide a sign
+reversal of at least the tolerance on it**, whatever the facts inside the bounds. `test_intel_power_balance.py` checks the
+inequality over 12000 random pairs of facts (a reversal that passes is always absorbed by the rule's own error) and the
+consequence over random rules (errors under 0.79 of the tolerance never hide a reversal).
+
+**What a wrong set inside the bounds can still hide.** The bounds limit how wrong a set can be, not whether it is wrong. Two sets
+inside the bounds put the expectation at most 0.1 x d + 100 W apart on the discharge side (d >= 0) and 0.111 x |d| + 100 W on the
+charge side (d < 0); the corners of the bounds reach it (checked by the suite). At 5 kW of net DC-side power that is 600 W and 656 W
+(the former bounds, 0.85 and 150 W, allowed 0.15 x d + 150 W and 0.176 x |d| + 150 W: 900 W and 1032 W), against a balance
+tolerance of 100 W or 5 % of the largest magnitude (250 W at 5 kW). A fault whose effect on the balance is smaller than that shift
+plus the tolerance can be absorbed by a wrong set: a sign reversal of up to about half of (shift + tolerance), or a house sensor
+that reads low by about the share the shift is of the house power (the more PV or battery power flows, the larger that share).
+Measured on 50000 random sets of PV, battery and grid power (a seeded sweep with the engine's own tolerance and round numbers;
+the sets with a true house power of at least 50 W are kept, about 32000), for the loosest set the bounds allow (0.90, 0.90, 100 W;
+the former bounds: 0.85, 0.85, 150 W) against two true inverters (A: factors 0.96 and 40 W; B: no loss at all, the largest gap),
+the share of the samples that pass **only because the set is wrong** (the true facts block them):
+
+| | house reads 12 % low | house reads 20 % low | grid CT reversed (300 W or more) | battery reversed (300 W or more) |
+|---|---|---|---|---|
+| A, former bounds | 49.4 % | 24.3 % | 1.4 % | 1.5 % |
+| A, these bounds | 29.6 % | 15.8 % | 0.5 % | 0.5 % |
+| B, former bounds | 46.4 % | 25.7 % | 1.8 % | 1.8 % |
+| B, these bounds | 47.4 % | 22.8 % | 1.3 % | 1.1 % |
+
+Reversals of 600 W or more that the loosest set lets through: A 0.27 % of the reversals tried at the former bounds, 0.01 % at
+these; B 0.70 % and 0.16 %. The tighter bounds shrink the exposure but do not remove it, and they do not shrink it for every
+fault: a house sensor that reads 5 to 10 % low is hidden as often as before or more often by the set that cancels it (A at 5 % and
+8 %: 49 % and 61 % of the samples, against 30 % and 51 % at the former bounds, because the smaller shift matches a smaller sensor
+error); the larger sensor errors and the large reversals are hidden clearly less often. A wrong set inside the bounds is therefore
+still able to hide a sign reversal of a few hundred watts at several kilowatts of flow and a house sensor that is several percent
+off. **The facts must come from the fitting tool**: re-fitted per season and after any change of the inverter or its settings,
+used only when its hold-out accepts, its fault-injection row blocks every reversal that matters and the fitted values lie inside
+the bounds, and never entered by estimate, from a data sheet or from another site. The fault-injection row evaluates the loosest
+set the bounds allow as well; it must be read, not assumed.
+
+**What no balance rule can see.** A reversal that leaves
 the sum unchanged (the grid charging the battery: grid and battery cancel) is invisible to any balance rule, lossless or not.
 The balance is checked on instantaneous readings; the history rules in this document are separate. Clearing the balance BLOCK
 does not by itself make `data_quality` OK: any WARN finding (for example `CHARGE_WINDOW_FROM_TOU_TABLE`) keeps it DEGRADED.
@@ -419,7 +457,8 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
   identical through `assess_inputs`); the loss-aware pass cases on both sides, at idle and at zero net DC power; the
   tolerance floor and fraction; the CT reversed, battery reversed, both, native-load false zero and negative house
   load still blocking; invalid facts reported and never loosening; a too generous conversion not hiding a reversal at the
-  tested powers, and a conversion wrong by less than half the tolerance never hiding one; 19 mutants of the rule killed;
+  tested powers, a conversion wrong by less than 0.8 of the tolerance never hiding a reversal of at least the tolerance (the exact
+  inequality over random pairs of facts, and the 0.1 x d + 100 W shift between two sets inside the bounds); 19 mutants of the rule killed;
   the native-load false zero with the facts configured (a table with no facts, the synthetic inverter and the loosest facts, and a
   seeded sweep: its decision never depends on the facts and no zero over the 150 W margin passes silently).
 - `test_intel_power_balance_fit.py`: the fitting tool on synthetic histories (the generic CSV and the Home Assistant JSON
