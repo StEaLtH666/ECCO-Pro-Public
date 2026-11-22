@@ -5,35 +5,35 @@ here as "runbook N" (a section number). Nothing in this list has been done.
 
 ## 1. The answer
 
-**Prepared offline and never run in a real Home Assistant. NOT yet ready for your go.** Open preconditions (runbook 5): P1, P3, P4, P5, P6, P7 and P9.
-Closed: P2 (one independent code review: one MAJOR and five minors, all fixed) and P8 (offline gates on this commit).
+**Prepared offline and never run in a real Home Assistant. NOT yet ready for your go.** Open preconditions (runbook 5): P1, P3, P4, P5, P7 and P9.
+Closed: P2 (one independent code review: one MAJOR and five minors, all fixed), P6 (Ghost installed 22 Nov 2026; this commit is stacked on it) and P8 (offline gates on this commit).
 
-- **P1 (the one that matters most):** the L3 (WSL) kit-equivalence reference run on the exact kit, with the facts: the kit loads, a valid
+- **P1 (the one that matters most):** the L3 (WSL) kit-equivalence reference run on the exact kit (the one stacked on Ghost), with the facts: the kit loads, a valid
   set gives `SITE_INVERTER_CONVERSION` PASS after a reload, an invalid set is WARN and withholds the two outputs, and the previous
   kit restored on the isolated instance still loads a site file that holds the facts. P9 (the reference kit's hash) follows it.
-- P3 an independent review of these documents; P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on that commit;
-  P6 Ghost (U2) installed and verified first, or your deliberate ruling that U3 is independent; P7 your rulings on section 3.
+- P3 an independent review of these documents as stacked on Ghost; P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on
+  that commit; P7 your rulings on section 3.
 
 **No automatic installation or live access is authorised.** Nothing is installed, restarted, reloaded or read live until every
-precondition is closed, you have given the final GO on this list, and each live step has had its own go. No live change before
-Ghost has its final GO.
+precondition is closed, you have given the final GO on this list, and each live step has had its own go. Your rule, no live change
+before Ghost has its final GO, is met (Ghost is installed); this is a window of its own.
 
 Your words, kept: "keep the diagnosed inverter power-balance correction ready as the following **separate update**", the degradation
 fixed, "but not bundled into Ghost". Intelligence stays SHADOW. This is U3: its own window, backup, restart and rollback.
 
-| Pinned artefact (the kit as reviewed, built on the merged base) | `SHA256SUMS` sha256 |
+| Pinned artefact (the kit as built here, stacked on the installed Ghost code) | `SHA256SUMS` sha256 |
 |---|---|
-| built with no commit recorded (53 files) | `8de99a8e1f981c48a4e4a193e64d3457aa01e645214436a2f44c00d0d7be5fa5` |
-| built with the fixed reference commit `--git-sha 0000000` (53 files) | `71f2d132bc635616b9f951b668113d96705c664c4992580be589e8cd779cec4a` |
+| built with no commit recorded (58 files) | `c0a22729441156ead482d5d03ac566146f281309d27297c10e65bbc598fba64b` |
+| built with the fixed reference commit `--git-sha 0000000` (58 files) | `4e3cb4bb6a4dc152eb56861734dbe64a0934732fcb30ae3be1dcef44dcb98208` |
 
-The kit you install is built with its own commit: it differs from these in two `VENDOR_MANIFEST.json` lines only. After U2 the commit
-holds both updates and these numbers are repeated for it (runbook 3).
+The kit you install is built with its own commit: it differs from these in two `VENDOR_MANIFEST.json` lines only. This commit holds
+both updates, so Ghost's files are kept (runbook 3); a kit built from the U3 commits alone would remove them.
 
 ## 2. What changes, and what does not
 
 | Changes | Detail |
 |---|---|
-| the integration's code | the folder `/config/custom_components/ecco_intelligence/` is replaced by the kit (none new, 5 changed, 48 identical to the merged base's) |
+| the integration's code | the folder `/config/custom_components/ecco_intelligence/` is replaced by the kit (57 files installed: none new, 5 changed, 52 identical to the installed Ghost kit) |
 | a Home Assistant restart | one, yours, approved separately, short (an outage over about 5 minutes sets the supervision latch), in daylight |
 | your site file | three facts in its `site` block (the inverter's two conversion factors and its standby draw), placed with `place-ha-site-file.ps1`; they take effect at a config-entry **reload** (a reload, not a second restart), approved separately |
 | what you will see | the Dump to Grid and export-event outputs no longer withheld with `POWER_BALANCE_INCONSISTENT` (they may read unknown for another reason); data quality may return to OK or **stay DEGRADED** (any other open warning keeps it so); one more `self_test` line, `SITE_INVERTER_CONVERSION`, as the single word PASS; the status entity's `config_hash` changes |
@@ -48,7 +48,7 @@ in the state folder. The one helper the procedure touches is the existing pause 
 
 | # | Item | Your ruling |
 |---|---|---|
-| D-U3-1 | the order against U2: U3 follows Ghost in a window of its own, and its commit then holds Ghost's code | open |
+| D-U3-1 | the order against U2: U3 follows Ghost in a window of its own, and its commit holds Ghost's code (it is stacked on the installed one) | open |
 | D-U3-2 | the commit to install from, after green CI and your M2 scan | open |
 | D-U3-3 | the restart window: one restart, in daylight, you watching | open |
 | D-U3-4 | the facts take effect at a reload after the one restart (recommended), or before it so one restart reads both | open |

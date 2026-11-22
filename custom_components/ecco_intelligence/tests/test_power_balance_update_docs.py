@@ -14,8 +14,10 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
       kit, every placement line carries the flags it needs and the placement is shown with and without -Plan
   [3] the kit: tools/build_ha_integration.py is run into temporary directories (outside the repository), with no commit and with the
       fixed reference commit; the two SHA256SUMS sha256 values, the file counts and the changed file names the documents state are
-      those the build produces; where the checkout holds the history before this change, the previous kit is built too and the
-      documents' "none new, none removed, five changed" and the pinned hash of the previous loader are compared with it
+      those the build produces; the kit is stacked on the installed Ghost code: it holds the five files U2 added and the Ghost-changed
+      sources; where the checkout holds the history before this change (the Ghost tree as installed), the previous kit is built too and
+      the documents' "none new, none removed, five changed", the Ghost kit's two sums and the pinned hash of the previous loader are
+      compared with it, and the nine Ghost files must be byte-identical in both kits
   [4] numbers: the bounds (0.90 to 1.0, 0 to 100 W), the fact names, the tolerance, the exposure figures at 5 kW, the rule-set version
       and the blocker codes are those of the sources, EVERY mention of a bound equals the source, and no calibrated-looking decimal
       (three or more decimals) is in either document: the facts are site values
@@ -32,8 +34,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
   [9] the plain sentences: no automatic installation or live access is authorised; never run in a real Home Assistant
  [10] forbidden: the three phrases the owner ruled out, an entity id, an address, a token, a workstation path, a commit id, a hash
       that is not one of the pinned ones, a non-ASCII character, a calibrated-looking decimal
- [11] preconditions: P1 (the L3 WSL run on the exact kit) is OPEN and says what it must show; the open set (P1, P3, P4, P5, P6, P7, P9)
-      AND the closed set (P2, P8) are exact, each closed line gives its reason, and the open set is the same in both documents
+ [11] preconditions: P1 (the L3 WSL run on the exact kit) is OPEN and says what it must show; the open set (P1, P3, P4, P5, P7, P9)
+      AND the closed set (P2, P6, P8) are exact, each closed line gives its reason, and the open set is the same in both documents;
+      the one commit id the documents may carry is the one in P6's row, and it is the commit the history says U2 was installed from
  [12] the steps: the same step numbers in both, the same who, an owner go at each live step, the restart and the reload each with
       their own approval
  [13] the rollback: RB1 to RB7 in order in both, a proof for each in the runbook, the facts-only and the full sequence, the commands,
@@ -44,10 +47,11 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
  [16] no durable write: the four changed kit sources hold no file, database or network write, the store (the only writer) does not
       name the facts, and the documents say no table, column or row type is added
  [17] what is NOT established: every bullet of the runbook's section 12 has a keyword, and the checklist's section 8 has each keyword
- [18] the drill: its statement is in the runbook, and the REAL drill is run here with a real kit and a synthetic previous kit on a
-      mock root: install the previous kit, place a synthetic site file that holds the facts, upgrade, roll back, uninstall; the site
-      file and the state folder are byte-identical through every step and the tree after the rollback is the previous kit's; the
-      real site-check prints the lines the runbook quotes for no facts, valid facts and invalid facts
+ [18] the drill: its statement is in the runbook, and the REAL drill is run here with the real kit and the previous kit (the real
+      Ghost kit where the history is here, a synthetic copy otherwise) on a mock root whose state folder holds a real scorecard file
+      with U2's two tables: install the previous kit, place a synthetic site file that holds the facts, upgrade, roll back, uninstall;
+      the site file and the state folder (that scorecard file included) are byte-identical through every step and the tree after the
+      rollback is the previous kit's; the real site-check prints the lines the runbook quotes for no facts, valid facts and invalid facts
  [19] quoted tool phrases exist in the tools' sources
  [20] every block sets the variables it uses
  [21] every section the checklist cites exists in the runbook, and every install-runbook row or section the documents cite exists
@@ -73,9 +77,11 @@ import io
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
@@ -126,13 +132,21 @@ TOOL_KEYS = {"build_ha_integration.py": "build", "ecco_intel_drill.py": "drill",
 PY_TOOLS = ("build", "drill", "fit", "runoff")
 PS_TOOLS = ("deploy", "place", "status", "logs")
 FIXED_SHA = "0000000"                 # the fixed reference commit of the second build (not a commit: a placeholder)
-BASE_KIT_SUMS = "47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40"   # the base kit, no commit recorded; not pinned
-BASE_GATES_SHA = "659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b"  # runtime/gates.py in the base kit (and in U2's)
-OPEN_AT_WRITING = ("P1", "P3", "P4", "P5", "P6", "P7", "P9")
-CLOSED_AT_WRITING = ("P2", "P8")
-OPEN_LIST_TEXT = "P1, P3, P4, P5, P6, P7 and P9"
+# The Ghost-as-installed kit (the tree this update is stacked on, the baseline of every comparison): its two reference builds, no
+# commit recorded and the fixed reference. The runbook states them as the baseline; where the history is here the suite rebuilds that
+# kit from it and requires these values.
+GHOST_KIT_SUMS = {"nosha": "ec9f31955ef635e8bf3f02c690f26b86cfecb5982f5b497796085196c7612525",
+                  "fixed": "41fe3ab03b9222dcba476af9d1afdf7ea2bda8dd8b00ea3bef6485c3b0ae4ac1"}
+BASE_GATES_SHA = "659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b"  # runtime/gates.py in the Ghost kit (and the merged base's)
+OPEN_AT_WRITING = ("P1", "P3", "P4", "P5", "P7", "P9")
+CLOSED_AT_WRITING = ("P2", "P6", "P8")
+OPEN_LIST_TEXT = "P1, P3, P4, P5, P7 and P9"
 CHANGED_FILES = ("_vendor/intelligence/site_decisions.py", "_vendor/intelligence/quality.py",
                  "_vendor/intelligence/advisory_contract.py", "runtime/gates.py", "VENDOR_MANIFEST.json")
+GHOST_NEW_FILES = ("_vendor/intelligence/ghost.py", "_vendor/intelligence/ghost_compare.py", "_vendor/intelligence/ghost_feed.py",
+                   "_vendor/intelligence/net_value.py", "runtime/ghost_link.py")                 # the five files U2 added to the kit
+GHOST_CHANGED_FILES = ("_vendor/intelligence/scorecard.py", "runtime/store.py", "coordinator.py", "diagnostics.py")   # U2 changed these four
+GHOST_FILES = GHOST_NEW_FILES + GHOST_CHANGED_FILES                                              # byte-identical in the Ghost kit and this kit
 PKG_ROOT_PY = {"__init__", "binary_sensor", "config_flow", "const", "coordinator", "diagnostics", "entity_base", "sensor"}   # file stems
 GO_STEPS = (1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 STEP_NUMBERS = tuple(range(15))
@@ -436,6 +450,24 @@ def rule_kit(rb, cl, S, F):
         pr.append("checklist does not say none new, 5 changed")
     if len(k["pkg"]) != int(m.group(3)) - 1:
         pr.append("the installed file count is not the kit's less the root manifest")
+    same = len(k["pkg"]) - 5                                      # the installed files this update leaves as the Ghost kit has them
+    for label, doc in (("runbook", rb), ("checklist", cl)):
+        if not has(doc, f"{len(k['pkg'])} files installed"):
+            pr.append(f"{label} does not give the installed file count {len(k['pkg'])} ('{len(k['pkg'])} files installed')")
+        if not has(doc, f"{same} identical to the installed Ghost kit"):
+            pr.append(f"{label} does not say {same} identical to the installed Ghost kit")
+    for rel in GHOST_FILES:                                       # stacked on U2: its files are in this kit
+        if PKG + "/" + rel not in k["all"]:
+            pr.append(f"the kit lacks U2's file {rel} (the update would remove it from an installed Ghost)")
+        if rel.rsplit("/", 1)[-1] not in rb:
+            pr.append(f"runbook does not name U2's file {rel.rsplit('/', 1)[-1]}")
+    if not has(rb, "byte for byte the Ghost kit's"):
+        pr.append("runbook does not say U2's files are in this kit byte for byte as in the Ghost kit")
+    for key in ("nosha", "fixed"):
+        if GHOST_KIT_SUMS[key] not in rb:
+            pr.append(f"runbook lacks the installed Ghost kit's {key} SHA256SUMS sha256 {GHOST_KIT_SUMS[key][:8]}")
+    if not has(rb, "a kit built from the U3 commits alone"):
+        pr.append("runbook does not say that a kit built from the U3 commits alone would remove U2's files")
     if k["nosha"] == k["fixed"]:
         pr.append("the two reference builds are identical (the commit is not recorded)")
     return pr
@@ -605,18 +637,39 @@ def rule_sentences(rb, cl, S, F):
     return pr
 
 
+def p6_commit_scan_text(rb: str, F, pr: list) -> str:
+    """The runbook may carry exactly ONE commit id: in P6's row, the commit U2 was installed from (a fact of the installation record, so
+    the precondition says what it closed on). It is taken out of the text the commit-id rule scans; where the history is in the checkout it
+    must be the leading characters of the commit the history gives (never written in this suite). Any other commit id, or a second one in
+    that row, stays in the text and fires the rule."""
+    lines = rb.split(chr(10))
+    idx = next((i for i, ln in enumerate(lines) if ln.startswith("| P6 |")), None)
+    if idx is None:
+        return rb
+    ids = COMMIT_RE.findall(lines[idx])
+    if len(ids) != 1:
+        return rb
+    prev = F.get("prev_commit")
+    if prev is not None and not prev.startswith(ids[0]):
+        pr.append(f"P6 names the commit {ids[0]}, which is not the commit the history says U2 was installed from")
+        return rb
+    lines[idx] = lines[idx].replace(ids[0], "<the installed commit>", 1)
+    return chr(10).join(lines)
+
+
 def rule_forbidden(rb, cl, S, F):
     pr = []
     k = F["kit"]
-    allowed = {k["nosha"], k["fixed"], BASE_KIT_SUMS, BASE_GATES_SHA}
+    allowed = {k["nosha"], k["fixed"], GHOST_KIT_SUMS["nosha"], GHOST_KIT_SUMS["fixed"], BASE_GATES_SHA}
     for label, doc in (("runbook", rb), ("checklist", cl)):
         low = doc.lower()
+        scan = p6_commit_scan_text(doc, F, pr) if label == "runbook" else doc
         for w in FORBIDDEN_WORDS:
             if w in low:
                 pr.append(f"{label}: the forbidden phrase '{w}'")
         for name, rx in (("an entity id", ENTITY_RE), ("an address", IPV4_RE), ("a token", TOKEN_RE), ("a workstation path", PATH_RE),
                          ("a commit id", COMMIT_RE)):
-            hit = rx.search(doc)
+            hit = rx.search(scan if name == "a commit id" else doc)
             if hit:
                 pr.append(f"{label}: {name} ({hit.group(0)[:20]})")
         if "ecco-ha" in low:
@@ -662,7 +715,8 @@ def rule_preconditions(rb, cl, S, F):
         pr.append(f"the closed preconditions are {closed}, expected {list(CLOSED_AT_WRITING)} (closing or reopening one is a deliberate edit of this suite)")
     rows = {c[0]: " ".join(c) for c in table_rows(sec) if re.fullmatch(r"P\d+", c[0])}
     for pid, words in (("P2", ("one independent review", "no BLOCKER", "one MAJOR", "five minors", "all fixed in a follow-up round")),
-                       ("P6", ("U2 (Ghost) installed and verified first", "never both in one window", "section 3")),
+                       ("P6", ("U2 (Ghost) installed and verified first", "never both in one window", "section 3", "Ghost installed from",
+                              "this branch is stacked on that commit")),
                        ("P8", ("repeated in full at step 0", "the drills of 8.0", "the deploy suite"))):
         for w in words:
             if not has(rows.get(pid, ""), w):
@@ -1047,9 +1101,13 @@ def rule_rollback_reads(rb, cl, S, F):
                    "rolls itself back if they changed", "this is why RB1 comes first", "Restored names the backup's file count"):
         if not has(rb4, phrase):
             pr.append(f"RB4 lacks '{phrase}'")
-    m81 = re.search(r"it must be (\d+) if the installed kit is the merged base's and (\d+) if it\s+is U2's", P(rb))
-    if m81 is None or not has(rb4, f"{m81.group(1)} if the installed kit was the merged base's and {m81.group(2)} if it was U2's"):
-        pr.append("RB4 does not give the file counts the baseline's block 1 (8.1) gives")
+    installed = len(F["kit"]["pkg"])                                      # the files of the installed Ghost kit (this update adds and removes none)
+    m81 = re.search(r"it must be (\d+), the installed Ghost kit's count", P(rb))
+    if m81 is None or int(m81.group(1)) != installed or not has(rb4, f"{installed}, the installed Ghost kit's"):
+        pr.append(f"8.1 and RB4 do not both give the installed Ghost kit's file count {installed}")
+    for phrase in (f"INSTALLED TREE EQUALS THE KIT ({installed} files)",):
+        if phrase not in rb:
+            pr.append(f"the runbook's 8.6 does not expect '{phrase}'")
     for phrase in ("the block of 8.8", "diagnostics-rollback.json", "SITE_INVERTER_CONVERSION None", "self_test FAIL []", "diagnostics-before.json"):
         if not has(rb5, phrase):
             pr.append(f"RB5's proof lacks '{phrase}' (the load-check read of 8.8 on the rollback download, against the baseline download)")
@@ -1236,22 +1294,66 @@ def site_check_facts(D) -> dict:
     return {"problems": problems}
 
 
-def run_real_drill(base: Path, kit_a: Path, D) -> dict:
-    """The repository's own drill, on a marked mock root: install a synthetic PREVIOUS kit, place a synthetic site file that holds the
-    facts (a file copy: the placement tool needs ssh), upgrade to the real kit, roll back, uninstall."""
+def advice_payloads(gen: datetime) -> dict:
+    """Two advice records as the integration publishes them (synthetic values), for a real scorecard file with U2's advice table."""
+    from intelligence import advisory_contract as ac
+    base = {"mode": "SHADOW", "applies_nothing": True, "contract_version": ac.CONTRACT_VERSION}
+    until = gen + timedelta(seconds=900)
+    ct_sum = {"target_soc_pct": 80.0, "effective_reserve_pct": 40.0, "conservative_fallback": False,
+              "window": [(gen + timedelta(hours=2)).isoformat(), (gen + timedelta(hours=6)).isoformat()]}
+    dp_sum = {"dump_advisable": True, "stop_soc_pct": 55.0, "export_kwh": 3.2, "export_kw_avg": 3.2, "effective_reserve_pct": 40.0}
+    ct = ac.ItemView("charge_target", "OK", 80.0, until, "MEDIUM", (), ("R1",), ct_sum)
+    dp = ac.ItemView("dump_to_grid", "OK", 3.2, until, "LOW", (), ("D1",), dp_sum)
+    out = {}
+    for v in (ct, dp):
+        rec = {**base, "kind": v.key, "status": v.status, "generated_at": gen.isoformat(), "unit": v.unit,
+               "valid_until": v.valid_until.isoformat(), "confidence": v.confidence, "blockers": [], "reason_codes": list(v.reason_codes)}
+        out[ac.ENTITY_IDS[v.key]] = (v.value, rec, {"advice": ac._view_advice(v, True)})
+    return out
+
+
+def write_ghost_scorecard(path: Path) -> dict:
+    """A real scorecard file with BOTH of U2's tables (the advice log with rows, the incident table with one closed incident), written by
+    the repository's own scorecard code. Returns what was written and the tables found."""
+    from intelligence import scorecard as sc
+    t0 = datetime(2030, 3, 4, 20, 0, tzinfo=timezone.utc)
+    card = sc.Scorecard(str(path))
+    wrote = card.record_advice(advice_payloads(t0))
+    inc = {"first_failed_utc": (t0 + timedelta(minutes=5)).isoformat(), "last_failed_utc": (t0 + timedelta(minutes=5)).isoformat(),
+           "failed_count": 1, "missed_slots": 1, "reason": "OperationalError", "first_reason": "OperationalError",
+           "first_issued_utc": t0.isoformat(), "last_issued_utc": t0.isoformat(),
+           "recovered_utc": (t0 + timedelta(hours=1)).isoformat(), "rows_since": 2}
+    persisted = card.persist_advice_incidents([inc], t0 + timedelta(hours=1))
+    card.close()
+    con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    con.close()
+    return {"tables": tables, "rows": wrote, "persist_error": persisted.get("error")}
+
+
+def run_real_drill(base: Path, kit_a: Path, D, kit_prev: Path | None = None) -> dict:
+    """The repository's own drill, on a marked mock root whose state folder holds a real scorecard file with U2's two tables: install the
+    PREVIOUS kit (the real Ghost kit when the history gives it, else a synthetic copy of this kit), place a synthetic site file that
+    holds the facts (a file copy: the placement tool needs ssh), upgrade to the real kit, roll back, uninstall. The state folder is
+    compared after every step, so the scorecard file is shown byte-identical through the Upgrade and the Rollback."""
     kit_p = base / "kit_prev"
-    shutil.copytree(kit_a, kit_p)
-    target = kit_p / PKG / "runtime" / "selftest.py"
-    target.write_bytes(target.read_bytes() + b"\n# a synthetic previous kit\n")
-    sums = "".join(f"{hashlib.sha256((kit_p / rel).read_bytes()).hexdigest()}  {rel}\n"
-                   for rel in sorted(k for k in H.tree_hashes(kit_p) if not k.endswith("/") and k != "SHA256SUMS"))
-    (kit_p / "SHA256SUMS").write_bytes(sums.encode("utf-8"))
+    if kit_prev is not None:
+        shutil.copytree(kit_prev, kit_p)
+    else:
+        shutil.copytree(kit_a, kit_p)
+        target = kit_p / PKG / "runtime" / "selftest.py"
+        target.write_bytes(target.read_bytes() + b"\n# a synthetic previous kit\n")
+        sums = "".join(f"{hashlib.sha256((kit_p / rel).read_bytes()).hexdigest()}  {rel}\n"
+                       for rel in sorted(k for k in H.tree_hashes(kit_p) if not k.endswith("/") and k != "SHA256SUMS"))
+        (kit_p / "SHA256SUMS").write_bytes(sums.encode("utf-8"))
     root = base / "mock"
     state = root / "ecco" / "intelligence" / "state"
     state.mkdir(parents=True)
     site = root / "ecco" / "intelligence" / "site.local.json"
     site.write_bytes(synthetic_site(None, D))
-    (state / "scorecard.sqlite3").write_bytes(b"synthetic scorecard bytes\n")
+    card = write_ghost_scorecard(state / "scorecard.sqlite3")
+    if not ({"advice_log", "advice_incident"} <= card["tables"] and card["rows"] == 2 and card["persist_error"] is None):
+        return {"ok": False, "detail": f"set-up: tables {sorted(card['tables'])}, rows {card['rows']}, persist {card['persist_error']}"}
     (state / "store_meta.json").write_text('{"synthetic": true}\n', encoding="utf-8")
     (root / "custom_components" / "other_integration").mkdir(parents=True)
     (root / "custom_components" / "other_integration" / "__init__.py").write_text("# another integration\n", encoding="utf-8")
@@ -1268,16 +1370,22 @@ def run_real_drill(base: Path, kit_a: Path, D) -> dict:
         site.write_bytes(synthetic_site(GOOD_FACTS, D))          # the placement (a file copy on the mock root)
         placed = site.read_bytes()
         d.install(kit_a, "20300115-120001", upgrade=True)
+        after_upgrade = keep()
         d.rollback("20300115-120002", "20300115-120001")
+        after_rollback = keep()
         pkg_p = {k[len(D.KIT_PREFIX):]: v for k, v in D.read_sums(kit_p / "SHA256SUMS").items() if k.startswith(D.KIT_PREFIX)}
         back = {k: v for k, v in D.tree(d.installed, D.IGNORED_IN_PLACE).items()}
         same_tree = back == pkg_p
         d.uninstall("20300115-120003")
     except D.DrillError as exc:
         return {"ok": False, "detail": f"the drill stopped: {exc}"}
-    ok = (keep() == before_state and site.read_bytes() == placed and same_tree and all(s[0] == "PASS" for s in d.steps) and len(d.steps) > 20)
-    return {"ok": ok, "detail": f"{len(d.steps)} steps, state unchanged: {keep() == before_state}, site file unchanged: {site.read_bytes() == placed}, "
-                                f"tree after the rollback is the previous kit's: {same_tree}"}
+    scorecard_key = "ecco/intelligence/state/scorecard.sqlite3"
+    states_equal = before_state == after_upgrade == after_rollback == keep() and scorecard_key in before_state
+    ok = (states_equal and site.read_bytes() == placed and same_tree and all(s[0] == "PASS" for s in d.steps) and len(d.steps) > 20)
+    return {"ok": ok, "detail": f"{len(d.steps)} steps, state (scorecard file included) unchanged after the upgrade, the rollback and the uninstall: "
+                                f"{states_equal}, site file unchanged: {site.read_bytes() == placed}, "
+                                f"tree after the rollback is the previous kit's: {same_tree}, previous kit: "
+                                f"{'the real Ghost kit' if kit_prev is not None else 'a synthetic copy'}"}
 
 
 OLD_PROBE = r'''
@@ -1320,26 +1428,27 @@ def run_probe(tree: Path, scratch: Path) -> dict | None:
 
 
 def previous_commit() -> str | None:
-    """The commit just before the one that introduced the inverter facts (the merged base while this branch is unmerged, main before
-    the change after a squash merge), found from the history and never named here (no document or test of the runtime carries a commit
-    id). None where the checkout does not hold that history (a shallow clone)."""
+    """The tree just before the update: the first parent of the commit that introduced the inverter facts on the first-parent history.
+    This branch is stacked on the installed Ghost code, so that is the merge that brings the update onto the Ghost commit (the Ghost
+    tree as installed); after a squash merge it is main with Ghost in it. Found from the history and never named here (no document or
+    test of the runtime carries a commit id). None where the checkout does not hold that history (a shallow clone)."""
     try:
-        r = subprocess.run(["git", "-C", str(REPO), "log", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--", "intelligence/site_decisions.py"],
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["git", "-C", str(REPO), "log", "--first-parent", "-m", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--",
+                            "intelligence/site_decisions.py"], capture_output=True, text=True, timeout=120)
         shas = r.stdout.split()
         if r.returncode != 0 or not shas:
             return None
-        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", shas[-1] + "^"], capture_output=True, text=True, timeout=60)
+        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", shas[-1] + "^1"], capture_output=True, text=True, timeout=60)
         out = p.stdout.strip()
         return out if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
     except (OSError, subprocess.SubprocessError):
         return None
 
 
-def old_tree_facts(base: Path, kit_fixed: Path) -> dict | None:
-    """The tree just before this change, if the checkout holds that history: its loader run on site files that carry the facts, and its
-    kit compared with this one (none new, none removed, the five changed files, the previous loader's hash). None when it is not here."""
-    prev = previous_commit()
+def old_tree_facts(base: Path, kit_fixed: Path, prev: str | None) -> dict | None:
+    """The tree just before this change (the Ghost tree as installed), if the checkout holds that history: its loader run on site files
+    that carry the facts, and its kit compared with this one (none new, none removed, the five changed files, the nine Ghost files
+    byte-identical, the previous loader's hash, the two reference sums). None when it is not here."""
     if prev is None:
         return None
     try:
@@ -1360,6 +1469,13 @@ def old_tree_facts(base: Path, kit_fixed: Path) -> dict | None:
     env_cmd = [sys.executable, "-I", "-B", str(tree / "tools" / "build_ha_integration.py"), "--out", str(kit_old), "--git-sha", FIXED_SHA]
     b = subprocess.run(env_cmd, cwd=str(tree), capture_output=True, text=True, timeout=300)
     out["build_rc"] = b.returncode
+    out["kit_dir"] = kit_old
+    kit_old_nosha = base / "kit_old_nosha"
+    b2 = subprocess.run([sys.executable, "-I", "-B", str(tree / "tools" / "build_ha_integration.py"), "--out", str(kit_old_nosha)],
+                        cwd=str(tree), capture_output=True, text=True, timeout=300)
+    out["old_sums"] = ({"nosha": hashlib.sha256((kit_old_nosha / "SHA256SUMS").read_bytes()).hexdigest(),
+                        "fixed": hashlib.sha256((kit_old / "SHA256SUMS").read_bytes()).hexdigest()}
+                       if b.returncode == 0 and b2.returncode == 0 else None)
 
     def sums(p: Path) -> dict:
         return {ln.split("  ", 1)[1]: ln.split("  ", 1)[0] for ln in (p / "SHA256SUMS").read_text(encoding="utf-8").splitlines() if "  " in ln}
@@ -1370,6 +1486,7 @@ def old_tree_facts(base: Path, kit_fixed: Path) -> dict | None:
         out["removed"] = sorted(k[len(pre):] for k in set(old) - set(new) if k.startswith(pre))
         out["changed"] = sorted(k[len(pre):] for k in set(old) & set(new) if k.startswith(pre) and old[k] != new[k])
         out["gates_sha"] = old.get(pre + "runtime/gates.py")
+        out["ghost_same"] = sorted(rel for rel in GHOST_FILES if pre + rel in old and old.get(pre + rel) == new.get(pre + rel))
     return out
 
 
@@ -1423,7 +1540,16 @@ def make_mutants(F):
     # --- the kit
     add("rb", "the nosha hash changed by one digit", lambda t: t.replace(k["nosha"], k["nosha"][:-1] + ("0" if k["nosha"][-1] != "0" else "1")), "kit")
     add("cl", "the fixed-reference hash removed from the checklist", lambda t: t.replace(k["fixed"], "REMOVED"), "kit")
-    add("rb", "the file count changed (53 files)", lambda t: t.replace("53 files", "54 files"), "kit")
+    add("rb", "the file count changed (58 files)", lambda t: t.replace("58 files", "59 files"), "kit")
+    add("rb", "the installed Ghost kit's no-commit hash changed by one digit in the runbook",
+        lambda t: t.replace(GHOST_KIT_SUMS["nosha"], GHOST_KIT_SUMS["nosha"][:-1] + ("0" if GHOST_KIT_SUMS["nosha"][-1] != "0" else "1")), "kit")
+    add("rb", "the number identical to the installed Ghost kit changed (52 to 51)", lambda t: t.replace("52 identical to the installed Ghost kit", "51 identical to the installed Ghost kit"), "kit")
+    add("cl", "the number identical to the installed Ghost kit changed in the checklist (52 to 51)",
+        lambda t: t.replace("52 identical to the installed Ghost kit", "51 identical to the installed Ghost kit"), "kit")
+    add("rb", "the installed file count changed in the artefact table (57 to 52)", lambda t: t.replace("57 files installed", "52 files installed"), "kit")
+    add("rb", "one of U2's new files is no longer named (ghost_link.py)", lambda t: t.replace("ghost_link.py", "link.py"), "kit")
+    add("rb", "U2's files are no longer said to be byte for byte the Ghost kit's", lambda t: subw(t, "byte for byte the Ghost kit's", "similar to the Ghost kit's"), "kit")
+    add("rb", "the warning that a stand-alone kit would remove U2's files dropped", lambda t: subw(t, "a kit built from the U3 commits alone", "a kit built differently"), "kit")
     add("rb", "a changed file's name dropped", lambda t: t.replace("site_decisions.py", "decisions.py"), "kit")
     add("rb", "'none new' dropped", lambda t: t.replace("none new, 5 changed", "7 new, 5 changed"), "kit")
     add("cl", "'none new' dropped from the checklist", lambda t: t.replace("none new, 5 changed", "3 new, 5 changed"), "kit")
@@ -1448,7 +1574,7 @@ def make_mutants(F):
     add("rb", "'Kit first, one restart, then the facts' removed", lambda t: t.replace("Kit first, one restart, then the facts", "The facts first"), "order")
     add("rb", "the loosening-step reason removed", lambda t: t.replace("The facts are the loosening step", "The facts are a step"), "order")
     add("rb", "the reload-or-restart reason removed", lambda t: t.replace("The facts take effect only at a reload or a restart", "The facts take effect at once"), "order")
-    add("rb", "the suite's repeat of the old-loader experiment no longer said to skip honestly", lambda t: t.replace("the suite prints SKIP for these two checks", "the suite always runs these two checks"), "order")
+    add("rb", "the suite's repeat of the old-loader experiment no longer said to skip honestly", lambda t: subw(t, "the suite prints SKIP for these two checks", "the suite always runs these two checks"), "order")
     add("cl", "the checklist's reason dropped", lambda t: t.replace("the previous kit does not refuse the facts", "the previous kit may refuse the facts"), "order")
     add("cl", "the checklist's rollback takes the kit out before the facts (RB2 and RB4 swapped in the text)",
         lambda t: sub1(sub1(sub1(t, "2. **RB2 the facts out:**", "2. **RB9 the facts out:**"), "4. **RB4 restore the previous", "4. **RB2 restore the previous"), "**RB9 the facts out:**", "**RB4 the facts out:**"), "rollback")
@@ -1473,6 +1599,11 @@ def make_mutants(F):
     add("cl", "an address added", lambda t: t + f"\nHost {sample_addr}.\n", "forbidden")
     add("rb", "a workstation path added", lambda t: t + f"\nFile {sample_path}.\n", "forbidden")
     add("rb", "a commit id added", lambda t: t + f"\nBuilt from {sample_commit}.\n", "forbidden")
+    add("rb", "a second commit id in P6's row", lambda t: re.sub(r"(Ghost installed from )([0-9a-f]{7,40})", lambda m: m.group(1) + m.group(2) + " and " + "ab12" + "cd3", t, count=1), "forbidden")
+    add("rb", "the commit id of P6 repeated outside its row", lambda t: t + "\nU2 was installed from " + (re.search(r"Ghost installed from ([0-9a-f]{7,40})", t) or re.search("()", t)).group(1) + ".\n", "forbidden")
+    if F.get("prev_commit"):
+        add("rb", "P6 names a commit that is not the one the history gives",
+            lambda t: re.sub(r"(Ghost installed from )[0-9a-f]{7,40}", lambda m: m.group(1) + "abcde" + "f01", t, count=1), "forbidden")
     add("cl", "a token added", lambda t: t + f"\nKey {sample_token}.\n", "forbidden")
     add("rb", "a hash that is not pinned", lambda t: t + "\n" + "ab" * 32 + "\n", "forbidden")
     add("rb", "a calibrated factor added (three decimals)", lambda t: t + "\nThe fitted factor is 0.924.\n", "forbidden")
@@ -1482,10 +1613,12 @@ def make_mutants(F):
     add("rb", "the L3 precondition closed", lambda t: re.sub(r"(\| P1 \|.*?)\*\*OPEN\*\*", r"\1closed", t, count=1, flags=re.S), "preconditions")
     add("rb", "P3 closed", lambda t: sub1(t, "| **OPEN**: one independent review (lean mode)", "| closed: one independent review (lean mode)"), "preconditions")
     add("rb", "P2 reopened", lambda t: sub1(t, "closed (offline, lean mode, per the project record", "**OPEN** (offline, lean mode, per the project record"), "preconditions")
-    add("rb", "P6 closed", lambda t: sub1(t, "| **OPEN**: U2 is prepared and waits", "| closed: U2 is prepared and waits"), "preconditions")
-    add("rb", "P8 reopened", lambda t: sub1(t, "| closed on the commit these documents were written on", "| **OPEN** on the commit these documents were written on"), "preconditions")
+    add("rb", "P6 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: Ghost installed from", "| **OPEN** 22 Nov 2026: Ghost installed from"), "preconditions")
+    add("rb", "P6 closed without its reason", lambda t: re.sub(r"closed 22 Nov 2026: Ghost installed from [0-9a-f]+; this branch is stacked on that commit, so the kit of this update holds U2's code",
+                                                               "closed", t, count=1), "preconditions")
+    add("rb", "P8 reopened", lambda t: sub1(t, "| closed on the stacked commit these documents were written on", "| **OPEN** on the stacked commit these documents were written on"), "preconditions")
     add("rb", "P2 closed without its reason", lambda t: sub1(t, "one MAJOR (the factor bounds were too wide) and five minors", "some findings"), "preconditions")
-    add("cl", "the checklist lists P6 as closed", lambda t: t.replace(OPEN_LIST_TEXT, "P1, P3, P4, P5, P7 and P9"), "preconditions")
+    add("cl", "the checklist lists P6 as open", lambda t: t.replace(OPEN_LIST_TEXT, "P1, P3, P4, P5, P6, P7 and P9"), "preconditions")
     add("cl", "the checklist claims it is ready", lambda t: t.replace("NOT yet ready", "ready"), "preconditions")
     add("rb", "the L3 precondition no longer asks for the previous kit on a site file with the facts",
         lambda t: subw(t, "the previous kit restored on the isolated instance loads with a site file that still holds the facts", "the previous kit restored"), "preconditions")
@@ -1675,12 +1808,16 @@ S0 = {k: read_src(v) for k, v in SOURCES.items()}
 base = H.mktemp(PREFIX)
 try:
     print("== the kit, built by the repository's own tool into temporary directories")
-    F = {"kit": kit_facts(base), "facts": real_facts(), "order_source_problems": order_source_problems}
+    prev = previous_commit()
+    F = {"kit": kit_facts(base), "facts": real_facts(), "order_source_problems": order_source_problems, "prev_commit": prev}
     D = load_drill_module()
-    print("== the real drill, with a synthetic previous kit, the real kit and a site file that holds the facts")
-    F["drill"] = run_real_drill(base, F["kit"]["dir"], D)
-    check("the real drill leaves the site file and the state folder byte-identical through install, upgrade, rollback and uninstall, "
-          "and the rollback restores the previous kit's tree", F["drill"]["ok"], F["drill"]["detail"])
+    old = old_tree_facts(base, F["kit"]["dir"], prev)                      # the Ghost tree as installed, when the history is here
+    prev_kit = old["kit_dir"] if old is not None and old.get("build_rc") == 0 else None
+    print("== the real drill, with the previous kit (the real Ghost kit where the history is here), the real kit, a real scorecard file with "
+          "U2's two tables and a site file that holds the facts")
+    F["drill"] = run_real_drill(base, F["kit"]["dir"], D, prev_kit)
+    check("the real drill leaves the site file and the state folder (a real scorecard file with both of U2's tables) byte-identical through "
+          "install, upgrade, rollback and uninstall, and the rollback restores the previous kit's tree", F["drill"]["ok"], F["drill"]["detail"])
     F["site_check"] = site_check_facts(D)
     check("the real site-check prints no check without facts, PASS with valid facts, and WARN with PROBLEMS and POWER_LOSS_FACTS_INVALID with invalid facts",
           not F["site_check"]["problems"], "; ".join(F["site_check"]["problems"]))
@@ -1690,11 +1827,12 @@ try:
           own_bytes.isascii() and not IPV4_RE.search(own) and not TOKEN_RE.search(own) and not ENTITY_RE.search(own)
           and not PATH_RE.search(own))
 
-    print("== the tree just before this change (the previous loader), where this checkout holds the history")
-    old = old_tree_facts(base, F["kit"]["dir"])
+    print("== the tree just before this change (the Ghost tree as installed: the previous loader and kit), where this checkout holds the history")
     if old is None:
         skip("the previous loader loads site files that carry the facts exactly as without them", "the history before this change is not in this checkout")
         skip("the previous kit differs from this one by exactly the five files the documents name, and its loader has the pinned hash",
+             "the history before this change is not in this checkout")
+        skip("the previous kit has the Ghost kit's two reference sums, and U2's nine files are byte-identical in both kits",
              "the history before this change is not in this checkout")
     else:
         po, pn = old["old"], old["new"]
@@ -1708,13 +1846,17 @@ try:
               old.get("build_rc") == 0 and old.get("added") == [] and old.get("removed") == [] and sorted(old.get("changed", [])) == sorted(CHANGED_FILES),
               f"added {old.get('added')}, removed {old.get('removed')}, changed {old.get('changed')}")
         check("the previous kit's runtime/gates.py has the hash the baseline guard pins", old.get("gates_sha") == BASE_GATES_SHA, str(old.get("gates_sha")))
+        check("the previous kit is the Ghost kit as installed: its two reference sums (no commit recorded, the fixed reference) are the ones the runbook "
+              "states as the baseline", old.get("old_sums") == GHOST_KIT_SUMS, str(old.get("old_sums")))
+        check("U2's nine files (the five it added, the four it changed) are byte-identical in the previous kit and in this one: the update is "
+              "stacked on Ghost and loses none of it", old.get("ghost_same") == sorted(GHOST_FILES), str(old.get("ghost_same")))
 
     if RB is not None and CL is not None:
         print("== the rules")
         result = analyse(RB, CL, S0, F)
         for name in RULES:
             check(RULE_TITLES[name], not result[name], "; ".join(result[name][:4]))
-        check("the open preconditions are exactly P1, P3, P4, P5, P6, P7 and P9 at the time of writing (P2 and P8 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
+        check("the open preconditions are exactly P1, P3, P4, P5, P7 and P9 at the time of writing (P2, P6 and P8 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
               str(sorted(open_ids(RB))))
         base_ok = not fired(result)
         check("the unmutated documents pass every rule (the baseline of the mutants)", base_ok, str(sorted(fired(result))))

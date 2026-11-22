@@ -2,8 +2,10 @@
 
 **Status: PREPARED OFFLINE, NOT RUN, NOT READY.** Nothing in this document has been done on Home Assistant. The update has
 never run in a real Home Assistant (section 12). It is not ready for a go until the preconditions of section 5 that are marked
-OPEN are closed (P1, P3, P4, P5, P6, P7 and P9 at the time of writing; P2 and P8 are closed). Every live step below needs its own
-owner authorisation, in the session, at the time (column "own authorisation" of the step table).
+OPEN are closed (P1, P3, P4, P5, P7 and P9 at the time of writing; P2, P6 and P8 are closed). Every live step below needs its own
+owner authorisation, in the session, at the time (column "own authorisation" of the step table). **This branch is stacked on the
+commit the Ghost update (U2) was installed from**: its kit holds U2's files and changes only the four sources and the manifests
+that section 2.2 lists, so the installed Ghost kit is the baseline of every comparison below.
 
 > **Every live step in this runbook is NOT AVAILABLE** until all of these hold:
 >
@@ -40,7 +42,7 @@ The owner's words (22 Nov 2026), quoted:
 | the following separate update | it is its own update (U3), after Ghost (U2): its own window, backup, restart and rollback verification; never in U2's window (P6, U3-G2, D-U3-1) |
 | not bundled into Ghost | the kit of this update changes four source files of the engine and the loader and nothing of Ghost (section 2.2); the Ghost update's own runbook and checklist are separate documents |
 | that degradation fixed | section 2.3 says what the update changes and 8.13 what is read to see it; data quality may stay DEGRADED for another reason, and the runbook says so (D-U3-7) |
-| no live change until Ghost has its final GO | every live step of section 7 is NOT AVAILABLE until section 5 is closed, and P6 closes only when U2 is installed and verified (or the owner rules it independent) |
+| no live change until Ghost has its final GO | Ghost (U2) is installed (P6 is closed, section 5); every live step of section 7 is still NOT AVAILABLE until the rest of section 5 is closed |
 
 **The cause, in one paragraph.** On the owner's Home Assistant the export-event and dump-to-grid outputs read unknown, each with the
 blocker `POWER_BALANCE_INCONSISTENT`, and data quality reads DEGRADED; it has been so since the shadow install and it is not new. A
@@ -70,7 +72,7 @@ or the Gentle controller, each of which has its own track.
 
 | # | Artefact | Where | How it gets there | Reversible by |
 |---|---|---|---|---|
-| A1 | the Intelligence integration folder, replaced as a whole by the kit (53 files; none new, 5 changed, 48 identical to a kit built from the merged base) | `/config/custom_components/ecco_intelligence/` | `tools/deploy-ha-kit.ps1 -Action Upgrade` (stage, verified backup, atomic swap, `ha core check`; no restart) | `-Action Rollback -BackupStamp` (section 10, RB4) |
+| A1 | the Intelligence integration folder, replaced as a whole by the kit (57 files installed; none new, 5 changed, 52 identical to the installed Ghost kit) | `/config/custom_components/ecco_intelligence/` | `tools/deploy-ha-kit.ps1 -Action Upgrade` (stage, verified backup, atomic swap, `ha core check`; no restart) | `-Action Rollback -BackupStamp` (section 10, RB4) |
 | A2 | the owner's site file, its `site` block gaining the three facts | `/config/ecco/intelligence/site.local.json` | `tools/place-ha-site-file.ps1` (a verified backup of the file now there, an upload hashed on the host, an atomic rename, a read-back); it takes effect only at a config-entry reload or a restart | placing the previous file again (section 10, RB2) |
 | A3 | the staging and backup folders of the Upgrade, and the backup folder of the placement | `/config/ecco/staging/<stamp>/` and `/config/ecco-backups/<stamp>/` | the two tools; nothing is ever deleted | kept; the owner cleans up when the owner decides |
 
@@ -81,9 +83,12 @@ Upgrade and off after the checks (install runbook 10 and 11), exactly as the ins
 
 ### 2.2 The kit's files
 
-The kit has 53 files (32 vendored modules, 19 integration files and the generated manifests); the installed folder holds 52 of
-them (the root `VENDOR_MANIFEST.json` is not installed). Against a kit built the same way from the merged base (the tree this work
-branched from; recorded during this preparation, not pinned by a suite), no file is new, none is removed and five change:
+The kit has 58 files (36 vendored modules, 20 integration files and the generated manifests); the installed folder holds 57 of
+them (the root `VENDOR_MANIFEST.json` is not installed). Against the kit of the installed Ghost update, built the same way from the
+tree this branch is stacked on (the suite rebuilds that kit from the history and compares, or prints SKIP where the history is not
+in the checkout), no file is new, none is removed and five change; U2's five new files (`ghost.py`, `ghost_compare.py`,
+`ghost_feed.py` and `net_value.py` under `_vendor/intelligence/`, and `runtime/ghost_link.py`) are in this kit, byte for byte the
+Ghost kit's, as are the Ghost-changed `scorecard.py`, `store.py`, `coordinator.py` and `diagnostics.py`:
 
 | Changed files | What changes |
 |---|---|
@@ -96,7 +101,8 @@ branched from; recorded during this preparation, not pinned by a suite), no file
 The fitting tool `intelligence/tools/power_balance_fit.py` and the site-check in `tools/ecco_intel_drill.py` are repository tools
 that run offline on the owner's PC; they are not kit files. The install baseline (step 1) records what is really installed; the
 comparison block of 8.1 lists exactly which files differ from the owner's installed folder. If the installed folder is not the one
-the commit was built on top of, the difference is read and explained before any write (section 3 says what that means after U2).
+the commit was built on top of, the difference is read and explained before any write (section 3 says what that means: the
+installed folder must be the Ghost kit).
 
 ### 2.3 What the owner will see after the update
 
@@ -112,7 +118,7 @@ the commit was built on top of, the difference is read and explained before any 
 - **The status entity's `config_hash` attribute** changes when the new site file is loaded (the diagnostics download redacts it).
 - Nothing else: no new entity, no new log line at the usual level (the fact names and reasons of an invalid set go to the debug
   log only), no new table.
-- **If U2 is installed**, its advice log keeps its own bounds and writes the same number of rows. The Dump to Grid rows it logs
+- **U2 is installed**, so its advice log keeps its own bounds and writes the same number of rows. The Dump to Grid rows it logs
   are then real advice instead of withheld rows from the day this update takes effect. The Ghost block simulates charge-target
   advice only and counts Dump advice as not followed (U2's own limit), so this update changes nothing in the Ghost comparison;
   the logged Dump rows only become real data for a later revision.
@@ -141,30 +147,35 @@ the kit's package are the known set.
 ## 3. The artefacts and their hashes
 
 The kit is built by the repository's own tool, `tools/build_ha_integration.py --out <dir> [--git-sha S]`, from the working tree
-(offline, byte-deterministic, outside the repository). Two reference builds are pinned by `test_power_balance_update_docs.py`, which
-rebuilds the kit and compares:
+(offline, byte-deterministic, outside the repository). Two reference builds of this kit, stacked on the installed Ghost code, are
+pinned by `test_power_balance_update_docs.py`, which rebuilds the kit and compares:
 
 | Build | Command | Files | `SHA256SUMS` sha256 |
 |---|---|---|---|
-| no commit recorded | `--out <dir>` | 53 (32 vendored modules, 19 integration files) | `8de99a8e1f981c48a4e4a193e64d3457aa01e645214436a2f44c00d0d7be5fa5` |
-| the fixed reference commit | `--out <dir> --git-sha 0000000` | 53 (the same) | `71f2d132bc635616b9f951b668113d96705c664c4992580be589e8cd779cec4a` |
+| no commit recorded | `--out <dir>` | 58 (36 vendored modules, 20 integration files) | `c0a22729441156ead482d5d03ac566146f281309d27297c10e65bbc598fba64b` |
+| the fixed reference commit | `--out <dir> --git-sha 0000000` | 58 (the same) | `4e3cb4bb6a4dc152eb56861734dbe64a0934732fcb30ae3be1dcef44dcb98208` |
 
 The two differ only in the two `VENDOR_MANIFEST.json` lines (the recorded commit). The kit that is **installed** is built with
 `--git-sha` of the commit it is installed from (the deploy tool compares it with the checkout's HEAD and rebuilds it), so its
 `SHA256SUMS` sha256 differs from both numbers above in those two lines only. The install runbook's equivalence rule applies: the kit
 is accepted when its sums equal the reference kit's, or equal them except those two lines with manifests that differ only in
-`git_sha`. The merged base's kit (the same 53 files; the same command without `--git-sha` gives
-`47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40`) is recorded for the baseline comparison and is not pinned.
+`git_sha`.
 
-These numbers hold for the kit sources as reviewed, built on the merged base. Any change of a kit source changes them: the suite
-fails and this document is updated in that change, and the reviews, the L3 run (P1) and the owner's acceptance are repeated. **After
-U2:** if the owner installs U3 after U2 (D-U3-1, recommended), the commit to install from is this branch put on top of the main that
-holds U2, so that its kit holds the files of both; its file count and hashes then differ from the rows above (the Ghost kit has 58
-files), the suite fails until this section is updated for that commit, and P1, P3 and the later preconditions are repeated on it.
-Installing a kit built from this branch alone over an installed U2 would remove U2's files: the comparison of 8.1 (block 2) lists
-them as REMOVED and step 1 stops. A commit that changes only documents or suites changes neither a kit source nor the rows above:
-the kit built from it differs from the L3-tested kit in the two `VENDOR_MANIFEST.json` lines only, and the build comparison of
-step 0 proves that each time.
+**The baseline is the installed Ghost kit.** The Ghost update (U2) was installed from the tree this branch is stacked on, so the
+kit of that tree (the same 58 files; the same two commands give
+`ec9f31955ef635e8bf3f02c690f26b86cfecb5982f5b497796085196c7612525` without `--git-sha` and
+`41fe3ab03b9222dcba476af9d1afdf7ea2bda8dd8b00ea3bef6485c3b0ae4ac1` with the fixed reference) is what is on the host. The suite
+rebuilds it from the history and compares it with the two rows above: where the checkout does not hold that history it prints SKIP
+for the comparison and counts it as neither a pass nor a failure, and the documents' own pins stay what they are. Against it this
+kit has no file new, none removed and five changed (2.2).
+
+These numbers hold for the kit sources as reviewed, built on the installed Ghost code. Any change of a kit source changes them: the
+suite fails and this document is updated in that change, and the reviews, the L3 run (P1) and the owner's acceptance are repeated.
+**Why the stacking matters:** a kit built from the U3 commits alone (without U2's code, 53 files) installed over the Ghost kit would
+remove U2's five new files and revert its four changed sources: the comparison of 8.1 (block 2) would list them as REMOVED and
+step 1 stops. That stand-alone build is not what this document describes; the numbers above are not those of it. A commit that
+changes only documents or suites changes neither a kit source nor the rows above: the kit built from it differs from the L3-tested
+kit in the two `VENDOR_MANIFEST.json` lines only, and the build comparison of step 0 proves that each time.
 
 **The three site facts** (the `site` block of the site file; all three or none; they are judged by the loader, never by the owner's
 eye):
@@ -187,7 +198,7 @@ Decisions are the owner's. This table lists them; it decides none. "Open" means 
 
 | # | Item | What it is, as built | Status |
 |---|---|---|---|
-| D-U3-1 | the order against U2 (Ghost) | U3 follows U2 in a window of its own, after U2's close-out, and the commit it installs from then holds U2's code; U2's advice log keeps withheld Dump rows until U3 takes effect | **open**: the owner chooses; never both in one window |
+| D-U3-1 | the order against U2 (Ghost) | U3 follows U2 in a window of its own, after U2's close-out, and the commit it installs from holds U2's code (this branch is stacked on the commit U2 was installed from); U2's advice log keeps withheld Dump rows until U3 takes effect | **open**: the owner chooses; never both in one window |
 | D-U3-2 | the commit to install from | a commit whose kit sources are this branch's, on top of everything already installed, after green CI and the owner's M2 scan: the squash commit on main or the branch tip | **open**: the commit is the owner's choice |
 | D-U3-3 | the restart | one restart, short, approved separately, the owner watching, in daylight (the after-checks need real PV or battery flow); an outage of more than about 5 minutes sets the supervision latch (install runbook 6) | **open**: the owner chooses the window |
 | D-U3-4 | when the facts take effect | the kit first, one restart, then the facts placed and a separately approved config-entry reload (a reload, not a second restart), all in one window; the alternative is to place the facts before the restart so the one restart reads both (no reload, but the kit's first start is also the facts' first start) | **open**: the owner chooses; this runbook describes the first |
@@ -199,18 +210,18 @@ Decisions are the owner's. This table lists them; it decides none. "Open" means 
 
 ## 5. Preconditions
 
-The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P1, P3, P4, P5, P6, P7 and P9.
+The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P1, P3, P4, P5, P7 and P9.
 
 | # | Precondition | Status |
 |---|---|---|
-| P1 | **The L3 (WSL) kit-equivalence reference run, on the exact kit.** It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit installs through the same route (`deploy-ha-kit.ps1 -Target Test`; as an Upgrade over the previous kit where the run can), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) a site file with a valid set of facts placed with `place-ha-site-file.ps1 -Target Test` and the entry reloaded: `SITE_INVERTER_CONVERSION` PASS in the download, and with synthetic loss-affected inputs the two outputs are not blocked by `POWER_BALANCE_INCONSISTENT` where the same inputs without the facts are; (c) an invalid set, induced on the isolated instance only (never on production): WARN and the two outputs BLOCKED with `POWER_LOSS_FACTS_INVALID`; (d) **the previous kit restored on the isolated instance loads with a site file that still holds the facts** (no FAIL and no `SITE_INVERTER_CONVERSION` line): the reading of 7.1 observed in a real Home Assistant; (e) the config-entry reload observed there, with the download taken before it; (f) at least three slot cycles with cycle times inside the install runbook's bounds and no blocking-I/O or slow-callback warning from the integration; (g) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN**: closed only by the recorded run on the exact kit; its result is kept in the private project record, not here |
+| P1 | **The L3 (WSL) kit-equivalence reference run, on the exact kit.** It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit (this branch, stacked on the installed Ghost code) installs through the same route (`deploy-ha-kit.ps1 -Target Test`; as an Upgrade over the previous kit, which is the Ghost kit, where the run can), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) a site file with a valid set of facts placed with `place-ha-site-file.ps1 -Target Test` and the entry reloaded: `SITE_INVERTER_CONVERSION` PASS in the download, and with synthetic loss-affected inputs the two outputs are not blocked by `POWER_BALANCE_INCONSISTENT` where the same inputs without the facts are; (c) an invalid set, induced on the isolated instance only (never on production): WARN and the two outputs BLOCKED with `POWER_LOSS_FACTS_INVALID`; (d) **the previous kit restored on the isolated instance loads with a site file that still holds the facts** (no FAIL and no `SITE_INVERTER_CONVERSION` line): the reading of 7.1 observed in a real Home Assistant; (e) the config-entry reload observed there, with the download taken before it; (f) at least three slot cycles with cycle times inside the install runbook's bounds and no blocking-I/O or slow-callback warning from the integration; (g) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN**: closed only by the recorded run on the exact kit; its result is kept in the private project record, not here. A run on the stand-alone kit of this branch (before it was stacked on Ghost) is a precursor and does not close it: P1 repeats on the stacked kit |
 | P2 | independent review of the code (the loss-aware expectation, the bounds, the loader, the fitting tool), findings fixed, the kit unchanged since the reviewed build (proven by the build comparison of section 3) | closed (offline, lean mode, per the project record of 22 Nov 2026): one independent review, no BLOCKER, one MAJOR (the factor bounds were too wide) and five minors, all fixed in a follow-up round (the bounds tightened, a huge integer fact reported and never raised, the rule-set version bumped, the native-load false-zero rule pinned with facts configured, mutants of the real source added); the record names no second review |
-| P3 | independent review of these documents and their suite | **OPEN**: one independent review (lean mode); a finding of substance is fixed and pinned in the suite before this line closes |
+| P3 | independent review of these documents and their suite | **OPEN**: one independent review (lean mode) of the documents as stacked on Ghost: the stand-alone version was reviewed and its findings fixed, but the stacking edits (the Ghost baseline, the file counts, the pins, the drills) are new text that no reviewer has read; a finding of substance is fixed and pinned in the suite before this line closes |
 | P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN**: closed only by a green run on the exact commit; any later commit repeats it |
 | P5 | the owner's M2 private-pattern scan on the exact commit, generated assets, commit metadata and pull request text included | **OPEN**: runs before any push; any later commit repeats it |
-| P6 | U2 (Ghost) installed and verified first, its installation record filed, and the commit installed holds its code (section 3), or the owner deliberately decides U3 is independent of it; never both in one window | **OPEN**: U2 is prepared and waits for the owner's final go; no live step of U3 before it |
+| P6 | U2 (Ghost) installed and verified first, its installation record filed, and the commit installed holds its code (section 3), or the owner deliberately decides U3 is independent of it; never both in one window | closed 22 Nov 2026: Ghost installed from 87f26df; this branch is stacked on that commit, so the kit of this update holds U2's code (section 3); U3 is still a window of its own, after U2's close-out |
 | P7 | the owner's rulings on D-U3-1 to D-U3-9 recorded | **OPEN** |
-| P8 | the offline gates green on the exact commit: the suites, the kit build comparison, the mock-root drills with this kit and the PowerShell parse (step 0) | closed on the commit these documents were written on (22 Nov 2026): the engine and runtime roots as run for the code review, this document's suite and its neighbours, both builds equal to the pins, the drills of 8.0 and the deploy suite; repeated in full at step 0 on the commit that is installed |
+| P8 | the offline gates green on the exact commit: the suites, the kit build comparison, the mock-root drills with this kit and the PowerShell parse (step 0) | closed on the stacked commit these documents were written on (22 Nov 2026): the engine and runtime roots, the repository validation, the public privacy suite and the deploy suite, all green on the tree stacked on Ghost; this document's suite and the Ghost documents' suite, both builds equal to the pins and the Ghost kit rebuilt from the history; the drills of 8.0 with the installed Ghost kit as the previous kit (install, place the facts, upgrade, roll back, uninstall) and the scorecard file with U2's two tables byte-identical through them; repeated in full at step 0 on the commit that is installed |
 | P9 | the reference kit and its `SHA256SUMS` sha256 from P1 recorded offline (the Production route refuses without them) | **OPEN** (follows P1) |
 
 ## 6. Go / no-go on the day
@@ -262,11 +273,12 @@ no code in the previous loader rejects, counts or reports another key of the `si
 name and adds one check. One offline experiment of this preparation (scratch only, synthetic data) ran the
 merged base's loader on a site file whose `site` block held the three keys valid, partial, out of bounds, of the wrong types and
 null: every load gave no FAIL, no extra check and the same decisions, entity map and array size as the file without them. The
-Ghost update's loader is the same file as the merged base's (checked by a diff during this preparation, recorded and not pinned), so
-the reading holds whether U2 is installed or not. The suite pins what makes it true of the new tree (the keys are read only by name,
-no code refuses an unknown key of the `site` block) and, where the checkout holds the history before this change, repeats the
-experiment on that tree and compares the previous kit's loader hash with the one step 1 reads; in a checkout without that history (a
-shallow clone) the suite prints SKIP for these two checks and counts them as neither a pass nor a failure. The reading is about the loader, not about
+Ghost update's loader is the same file as the merged base's (checked by a diff during this preparation, recorded and not pinned),
+and the previous kit of this branch is the Ghost kit, so the reading is about the loader that is installed. The suite pins what
+makes it true of the new tree (the keys are read only by name, no code refuses an unknown key of the `site` block) and, where the
+checkout holds the history before this change (the Ghost tree), repeats the experiment on that tree and compares the previous
+kit's loader hash with the one step 1 reads; in a checkout without that history (a shallow clone) the suite prints SKIP for these
+two checks and counts them as neither a pass nor a failure. The reading is about the loader, not about
 the whole previous integration: P1(d) must show the previous kit as a whole on such a file, in a real Home Assistant.
 
 **So no order refuses a file or fails a start-up from this cause.** The new kit with the unchanged site file is the old rule bit for
@@ -314,9 +326,9 @@ Set-Location <checkout>
 (Get-FileHash -Algorithm SHA256 (Join-Path $KIT 'SHA256SUMS')).Hash.ToLower()
 ```
 
-The tool prints `built custom_components/ecco_intelligence with 32 vendored modules and 19 integration files; 53 files; SHA256SUMS sha256 <hash>` and a `status:` line; the `Get-FileHash` line prints the same hash again, and it must equal the fixed-reference row of section 3. The same
+The tool prints `built custom_components/ecco_intelligence with 36 vendored modules and 20 integration files; 58 files; SHA256SUMS sha256 <hash>` and a `status:` line; the `Get-FileHash` line prints the same hash again, and it must equal the fixed-reference row of section 3. The same
 command without `--git-sha` (into a second new directory) must give the first row. If either differs, stop: the checkout is not
-the reviewed one (after U2, 3 says what changes).
+the reviewed one (3 says why the kit must be the one stacked on U2).
 
 Then build the kit that will be installed, with the commit it is installed from, and record its `SHA256SUMS` sha256 offline (it is
 `-ExpectedSumsSha256` of every run with it):
@@ -333,8 +345,8 @@ Set-Location <checkout>
 
 `runbook --kit` verifies the kit and exits 1 when it does not verify. Drill install, upgrade, rollback and uninstall on a marked
 mock root, **with the previous kit installed first and this kit as the upgrade**, which is the order of the live steps (install
-runbook 2; the root must contain the marker file, and the drill refuses any other directory). `<previous kit>` is a kit built the
-same way from the commit that is installed on the host now:
+runbook 2; the root must contain the marker file, and the drill refuses any other directory). `<previous kit>` is the installed
+Ghost kit: built the same way from the commit that is installed on the host now (U2's):
 
 ```powershell
 cls
@@ -352,7 +364,10 @@ Set-Content -Encoding utf8 (Join-Path $MOCK '.ecco_mock_config_root') 'mock'
 state folder (with whatever scorecard file it holds) and every other integration byte-identical: their hashes are compared before
 and after each step. The suite of this runbook repeats that with a synthetic site file that holds the three facts, placed on the
 mock root between the install and the upgrade by a plain file copy (the drill has no placement step: the placement tool needs ssh
-and never runs offline), and checks that the tree after the rollback equals the previous kit's. The placement tool's own logic
+and never runs offline), and checks that the tree after the rollback equals the previous kit's. Its state folder holds a real
+scorecard file with both of U2's tables (`advice_log` and `advice_incident`), so the byte-identity covers the file the Ghost update
+made; where the history is in the checkout the previous kit installed first is the real Ghost kit, otherwise a synthetic copy of
+this kit. The placement tool's own logic
 (its local checks, the backup, the upload, the read-back and its rollback messages) is exercised against a stand-in host by
 `tools/tests/Test-EccoDeploy.ps1`; that is a stand-in, not the production host. The drill does **not** run the previous
 integration as a whole on a site file with the facts; the previous loader alone was run on one (7.1), and P1(d) must show the rest.
@@ -466,15 +481,15 @@ $HAVE = (Get-FileHash -Algorithm SHA256 -LiteralPath $COPY).Hash.ToLower()
 if ($LIVE -ceq $HAVE) { 'THE OFFLINE COPY EQUALS THE SITE FILE ON THE HOST' } else { 'DIFFERENT: stop' }
 ```
 
-The count line is the number of files in the installed folder: it must be 52 if the installed kit is the merged base's and 57 if it
-is U2's (the Ghost kit), and U3 changes it by nothing; any other number is explained before going on. The hash read of the site
+The count line is the number of files in the installed folder: it must be 57, the installed Ghost kit's count (U2 is installed), and
+U3 changes it by nothing; any other number is explained before going on. The hash read of the site
 file is the command the placement tool itself runs on the host (`sha256sum` of that one path); it shows no content. `ha-status.ps1`
 and `ha-logs.ps1` are the repository's read-only tools; the `find` and `ls` reads are new combinations of commands the deploy tools
 themselves use and have not been run on the production host (section 12). The state folder's hash is read in step 4, with the
 integration paused, because the file is written once per slot cycle while the integration runs.
 
 **The loader guard.** The listing's line for `./runtime/gates.py` must show the sha256 the old-loader reading of 7.1 was made on:
-`659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b` (the merged base's kit file, which the Ghost kit carries too). If the
+`659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b` (the installed Ghost kit's file, the same file as the merged base's kit). If the
 installed loader is another file, that reading does not cover it: stop, and read the installed loader against 7.1 before any write.
 
 **Block 2: what will change (offline, on the saved listing).** Compare the baseline with the kit's `SHA256SUMS`:
@@ -506,7 +521,7 @@ $removed = @($have.Keys | Where-Object { -not $want.ContainsKey($_) } | Sort-Obj
 'REMOVED ({0}): {1}' -f $removed.Count, ($removed -join ', ')
 ```
 
-Expected, whether the installed folder is the merged base's kit or U2's and the kit was built on top of it: 0 ADDED, 5 CHANGED
+Expected, with the installed folder the Ghost kit and this kit built on top of it: 0 ADDED, 5 CHANGED
 (`_vendor/intelligence/advisory_contract.py`, `_vendor/intelligence/quality.py`, `_vendor/intelligence/site_decisions.py`,
 `runtime/gates.py` and `VENDOR_MANIFEST.json`) and 0 REMOVED (section 2.2). **Any REMOVED file means the kit does not contain
 what is installed (U2 would be undone): stop.** Anything else is a stop until it is explained.
@@ -640,7 +655,7 @@ Compare-Object (Get-Content "$E\state-paused-1.txt") (Get-Content "$E\state-afte
 Compare-Object (Get-Content "$E\site-file-sha-before.txt") (Get-Content "$E\site-file-sha-after-swap.txt")
 ```
 
-Expected: `INSTALLED TREE EQUALS THE KIT (52 files)` (57 after U2) and no line for the state folder or the site file: nothing wrote while the
+Expected: `INSTALLED TREE EQUALS THE KIT (57 files)` and no line for the state folder or the site file: nothing wrote while the
 integration was paused and the tool never touches either.
 
 ### 8.7 Step 7: the restart
@@ -879,8 +894,7 @@ RB2 (only if step 9 placed the facts: after a no-go at step 8 the site file was 
    here). It verifies the backup against its `BACKUP_SHA256SUMS`, stages and verifies the restore copy, backs up the current tree,
    swaps, verifies in place, compares the site file and the state folder before and after and rolls itself back if they changed
    (this is why RB1 comes first) and runs `ha core check`;
-   it never restarts. Proof: the PASSED block (`Restored` names the backup's file count, which is the baseline listing's: 52 if the
-   installed kit was the merged base's and 57 if it was U2's; and `HA check    : passed`), and an independent comparison of the
+   it never restarts. Proof: the PASSED block (`Restored` names the backup's file count, which is the baseline listing's: 57, the installed Ghost kit's; and `HA check    : passed`), and an independent comparison of the
    installed folder with the baseline (the block below):
 
    ```powershell
