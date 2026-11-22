@@ -14,7 +14,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
       takes no kit
   [3] the kit: tools/build_ha_integration.py is run into temporary directories (outside the repository), with no commit and with the
       fixed reference commit; the two SHA256SUMS sha256 values, the file counts and the new and changed file names the documents state
-      are those the build produces
+      are those of the Ghost-as-installed kit. The kit built from this tree must be that kit or the kit of the power-balance update
+      stacked on it (both pinned below); where the checkout holds the history, the Ghost-as-installed kit is also rebuilt from the tree
+      just before the power-balance update (found from the history, never by a commit id written here) and must equal its pin
   [4] numbers and names: the two table names, the retention bound, the rows a day (kinds x the slot cycles of the clock-change day),
       the incident list size, the two read budgets and the export epsilon are those of the sources, and EVERY mention in either
       document of a retention period, a rows-a-day figure and the incident list size equals the source constant
@@ -60,17 +62,22 @@ reads both documents as text (no Home Assistant, no network, no PowerShell, no g
 
 Usage: python custom_components/ecco_intelligence/tests/test_ghost_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
-Test-only, no network. Reads repository files, builds into temporary directories and removes them.
+Test-only, no network. Reads repository files, builds into temporary directories and removes them. The one check that needs the tree
+just before the power-balance update (found from the git history with a pickaxe search, never by a commit id written here) prints SKIP,
+and counts as neither a pass nor a failure, where the checkout does not hold that history (a shallow clone).
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
+import tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -83,6 +90,7 @@ import _harness as H  # noqa: E402
 
 FAILURES: list[str] = []
 PASSED = [0]
+SKIPPED: list[str] = []
 PREFIX = "ecco_ghost_docs_"
 
 
@@ -93,6 +101,11 @@ def check(name: str, condition: bool, detail: str = "") -> None:
     else:
         FAILURES.append(name)
         print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
+
+def skip(name: str, why: str) -> None:
+    SKIPPED.append(name)
+    print(f"  SKIP  {name} - {why}")
 
 
 RB_REL = "docs/intelligence/GHOST_SECOND_UPDATE_RUNBOOK.md"
@@ -112,6 +125,14 @@ TOOL_KEYS = {"build_ha_integration.py": "build", "ecco_intel_drill.py": "drill",
              "ha-status.ps1": "status", "ha-logs.ps1": "logs"}
 FIXED_SHA = "0000000"                 # the fixed reference commit of the second build (not a commit: a placeholder)
 BASE_KIT_SUMS = "47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40"   # recorded from the merged base's kit; not pinned
+# The Ghost-as-installed kit: the two reference builds of the tree the Ghost update was installed from. These are the values the
+# Ghost documents state, so they are what the documents are checked against whatever else this tree builds.
+GHOST_KIT_SUMS = {"nosha": "ec9f31955ef635e8bf3f02c690f26b86cfecb5982f5b497796085196c7612525",
+                  "fixed": "41fe3ab03b9222dcba476af9d1afdf7ea2bda8dd8b00ea3bef6485c3b0ae4ac1"}
+# The kit of the power-balance update stacked on the Ghost code (four changed sources and the manifests, none new, none removed):
+# the only other kit this tree may build. A kit change is a deliberate edit of these two pins and of the documents' pins.
+STACKED_KIT_SUMS = {"nosha": "c0a22729441156ead482d5d03ac566146f281309d27297c10e65bbc598fba64b",
+                    "fixed": "4e3cb4bb6a4dc152eb56861734dbe64a0934732fcb30ae3be1dcef44dcb98208"}
 OPEN_AT_WRITING = ("P1", "P4", "P5", "P7", "P9")
 CLOSED_AT_WRITING = ("P2", "P3", "P6", "P8")
 OPEN_LIST_TEXT = "P1, P4, P5, P7 and P9"
@@ -965,13 +986,16 @@ def fired(result: dict) -> set[str]:
 # facts from the sources, the kit build and the real drill
 # ---------------------------------------------------------------------------------------------------------------------
 def kit_facts(base: Path) -> dict:
+    """The kit this tree builds (its file set, its build line and its two sums) and the Ghost-as-installed kit's sums, which are what the
+    documents state (out["nosha"] and out["fixed"]: the documents describe the Ghost update as installed, whatever else this tree builds)."""
     out = {}
+    tree = {}
     for key, sha in (("nosha", None), ("fixed", FIXED_SHA)):
         d = base / f"kit_{key}"
         r = H.build_kit(d, git_sha=sha)
         check(f"the kit builds ({key}), rc 0", r.returncode == 0, (r.stdout + r.stderr)[-300:])
         sums = (d / "SHA256SUMS").read_bytes()
-        out[key] = hashlib.sha256(sums).hexdigest()
+        tree[key] = hashlib.sha256(sums).hexdigest()
         if key == "nosha":
             out["line"] = r.stdout.splitlines()[0] if r.stdout else ""
             paths = [ln.split("  ", 1)[1] for ln in sums.decode("utf-8").splitlines() if "  " in ln]
@@ -979,6 +1003,56 @@ def kit_facts(base: Path) -> dict:
             out["pkg"] = [p for p in paths if p.startswith(PKG + "/")]
             out["root_py"] = {p[len(PKG) + 1:-3] for p in out["pkg"] if "/" not in p[len(PKG) + 1:] and p.endswith(".py")}
     out["dir"] = base / "kit_fixed"
+    out["tree"] = tree
+    out.update(GHOST_KIT_SUMS)
+    return out
+
+
+def ghost_commit() -> str | None:
+    """The tree just before the power-balance update, i.e. the Ghost-as-installed state: the first parent of the commit that introduced
+    the inverter conversion facts on the first-parent history (the merge that stacks the update on the Ghost code, or the commit that
+    follows it after a squash merge). Found from the history and never named here (no document or test of the runtime carries a commit
+    id). None where there is no such commit or the checkout does not hold the history (a shallow clone, or a tree without the update)."""
+    try:
+        r = subprocess.run(["git", "-C", str(REPO), "log", "--first-parent", "-m", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--",
+                            "intelligence/site_decisions.py"], capture_output=True, text=True, timeout=120)
+        shas = r.stdout.split()
+        if r.returncode != 0 or not shas:
+            return None
+        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", shas[-1] + "^1"], capture_output=True, text=True, timeout=60)
+        out = p.stdout.strip()
+        return out if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def ghost_kit_from_history(base: Path) -> dict | None:
+    """The two reference sums of the kit the tree just before the power-balance update builds with its own build tool; None when it is
+    not here."""
+    prev = ghost_commit()
+    if prev is None:
+        return None
+    try:
+        arc = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", prev], capture_output=True, timeout=300)
+        if arc.returncode != 0:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    tree = base / "ghost_tree"
+    tree.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(arc.stdout)) as tf:
+        try:
+            tf.extractall(tree, filter="data")
+        except TypeError:
+            tf.extractall(tree)
+    out = {}
+    for key, sha in (("nosha", None), ("fixed", FIXED_SHA)):
+        d = base / f"ghost_kit_{key}"
+        cmd = [sys.executable, "-I", "-B", str(tree / "tools" / "build_ha_integration.py"), "--out", str(d)] + (["--git-sha", sha] if sha else [])
+        b = subprocess.run(cmd, cwd=str(tree), capture_output=True, text=True, timeout=300)
+        if b.returncode != 0:
+            return {"error": (b.stdout + b.stderr)[-300:]}
+        out[key] = hashlib.sha256((d / "SHA256SUMS").read_bytes()).hexdigest()
     return out
 
 
@@ -1298,6 +1372,21 @@ base = H.mktemp(PREFIX)
 try:
     print("== the kit, built by the repository's own tool into temporary directories")
     F = {"kit": kit_facts(base), "facts": real_facts(), "ghost_feed_src": S0["ghost_feed"]}
+    check("the kit this tree builds is one of the two pinned kits: the Ghost-as-installed kit, or the power-balance update stacked on it "
+          "(both reference builds, no commit and the fixed reference)",
+          F["kit"]["tree"] in (GHOST_KIT_SUMS, STACKED_KIT_SUMS),
+          f"{F['kit']['tree']['nosha'][:8]} / {F['kit']['tree']['fixed'][:8]}")
+    check("the two pinned kits are different, and each pin is a sha256 and differs between the build without and with the fixed commit",
+          GHOST_KIT_SUMS != STACKED_KIT_SUMS and all(re.fullmatch(r"[0-9a-f]{64}", v) for p in (GHOST_KIT_SUMS, STACKED_KIT_SUMS) for v in p.values())
+          and all(p["nosha"] != p["fixed"] for p in (GHOST_KIT_SUMS, STACKED_KIT_SUMS)))
+    print("== the Ghost-as-installed kit, rebuilt from the tree just before the power-balance update, where this checkout holds the history")
+    ghost_built = ghost_kit_from_history(base)
+    if ghost_built is None:
+        skip("the Ghost-as-installed kit rebuilt from the history has the pinned sums the documents state",
+             "the history before the power-balance update is not in this checkout")
+    else:
+        check("the Ghost-as-installed kit rebuilt from the history has the pinned sums the documents state (no commit and the fixed reference)",
+              ghost_built == GHOST_KIT_SUMS, str(ghost_built)[:300])
     print("== the real drill, with the real kit and a state folder that holds both new tables")
     F["drill"] = run_real_drill(base, F["kit"]["dir"])
     check("the real drill leaves the state folder byte-identical through install, upgrade, rollback and uninstall",
@@ -1344,10 +1433,10 @@ finally:
     H.rmtree_own(base, PREFIX)
 
 print("")
-print(f"{PASSED[0]} PASS, {len(FAILURES)} FAIL")
+print(f"{PASSED[0]} PASS, {len(FAILURES)} FAIL" + (f", {len(SKIPPED)} SKIP" if SKIPPED else ""))
 if FAILURES:
     print(f"{len(FAILURES)} check(s) FAILED in the Ghost update documents suite:")
     for f_ in FAILURES:
         print("  -", f_)
     sys.exit(1)
-print("all Ghost update documents checks passed")
+print("all Ghost update documents checks passed" + (f" ({len(SKIPPED)} skipped: the history before the power-balance update is not in this checkout)" if SKIPPED else ""))
