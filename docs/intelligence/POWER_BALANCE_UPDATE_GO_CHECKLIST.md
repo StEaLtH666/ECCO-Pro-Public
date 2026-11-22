@@ -5,14 +5,14 @@ here as "runbook N" (a section number). Nothing in this list has been done.
 
 ## 1. The answer
 
-**Prepared offline and never run in a real Home Assistant. NOT yet ready for your go.** Open preconditions (runbook 5): P1, P3, P4, P5, P7 and P9.
-Closed: P2 (one independent code review: one MAJOR and five minors, all fixed), P6 (Ghost installed 22 Nov 2026; this commit is stacked on it) and P8 (offline gates on this commit).
+**Prepared offline and run once on an isolated test instance; never run in a real Home Assistant of yours. NOT yet ready for your go.** Open preconditions (runbook 5): P4, P5 and P7.
+Closed: P1, P2 (one independent code review: one MAJOR and five minors, all fixed), P3, P6 (Ghost installed 22 Nov 2026; this commit is stacked on it), P8 (offline gates on this commit) and P9.
 
-- **P1 (the one that matters most):** the L3 (WSL) kit-equivalence reference run on the exact kit (the one stacked on Ghost), with the facts: the kit loads, a valid
-  set gives `SITE_INVERTER_CONVERSION` PASS after a reload, an invalid set is WARN and withholds the two outputs, and the previous
-  kit restored on the isolated instance still loads a site file that holds the facts. P9 (the reference kit's hash) follows it.
-- P3 an independent review of these documents as stacked on Ghost; P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on
-  that commit; P7 your rulings on section 3.
+- **P1, closed 22 Nov 2026:** the L3 (WSL) kit-equivalence reference run on the exact kit (the one stacked on Ghost) passed on the isolated instance (Core 2026.11.0, Python 3.14.10):
+  the kit loads, valid facts give `SITE_INVERTER_CONVERSION` PASS after a reload, invalid facts are WARN and withhold the two outputs, and the previous kit restored there loaded a site
+  file with the facts and ignored them. **It holds only for those versions: after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5).**
+  P9: the reference kit and its hash are recorded offline. P3: one independent review of these documents (no BLOCKER or MAJOR, one MINOR fixed in the suite).
+- Open: P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on that commit; P7 your rulings on section 3.
 
 **No automatic installation or live access is authorised.** Nothing is installed, restarted, reloaded or read live until every
 precondition is closed, you have given the final GO on this list, and each live step has had its own go. Your rule, no live change
@@ -101,13 +101,14 @@ file and the scorecard file included, to backup time). A full rollback needs one
 
 ## 7. Blockers
 
-The open preconditions of section 1 (P1 first). No defect is known from the offline checks. Ghost (U2) is a window of its own: if another
-supervised live step is in progress, this one waits. At install time: your reads, your protected backup, your presence, the offline copy of
-your site file, and your go for each step.
+The open preconditions of section 1 (P4, P5, P7); P1 reopens after any Core or Python update of your host. No defect is known from the offline checks. Ghost (U2) is a window of its
+own: if another supervised live step is in progress, this one waits. At install time: your reads, your protected backup, your presence, the offline copy of your site file, your go for each step.
 
 ## 8. What is NOT established
 
-- It has **never run in a real Home Assistant**; the L3 (WSL) run on the exact kit is OPEN.
+- It has **never run in a real Home Assistant** of yours. The L3 (WSL) run on the exact kit (isolated instance, Core 2026.11.0, synthetic round numbers only) passed with limits: its
+  harness maps no export or dump inputs, so the two outputs read unknown there for other reasons and data quality stayed DEGRADED (the flip to OK is not shown); its 0.25-CPU debug
+  session logged slow-callback lines under download load, none naming the integration; no Uninstall and no clean-order rollback ran on this pair.
 - The facts are calibrated, not known: whether they hold in another season is not established (recalibration is a rule).
 - A wrong set inside the bounds can still hide faults: at 5 kW up to 600 W (discharge side) or 656 W (charge side) of expectation, against a
   250 W tolerance; the fit's fault-injection and hold-out rows, read by you, are the defence.

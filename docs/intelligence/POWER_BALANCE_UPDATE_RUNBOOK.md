@@ -1,8 +1,10 @@
 # ECCO Intelligence: the inverter power-balance update (U3), a supervised Home Assistant update: runbook
 
-**Status: PREPARED OFFLINE, NOT RUN, NOT READY.** Nothing in this document has been done on Home Assistant. The update has
-never run in a real Home Assistant (section 12). It is not ready for a go until the preconditions of section 5 that are marked
-OPEN are closed (P1, P3, P4, P5, P7 and P9 at the time of writing; P2, P6 and P8 are closed). Every live step below needs its own
+**Status: PREPARED OFFLINE, RUN ONCE ON AN ISOLATED TEST INSTANCE, NEVER ON THE OWNER'S HOME ASSISTANT, NOT READY.** Nothing in this
+document has been done on the owner's Home Assistant. The update has never run in a real Home Assistant that is the owner's (section
+12): the one run of the stacked kit in a real Home Assistant Core was on an isolated test instance (P1, closed 22 Nov 2026). It is not
+ready for a go until the preconditions of section 5 that are marked OPEN are closed (P4, P5 and P7 at the time of writing; P1, P2,
+P3, P6, P8 and P9 are closed, and P1 reopens after any Core or Python update of the host, U3-G5). Every live step below needs its own
 owner authorisation, in the session, at the time (column "own authorisation" of the step table). **This branch is stacked on the
 commit the Ghost update (U2) was installed from**: its kit holds U2's files and changes only the four sources and the manifests
 that section 2.2 lists, so the installed Ghost kit is the baseline of every comparison below.
@@ -210,19 +212,20 @@ Decisions are the owner's. This table lists them; it decides none. "Open" means 
 
 ## 5. Preconditions
 
-The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P1, P3, P4, P5, P7 and P9.
+The update is **NOT READY** while any line below is OPEN. At the time of writing the OPEN lines are P4, P5 and P7. P1 is closed for
+the Home Assistant Core and Python versions its run was made on and reopens for any other (U3-G5, section 6).
 
 | # | Precondition | Status |
 |---|---|---|
-| P1 | **The L3 (WSL) kit-equivalence reference run, on the exact kit.** It must show, on the isolated test instance pinned to the production Home Assistant and Python versions: (a) the exact kit (this branch, stacked on the installed Ghost code) installs through the same route (`deploy-ha-kit.ps1 -Target Test`; as an Upgrade over the previous kit, which is the Ghost kit, where the run can), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) a site file with a valid set of facts placed with `place-ha-site-file.ps1 -Target Test` and the entry reloaded: `SITE_INVERTER_CONVERSION` PASS in the download, and with synthetic loss-affected inputs the two outputs are not blocked by `POWER_BALANCE_INCONSISTENT` where the same inputs without the facts are; (c) an invalid set, induced on the isolated instance only (never on production): WARN and the two outputs BLOCKED with `POWER_LOSS_FACTS_INVALID`; (d) **the previous kit restored on the isolated instance loads with a site file that still holds the facts** (no FAIL and no `SITE_INVERTER_CONVERSION` line): the reading of 7.1 observed in a real Home Assistant; (e) the config-entry reload observed there, with the download taken before it; (f) at least three slot cycles with cycle times inside the install runbook's bounds and no blocking-I/O or slow-callback warning from the integration; (g) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | **OPEN**: closed only by the recorded run on the exact kit; its result is kept in the private project record, not here. A run on the stand-alone kit of this branch (before it was stacked on Ghost) is a precursor and does not close it: P1 repeats on the stacked kit |
+| P1 | **The L3 (WSL) kit-equivalence reference run, on the exact kit.** It must show, on the isolated test instance pinned to a Home Assistant Core and Python version that U3-G5 compares with the host's: (a) the exact kit (this branch, stacked on the installed Ghost code) installs through the same route (`deploy-ha-kit.ps1 -Target Test`; as an Upgrade over the previous kit, which is the Ghost kit, where the run can), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) a site file with a valid set of facts placed with `place-ha-site-file.ps1 -Target Test` and the entry reloaded: `SITE_INVERTER_CONVERSION` PASS in the download, and with synthetic loss-affected inputs the two outputs are not blocked by `POWER_BALANCE_INCONSISTENT` where the same inputs without the facts are; (c) an invalid set, induced on the isolated instance only (never on production): WARN and the two outputs BLOCKED with `POWER_LOSS_FACTS_INVALID`; (d) **the previous kit restored on the isolated instance loads with a site file that still holds the facts** (no FAIL and no `SITE_INVERTER_CONVERSION` line): the reading of 7.1 observed in a real Home Assistant; (e) the config-entry reload observed there, with the download taken before it; (f) at least three slot cycles with cycle times inside the install runbook's bounds and no blocking-I/O or slow-callback warning from the integration; (g) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | closed 22 Nov 2026: the stacked kit (the kit these documents pin; a later commit that changes only documents or suites builds the same kit but for its two `VENDOR_MANIFEST.json` lines) ran on the isolated test instance pinned to Home Assistant Core 2026.11.0 and Python 3.14.10: (a) to (f) passed, with the limits of section 12, and (g) is recorded offline (P9); the run's result is kept in the private project record, not here. **The closure holds only for those two versions.** U3-G5 requires the host's Core and Python to equal them: after ANY Core or Python update of the host the run is repeated on the new versions and P1 reopens until it has been. That run did not read the production versions. A run on the stand-alone kit of this branch (before it was stacked on Ghost) was a precursor and did not close it |
 | P2 | independent review of the code (the loss-aware expectation, the bounds, the loader, the fitting tool), findings fixed, the kit unchanged since the reviewed build (proven by the build comparison of section 3) | closed (offline, lean mode, per the project record of 22 Nov 2026): one independent review, no BLOCKER, one MAJOR (the factor bounds were too wide) and five minors, all fixed in a follow-up round (the bounds tightened, a huge integer fact reported and never raised, the rule-set version bumped, the native-load false-zero rule pinned with facts configured, mutants of the real source added); the record names no second review |
-| P3 | independent review of these documents and their suite | **OPEN**: one independent review (lean mode) of the documents as stacked on Ghost: the stand-alone version was reviewed and its findings fixed, but the stacking edits (the Ghost baseline, the file counts, the pins, the drills) are new text that no reviewer has read; a finding of substance is fixed and pinned in the suite before this line closes |
+| P3 | independent review of these documents and their suite | closed 22 Nov 2026: one independent review (lean mode) of the documents as stacked on Ghost (the Ghost baseline, the file counts, the pins, the drills) found no BLOCKER, no MAJOR and one MINOR, fixed in the suite and pinned by mutants (the commit id named in P6 was only skipped when it did not match the history; it is now checked, rule 28 of the suite); the stand-alone version had been reviewed before, its findings fixed. What no reviewer has read: the edits made after that review (the closure of P1, P3 and P9, and the limits of the L3 run in section 12); the suite pins them |
 | P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN**: closed only by a green run on the exact commit; any later commit repeats it |
 | P5 | the owner's M2 private-pattern scan on the exact commit, generated assets, commit metadata and pull request text included | **OPEN**: runs before any push; any later commit repeats it |
 | P6 | U2 (Ghost) installed and verified first, its installation record filed, and the commit installed holds its code (section 3), or the owner deliberately decides U3 is independent of it; never both in one window | closed 22 Nov 2026: Ghost installed from 87f26df; this branch is stacked on that commit, so the kit of this update holds U2's code (section 3); U3 is still a window of its own, after U2's close-out |
 | P7 | the owner's rulings on D-U3-1 to D-U3-9 recorded | **OPEN** |
 | P8 | the offline gates green on the exact commit: the suites, the kit build comparison, the mock-root drills with this kit and the PowerShell parse (step 0) | closed on the stacked commit these documents were written on (22 Nov 2026): the engine and runtime roots, the repository validation, the public privacy suite and the deploy suite, all green on the tree stacked on Ghost; this document's suite and the Ghost documents' suite, both builds equal to the pins and the Ghost kit rebuilt from the history; the drills of 8.0 with the installed Ghost kit as the previous kit (install, place the facts, upgrade, roll back, uninstall) and the scorecard file with U2's two tables byte-identical through them; repeated in full at step 0 on the commit that is installed |
-| P9 | the reference kit and its `SHA256SUMS` sha256 from P1 recorded offline (the Production route refuses without them) | **OPEN** (follows P1) |
+| P9 | the reference kit and its `SHA256SUMS` sha256 from P1 recorded offline (the Production route refuses without them) | closed 22 Nov 2026: the reference kit and its `SHA256SUMS` sha256 of the L3 run are recorded offline in the private project record; they are not in this repository, so the `-ReferenceKit` and `-ReferenceSumsSha256` placeholders of the Plan and Upgrade lines stay placeholders here, and the coordinator fills them from the offline record. P9 follows P1: when P1 reopens (U3-G5) and the run is repeated, the new reference kit and sums are recorded again and replace these |
 
 ## 6. Go / no-go on the day
 
@@ -235,7 +238,7 @@ they apply to an upgrade, and its G7 for a site file that already exists.
 | U3-G2 | the owner has reserved a quiet period, is present, and no other supervised live step is in progress (U2 and U1 included) |
 | U3-G3 | the owner has made a fresh **protected** full backup in the Home Assistant UI (step 2). A backup made over SSH is full but UNPROTECTED: no session handles a backup encryption password |
 | U3-G4 | the baseline (step 1) shows supervision SUPERVISED and stable with the heartbeat age nominal, every write enable, arm and schedule off, the manual write counter noted, Intelligence SHADOW with a fresh result, the pause helper's state noted and the config entry loaded; the three outputs' states and blockers are noted, taken while PV or battery power was large |
-| U3-G5 | the host's Home Assistant Core and Python versions, re-read read-only, equal the versions the L3 run pinned (P1) |
+| U3-G5 | the host's Home Assistant Core and Python versions, re-read read-only, equal the versions the L3 run pinned (P1: Core 2026.11.0, Python 3.14.10). If either differs after ANY Core or Python update, this is a no-go: the L3 run is repeated on the new versions, P1 reopens until it has been, and the reference kit and sums of P9 are recorded again |
 | U3-G6 | the kit verifies against its `SHA256SUMS`, is equivalent to the L3-tested kit, the offline suites are green and the mock-root drills pass (step 0) |
 | U3-G7 | the baseline of step 1 is saved: every listing and copy is in `<OFFLINE_EVIDENCE_DIR>`; the installed `runtime/gates.py` has the hash the old-loader reading of 7.1 was made on; the owner's offline copy of the site file now on the host has the same sha256 as the live one |
 | U3-G8 | the facts are accepted by the rule of D-U3-5 on the fit of 8.0, the new site file passes the site-check (exit 0, the PASS line), and its sha256 is recorded in `<OFFLINE_EVIDENCE_DIR>` |
@@ -279,7 +282,11 @@ makes it true of the new tree (the keys are read only by name, no code refuses a
 checkout holds the history before this change (the Ghost tree), repeats the experiment on that tree and compares the previous
 kit's loader hash with the one step 1 reads; in a checkout without that history (a shallow clone) the suite prints SKIP for these
 two checks and counts them as neither a pass nor a failure. The reading is about the loader, not about
-the whole previous integration: P1(d) must show the previous kit as a whole on such a file, in a real Home Assistant.
+the whole previous integration: P1(d) showed the previous kit as a whole on such a file, in a real Home Assistant Core on the
+isolated test instance (22 Nov 2026): the Ghost kit, restored over a site file that still held the facts, loaded (no FAIL, no
+`SITE_INVERTER_CONVERSION` line) and ignored them, so the two outputs were blocked with `POWER_BALANCE_INCONSISTENT` again: safe,
+but the correction is silently lost, which is why the clean order stays (the facts out first, then the previous kit). That was not
+observed on the production host.
 
 **So no order refuses a file or fails a start-up from this cause.** The new kit with the unchanged site file is the old rule bit for
 bit (absent facts are lossless; the L2 suites compare the two over thousands of sets), and the previous kit with the new site file
@@ -370,7 +377,8 @@ made; where the history is in the checkout the previous kit installed first is t
 this kit. The placement tool's own logic
 (its local checks, the backup, the upload, the read-back and its rollback messages) is exercised against a stand-in host by
 `tools/tests/Test-EccoDeploy.ps1`; that is a stand-in, not the production host. The drill does **not** run the previous
-integration as a whole on a site file with the facts; the previous loader alone was run on one (7.1), and P1(d) must show the rest.
+integration as a whole on a site file with the facts; the previous loader alone was run on one (7.1), and P1(d) showed the rest on
+the isolated test instance.
 It never touches a real Home Assistant.
 
 **The facts, offline.** The fit needs a recorded history of the four readings (the house power, the PV power, the battery power and
@@ -753,8 +761,10 @@ The owner downloads the diagnostics first (`diagnostics-before-reload.json`): `c
 ECCO Intelligence, the entry's menu, Reload; the screen names are recalled, not verified on this host). It is a reload of one entry,
 not a restart: Home Assistant stays up, the entry is unloaded and set up again, and the setup reads the site file. The install
 runbook uses the same reload to recover from an entity-id collision (install runbook 7); it does not record that the reload was
-run on a real Home Assistant, so P1(e) must observe it. Expected: the entry loads, the status reads PAUSED, no repair or error
-line. Never delete and re-add the entry.
+run on a real Home Assistant, so P1(e) observed it on the isolated test instance: three reloads, each answered without a restart
+being required, the entry loaded again each time and a start-up slot of its own ran (so the integration was not paused in those
+observations; a reload with the pause helper on, as here, was not separately observed, and the production host has never run
+it). Expected: the entry loads, the status reads PAUSED, no repair or error line. Never delete and re-add the entry.
 
 ### 8.11 Step 11: the load checks with the facts, still paused
 
@@ -972,11 +982,28 @@ with the baseline's file) bring the check back; if the failure is not the site f
 
 Say these plainly in every report about this update.
 
-- **The update has never run in a real Home Assistant.** The code has run offline, on a stand-in Home Assistant (L2) and in the
-  engine's own suites, on synthetic data, and the facts were fitted offline on recorded history. Nothing here has been observed
-  on the production host.
-- **The L3 (WSL) kit-equivalence reference run is OPEN (P1).** Until it is recorded on the exact kit, the reload, the facts through a
-  real Home Assistant and the previous kit on a site file with the facts are unobserved there, and `-ReferenceKit` has no kit to name.
+- **The update has never run in a real Home Assistant that is the owner's.** The code has run offline, on a stand-in Home Assistant
+  (L2) and in the engine's own suites, on synthetic data, once in a real Home Assistant Core on an isolated test instance (the L3
+  run, next bullet), and the facts were fitted offline on recorded history. Nothing here has been observed on the production host.
+- **The L3 (WSL) kit-equivalence reference run is closed (P1, 22 Nov 2026), and its limits are these.** It ran the stacked kit on
+  the isolated test instance (Home Assistant Core 2026.11.0, Python 3.14.10; 1 h 53 min of instance time; 13 slot cycles, 9 of them
+  on the stacked kit): (a) to (f) passed and (g) is recorded offline. It was never run in the owner's Home Assistant, it did not
+  read the production versions, and it used synthetic round-number readings and a fictional site file: never the owner's facts.
+  The closure holds only for those two versions: after any Core or Python update of the host the run is repeated on the new
+  versions and P1 reopens (U3-G5).
+  - **The flip of data quality to OK is not shown there.** The harness maps no export or dump inputs, so the export event and Dump to
+    Grid read unknown there for other reasons (an input not fresh, supervision not stable, tariff events not fresh) with or without
+    the facts, and data quality read DEGRADED in every state. The run shows `POWER_BALANCE_INCONSISTENT` leaving the blocker list
+    when the facts are valid and staying when they are invalid, not a released number: a released number is shown by the repository
+    suites, and on the host by the reads of step 13.
+  - **Slow-callback lines under load.** The run's 0.25-CPU debug session logged 13 slow-callback lines while diagnostics downloads
+    were being taken, none naming the integration; which frames ran inside the three request-handler steps was not cleared. The
+    harness's log scan exits 1 for the known time-format gap (it cannot parse the time-zone suffix of Core 2026.11.0's log lines, so an
+    unnamed task fails closed), not for a line of the integration. No blocking-I/O line appeared at all.
+  - **No Uninstall and no clean-order rollback on this pair.** The order of section 10 (the facts out first, then the Rollback, then
+    the restart) was proved on the stand-alone pair earlier and was not repeated on the stacked pair: the Rollback and its restart ran
+    there with the facts left in the file, and the Ghost kit loaded that file and ignored them (7.1). The Uninstall ran only in the
+    offline drill.
 - **The facts are calibrated, not known.** They are PROPOSED engineering parameters of one site, fitted from a recorded window of
   one season. Whether they hold on another day or in another season is not established; the recalibration rule (D-U3-6) is a
   rule, not a measurement.
@@ -993,13 +1020,16 @@ Say these plainly in every report about this update.
 - **Data quality may stay DEGRADED** (8.13): this update removes one cause, and the diagnosis recorded no other finding at the time,
   which is a reading of one day and not a promise for the next.
 - **The config-entry reload on the production host with this integration has never been run.** It is the install runbook's own
-  recovery step, and that runbook does not record it as run on a real Home Assistant; the Home Assistant screen names are
-  recalled, not verified on this host.
+  recovery step, and that runbook does not record it as run on a real Home Assistant; the L3 run observed it on the isolated
+  instance only, three reloads with the pause helper off (each started a start-up slot and the status read STARTING for about three
+  and a half minutes afterwards), not with the pause helper on as step 10 does; the Home Assistant screen names are recalled, not
+  verified on this host.
 - **The cost of computing the two outputs on the production host is unmeasured.** They were withheld before; the cycle-time bounds
   of the install runbook's section 7 are read in 8.13.
 - **The rollback with the facts present has never been run live.** The drill proves the swap steps leave the site file and the
-  state folder byte-identical; one offline experiment on synthetic data ran the previous loader on a file with the facts. The
-  previous integration as a whole has not been run on such a file offline, and no suite runs the previous code (P1(d) must).
+  state folder byte-identical on a mock root; one offline experiment on synthetic data ran the previous loader on a file with the facts. The
+  previous integration as a whole ran on such a file once, in the L3 run on the isolated instance (P1(d): it loaded and ignored the
+  facts), and no suite runs the previous code.
 - **The baseline's listing commands** (`find`, `ls -lR`, `sha256sum` over the state folder and the site file) have not been run on
   the production host, and the diagnostics file's outer wrapper key is recalled, not verified. The repository's own tools
   (`ha-status.ps1`, `ha-logs.ps1`, `deploy-ha-kit.ps1`, `place-ha-site-file.ps1`) are the read-only and write routes; the Upgrade,

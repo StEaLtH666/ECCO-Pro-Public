@@ -34,9 +34,10 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
   [9] the plain sentences: no automatic installation or live access is authorised; never run in a real Home Assistant
  [10] forbidden: the three phrases the owner ruled out, an entity id, an address, a token, a workstation path, a commit id, a hash
       that is not one of the pinned ones, a non-ASCII character, a calibrated-looking decimal
- [11] preconditions: P1 (the L3 WSL run on the exact kit) is OPEN and says what it must show; the open set (P1, P3, P4, P5, P7, P9)
-      AND the closed set (P2, P6, P8) are exact, each closed line gives its reason, and the open set is the same in both documents;
-      the one commit id the documents may carry is the one in P6's row, and it is the commit the history says U2 was installed from
+ [11] preconditions: P1 (the L3 WSL run on the exact kit) is closed, says what it had to show and that the closure holds only for the
+      Core and Python versions the run was made on (after any Core or Python update the run is repeated and P1 reopens: U3-G5 says
+      so too); the open set (P4, P5, P7) AND the closed set (P1, P2, P3, P6, P8, P9) are exact, each closed line gives its reason, and
+      the open set is the same in both documents; the one commit id the documents may carry is the one in P6's row (rule [28])
  [12] the steps: the same step numbers in both, the same who, an owner go at each live step, the restart and the reload each with
       their own approval
  [13] the rollback: RB1 to RB7 in order in both, a proof for each in the runbook, the facts-only and the full sequence, the commands,
@@ -64,6 +65,8 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
  [28] the commit id in P6's row: where it resolves here (git cat-file -e) it must be the history's previous commit or the commit of a
       kit that is the Ghost-as-installed kit (the two pinned sums), a FAIL otherwise; where it does not resolve it is a SKIP only when
       the history does not expect the object (a shallow clone, a squash-merged branch), and a FAIL when the history says it is here
+ [29] the L3 run is closed (P1): the closure, its limits in every place that lists what is not established, and that P1 reopens after any
+      Core or Python update of the host (U3-G5 says so too)
 
 Usage: python custom_components/ecco_intelligence/tests/test_power_balance_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
@@ -141,9 +144,10 @@ FIXED_SHA = "0000000"                 # the fixed reference commit of the second
 GHOST_KIT_SUMS = {"nosha": "ec9f31955ef635e8bf3f02c690f26b86cfecb5982f5b497796085196c7612525",
                   "fixed": "41fe3ab03b9222dcba476af9d1afdf7ea2bda8dd8b00ea3bef6485c3b0ae4ac1"}
 BASE_GATES_SHA = "659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b"  # runtime/gates.py in the Ghost kit (and the merged base's)
-OPEN_AT_WRITING = ("P1", "P3", "P4", "P5", "P7", "P9")
-CLOSED_AT_WRITING = ("P2", "P6", "P8")
-OPEN_LIST_TEXT = "P1, P3, P4, P5, P7 and P9"
+OPEN_AT_WRITING = ("P4", "P5", "P7")
+CLOSED_AT_WRITING = ("P1", "P2", "P3", "P6", "P8", "P9")
+OPEN_LIST_TEXT = "P4, P5 and P7"
+L3_CORE, L3_PYTHON = "2026.11.0", "3.14.10"          # the Home Assistant Core and Python versions the L3 run pinned (U3-G5 compares the host's)
 CHANGED_FILES = ("_vendor/intelligence/site_decisions.py", "_vendor/intelligence/quality.py",
                  "_vendor/intelligence/advisory_contract.py", "runtime/gates.py", "VENDOR_MANIFEST.json")
 GHOST_NEW_FILES = ("_vendor/intelligence/ghost.py", "_vendor/intelligence/ghost_compare.py", "_vendor/intelligence/ghost_feed.py",
@@ -705,12 +709,26 @@ def rule_preconditions(rb, cl, S, F):
     if ids != [f"P{i}" for i in range(1, 10)]:
         pr.append(f"the runbook's preconditions are {ids}")
     p1 = next((c for c in table_rows(sec) if c[0] == "P1"), None)
-    if p1 is None or "OPEN" not in p1[-1]:
-        pr.append("P1 (the L3 run) is not OPEN in the runbook")
-    elif not all(has(p1[1], x) for x in ("WSL", "kit-equivalence", "on the exact kit", "SITE_INVERTER_CONVERSION", "POWER_LOSS_FACTS_INVALID",
-                                         "the previous kit restored on the isolated instance loads with a site file that still holds the facts",
-                                         "the config-entry reload observed", "-ReferenceSumsSha256", "never on production")):
-        pr.append("P1 does not say what the run must show")
+    if p1 is None or not P(p1[-1]).lower().startswith("closed"):
+        pr.append("P1 (the L3 run) is not closed in the runbook")
+    else:
+        if not all(has(p1[1], x) for x in ("WSL", "kit-equivalence", "on the exact kit", "SITE_INVERTER_CONVERSION", "POWER_LOSS_FACTS_INVALID",
+                                           "the previous kit restored on the isolated instance loads with a site file that still holds the facts",
+                                           "the config-entry reload observed", "-ReferenceSumsSha256", "never on production")):
+            pr.append("P1 does not say what the run had to show")
+        for w in ("22 Nov 2026", f"Home Assistant Core {L3_CORE} and Python {L3_PYTHON}", "(a) to (f) passed", "the limits of section 12",
+                  "(g) is recorded offline", "The closure holds only for those two versions", "U3-G5 requires the host's Core and Python to equal them",
+                  "after ANY Core or Python update of the host the run is repeated on the new versions and P1 reopens until it has been",
+                  "That run did not read the production versions"):
+            if not has_cs(p1[-1], w):
+                pr.append(f"P1's closure lacks '{w}'")
+    g5 = next((c for c in table_rows(section(rb, "6")) if c[0] == "U3-G5"), None)
+    if g5 is None or not all(has_cs(g5[-1], w) for w in (f"Core {L3_CORE}, Python {L3_PYTHON}", "after ANY Core or Python update", "a no-go",
+                                                          "the L3 run is repeated on the new versions", "P1 reopens until it has been",
+                                                          "recorded again")):
+        pr.append("U3-G5 does not say that after any Core or Python update this is a no-go until the L3 run is repeated and P1 closes again")
+    if not has_cs(rb, "P1 reopens after any Core or Python update of the host") or not has_cs(sec, "reopens for any other"):
+        pr.append("the runbook's status line and section 5 do not say that P1 reopens after any Core or Python update of the host")
     got = open_ids(rb)
     if got != set(OPEN_AT_WRITING):
         pr.append(f"the open preconditions are {sorted(got)}, expected {list(OPEN_AT_WRITING)} (closing one is a deliberate edit of this suite)")
@@ -719,6 +737,10 @@ def rule_preconditions(rb, cl, S, F):
         pr.append(f"the closed preconditions are {closed}, expected {list(CLOSED_AT_WRITING)} (closing or reopening one is a deliberate edit of this suite)")
     rows = {c[0]: " ".join(c) for c in table_rows(sec) if re.fullmatch(r"P\d+", c[0])}
     for pid, words in (("P2", ("one independent review", "no BLOCKER", "one MAJOR", "five minors", "all fixed in a follow-up round")),
+                       ("P3", ("one independent review", "no BLOCKER, no MAJOR and one MINOR", "fixed in the suite", "What no reviewer has read",
+                               "the suite pins them")),
+                       ("P9", ("recorded offline", "private project record", "not in this repository", "-ReferenceKit", "-ReferenceSumsSha256",
+                               "placeholders", "P9 follows P1")),
                        ("P6", ("U2 (Ghost) installed and verified first", "never both in one window", "section 3", "Ghost installed from",
                               "this branch is stacked on that commit")),
                        ("P8", ("repeated in full at step 0", "the drills of 8.0", "the deploy suite"))):
@@ -730,6 +752,10 @@ def rule_preconditions(rb, cl, S, F):
     c1 = section(cl, "1")
     if not has(c1, "NOT yet ready") or not has(c1, OPEN_LIST_TEXT):
         pr.append("the checklist does not say NOT yet ready and list the open preconditions")
+    for label, text, lead in (("runbook", P(rb), "At the time of writing the OPEN lines are"), ("checklist", P(c1), "Open preconditions (runbook 5):")):
+        m_open = re.search(re.escape(lead) + r" (P\d(?:, P\d)* and P\d)", text)     # the whole list, not a part of a longer one
+        if m_open is None or m_open.group(1) != OPEN_LIST_TEXT:
+            pr.append(f"the {label}'s list of open preconditions is {m_open.group(1) if m_open else None}, expected {OPEN_LIST_TEXT}")
     for phrase in ("L3 (WSL) kit-equivalence reference run", "SITE_INVERTER_CONVERSION", "exact kit", "Closed:", "P2", "P8"):
         if not has(c1, phrase):
             pr.append(f"the checklist's answer lacks '{phrase}'")
@@ -761,6 +787,54 @@ def rule_p6_commit(rb, cl, S, F):
         return []
     return ["the commit id P6's row names is in this checkout but is neither the history's previous commit nor a commit whose built kit "
             "is the Ghost-as-installed kit (the two pinned sums)"]
+
+
+def rule_l3_closure(rb, cl, S, F):
+    """The L3 (WSL) run is closed (P1), and the documents say what it does not show, in every place they list what is not established:
+    the harness maps no export or dump inputs (the flip of data quality to OK is NOT shown), the slow-callback lines of the 0.25-CPU
+    debug session, the log scan's time-format gap, no Uninstall and no clean-order rollback on this pair, synthetic numbers only, never
+    run in the owner's Home Assistant, and that after any Core or Python update the run is repeated and P1 reopens."""
+    pr = []
+    s12 = section(rb, "12")
+    for w in ("The update has never run in a real Home Assistant that is the owner's", "once in a real Home Assistant Core on an isolated test instance",
+              "The L3 (WSL) kit-equivalence reference run is closed (P1, 22 Nov 2026), and its limits are these",
+              f"Home Assistant Core {L3_CORE}, Python {L3_PYTHON}", "(a) to (f) passed and (g) is recorded offline",
+              "It was never run in the owner's Home Assistant, it did not read the production versions",
+              "synthetic round-number readings and a fictional site file: never the owner's facts",
+              "after any Core or Python update of the host the run is repeated on the new versions and P1 reopens (U3-G5)",
+              "The flip of data quality to OK is not shown there", "The harness maps no export or dump inputs",
+              "read unknown there for other reasons", "data quality read DEGRADED in every state",
+              "not a released number: a released number is shown by the repository suites",
+              "13 slow-callback lines", "none naming the integration", "which frames ran inside the three request-handler steps was not cleared",
+              "the known time-format gap", "so an unnamed task fails closed", "No blocking-I/O line appeared at all",
+              "No Uninstall and no clean-order rollback on this pair", "was not repeated on the stacked pair",
+              "the Ghost kit loaded that file and ignored them", "The Uninstall ran only in the offline drill",
+              "three reloads with the pause helper off", "not with the pause helper on as step 10 does",
+              "ran on such a file once, in the L3 run on the isolated instance"):
+        if not has(s12, w):
+            pr.append(f"runbook 12 lacks '{w}'")
+    s71, s810 = section(rb, "7.1"), section(rb, "8.10")
+    if not has(s71, "P1(d) showed the previous kit as a whole on such a file") or not has(s71, "silently lost") or not has(s71, "not observed on the production host"):
+        pr.append("runbook 7.1 does not say what P1(d) showed (the previous kit loaded the facts file and ignored them) and that it was not seen on the production host")
+    if not has(s810, "P1(e) observed it on the isolated test instance") or not has(s810, "was not separately observed"):
+        pr.append("runbook 8.10 does not say that the reload was observed on the isolated instance only, not paused")
+    if re.search(r"P1\([a-g]\) must|P1 repeats on the stacked kit|the L3 run is OPEN|L3 \(WSL\) [a-z -]*run is OPEN", P(rb)):
+        pr.append("the runbook still speaks of the L3 run as open or as something P1 must still show")
+    c1, c8 = section(cl, "1"), section(cl, "8")
+    for w in ("run once on an isolated test instance; never run in a real Home Assistant of yours", "P1, closed 22 Nov 2026",
+              f"Core {L3_CORE}, Python {L3_PYTHON}", "the previous kit restored there loaded a site file with the facts and ignored them",
+              "It holds only for those versions: after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5)",
+              "P9: the reference kit and its hash are recorded offline", "P3: one independent review of these documents (no BLOCKER or MAJOR, one MINOR fixed in the suite)"):
+        if not has(c1, w):
+            pr.append(f"checklist 1 lacks '{w}'")
+    for w in ("never run in a real Home Assistant of yours", "synthetic round numbers only", "maps no export or dump inputs",
+              "data quality stayed DEGRADED (the flip to OK is not shown)", "slow-callback lines under download load, none naming the integration",
+              "no Uninstall and no clean-order rollback ran on this pair"):
+        if not has(c8, w):
+            pr.append(f"checklist 8 lacks '{w}'")
+    if not has(section(cl, "7"), "P1 reopens after any Core or Python update of your host"):
+        pr.append("checklist 7 does not say that P1 reopens after any Core or Python update of the host")
+    return pr
 
 
 def rule_steps(rb, cl, S, F):
@@ -1174,7 +1248,7 @@ RULES = {
     "no_entity": rule_no_entity, "no_write": rule_no_write, "coverage": rule_coverage, "drill": rule_drill, "phrases": rule_phrases,
     "vars": rule_vars, "cites": rule_cites, "workdir": rule_workdir, "write_statement": rule_write_statement,
     "data_quality": rule_data_quality, "fit_rows": rule_fit_rows, "rollback_reads": rule_rollback_reads,
-    "p6_commit": rule_p6_commit,
+    "p6_commit": rule_p6_commit, "l3_closure": rule_l3_closure,
 }
 RULE_TITLES = {
     "shape": "[1] both documents exist, are ASCII, the checklist has at most 120 lines, sections 1 to 12 and 1 to 8",
@@ -1203,6 +1277,7 @@ RULE_TITLES = {
     "data_quality": "[24] data quality may stay DEGRADED: the engine's rule is the one stated, and what to read next is said",
     "fit_rows": "[25] the fit tool's rows the owner reads exist in the tool's source",
     "rollback_reads": "[26] the rollback proofs name real reads (8.4, 8.8, the placement's read-back) and what the runbook says the tools do is what they do",
+    "l3_closure": "[29] the L3 run is closed (P1) and its limits are stated where the documents list what is not established; P1 reopens after any Core or Python update (U3-G5)",
     "p6_commit": "[28] the commit id P6's row names is checked here: the history's previous commit or a commit that builds the Ghost-as-installed kit, "
                  "a failure otherwise (SKIP only for an object the history does not expect: a shallow clone, a squash-merged branch)",
 }
@@ -1737,19 +1812,51 @@ def make_mutants(F):
     add("cl", "a calibrated factor added to the checklist (four decimals)", lambda t: t + "\nThe fit gave 0.9238.\n", "forbidden")
     add("rb", "the live host alias added", lambda t: t + "\nHost ecco-ha.\n", "forbidden")
     # --- preconditions
-    add("rb", "the L3 precondition closed", lambda t: re.sub(r"(\| P1 \|.*?)\*\*OPEN\*\*", r"\1closed", t, count=1, flags=re.S), "preconditions")
-    add("rb", "P3 closed", lambda t: sub1(t, "| **OPEN**: one independent review (lean mode)", "| closed: one independent review (lean mode)"), "preconditions")
+    add("rb", "the L3 precondition reopened", lambda t: sub1(t, "| closed 22 Nov 2026: the stacked kit", "| **OPEN** 22 Nov 2026: the stacked kit"), "preconditions")
+    add("rb", "P1 closed without the rule that a Core or Python update reopens it", lambda t: subw(
+        t, "after ANY Core or Python update of the host the run is repeated on the new versions and P1 reopens until it has been", "the run holds"), "preconditions")
+    add("rb", "P1 closed for versions other than the run's (the Core version changed)", lambda t: sub1(t, f"Home Assistant Core {L3_CORE} and Python {L3_PYTHON}", f"Home Assistant Core and Python"), "preconditions")
+    add("rb", "U3-G5 no longer says that a changed version is a no-go until the run is repeated", lambda t: subw(
+        t, "this is a no-go: the L3 run is repeated on the new versions, P1 reopens until it has been", "this is noted"), "preconditions")
+    add("rb", "the status line no longer says that P1 reopens after a Core or Python update", lambda t: subw(
+        t, "and P1 reopens after any Core or Python update of the host, U3-G5", "and U3-G5"), "preconditions")
+    add("rb", "P3 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: one independent review (lean mode)", "| **OPEN** 22 Nov 2026: one independent review (lean mode)"), "preconditions")
+    add("rb", "P3 closed without the edits no reviewer has read", lambda t: subw(t, "What no reviewer has read:", "What a reviewer has read:"), "preconditions")
+    add("rb", "P9 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: the reference kit and its", "| **OPEN** 22 Nov 2026: the reference kit and its"), "preconditions")
+    add("rb", "P9 closed without saying the hash stays offline", lambda t: subw(t, "they are not in this repository, so the", "they are in this repository, so the"), "preconditions")
+    add("rb", "P4 closed", lambda t: sub1(t, "| **OPEN**: closed only by a green run on the exact commit", "| closed: closed only by a green run on the exact commit"), "preconditions")
+    add("rb", "P7 closed", lambda t: sub1(t, "| P7 | the owner's rulings on D-U3-1 to D-U3-9 recorded | **OPEN** |", "| P7 | the owner's rulings on D-U3-1 to D-U3-9 recorded | closed |"), "preconditions")
     add("rb", "P2 reopened", lambda t: sub1(t, "closed (offline, lean mode, per the project record", "**OPEN** (offline, lean mode, per the project record"), "preconditions")
     add("rb", "P6 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: Ghost installed from", "| **OPEN** 22 Nov 2026: Ghost installed from"), "preconditions")
     add("rb", "P6 closed without its reason", lambda t: re.sub(r"closed 22 Nov 2026: Ghost installed from [0-9a-f]+; this branch is stacked on that commit, so the kit of this update holds U2's code",
                                                                "closed", t, count=1), "preconditions")
     add("rb", "P8 reopened", lambda t: sub1(t, "| closed on the stacked commit these documents were written on", "| **OPEN** on the stacked commit these documents were written on"), "preconditions")
     add("rb", "P2 closed without its reason", lambda t: sub1(t, "one MAJOR (the factor bounds were too wide) and five minors", "some findings"), "preconditions")
-    add("cl", "the checklist lists P6 as open", lambda t: t.replace(OPEN_LIST_TEXT, "P1, P3, P4, P5, P6, P7 and P9"), "preconditions")
+    add("cl", "the checklist lists P6 as open", lambda t: t.replace(OPEN_LIST_TEXT, "P4, P5, P6 and P7"), "preconditions")
+    add("cl", "the checklist lists P1 as open again", lambda t: t.replace(OPEN_LIST_TEXT, "P1, P4, P5 and P7"), "preconditions")
     add("cl", "the checklist claims it is ready", lambda t: t.replace("NOT yet ready", "ready"), "preconditions")
     add("rb", "the L3 precondition no longer asks for the previous kit on a site file with the facts",
         lambda t: subw(t, "the previous kit restored on the isolated instance loads with a site file that still holds the facts", "the previous kit restored"), "preconditions")
     add("cl", "the checklist drops the WSL run", lambda t: t.replace("L3 (WSL) kit-equivalence reference run", "reference run"), "preconditions")
+    # --- the L3 closure and its limits
+    add("rb", "section 12 claims the flip of data quality to OK", lambda t: sub1(t, "The flip of data quality to OK is not shown there.", "Data quality returned to OK there."), "l3_closure")
+    add("rb", "section 12 no longer says the harness maps no export or dump inputs", lambda t: sub1(t, "The harness maps no export or dump inputs", "The harness maps every input"), "l3_closure")
+    add("rb", "section 12 drops the slow-callback lines of the debug session", lambda t: sub1(t, "13 slow-callback lines", "no slow-callback line"), "l3_closure")
+    add("rb", "section 12 drops the log scan's time-format gap", lambda t: sub1(t, "the known time-format gap", "an unknown reason"), "l3_closure")
+    add("rb", "section 12 drops the missing Uninstall and clean-order rollback", lambda t: sub1(t, "No Uninstall and no clean-order rollback on this pair", "The Uninstall and the clean order ran"), "l3_closure")
+    add("rb", "section 12 says the run was in the owner's Home Assistant", lambda t: sub1(t, "It was never run in the owner's Home Assistant", "It was run in the owner's Home Assistant"), "l3_closure")
+    add("rb", "section 12 says the run used the owner's facts", lambda t: sub1(t, "never the owner's facts", "the owner's facts"), "l3_closure")
+    add("rb", "section 12 says the L3 run is still open", lambda t: sub1(t, "reference run is closed (P1, 22 Nov 2026), and its limits are these", "reference run is OPEN (P1)"), "l3_closure")
+    add("rb", "section 12 drops that the closure holds only for the two versions", lambda t: subw(
+        t, "after any Core or Python update of the host the run is repeated on the new versions and P1 reopens (U3-G5)", "the run holds"), "l3_closure")
+    add("rb", "7.1 says P1(d) must still show the previous kit on the facts file", lambda t: sub1(t, "P1(d) showed the previous kit as a whole on such a file", "P1(d) must show the previous kit as a whole on such a file"), "l3_closure")
+    add("rb", "8.10 says the reload was observed paused", lambda t: subw(t, "a reload with the pause helper on, as here, was not separately observed", "a reload with the pause helper on was observed"), "l3_closure")
+    add("cl", "the checklist no longer says P1 reopens after a Core or Python update", lambda t: subw(
+        t, "after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5)", "the run holds"), "l3_closure")
+    add("cl", "the checklist claims the flip of data quality to OK", lambda t: subw(t, "data quality stayed DEGRADED (the flip to OK is not shown)", "data quality returned to OK"), "l3_closure")
+    add("cl", "the checklist drops the slow-callback lines", lambda t: subw(t, "slow-callback lines under download load, none naming the integration", "no slow-callback line"), "l3_closure")
+    add("cl", "the checklist drops that the run used synthetic numbers only", lambda t: sub1(t, "synthetic round numbers only", "real numbers"), "l3_closure")
+    add("cl", "the checklist section 7 drops the reopening", lambda t: sub1(t, "P1 reopens after any Core or Python update of your host", "P1 stays closed"), "l3_closure")
     # --- steps
     add("cl", "a step row removed from the checklist", lambda t: drop_line(t, "| 6 | coordinator, **go** |"), "steps")
     add("cl", "a step's who changed", lambda t: t.replace("| 4 | coordinator, **go** |", "| 4 | you, **go** |"), "steps")
@@ -1992,7 +2099,7 @@ try:
                      "(a shallow clone, or the branch was squash-merged)")
                 continue
             check(RULE_TITLES[name], not result[name], "; ".join(result[name][:4]))
-        check("the open preconditions are exactly P1, P3, P4, P5, P7 and P9 at the time of writing (P2, P6 and P8 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
+        check("the open preconditions are exactly P4, P5 and P7 at the time of writing (P1, P2, P3, P6, P8 and P9 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
               str(sorted(open_ids(RB))))
         base_ok = not fired(result)
         check("the unmutated documents pass every rule (the baseline of the mutants)", base_ok, str(sorted(fired(result))))
