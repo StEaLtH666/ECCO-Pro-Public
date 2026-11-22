@@ -61,6 +61,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
  [25] the fit tool's rows the owner reads exist in the tool's source
  [26] the rollback proofs name real reads and real tool behaviour
  [27] mutants (all in memory): each is killed by the rule that exists for it
+ [28] the commit id in P6's row: where it resolves here (git cat-file -e) it must be the history's previous commit or the commit of a
+      kit that is the Ghost-as-installed kit (the two pinned sums), a FAIL otherwise; where it does not resolve it is a SKIP only when
+      the history does not expect the object (a shallow clone, a squash-merged branch), and a FAIL when the history says it is here
 
 Usage: python custom_components/ecco_intelligence/tests/test_power_balance_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
@@ -736,6 +739,30 @@ def rule_preconditions(rb, cl, S, F):
     return pr
 
 
+def rule_p6_commit(rb, cl, S, F):
+    """The one commit id P6's row carries (the commit U2 was installed from) is checked against this checkout, not just scanned:
+    where the object is here it must be the history's previous commit or a commit whose built kit is the Ghost-as-installed kit (the
+    suite's two pinned sums), and anything else FAILS; where the object is absent it is a SKIP only when the history does not expect it
+    (a shallow clone, a squash-merged branch); where the history says the commit is in this checkout and the id names nothing, that is
+    a wrong id and FAILS."""
+    ctx = F["p6"]
+    cid = p6_commit_id(rb)
+    if cid is None:
+        return ["P6's row does not carry exactly one commit id (the commit U2 was installed from)"]
+    full = ctx["resolve"](cid)
+    if full is None:
+        if ctx["expect_present"]:
+            return ["the commit id P6's row names is not in this checkout, though the history says the commit U2 was installed from is its "
+                    "first-parent commit here: the id is wrong"]
+        return []
+    if ctx["prev"] is not None and full == ctx["prev"]:
+        return []
+    if ctx["kit_matches"](full):
+        return []
+    return ["the commit id P6's row names is in this checkout but is neither the history's previous commit nor a commit whose built kit "
+            "is the Ghost-as-installed kit (the two pinned sums)"]
+
+
 def rule_steps(rb, cl, S, F):
     pr = []
     rr = step_rows(rb)
@@ -1147,6 +1174,7 @@ RULES = {
     "no_entity": rule_no_entity, "no_write": rule_no_write, "coverage": rule_coverage, "drill": rule_drill, "phrases": rule_phrases,
     "vars": rule_vars, "cites": rule_cites, "workdir": rule_workdir, "write_statement": rule_write_statement,
     "data_quality": rule_data_quality, "fit_rows": rule_fit_rows, "rollback_reads": rule_rollback_reads,
+    "p6_commit": rule_p6_commit,
 }
 RULE_TITLES = {
     "shape": "[1] both documents exist, are ASCII, the checklist has at most 120 lines, sections 1 to 12 and 1 to 8",
@@ -1175,6 +1203,8 @@ RULE_TITLES = {
     "data_quality": "[24] data quality may stay DEGRADED: the engine's rule is the one stated, and what to read next is said",
     "fit_rows": "[25] the fit tool's rows the owner reads exist in the tool's source",
     "rollback_reads": "[26] the rollback proofs name real reads (8.4, 8.8, the placement's read-back) and what the runbook says the tools do is what they do",
+    "p6_commit": "[28] the commit id P6's row names is checked here: the history's previous commit or a commit that builds the Ghost-as-installed kit, "
+                 "a failure otherwise (SKIP only for an object the history does not expect: a shallow clone, a squash-merged branch)",
 }
 
 
@@ -1428,22 +1458,102 @@ def run_probe(tree: Path, scratch: Path) -> dict | None:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
+def git_run(*args: str, timeout: int = 120) -> subprocess.CompletedProcess | None:
+    """One read-only git command in this checkout; None when git cannot be run at all."""
+    try:
+        return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def introducing_commit() -> str | None:
+    """The commit that introduced the inverter facts on the first-parent history (the earliest one the pickaxe search lists), or None
+    where the checkout does not hold that history."""
+    r = git_run("log", "--first-parent", "-m", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--", "intelligence/site_decisions.py")
+    shas = r.stdout.split() if r is not None and r.returncode == 0 else []
+    return shas[-1] if shas else None
+
+
 def previous_commit() -> str | None:
     """The tree just before the update: the first parent of the commit that introduced the inverter facts on the first-parent history.
     This branch is stacked on the installed Ghost code, so that is the merge that brings the update onto the Ghost commit (the Ghost
     tree as installed); after a squash merge it is main with Ghost in it. Found from the history and never named here (no document or
     test of the runtime carries a commit id). None where the checkout does not hold that history (a shallow clone)."""
+    intro = introducing_commit()
+    if intro is None:
+        return None
+    p = git_run("rev-parse", "--verify", "-q", intro + "^1", timeout=60)
+    out = p.stdout.strip() if p is not None else ""
+    return out if p is not None and p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
+
+
+def resolve_commit(cid: str) -> str | None:
+    """The full id of the commit a (7- to 40-digit hex) id names in this checkout; None where that object is absent here
+    (`git cat-file -e <id>^{commit}` fails: a shallow clone, a squash-merged branch, or an id that is wrong)."""
+    if not re.fullmatch(r"[0-9a-f]{7,40}", cid):
+        return None
+    ok = git_run("cat-file", "-e", cid + "^{commit}", timeout=60)
+    if ok is None or ok.returncode != 0:
+        return None
+    p = git_run("rev-parse", "--verify", "-q", cid + "^{commit}", timeout=60)
+    out = p.stdout.strip() if p is not None else ""
+    return out if p is not None and p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
+
+
+def history_expects_installed_commit(prev: str | None) -> bool:
+    """True where this checkout's own history says the commit U2 was installed from must be here as an object: the checkout is complete
+    (not a shallow clone), the history gives a previous commit, and the commit that introduced the update is a MERGE whose first parent
+    is that previous commit (the update was stacked on the installed commit and merged, so that commit is in the history). After a squash
+    or a rebase merge of the Ghost update or of this one the installed commit may be legitimately gone from the clone: False."""
+    if prev is None:
+        return False
+    sh = git_run("rev-parse", "--is-shallow-repository", timeout=60)
+    if sh is None or sh.returncode != 0 or sh.stdout.strip() != "false":
+        return False
+    intro = introducing_commit()
+    r = git_run("rev-list", "--parents", "-n", "1", intro, timeout=60) if intro is not None else None
+    parts = r.stdout.split() if r is not None and r.returncode == 0 else []
+    return len(parts) >= 3 and parts[1] == prev
+
+
+def commit_kit_sums(base: Path, full: str, tag: str) -> dict | None:
+    """The two reference sums (no commit recorded, the fixed reference) of the kit that the commit `full` builds with its own build tool,
+    from a git archive of that commit extracted under `base`; None when it cannot be archived or built."""
     try:
-        r = subprocess.run(["git", "-C", str(REPO), "log", "--first-parent", "-m", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--",
-                            "intelligence/site_decisions.py"], capture_output=True, text=True, timeout=120)
-        shas = r.stdout.split()
-        if r.returncode != 0 or not shas:
-            return None
-        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", shas[-1] + "^1"], capture_output=True, text=True, timeout=60)
-        out = p.stdout.strip()
-        return out if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
+        raw = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", full], capture_output=True, timeout=300)
     except (OSError, subprocess.SubprocessError):
         return None
+    if raw.returncode != 0:
+        return None
+    tree = base / f"tree_{tag}"
+    tree.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(raw.stdout)) as tf:
+        try:
+            tf.extractall(tree, filter="data")
+        except TypeError:
+            tf.extractall(tree)
+    out = {}
+    for key, extra in (("nosha", []), ("fixed", ["--git-sha", FIXED_SHA])):
+        kit = base / f"kit_{tag}_{key}"
+        b = subprocess.run([sys.executable, "-I", "-B", str(tree / "tools" / "build_ha_integration.py"), "--out", str(kit), *extra],
+                           cwd=str(tree), capture_output=True, text=True, timeout=300)
+        if b.returncode != 0:
+            return None
+        out[key] = hashlib.sha256((kit / "SHA256SUMS").read_bytes()).hexdigest()
+    return out
+
+
+def p6_context(base: Path, prev: str | None) -> dict:
+    """What the P6 rule needs: the history's previous commit, whether the history expects the installed commit to be here as an object, and
+    a cached test of whether a given commit builds the Ghost-as-installed kit (its two reference sums are the pins of this suite)."""
+    cache: dict[str, bool] = {}
+
+    def kit_matches(full: str) -> bool:
+        if full not in cache:
+            sums = commit_kit_sums(base, full, f"p6_{len(cache)}")
+            cache[full] = sums == GHOST_KIT_SUMS
+        return cache[full]
+    return {"prev": prev, "resolve": resolve_commit, "expect_present": history_expects_installed_commit(prev), "kit_matches": kit_matches}
 
 
 def old_tree_facts(base: Path, kit_fixed: Path, prev: str | None) -> dict | None:
@@ -1602,6 +1712,25 @@ def make_mutants(F):
     add("rb", "a commit id added", lambda t: t + f"\nBuilt from {sample_commit}.\n", "forbidden")
     add("rb", "a second commit id in P6's row", lambda t: re.sub(r"(Ghost installed from )([0-9a-f]{7,40})", lambda m: m.group(1) + m.group(2) + " and " + "ab12" + "cd3", t, count=1), "forbidden")
     add("rb", "the commit id of P6 repeated outside its row", lambda t: t + "\nU2 was installed from " + (re.search(r"Ghost installed from ([0-9a-f]{7,40})", t) or re.search("()", t)).group(1) + ".\n", "forbidden")
+    # the P6 commit id is checked against this checkout: a wrong digit, and another real commit that does not build the Ghost kit
+    p6 = F["p6"]
+
+    def p6_replace_id(new_id_for):
+        def fn(t):
+            cid = p6_commit_id(t)
+            return t if cid is None else t.replace(cid, new_id_for(cid), 1)
+        return fn
+    if p6["expect_present"]:
+        add("rb", "one hex digit of the commit id in P6's row changed", p6_replace_id(lambda c: c[:-1] + ("0" if c[-1] != "0" else "1")), "p6_commit")
+        add("rb", "the first hex digit of the commit id in P6's row changed", p6_replace_id(lambda c: ("0" if c[0] != "0" else "1") + c[1:]), "p6_commit")
+        head = git_run("rev-parse", "HEAD", timeout=60)
+        head_id = head.stdout.strip() if head is not None and head.returncode == 0 else ""
+        if re.fullmatch(r"[0-9a-f]{40}", head_id) and head_id != p6["prev"] and not p6["kit_matches"](head_id):
+            add("rb", "P6 names another real commit of this checkout (the tip), whose kit is not the Ghost kit", p6_replace_id(lambda c: head_id), "p6_commit")
+        else:
+            skip("P6 names another real commit whose kit is not the Ghost kit", "the checkout's tip is the previous commit or builds the Ghost kit")
+    else:
+        skip("one hex digit of the commit id in P6's row changed", "the history does not expect the installed commit in this checkout (shallow clone or squash merge)")
     add("cl", "a token added", lambda t: t + f"\nKey {sample_token}.\n", "forbidden")
     add("rb", "a hash that is not pinned", lambda t: t + "\n" + "ab" * 32 + "\n", "forbidden")
     add("rb", "a calibrated factor added (three decimals)", lambda t: t + "\nThe fitted factor is 0.924.\n", "forbidden")
@@ -1810,6 +1939,7 @@ try:
     F = {"kit": kit_facts(base), "facts": real_facts(), "order_source_problems": order_source_problems, "prev_commit": prev}
     D = load_drill_module()
     old = old_tree_facts(base, F["kit"]["dir"], prev)                      # the Ghost tree as installed, when the history is here
+    F["p6"] = p6_context(base, prev)                                        # what the P6 commit-id rule checks the id against
     prev_kit = old["kit_dir"] if old is not None and old.get("build_rc") == 0 else None
     print("== the real drill, with the previous kit (the real Ghost kit where the history is here), the real kit, a real scorecard file with "
           "U2's two tables and a site file that holds the facts")
@@ -1848,17 +1978,19 @@ try:
               "states as the baseline", old.get("old_sums") == GHOST_KIT_SUMS, str(old.get("old_sums")))
         check("U2's nine files (the five it added, the four it changed) are byte-identical in the previous kit and in this one: the update is "
               "stacked on Ghost and loses none of it", old.get("ghost_same") == sorted(GHOST_FILES), str(old.get("ghost_same")))
-        p6_id = p6_commit_id(RB) if RB is not None else None
-        if p6_id is not None and prev is not None and prev.startswith(p6_id):
-            check("the commit P6's row names is the commit the history gives as the one just before this change (the Ghost tree as installed)", True)
-        elif p6_id is not None:
-            skip("the commit P6's row names is the commit the history gives as the one just before this change",
-                 "the history's previous commit is another one (the Ghost update has been merged since); P6 records the installation, not an ancestor")
+        check("the kit-match helper of the P6 rule accepts the previous commit's own kit, the Ghost-as-installed kit (non-vacuity of the P6 check)",
+              prev is not None and F["p6"]["kit_matches"](prev))
 
     if RB is not None and CL is not None:
         print("== the rules")
         result = analyse(RB, CL, S0, F)
+        p6_id = p6_commit_id(RB)
+        p6_absent = p6_id is not None and F["p6"]["resolve"](p6_id) is None
         for name in RULES:
+            if name == "p6_commit" and not result[name] and p6_absent:
+                skip(RULE_TITLES[name], "the commit P6's row names is not in this checkout and the history does not expect it here "
+                     "(a shallow clone, or the branch was squash-merged)")
+                continue
             check(RULE_TITLES[name], not result[name], "; ".join(result[name][:4]))
         check("the open preconditions are exactly P1, P3, P4, P5, P7 and P9 at the time of writing (P2, P6 and P8 closed)", open_ids(RB) == set(OPEN_AT_WRITING),
               str(sorted(open_ids(RB))))
