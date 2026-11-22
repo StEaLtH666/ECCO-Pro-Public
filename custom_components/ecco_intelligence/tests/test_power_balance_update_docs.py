@@ -67,6 +67,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
       the history does not expect the object (a shallow clone, a squash-merged branch), and a FAIL when the history says it is here
  [29] the L3 run is closed (P1): the closure, its limits in every place that lists what is not established, and that P1 reopens after any
       Core or Python update of the host (U3-G5 says so too)
+ [30] what a restart does to the state folder: the tools leave it byte-identical, a restart rewrites store_meta.json and three scorecard
+      pages (the sources do so at every start), no proof after a restart compares a hash with a read made before it, step 8 reads the
+      folder again as the reference for step 9
 
 Usage: python custom_components/ecco_intelligence/tests/test_power_balance_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
@@ -810,7 +813,7 @@ def rule_l3_closure(rb, cl, S, F):
               "No Uninstall and no clean-order rollback on this pair", "was not repeated on the stacked pair",
               "the Ghost kit loaded that file and ignored them", "The Uninstall ran only in the offline drill",
               "three reloads with the pause helper off", "not with the pause helper on as step 10 does",
-              "ran on such a file once, in the L3 run on the isolated instance"):
+              "it restarts nothing", "ran on such a file once, in the L3 run on the isolated instance"):
         if not has(s12, w):
             pr.append(f"runbook 12 lacks '{w}'")
     s71, s810 = section(rb, "7.1"), section(rb, "8.10")
@@ -834,6 +837,79 @@ def rule_l3_closure(rb, cl, S, F):
             pr.append(f"checklist 8 lacks '{w}'")
     if not has(section(cl, "7"), "P1 reopens after any Core or Python update of your host"):
         pr.append("checklist 7 does not say that P1 reopens after any Core or Python update of the host")
+    return pr
+
+
+def rule_restart_state(rb, cl, S, F):
+    """What a restart does to the state folder, said once and kept true: the tools leave it byte-identical, a restart does not (the
+    integration's own start-up rewrites store_meta.json and three pages of the scorecard file with the same values); so no proof after
+    a restart compares a hash with a read made before it, and step 8 reads the folder again as the reference for step 9."""
+    pr = []
+    s24 = section(rb, "2.4")
+    for w in ("What a restart does to the state folder", "leave the state folder byte-identical", "A restart does not",
+              "the store's open, run at every start, so at a config-entry reload as well", "writes `store_meta.json` again with the same content",
+              "rewrites three pages of the scorecard file", "the change counter in the SQLite header page", "the `schema_meta` table with its index",
+              "INSERT OR REPLACE INTO schema_meta", "No table, row or trigger changes",
+              "before the restart of step 7 the state folder is byte-identical to the paused read of step 4",
+              "across a restart it has the same logical content but not the same bytes", "the scorecard file's sha256 differs",
+              "compared byte for byte only between two reads that have no restart or reload between them",
+              "the references for step 9 are read again after the restart (8.8)",
+              "no proof after a restart compares a hash with a read made before it"):
+        if not has(s24, w):
+            pr.append(f"runbook 2.4 lacks '{w}'")
+    # the sources make it true: the store writes both at every open, and the set-up runs the open
+    st, co = S["store"], S["coordinator"]
+    if "INSERT OR REPLACE INTO schema_meta" not in st or "self._atomic_write(META_FILE" not in st:
+        pr.append("the store no longer writes store_meta.json and the schema_meta rows at its open (2.4 says it does)")
+    if "ok, text = store.try_open()" not in co:
+        pr.append("the coordinator's start-up no longer opens the store (2.4 says every start does)")
+    s84, s86, s88, s9 = (section(rb, n) for n in ("8.4", "8.6", "8.8", "9"))
+    if not has(s84, "the reference for step 6, which is read before the restart") or not has(s84, "It is not the reference for step 9"):
+        pr.append("runbook 8.4 does not say that the paused read is the reference for step 6 only (not for step 9, after the restart)")
+    if has(rb, "the reference for steps 6 and 9"):
+        pr.append("the runbook still makes the read before the restart the reference for step 9")
+    if not has(s86, "byte-identical to the paused read of step 4 (after the restart it is not: 2.4)"):
+        pr.append("runbook 8.6 does not say that the state folder is byte-identical to the paused read only before the restart")
+    for w in ("The state folder, read again after the restart", "it is the reference for step 9, and it is not compared with the read of step 4 byte for byte",
+              "the same file names as `state-paused-1.txt` and no new file", "a different `store_meta.json` hash, is a stop"):
+        if not has(s88, w):
+            pr.append(f"runbook 8.8 lacks '{w}'")
+    writers = [b for b in ps_blocks(s88) if re.search(r'sha256sum \*" \| Out-File -Encoding utf8 "\$E\\state-after-restart\.txt"', b)]
+    if len(writers) != 1 or "/config/ecco/intelligence/state" not in writers[0]:
+        pr.append("no block of 8.8 reads the state folder after the restart into state-after-restart.txt")
+    cmp_lines = [ln for b in ps_blocks(rb) for ln in logical_lines(b) if "Compare-Object" in ln and "state-" in ln]
+    for ln in cmp_lines:
+        old = re.search(r"state-paused-1\.txt", ln) is not None
+        new = re.findall(r"state-([a-z0-9-]+)\.txt", ln)
+        if old and any(n not in ("paused-1", "paused-2", "after-swap") for n in new):
+            pr.append(f"a block compares the read made before the restart with a read made after it: {ln.strip()[:90]}")
+    b89 = [ln for ln in cmp_lines if "state-after-place.txt" in ln]
+    if len(b89) != 1 or "state-after-restart.txt" not in b89[0] or "state-paused-1.txt" in b89[0]:
+        pr.append("step 9's state comparison is not between the read after the restart and the read after the placement")
+    if not has(s9, "between two reads of one paused period with no restart or reload between them") or not has(s9, "another `store_meta.json` hash is"):
+        pr.append("section 9's stop condition on the state folder does not allow for the restart's own rewrite")
+    rr = step_rows(rb)
+    if 8 in rr and not (has(rr[8][1], "the state folder read again after the restart as the reference for step 9") and has(rr[8][6], "the same state file names")
+                        and has(rr[8][7], "another `store_meta.json` hash")):
+        pr.append("runbook step 8 does not read the state folder again after the restart")
+    if 9 in rr and not (has(rr[9][6], "the state folder as read after the restart (step 8)") and has(rr[9][7], "the state folder differs from the read of step 8")):
+        pr.append("runbook step 9 does not compare the state folder with the read of step 8")
+    rb5 = dict(re.findall(r"^\d+\. \*\*(RB\d)\b(.*?)(?=^\d+\. \*\*RB|\*\*Special cases|\Z)", section(rb, "10"), re.S | re.M)).get("RB5", "")
+    if not has(rb5, "is not compared hash for hash with the baseline after this restart"):
+        pr.append("RB5 does not say that the state folder is not compared hash for hash with the baseline after the restart")
+    if not has(section(rb, "10"), "its hashes only before a restart: 2.4"):
+        pr.append("the rollback's baseline does not say that the state folder's hashes are compared only before a restart")
+    if not has(section(rb, "8.0"), "The drill restarts nothing, so it says nothing about what a restart does to the state folder (2.4)"):
+        pr.append("the drill statement does not say that the drill restarts nothing")
+    c2 = section(cl, "2")
+    for w in ("the integration's own start-up rewrites `store_meta.json` and three scorecard pages with the same content",
+              "before the restart it stays byte-identical, across it the same content with three scorecard pages rewritten: runbook 2.4"):
+        if not has(c2, w):
+            pr.append(f"checklist 2 lacks '{w}'")
+    crow = {int(c[0]): " ".join(c) for c in table_rows(section(cl, "4")) if re.fullmatch(r"\d+", c[0])}
+    if not has(crow.get(6, ""), "untouched (before the restart)") or not has(crow.get(8, ""), "the state folder read again after the restart") \
+            or not has(crow.get(9, ""), "state folder as read at step 8"):
+        pr.append("the checklist's steps 6, 8 and 9 do not say when the state folder is compared (before the restart; read again after it)")
     return pr
 
 
@@ -1248,7 +1324,7 @@ RULES = {
     "no_entity": rule_no_entity, "no_write": rule_no_write, "coverage": rule_coverage, "drill": rule_drill, "phrases": rule_phrases,
     "vars": rule_vars, "cites": rule_cites, "workdir": rule_workdir, "write_statement": rule_write_statement,
     "data_quality": rule_data_quality, "fit_rows": rule_fit_rows, "rollback_reads": rule_rollback_reads,
-    "p6_commit": rule_p6_commit, "l3_closure": rule_l3_closure,
+    "p6_commit": rule_p6_commit, "l3_closure": rule_l3_closure, "restart_state": rule_restart_state,
 }
 RULE_TITLES = {
     "shape": "[1] both documents exist, are ASCII, the checklist has at most 120 lines, sections 1 to 12 and 1 to 8",
@@ -1278,6 +1354,7 @@ RULE_TITLES = {
     "fit_rows": "[25] the fit tool's rows the owner reads exist in the tool's source",
     "rollback_reads": "[26] the rollback proofs name real reads (8.4, 8.8, the placement's read-back) and what the runbook says the tools do is what they do",
     "l3_closure": "[29] the L3 run is closed (P1) and its limits are stated where the documents list what is not established; P1 reopens after any Core or Python update (U3-G5)",
+    "restart_state": "[30] what a restart does to the state folder is said and true of the sources: the tools leave it byte-identical, a restart rewrites three scorecard pages and store_meta.json, and no proof after a restart compares a hash with a read made before it",
     "p6_commit": "[28] the commit id P6's row names is checked here: the history's previous commit or a commit that builds the Ghost-as-installed kit, "
                  "a failure otherwise (SKIP only for an object the history does not expect: a shallow clone, a squash-merged branch)",
 }
@@ -1857,6 +1934,28 @@ def make_mutants(F):
     add("cl", "the checklist drops the slow-callback lines", lambda t: subw(t, "slow-callback lines under download load, none naming the integration", "no slow-callback line"), "l3_closure")
     add("cl", "the checklist drops that the run used synthetic numbers only", lambda t: sub1(t, "synthetic round numbers only", "real numbers"), "l3_closure")
     add("cl", "the checklist section 7 drops the reopening", lambda t: sub1(t, "P1 reopens after any Core or Python update of your host", "P1 stays closed"), "l3_closure")
+    # --- what a restart does to the state folder
+    add("rb", "2.4 says a restart leaves the state folder byte-identical", lambda t: sub1(t, "A restart does not:", "A restart does too:"), "restart_state")
+    add("rb", "2.4 drops the three rewritten scorecard pages", lambda t: sub1(t, "rewrites three pages of the scorecard file", "rewrites nothing in the scorecard file"), "restart_state")
+    add("rb", "2.4 says the folder is byte-identical across the restart", lambda t: sub1(t, "across a restart it has the same logical content but not the same bytes", "across a restart it is byte-identical"), "restart_state")
+    add("rb", "2.4 no longer says the reload does it as well", lambda t: subw(t, "run at every start, so at a config-entry reload as well", "run at the restart"), "restart_state")
+    add("rb", "step 9's comparison goes back to the read before the restart",
+        lambda t: sub1(t, 'Compare-Object (Get-Content "$E\\state-after-restart.txt") (Get-Content "$E\\state-after-place.txt")',
+                       'Compare-Object (Get-Content "$E\\state-paused-1.txt") (Get-Content "$E\\state-after-place.txt")'), "restart_state")
+    add("rb", "step 8 no longer reads the state folder after the restart", lambda t: drop_line(t, 'Out-File -Encoding utf8 "$E\\state-after-restart.txt"'), "restart_state")
+    add("rb", "8.4 makes the read before the restart the reference for step 9 again",
+        lambda t: subw(t, "the reference for step 6, which is read before the restart", "the reference for steps 6 and 9"), "restart_state")
+    add("rb", "8.6 says the state folder stays byte-identical after the restart", lambda t: sub1(t, "(after the restart it is not: 2.4)", "(after the restart too)"), "restart_state")
+    add("rb", "section 9 stops on any change of the state folder while paused again",
+        lambda t: subw(t, "between two reads of one paused period with no restart or reload between them", "while the integration is paused"), "restart_state")
+    add("rb", "step 9's stop column forgets the state folder", lambda t: sub1(t, "the state folder differs from the read of step 8; ", ""), "restart_state")
+    add("rb", "step 8's row forgets the state read", lambda t: sub1(t, "a diagnostics download, and the state folder read again after the restart as the reference for step 9 (8.8)", "and a diagnostics download (8.8)"), "restart_state")
+    add("rb", "RB5 compares the state folder hash for hash with the baseline", lambda t: subw(t, "is not compared hash for hash with the baseline after this restart", "is compared with the baseline"), "restart_state")
+    add("rb", "the drill statement forgets that it restarts nothing", lambda t: subw(t, "The drill restarts nothing, so it says nothing about what a restart does to the state folder (2.4)", "The drill covers everything"), "restart_state")
+    add("cl", "the checklist says the state folder stays byte-identical across the restart", lambda t: subw(
+        t, "across it the same content with three scorecard pages rewritten", "across it too"), "restart_state")
+    add("cl", "the checklist's step 8 forgets the state read", lambda t: sub1(t, "; the state folder read again after the restart |", " |"), "restart_state")
+    add("cl", "the checklist's step 6 forgets that it is before the restart", lambda t: sub1(t, "untouched (before the restart)", "untouched"), "restart_state")
     # --- steps
     add("cl", "a step row removed from the checklist", lambda t: drop_line(t, "| 6 | coordinator, **go** |"), "steps")
     add("cl", "a step's who changed", lambda t: t.replace("| 4 | coordinator, **go** |", "| 4 | you, **go** |"), "steps")
@@ -1999,7 +2098,19 @@ def make_source_mutants():
     def strict_map(src):
         return src.replace("_strict(profile[MAP_BLOCK]", "_strict(profile")
 
+    def store_ignores(src):
+        return src.replace("INSERT OR REPLACE INTO schema_meta", "INSERT OR IGNORE INTO schema_meta")
+
+    def store_no_meta_write(src):
+        return src.replace("self._atomic_write(META_FILE", "self._skip_write(META_FILE")
+
+    def coordinator_no_open(src):
+        return src.replace("ok, text = store.try_open()", "ok, text = True, 'x'")
+
     return [
+        ("store", "the store no longer rewrites the schema rows at its open", store_ignores, "restart_state"),
+        ("store", "the store no longer writes store_meta.json at its open", store_no_meta_write, "restart_state"),
+        ("coordinator", "the start-up no longer opens the store", coordinator_no_open, "restart_state"),
         ("deploy", "the deploy tool without the -ReferenceKit parameter", drop_param, "tools"),
         ("place", "the placement tool without the -ReplaceExistingSha256 parameter", drop_replace_param, "tools"),
         ("build", "the build tool without the --git-sha flag", drop_gitsha, "tools"),

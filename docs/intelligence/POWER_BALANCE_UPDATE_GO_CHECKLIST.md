@@ -34,7 +34,7 @@ both updates, so Ghost's files are kept (runbook 3); a kit built from the U3 com
 | Changes | Detail |
 |---|---|
 | the integration's code | the folder `/config/custom_components/ecco_intelligence/` is replaced by the kit (57 files installed: none new, 5 changed, 52 identical to the installed Ghost kit) |
-| a Home Assistant restart | one, yours, approved separately, short (an outage over about 5 minutes sets the supervision latch), in daylight |
+| a Home Assistant restart | one, yours, approved separately, short (an outage over about 5 minutes sets the supervision latch), in daylight; the integration's own start-up rewrites `store_meta.json` and three scorecard pages with the same content |
 | your site file | three facts in its `site` block (the inverter's two conversion factors and its standby draw), placed with `place-ha-site-file.ps1`; they take effect at a config-entry **reload** (a reload, not a second restart), approved separately |
 | what you will see | the Dump to Grid and export-event outputs no longer withheld with `POWER_BALANCE_INCONSISTENT` (they may read unknown for another reason); data quality may return to OK or **stay DEGRADED** (any other open warning keeps it so); one more `self_test` line, `SITE_INVERTER_CONVERSION`, as the single word PASS; the status entity's `config_hash` changes |
 
@@ -42,7 +42,8 @@ both updates, so Ghost's files are kept (runbook 3); a kit built from the U3 com
 database. **No entity, helper or service is created** (RG-F3: section 3). **No table, column or row type is added**: the scorecard
 file and `store_meta.json` are written as before. The writes of this update, in one line (runbook 2.1 and 2.4): the integration
 folder (replaced by the kit), the site file (replaced by your new file), the staging and backup folders of the two tools, and nothing
-in the state folder. The one helper the procedure touches is the existing pause helper, which you turn on and off.
+in the state folder (no tool writes there; before the restart it stays byte-identical, across it the same content with three scorecard pages rewritten: runbook 2.4).
+The one helper the procedure touches is the existing pause helper, which you turn on and off.
 
 ## 3. Your acceptance items (I decide none)
 
@@ -68,10 +69,10 @@ in the state folder. The one helper the procedure touches is the existing pause 
 | 3 | you, **go** | PAUSE: pause helper on | status PAUSED | not PAUSED |
 | 4 | coordinator, **go** | read the scorecard file's hash and size, twice | stable | it changes |
 | 5 | coordinator, **go** | `deploy-ha-kit.ps1 -Action Plan`, then, on a separate go, `-Action Upgrade` | `ECCO INTELLIGENCE KIT UPGRADE PASSED`, the backup stamp, no restart | any failure line |
-| 6 | coordinator, **go** | the installed folder equals the kit; the state folder and the site file untouched | `INSTALLED TREE EQUALS THE KIT` | any difference |
+| 6 | coordinator, **go** | the installed folder equals the kit; the state folder and the site file untouched (before the restart) | `INSTALLED TREE EQUALS THE KIT` | any difference |
 | 7 | you, **own approval** | **the restart** (nothing in this list restarts Home Assistant) | Core back, integration loads, no repair | over 5 minutes; no load |
-| 8 | coordinator + you, **go** | load checks of the kit alone, still paused, site file unchanged | no FAIL, no `SITE_INVERTER_CONVERSION` line | any FAIL |
-| 9 | coordinator, **go** | `place-ha-site-file.ps1 -Plan`, then, on a separate go, the placement of the new site file | `ECCO SITE FILE PLACED`, read-back equal | NO CHANGE, STOPPED |
+| 8 | coordinator + you, **go** | load checks of the kit alone, still paused, site file unchanged; the state folder read again after the restart | no FAIL, no `SITE_INVERTER_CONVERSION` line; same state file names | any FAIL |
+| 9 | coordinator, **go** | `place-ha-site-file.ps1 -Plan`, then, on a separate go, the placement of the new site file | `ECCO SITE FILE PLACED`, read-back equal, state folder as read at step 8 | NO CHANGE, STOPPED |
 | 10 | you, **own approval** | the config-entry reload (a reload, not a restart), after a download | entry loads, PAUSED | no load |
 | 11 | coordinator + you, **go** | load checks with the facts, still paused | `SITE_INVERTER_CONVERSION` PASS, `config_hash` as the site-check's | WARN, FAIL |
 | 12 | you, **go** | un-pause | a computed SHADOW status | `SELF_TEST_FAILED` |

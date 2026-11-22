@@ -135,7 +135,19 @@ no event. The deploy tool writes A1 and A3 only, and never touches the site file
 and after and refuses if they changed). The placement tool writes A2 and its own backup folder, never names the state folder, and
 never restarts or reloads Home Assistant. In one line, the writes of this update are the integration folder (A1, replaced by the
 kit), the site file (A2, replaced by the owner's new file), the staging and backup folders of the two tools (A3) and nothing in the
-state folder; the one helper the procedure touches is the existing pause helper, which the owner switches (2.1).
+state folder (no tool of this update writes there; what the integration's own start-up rewrites is said next); the one helper the
+procedure touches is the existing pause helper, which the owner switches (2.1).
+
+**What a restart does to the state folder.** The tools of this update (the Upgrade, the Rollback and the placement) leave the state
+folder byte-identical: that is what the drill proves and what the steps before the restart compare. A restart does not: the integration's own start-up
+(the store's open, run at every start, so at a config-entry reload as well, as before this update and by the same code in the Ghost
+kit and in this one) writes `store_meta.json` again with the same content and rewrites three pages of the scorecard file: the change
+counter in the SQLite header page, and the `schema_meta` table with its index, set to the same values by the store's own
+`INSERT OR REPLACE INTO schema_meta`. No table, row or trigger changes. So **before the restart of step 7 the state folder is
+byte-identical to the paused read of step 4; across a restart it has the same logical content but not the same bytes** (the
+scorecard file's sha256 differs, and so does its modification time), and the L3 run saw exactly that at every restart. The state
+folder is therefore compared byte for byte only between two reads that have no restart or reload between them: the references for
+step 9 are read again after the restart (8.8), and no proof after a restart compares a hash with a read made before it.
 
 ### 2.5 What does not change
 
@@ -219,7 +231,7 @@ the Home Assistant Core and Python versions its run was made on and reopens for 
 |---|---|---|
 | P1 | **The L3 (WSL) kit-equivalence reference run, on the exact kit.** It must show, on the isolated test instance pinned to a Home Assistant Core and Python version that U3-G5 compares with the host's: (a) the exact kit (this branch, stacked on the installed Ghost code) installs through the same route (`deploy-ha-kit.ps1 -Target Test`; as an Upgrade over the previous kit, which is the Ghost kit, where the run can), Home Assistant loads it, no FAIL in the self-test, the eleven entities and no suffix; (b) a site file with a valid set of facts placed with `place-ha-site-file.ps1 -Target Test` and the entry reloaded: `SITE_INVERTER_CONVERSION` PASS in the download, and with synthetic loss-affected inputs the two outputs are not blocked by `POWER_BALANCE_INCONSISTENT` where the same inputs without the facts are; (c) an invalid set, induced on the isolated instance only (never on production): WARN and the two outputs BLOCKED with `POWER_LOSS_FACTS_INVALID`; (d) **the previous kit restored on the isolated instance loads with a site file that still holds the facts** (no FAIL and no `SITE_INVERTER_CONVERSION` line): the reading of 7.1 observed in a real Home Assistant; (e) the config-entry reload observed there, with the download taken before it; (f) at least three slot cycles with cycle times inside the install runbook's bounds and no blocking-I/O or slow-callback warning from the integration; (g) the run's `SHA256SUMS` sha256 recorded: it is `-ReferenceSumsSha256` of the production run | closed 22 Nov 2026: the stacked kit (the kit these documents pin; a later commit that changes only documents or suites builds the same kit but for its two `VENDOR_MANIFEST.json` lines) ran on the isolated test instance pinned to Home Assistant Core 2026.11.0 and Python 3.14.10: (a) to (f) passed, with the limits of section 12, and (g) is recorded offline (P9); the run's result is kept in the private project record, not here. **The closure holds only for those two versions.** U3-G5 requires the host's Core and Python to equal them: after ANY Core or Python update of the host the run is repeated on the new versions and P1 reopens until it has been. That run did not read the production versions. A run on the stand-alone kit of this branch (before it was stacked on Ghost) was a precursor and did not close it |
 | P2 | independent review of the code (the loss-aware expectation, the bounds, the loader, the fitting tool), findings fixed, the kit unchanged since the reviewed build (proven by the build comparison of section 3) | closed (offline, lean mode, per the project record of 22 Nov 2026): one independent review, no BLOCKER, one MAJOR (the factor bounds were too wide) and five minors, all fixed in a follow-up round (the bounds tightened, a huge integer fact reported and never raised, the rule-set version bumped, the native-load false-zero rule pinned with facts configured, mutants of the real source added); the record names no second review |
-| P3 | independent review of these documents and their suite | closed 22 Nov 2026: one independent review (lean mode) of the documents as stacked on Ghost (the Ghost baseline, the file counts, the pins, the drills) found no BLOCKER, no MAJOR and one MINOR, fixed in the suite and pinned by mutants (the commit id named in P6 was only skipped when it did not match the history; it is now checked, rule 28 of the suite); the stand-alone version had been reviewed before, its findings fixed. What no reviewer has read: the edits made after that review (the closure of P1, P3 and P9, and the limits of the L3 run in section 12); the suite pins them |
+| P3 | independent review of these documents and their suite | closed 22 Nov 2026: one independent review (lean mode) of the documents as stacked on Ghost (the Ghost baseline, the file counts, the pins, the drills) found no BLOCKER, no MAJOR and one MINOR, fixed in the suite and pinned by mutants (the commit id named in P6 was only skipped when it did not match the history; it is now checked, rule 28 of the suite); the stand-alone version had been reviewed before, its findings fixed. What no reviewer has read: the edits made after that review (the closure of P1, P3 and P9, the limits of the L3 run in section 12, and the wording of what a restart does to the state folder with the one state read added to step 8); the suite pins them |
 | P4 | CI green on the exact commit (the branch has not been pushed and has no pull request) | **OPEN**: closed only by a green run on the exact commit; any later commit repeats it |
 | P5 | the owner's M2 private-pattern scan on the exact commit, generated assets, commit metadata and pull request text included | **OPEN**: runs before any push; any later commit repeats it |
 | P6 | U2 (Ghost) installed and verified first, its installation record filed, and the commit installed holds its code (section 3), or the owner deliberately decides U3 is independent of it; never both in one window | closed 22 Nov 2026: Ghost installed from 87f26df; this branch is stacked on that commit, so the kit of this update holds U2's code (section 3); U3 is still a window of its own, after U2's close-out |
@@ -251,12 +263,12 @@ they apply to an upgrade, and its G7 for a site file that already exists.
 | 1 | live read-only baseline: Core and its version, the integration folder listing (hashes and sizes), the state folder listing, the site file's sha256 on the host, the log lines, the owner's UI reads of the status and of the three outputs, and the diagnostics download taken before the restart (8.1) | COORDINATOR (reads), OWNER (UI reads and the download) | live | read-only | **yes** (a live read) | every listing saved; Core running; U3-G4 and U3-G7 hold; the comparison with the kit is as 2.2 says | Core not running; Intelligence not SHADOW or not fresh; supervision not stable; the installed `runtime/gates.py` is not the one 7.1 was read on; the offline copy of the site file differs from the live one; a listing that cannot be read |
 | 2 | the owner's protected full backup in the Home Assistant UI; its name and time noted offline, never its password | OWNER | live (UI) | the owner's own backup action | the owner's own action | a protected backup exists | no protected backup |
 | 3 | PAUSE: the owner turns the pause helper on (install runbook 10 and 11: pause before an upgrade) | OWNER | live (UI) | **write** (the existing pause helper, as always) | **yes** | the status reads PAUSED; the watchdog stays fresh (PAUSED counts as fresh while the helper is on); no cycle is computed | anything but PAUSED within a few minutes |
-| 4 | live read-only: the status reads PAUSED, then, after the longest cycle has ended, the scorecard file's hash and size and the listings again (8.4) | COORDINATOR | live | read-only | **yes** | the state listing is stable across two reads one minute apart | the file changes while paused |
+| 4 | live read-only: the status reads PAUSED, then, after the longest cycle has ended, the scorecard file's hash and size and the listings again (8.4) | COORDINATOR | live | read-only | **yes** | the state listing is stable across two reads one minute apart | the file changes between these two paused reads |
 | 5 | stage the new kit with the repository's own tool and verify hashes: `deploy-ha-kit.ps1 -Action Plan` (read-only), then `-Action Upgrade` (8.5) | COORDINATOR | live | Plan read-only; Upgrade **write** (A1, A3) | **yes**, for the Upgrade separately | `ECCO INTELLIGENCE KIT UPGRADE PASSED`, the backup path printed (record its stamp), `HA check    : passed`, **RESTART REQUIRED - separately gated, not performed** | any failure line; NO CHANGE; a hash mismatch; the tool's own rollback message; ROLLBACK NOT CONFIRMED |
 | 6 | live read-only, before any restart: the installed folder equals the kit, the state folder and the site file are untouched (8.6) | COORDINATOR | live | read-only | **yes** | `INSTALLED TREE EQUALS THE KIT`; no line of difference for the state folder; the site file's sha256 is the baseline's | any difference |
 | 7 | **the restart**: the owner restarts Home Assistant, once, short, watching; Core running again before and after the checks of 8.7 | OWNER | live | the owner's restart | **yes, its own approval, separate from the Upgrade** | Core running, the integration loads, no repair or error line, the outage well under 5 minutes | an outage of more than about 5 minutes (the latch: a supervised dongle reboot by the owner); the integration does not load; a repair or error line |
-| 8 | live read-only, still paused: the load checks of the kit alone, with the site file unchanged, and a diagnostics download (8.8) | COORDINATOR (reads), OWNER (the download) | live | read-only | **yes** | status PAUSED; no FAIL in `self_test`; no `SITE_INVERTER_CONVERSION` line; eleven entities, no suffix; watchdog fresh | a FAIL; a new entity; a `_2` suffix; a `SITE_INVERTER_CONVERSION` line (the facts are not supposed to be on the host yet) |
-| 9 | the site file with the three facts: `place-ha-site-file.ps1 -Plan`, then the placement (8.9) | COORDINATOR | live | Plan read-only; the placement **write** (A2, A3) | **yes**, for the placement separately | `ECCO SITE FILE PLACED`, the read-back equal to `-ExpectedSha256`, the backup path printed; the state folder untouched | NO CHANGE; STOPPED; a read-back mismatch; any message that the restore could NOT be confirmed |
+| 8 | live read-only, still paused: the load checks of the kit alone, with the site file unchanged, a diagnostics download, and the state folder read again after the restart as the reference for step 9 (8.8) | COORDINATOR (reads), OWNER (the download) | live | read-only | **yes** | status PAUSED; no FAIL in `self_test`; no `SITE_INVERTER_CONVERSION` line; eleven entities, no suffix; watchdog fresh; the same state file names as before the restart (the scorecard file's hash may differ: the restart rewrote three of its pages, 2.4) | a FAIL; a new entity; a `_2` suffix; a `SITE_INVERTER_CONVERSION` line (the facts are not supposed to be on the host yet); another set of state file names or another `store_meta.json` hash |
+| 9 | the site file with the three facts: `place-ha-site-file.ps1 -Plan`, then the placement (8.9) | COORDINATOR | live | Plan read-only; the placement **write** (A2, A3) | **yes**, for the placement separately | `ECCO SITE FILE PLACED`, the read-back equal to `-ExpectedSha256`, the backup path printed; the state folder as read after the restart (step 8) | NO CHANGE; STOPPED; a read-back mismatch; the state folder differs from the read of step 8; any message that the restore could NOT be confirmed |
 | 10 | **the config-entry reload** (a reload, not a restart), still paused: the owner takes a diagnostics download first, then reloads the ECCO Intelligence entry in the UI (8.10) | OWNER | live (UI) | the owner's reload | **yes, its own approval, separate from the placement** | the entry loads again, status PAUSED, no repair or error line | the entry does not load; a repair or error line; `SELF_TEST_FAILED` |
 | 11 | live read-only, still paused: the load checks with the facts and a diagnostics download (8.11) | COORDINATOR (reads), OWNER (the download) | live | read-only | **yes** | `SITE_INVERTER_CONVERSION` PASS; no FAIL; the status entity's `config_hash` equals the site-check's | a WARN or a FAIL; no `SITE_INVERTER_CONVERSION` line; a different `config_hash` |
 | 12 | UN-PAUSE: the owner turns the pause helper off; the status goes to STARTING, then a computed one after the start-up grace | OWNER | live (UI) | **write** (the pause helper) | **yes** | a computed status, SHADOW | `SELF_TEST_FAILED`; no computed status after the grace |
@@ -378,7 +390,7 @@ this kit. The placement tool's own logic
 (its local checks, the backup, the upload, the read-back and its rollback messages) is exercised against a stand-in host by
 `tools/tests/Test-EccoDeploy.ps1`; that is a stand-in, not the production host. The drill does **not** run the previous
 integration as a whole on a site file with the facts; the previous loader alone was run on one (7.1), and P1(d) showed the rest on
-the isolated test instance.
+the isolated test instance. The drill restarts nothing, so it says nothing about what a restart does to the state folder (2.4).
 It never touches a real Home Assistant.
 
 **The facts, offline.** The fit needs a recorded history of the four readings (the house power, the PV power, the battery power and
@@ -585,9 +597,10 @@ Compare-Object (Get-Content "$E\state-paused-1.txt") (Get-Content "$E\state-paus
 Compare-Object (Get-Content "$E\integration-before.txt") (Get-Content "$E\integration-paused.txt")
 ```
 
-`state-paused-1.txt` holds the scorecard file's hash and size: the reference for steps 6 and 9 (the file itself is in the owner's
-protected backup). A write in flight when the pause began would show as a difference between the two state reads: stop and read
-again.
+`state-paused-1.txt` holds the scorecard file's hash and size: the reference for step 6, which is read before the restart (the file
+itself is in the owner's protected backup). It is not the reference for step 9: a restart rewrites three scorecard pages, so step 8
+reads the folder again after the restart (2.4). A write in flight when the pause began would show as a difference between the two
+state reads: stop and read again.
 
 ### 8.5 Step 5: stage and swap with the repository's own tool
 
@@ -664,7 +677,8 @@ Compare-Object (Get-Content "$E\site-file-sha-before.txt") (Get-Content "$E\site
 ```
 
 Expected: `INSTALLED TREE EQUALS THE KIT (57 files)` and no line for the state folder or the site file: nothing wrote while the
-integration was paused and the tool never touches either.
+integration was paused and the tool never touches either. No restart has happened yet, so here the state folder is still
+byte-identical to the paused read of step 4 (after the restart it is not: 2.4).
 
 ### 8.7 Step 7: the restart
 
@@ -702,6 +716,27 @@ suffix, the watchdog fresh and no `ecco_intel` notification (install runbook 7).
 coordinator's diagnostics; the file's outer `data` wrapper is recalled, not verified (`d.get('data', d)` reads either form). **The
 proof that the new code is the code that runs is step 11:** only the new loader produces `SITE_INVERTER_CONVERSION`. Keep the file
 in the evidence folder.
+
+**The state folder, read again after the restart.** The restart rewrote `store_meta.json` (same content) and three pages of the
+scorecard file (same values) through the integration's own start-up (2.4), so the scorecard file's hash can differ from the paused
+read of step 4 although nothing was added or lost; that is not a stop. Read the folder once more now (still paused, so nothing
+writes until the un-pause or a reload) and keep the read: it is the reference for step 9, and it is not compared with the read
+of step 4 byte for byte:
+
+```powershell
+cls
+$H = '<production alias>'
+$E = '<OFFLINE_EVIDENCE_DIR>\u3-baseline'
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
+ssh $H "cd /config/ecco/intelligence/state && ls -l | grep -v '^total' && sha256sum *" | Out-File -Encoding utf8 "$E\state-after-restart.txt"
+Get-Content "$E\state-after-restart.txt"
+```
+
+Expected: the same file names as `state-paused-1.txt` and no new file; the `sha256` of `store_meta.json` equal to the paused read's; the
+scorecard file's `sha256` equal to the paused read's or not (the L3 run saw it differ at every restart; it was not seen on this
+host). A different set of file names, or a different `store_meta.json` hash, is a stop (section 9).
 
 ### 8.9 Step 9: the site file with the three facts
 
@@ -748,8 +783,8 @@ ssh $H "sha256sum /config/ecco/intelligence/site.local.json | cut -d ' ' -f 1" |
 ssh $H "cd /config/ecco/intelligence/state && ls -l | grep -v '^total' && sha256sum *" | Out-File -Encoding utf8 "$E\state-after-place.txt"
 $GOT = (Get-Content "$E\site-file-sha-after-place.txt" | Select-Object -First 1).Trim()
 if ($GOT -ceq $NEW) { 'THE SITE FILE ON THE HOST IS THE PLACED ONE' } else { 'DIFFERENT: stop' }
-'--- state folder against the paused read (no output means untouched):'
-Compare-Object (Get-Content "$E\state-paused-1.txt") (Get-Content "$E\state-after-place.txt")
+'--- state folder against the read after the restart of step 8 (no output means untouched by the placement):'
+Compare-Object (Get-Content "$E\state-after-restart.txt") (Get-Content "$E\state-after-place.txt")
 ```
 
 Nothing is live yet: the running integration holds the site file it loaded at the restart (the one without the facts) until step 10.
@@ -764,7 +799,8 @@ runbook uses the same reload to recover from an entity-id collision (install run
 run on a real Home Assistant, so P1(e) observed it on the isolated test instance: three reloads, each answered without a restart
 being required, the entry loaded again each time and a start-up slot of its own ran (so the integration was not paused in those
 observations; a reload with the pause helper on, as here, was not separately observed, and the production host has never run
-it). Expected: the entry loads, the status reads PAUSED, no repair or error line. Never delete and re-add the entry.
+it). Every start of the integration, a reload included, rewrites a little of the state folder with the same content (2.4).
+Expected: the entry loads, the status reads PAUSED, no repair or error line. Never delete and re-add the entry.
 
 ### 8.11 Step 11: the load checks with the facts, still paused
 
@@ -836,8 +872,9 @@ them up. The owner's offline copies of the previous and the new site file are ke
 Stop, change nothing more, record the state, and ask the owner, when: a tool prints anything but the expected line; a hash differs
 from its pin; the baseline shows Core not running, Intelligence not SHADOW or not fresh, or supervision not stable; the installed
 folder is not what 2.2 expects and is not explained, or a file would be REMOVED; the installed loader is not the one 7.1 was read
-on; the offline copy of the site file differs from the live one; the state folder changes while the integration is paused; the
-Upgrade prints NO CHANGE, a hash mismatch, ROLLBACK NOT CONFIRMED or a failed `ha core check`; the placement prints NO CHANGE,
+on; the offline copy of the site file differs from the live one; the state folder changes between two reads of one paused period
+with no restart or reload between them (a restart or a reload rewrites three scorecard pages and `store_meta.json` with the same
+content, 2.4, and that alone is not a change; another set of file names or another `store_meta.json` hash is); the Upgrade prints NO CHANGE, a hash mismatch, ROLLBACK NOT CONFIRMED or a failed `ha core check`; the placement prints NO CHANGE,
 STOPPED, a read-back mismatch or a restore that could NOT be confirmed; the restart outage exceeds about 5 minutes; after the
 restart or the reload the integration does not load, a self-test check FAILs, a repair or error line appears, a new entity or a
 `_2` suffix appears; step 8 shows a `SITE_INVERTER_CONVERSION` line; step 11 shows a WARN or no such line, or a `config_hash` that
@@ -850,13 +887,14 @@ Any no-go after the swap means the pause stays on and the rollback of section 10
 ## 10. Rollback, in order
 
 Each item is the owner's decision to start and needs its own go. The rollback is measured against two things made before any live
-write: **(i) the baseline** of step 1 (the integration folder listing and its hashes, the state folder listing, the site file's
-sha256, Core's version, the log lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's protected full
+write: **(i) the baseline** of step 1 (the integration folder listing and its hashes, the state folder listing (its file names, and
+its hashes only before a restart: 2.4), the site file's sha256, Core's version, the log lines, the owner's UI reads, the diagnostics download), and **(ii) the owner's protected full
 backup** of step 2, the last resort. **A facts-only rollback** (the kit stays) is RB1, RB2, RB3 and RB6. **A full rollback** is RB1,
 RB2 (only if step 9 placed the facts: after a no-go at step 8 the site file was never changed, and RB2 is skipped), RB4, RB5 and RB6. The facts go out first, and the previous kit second (7.1 says why).
 
 1. **RB1, pause.** The owner turns the pause helper on if it is not on (install runbook 11: pause, then roll back). Proof: the status
-   reads PAUSED; the state listing is stable across two reads (the block of 8.4: the same two reads, a minute apart).
+   reads PAUSED; the state listing is stable across two reads (the block of 8.4: the same two reads, a minute apart, in one paused
+   period with no restart or reload between them).
 2. **RB2, the facts out: put the previous site file back.** The coordinator places the owner's offline copy of the previous file
    with the same tool, `-ExpectedSha256` its recorded sha256 (the baseline's) and `-ReplaceExistingSha256` the sha256 of the file now
    on the host (the new one); read the Plan first, then give the go for the placement:
@@ -923,7 +961,9 @@ RB2 (only if step 9 placed the facts: after a no-go at step 8 the site file was 
    running; the integration loads with no repair or error line; the download, saved as `diagnostics-rollback.json` and read with
    the block of 8.8 (change `$F`), reads `self_test FAIL []` and `SITE_INVERTER_CONVERSION None`, as the baseline's
    `diagnostics-before.json` reads (the previous loader has no such check, and the file is the baseline's again); the entities are
-   the same eleven. **What happens to the two outputs:** after RB6 they read as the baseline's, the balance blocker returning
+   the same eleven. The state folder is not compared hash for hash with the baseline after this restart: it rewrote
+   `store_meta.json` (same content) and three scorecard pages (same values), 2.4; the proof here is the same file names, the load and the
+   download. **What happens to the two outputs:** after RB6 they read as the baseline's, the balance blocker returning
    while the flow is large. If the facts were left in the file by mistake, the previous kit still loads it (7.1) and
    `SITE_INVERTER_CONVERSION` is absent from the download all the same: the file's sha256 against the baseline is then the proof
    that RB2 was done, and RB2 is repeated.
@@ -1027,7 +1067,8 @@ Say these plainly in every report about this update.
 - **The cost of computing the two outputs on the production host is unmeasured.** They were withheld before; the cycle-time bounds
   of the install runbook's section 7 are read in 8.13.
 - **The rollback with the facts present has never been run live.** The drill proves the swap steps leave the site file and the
-  state folder byte-identical on a mock root; one offline experiment on synthetic data ran the previous loader on a file with the facts. The
+  state folder byte-identical on a mock root (it restarts nothing: a restart rewrites three scorecard pages and `store_meta.json`
+  with the same content, 2.4); one offline experiment on synthetic data ran the previous loader on a file with the facts. The
   previous integration as a whole ran on such a file once, in the L3 run on the isolated instance (P1(d): it loaded and ignored the
   facts), and no suite runs the previous code.
 - **The baseline's listing commands** (`find`, `ls -lR`, `sha256sum` over the state folder and the site file) have not been run on
