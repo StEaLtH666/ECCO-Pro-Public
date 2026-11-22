@@ -740,8 +740,9 @@ The owner downloads the diagnostics first (`diagnostics-before-reload.json`): `c
 (install runbook 8). With the pause helper still on, the owner reloads the ECCO Intelligence entry (Settings, Devices and services,
 ECCO Intelligence, the entry's menu, Reload; the screen names are recalled, not verified on this host). It is a reload of one entry,
 not a restart: Home Assistant stays up, the entry is unloaded and set up again, and the setup reads the site file. The install
-runbook uses the same reload to recover from an entity-id collision (install runbook 7), under L3. Expected: the entry loads, the
-status reads PAUSED, no repair or error line. Never delete and re-add the entry.
+runbook uses the same reload to recover from an entity-id collision (install runbook 7); it does not record that the reload was
+run on a real Home Assistant, so P1(e) must observe it. Expected: the entry loads, the status reads PAUSED, no repair or error
+line. Never delete and re-add the entry.
 
 ### 8.11 Step 11: the load checks with the facts, still paused
 
@@ -981,9 +982,10 @@ Say these plainly in every report about this update.
 - **Data quality may stay DEGRADED** (8.13): this update removes one cause, and the diagnosis recorded no other finding at the time,
   which is a reading of one day and not a promise for the next.
 - **The config-entry reload on the production host with this integration has never been run.** It is the install runbook's own
-  recovery step and was seen under L3; the Home Assistant screen names are recalled, not verified on this host.
+  recovery step, and that runbook does not record it as run on a real Home Assistant; the Home Assistant screen names are
+  recalled, not verified on this host.
 - **The cost of computing the two outputs on the production host is unmeasured.** They were withheld before; the cycle-time bounds
-  of the install runbook's section 7 are read in 8.13, and the Ghost block's budget has not been measured with such content.
+  of the install runbook's section 7 are read in 8.13.
 - **The rollback with the facts present has never been run live.** The drill proves the swap steps leave the site file and the
   state folder byte-identical; one offline experiment on synthetic data ran the previous loader on a file with the facts. The
   previous integration as a whole has not been run on such a file offline, and no suite runs the previous code (P1(d) must).
