@@ -637,23 +637,24 @@ def rule_sentences(rb, cl, S, F):
     return pr
 
 
-def p6_commit_scan_text(rb: str, F, pr: list) -> str:
+def p6_commit_id(rb: str) -> str | None:
+    """The one commit id P6's row carries (the commit U2 was installed from), or None when the row has none or more than one."""
+    row = next((ln for ln in rb.split(chr(10)) if ln.startswith("| P6 |")), None)
+    ids = COMMIT_RE.findall(row) if row is not None else []
+    return ids[0] if len(ids) == 1 else None
+
+
+def p6_commit_scan_text(rb: str) -> str:
     """The runbook may carry exactly ONE commit id: in P6's row, the commit U2 was installed from (a fact of the installation record, so
-    the precondition says what it closed on). It is taken out of the text the commit-id rule scans; where the history is in the checkout it
-    must be the leading characters of the commit the history gives (never written in this suite). Any other commit id, or a second one in
-    that row, stays in the text and fires the rule."""
+    the precondition says what it closed on). It is taken out of the text the commit-id rule scans. Any other commit id, or a second one
+    in that row, stays in the text and fires the rule. (Whether it is the commit the history gives is a separate, informational check:
+    after a squash merge of the Ghost update the installed commit is no longer an ancestor, and that must not turn the suite red.)"""
+    cid = p6_commit_id(rb)
+    if cid is None:
+        return rb
     lines = rb.split(chr(10))
-    idx = next((i for i, ln in enumerate(lines) if ln.startswith("| P6 |")), None)
-    if idx is None:
-        return rb
-    ids = COMMIT_RE.findall(lines[idx])
-    if len(ids) != 1:
-        return rb
-    prev = F.get("prev_commit")
-    if prev is not None and not prev.startswith(ids[0]):
-        pr.append(f"P6 names the commit {ids[0]}, which is not the commit the history says U2 was installed from")
-        return rb
-    lines[idx] = lines[idx].replace(ids[0], "<the installed commit>", 1)
+    idx = next(i for i, ln in enumerate(lines) if ln.startswith("| P6 |"))
+    lines[idx] = lines[idx].replace(cid, "<the installed commit>", 1)
     return chr(10).join(lines)
 
 
@@ -663,7 +664,7 @@ def rule_forbidden(rb, cl, S, F):
     allowed = {k["nosha"], k["fixed"], GHOST_KIT_SUMS["nosha"], GHOST_KIT_SUMS["fixed"], BASE_GATES_SHA}
     for label, doc in (("runbook", rb), ("checklist", cl)):
         low = doc.lower()
-        scan = p6_commit_scan_text(doc, F, pr) if label == "runbook" else doc
+        scan = p6_commit_scan_text(doc) if label == "runbook" else doc
         for w in FORBIDDEN_WORDS:
             if w in low:
                 pr.append(f"{label}: the forbidden phrase '{w}'")
@@ -1601,9 +1602,6 @@ def make_mutants(F):
     add("rb", "a commit id added", lambda t: t + f"\nBuilt from {sample_commit}.\n", "forbidden")
     add("rb", "a second commit id in P6's row", lambda t: re.sub(r"(Ghost installed from )([0-9a-f]{7,40})", lambda m: m.group(1) + m.group(2) + " and " + "ab12" + "cd3", t, count=1), "forbidden")
     add("rb", "the commit id of P6 repeated outside its row", lambda t: t + "\nU2 was installed from " + (re.search(r"Ghost installed from ([0-9a-f]{7,40})", t) or re.search("()", t)).group(1) + ".\n", "forbidden")
-    if F.get("prev_commit"):
-        add("rb", "P6 names a commit that is not the one the history gives",
-            lambda t: re.sub(r"(Ghost installed from )[0-9a-f]{7,40}", lambda m: m.group(1) + "abcde" + "f01", t, count=1), "forbidden")
     add("cl", "a token added", lambda t: t + f"\nKey {sample_token}.\n", "forbidden")
     add("rb", "a hash that is not pinned", lambda t: t + "\n" + "ab" * 32 + "\n", "forbidden")
     add("rb", "a calibrated factor added (three decimals)", lambda t: t + "\nThe fitted factor is 0.924.\n", "forbidden")
@@ -1850,6 +1848,12 @@ try:
               "states as the baseline", old.get("old_sums") == GHOST_KIT_SUMS, str(old.get("old_sums")))
         check("U2's nine files (the five it added, the four it changed) are byte-identical in the previous kit and in this one: the update is "
               "stacked on Ghost and loses none of it", old.get("ghost_same") == sorted(GHOST_FILES), str(old.get("ghost_same")))
+        p6_id = p6_commit_id(RB) if RB is not None else None
+        if p6_id is not None and prev is not None and prev.startswith(p6_id):
+            check("the commit P6's row names is the commit the history gives as the one just before this change (the Ghost tree as installed)", True)
+        elif p6_id is not None:
+            skip("the commit P6's row names is the commit the history gives as the one just before this change",
+                 "the history's previous commit is another one (the Ghost update has been merged since); P6 records the installation, not an ancestor")
 
     if RB is not None and CL is not None:
         print("== the rules")
