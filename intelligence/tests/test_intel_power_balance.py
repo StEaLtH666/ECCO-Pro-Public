@@ -4,11 +4,11 @@
 The balance check (intelligence/quality.py: power_balance_verdict, _power_rules) expects house = PV + battery + grid. PV and
 battery power are DC-side readings, so a real inverter's conversion loss and own draw make the house power fall short of
 that sum. Three optional site facts (inverter_dc_to_ac_factor, inverter_ac_to_dc_factor, inverter_standby_w) let the check
-expect the loss. These checks use a synthetic inverter (DC to AC 0.90, AC to DC 0.92, standby 40 W): no number is a site
+expect the loss. These checks use a synthetic inverter (DC to AC 0.92, AC to DC 0.94, standby 40 W): no number is a site
 value.
 
   [1] the facts: absent = lossless; valid; every invalid form is refused with a reason that never names a value; the bounds
-      (factors 0.85 to 1.0, standby 0 to 150 W) are inclusive and one step outside them is refused
+      (factors 0.90 to 1.0, standby 0 to 100 W) are inclusive and one step outside them is refused
   [2] the default is today's behaviour: a literal table of cases and a seeded sweep give exactly the verdict, residual and
       tolerance of the rule as it stood before the facts existed (a verbatim copy below), and a sweep through assess_inputs
       gives identical findings with no facts and with explicit lossless facts
@@ -56,7 +56,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 
 # the synthetic inverter
-DC_AC, AC_DC, STANDBY = 0.90, 0.92, 40.0
+DC_AC, AC_DC, STANDBY = 0.92, 0.94, 40.0
 CONV = sd.InverterConversion(DC_AC, AC_DC, STANDBY)
 FACTS = replace(cf.FACTS, inverter_dc_to_ac_factor=DC_AC, inverter_ac_to_dc_factor=AC_DC, inverter_standby_w=STANDBY)
 
@@ -118,7 +118,7 @@ check("an object without the attributes reads as absent (never raises)",
 
 LO_F, HI_F = sd.INVERTER_FACTOR_BOUNDS
 LO_S, HI_S = sd.INVERTER_STANDBY_BOUNDS_W
-check("the bounds are the proposed ones: factors 0.85 to 1.0, standby 0 to 150 W", (LO_F, HI_F, LO_S, HI_S) == (0.85, 1.0, 0.0, 150.0))
+check("the bounds are the proposed ones: factors 0.90 to 1.0, standby 0 to 100 W", (LO_F, HI_F, LO_S, HI_S) == (0.90, 1.0, 0.0, 100.0))
 at_bounds = [(LO_F, LO_F, LO_S), (HI_F, HI_F, HI_S), (LO_F, HI_F, HI_S), (HI_F, LO_F, LO_S)]
 check("every value exactly at a bound is accepted (inclusive)",
       all(sd.inverter_conversion(replace(cf.FACTS, inverter_dc_to_ac_factor=a, inverter_ac_to_dc_factor=b, inverter_standby_w=c))
@@ -126,20 +126,21 @@ check("every value exactly at a bound is accepted (inclusive)",
 just_out = {"inverter_dc_to_ac_factor": (math.nextafter(LO_F, 0.0), math.nextafter(HI_F, 2.0)),
             "inverter_ac_to_dc_factor": (math.nextafter(LO_F, 0.0), math.nextafter(HI_F, 2.0)),
             "inverter_standby_w": (-1e-9, math.nextafter(HI_S, 1000.0))}
-ok_all = {"inverter_dc_to_ac_factor": 0.9, "inverter_ac_to_dc_factor": 0.9, "inverter_standby_w": 40.0}
+ok_all = {"inverter_dc_to_ac_factor": 0.95, "inverter_ac_to_dc_factor": 0.95, "inverter_standby_w": 40.0}
 for name, outs in just_out.items():
     for v in outs:
         cv, pr = sd.inverter_conversion(replace(cf.FACTS, **{**ok_all, name: v}))
         check(f"{name} one step outside its bound is refused (out_of_bounds), lossless stays",
               cv.lossless and pr == (f"{name}:out_of_bounds",), str(pr))
 bad_values = {"nan": float("nan"), "inf": float("inf"), "-inf": float("-inf"), "a string": "0.9", "true": True, "false": False,
-              "a list": [0.9], "negative": -0.9, "zero factor": 0.0, "huge": 1e9}
+              "a list": [0.9], "negative": -0.9, "zero factor": 0.0, "huge": 1e9,
+              "a huge integer": 10 ** 400, "a huge negative integer": -(10 ** 400)}
 for label, v in bad_values.items():
     for name in sd.INVERTER_CONVERSION_FACTS:
         cv, pr = sd.inverter_conversion(replace(cf.FACTS, **{**ok_all, name: v}))
-        reason = "out_of_bounds" if label in ("negative", "zero factor", "huge") and not (name == "inverter_standby_w" and v == 0.0) else "not_a_number"
+        reason = "out_of_bounds" if label in ("negative", "zero factor", "huge", "a huge integer", "a huge negative integer") and not (name == "inverter_standby_w" and v == 0.0) else "not_a_number"
         if name == "inverter_standby_w" and label in ("zero factor",):
-            ok = cv == sd.InverterConversion(0.9, 0.9, 0.0) and pr == ()      # zero is a valid standby (the bound is inclusive)
+            ok = cv == sd.InverterConversion(0.95, 0.95, 0.0) and pr == ()      # zero is a valid standby (the bound is inclusive)
         else:
             ok = cv.lossless and pr == (f"{name}:{reason}",)
         check(f"{name} = {label}: " + ("accepted" if (name == "inverter_standby_w" and label == "zero factor") else f"refused ({reason}), lossless stays"),
@@ -153,7 +154,8 @@ for keep in (("inverter_dc_to_ac_factor",), ("inverter_ac_to_dc_factor",), ("inv
 check("a problem names the fact and the reason and never a value",
       all(":" in x and x.split(":")[0] in sd.INVERTER_CONVERSION_FACTS and x.split(":")[1] in ("missing", "not_a_number", "out_of_bounds")
           for x in sd.inverter_conversion(replace(cf.FACTS, inverter_dc_to_ac_factor=0.123456))[1]))
-for args in ((0.84, 0.9, 40.0), (0.9, 1.01, 40.0), (0.9, 0.9, -1.0), (0.9, 0.9, 151.0), (float("nan"), 0.9, 40.0), (0.9, 0.9, True)):
+for args in ((0.89, 0.9, 40.0), (0.9, 1.01, 40.0), (0.9, 0.9, -1.0), (0.9, 0.9, 101.0), (float("nan"), 0.9, 40.0), (0.9, 0.9, True),
+             (0.9, 0.9, 10**400), (10**400, 0.9, 40.0)):
     try:
         sd.InverterConversion(*args)
         refused = False
@@ -244,6 +246,8 @@ CASES = [
     ("net DC power +1 W", 0.0, 1.0, 200.0),
     ("net DC power -1 W", 0.0, -1.0, 200.0),
     ("high power", 6000.0, 4000.0, 2000.0),
+    ("idle, large import", 0.0, 0.0, 2000.0),
+    ("discharge with a large import", 0.0, 500.0, 8000.0),
 ]
 for label, p, b, g in CASES:
     hw = model_house(p, b, g)
@@ -257,8 +261,8 @@ check("idle: the house power is the grid less the standby draw (60 W for 100 W o
 check("the expectation is continuous at zero net DC power and the two sides give the values written out",
       CONV.expected_house_w(1000.0, -1000.0, 0.0) == -STANDBY
       and abs(CONV.expected_house_w(0.0, 1e-9, 0.0) - CONV.expected_house_w(0.0, -1e-9, 0.0)) < 1e-6
-      and abs(CONV.expected_house_w(0.0, 1000.0, 50.0) - (50.0 + 900.0 - 40.0)) < 1e-9
-      and abs(CONV.expected_house_w(0.0, -920.0, 50.0) - (50.0 - 1000.0 - 40.0)) < 1e-9)
+      and abs(CONV.expected_house_w(0.0, 1000.0, 50.0) - (50.0 + DC_AC * 1000.0 - 40.0)) < 1e-9
+      and abs(CONV.expected_house_w(0.0, -AC_DC * 1000.0, 50.0) - (50.0 - 1000.0 - 40.0)) < 1e-9)
 check("the lossless conversion returns exactly PV + battery + grid", sd.LOSSLESS_CONVERSION.expected_house_w(1.5, -0.25, 7.0) == 1.5 - 0.25 + 7.0)
 # the tolerance: the same rule as today (floor 100 W, 5 % of the largest magnitude), applied to the loss-aware residual
 exp_low = CONV.expected_house_w(0.0, 200.0, 0.0)                     # 140 W
@@ -375,6 +379,8 @@ bad_facts = {
     "infinity": replace(FACTS, inverter_standby_w=float("inf")),
     "a string": replace(FACTS, inverter_ac_to_dc_factor="0.92"),
     "a bool": replace(FACTS, inverter_standby_w=True),
+    "a huge integer": replace(FACTS, inverter_standby_w=10 ** 400),           # finite_number raises OverflowError for it
+    "a huge negative integer": replace(FACTS, inverter_dc_to_ac_factor=-(10 ** 400)),
 }
 for label, fx in bad_facts.items():
     r = assess(base, loss_set, fx)
@@ -406,7 +412,7 @@ check("a site_facts that is not a SiteFacts is read as absent by this rule (neve
 print("== [6] a wrong (too generous) conversion cannot hide a sign reversal at the tested powers")
 TESTED = [(0.0, 3000.0, 1500.0), (0.0, 3000.0, -2000.0), (0.0, -2000.0, 2500.0), (4000.0, 0.0, 1500.0), (4000.0, 0.0, -1500.0),
           (5000.0, -2000.0, 1000.0), (0.0, 1000.0, 800.0), (0.0, -1000.0, 1200.0), (2000.0, 2000.0, 1200.0), (3000.0, 0.0, 1000.0)]
-generous = [sd.InverterConversion(LO_F, LO_F, HI_S), sd.InverterConversion(LO_F, HI_F, 100.0), sd.InverterConversion(0.88, 0.88, 100.0),
+generous = [sd.InverterConversion(LO_F, LO_F, HI_S), sd.InverterConversion(LO_F, HI_F, 100.0), sd.InverterConversion(0.92, 0.92, 100.0),
             sd.InverterConversion(DC_AC - 0.02, AC_DC - 0.02, STANDBY + 20.0), CONV]
 hidden, tested = [], 0
 for pv, b, g in TESTED:

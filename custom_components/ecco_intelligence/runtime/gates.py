@@ -141,8 +141,8 @@ def _facts(profile: Mapping | None, latitude: object, longitude: object) -> tupl
     """Site facts only (never the example battery values): the PV array size from the site file, the location from Home
     Assistant's own configuration, the zone Europe/London, and the optional inverter conversion (`site` block keys
     INVERTER_CONVERSION_FACTS): a key that is absent or null is None, a number is carried as it is (the quality layer judges
-    its bound), and any other JSON value (a string, true / false, a list, an object) is carried as NaN, which can never be
-    a usable value: it is reported, never silently read as absent."""
+    its bound), and any other JSON value (a string, true / false, a list, an object, an integer too large for a float) is
+    carried as NaN, which can never be a usable value: it is reported, never silently read as absent."""
     def fin(v: object) -> float | None:
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
@@ -150,7 +150,10 @@ def _facts(profile: Mapping | None, latitude: object, longitude: object) -> tupl
         v = site_block.get(key) if isinstance(site_block, Mapping) else None
         if v is None:
             return None
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else math.nan
+        try:
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else math.nan
+        except OverflowError:                 # an integer too large for a float: carried as NaN too, reported, never used
+            return math.nan
     site = profile.get("site") if isinstance(profile, Mapping) else None
     kwp = fin(site.get("pv_array_kwp")) if isinstance(site, Mapping) else None
     kwp = kwp if kwp is not None and kwp > 0 else None

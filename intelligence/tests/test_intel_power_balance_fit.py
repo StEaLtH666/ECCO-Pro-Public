@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """intelligence/tools/power_balance_fit.py: the offline fit of the inverter conversion from a recorded history (synthetic
-round-number data only; no site value). The synthetic inverter: DC to AC 0.90, AC to DC 0.92, standby 40 W.
+round-number data only; no site value). The synthetic inverter: DC to AC 0.92, AC to DC 0.94, standby 40 W.
 
   [1] the engine's own rule judges the history (the tool calls quality.power_balance_verdict), and the tool is stdlib only
       and writes nothing
@@ -45,7 +45,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
 
 
-DC_AC, AC_DC, STANDBY = 0.90, 0.92, 40.0
+DC_AC, AC_DC, STANDBY = 0.92, 0.94, 40.0
 CONV = sd.InverterConversion(DC_AC, AC_DC, STANDBY)
 T0 = datetime(2030, 1, 10, tzinfo=timezone.utc).timestamp()
 STEP = 60.0
@@ -162,10 +162,10 @@ with tempfile.TemporaryDirectory() as td:
     check("the values read back are the values written (repr round trip)", samples[1234][1:] == clean[1234][1:])
     j = fit.fit_joint(samples)
     pf = fit.proposed_facts(j)
-    check("noise-free: the joint fit recovers the synthetic inverter (slopes 0.90 and 1/0.92, constant -40 W)",
+    check("noise-free: the joint fit recovers the synthetic inverter (slopes 0.92 and 1/0.94, constant -40 W)",
           abs(j["a_pos"] - DC_AC) < 1e-9 and abs(j["a_neg"] - 1.0 / AC_DC) < 1e-9 and abs(j["c"] + STANDBY) < 1e-6, str(j))
     check("... and proposes exactly the synthetic facts, rounded as entered, inside the bounds",
-          pf["facts"] == {"inverter_dc_to_ac_factor": 0.9, "inverter_ac_to_dc_factor": 0.92, "inverter_standby_w": 40} and not pf["problems"],
+          pf["facts"] == {"inverter_dc_to_ac_factor": 0.92, "inverter_ac_to_dc_factor": 0.94, "inverter_standby_w": 40} and not pf["problems"],
           str(pf))
     conv = fit.conversion_from(pf["facts"], pf["problems"])
     check("... a conversion the site facts would accept", conv == CONV and sd.inverter_conversion(type("F", (), pf["facts"])())[0] == CONV)
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory() as td:
     c1 = fit.conversion_from(**{"facts": fit.proposed_facts(j1)["facts"], "problems": fit.proposed_facts(j1)["problems"]})
     check("fitted on the first part, the second part is accepted in full", c1 is not None and fit.judge(second, c1)["ok_share"] == 1.0)
     check("the printed report shows the proposed facts as the `site` keys and says they are not owner decisions",
-          '"inverter_dc_to_ac_factor": 0.9' in out and '"inverter_standby_w": 40' in out and "not owner decisions" in out, out[:1500])
+          '"inverter_dc_to_ac_factor": 0.92' in out and '"inverter_standby_w": 40' in out and "not owner decisions" in out, out[:1500])
     check("... the loss-aware line reads 100.00 % and the current rule far less", "100.00 %" in out
           and any(line.strip().startswith("current rule (lossless)") and "100.00" not in line for line in out.splitlines()), out[:1500])
 
@@ -223,7 +223,7 @@ with tempfile.TemporaryDirectory() as td:
     ban = fit.inject(sn, cn, "batt")
     check("... and the noisy history's reversals are all blocked", ctn["blocked"] == ctn["n"] > 500 and ban["blocked"] == ban["n"] > 500)
     ps = fit.fit_side([s for s in sn if s[2] + s[3] >= 0.0])
-    check("the separate side fit gives the discharge slope too (close to 0.90, intercept near -40 W)",
+    check("the separate side fit gives the discharge slope too (close to 0.92, intercept near -40 W)",
           abs(ps["slope"] - DC_AC) < 0.005 and abs(ps["intercept"] + STANDBY) < 8, str(ps))
 
 print("== [3] the Home Assistant history adapter")
@@ -327,17 +327,17 @@ with tempfile.TemporaryDirectory() as td:
     check("a history with no charge side is reported (not fitted) and proposes no facts; the current rule is still judged",
           rc == 0 and "charge side" in out and "not fitted" in out and "no site facts are proposed" in out
           and "(b) SHARE OF SAMPLES" in out and "not evaluated (no usable proposed facts)" in out and '"inverter_' not in out, out[:1200])
-    for every, label in ((3, "a third"), (10, "a tenth")):
+    for every, label in ((3, "a third"), (10, "a tenth"), (50, "a fiftieth")):
         faulty = [(t, hw, p, b, -g if i % every == 0 else g) for i, (t, hw, p, b, g) in enumerate(synth(4, 0.0))]
         write_csv(tdp / "faulty.csv", faulty)
         rc, out, err = run_main(["csv", "--file", str(tdp / "faulty.csv")])
         check(f"a history with the grid sign reversed in {label} of its samples: the fit lands outside the bounds, the report says NOT "
               "USABLE, proposes nothing to use and does not evaluate a loss-aware rule",
               rc == 0 and "NOT USABLE as site facts" in out and "not evaluated (no usable proposed facts)" in out, out[:1500])
-    faulty = [(t, hw, p, b, -g if i % 50 == 0 else g) for i, (t, hw, p, b, g) in enumerate(synth(4, 0.0))]
+    faulty = [(t, hw, p, b, -g if i % 100 == 0 else g) for i, (t, hw, p, b, g) in enumerate(synth(4, 0.0))]
     write_csv(tdp / "faulty.csv", faulty)
     rc, out, err = run_main(["csv", "--file", str(tdp / "faulty.csv")])
-    check("a history with the grid sign reversed in 2 % of its samples still fits inside the bounds, but the loss-aware rule accepts "
+    check("a history with the grid sign reversed in 1 % of its samples still fits inside the bounds, but the loss-aware rule accepts "
           "under 99 % of it, and the report warns to review the history before using the facts",
           rc == 0 and "WARNING" in out and "review it before using these facts" in out and "NOT USABLE" not in out, out[:1500])
     outside = {"joint": {"a_pos": 0.80, "a_neg": 1.30, "c": -200.0}}
@@ -348,7 +348,7 @@ with tempfile.TemporaryDirectory() as td:
     check("non-positive slopes are reported as not usable", fit.conversion_from(pf2["facts"], pf2["problems"]) is None and len(pf2["problems"]) >= 2)
     check("the bounds the tool uses are the engine's",
           fit.INVERTER_FACTOR_BOUNDS == sd.INVERTER_FACTOR_BOUNDS and fit.INVERTER_STANDBY_BOUNDS_W == sd.INVERTER_STANDBY_BOUNDS_W
-          and fit.STRESS == sd.InverterConversion(0.85, 0.85, 150.0))
+          and fit.STRESS == sd.InverterConversion(0.90, 0.90, 100.0))
     rc, out, err = run_main(["csv", "--file", str(tdp / "nothing.csv")])
     check("the command line exits 2 on a refusal, with the reason on stderr and nothing on stdout", rc == 2 and out == "" and "not a file" in err)
     rc, out, err = run_main(["csv", "--file", str(tdp / "epoch.csv"), "--max-samples", "5"])

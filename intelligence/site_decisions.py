@@ -251,12 +251,27 @@ PROPOSED = ProposedThresholds()
 # power_balance_fit.py), never an owner decision. Present = all three, each inside its bound; anything else is reported
 # (POWER_LOSS_FACTS_INVALID) and the lossless balance stays in force: an invalid fact never loosens the check.
 INVERTER_CONVERSION_FACTS = ("inverter_dc_to_ac_factor", "inverter_ac_to_dc_factor", "inverter_standby_w")
-INVERTER_FACTOR_BOUNDS = (0.85, 1.0)             # both conversion factors, inclusive
-INVERTER_STANDBY_BOUNDS_W = (0.0, 150.0)         # the inverter's own draw, inclusive
+# The bounds are deliberately narrow: they are the limit on how wrong an in-bounds but mistaken set of facts can be, next to
+# the balance tolerance (the larger of 100 W and 5 % of the largest magnitude). At the loosest allowed set (0.90, 0.90, 100 W)
+# the expectation sits 10 % (discharge side) or 11.1 % (charge side) of the net DC-side power, plus 100 W, away from the
+# lossless sum (DATA_QUALITY_METHOD.md 10.1 quantifies what that can hide); a wider bound would hide more. The facts must come
+# from the fitting tool, never be guessed.
+INVERTER_FACTOR_BOUNDS = (0.90, 1.0)             # both conversion factors, inclusive
+INVERTER_STANDBY_BOUNDS_W = (0.0, 100.0)         # the inverter's own draw, inclusive
 
 
 def _conversion_bounds(name: str) -> tuple[float, float]:
     return INVERTER_STANDBY_BOUNDS_W if name == "inverter_standby_w" else INVERTER_FACTOR_BOUNDS
+
+
+def _in_bounds(name: str, v: object) -> bool:
+    """True only for a finite number inside the fact's bound (inclusive). An integer too large for a float (finite_number
+    raises OverflowError for it) is a number far outside every bound, so it is simply not in bounds: never an exception."""
+    lo, hi = _conversion_bounds(name)
+    try:
+        return bool(finite_number(v) and lo <= v <= hi)
+    except OverflowError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -265,7 +280,8 @@ class InverterConversion:
     that reaches the AC side when that net power is positive), `ac_to_dc` (the share of the AC power that reaches the DC
     side when the net DC-side power is negative, i.e. the battery charges from the AC side) and `standby_w` (the inverter's
     own draw, taken off the AC side). The default is lossless (1, 1, 0 W): the expectation is then exactly PV + battery +
-    grid. Construction refuses a value outside its bound (use `inverter_conversion` to judge site facts)."""
+    grid. Construction refuses a value outside its bound with a ValueError, also an integer too large for a float (use
+    `inverter_conversion` to judge site facts: it reports instead of raising)."""
     dc_to_ac: float = 1.0
     ac_to_dc: float = 1.0
     standby_w: float = 0.0
@@ -273,8 +289,8 @@ class InverterConversion:
     def __post_init__(self) -> None:
         for name, v in (("inverter_dc_to_ac_factor", self.dc_to_ac), ("inverter_ac_to_dc_factor", self.ac_to_dc),
                         ("inverter_standby_w", self.standby_w)):
-            lo, hi = _conversion_bounds(name)
-            if not (finite_number(v) and lo <= v <= hi):
+            if not _in_bounds(name, v):
+                lo, hi = _conversion_bounds(name)
                 raise ValueError(f"{name} must be a finite number from {lo} to {hi}")
 
     @property
@@ -304,8 +320,9 @@ def inverter_conversion(facts: object) -> tuple[InverterConversion, tuple[str, .
     """(the conversion the balance check applies, the problems), judged from a SiteFacts (any object: a missing attribute
     reads as absent). All three facts absent (None): (lossless, ()). All three present, finite numbers inside their bounds
     (inclusive): (that conversion, ()). Anything else (a partial set, a value that is not a finite number, a value outside
-    its bound): (LOSSLESS, ("<fact>:<missing | not_a_number | out_of_bounds>", ...)), so the stricter, lossless check stays
-    in force and the caller reports the problem. A problem names the fact and the reason, never the value."""
+    its bound, an integer too large for a float, which is out_of_bounds): (LOSSLESS, ("<fact>:<missing | not_a_number |
+    out_of_bounds>", ...)), so the stricter, lossless check stays in force and the caller reports the problem. A problem
+    names the fact and the reason, never the value. It never raises, whatever the facts hold."""
     raw = {n: getattr(facts, n, None) for n in INVERTER_CONVERSION_FACTS}
     if all(v is None for v in raw.values()):
         return LOSSLESS_CONVERSION, ()
@@ -313,12 +330,16 @@ def inverter_conversion(facts: object) -> tuple[InverterConversion, tuple[str, .
     for name, v in raw.items():
         if v is None:
             problems.append(f"{name}:missing")
-        elif not finite_number(v):
+            continue
+        try:
+            numeric = finite_number(v)
+        except OverflowError:                 # an integer too large for a float: a number, far outside every bound
+            problems.append(f"{name}:out_of_bounds")
+            continue
+        if not numeric:
             problems.append(f"{name}:not_a_number")
-        else:
-            lo, hi = _conversion_bounds(name)
-            if not lo <= v <= hi:
-                problems.append(f"{name}:out_of_bounds")
+        elif not _in_bounds(name, v):
+            problems.append(f"{name}:out_of_bounds")
     if problems:
         return LOSSLESS_CONVERSION, tuple(problems)
     return InverterConversion(float(raw["inverter_dc_to_ac_factor"]), float(raw["inverter_ac_to_dc_factor"]),

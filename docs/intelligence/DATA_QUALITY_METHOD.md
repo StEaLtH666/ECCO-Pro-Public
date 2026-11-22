@@ -306,13 +306,13 @@ file is placed with `tools/place-ha-site-file.ps1`, which needs no change):
 
 | Site fact | Meaning | Bound (inclusive) |
 |---|---|---|
-| `inverter_dc_to_ac_factor` | share of the net DC-side power that reaches the AC side while d >= 0 | 0.85 to 1.0 |
-| `inverter_ac_to_dc_factor` | share of the AC power that reaches the DC side while d < 0 | 0.85 to 1.0 |
-| `inverter_standby_w` | the inverter's own draw, taken off the AC side | 0 to 150 W |
+| `inverter_dc_to_ac_factor` | share of the net DC-side power that reaches the AC side while d >= 0 | 0.90 to 1.0 |
+| `inverter_ac_to_dc_factor` | share of the AC power that reaches the DC side while d < 0 | 0.90 to 1.0 |
+| `inverter_standby_w` | the inverter's own draw, taken off the AC side | 0 to 100 W |
 
 All three absent (or null) means the lossless balance, the default, so every existing test and every installed site behaves
 as before until its site file carries them. Present means all three, each a finite number inside its bound. Anything else
-(one or two of the three, a string, true or false, a list, an object, a number outside its bound) is reported and never
+(one or two of the three, a string, true or false, a list, an object, a number outside its bound, an integer too large for a float) is reported and never
 read as a looser rule: the runtime's loader WARNs `SITE_INVERTER_CONVERSION` (naming no value; the fact names and reasons go
 to the debug detail), `tools/ecco_intel_drill.py site-check` reports PROBLEMS and shows export_event and dump_to_grid as
 BLOCKED with `POWER_LOSS_FACTS_INVALID`, and the engine BLOCKs those two items with `POWER_LOSS_FACTS_INVALID` while still
@@ -333,7 +333,7 @@ bounds. The tool's output holds site values: keep it with the site's offline evi
 **What it guarantees, and what it does not.** A rule whose expectation is wrong by less than half the tolerance at a sample
 cannot hide a sign reversal of at least the tolerance on it (a reversal moves the expectation by twice the reversed
 reading), and `test_intel_power_balance.py` checks this over random sets. The bounds, however, allow errors larger than
-that: at the loosest values the bounds permit (both factors 0.85, standby 150 W) some reversals can pass, which is why the
+that: at the loosest values the bounds permit (both factors 0.90, standby 100 W) some reversals can pass, which is why the
 values must come from the fit and the fault-injection row of the report must be read, not assumed. A reversal that leaves
 the sum unchanged (the grid charging the battery: grid and battery cancel) is invisible to any balance rule, lossless or not.
 The balance is checked on instantaneous readings; the history rules in this document are separate. Clearing the balance BLOCK
@@ -359,7 +359,7 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
 | `soc_agree_points` (S0) | 2 points | one SOC step either way |
 | `protection_margin_pct` | 10 points | export and Dump advice withheld this close to the protection level |
 | `power_agree_w`, `power_agree_fraction` (S0) | 100 W, 5 % | the live power-balance tolerance: the larger of the two |
-| `INVERTER_FACTOR_BOUNDS`, `INVERTER_STANDBY_BOUNDS_W` (`site_decisions`) | 0.85 to 1.0; 0 to 150 W | the bounds of the optional inverter conversion site facts (section 10.1): PROPOSED limits on how far the expectation may move from the lossless sum (a loss of at most 15 % of the net DC-side power and an own draw of at most 150 W); a value outside is reported, never used |
+| `INVERTER_FACTOR_BOUNDS`, `INVERTER_STANDBY_BOUNDS_W` (`site_decisions`) | 0.90 to 1.0; 0 to 100 W | the bounds of the optional inverter conversion site facts (section 10.1): PROPOSED limits on how far the expectation may move from the lossless sum (a loss of at most 10 % of the net DC-side power, 11.1 % on the charge side, and an own draw of at most 100 W); a value outside is reported, never used. Tightened from 0.85 / 150 W after an independent review showed that wide bounds let a wrong but in-bounds set hide real faults |
 | `load_zero_max_w`, `load_false_zero_flow_w` | 0.5 W, 150 W | HD1's rule: a native zero is false when inverter + grid exceed 150 W ([`../HOUSE_LOAD_HD1.md`](../HOUSE_LOAD_HD1.md)) |
 | `clock_offset_warn_s` | 30 s | the firmware's background clock-correction floor |
 | `clock_offset_block_s` | 30 s | equal to the warning bound: any offset worth a warning refuses a TOU-derived charge window (the work order's "WARN; BLOCK a charge window derived from the TOU slot table", read in the direction that blocks more; the firmware's 120 s correction threshold is not used) |

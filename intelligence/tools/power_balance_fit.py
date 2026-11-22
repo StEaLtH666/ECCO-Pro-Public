@@ -5,7 +5,7 @@ The live balance check (intelligence/quality.py, power_balance_verdict) expects 
 power are DC-side readings and the house power is the inverter's AC output plus the grid CT, so on a real inverter the
 house power falls short of that sum by the conversion loss and the inverter's own draw. The check can allow for it through
 three OPTIONAL site facts (site_decisions.InverterConversion): inverter_dc_to_ac_factor, inverter_ac_to_dc_factor and
-inverter_standby_w, each bounded (factors 0.85 to 1.0, standby 0 to 150 W). This tool fits them from a history, so they
+inverter_standby_w, each bounded (factors 0.90 to 1.0, standby 0 to 100 W). This tool fits them from a history, so they
 can be recalibrated for a site and a season. It reads files you name, prints a report and writes nothing, calls nothing and
 needs no network or Home Assistant access. The values it prints are PROPOSED engineering parameters of one site, not owner
 decisions: keep its output with the site's offline evidence, never in a repository.

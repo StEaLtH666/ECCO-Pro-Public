@@ -710,7 +710,7 @@ Notes on the example:
   installed: a mapped helper that is missing, unavailable, non-numeric or outside
   0..100 BLOCKs the reserve items (`PREF_RESERVE_RAISE_UNKNOWN`). Unmapped means no raise.
 - `site.inverter_dc_to_ac_factor`, `site.inverter_ac_to_dc_factor` and `site.inverter_standby_w` are optional and all or nothing: the
-  calibrated inverter conversion of the live power balance (factors 0.85 to 1.0, standby 0 to 150 W; the fitting tool
+  calibrated inverter conversion of the live power balance (factors 0.90 to 1.0, standby 0 to 100 W; the fitting tool
   `intelligence/tools/power_balance_fit.py` proposes them from recorded history). Without them the balance is lossless as
   before. They are PROPOSED engineering parameters of one site, never owner decisions, and never enter a repository.
 - `reserve.ha_minimum_soc` (signal) is needed only when I-D1 takes its value from the Home Assistant reserve helper

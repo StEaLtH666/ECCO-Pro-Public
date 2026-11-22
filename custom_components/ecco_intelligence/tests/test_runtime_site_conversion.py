@@ -45,7 +45,7 @@ spec.loader.exec_module(D)
 FAILURES: list[str] = []
 CODE = "SITE_INVERTER_CONVERSION"
 FACTS = ("inverter_dc_to_ac_factor", "inverter_ac_to_dc_factor", "inverter_standby_w")
-GOOD = {"inverter_dc_to_ac_factor": 0.9, "inverter_ac_to_dc_factor": 0.92, "inverter_standby_w": 40}
+GOOD = {"inverter_dc_to_ac_factor": 0.92, "inverter_ac_to_dc_factor": 0.94, "inverter_standby_w": 40}
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -94,14 +94,14 @@ check("the other load checks do not change with a valid set (the same codes, plu
 print("== [2] valid keys")
 ok = load(GOOD)
 check("a valid set: the PASS check, the facts carried as numbers",
-      level(ok) == "PASS" and [getattr(ok.site_facts, f) for f in FACTS] == [0.9, 0.92, 40.0]
+      level(ok) == "PASS" and [getattr(ok.site_facts, f) for f in FACTS] == [0.92, 0.94, 40.0]
       and all(isinstance(getattr(ok.site_facts, f), float) for f in FACTS), str([(c.code, c.level) for c in ok.checks]))
 check("... the engine's judgement of them is the conversion, no problem",
-      sd.inverter_conversion(ok.site_facts) == (sd.InverterConversion(0.9, 0.92, 40.0), ()))
+      sd.inverter_conversion(ok.site_facts) == (sd.InverterConversion(0.92, 0.94, 40.0), ()))
 check("... the PASS text names no value", not any(ch.isdigit() for ch in text(ok)), text(ok))
-edge = load({"inverter_dc_to_ac_factor": 0.85, "inverter_ac_to_dc_factor": 1, "inverter_standby_w": 150})
-check("values exactly at the bounds load as PASS (inclusive; integers carried as numbers)",
-      level(edge) == "PASS" and sd.inverter_conversion(edge.site_facts)[1] == ())
+edge = load({"inverter_dc_to_ac_factor": 0.9, "inverter_ac_to_dc_factor": 1, "inverter_standby_w": 100})
+check("values exactly at the bounds (0.90, 1, 100 W) load as PASS (inclusive; integers carried as numbers)",
+      level(edge) == "PASS" and sd.inverter_conversion(edge.site_facts) == (sd.InverterConversion(0.9, 1.0, 100.0), ()))
 zero = load({"inverter_dc_to_ac_factor": 1, "inverter_ac_to_dc_factor": 1, "inverter_standby_w": 0})
 check("explicit lossless values (1, 1, 0) load as PASS and the engine treats them as lossless",
       level(zero) == "PASS" and sd.inverter_conversion(zero.site_facts)[0].lossless)
@@ -112,7 +112,9 @@ INVALID = {
     "two keys": {"inverter_dc_to_ac_factor": 0.8123, "inverter_ac_to_dc_factor": 0.9},
     "a factor above 1": {**GOOD, "inverter_dc_to_ac_factor": 1.0377},
     "a factor below the bound": {**GOOD, "inverter_ac_to_dc_factor": 0.8123},
+    "a factor just below the bound": {**GOOD, "inverter_dc_to_ac_factor": 0.8945},
     "a standby above the bound": {**GOOD, "inverter_standby_w": 777.5},
+    "a standby just above the bound": {**GOOD, "inverter_standby_w": 100.5},
     "a negative standby": {**GOOD, "inverter_standby_w": -12.5},
     "a string": {**GOOD, "inverter_standby_w": "forty-two"},
     "a numeric string": {**GOOD, "inverter_dc_to_ac_factor": "0.9123"},
@@ -121,7 +123,7 @@ INVALID = {
     "an object": {**GOOD, "inverter_standby_w": {"w": 40.123}},
     "a null among valid values": {**GOOD, "inverter_standby_w": None},
 }
-LITERALS = ("0.8123", "1.0377", "777.5", "12.5", "forty-two", "0.9123", "40.123")
+LITERALS = ("0.8123", "1.0377", "777.5", "12.5", "forty-two", "0.9123", "40.123", "0.8945", "100.5")
 for label, extra in INVALID.items():
     sl = load(extra)
     facts = [getattr(sl.site_facts, f) for f in FACTS]
@@ -145,6 +147,17 @@ nonfinite = gates.load_site(b'{"site": {"inverter_standby_w": NaN}}')
 check("a NaN literal is refused by the loader's own non-finite rule (SITE_FILE FAIL) as for any other number",
       level(nonfinite, "SITE_FILE") == "FAIL")
 check("a refused site file does not raise on the conversion keys", isinstance(gates.load_site(b'["x"]'), gates.SiteLoad))
+huge_raw = b'{"site": {"inverter_standby_w": 1' + b"0" * 400 + b"}}"
+huge_file = gates.load_site(huge_raw)
+check("an integer beyond the double range in the site file is refused by the loader's own rule (SITE_FILE FAIL, no value named), "
+      "not raised", level(huge_file, "SITE_FILE") == "FAIL" and level(huge_file) is None
+      and not any("0" * 20 in c.text for c in huge_file.checks))
+huge_facts, _cfg = gates._facts({"site": {"inverter_standby_w": 10 ** 400, "inverter_dc_to_ac_factor": 0.95,
+                                          "inverter_ac_to_dc_factor": 0.95}}, 51.5, -0.1)
+check("the facts builder itself never raises on such an integer (a profile that did not come through the loader): carried as NaN, "
+      "which the engine reports as a fact that is not a number, never as absent and never as usable",
+      isinstance(huge_facts.inverter_standby_w, float) and math.isnan(huge_facts.inverter_standby_w)
+      and sd.inverter_conversion(huge_facts) == (sd.LOSSLESS_CONVERSION, ("inverter_standby_w:not_a_number",)))
 
 print("== [4] site-check")
 raw_none = json.dumps(profile()).encode()
