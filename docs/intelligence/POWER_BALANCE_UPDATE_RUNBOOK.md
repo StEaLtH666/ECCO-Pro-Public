@@ -112,9 +112,10 @@ the commit was built on top of, the difference is read and explained before any 
 - **The status entity's `config_hash` attribute** changes when the new site file is loaded (the diagnostics download redacts it).
 - Nothing else: no new entity, no new log line at the usual level (the fact names and reasons of an invalid set go to the debug
   log only), no new table.
-- **If U2 is installed**, its advice log keeps its own bounds. The Dump to Grid rows it logs are then real advice instead of
-  withheld rows from the day this update takes effect, which gives the Ghost block (diagnostics only) something to compare; its
-  30 s read budget has not been measured with such content.
+- **If U2 is installed**, its advice log keeps its own bounds and writes the same number of rows. The Dump to Grid rows it logs
+  are then real advice instead of withheld rows from the day this update takes effect. The Ghost block simulates charge-target
+  advice only and counts Dump advice as not followed (U2's own limit), so this update changes nothing in the Ghost comparison;
+  the logged Dump rows only become real data for a later revision.
 
 ### 2.4 The write statement
 
@@ -259,13 +260,14 @@ kit, which is what a rollback restores, refuses a site file that carries these t
 previous loader (`runtime/gates.py`, `load_site`) reads the site file as one JSON object and takes from its `site` block only the
 PV array size (and notes two reserve hints); the only strict parts are the `decisions` block and the `shadow_runtime` entity map;
 no code in the previous loader rejects, counts or reports another key of the `site` block. The new loader reads the three keys by
-name and adds one check. One offline experiment of this preparation (scratch only, synthetic data, not a repository suite) ran the
+name and adds one check. One offline experiment of this preparation (scratch only, synthetic data) ran the
 merged base's loader on a site file whose `site` block held the three keys valid, partial, out of bounds, of the wrong types and
 null: every load gave no FAIL, no extra check and the same decisions, entity map and array size as the file without them. The
 Ghost update's loader is the same file as the merged base's (checked by a diff during this preparation, recorded and not pinned), so
 the reading holds whether U2 is installed or not. The suite pins what makes it true of the new tree (the keys are read only by name,
-no code refuses an unknown key of the `site` block) and, where the merged base's commit is present in the checkout, repeats the
-experiment on it and compares the previous kit's loader hash with the one step 1 reads. The reading is about the loader, not about
+no code refuses an unknown key of the `site` block) and, where the checkout holds the history before this change, repeats the
+experiment on that tree and compares the previous kit's loader hash with the one step 1 reads; in a checkout without that history (a
+shallow clone) the suite prints SKIP for these two checks and counts them as neither a pass nor a failure. The reading is about the loader, not about
 the whole previous integration: P1(d) must show the previous kit as a whole on such a file, in a real Home Assistant.
 
 **So no order refuses a file or fails a start-up from this cause.** The new kit with the unchanged site file is the old rule bit for
@@ -765,8 +767,9 @@ Wait for at least the next two slot times (allow about two and a half hours), th
 (change `$F`), and the log again with `-Pattern ecco_intelligence` into `log-after.txt`. **Read while PV or battery power is
 large**, as the baseline was: with little flow the old rule passed too and a clean read proves nothing. Expected, and each a check:
 
-1. **Status SHADOW with a fresh computed result.** `status` is a computed one, `mode` SHADOW, `applies_nothing` true; no
-   `SELF_TEST_FAILED`; `budget_exceeded` and `exceptions` 0; `SITE_INVERTER_CONVERSION` still PASS.
+1. **Status as in the baseline, SHADOW, fresh.** `status` is the computed status the baseline showed (OK while the inputs are
+   fresh), `mode` SHADOW, `applies_nothing` true; no `SELF_TEST_FAILED`; `budget_exceeded` and `exceptions` 0;
+   `SITE_INVERTER_CONVERSION` still PASS.
 2. **The two outputs.** The `blockers` of the Dump to Grid output and of the export-event output no longer contain
    `POWER_BALANCE_INCONSISTENT`, and contain neither `CT_SIGN_REVERSED`, `BATTERY_SIGN_REVERSED` nor `POWER_LOSS_FACTS_INVALID`, at the
    reads where the baseline showed the first. They may still read unknown for another reason, with another blocker (a decision

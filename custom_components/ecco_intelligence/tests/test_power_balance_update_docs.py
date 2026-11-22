@@ -14,8 +14,8 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
       kit, every placement line carries the flags it needs and the placement is shown with and without -Plan
   [3] the kit: tools/build_ha_integration.py is run into temporary directories (outside the repository), with no commit and with the
       fixed reference commit; the two SHA256SUMS sha256 values, the file counts and the changed file names the documents state are
-      those the build produces; where the merged base's commit is in the checkout, the base kit is built too and the documents'
-      "none new, none removed, five changed" and the pinned hash of the previous loader are compared with it
+      those the build produces; where the checkout holds the history before this change, the previous kit is built too and the
+      documents' "none new, none removed, five changed" and the pinned hash of the previous loader are compared with it
   [4] numbers: the bounds (0.90 to 1.0, 0 to 100 W), the fact names, the tolerance, the exposure figures at 5 kW, the rule-set version
       and the blocker codes are those of the sources, EVERY mention of a bound equals the source, and no calibrated-looking decimal
       (three or more decimals) is in either document: the facts are site values
@@ -23,7 +23,7 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
       the rollback takes the facts out first; the documents give the reasons (the facts are the loosening step; the previous loader
       does not refuse them; the facts take effect only at a reload or a restart) and the sources make them true (the loader reads
       the three keys by name only, nothing refuses an unknown key of the site block, the placement tool says it takes effect only at
-      a reload or a restart); where the merged base's commit is in the checkout, the previous loader is run on site files that carry
+      a reload or a restart); where the checkout holds the history before this change, the previous loader is run on site files that carry
       the facts and must load them exactly as without
   [6] no automatic restart or reload: no restart flag or command in any block, the deploy tool has no restart parameter, the
       restart is the owner's, once, approved separately, the reload is its own approval and is not a restart
@@ -60,8 +60,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
 
 Usage: python custom_components/ecco_intelligence/tests/test_power_balance_update_docs.py [--docs-root DIR]
 --docs-root names another folder to read the two documents from (this is how the suite is shown to fail on missing or stub documents).
-Test-only, no network. Reads repository files, builds into temporary directories and removes them. The checks that need the merged
-base's commit print SKIP (and count as neither a pass nor a failure) where the checkout does not hold it.
+Test-only, no network. Reads repository files, builds into temporary directories and removes them. The checks that need the tree just
+before this change (found from the git history with a pickaxe search, never by a commit id written here) print SKIP, and count as neither
+a pass nor a failure, where the checkout does not hold that history (a shallow clone).
 """
 
 from __future__ import annotations
@@ -125,7 +126,6 @@ TOOL_KEYS = {"build_ha_integration.py": "build", "ecco_intel_drill.py": "drill",
 PY_TOOLS = ("build", "drill", "fit", "runoff")
 PS_TOOLS = ("deploy", "place", "status", "logs")
 FIXED_SHA = "0000000"                 # the fixed reference commit of the second build (not a commit: a placeholder)
-BASE_COMMIT = "c6e5a588a62aad03597d1233d119eefb895990cc"     # the merged base this branch was made on (public history)
 BASE_KIT_SUMS = "47391f0d67144739774034e471486814dae2fd47229a130aae8109968a70ee40"   # the base kit, no commit recorded; not pinned
 BASE_GATES_SHA = "659239f3cca7393d3e82b779a504075c9b6291403195923757712016f591305b"  # runtime/gates.py in the base kit (and in U2's)
 OPEN_AT_WRITING = ("P1", "P3", "P4", "P5", "P6", "P7", "P9")
@@ -503,7 +503,7 @@ def rule_order(rb, cl, S, F):
                    "last on the way in and go first on the way out", "The facts take effect only at a reload or a restart",
                    "the integration reads the site file at start-up and at a reload only",
                    "The rollback runs the other way", "the facts out first", "then the previous kit, then one restart",
-                   "the other order is allowed, not recommended", "not a repository suite", "no code in the previous loader rejects"):
+                   "the other order is allowed, not recommended", "the suite prints SKIP for these two checks", "no code in the previous loader rejects"):
         if not has(s71, phrase):
             pr.append(f"runbook 7.1 lacks '{phrase}'")
     if not has(rb, "last in, first out") and not has(cl, "last in, first out"):
@@ -1319,14 +1319,31 @@ def run_probe(tree: Path, scratch: Path) -> dict | None:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-def old_tree_facts(base: Path, kit_fixed: Path) -> dict | None:
-    """The merged base's commit, if the checkout holds it: its loader run on site files that carry the facts, and its kit compared with
-    this one (none new, none removed, the five changed files, the previous loader's hash). None when the commit is not here."""
+def previous_commit() -> str | None:
+    """The commit just before the one that introduced the inverter facts (the merged base while this branch is unmerged, main before
+    the change after a squash merge), found from the history and never named here (no document or test of the runtime carries a commit
+    id). None where the checkout does not hold that history (a shallow clone)."""
     try:
-        r = subprocess.run(["git", "-C", str(REPO), "cat-file", "-e", BASE_COMMIT + "^{commit}"], capture_output=True, timeout=60)
-        if r.returncode != 0:
+        r = subprocess.run(["git", "-C", str(REPO), "log", "--format=%H", "-S", "INVERTER_CONVERSION_FACTS", "--", "intelligence/site_decisions.py"],
+                           capture_output=True, text=True, timeout=120)
+        shas = r.stdout.split()
+        if r.returncode != 0 or not shas:
             return None
-        arc = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", BASE_COMMIT], capture_output=True, timeout=300)
+        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", shas[-1] + "^"], capture_output=True, text=True, timeout=60)
+        out = p.stdout.strip()
+        return out if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def old_tree_facts(base: Path, kit_fixed: Path) -> dict | None:
+    """The tree just before this change, if the checkout holds that history: its loader run on site files that carry the facts, and its
+    kit compared with this one (none new, none removed, the five changed files, the previous loader's hash). None when it is not here."""
+    prev = previous_commit()
+    if prev is None:
+        return None
+    try:
+        arc = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", prev], capture_output=True, timeout=300)
         if arc.returncode != 0:
             return None
     except (OSError, subprocess.SubprocessError):
@@ -1431,7 +1448,7 @@ def make_mutants(F):
     add("rb", "'Kit first, one restart, then the facts' removed", lambda t: t.replace("Kit first, one restart, then the facts", "The facts first"), "order")
     add("rb", "the loosening-step reason removed", lambda t: t.replace("The facts are the loosening step", "The facts are a step"), "order")
     add("rb", "the reload-or-restart reason removed", lambda t: t.replace("The facts take effect only at a reload or a restart", "The facts take effect at once"), "order")
-    add("rb", "the old-loader experiment no longer labelled as not a suite", lambda t: t.replace("not a repository suite", "a repository suite"), "order")
+    add("rb", "the suite's repeat of the old-loader experiment no longer said to skip honestly", lambda t: t.replace("the suite prints SKIP for these two checks", "the suite always runs these two checks"), "order")
     add("cl", "the checklist's reason dropped", lambda t: t.replace("the previous kit does not refuse the facts", "the previous kit may refuse the facts"), "order")
     add("cl", "the checklist's rollback takes the kit out before the facts (RB2 and RB4 swapped in the text)",
         lambda t: sub1(sub1(sub1(t, "2. **RB2 the facts out:**", "2. **RB9 the facts out:**"), "4. **RB4 restore the previous", "4. **RB2 restore the previous"), "**RB9 the facts out:**", "**RB4 the facts out:**"), "rollback")
@@ -1673,12 +1690,12 @@ try:
           own_bytes.isascii() and not IPV4_RE.search(own) and not TOKEN_RE.search(own) and not ENTITY_RE.search(own)
           and not PATH_RE.search(own))
 
-    print("== the merged base's commit (the previous loader), where this checkout holds it")
+    print("== the tree just before this change (the previous loader), where this checkout holds the history")
     old = old_tree_facts(base, F["kit"]["dir"])
     if old is None:
-        skip("the previous loader loads site files that carry the facts exactly as without them", "the merged base's commit is not in this checkout")
+        skip("the previous loader loads site files that carry the facts exactly as without them", "the history before this change is not in this checkout")
         skip("the previous kit differs from this one by exactly the five files the documents name, and its loader has the pinned hash",
-             "the merged base's commit is not in this checkout")
+             "the history before this change is not in this checkout")
     else:
         po, pn = old["old"], old["new"]
         ok_old = bool(po) and "error" not in po and all(v["fail"] == [] and v["added"] == [] and v["same"] for v in po.values())
@@ -1734,4 +1751,4 @@ if FAILURES:
     for f_ in FAILURES:
         print("  -", f_)
     sys.exit(1)
-print("all power-balance update documents checks passed" + (f" ({len(SKIPPED)} skipped: the merged base's commit is not in this checkout)" if SKIPPED else ""))
+print("all power-balance update documents checks passed" + (f" ({len(SKIPPED)} skipped: the history before this change is not in this checkout)" if SKIPPED else ""))
