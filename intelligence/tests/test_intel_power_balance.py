@@ -20,6 +20,8 @@ value.
   [6] a wrong (too generous) conversion cannot hide a sign reversal at the tested powers, and a conversion whose
       expectation is wrong by less than half the tolerance can never hide a reversal of at least the tolerance
   [7] mutants: each deliberately wrong variant of the rule is told apart from the rule by this suite's case table
+  [8] the native-load false zero with the facts configured: it stays on the lossless flow (a table of cases with no facts, the
+      synthetic inverter and the loosest facts the bounds allow; a seeded sweep over six conversions)
 """
 
 from __future__ import annotations
@@ -606,6 +608,85 @@ check(f"every one of the {len(MUTANTS)} mutants is killed by the case table", no
 equiv = make_verdict(lambda p, b, g: g + (DC_AC * (p + b) if (p + b) > 0 else (p + b) / AC_DC) - STANDBY)
 check("the one equivalent mutant (d > 0 instead of d >= 0: both sides are equal at d = 0) is correctly NOT killed",
       not killed_by_table(equiv))
+
+print("== [8] the native-load false zero with the facts configured (it stays on the lossless flow, on purpose)")
+# LOAD_FALSE_ZERO (HD1): a house load reading zero (|h| <= 0.5 W) while the lossless flow PV + battery + grid exceeds 150 W. The
+# rule does not use the conversion. Why that is safe: for every conversion inside the bounds the expectation is at most the
+# lossless flow (the inverter's loss and own draw only take power away from the AC side), so a zero reading that passes can
+# never hide more than the flow, which is at most 150 W: HD1's own documented margin. The conversion can only move the
+# balance verdict that follows; it never lets a zero past that the lossless flow would stop.
+WIDE = replace(cf.FACTS, inverter_dc_to_ac_factor=LO_F, inverter_ac_to_dc_factor=LO_F, inverter_standby_w=HI_S)   # the loosest
+ZERO_CODES = BALANCE_CODES | {"LOAD_FALSE_ZERO", "HOUSE_POWER_NEGATIVE", "POWER_LOSS_FACTS_INVALID"}
+
+
+def zero_codes(res: q.QualityResult) -> set[str]:
+    return h.codes(res, "BLOCK") & ZERO_CODES
+
+
+LFZ = {"LOAD_FALSE_ZERO"}
+INC = {"POWER_BALANCE_INCONSISTENT"}
+# (label, house, pv, battery, grid, {facts label: the BLOCK codes of the power rules}); N = none, F = the synthetic inverter,
+# W = the loosest facts the bounds allow (0.90, 0.90, 100 W). The expectations are written out by hand from the rule's text.
+LFZ_TABLE = [
+    ("the reviewer's case: a native zero, the battery charging 500 W from a 650 W import (lossless flow exactly 150 W, not above)",
+     0.0, 0.0, -500.0, 650.0, {"N": INC, "F": set(), "W": set()}),
+    ("... 50 W more import (flow 200 W): the zero is false whatever the facts", 0.0, 0.0, -500.0, 700.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+    ("flow exactly at the threshold, nothing else flowing (150 W import): not a false zero; the balance decides",
+     0.0, 0.0, 0.0, 150.0, {"N": INC, "F": INC, "W": set()}),
+    ("idle at the largest standby, 200 W import: the zero rule blocks (flow 200 W), though the loosest facts would balance it "
+     "at 100 W of real load", 0.0, 0.0, 0.0, 200.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+    ("idle at the largest standby, 160 W import (the model says 60 W of real load): still the zero rule, on the lossless flow "
+     "(conservative: it can only block more)", 0.0, 0.0, 0.0, 160.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+    ("idle, 100 W import: the flow is under the threshold and the balance holds (loss-aware or lossless)",
+     0.0, 0.0, 0.0, 100.0, {"N": set(), "F": set(), "W": set()}),
+    ("a discharge of 1000 W with the house reading zero", 0.0, 0.0, 1000.0, 0.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+    ("PV 2000 W exported, house reading zero (flow 0 W): the balance decides, and 2000 W less 8 % does not balance zero",
+     0.0, 2000.0, 0.0, -2000.0, {"N": set(), "F": INC, "W": INC}),
+    ("a reading of exactly 0.5 W counts as zero", 0.5, 0.0, 1000.0, 0.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+    ("a reading of 0.51 W does not: the balance decides", 0.51, 0.0, 1000.0, 0.0, {"N": INC, "F": INC, "W": INC}),
+    ("a reading of -0.5 W counts as zero (a negative load needs more than 0.5 W)", -0.5, 0.0, 1000.0, 0.0, {"N": LFZ, "F": LFZ, "W": LFZ}),
+]
+FACT_SETS = {"N": None, "F": FACTS, "W": WIDE}
+for label, hw, p, b, g, want in LFZ_TABLE:
+    for key, fx in FACT_SETS.items():
+        r = assess(base, sig(hw, p, b, g), fx)
+        got = zero_codes(r)
+        flows = [dict(f.evidence).get("flow_w") for f in r.findings if f.code == "LOAD_FALSE_ZERO"]
+        check(f"{label} [{key}]: {sorted(want[key]) or 'no power finding'}",
+              got == want[key] and (not want[key] & LFZ or flows and set(flows) == {round(p + b + g, 1)}), str((sorted(got), flows)))
+check("the evidence of a false zero is the lossless flow whatever the facts (flow_w 200.0), and it names no balance",
+      all(dict(f.evidence) == {"flow_w": 200.0} for key in FACT_SETS
+          for f in assess(base, sig(0.0, 0.0, -500.0, 700.0), FACT_SETS[key]).findings if f.code == "LOAD_FALSE_ZERO"))
+# the property: the false-zero decision does not depend on the facts, and a conversion inside the bounds never expects more
+# than the lossless flow
+rng8 = random.Random(8128)
+convs8 = [sd.InverterConversion(LO_F, LO_F, HI_S), sd.InverterConversion(HI_F, HI_F, LO_S), sd.InverterConversion(LO_F, HI_F, HI_S),
+          sd.InverterConversion(HI_F, LO_F, LO_S), CONV, sd.InverterConversion(0.95, 0.97, 60.0)]
+dec_diff, silent, above, n8, n_zero = [], [], [], 0, 0
+for i in range(2400):
+    hw = rng8.choice((0.0, 0.0, 0.3, -0.5, 0.5, 0.51, rng8.uniform(-0.5, 0.5)))
+    p = rng8.choice((0.0, rng8.uniform(0, 6000)))
+    b = rng8.uniform(-3000, 3000)
+    g = rng8.choice((rng8.uniform(-3000, 3000), 150.0 - p - b, 150.0 - p - b + 0.5, 150.0 - p - b - 0.5))
+    flow = p + b + g
+    cv = convs8[i % len(convs8)]
+    fx = replace(cf.FACTS, inverter_dc_to_ac_factor=cv.dc_to_ac, inverter_ac_to_dc_factor=cv.ac_to_dc, inverter_standby_w=cv.standby_w)
+    r = assess(base, sig(hw, p, b, g), fx)
+    r0 = assess(base, sig(hw, p, b, g))
+    n8 += 1
+    is_zero = abs(hw) <= 0.5
+    n_zero += is_zero
+    if ("LOAD_FALSE_ZERO" in zero_codes(r)) != ("LOAD_FALSE_ZERO" in zero_codes(r0)) or ("LOAD_FALSE_ZERO" in zero_codes(r)) != (is_zero and flow > 150.0):
+        dec_diff.append((hw, p, b, g, cv))
+    if is_zero and not zero_codes(r) and flow > 150.0:
+        silent.append((hw, p, b, g, cv))                              # a native zero over the HD1 margin that nothing reported
+    if cv.expected_house_w(p, b, g) > flow + 1e-9:
+        above.append((p, b, g, cv))
+check(f"{n8} seeded sets ({n_zero} native zeros) under six conversions from the loosest to the mildest: the false-zero decision is "
+      "exactly 'zero reading and lossless flow above 150 W', the same with and without the facts", n_zero > 1500 and not dec_diff, str(dec_diff[:2]))
+check("... and no native zero over the 150 W margin ever passes silently (the balance never has to catch it)", not silent, str(silent[:2]))
+check("... and no conversion inside the bounds expects more than the lossless flow (the reason the lossless flow is the safe test)",
+      not above, str(above[:2]))
 
 print("")
 if FAILURES:

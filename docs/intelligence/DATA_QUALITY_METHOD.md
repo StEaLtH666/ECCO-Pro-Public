@@ -301,6 +301,18 @@ applied to the residual against this expectation. The CT-reversed and battery-re
 the reversed reading (`quality.power_balance_verdict`, which the engine and the fitting tool share). `LOAD_FALSE_ZERO` and
 `HOUSE_POWER_NEGATIVE` are unchanged and run first, as before.
 
+**The native-load false zero stays on the lossless flow, on purpose.** `LOAD_FALSE_ZERO` (HD1) fires when the house load reads
+zero (0.5 W or less) while the lossless flow PV + battery + grid exceeds 150 W, with or without the facts. For every conversion
+inside the bounds the loss-aware expectation is at most that flow (the inverter's loss and own draw only take power off the AC
+side), so a zero reading that passes the rule can never hide more than the flow, that is, 150 W: HD1's own documented margin
+([`../HOUSE_LOAD_HD1.md`](../HOUSE_LOAD_HD1.md)). The facts can therefore only change the balance verdict that follows, and in
+two directions that are both pinned by `test_intel_power_balance.py` (section 8): the zero rule may block a set the loss-aware
+expectation would accept (an idle inverter at the largest standby, 100 W, importing 160 W with the house reading zero: the
+model says 60 W of real load, the rule still reports it; conservative, it can only block more), and a zero reading with a
+flow of 150 W or less reaches the balance, which a valid set of facts can pass where the lossless balance would not (the
+battery charging 500 W from a 650 W import with the house reading zero: flow exactly 150 W, loss-aware expectation about
+80 W, inside the 100 W floor; without the facts the balance blocks it).
+
 **Where the values live.** Three optional site facts in the `site` block of the site file (never in the repository; the
 file is placed with `tools/place-ha-site-file.ps1`, which needs no change):
 
@@ -405,7 +417,9 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
   identical through `assess_inputs`); the loss-aware pass cases on both sides, at idle and at zero net DC power; the
   tolerance floor and fraction; the CT reversed, battery reversed, both, native-load false zero and negative house
   load still blocking; invalid facts reported and never loosening; a too generous conversion not hiding a reversal at the
-  tested powers, and a conversion wrong by less than half the tolerance never hiding one; 19 mutants of the rule killed.
+  tested powers, and a conversion wrong by less than half the tolerance never hiding one; 19 mutants of the rule killed;
+  the native-load false zero with the facts configured (a table with no facts, the synthetic inverter and the loosest facts, and a
+  seeded sweep: its decision never depends on the facts and no zero over the 150 W margin passes silently).
 - `test_intel_power_balance_fit.py`: the fitting tool on synthetic histories (the generic CSV and the Home Assistant JSON
   adapter, which must give the same report), noise-free recovery of the synthetic inverter, the hold-out, the
   fault-injection table, gaps and byte-order marks, every refusal (a time without a zone, a missing column, an unusable
