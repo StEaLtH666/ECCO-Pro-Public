@@ -72,7 +72,11 @@ from .site_decisions import (BLOCK, CAPACITY_READING_BY_KIND, CONDITIONAL_D4_ITE
                              capacity_sources_context, finding, freshness_limits, inverter_conversion, required_inputs)
 from .timeutil import HOUR, UTC, day_bounds, local_date, local_wall, zone
 
-QUALITY_VERSION = "intel-quality-0.3.1-cfg"
+# The rule set a result or a capture summary was judged under. 0.3.1: the CT-reversal share counts only the hours in which import
+# and export can be told apart. 0.3.2: the live power balance can allow for the optional inverter conversion site facts (the
+# default, no facts, is the previous rule bit for bit; a site that configures them is judged by a different balance, so a
+# capture summary made under the old rule and one made under the new rule must be told apart).
+QUALITY_VERSION = "intel-quality-0.3.2-cfg"
 
 FRESH, STALE, UNKNOWN, MISSING = "fresh", "stale", "unknown", "missing"
 

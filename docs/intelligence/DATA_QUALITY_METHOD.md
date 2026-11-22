@@ -329,7 +329,9 @@ read as a looser rule: the runtime's loader WARNs `SITE_INVERTER_CONVERSION` (na
 to the debug detail), `tools/ecco_intel_drill.py site-check` reports PROBLEMS and shows export_event and dump_to_grid as
 BLOCKED with `POWER_LOSS_FACTS_INVALID`, and the engine BLOCKs those two items with `POWER_LOSS_FACTS_INVALID` while still
 judging the balance lossless. A valid set shows a PASS check. The factors and the standby are **PROPOSED engineering
-parameters calibrated for one site, not owner decisions**; the bounds are PROPOSED too (section 11).
+parameters calibrated for one site, not owner decisions**; the bounds are PROPOSED too (section 11). The rule set carries the
+version `QUALITY_VERSION` `intel-quality-0.3.2-cfg` (0.3.1 had no conversion), which the capture validator prints in its summary,
+so that results and summaries made before and after the change are told apart.
 
 **How to recalibrate.** `intelligence/tools/power_balance_fit.py` (standard library only; reads the files it is given, prints a
 report, writes nothing, needs no network or Home Assistant access) fits the three values from a recorded history of the

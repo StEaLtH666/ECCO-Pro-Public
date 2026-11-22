@@ -91,7 +91,10 @@ Get-Content (Join-Path $Evidence 'capture-summary\capture_summary.txt')
 `capture_summary.txt` hold the blocks below. Version 0.1.1 added `distinguishable_only_swapped` to `energy_balance`; the
 schema id stays `/1` because the change only adds a key. A 0.1.0 summary has the same blocks without it, but its
 `ct_reversed` came from the `intel-quality-0.3.0-cfg` rule, so re-run the validator rather than compare an old summary's
-verdict:
+verdict. The quality version a summary was judged under is printed in its first lines (`quality_version`): `0.3.1-cfg` is the
+share rule that counts only distinguishable hours, and `0.3.2-cfg` adds the optional inverter conversion to the live power
+balance (this validator replays the hourly capture and never configures it, so its verdicts are the same under both; the
+version tells a summary made before the change from one made after it):
 
 | Block | Content |
 |---|---|

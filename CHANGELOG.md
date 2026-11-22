@@ -38,6 +38,17 @@ Development before the first public release happened in a private repository; se
   `ecco_intelligence_prefs.yaml` and the standalone dashboard's registration package `ecco_intelligence_dashboard.yaml`, each
   with its suite. `deployment/ha-manifest.yaml` lists the three packages, the standalone dashboard and the card (manual
   resource registration); `VERSION.yaml` records Intelligence 0.1.0 (SHADOW, applies nothing, not tested in Home Assistant).
+- **Intelligence SHADOW v0.1, data quality: the live power balance can allow for the inverter's conversion** (optional; offline
+  and in the runtime's site loader, never run in a real Home Assistant): PV and battery power are DC-side readings and the house
+  power is the inverter's output plus the grid CT, so a lossless balance withholds export and Dump advice for a reason that is
+  physics. Three optional site facts in the site file's `site` block (`inverter_dc_to_ac_factor`, `inverter_ac_to_dc_factor`,
+  `inverter_standby_w`, all or none; factors 0.90 to 1.0, standby 0 to 100 W, inclusive) make the expected house power
+  loss-aware, in the balance and in both sign-reversal tests alike. Absent, the rule is the previous rule bit for bit; incomplete
+  or invalid facts are reported (`SITE_INVERTER_CONVERSION` WARN, `site-check` PROBLEMS, `POWER_LOSS_FACTS_INVALID` BLOCK on
+  export and Dump) and never loosen the check. `intelligence/tools/power_balance_fit.py` fits the facts from recorded history
+  (offline, stdlib only). The facts are PROPOSED engineering parameters calibrated per site, not owner decisions.
+  `QUALITY_VERSION` is `intel-quality-0.3.2-cfg` so that summaries made before and after are told apart
+  ([docs/intelligence/DATA_QUALITY_METHOD.md](docs/intelligence/DATA_QUALITY_METHOD.md) section 10.1).
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten
