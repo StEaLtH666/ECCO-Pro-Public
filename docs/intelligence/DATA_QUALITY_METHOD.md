@@ -365,20 +365,20 @@ plus the tolerance can be absorbed by a wrong set: a sign reversal of up to abou
 that reads low by about the share the shift is of the house power (the more PV or battery power flows, the larger that share).
 Measured on 50000 random sets of PV, battery and grid power (a seeded sweep with the engine's own tolerance and round numbers;
 the sets with a true house power of at least 50 W are kept, about 32000), for the loosest set the bounds allow (0.90, 0.90, 100 W;
-the former bounds: 0.85, 0.85, 150 W) against two true inverters (A: factors 0.96 and 40 W; B: no loss at all, the largest gap),
+the former bounds: 0.85, 0.85, 150 W) against two true inverters (A: factors 0.95 and 50 W; B: no loss at all, the largest gap),
 the share of the samples that pass **only because the set is wrong** (the true facts block them):
 
 | | house reads 12 % low | house reads 20 % low | grid CT reversed (300 W or more) | battery reversed (300 W or more) |
 |---|---|---|---|---|
-| A, former bounds | 49.4 % | 24.3 % | 1.4 % | 1.5 % |
-| A, these bounds | 29.6 % | 15.8 % | 0.5 % | 0.5 % |
+| A, former bounds | 47.8 % | 23.6 % | 1.3 % | 1.3 % |
+| A, these bounds | 24.2 % | 13.0 % | 0.4 % | 0.4 % |
 | B, former bounds | 46.4 % | 25.7 % | 1.8 % | 1.8 % |
 | B, these bounds | 47.4 % | 22.8 % | 1.3 % | 1.1 % |
 
-Reversals of 600 W or more that the loosest set lets through: A 0.27 % of the reversals tried at the former bounds, 0.01 % at
+Reversals of 600 W or more that the loosest set lets through: A 0.19 % of the reversals tried at the former bounds, none at
 these; B 0.70 % and 0.16 %. The tighter bounds shrink the exposure but do not remove it, and they do not shrink it for every
-fault: a house sensor that reads 5 to 10 % low is hidden as often as before or more often by the set that cancels it (A at 5 % and
-8 %: 49 % and 61 % of the samples, against 30 % and 51 % at the former bounds, because the smaller shift matches a smaller sensor
+fault: a house sensor that reads 5 to 10 % low is hidden as often as before or more often by the set that cancels it (B at 5 % and
+8 %: 37 % and 56 % of the samples, against 14 % and 36 % at the former bounds, because the smaller shift matches a smaller sensor
 error); the larger sensor errors and the large reversals are hidden clearly less often. A wrong set inside the bounds is therefore
 still able to hide a sign reversal of a few hundred watts at several kilowatts of flow and a house sensor that is several percent
 off. **The facts must come from the fitting tool**: re-fitted per season and after any change of the inverter or its settings,
