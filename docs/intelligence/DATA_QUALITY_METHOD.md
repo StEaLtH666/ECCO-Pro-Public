@@ -458,7 +458,10 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
   tolerance floor and fraction; the CT reversed, battery reversed, both, native-load false zero and negative house
   load still blocking; invalid facts reported and never loosening; a too generous conversion not hiding a reversal at the
   tested powers, a conversion wrong by less than 0.8 of the tolerance never hiding a reversal of at least the tolerance (the exact
-  inequality over random pairs of facts, and the 0.1 x d + 100 W shift between two sets inside the bounds); 19 mutants of the rule killed;
+  inequality over random pairs of facts, and the 0.1 x d + 100 W shift between two sets inside the bounds); 19 re-implemented
+  mutants of the rule killed, and 34 mutants of the real `quality.py` and 18 of the real `site_decisions.py` (each the file's own
+  text with one exact edit, imported as a module of its own and judged on hand-written tables; the one equivalent mutant is
+  correctly not killed); a `site_facts` that is not a `SiteFacts` reads exactly as absent;
   the native-load false zero with the facts configured (a table with no facts, the synthetic inverter and the loosest facts, and a
   seeded sweep: its decision never depends on the facts and no zero over the 150 W margin passes silently).
 - `test_intel_power_balance_fit.py`: the fitting tool on synthetic histories (the generic CSV and the Home Assistant JSON

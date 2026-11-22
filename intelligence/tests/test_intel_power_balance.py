@@ -22,6 +22,9 @@ value.
   [7] mutants: each deliberately wrong variant of the rule is told apart from the rule by this suite's case table
   [8] the native-load false zero with the facts configured: it stays on the lossless flow (a table of cases with no facts, the
       synthetic inverter and the loosest facts the bounds allow; a seeded sweep over six conversions)
+  [9] mutants of the REAL source: quality.py and site_decisions.py as text with one exact edit each, imported as modules of their
+      own and judged on hand-written tables (the case table, the default rule, the false-zero table, the invalid facts; the
+      conversion and the fact validation); a site_facts that is not a SiteFacts reads exactly as absent (in [5])
 """
 
 from __future__ import annotations
@@ -407,9 +410,24 @@ check("valid facts raise no POWER_LOSS_FACTS_INVALID; absent facts raise none ei
       "POWER_LOSS_FACTS_INVALID" not in h.codes(assess(base, loss_set, FACTS)) and "POWER_LOSS_FACTS_INVALID" not in h.codes(assess(base, loss_set)))
 check("POWER_LOSS_FACTS_INVALID is a declared rule judging the structure, not a live input (so a poll cannot lift it)",
       q.RULE_INPUTS["POWER_LOSS_FACTS_INVALID"] == ("<structure>",))
-mal = q.assess_inputs(replace(faults.with_signals(base, loss_set), site_facts="not a SiteFacts"))
-check("a site_facts that is not a SiteFacts is read as absent by this rule (never raises), though the zone is then unknown",
-      isinstance(mal, q.QualityResult))
+def result_signature(res: q.QualityResult) -> tuple:
+    return (res.data_quality, tuple(sorted(res.blocked_items)),
+            tuple(sorted((f.code, f.subject, f.severity, tuple(sorted((k, repr(v)) for k, v in dict(f.evidence).items())))
+                         for f in res.findings)))
+
+
+loss_inputs = faults.with_signals(base, loss_set)
+absent_sig = result_signature(q.assess_inputs(replace(loss_inputs, site_facts=None)))
+for junk_label, junk in (("a string", "not a SiteFacts"), ("an integer", 5), ("a bare object", object()), ("a dict of valid facts", {
+        "inverter_dc_to_ac_factor": DC_AC, "inverter_ac_to_dc_factor": AC_DC, "inverter_standby_w": STANDBY})):
+    mal = q.assess_inputs(replace(loss_inputs, site_facts=junk))
+    check(f"a site_facts that is {junk_label} (not a SiteFacts) is read as absent by this rule: never raises, no POWER_LOSS_FACTS_INVALID, "
+          "the lossless balance with its old evidence, and the whole result is the one for site_facts=None",
+          isinstance(mal, q.QualityResult) and result_signature(mal) == absent_sig
+          and "POWER_LOSS_FACTS_INVALID" not in h.codes(mal)
+          and [dict(f.evidence) for f in mal.findings if f.code == "POWER_BALANCE_INCONSISTENT" and f.subject == "export_event"]
+          == [{"residual_w": -280.0, "tolerance_w": 150.0}]
+          and all(it in mal.blocked_items for it in EXPORT), str(sorted(h.codes(mal, "BLOCK"))))
 
 print("== [6] a wrong (too generous) conversion cannot hide a sign reversal at the tested powers")
 TESTED = [(0.0, 3000.0, 1500.0), (0.0, 3000.0, -2000.0), (0.0, -2000.0, 2500.0), (4000.0, 0.0, 1500.0), (4000.0, 0.0, -1500.0),
@@ -574,6 +592,19 @@ def sign_flipped_side(p, b, g):
     return g + (DC_AC * d if d <= 0 else d / AC_DC) - STANDBY
 
 
+def edge_pair(e: float, up: bool) -> tuple[float, float]:
+    """(the house power at exactly the floor tolerance from `e` in floating point, the next float outward): the pair on both sides
+    of the boundary, found by stepping, so that no rounding of the expectation can move a row across it."""
+    hw = e + 100.0 if up else e - 100.0
+    far = math.inf if up else -math.inf
+    while abs(hw - e) > 100.0:
+        hw = math.nextafter(hw, e)
+    nxt = math.nextafter(hw, far)
+    while abs(nxt - e) <= 100.0:
+        hw, nxt = nxt, math.nextafter(nxt, far)
+    return hw, nxt
+
+
 def case_rows():
     rows = []
     for label, p, b, g in CASES:
@@ -602,6 +633,28 @@ def case_rows():
               CONV.expected_house_w(1500.0, -48.0, 0.0) - 50.0, 1500.0, 48.0, 0.0, "POWER_BALANCE_INCONSISTENT"),
              ("battery 80 W, battery reversed: above half the tolerance", CONV.expected_house_w(1500.0, -80.0, 0.0), 1500.0, 80.0, 0.0,
               "BATTERY_SIGN_REVERSED")]
+    # the boundaries of the reversal tests (exactly at the tolerance, one float beyond) and of the half-tolerance guard (exactly
+    # 50 W: the reversed fit holds, the reading is not above half the tolerance, so it cannot name a reversal)
+    ct_in, ct_out = edge_pair(CONV.expected_house_w(0.0, 1500.0, -500.0), up=True)
+    bt_in, bt_out = edge_pair(CONV.expected_house_w(1500.0, -500.0, 0.0), up=True)
+    g50, _ = edge_pair(CONV.expected_house_w(0.0, 1500.0, -50.0), up=False)
+    b50, _ = edge_pair(CONV.expected_house_w(1500.0, -50.0, 0.0), up=False)
+    rows += [("CT reversed: the reversed fit exactly at the tolerance", ct_in, 0.0, 1500.0, 500.0, "CT_SIGN_REVERSED"),
+             ("CT reversed: the reversed fit one float beyond the tolerance", ct_out, 0.0, 1500.0, 500.0, "POWER_BALANCE_INCONSISTENT"),
+             ("battery reversed: the reversed fit exactly at the tolerance", bt_in, 1500.0, 500.0, 0.0, "BATTERY_SIGN_REVERSED"),
+             ("battery reversed: the reversed fit one float beyond the tolerance", bt_out, 1500.0, 500.0, 0.0, "POWER_BALANCE_INCONSISTENT"),
+             ("grid exactly 50 W (half the tolerance): the reversed fit holds but the reading cannot name a reversal", g50,
+              0.0, 1500.0, 50.0, "POWER_BALANCE_INCONSISTENT"),
+             ("battery exactly 50 W (half the tolerance): the reversed fit holds but the reading cannot name a reversal", b50,
+              1500.0, 50.0, 0.0, "POWER_BALANCE_INCONSISTENT")]
+    # the tolerance is 5 % of the LARGEST magnitude of the four readings: one row for each reading being the largest, with a
+    # residual (392 W, 4.9 % of 8000 W) that passes only when that reading is counted
+    rows += [("the tolerance counts the PV reading (8000 W largest)", CONV.expected_house_w(8000.0, 0.0, 0.0) - 392.0, 8000.0, 0.0, 0.0, None),
+             ("the tolerance counts the battery reading (8000 W largest)", CONV.expected_house_w(0.0, 8000.0, 0.0) - 392.0, 0.0, 8000.0, 0.0, None),
+             ("the tolerance counts the grid reading (8000 W largest)", CONV.expected_house_w(0.0, -500.0, 8000.0) - 392.0, 0.0, -500.0, 8000.0, None),
+             ("the tolerance counts the house reading (6000 W largest)", 6000.0, 3000.0, 0.0, 3000.0, None),
+             ("... and 5 % of the house reading is the limit (320 W off a 6040 W reading blocks)", 6040.0, 3000.0, 0.0, 3000.0,
+              "POWER_BALANCE_INCONSISTENT")]
     return rows
 
 
@@ -711,6 +764,7 @@ rng8 = random.Random(8128)
 convs8 = [sd.InverterConversion(LO_F, LO_F, HI_S), sd.InverterConversion(HI_F, HI_F, LO_S), sd.InverterConversion(LO_F, HI_F, HI_S),
           sd.InverterConversion(HI_F, LO_F, LO_S), CONV, sd.InverterConversion(0.95, 0.97, 60.0)]
 dec_diff, silent, above, n8, n_zero = [], [], [], 0, 0
+light = cf.cycle_inputs(synthetic_recorded=True, missing_key="history")      # no history: the power rules do not read it, and it is 5x faster
 for i in range(2400):
     hw = rng8.choice((0.0, 0.0, 0.3, -0.5, 0.5, 0.51, rng8.uniform(-0.5, 0.5)))
     p = rng8.choice((0.0, rng8.uniform(0, 6000)))
@@ -719,8 +773,8 @@ for i in range(2400):
     flow = p + b + g
     cv = convs8[i % len(convs8)]
     fx = replace(cf.FACTS, inverter_dc_to_ac_factor=cv.dc_to_ac, inverter_ac_to_dc_factor=cv.ac_to_dc, inverter_standby_w=cv.standby_w)
-    r = assess(base, sig(hw, p, b, g), fx)
-    r0 = assess(base, sig(hw, p, b, g))
+    r = assess(light, sig(hw, p, b, g), fx)
+    r0 = assess(light, sig(hw, p, b, g))
     n8 += 1
     is_zero = abs(hw) <= 0.5
     n_zero += is_zero
@@ -735,6 +789,256 @@ check(f"{n8} seeded sets ({n_zero} native zeros) under six conversions from the 
 check("... and no native zero over the 150 W margin ever passes silently (the balance never has to catch it)", not silent, str(silent[:2]))
 check("... and no conversion inside the bounds expects more than the lossless flow (the reason the lossless flow is the safe test)",
       not above, str(above[:2]))
+
+print("== [9] mutants of the REAL source (quality.py and site_decisions.py as text, loaded as modules of their own)")
+# The mutants of [7] are re-implementations. These are the real files: each mutant is the file's text with one exact edit (the
+# anchor must occur exactly once, so a change of the source that moves an anchor fails this suite loudly instead of silently
+# mutating nothing), written to a temporary directory and imported as `intelligence._pbmutN`, so its relative imports and every
+# other line are the real ones. A mutant of quality.py is run through assess_inputs on the scenario table below; a mutant of
+# site_decisions.py through the literal tables of the conversion and of the fact validation. The real module must agree with
+# the hand-written expectations first; a mutant is killed when its output differs from the real module's on any scenario (or
+# it raises). The copy of a file with no edit must NOT be killed (the harness itself changes nothing).
+import importlib.util  # noqa: E402
+import tempfile  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+QUALITY_SRC = Path(q.__file__).read_text(encoding="utf-8")
+DECISIONS_SRC = Path(sd.__file__).read_text(encoding="utf-8")
+_MUT = [0]
+
+
+def edit_source(source: str, *pairs: tuple[str, str]) -> str:
+    for old, new in pairs:
+        if source.count(old) != 1:
+            raise AssertionError(f"mutation anchor must occur exactly once ({source.count(old)}): {old[:70]!r}")
+        source = source.replace(old, new)
+    return source
+
+
+def load_module(source: str, tmp: Path):
+    _MUT[0] += 1
+    name = f"_pbmut{_MUT[0]}"
+    path = tmp / f"{name}.py"
+    path.write_text(source, encoding="utf-8", newline="\n")
+    spec = importlib.util.spec_from_file_location(f"intelligence.{name}", path)
+    mod = importlib.util.module_from_spec(spec)
+    old_flag, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = old_flag
+        sys.modules.pop(spec.name, None)
+    return mod
+
+
+def scenario_inputs(hw, p, b, g, facts):
+    inp = faults.with_signals(base, sig(hw, p, b, g))
+    return inp if facts is None else replace(inp, site_facts=facts)
+
+
+SCEN: list[tuple[str, object, set[str]]] = []             # (label, CycleInputs, the power BLOCK codes written out by hand)
+for label, hw, p, b, g, want in ROWS:
+    SCEN.append((f"table: {label}", scenario_inputs(hw, p, b, g, FACTS), {want} if want else set()))
+for label, hw, p, b, g, want in LITERAL:
+    SCEN.append((f"default rule: {label}", scenario_inputs(hw, p, b, g, None), {want} if want else set()))
+for label, hw, p, b, g, wants in LFZ_TABLE:
+    for key, fx in FACT_SETS.items():
+        SCEN.append((f"false zero [{key}]: {label}", scenario_inputs(hw, p, b, g, fx), wants[key]))
+for label, fx in bad_facts.items():
+    SCEN.append((f"invalid facts, {label}", scenario_inputs(*loss_set.values(), fx), {"POWER_LOSS_FACTS_INVALID", "POWER_BALANCE_INCONSISTENT"}))
+SCEN.append(("invalid facts, a balanced set", scenario_inputs(900.0, 300.0, 500.0, 100.0, bad_facts["a partial set"]), {"POWER_LOSS_FACTS_INVALID"}))
+SCEN.append(("negative load with the facts", scenario_inputs(-300.0, 0.0, 400.0, -50.0, FACTS), {"HOUSE_POWER_NEGATIVE"}))
+SCEN.append(("negative load with invalid facts", scenario_inputs(-300.0, 0.0, 400.0, -50.0, bad_facts["NaN"]),
+             {"HOUSE_POWER_NEGATIVE", "POWER_LOSS_FACTS_INVALID"}))
+SCEN.append(("a loss-aware balanced set (no finding)", scenario_inputs(model_house(0.0, 3000.0, 0.0), 0.0, 3000.0, 0.0, FACTS), set()))
+
+
+def run_scenario(mod, inputs):
+    res = mod.assess_inputs(inputs)
+    return (tuple(sorted((f.code, f.subject, f.severity, tuple(sorted((k, repr(v)) for k, v in dict(f.evidence).items())))
+                         for f in res.findings if f.code in ZERO_CODES)),
+            tuple(sorted(res.blocked_items)), res.data_quality, mod.RULE_INPUTS.get("POWER_LOSS_FACTS_INVALID"))
+
+
+with tempfile.TemporaryDirectory() as _td:
+    TMP = Path(_td)
+    real_out = [run_scenario(q, inp) for _l, inp, _w in SCEN]
+    bad_real = [(lab, sorted({f[0] for f in out[0]}), sorted(want)) for (lab, _i, want), out in zip(SCEN, real_out)
+                if {f[0] for f in out[0]} != want]
+    check(f"the real quality.py agrees with the hand-written expectation on all {len(SCEN)} scenarios of the table "
+          "(the case table, the default rule, the false-zero table, invalid facts)", not bad_real, str(bad_real[:3]))
+
+    def killed_q(mutant_source: str) -> tuple[bool, str]:
+        try:
+            mod = load_module(mutant_source, TMP)
+        except Exception as exc:                                        # noqa: BLE001 - a mutant that cannot load is dead
+            return True, f"does not load: {type(exc).__name__}"
+        for (lab, inp, _w), want_out in zip(SCEN, real_out):
+            try:
+                got = run_scenario(mod, inp)
+            except Exception as exc:                                    # noqa: BLE001
+                return True, f"{lab}: raised {type(exc).__name__}"
+            if got != want_out:
+                return True, lab
+        return False, ""
+
+    check("the harness itself changes nothing: an unedited copy of quality.py is NOT killed", not killed_q(QUALITY_SRC)[0])
+
+    TOL = "tol = max(PROPOSED.power_agree_w, PROPOSED.power_agree_fraction"
+    MAX4 = "max(abs(h), abs(p), abs(b), abs(g))"
+    CT_T = "abs(h - conv.expected_house_w(p, b, -g))"
+    BT_T = "abs(h - conv.expected_house_w(p, -b, g))"
+    BAL = "resid = h - conv.expected_house_w(p, b, g)"
+    EV = 'ev = {} if conv.lossless else {"balance": "loss_aware"}'
+    ZERO = "and flow > DQ_PROPOSED.load_false_zero_flow_w:"
+    Q_MUTANTS = {
+        "tolerance floor doubled": ((TOL, "tol = max(2.0 * PROPOSED.power_agree_w, PROPOSED.power_agree_fraction"),),
+        "tolerance floor halved": ((TOL, "tol = max(0.5 * PROPOSED.power_agree_w, PROPOSED.power_agree_fraction"),),
+        "tolerance fraction doubled": (("PROPOSED.power_agree_fraction * max(abs(h)", "2.0 * PROPOSED.power_agree_fraction * max(abs(h)"),),
+        "tolerance fraction halved": (("PROPOSED.power_agree_fraction * max(abs(h)", "0.5 * PROPOSED.power_agree_fraction * max(abs(h)"),),
+        "tolerance without the house reading": ((MAX4, "max(abs(p), abs(b), abs(g))"),),
+        "tolerance without the PV reading": ((MAX4, "max(abs(h), abs(b), abs(g))"),),
+        "tolerance without the battery reading": ((MAX4, "max(abs(h), abs(p), abs(g))"),),
+        "tolerance without the grid reading": ((MAX4, "max(abs(h), abs(p), abs(b))"),),
+        "the balance boundary made strict": (("if abs(resid) <= tol:", "if abs(resid) < tol:"),),
+        "the CT test boundary made strict": ((CT_T + " <= tol and", CT_T + " < tol and"),),
+        "the battery test boundary made strict": ((BT_T + " <= tol and", BT_T + " < tol and"),),
+        "the CT guard made inclusive": (("abs(g) > tol / 2.0", "abs(g) >= tol / 2.0"),),
+        "the CT guard quartered": (("abs(g) > tol / 2.0", "abs(g) > tol / 4.0"),),
+        "the battery guard made inclusive": (("abs(b) > tol / 2.0", "abs(b) >= tol / 2.0"),),
+        "the battery guard quartered": (("abs(b) > tol / 2.0", "abs(b) > tol / 4.0"),),
+        "the CT test without the flip": (("conv.expected_house_w(p, b, -g)", "conv.expected_house_w(p, b, g)"),),
+        "the battery test without the flip": (("conv.expected_house_w(p, -b, g)", "conv.expected_house_w(p, b, g)"),),
+        "the CT test lossless": ((CT_T, "abs(h - (p + b - g))"),),
+        "the battery test lossless": ((BT_T, "abs(h - (p - b + g))"),),
+        "the balance lossless": ((BAL, "resid = h - (p + b + g)"),),
+        "the residual's sign reversed": ((BAL, "resid = conv.expected_house_w(p, b, g) - h"),),
+        "the two reversal codes exchanged": (('return "CT_SIGN_REVERSED", resid, tol', 'return "BATTERY_SIGN_REVERSED", resid, tol'),
+                                             ('return "BATTERY_SIGN_REVERSED", resid, tol\n    return "POWER',
+                                              'return "CT_SIGN_REVERSED", resid, tol\n    return "POWER')),
+        "the facts never reach the rule": (('_power_rules(c, getattr(inputs, "site_facts", None))', "_power_rules(c, None)"),),
+        "invalid facts not reported": (('    if problems:\n        c.block(POWER_ITEMS, "POWER_LOSS_FACTS_INVALID"',
+                                        '    if False:\n        c.block(POWER_ITEMS, "POWER_LOSS_FACTS_INVALID"'),),
+        "invalid facts reported on the wrong item": (('c.block(POWER_ITEMS, "POWER_LOSS_FACTS_INVALID"', 'c.block(("charge_target",), "POWER_LOSS_FACTS_INVALID"'),),
+        "invalid facts name their value": (("problems=problems)", "problems=(repr(site_facts),))"),),
+        "the loss-aware evidence dropped": ((EV, "ev = {}"),),
+        "the evidence always says loss-aware": ((EV, 'ev = {"balance": "loss_aware"}'),),
+        "the false zero uses the loss-aware flow": (("    flow = p + b + g\n", "    flow = conv.expected_house_w(p, b, g)\n"),),
+        "the false zero threshold made inclusive": (("flow > DQ_PROPOSED.load_false_zero_flow_w", "flow >= DQ_PROPOSED.load_false_zero_flow_w"),),
+        "the false-zero band made strict": (("abs(h) <= DQ_PROPOSED.load_zero_max_w and flow", "abs(h) < DQ_PROPOSED.load_zero_max_w and flow"),),
+        "the false zero skipped when the facts are valid": ((ZERO, "and flow > DQ_PROPOSED.load_false_zero_flow_w and conv.lossless:"),),
+        "the negative load threshold moved to zero": (("h < -DQ_PROPOSED.load_zero_max_w", "h < 0.0"),),
+        "POWER_LOSS_FACTS_INVALID declared a live input": (('"POWER_LOSS_FACTS_INVALID": (_S,)', '"POWER_LOSS_FACTS_INVALID": (_S, "house.power")'),),
+    }
+    survivors_q, never_loaded, kill_reasons = {}, [], {}
+    for name, pairs in Q_MUTANTS.items():
+        dead, why = killed_q(edit_source(QUALITY_SRC, *pairs))
+        kill_reasons[name] = why
+        if not dead:
+            survivors_q[name] = why
+        elif why.startswith("does not load"):
+            never_loaded.append(name)
+    check(f"every one of the {len(Q_MUTANTS)} mutants of the real quality.py (tolerance, boundaries, guards, flips, lossless variants, "
+          "codes, facts wiring, invalid-fact reporting, evidence, false zero, negative load) is killed", not survivors_q, str(list(survivors_q)))
+    check("... each by a difference in behaviour on a scenario: none is 'killed' only because it failed to load, and none only by raising",
+          not never_loaded and not any(" raised " in w or w.endswith("raised") for w in kill_reasons.values()),
+          str([n for n, w in kill_reasons.items() if "raised" in w or w.startswith("does not load")]))
+
+    # site_decisions.py: the conversion and the fact validation, against literal tables written out by hand
+    CONVERSION_TABLE = [   # ((dc_to_ac, ac_to_dc, standby), (pv, battery, grid), the expected house power)
+        ((0.92, 0.94, 40.0), (0.0, 3000.0, 0.0), 2720.0), ((0.92, 0.94, 40.0), (0.0, -1880.0, 0.0), -2040.0),
+        ((0.92, 0.94, 40.0), (1000.0, -1000.0, 400.0), 360.0), ((0.92, 0.94, 40.0), (0.0, 0.0, 300.0), 260.0),
+        ((0.92, 0.94, 40.0), (3000.0, 2000.0, -500.0), 4060.0), ((1.0, 1.0, 40.0), (0.0, 1000.0, 100.0), 1060.0),
+        ((0.9, 1.0, 0.0), (2000.0, 0.0, -500.0), 1300.0), ((1.0, 0.9, 0.0), (0.0, -900.0, 0.0), -1000.0),
+        ((1.0, 1.0, 0.0), (1.5, -0.25, 7.0), 8.25), ((1.0, 1.0, 0.0), (0.0, 0.0, 0.0), 0.0),
+    ]
+    NAN = float("nan")
+    FACT_TABLE = [   # (the three facts, (the conversion tuple, the problems) the validation must return)
+        ((None, None, None), ((1.0, 1.0, 0.0), ())), ((0.92, 0.94, 40), ((0.92, 0.94, 40.0), ())),
+        ((0.9, 1.0, 100), ((0.9, 1.0, 100.0), ())), ((1, 1, 0), ((1.0, 1.0, 0.0), ())), ((1.0, 0.9, 0.0), ((1.0, 0.9, 0.0), ())),
+        ((0.92, None, None), ((1.0, 1.0, 0.0), ("inverter_ac_to_dc_factor:missing", "inverter_standby_w:missing"))),
+        ((0.8999, 0.94, 40), ((1.0, 1.0, 0.0), ("inverter_dc_to_ac_factor:out_of_bounds",))),
+        ((0.92, 1.0001, 40), ((1.0, 1.0, 0.0), ("inverter_ac_to_dc_factor:out_of_bounds",))),
+        ((0.92, 0.94, 100.0001), ((1.0, 1.0, 0.0), ("inverter_standby_w:out_of_bounds",))),
+        ((0.92, 0.94, -0.0001), ((1.0, 1.0, 0.0), ("inverter_standby_w:out_of_bounds",))),
+        ((0.92, 0.94, 150), ((1.0, 1.0, 0.0), ("inverter_standby_w:out_of_bounds",))),
+        ((0.87, 0.94, 40), ((1.0, 1.0, 0.0), ("inverter_dc_to_ac_factor:out_of_bounds",))),
+        ((0.92, 0.94, NAN), ((1.0, 1.0, 0.0), ("inverter_standby_w:not_a_number",))),
+        (("0.92", 0.94, 40), ((1.0, 1.0, 0.0), ("inverter_dc_to_ac_factor:not_a_number",))),
+        ((0.92, 0.94, True), ((1.0, 1.0, 0.0), ("inverter_standby_w:not_a_number",))),
+        ((0.92, 0.94, 10 ** 400), ((1.0, 1.0, 0.0), ("inverter_standby_w:out_of_bounds",))),
+        ((-(10 ** 400), 0.94, 40), ((1.0, 1.0, 0.0), ("inverter_dc_to_ac_factor:out_of_bounds",))),
+    ]
+    REFUSED = [(0.89, 0.9, 40.0), (0.9, 1.01, 40.0), (0.9, 0.9, -1.0), (0.9, 0.9, 101.0), (NAN, 0.9, 40.0), (0.9, 0.9, True),
+               (0.9, 0.9, 10 ** 400), (10 ** 400, 0.9, 40.0)]
+    ACCEPTED = [(0.9, 0.9, 0.0), (1.0, 1.0, 100.0), (0.95, 0.99, 12.5)]
+
+    def decisions_mismatches(mod) -> list[str]:
+        out = []
+        if (tuple(mod.INVERTER_FACTOR_BOUNDS), tuple(mod.INVERTER_STANDBY_BOUNDS_W)) != ((0.90, 1.0), (0.0, 100.0)):
+            out.append("bounds")
+        for (a, c, e), (pv, b, g), want in CONVERSION_TABLE:
+            if abs(mod.InverterConversion(a, c, e).expected_house_w(pv, b, g) - want) > 1e-9:
+                out.append(f"expectation {(a, c, e)} {(pv, b, g)}")
+        for facts, (conv_t, problems) in FACT_TABLE:
+            ns = SimpleNamespace(**dict(zip(sd.INVERTER_CONVERSION_FACTS, facts)))
+            cv, pr = mod.inverter_conversion(ns)
+            if (cv.dc_to_ac, cv.ac_to_dc, cv.standby_w) != conv_t or pr != problems:
+                out.append(f"facts {facts!r}: {pr}")
+        for args in REFUSED:
+            try:
+                mod.InverterConversion(*args)
+                out.append(f"constructed {args!r}")
+            except ValueError:
+                pass
+        for args in ACCEPTED:
+            mod.InverterConversion(*args)
+        if (not mod.LOSSLESS_CONVERSION.lossless or mod.InverterConversion(1.0, 0.95, 0.0).lossless
+                or mod.InverterConversion(1.0, 1.0, 5.0).lossless or mod.InverterConversion(0.95, 1.0, 0.0).lossless):
+            out.append("lossless property")
+        return out
+
+    real_mismatch = decisions_mismatches(sd)
+    check(f"the real site_decisions.py agrees with the literal tables ({len(CONVERSION_TABLE)} expectations, {len(FACT_TABLE)} fact sets, "
+          f"{len(REFUSED)} refused and {len(ACCEPTED)} accepted constructions, the bounds)", not real_mismatch, str(real_mismatch[:3]))
+
+    def killed_d(mutant_source: str) -> bool:
+        try:
+            return bool(decisions_mismatches(load_module(mutant_source, TMP)))
+        except Exception:                                               # noqa: BLE001 - a raise is a kill
+            return True
+
+    check("an unedited copy of site_decisions.py is NOT killed (the harness changes nothing)", not killed_d(DECISIONS_SRC))
+    SIDES = "self.dc_to_ac * d if d >= 0.0 else d / self.ac_to_dc"
+    D_MUTANTS = {
+        "the factor lower bound back to 0.85": (("INVERTER_FACTOR_BOUNDS = (0.90, 1.0)", "INVERTER_FACTOR_BOUNDS = (0.85, 1.0)"),),
+        "the factor upper bound raised": (("INVERTER_FACTOR_BOUNDS = (0.90, 1.0)", "INVERTER_FACTOR_BOUNDS = (0.90, 1.05)"),),
+        "the standby bound back to 150 W": (("INVERTER_STANDBY_BOUNDS_W = (0.0, 100.0)", "INVERTER_STANDBY_BOUNDS_W = (0.0, 150.0)"),),
+        "the lower bound made exclusive": (("finite_number(v) and lo <= v <= hi", "finite_number(v) and lo < v <= hi"),),
+        "the upper bound made exclusive": (("finite_number(v) and lo <= v <= hi", "finite_number(v) and lo <= v < hi"),),
+        "a huge integer raises in the validation": (("        except OverflowError:                 # an integer",
+                                                     "        except ZeroDivisionError:             # an integer"),),
+        "a huge integer raises in the construction": (("    except OverflowError:\n        return False", "    except ZeroDivisionError:\n        return False"),),
+        "a partial set read as absent": (("if all(v is None for v in raw.values()):", "if any(v is None for v in raw.values()):"),),
+        "a missing fact not reported": (('problems.append(f"{name}:missing")', "pass"),),
+        "a non-number reported as out of bounds": (('problems.append(f"{name}:not_a_number")', 'problems.append(f"{name}:out_of_bounds")'),),
+        "an invalid set returns the partial conversion": (("        return LOSSLESS_CONVERSION, tuple(problems)", "        return InverterConversion(), tuple(problems)[:1]"),),
+        "the DC to AC factor divides": (("self.dc_to_ac * d if d >= 0.0", "d / self.dc_to_ac if d >= 0.0"),),
+        "the AC to DC factor multiplies": (("else d / self.ac_to_dc)", "else d * self.ac_to_dc)"),),
+        "the standby added": (("else d / self.ac_to_dc) - self.standby_w", "else d / self.ac_to_dc) + self.standby_w"),),
+        "the net DC power without PV": (("        d = pv_w + battery_w\n", "        d = battery_w\n"),),
+        "the lossless sum with the grid subtracted": (("            return pv_w + battery_w + grid_w", "            return pv_w + battery_w - grid_w"),),
+        "the lossless test needs only one fact": (("self.dc_to_ac == 1.0 and self.ac_to_dc == 1.0 and self.standby_w == 0.0",
+                                                   "self.dc_to_ac == 1.0 or self.ac_to_dc == 1.0 and self.standby_w == 0.0"),),
+        "the sides exchanged": ((SIDES, "self.dc_to_ac * d if d <= 0.0 else d / self.ac_to_dc"),),
+    }
+    survivors_d = [name for name, pairs in D_MUTANTS.items() if not killed_d(edit_source(DECISIONS_SRC, *pairs))]
+    check(f"every one of the {len(D_MUTANTS)} mutants of the real site_decisions.py (bounds, validation, the huge integer, the "
+          "conversion on both sides, the standby, the lossless property) is killed", not survivors_d, str(survivors_d))
+    equivalent = edit_source(DECISIONS_SRC, (SIDES, "self.dc_to_ac * d if d > 0.0 else d / self.ac_to_dc"))
+    check("the one equivalent mutant of the real source (d > 0 instead of d >= 0: both sides are equal at d = 0) is correctly NOT killed",
+          not killed_d(equivalent))
 
 print("")
 if FAILURES:
