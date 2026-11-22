@@ -36,8 +36,8 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
       that is not one of the pinned ones, a non-ASCII character, a calibrated-looking decimal
  [11] preconditions: P1 (the L3 WSL run on the exact kit) is closed, says what it had to show and that the closure holds only for the
       Core and Python versions the run was made on (after any Core or Python update the run is repeated and P1 reopens: U3-G5 says
-      so too); the open set (P4, P5, P7) AND the closed set (P1, P2, P3, P6, P8, P9) are exact, each closed line gives its reason, and
-      the open set is the same in both documents; the one commit id the documents may carry is the one in P6's row (rule [28])
+      so too); the open set (P4, P5, P7) AND the closed set (P1, P2, P3, P6, P8, P9) are exact, each closed line gives its reason (P3 says what two
+      independent reviews read and names the two minors left as known follow-ups), and the open set is the same in both documents; the one commit id the documents may carry is the one in P6's row (rule [28])
  [12] the steps: the same step numbers in both, the same who, an owner go at each live step, the restart and the reload each with
       their own approval
  [13] the rollback: RB1 to RB7 in order in both, a proof for each in the runbook, the facts-only and the full sequence, the commands,
@@ -65,8 +65,9 @@ reads both documents as text (no Home Assistant, no network, no PowerShell) and 
  [28] the commit id in P6's row: where it resolves here (git cat-file -e) it must be the history's previous commit or the commit of a
       kit that is the Ghost-as-installed kit (the two pinned sums), a FAIL otherwise; where it does not resolve it is a SKIP only when
       the history does not expect the object (a shallow clone, a squash-merged branch), and a FAIL when the history says it is here
- [29] the L3 run is closed (P1): the closure, its limits in every place that lists what is not established, and that P1 reopens after any
-      Core or Python update of the host (U3-G5 says so too)
+ [29] the L3 run is closed (P1): the closure, its limits in every place that lists what is not established (the slow-callback lines: 13,
+      none naming the integration, 2 of them recorded as coinciding with diagnostics downloads), and that P1 reopens after any Core or
+      Python update of the host (U3-G5 says so too)
  [30] what a restart does to the state folder: the tools leave it byte-identical, a restart rewrites store_meta.json and three scorecard
       pages (the sources do so at every start), no proof after a restart compares a hash with a read made before it, step 8 reads the
       folder again as the reference for step 9
@@ -740,8 +741,12 @@ def rule_preconditions(rb, cl, S, F):
         pr.append(f"the closed preconditions are {closed}, expected {list(CLOSED_AT_WRITING)} (closing or reopening one is a deliberate edit of this suite)")
     rows = {c[0]: " ".join(c) for c in table_rows(sec) if re.fullmatch(r"P\d+", c[0])}
     for pid, words in (("P2", ("one independent review", "no BLOCKER", "one MAJOR", "five minors", "all fixed in a follow-up round")),
-                       ("P3", ("one independent review", "no BLOCKER, no MAJOR and one MINOR", "fixed in the suite", "What no reviewer has read",
-                               "the suite pins them")),
+                       ("P3", ("one independent review", "no BLOCKER, no MAJOR and one MINOR", "fixed in the suite",
+                               "one independent read-only review of the three closure commits", "on 22 Nov 2026",
+                               "no BLOCKER, no MAJOR and four MINORs", "P3 is closed on that basis", "the suite pins this wording",
+                               "known follow-ups", "nobody relies on them silently", "would need a guard",
+                               "another change that alters the kit lands on main between Ghost and U3 after a squash merge",
+                               "core.autocrlf=true", "CRLF line endings", "text-reading rules")),
                        ("P9", ("recorded offline", "private project record", "not in this repository", "-ReferenceKit", "-ReferenceSumsSha256",
                                "placeholders", "P9 follows P1")),
                        ("P6", ("U2 (Ghost) installed and verified first", "never both in one window", "section 3", "Ghost installed from",
@@ -750,6 +755,9 @@ def rule_preconditions(rb, cl, S, F):
         for w in words:
             if not has(rows.get(pid, ""), w):
                 pr.append(f"{pid} lacks '{w}'")
+    for old in ("What no reviewer has read", "not independently reviewed"):
+        if has(rows.get("P3", ""), old):
+            pr.append(f"P3 still says '{old}': the closure edits were read by the second independent review")
     if not has(rb, "NOT READY") or not has(rb, OPEN_LIST_TEXT):
         pr.append("the runbook's status does not say NOT READY and list the open preconditions")
     c1 = section(cl, "1")
@@ -808,7 +816,9 @@ def rule_l3_closure(rb, cl, S, F):
               "The flip of data quality to OK is not shown there", "The harness maps no export or dump inputs",
               "read unknown there for other reasons", "data quality read DEGRADED in every state",
               "not a released number: a released number is shown by the repository suites",
-              "13 slow-callback lines", "none naming the integration", "which frames ran inside the three request-handler steps was not cleared",
+              "13 slow-callback lines, none naming the integration",
+              "2 of them are recorded as coinciding with the run's timed diagnostics downloads",
+              "the others are classed as Home Assistant's own", "which frames ran inside the three request-handler steps was not cleared",
               "the known time-format gap", "so an unnamed task fails closed", "No blocking-I/O line appeared at all",
               "No Uninstall and no clean-order rollback on this pair", "was not repeated on the stacked pair",
               "the Ghost kit loaded that file and ignored them", "The Uninstall ran only in the offline drill",
@@ -816,6 +826,9 @@ def rule_l3_closure(rb, cl, S, F):
               "it restarts nothing", "ran on such a file once, in the L3 run on the isolated instance"):
         if not has(s12, w):
             pr.append(f"runbook 12 lacks '{w}'")
+    if has(s12, "while diagnostics downloads were being taken"):
+        pr.append("runbook 12 says the slow-callback lines were logged while diagnostics downloads were being taken: the run records only "
+                  "2 of the 13 as coinciding with a download")
     s71, s810 = section(rb, "7.1"), section(rb, "8.10")
     if not has(s71, "P1(d) showed the previous kit as a whole on such a file") or not has(s71, "silently lost") or not has(s71, "not observed on the production host"):
         pr.append("runbook 7.1 does not say what P1(d) showed (the previous kit loaded the facts file and ignored them) and that it was not seen on the production host")
@@ -827,14 +840,20 @@ def rule_l3_closure(rb, cl, S, F):
     for w in ("run once on an isolated test instance; never run in a real Home Assistant of yours", "P1, closed 22 Nov 2026",
               f"Core {L3_CORE}, Python {L3_PYTHON}", "the previous kit restored there loaded a site file with the facts and ignored them",
               "It holds only for those versions: after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5)",
-              "P9: the reference kit and its hash are recorded offline", "P3: one independent review of these documents (no BLOCKER or MAJOR, one MINOR fixed in the suite)"):
+              "P9: the reference kit and its hash are recorded offline",
+              "P3: two independent reviews of these documents (no BLOCKER or MAJOR in either; one MINOR fixed in the suite",
+              "four MINORs in the second, a read-only review of the closure commits, two of them left as known follow-ups",
+              "a previous-tree check of the suite after a squash merge", "CRLF documents on a Windows checkout with core.autocrlf=true"):
         if not has(c1, w):
             pr.append(f"checklist 1 lacks '{w}'")
     for w in ("never run in a real Home Assistant of yours", "synthetic round numbers only", "maps no export or dump inputs",
-              "data quality stayed DEGRADED (the flip to OK is not shown)", "slow-callback lines under download load, none naming the integration",
+              "data quality stayed DEGRADED (the flip to OK is not shown)",
+              "13 slow-callback lines, none naming the integration, 2 of them coinciding with diagnostics downloads",
               "no Uninstall and no clean-order rollback ran on this pair"):
         if not has(c8, w):
             pr.append(f"checklist 8 lacks '{w}'")
+    if has(c8, "under download load"):
+        pr.append("checklist 8 says the slow-callback lines were logged under download load: the run records only 2 of the 13 as coinciding with a download")
     if not has(section(cl, "7"), "P1 reopens after any Core or Python update of your host"):
         pr.append("checklist 7 does not say that P1 reopens after any Core or Python update of the host")
     return pr
@@ -1898,7 +1917,17 @@ def make_mutants(F):
     add("rb", "the status line no longer says that P1 reopens after a Core or Python update", lambda t: subw(
         t, "and P1 reopens after any Core or Python update of the host, U3-G5", "and U3-G5"), "preconditions")
     add("rb", "P3 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: one independent review (lean mode)", "| **OPEN** 22 Nov 2026: one independent review (lean mode)"), "preconditions")
-    add("rb", "P3 closed without the edits no reviewer has read", lambda t: subw(t, "What no reviewer has read:", "What a reviewer has read:"), "preconditions")
+    add("rb", "P3 says again that no reviewer has read the closure edits", lambda t: sub1(t, "The edits made after that review", "What no reviewer has read: the edits made after that review"), "preconditions")
+    add("rb", "P3 drops the second review of the closure commits", lambda t: subw(t, "one independent read-only review of the three closure commits", "no review of the closure commits"), "preconditions")
+    add("rb", "P3's second review found one minor instead of four", lambda t: subw(t, "no BLOCKER, no MAJOR and four MINORs", "no BLOCKER, no MAJOR and one MINOR"), "preconditions")
+    add("rb", "P3's second review found a MAJOR", lambda t: subw(t, "no BLOCKER, no MAJOR and four MINORs", "no BLOCKER, one MAJOR and four MINORs"), "preconditions")
+    add("rb", "P3 closed without saying on what basis", lambda t: subw(t, "P3 is closed on that basis", "P3 is closed"), "preconditions")
+    add("rb", "P3 drops the previous-tree follow-up", lambda t: subw(t, "would need a guard if another change that alters the kit", "is fine even if another change alters the kit"), "preconditions")
+    add("rb", "P3 drops the CRLF follow-up", lambda t: sub1(t, "core.autocrlf=true", "the default settings"), "preconditions")
+    add("rb", "P3 no longer calls the two minors known follow-ups", lambda t: subw(t, "Two of those minors are left as known follow-ups, so that nobody relies on them silently", "Two of those minors are left"), "preconditions")
+    add("cl", "the checklist's P3 goes back to one review", lambda t: subw(t, "P3: two independent reviews of these documents", "P3: one independent review of these documents"), "l3_closure")
+    add("cl", "the checklist drops the two known follow-ups of P3", lambda t: subw(t, "two of them left as known follow-ups", "none left"), "l3_closure")
+    add("cl", "the checklist drops the CRLF follow-up of P3", lambda t: subw(t, "CRLF documents on a Windows checkout with core.autocrlf=true", "a Windows checkout"), "l3_closure")
     add("rb", "P9 reopened", lambda t: sub1(t, "| closed 22 Nov 2026: the reference kit and its", "| **OPEN** 22 Nov 2026: the reference kit and its"), "preconditions")
     add("rb", "P9 closed without saying the hash stays offline", lambda t: subw(t, "they are not in this repository, so the", "they are in this repository, so the"), "preconditions")
     add("rb", "P4 closed", lambda t: sub1(t, "| **OPEN**: closed only by a green run on the exact commit", "| closed: closed only by a green run on the exact commit"), "preconditions")
@@ -1931,7 +1960,22 @@ def make_mutants(F):
     add("cl", "the checklist no longer says P1 reopens after a Core or Python update", lambda t: subw(
         t, "after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5)", "the run holds"), "l3_closure")
     add("cl", "the checklist claims the flip of data quality to OK", lambda t: subw(t, "data quality stayed DEGRADED (the flip to OK is not shown)", "data quality returned to OK"), "l3_closure")
-    add("cl", "the checklist drops the slow-callback lines", lambda t: subw(t, "slow-callback lines under download load, none naming the integration", "no slow-callback line"), "l3_closure")
+    add("rb", "section 12 says all the lines coincided with downloads", lambda t: subw(
+        t, "2 of them are recorded as coinciding with the run's timed diagnostics downloads", "all of them coincided with the run's timed diagnostics downloads"), "l3_closure")
+    add("rb", "section 12 restores 'while diagnostics downloads were being taken'", lambda t: subw(
+        t, "logged 13 slow-callback lines, none naming", "logged 13 slow-callback lines while diagnostics downloads were being taken, none naming"), "l3_closure")
+    add("rb", "section 12 says one line named the integration", lambda t: subw(t, "13 slow-callback lines, none naming the integration", "13 slow-callback lines, one naming the integration"), "l3_closure")
+    add("rb", "section 12 changes the count of lines that coincided (2 to 11)", lambda t: subw(t, "2 of them are recorded as coinciding", "11 of them are recorded as coinciding"), "l3_closure")
+    add("rb", "section 12 changes the total (13 to 3)", lambda t: subw(t, "13 slow-callback lines, none naming", "3 slow-callback lines, none naming"), "l3_closure")
+    add("rb", "section 12 drops what the other lines were", lambda t: subw(t, "the others are classed as Home Assistant's own", "the others are the integration's own"), "l3_closure")
+    add("cl", "the checklist drops the slow-callback lines", lambda t: subw(
+        t, "13 slow-callback lines, none naming the integration, 2 of them coinciding with diagnostics downloads", "no slow-callback line"), "l3_closure")
+    add("cl", "the checklist says all the lines coincided with downloads", lambda t: subw(
+        t, "2 of them coinciding with diagnostics downloads", "all of them coinciding with diagnostics downloads"), "l3_closure")
+    add("cl", "the checklist says one line named the integration", lambda t: subw(
+        t, "13 slow-callback lines, none naming the integration", "13 slow-callback lines, one naming the integration"), "l3_closure")
+    add("cl", "the checklist restores 'under download load'", lambda t: subw(
+        t, "13 slow-callback lines, none naming the integration, 2 of them coinciding with diagnostics downloads", "slow-callback lines under download load, none naming the integration"), "l3_closure")
     add("cl", "the checklist drops that the run used synthetic numbers only", lambda t: sub1(t, "synthetic round numbers only", "real numbers"), "l3_closure")
     add("cl", "the checklist section 7 drops the reopening", lambda t: sub1(t, "P1 reopens after any Core or Python update of your host", "P1 stays closed"), "l3_closure")
     # --- what a restart does to the state folder

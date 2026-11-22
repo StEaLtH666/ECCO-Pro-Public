@@ -11,7 +11,9 @@ Closed: P1, P2 (one independent code review: one MAJOR and five minors, all fixe
 - **P1, closed 22 Nov 2026:** the L3 (WSL) kit-equivalence reference run on the exact kit (the one stacked on Ghost) passed on the isolated instance (Core 2026.11.0, Python 3.14.10):
   the kit loads, valid facts give `SITE_INVERTER_CONVERSION` PASS after a reload, invalid facts are WARN and withhold the two outputs, and the previous kit restored there loaded a site
   file with the facts and ignored them. **It holds only for those versions: after ANY Core or Python update of your host the run is repeated and P1 reopens (runbook 6, U3-G5).**
-  P9: the reference kit and its hash are recorded offline. P3: one independent review of these documents (no BLOCKER or MAJOR, one MINOR fixed in the suite).
+  P9: the reference kit and its hash are recorded offline. P3: two independent reviews of these documents (no BLOCKER or MAJOR in either; one MINOR fixed in the suite, and four MINORs in the
+  second, a read-only review of the closure commits, two of them left as known follow-ups: a previous-tree check of the suite after a squash merge, and CRLF documents on a Windows checkout with
+  core.autocrlf=true; runbook 5).
 - Open: P4 CI green on the exact commit (not pushed yet); P5 your M2 scan on that commit; P7 your rulings on section 3.
 
 **No automatic installation or live access is authorised.** Nothing is installed, restarted, reloaded or read live until every
@@ -109,7 +111,7 @@ own: if another supervised live step is in progress, this one waits. At install 
 
 - It has **never run in a real Home Assistant** of yours. The L3 (WSL) run on the exact kit (isolated instance, Core 2026.11.0, synthetic round numbers only) passed with limits: its
   harness maps no export or dump inputs, so the two outputs read unknown there for other reasons and data quality stayed DEGRADED (the flip to OK is not shown); its 0.25-CPU debug
-  session logged slow-callback lines under download load, none naming the integration; no Uninstall and no clean-order rollback ran on this pair.
+  session logged 13 slow-callback lines, none naming the integration, 2 of them coinciding with diagnostics downloads; no Uninstall and no clean-order rollback ran on this pair.
 - The facts are calibrated, not known: whether they hold in another season is not established (recalibration is a rule).
 - A wrong set inside the bounds can still hide faults: at 5 kW up to 600 W (discharge side) or 656 W (charge side) of expectation, against a
   250 W tolerance; the fit's fault-injection and hold-out rows, read by you, are the defence.
