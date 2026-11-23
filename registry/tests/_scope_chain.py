@@ -118,6 +118,7 @@ import _acs1_scope as _acs1  # noqa: E402
 import _acu1_scope as _acu1  # noqa: E402
 import _acs1c_scope as _acs1c  # noqa: E402
 import _acs1x_scope as _acs1x  # noqa: E402
+import _bpd1_scope as _bpd1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
@@ -1369,7 +1370,24 @@ EPC3 = Entry(
          "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "
          "Home Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3)
+# bpd1 (the start bypass detector: DETECT AND ALERT ONLY, option O2 of the R9 / Stage 3 integration plan; offline, nothing installed; _bpd1_scope.py): made on the export
+# after epc3. ADDED: the detector package and its suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op
+# path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; the package calls only persistent_notification.create and the setters
+# of its own helpers; it presses and writes nothing on the dongle, the inverter or any ECCO control, and prevents nothing.
+BPD1 = Entry(
+    id="bpd1", pr="BPD1", commit="unmerged",
+    reverts=dict(_bpd1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after bpd1
+        HA_MANIFEST: "530073677c8e5773ee2e169a0d0981e6c6263452de109707c5781b106e5758fa",
+    },
+    added_files=_bpd1.ADDED_FILES,
+    # _pex.fingerprint(BPD1): hashes its parent epc3's fingerprint and every declaration above
+    fingerprint="1aa04524b96baf52b70b5259ff099ca04915fe90e514eb225efcb32485b832b5",
+    note="the start bypass detector (detect and alert only): a package that notices a Dump to Grid or Charge Battery session that turned active without ECCO's own record "
+         "of the start, raises one persistent notification and records an incident in its own helpers; it prevents nothing, writes nothing on the dongle, the inverter or "
+         "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

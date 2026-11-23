@@ -144,6 +144,17 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Start bypass detector - bpd1 (detect and alert only; NOT installed, NOT live-proven). Notices a Dump to Grid or Charge Battery session that turned active
+  # without ECCO's own record of the start (the scheduled run's STARTED OK, or the guarded start), raises one persistent notification and records an incident in
+  # its own helpers. It writes nothing but those helpers and the notification (no dongle, inverter, TOU or ECCO control), PREVENTS NOTHING and is blind while
+  # Home Assistant is down. It reads the plan sensors, the two schedule packages' result texts and the guarded start script: install it in the SAME deployment as,
+  # or after, ecco_plan_helpers.yaml, ecco_dump_to_grid_guarded_start.yaml and the two schedule packages (the ONE full Home Assistant restart covers it; installed
+  # alone later it needs no restart: reload the four helper domains and automations, never "reload all").
+  - source: home-assistant/packages/ecco_start_bypass_detector.yaml
+    destination: /config/packages/ecco_start_bypass_detector.yaml
+    method: ssh_file_copy
+    restart_required: true
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml
