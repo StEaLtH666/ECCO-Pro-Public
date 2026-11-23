@@ -556,6 +556,19 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   - a readiness check (including a battery already at the Stop SOC), a missed-trigger watchdog, restart recovery, persistent
     notifications, and STARTING / FAILED / COMPLETED status.
   No firmware, dashboard or Modbus change.
+- **Power Flow Today chart: the shared tooltip stays inside the card and the viewport** (`home-assistant/dashboards/ecco_pro.yaml`,
+  post-export entry `ptt1`; the dashboard stays at 7.23.0, staged, not live-proven). The chart's tooltip lists five readings (Solar,
+  House, Battery, Grid, SOC). ApexCharts places it from the plot grid only and the card's own `overflow: hidden` clips it, so on the
+  Overview chart (card height 7 rows) the last reading, SOC, was cut off, and more of it on a phone layout. Each of the three copies of
+  the chart (Overview, Intelligence, System) gains one `apex_config.chart.events.mounted` EVAL string (the chart already uses EVAL for
+  its TOU annotation): a MutationObserver sees ApexCharts move the tooltip and moves it the shortest way into the card and the
+  viewport (all four edges, mouse and touch, window scroll and resize); only when that move would put it under the pointer is it put
+  beside it instead. The geometry is one pure function; the code writes only the tooltip's `style.left` / `style.top`, never its
+  content, class or styling, and cleans up when the chart is destroyed. No series, colour, value, axis, legend, annotation, grid,
+  `card_mod` or third-party card change, no service call, no entity. New suite
+  `home-assistant/tests/test_ecco_power_chart_tooltip.py` (an exhaustive grid for the pure function against an independent oracle, 19
+  mutants of it, a DOM stand-in for the glue with 10 mutants, the structural proof that nothing else in the dashboard moved) and the
+  exact reverter `registry/tests/_ptt1_scope.py`.
 
 ### Fixed (documentation)
 

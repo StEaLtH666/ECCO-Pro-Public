@@ -232,3 +232,27 @@ Overview's one flow card, 2D or 3D, to read the time-to-reserve sensor and to un
 the shared bundle and plans no resource change for it. The dashboard-only plan and the read-only resource prerequisite (which the
 plan does not check) are in `frontend/ecco-flow-3d-card/INSTALL_PREVIEW.md` section 7. `ovw3` changed no firmware, Home Assistant
 package, deployment, registry, Intelligence or ecco_core file, and adds no service call.
+
+## What ptt1 changed
+
+`ptt1` keeps the shared tooltip of the `Power Flow Today` chart inside its card and the viewport (`registry/tests/_ptt1_scope.py`; pinned by
+`home-assistant/tests/test_ecco_power_chart_tooltip.py`). The chart (`custom:apexcharts-card`) exists three times in the dashboard (Overview,
+Intelligence, System; identical but for the chart height and `grid_options`). ApexCharts places its five-reading tooltip from the plot grid only
+and the card's `overflow: hidden` clips it, so on the Overview chart the last reading (SOC) was cut off. It edits no chain-pinned artifact. Its one
+frozen edit is the dashboard: one `apex_config.chart.events.mounted` EVAL string per chart (the chart already evaluates EVAL strings for its
+TOU annotation). The dashboard version is not bumped (the precedent is `wsc1`, which changed the dashboard without a version bump of its own),
+so `VERSION.yaml`, the header notes and the v7.23.0 pins are untouched.
+
+The code is one pure function, `fit(rect, pointer, bounds, gap)`, and a small glue: a `MutationObserver` on the chart sees ApexCharts position
+the tooltip (`.apexcharts-tooltip`), computes the tooltip's rectangle from its `style.left` / `style.top` (the target of ApexCharts' 0.15 s
+transition, not the animated rectangle), intersects the card (`ha-card`) with the visual viewport, inset by 4 px, and moves the tooltip the
+shortest way inside; only if that move would put it under the pointer is it put beside (left or right of) the pointer, or above / below it,
+whichever side was already its own and fits. A tooltip that is already inside is never touched (no loop); bounds smaller than the tooltip
+align it to their top left. The pointer is tracked from `mousemove`, `touchstart` and `touchmove` on the chart. Window `scroll` and `resize`
+re-run the placement of a visible tooltip. Clean-up: a re-render on the same element replaces the previous instance, `chart.destroy()` is
+wrapped to abort every listener and the observer, and the window listeners remove themselves when the card is detached. It writes only
+`style.left` and `style.top`: never the tooltip's content, class or styling. ZERO firmware, Home Assistant package, deployment, registry,
+Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access.
+
+The code reads `window.visualViewport` and the card's DOM; it cannot see a clipping ancestor other than `ha-card` (a sticky Home Assistant
+header over the top of the view is not subtracted from the visible area).
