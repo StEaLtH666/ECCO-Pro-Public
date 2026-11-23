@@ -549,24 +549,33 @@ own Start button, and whether to enrol the card's `tsconfig.json` in the pin cha
 ### Start-button bypass detector (detect and alert only; offline, NOTHING INSTALLED)
 
 `home-assistant/packages/ecco_start_bypass_detector.yaml` is option O2 of the R9 / Stage 3 integration plan: a small Home Assistant package that NOTICES a
-start the dongle's own Start button made without ECCO's own path, and says so. It does not close the residual above. It PREVENTS NOTHING: only a firmware gate binds the Start button.
+start the dongle's own Start button made without ECCO's own path, and says so. It does not close the residual above. It PREVENTS NOTHING: only a firmware gate binds the Start button. Its notice says that "no ECCO record of this start was found within 45 s", never that ECCO
+did not start it: it can be an ECCO run whose record was late or unconfirmed, so read the schedule's last result before ending anything.
 
 - **What it detects.** A Dump to Grid or Free Power (Charge Battery) session turning active (the dongle's own `active` sensor going off to on) with no record of ECCO's own start:
   neither the schedule package's own `STARTED OK - <n>W for <m> min` (written inside the run, after its own press and a verified start, no earlier than 10 s before the session turned
   active) nor the guarded Dump to Grid start (its script triggered 0 to 180 s before, while none of the three facts below was true). It waits at most 45 s for either record, so a raw start is reported at about 45 s.
-- **What it reports.** One persistent notification per kind (replaced by the next incident, never dismissed by the package) and a small record in new helpers: the time, the kind, a short
+- **What it reports.** One persistent notification per kind (by the notice policy below; replaced by the next incident, never dismissed by the package) and a small record in new helpers: the time, the kind, a short
   text and a counter (`ecco_start_bypass_*`), plus a last-check text (PENDING, ECCO START, BYPASS NOTICE or CANNOT CLASSIFY). The three facts, read when the session turned active: (i) an export hold
   (Hold battery, Skip tonight, Prepare for power cut) was active, (ii) the Stop SOC staged on the dongle was below the effective reserve (Dump to Grid only), (iii) a plan reading was unreadable or invalid.
   The wording says that a deliberate start from the dongle's own screen or button, or from the card's own Start when no guarded start is configured, is ALSO outside ECCO's guarded path and is
-  reported as such (informational). Charge Battery has no guarded start and is not gated by an override, so its facts are shown for information and every start from the card's own Start is reported;
-  `input_boolean.ecco_start_bypass_notice_muted` hides the popups (never the record).
+  reported as such (informational).
+- **Notice policy (release coordinator decision, 23 Nov 2026).** The incident record (time, kind, text, counter and the last-check text) is ALWAYS written for a start with no ECCO record, and is never muted.
+  The popup is raised for Dump to Grid on every such start (a guarded start exists for it), and for Charge Battery ONLY when an export hold is active or a plan reading is unreadable or invalid (fact (ii)
+  does not apply to it), or when the check cannot classify (that popup is never held back). The reason: the card's own Start for Charge Battery has no guarded path, so every start from the card would
+  otherwise raise a popup and train the owner to mute the detector. A Charge Battery start with every fact false leaves the record and the last-check text and no popup.
+  `input_boolean.ecco_start_bypass_notice_muted` hides the popups only, for every kind.
+- **Channel.** The only channel is the Home Assistant UI notification (a persistent notification) and the records: no phone push and no card display yet. An administrator can mute it, switch its two
+  automations off or write a record (they are ordinary helpers): nothing here is a lock, and it records nothing of who did it.
 - **What it never does.** It calls only `persistent_notification.create`, `input_text.set_value`, `input_number.set_value` and `input_datetime.set_datetime`, and writes only its own helpers: no dongle,
   inverter, TOU, Stop SOC, write-enable, End / Restore or ECCO control is written or pressed. It adds no template entity and reads only entities this repository already contains. It touches no existing package.
 - **Limits.** It is blind while Home Assistant is down and for a session that started then (after a restart the sensor goes unavailable to on, which is not a start, so nothing is raised for a session already running).
   A script or client that uses the API key looks like a person. A marker it cannot read gives CANNOT CLASSIFY (a notification, never an all clear). A restart or an automation reload during the 45 s of a check
-  gives one CANNOT CLASSIFY. One check runs at a time; a flap after a recognised ECCO start more than 10 s later is reported. A raw press right after a refused guarded start is reported while a fact is true; with every
-  fact false it reads as the guarded start (the plan would have allowed it).
+  gives one CANNOT CLASSIFY. One check runs at a time; a flap after a recognised ECCO start more than 10 s later is reported. Any run of the guarded start script in the 180 s before the session counts as ECCO's start while no fact is true, whatever the script did (it leaves
+  no record but Home Assistant's own `last_triggered`), so a raw press right after a refused guarded start with all facts false reads as ECCO START (the guarded start refuses only on a fact);
+  while a fact is true the press is reported. A notice is "no ECCO record found", not proof: an ECCO run whose record arrives after 45 s, or whose result reads UNCONFIRMED or FAILED although the session is
+  its own, is reported the same way.
 - **Not verified.** Recalled, not verified on a real Home Assistant: a script entity's `last_triggered` attribute read by `as_timestamp`, `last_updated` moving only when a text changes, `trigger.from_state`, the `match` test,
-  `wait.completed`, and the dongle's `active` sensor not passing through off on a reconnect. The offline suite is `home-assistant/tests/test_ecco_start_bypass_detector.py` (the real package against the repository's dongle models and the real schedule, guarded start and plan packages; independent models; over 40 mutants).
+  `wait.completed`, and the dongle's `active` sensor not passing through off on a reconnect. The offline suite is `home-assistant/tests/test_ecco_start_bypass_detector.py` (the real package against the repository's dongle models and the real schedule, guarded start and plan packages; independent models; over 70 mutants).
 - **Install.** Needs the Stage 3 packages and R9's two schedule packages in the same or an earlier deployment. In the SAME deployment it adds no restart (the ONE full restart above). Installed later on its own it needs no restart: reload the helper
-  domains (`input_boolean`, `input_datetime`, `input_number`, `input_text`) and automations, never "reload all". The deployment manifest and the pin chain do not list it yet (a new package and its manifest stanza are a declared post-export entry; a separate step).
+  domains (`input_boolean`, `input_datetime`, `input_number`, `input_text`) and automations, never "reload all". The deployment manifest lists it (one stanza) and the pin chain carries it as the append-only post-export entry `bpd1` (the stanza is its only chain-pinned edit); nothing is installed.

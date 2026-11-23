@@ -1378,13 +1378,13 @@ BPD1 = Entry(
     id="bpd1", pr="BPD1", commit="unmerged",
     reverts=dict(_bpd1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after bpd1
-        HA_MANIFEST: "530073677c8e5773ee2e169a0d0981e6c6263452de109707c5781b106e5758fa",
+        HA_MANIFEST: "99ba89d5e4f4a3d021d0917653e86633aed5c61043bc1f42227c94f3778be035",
     },
     added_files=_bpd1.ADDED_FILES,
     # _pex.fingerprint(BPD1): hashes its parent epc3's fingerprint and every declaration above
-    fingerprint="1aa04524b96baf52b70b5259ff099ca04915fe90e514eb225efcb32485b832b5",
+    fingerprint="c549f75b8f8fac951042f74047bd07c6e0c1da6ac0c3116b34d12026c79e654b",
     note="the start bypass detector (detect and alert only): a package that notices a Dump to Grid or Charge Battery session that turned active without ECCO's own record "
-         "of the start, raises one persistent notification and records an incident in its own helpers; it prevents nothing, writes nothing on the dongle, the inverter or "
+         "of the start, always records an incident in its own helpers and raises a persistent notification (Charge Battery only with a fact true); it prevents nothing, writes nothing on the dongle, the inverter or "
          "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1)

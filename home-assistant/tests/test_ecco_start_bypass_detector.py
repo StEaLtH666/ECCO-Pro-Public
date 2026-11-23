@@ -14,15 +14,18 @@ The REAL package YAML runs under the FPS1 interpreter (_ha_script_sim.py, throug
                   packages; texts fit the 255-character helper; the stated limits are in the header and in the notice; ASCII, LF, no site value
   [1] ECCO's own  an ECCO scheduled start (Dump to Grid and Charge Battery) and the guarded start, through the real scripts: nothing to report, the
                   dongle sees exactly the calls it sees without the package
-  [2] bypass      a raw press (stage, arm, press) of each kind: one notification, the incident record (time, kind, text, counter), the wording;
-                  the three facts, for a table of hold / reserve / staged Stop SOC values against an independent model
+  [2] bypass      a raw press (stage, arm, press) of each kind: the incident record (time, kind, text, counter) ALWAYS and, by the notice policy,
+                  one notification (Dump to Grid on every start with no ECCO record, Charge Battery only with a fact true); the wording (no ECCO
+                  record of this start was found within 45 s, never "ECCO did not start it"; this can be an ECCO run whose record was late);
+                  held_by; the three facts, for a table of hold / reserve / staged Stop SOC values against an independent model; the Charge
+                  Battery policy case by case; an ECCO record of the OTHER kind is no record of this start
   [3] markers     the verdict over a grid of schedule texts (own form, stale, recovery, failed, blocked, unreadable) x guarded start (age, state)
                   x facts, against an independent model; the 45 s wait, the 10 s freshness window and the 180 s guard window at their edges
   [4] unreadable  a marker that cannot be read is CANNOT CLASSIFY (a notification, no counter, never an all clear, no log noise)
   [5] restart     a restart or reconnect with a session running raises nothing; a restart or an automation reload during a check becomes one
                   CANNOT CLASSIFY, and a storm of restarts adds none; an ordinary start or reload is silent
   [6] repeats     a flap during a check is dropped silently; a new start after a check is a new check; the documented flap limit is pinned
-  [7] mute        the mute switch hides the popups and never the record
+  [7] mute        the mute switch hides the popups and never the record (Charge Battery included)
   [8] mutation    in-memory mutants of the package, each caught
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
@@ -91,7 +94,10 @@ GUARD_WINDOW = 180.0
 DET_PKG = yaml.safe_load(DET_TEXT)
 PARSED = {n: yaml.safe_load(t) for n, t in (("dump", DUMP_TEXT), ("free", FREE_TEXT), ("plan", PLAN_TEXT), ("guard", GUARD_TEXT))}
 MSG_PINS = ("deliberate start from the dongle's own screen or button", "PREVENTS NOTHING", "looks like a person", "while Home Assistant is down",
-            "OUTSIDE ECCO's own paths", "End and restore")
+            "OUTSIDE ECCO's own paths", "End and restore", "no ECCO record of this start was found within 45 s",
+            "this can be an ECCO run whose record was late or unconfirmed: read the schedule last result before ending anything",
+            "If it was not an ECCO run and not you, end the session with End and restore")
+MSG_BANNED = ("ECCO did not start it", "outside ECCO scheduled or guarded start")      # the notice never asserts who started it (it can be an ECCO run with a late record)
 
 
 # ================================================================================================================================
@@ -282,19 +288,33 @@ for _n, _p in sorted({**OTHER_PKGS, "ecco_start_bypass_detector.yaml": PKGS / "e
 check(f"no repeated key inside any package, and no helper, script, automation id or template unique_id defined twice across the {len(OTHER_PKGS) + 1} packages", dup == [], str(dup[:3]))
 nc0 = "\n".join(line for line in DET_TEXT.split("\n") if not line.lstrip().startswith("#"))
 head = DET_TEXT.split("\ninput_boolean:")[0]
+head_flat = re.sub(r"\s*\n#\s*", " ", head)       # the comment block as running text, so that a phrase may wrap across lines
 check("the header states, in plain words: not installed, detect and alert only, never actuates, prevents nothing, visible within about a minute, blind while Home Assistant is down, "
       "a script using the API key looks like a person, a deliberate owner start from the dongle's own UI is also outside the guarded path",
-      all(s in head for s in ("NOT INSTALLED, NOT LIVE-PROVEN", "DETECT AND ALERT ONLY", "NEVER actuates", "PREVENTS NOTHING", "VISIBLE within about a minute",
-                              "BLIND while Home Assistant is down", "LOOKS LIKE A PERSON", "deliberate start from the dongle's own", "Recalled, NOT verified")))
-check("the notice says the same in the text the owner sees (deliberate start, prevents nothing, looks like a person, down, outside ECCO's own paths, End and restore)",
-      all(s in DET_TEXT for s in MSG_PINS))
+      all(s in head_flat for s in ("NOT INSTALLED, NOT LIVE-PROVEN", "DETECT AND ALERT ONLY", "NEVER actuates", "PREVENTS NOTHING", "VISIBLE within about a minute",
+                                   "BLIND while Home Assistant is down", "LOOKS LIKE A PERSON", "deliberate start from the dongle's own", "Recalled, NOT verified")))
+check("the header states the notice wording and the Charge Battery notice policy with its reason: no ECCO record found within 45 s (never that ECCO did not start it; it can be an ECCO run with a late "
+      "or unconfirmed record), the record always written and never muted, Dump to Grid popups on every start, Charge Battery popups only with a fact true or cannot classify, because the card's own "
+      "Start has no guarded path; the only channel is the Home Assistant UI notification; an administrator can mute, disable or write; any guarded-script run within 180 s counts",
+      all(s in head_flat for s in ("NOTICE POLICY", "no ECCO record of this start was found within 45 s", "NEVER that ECCO did not start it", "this can be an ECCO run whose record was late or unconfirmed",
+                                   "is ALWAYS written for a start with no ECCO record, and is never muted", "for Dump to Grid: on EVERY start with no ECCO record",
+                                   "for Charge Battery (Free Power): ONLY when at least one of the facts", "or when the check is CANNOT CLASSIFY",
+                                   "has no guarded path, so every start from the card would otherwise raise a popup and train the owner to mute the detector",
+                                   "hides the popups only", "no phone push and no card display yet", "An administrator can mute the popups, switch the two automations off, or write the detector's helpers",
+                                   "Any run of the guarded start script in the 180 s before the session counts as ECCO's start")))
+_wait_s = re.findall(r'timeout: "00:00:(\d\d)"', DET_TEXT)
+check("the wait for ECCO's record is 45 s and every text that names the wait (header, notice, record, last check) says 45 s and no other number of seconds",
+      _wait_s == ["45"] and set(re.findall(r"within (\d+) s", DET_TEXT)) == {"45"} and DET_TEXT.count("was found within 45 s") >= 4, f"{_wait_s} {sorted(set(re.findall(r'within (\d+) s', DET_TEXT)))}")
+check("the notice says the same in the text the owner sees (no ECCO record found within 45 s, can be an ECCO run with a late record: read the schedule last result before ending anything, "
+      "deliberate start, prevents nothing, looks like a person, down, outside ECCO's own paths, End and restore) and no text asserts that ECCO did not start it",
+      all(s in DET_TEXT for s in MSG_PINS) and not [b for b in MSG_BANNED if b.lower() in "\n".join(x for x in DET_TEXT.split("\n") if not x.lstrip().startswith("#")).lower()])
 check("ASCII only, LF line ends, no tab, no site value (no address, e-mail, link, key or secret)",
       DET_TEXT.isascii() and b"\r" not in DET_RAW and "\t" not in DET_TEXT
       and not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|@|https?://|secret|token|password|api_key", nc0, re.I))
 manifest = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
 stanza = re.findall(r"- source: home-assistant/packages/ecco_start_bypass_detector\.yaml\n\s+destination: (\S+)\n\s+method: (\S+)\n\s+restart_required: (\S+)", manifest)
-check("when the deployment manifest lists the package it lists it once, to /config/packages, by ssh_file_copy, with restart_required true (it may not list it yet)",
-      stanza in ([], [("/config/packages/ecco_start_bypass_detector.yaml", "ssh_file_copy", "true")]), str(stanza))
+check("the deployment manifest lists the package exactly once, to /config/packages, by ssh_file_copy, with restart_required true (the pin-chain entry bpd1 pins that stanza)",
+      stanza == [("/config/packages/ecco_start_bypass_detector.yaml", "ssh_file_copy", "true")], str(stanza))
 
 
 # ================================================================================================================================
@@ -304,7 +324,7 @@ class Light:
     """The detector package alone. The plan sensors, the schedule texts, the guarded script and the dongle's sensors are plain states that the case sets;
     the case schedules every event at an explicit offset from the instant the session turns active (`start`)."""
 
-    def __init__(self, pkg=None, hold="clear", reserve="20.0", stop="30.0", muted=False, guard="off", texts=None):
+    def __init__(self, pkg=None, hold="clear", reserve="20.0", stop="30.0", muted=False, guard="off", texts=None, hold_attrs=None):
         self.pw = P.PlanWorld(T0, [copy.deepcopy(DET_PKG if pkg is None else pkg)], ZONE)
         self.w = self.pw.w
         w = self.w
@@ -316,6 +336,8 @@ class Light:
             w.set(GUARD, guard)
         if muted:
             w.set(MUTED, "on")
+        if hold_attrs is not None:
+            w.set(HOLD, hold, hold_attrs)      # the template sensor's held_by attribute (the interpreter does not render a template sensor's attributes)
         self.pw.ha.start()
         w.run_until(w.t + 20)
         self.t_start = w.t + 20          # the instant every case turns a session on
@@ -392,33 +414,67 @@ def expected_record(kind, hold, reserve, stop):
     return ov, bl, ("YES" if f_unr else "no"), tail
 
 
+def popup_expected(kind, hold, reserve, stop) -> bool:
+    """The independent reference for the notice policy: Dump to Grid raises its popup on every start with no ECCO record; Charge Battery only when a fact is true."""
+    f_over, f_below, f_unr, _ = model_facts(kind, hold, reserve, stop)
+    return kind == DUMP or f_over or f_below or f_unr
+
+
+def record_for(kind, hold, reserve, stop, clock="21:00") -> str:
+    """The incident text a start with no ECCO record leaves (always, popup or not)."""
+    ov, bl, rd, _tail = expected_record(kind, hold, reserve, stop)
+    return (f"{KIND_NAME[kind]} at {clock}: no ECCO record of this start was found within 45 s (maybe a late or unconfirmed ECCO run). "
+            f"Override: {ov}. Stop SOC below reserve: {bl}. Plan reading unreadable: {rd}. Detected only; not stopped.")
+
+
+def check_for(kind, popup, clock="21:00") -> str:
+    return (f"BYPASS NOTICE - {KIND_NAME[kind]} active at {clock}: no ECCO record of this start was found within 45 s (detected only; "
+            + ("see the notification)" if popup else "recorded without a popup: no plan fact was true)"))
+
+
 # ---- the cases ------------------------------------------------------------------------------------------------------------------
 def case_raw(pkg, kind, hold="clear", reserve="20.0", stop="30.0") -> list[str]:
-    """A raw press: one notification at the end of the wait, the record, the wording, the facts against the model."""
+    """A raw press: the incident record ALWAYS; the notification by the policy (Dump to Grid always, Charge Battery only with a fact true) at the end of the wait; the wording and the facts against the model."""
     L = Light(pkg, hold=hold, reserve=reserve, stop=stop).go(kind)
     bad = quiet(L)
     cr = L.creates()
-    if [n for _t, n in cr] != [NOTE[kind]] or not (WAIT - 1 <= cr[0][0] <= 60):
-        bad.append(f"notifications {cr}")
+    popup = popup_expected(kind, hold, reserve, stop)
+    if [n for _t, n in cr] != ([NOTE[kind]] if popup else []) or (popup and not (WAIT - 1 <= cr[0][0] <= 60)):
+        bad.append(f"notifications {cr} (the policy wants a popup: {popup})")
         return bad
-    ov, bl, rd, tail = expected_record(kind, hold, reserve, stop)
-    want = f"{KIND_NAME[kind]} started at 21:00 outside ECCO scheduled or guarded start. Override: {ov}. Stop SOC below reserve: {bl}. Plan reading unreadable: {rd}. Detected only; not stopped."
+    want = record_for(kind, hold, reserve, stop)
+    if len(want) > 250:
+        bad.append(f"the model's own record text is {len(want)} characters")
     if L.s(TEXT) != want:
         bad.append(f"text {L.s(TEXT)!r} != {want!r}")
     if L.s(KIND) != kind or L.count() != 1.0:
         bad.append(f"kind {L.s(KIND)} count {L.s(COUNT)}")
     if L.w.states[TIME][1].get("timestamp") != int(L.t_start):
         bad.append(f"time {L.w.states[TIME]}")
-    if not L.s(CHECK).startswith(f"BYPASS NOTICE - {KIND_NAME[kind]} started at 21:00 "):
-        bad.append(f"check {L.s(CHECK)!r}")
-    if not L.title(NOTE[kind]).endswith(tail) or "started OUTSIDE ECCO scheduled or guarded start" not in L.title(NOTE[kind]):
-        bad.append(f"title {L.title(NOTE[kind])!r} tail {tail!r}")
+    if L.s(CHECK) != check_for(kind, popup):
+        bad.append(f"check {L.s(CHECK)!r} != {check_for(kind, popup)!r}")
+    for banned in MSG_BANNED:
+        if banned.lower() in (L.s(TEXT) + " " + L.s(CHECK)).lower():
+            bad.append(f"the record asserts {banned!r}")
+    if not popup:
+        if L.w.notifications:
+            bad.append(f"a popup where the policy raises none: {sorted(L.w.notifications)}")
+        return bad
+    ov, bl, rd, tail = expected_record(kind, hold, reserve, stop)
+    title = L.title(NOTE[kind])
+    if not title.endswith(tail) or "became active with NO ECCO record of its start" not in title:
+        bad.append(f"title {title!r} tail {tail!r}")
     msg = L.message(NOTE[kind])
     for pin in MSG_PINS:
         if pin not in msg:
             bad.append(f"message lacks {pin!r}")
+    for banned in MSG_BANNED:
+        if banned.lower() in (msg + " " + title).lower():
+            bad.append(f"the notice asserts {banned!r}")
     if (kind == FREE) != ("ECCO does not gate a Charge Battery start" in msg):
         bad.append("the Charge Battery sentence")
+    if kind == FREE and "is recorded without a popup" not in msg:
+        bad.append("the Charge Battery sentence does not say why this popup was raised")
     return bad
 
 
@@ -475,9 +531,12 @@ def case_marker_model(pkg, kind, sched, guard, **facts) -> list[str]:
         bad.append(f"{kind} sched={sched} guard={guard} {facts}: got {got} want {want} ({L.s(CHECK)[:60]!r})")
         return bad
     cr = [n for _t, n in L.creates()]
-    exp = {"ECCO": [], "BYPASS": [NOTE[kind]], "CANNOT": [UNCL]}[want]
+    popup = popup_expected(kind, facts.get("hold", "clear"), facts.get("reserve", "20.0"), facts.get("stop", "30.0"))
+    exp = {"ECCO": [], "BYPASS": [NOTE[kind]] if popup else [], "CANNOT": [UNCL]}[want]
     if cr != exp:
         bad.append(f"{sched} {guard}: notifications {cr} want {exp}")
+    if want == "BYPASS" and (L.count() != 1.0 or L.s(KIND) != kind or not L.s(TEXT)):
+        bad.append(f"{sched} {guard}: a start with no ECCO record left no incident record (popup {popup}): count {L.s(COUNT)} kind {L.s(KIND)!r}")
     if want == "CANNOT" and (L.count() != 0 or L.s(CHECK).startswith("ECCO START")):
         bad.append("a cannot-classify start counted or read as an all clear")
     if want == "ECCO" and (L.count() != 0 or L.s(KIND) != ""):
@@ -565,6 +624,83 @@ def case_unreadable(pkg) -> list[str]:
     if "the guarded start script could not be read" not in L.message(UNCL):
         bad.append("guard unreadable: reason")
     return bad
+
+
+def case_held_by(pkg) -> list[str]:
+    """The notice names what holds: the hold sensor's held_by attribute as it stands when the session turns active; 'unknown' when it has none or an empty one."""
+    bad = []
+    for kind in (DUMP, FREE):
+        for attrs, by in (({"held_by": "Hold battery, Skip tonight"}, "Hold battery, Skip tonight"), ({"held_by": "Prepare for power cut"}, "Prepare for power cut"),
+                          (None, "unknown"), ({"held_by": ""}, "unknown")):
+            L = Light(pkg, hold="held", hold_attrs=attrs).go(kind)
+            want = f"- override: an override was ACTIVE (Hold battery, Skip tonight or Prepare for power cut; held by {by});"
+            if want not in L.message(NOTE[kind]):
+                bad.append(f"{kind} held_by {attrs}: the notice lacks {want!r}")
+            bad += quiet(L)
+    return bad
+
+
+def case_cross_kind(pkg) -> list[str]:
+    """ECCO's STARTED OK of the OTHER kind is no record of this start: a Dump to Grid session beside a fresh Free Power STARTED OK is a bypass, and the reverse (the plan held, so that
+    Charge Battery raises its popup). The same-kind text beside the other kind's is the control."""
+    bad = []
+    for kind, other in ((DUMP, FREE), (FREE, DUMP)):
+        for off in (0.4, -FRESH, 20.0):
+            L = Light(pkg, hold="held")
+            L.set_at(off, LAST[other], OWN_TEXT[other])
+            L.go(kind)
+            if verdict_of(L) != "BYPASS" or [n for _t, n in L.creates()] != [NOTE[kind]] or L.count() != 1.0 or L.s(KIND) != kind:
+                bad.append(f"{kind} beside a fresh {other} STARTED OK at {off:+.1f} s: {verdict_of(L)} {L.creates()} count {L.s(COUNT)}")
+            bad += quiet(L)
+        L = Light(pkg, hold="held")
+        L.set_at(0.4, LAST[other], OWN_TEXT[other])
+        L.set_at(0.4, LAST[kind], OWN_TEXT[kind])
+        L.go(kind)
+        if verdict_of(L) != "ECCO" or L.creates() or L.count() != 0.0:
+            bad.append(f"{kind} with its own STARTED OK beside the other kind's is not recognised as ECCO's: {verdict_of(L)} {L.creates()}")
+    return bad
+
+
+def case_policy(pkg) -> list[str]:
+    """The Charge Battery notice policy: the record is ALWAYS written; the popup only with a fact true (an override, an unreadable or invalid plan reading) or when the check cannot classify;
+    Dump to Grid raises its popup with every fact false; the mute switch never mutes the record."""
+    bad = []
+    # (a) every fact false: the record twice (the counter follows), no popup at all
+    L = Light(pkg)
+    L.set_at(0, ACTIVE[FREE], "on")
+    L.set_at(100, ACTIVE[FREE], "off")
+    L.set_at(200, ACTIVE[FREE], "on")
+    L.w.run_until(L.t_start + 300)
+    clock2 = datetime.fromtimestamp(L.t_start + 200, L.pw.zone).strftime("%H:%M")
+    if L.creates() or L.w.notifications or L.count() != 2.0 or L.s(KIND) != FREE or L.s(TEXT) != record_for(FREE, "clear", "20.0", "30.0", clock2) or L.s(CHECK) != check_for(FREE, False, clock2):
+        bad.append(f"two quiet Charge Battery starts: {L.creates()} count {L.s(COUNT)} kind {L.s(KIND)!r} check {L.s(CHECK)[:90]!r}")
+    bad += quiet(L)
+    # (b) each fact alone raises the popup (and the record is written)
+    for hold, reserve in (("held", "20.0"), ("unavailable", "20.0"), ("junk", "20.0"), ("clear", "unavailable"), ("clear", "nan"), ("clear", "120"), ("clear", "-5")):
+        L = Light(pkg, hold=hold, reserve=reserve).go(FREE)
+        if [n for _t, n in L.creates()] != [NOTE[FREE]] or L.count() != 1.0 or L.s(CHECK) != check_for(FREE, True):
+            bad.append(f"Charge Battery with hold {hold!r} reserve {reserve!r}: {L.creates()} count {L.s(COUNT)} check {L.s(CHECK)[:60]!r}")
+    # (c) the staged Stop SOC is not a Charge Battery fact: unreadable, below the reserve or above 100, no popup
+    for stop in ("unavailable", "5.0", "150"):
+        L = Light(pkg, stop=stop).go(FREE)
+        if L.creates() or L.count() != 1.0 or L.s(CHECK) != check_for(FREE, False):
+            bad.append(f"Charge Battery with the Dump Stop SOC {stop!r}: {L.creates()} count {L.s(COUNT)}")
+    # (d) Dump to Grid raises its popup with every fact false
+    L = Light(pkg).go(DUMP)
+    if [n for _t, n in L.creates()] != [NOTE[DUMP]] or not L.title(NOTE[DUMP]).endswith("(informational)") or L.count() != 1.0:
+        bad.append(f"Dump to Grid with every fact false: {L.creates()} {L.title(NOTE[DUMP])!r}")
+    # (e) cannot classify for Charge Battery with every fact false still raises its popup (never held back) and counts no incident
+    L = case_marker(pkg, FREE, ("unavailable", None), None)
+    if [n for _t, n in L.creates()] != [UNCL] or L.count() != 0.0 or not L.s(CHECK).startswith("CANNOT CLASSIFY - "):
+        bad.append(f"Charge Battery cannot classify: {L.creates()} count {L.s(COUNT)} {L.s(CHECK)[:40]!r}")
+    # (f) the mute switch hides the popup (a fact true) and never the record; a quiet start is recorded while muted too
+    L = Light(pkg, hold="held", muted=True).go(FREE)
+    if L.creates() or L.count() != 1.0 or L.s(KIND) != FREE or L.s(TEXT) != record_for(FREE, "held", "20.0", "30.0") or L.w.states[TIME][1].get("timestamp") != int(L.t_start):
+        bad.append(f"muted Charge Battery with an override: {L.creates()} count {L.s(COUNT)}")
+    L = Light(pkg, muted=True).go(FREE)
+    if L.creates() or L.count() != 1.0 or L.s(TEXT) != record_for(FREE, "clear", "20.0", "30.0") or L.s(CHECK) != check_for(FREE, False):
+        bad.append(f"muted quiet Charge Battery: {L.creates()} count {L.s(COUNT)}")
+    return bad + quiet(L)
 
 
 def reload_ha(L: Light, ha_start: bool = True, reload_event: bool = False):
@@ -675,14 +811,15 @@ def case_repeats(pkg) -> list[str]:
     if [n for _t, n in L.creates()] != [NOTE[DUMP]] or L.count() != 1.0:
         bad.append(f"two kinds during a check: {L.creates()}")
     bad += quiet(L, allow_drops=True)
-    # a new start after the check is a new check: a second notice replaces the first (same id), the counter moves, the record follows
-    L = Light(pkg)
-    L.set_at(0, ACTIVE[DUMP], "on")
-    L.set_at(100, ACTIVE[DUMP], "off")
-    L.set_at(200, ACTIVE[FREE], "on")
-    L.w.run_until(L.t_start + 300)
-    if [n for _t, n in L.creates()] != [NOTE[DUMP], NOTE[FREE]] or L.count() != 2.0 or L.s(KIND) != FREE or set(L.w.notifications) != {NOTE[DUMP], NOTE[FREE]}:
-        bad.append(f"two sessions: {L.creates()} count {L.s(COUNT)} kind {L.s(KIND)}")
+    # a new start after the check is a new check: the counter moves and the record follows; the second popup (Charge Battery: only with a fact true) is its own notice
+    for hold, popups in (("held", [NOTE[DUMP], NOTE[FREE]]), ("clear", [NOTE[DUMP]])):
+        L = Light(pkg, hold=hold)
+        L.set_at(0, ACTIVE[DUMP], "on")
+        L.set_at(100, ACTIVE[DUMP], "off")
+        L.set_at(200, ACTIVE[FREE], "on")
+        L.w.run_until(L.t_start + 300)
+        if [n for _t, n in L.creates()] != popups or L.count() != 2.0 or L.s(KIND) != FREE or set(L.w.notifications) != set(popups):
+            bad.append(f"two sessions (hold {hold}): {L.creates()} count {L.s(COUNT)} kind {L.s(KIND)}")
     L = Light(pkg)
     L.set_at(0, ACTIVE[DUMP], "on")
     L.set_at(100, ACTIVE[DUMP], "off")
@@ -721,9 +858,12 @@ def case_flap_limit(pkg) -> list[str]:
 def case_mute(pkg) -> list[str]:
     bad = []
     for kind in (DUMP, FREE):
-        L = Light(pkg, muted=True).go(kind)
-        if L.creates() or L.count() != 1.0 or L.s(KIND) != kind or not L.s(TEXT) or not L.s(CHECK).startswith("BYPASS NOTICE - "):
+        L = Light(pkg, muted=True, hold="held").go(kind)       # held: Charge Battery raises its popup only then, so the mute is what hides it
+        if L.creates() or L.count() != 1.0 or L.s(KIND) != kind or not L.s(TEXT) or not L.s(CHECK).startswith("BYPASS NOTICE - ") or L.w.states[TIME][1].get("timestamp") != int(L.t_start):
             bad.append(f"muted {kind} bypass: {L.creates()} count {L.s(COUNT)} check {L.s(CHECK)[:30]!r}")
+        L = Light(pkg, hold="held").go(kind)
+        if len(L.creates()) != 1:
+            bad.append(f"the same {kind} start unmuted raised {L.creates()}")
     L = case_marker(pkg, DUMP, ("unavailable", None), None, muted=True)
     if L.creates() or not L.s(CHECK).startswith("CANNOT CLASSIFY - "):
         bad.append(f"muted cannot classify: {L.creates()} {L.s(CHECK)[:30]!r}")
@@ -767,16 +907,22 @@ def case_timing(pkg) -> list[str]:
     cr = L.creates()
     if len(cr) != 1 or not (WAIT - 0.5 <= cr[0][0] <= WAIT + 1):
         bad.append(f"the notice at {cr}")
-    L = Light(pkg)
+    L = Light(pkg, hold="held")
     L.set_at(0, ACTIVE[FREE], "on")
     L.w.run_until(L.t_start + 59)
     if len(L.creates()) != 1:
-        bad.append("a Charge Battery raw start is not reported within a minute")
+        bad.append("a Charge Battery raw start with an override is not reported within a minute")
+    L = Light(pkg)
+    L.set_at(0, ACTIVE[FREE], "on")
+    L.w.run_until(L.t_start + 59)
+    if L.creates() or L.count() != 1.0:
+        bad.append(f"a quiet Charge Battery raw start is not recorded within a minute without a popup: {L.creates()} count {L.s(COUNT)}")
     return bad
 
 
 BATTERY_QUICK = (
     ("raw Dump to Grid", lambda p: case_raw(p, DUMP)), ("raw Charge Battery", lambda p: case_raw(p, FREE)),
+    ("Charge Battery notice policy", case_policy), ("held_by", case_held_by), ("the other kind's record", case_cross_kind),
     ("markers", case_markers_core), ("ECCO starts settle at once", case_ecco_fast), ("facts", lambda p: case_facts(p, True)),
     ("guard with a fact true", case_guard_facts), ("unreadable markers", case_unreadable), ("restart", case_restart),
     ("repeats", case_repeats), ("flap limit", case_flap_limit), ("mute", case_mute), ("timing", case_timing),
@@ -974,15 +1120,17 @@ check("[2] a raw press with the staged Stop SOC (20) below the effective reserve
       d.successes == 1 and "Stop SOC below reserve: YES" in pw.w.state(TEXT) and "was BELOW the effective reserve (60 %)" in pw.w.notifications[NOTE[DUMP]]["message"], pw.w.state(TEXT)[:140])
 pw, d = heavy_free()
 raw_free(pw, d)
-check("[2] a raw Charge Battery press: the dongle starts, one notice for kind free_power (informational: Charge Battery has no Stop SOC and is not gated by an override), count 1",
-      d.successes == 1 and detector_creates(pw) == [NOTE[FREE]] and pw.w.state(KIND) == FREE and pw.w.state(COUNT) == "1.0"
-      and pw.w.notifications[NOTE[FREE]]["title"].endswith("(informational)") and "Stop SOC below reserve: n/a" in pw.w.state(TEXT)
-      and "ECCO does not gate a Charge Battery start" in pw.w.notifications[NOTE[FREE]]["message"], pw.w.state(TEXT)[:140])
+check("[2] a raw Charge Battery press with the plan clear (the card's own Start has no guarded path): the dongle starts; the incident record is written (kind free_power, count 1, Stop SOC n/a, "
+      "the time) and NO popup is raised (the notice policy: no fact is true); the last check says it was recorded without a popup",
+      d.successes == 1 and detector_creates(pw) == [] and NOTE[FREE] not in pw.w.notifications and pw.w.state(KIND) == FREE and pw.w.state(COUNT) == "1.0"
+      and "Stop SOC below reserve: n/a" in pw.w.state(TEXT) and "no ECCO record of this start was found within 45 s" in pw.w.state(TEXT)
+      and pw.w.state(CHECK) == check_for(FREE, False) and pw.w.states[TIME][1].get("timestamp"), pw.w.state(CHECK)[:140])
 pw, d = heavy_free()
 pw.run_script("ecco_plan_override_start", {"kind": "skip_tonight", "expiry_min": 120})
 raw_free(pw, d)
-check("[2] a raw Charge Battery press during Skip tonight: reported with the override fact for information (ECCO does not gate Charge Battery on it)",
-      d.successes == 1 and "Override: ACTIVE" in pw.w.state(TEXT) and pw.w.notifications[NOTE[FREE]]["title"].endswith("- with an override active or unreadable"), pw.w.state(TEXT)[:100])
+check("[2] a raw Charge Battery press during Skip tonight: the popup IS raised (an override is a fact), with the override fact for information (ECCO does not gate Charge Battery on it), and the record",
+      d.successes == 1 and detector_creates(pw) == [NOTE[FREE]] and "Override: ACTIVE" in pw.w.state(TEXT) and pw.w.state(COUNT) == "1.0"
+      and pw.w.notifications[NOTE[FREE]]["title"].endswith("- with an override active or unreadable"), pw.w.state(TEXT)[:100])
 pw, d = heavy_dump(owner=40)
 pw0, d0 = heavy_dump(owner=40, detector=False)
 for x, y in ((pw, d), (pw0, d0)):
@@ -992,7 +1140,18 @@ check("[2] a raw press: the dongle and every other service call are identical wi
 print("[2] the three facts, against an independent model (a raw press in a world that holds only the package)")
 bad_f = case_facts(DET_PKG, quick=False)
 check(f"[2] {len(FACT_DUMP)} Dump to Grid and {len(FACT_FREE)} Charge Battery combinations of hold, effective reserve and staged Stop SOC (clear / held / unavailable / junk; a number, unavailable, nan, inf, below 0, above 100, equal) "
-      "give exactly the modelled override, Stop SOC, unreadable facts, title and record text", bad_f == [], str(bad_f[:3]))
+      "give exactly the modelled override, Stop SOC, unreadable facts, popup (the policy), title, record text and last check", bad_f == [], str(bad_f[:3]))
+_longest = max(len(record_for(k, h, r, s)) for k, rows in ((DUMP, FACT_DUMP), (FREE, FACT_FREE)) for h, r, s in rows)
+check("[2] the longest incident text over all those combinations fits the 250 characters a run writes (nothing is cut)", _longest <= 250, str(_longest))
+print("[2] the Charge Battery notice policy (record always, popup only with a fact true or cannot classify), the held_by text, the other kind's record")
+bad_pol = case_policy(DET_PKG)
+check("[2] a quiet Charge Battery start (every fact false) is recorded (time, kind, text, counter, last check) with no popup, twice; each fact alone (an override, the hold sensor unreadable, the effective reserve "
+      "unreadable or invalid) raises the popup; the Dump Stop SOC is no Charge Battery fact; Dump to Grid raises its popup with every fact false; Charge Battery cannot-classify still raises its popup; "
+      "the mute hides the popup and never the record", bad_pol == [], str(bad_pol[:3]))
+bad_hb = case_held_by(DET_PKG)
+check("[2] the notice names what holds (held_by as it stands, 'unknown' when absent or empty), for both kinds", bad_hb == [], str(bad_hb[:3]))
+bad_ck = case_cross_kind(DET_PKG)
+check("[2] ECCO's STARTED OK of the OTHER kind is no record of this start (Dump to Grid beside a fresh Free Power STARTED OK, and the reverse, at three offsets) and the same-kind text is recognised", bad_ck == [], str(bad_ck[:3]))
 
 print("[3] the verdict over a grid of ECCO's own records")
 grid_bad: list[str] = []
@@ -1108,8 +1267,44 @@ MUTANTS = [
      "- action: number.set_value\n                continue_on_error: true\n                target:\n                  entity_id: number.ecco_clock_dongle_dump_to_grid_stop_soc", None),
     ("Charge Battery counts an unreadable Stop SOC as an unreadable plan reading", "or (kind == 'dump_to_grid' and staged_stop_soc < 0) }}", "or staged_stop_soc < 0 }}", None),
     ("the Charge Battery title tail claims a plan check would have refused it", "{%- if kind == 'dump_to_grid' and any_fact -%}", "{%- if any_fact -%}", None),
-    ("the incident text drops the facts", "start. Override: '", "start. '", None),
+    ("the incident text drops the facts", "ECCO run). Override: '", "ECCO run). '", None),
     ("a second entity is read (the dongle's write enable)", "script.ecco_dump_to_grid_start_guarded', 'last_triggered'", "switch.ecco_clock_dongle_dump_to_grid_write_enable', 'last_triggered'", None),
+    # ---- the Charge Battery notice policy (record always, popup only with a fact true) ----
+    ("the popup policy is dropped (every Charge Battery start raises a popup)", "popup_wanted: \"{{ kind == 'dump_to_grid' or any_fact }}\"", "popup_wanted: \"{{ true }}\"", None),
+    ("the popup policy holds back the Dump to Grid popup too (a fact is needed)", "popup_wanted: \"{{ kind == 'dump_to_grid' or any_fact }}\"", "popup_wanted: \"{{ any_fact }}\"", None),
+    ("Charge Battery raises a popup only for an active override (an unreadable plan reading is ignored)", "popup_wanted: \"{{ kind == 'dump_to_grid' or any_fact }}\"", "popup_wanted: \"{{ kind == 'dump_to_grid' or f_override }}\"", None),
+    ("Charge Battery raises a popup only for an unreadable plan reading (an active override is ignored)", "popup_wanted: \"{{ kind == 'dump_to_grid' or any_fact }}\"", "popup_wanted: \"{{ kind == 'dump_to_grid' or f_unreadable }}\"", None),
+    ("the popup policy is inverted (Charge Battery raises a popup only with every fact false)", "popup_wanted: \"{{ kind == 'dump_to_grid' or any_fact }}\"", "popup_wanted: \"{{ kind == 'dump_to_grid' or not any_fact }}\"", None),
+    ("a start without a popup leaves no incident time", "timestamp: \"{{ started_ts | int }}\"", "timestamp: \"{{ (started_ts | int) if popup_wanted else 0 }}\"", None),
+    ("a start without a popup is not counted", "value: \"{{ new_count }}\"", "value: \"{{ new_count if popup_wanted else 0 }}\"", None),
+    ("a start without a popup leaves no incident text", "value: \"{{ record_text[:250] }}\"", "value: \"{{ record_text[:250] if popup_wanted else '' }}\"", None),
+    ("a start without a popup leaves no incident kind", "- action: input_text.set_value\n                continue_on_error: true\n                target:\n                  entity_id: input_text.ecco_start_bypass_last_kind\n                data:\n                  value: \"{{ kind }}\"",
+     "- action: input_text.set_value\n                continue_on_error: true\n                target:\n                  entity_id: input_text.ecco_start_bypass_last_kind\n                data:\n                  value: \"{{ kind if popup_wanted else '' }}\"", None),
+    ("the mute switch hides the incident count too", "value: \"{{ new_count }}\"", "value: \"{{ 0 if is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') else new_count }}\"", None),
+    ("the mute switch hides the incident text too", "value: \"{{ record_text[:250] }}\"", "value: \"{{ '' if is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') else record_text[:250] }}\"", None),
+    ("the Charge Battery cannot-classify popup is held back by the policy", MUT_MUTE, "value_template: \"{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') and kind == 'dump_to_grid' }}\"", 1),
+    ("the last check claims a notification that was not raised", "('see the notification' if popup_wanted else 'recorded without a popup: no plan fact was true')", "'see the notification'", None),
+    # ---- the notice wording: no ECCO record found, never that ECCO did not start it ----
+    ("the notice asserts again that ECCO did not start it", ", and no ECCO record of this start was found within 45 s: neither", ". ECCO did not start it: neither", None),
+    ("the notice drops the caution that it can be an ECCO run with a late record", "Note that this can be an ECCO run whose record was late or unconfirmed: read the schedule last result before ending anything.\n\n                        At the moment",
+     "At the moment", None),
+    ("the caution no longer says to read the schedule last result", "late or unconfirmed: read the schedule last result before ending anything", "late or unconfirmed: end the session at once", None),
+    ("the notice names a wait that is not the wait (30 s)", "was found within 45 s: neither", "was found within 30 s: neither", None),
+    ("the End and restore advice is unconditional again", "If it was not an ECCO run and not you, end the session", "If this was not you, end the session", None),
+    ("the incident text asserts the start was outside ECCO's paths", ": no ECCO record of this start was found within 45 s (maybe a late or unconfirmed ECCO run). Override: '", " outside ECCO scheduled or guarded start. Override: '", None),
+    ("the incident text names a wait that is not the wait (40 s)", "found within 45 s (maybe a late", "found within 40 s (maybe a late", None),
+    ("the incident text drops the late-record hedge", " (maybe a late or unconfirmed ECCO run)", "", None),
+    ("the last check asserts the start was outside ECCO's paths", "': no ECCO record of this start was found within 45 s (detected only; '", "' outside ECCO scheduled or guarded start (detected only; '", None),
+    ("the title asserts the start was outside ECCO's paths", "' became active with NO ECCO record of its start '", "' started OUTSIDE ECCO scheduled or guarded start '", None),
+    # ---- held_by, and the other kind's record ----
+    ("the held_by attribute is read under a wrong name", "'held_by') | default('unknown', true)", "'heldby') | default('unknown', true)", None),
+    ("an empty held_by is not replaced by unknown", "default('unknown', true)", "default('unknown')", None),
+    ("a Dump to Grid session accepts the Free Power STARTED OK (the kinds are swapped)", "{% if kind == 'dump_to_grid' %}{% set o = states.input_text.ecco_dump_to_grid_schedule_last_result %}",
+     "{% if kind != 'dump_to_grid' %}{% set o = states.input_text.ecco_dump_to_grid_schedule_last_result %}", None),
+    ("a Charge Battery session accepts the Dump to Grid STARTED OK", "{% else %}{% set o = states.input_text.ecco_free_power_schedule_last_result %}{% endif %}",
+     "{% else %}{% set o = states.input_text.ecco_dump_to_grid_schedule_last_result %}{% endif %}", None),
+    ("a Dump to Grid session accepts the Free Power STARTED OK as well (either text counts)", "{{ guarded or (o is not none and (o.state is match(",
+     "{{ guarded or (states.input_text.ecco_free_power_schedule_last_result is not none and (states.input_text.ecco_free_power_schedule_last_result.state is match('STARTED OK - [0-9]+W for [0-9]+ min')) and as_timestamp(states.input_text.ecco_free_power_schedule_last_result.last_updated, 0) >= started_ts - 10) or (o is not none and (o.state is match(", None),
 ]
 killed = 0
 for label, old, new, nth in MUTANTS:
@@ -1125,7 +1320,8 @@ for label, old, new, nth in MUTANTS:
     else:
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
-check(f"{len(MUTANTS)} mutants, all caught", killed == len(MUTANTS) and len(MUTANTS) >= 15, f"{killed}/{len(MUTANTS)}")
+check(f"{len(MUTANTS)} mutants, all caught (44 for the first version; 3 or more each for the notice wording, the Charge Battery notice policy, held_by and the other kind's record)",
+      killed == len(MUTANTS) and len(MUTANTS) >= 44 + 3 * 4, f"{killed}/{len(MUTANTS)}")
 check("the full battery holds on the package as written", battery(DET_TEXT, first_only=False) == [])
 _harmless = DET_TEXT.replace("Notification and record only. When a Dump", "Notification and record only (restated). When a Dump")
 check("a harmless rewrite (an automation description) survives, and a rewrite of a pinned result text does not",
