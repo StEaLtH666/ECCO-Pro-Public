@@ -1381,8 +1381,12 @@ BPD1 = Entry(
         HA_MANIFEST: "99ba89d5e4f4a3d021d0917653e86633aed5c61043bc1f42227c94f3778be035",
     },
     added_files=_bpd1.ADDED_FILES,
+    frozen_reverts=dict(_bpd1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the frozen suite after bpd1 (Z11 (vii): one declared read-only reader of the schedule result helpers)
+        _bpd1.SHADOW_EVALUATOR_TEST_REL: "7c4665b15fb8d1681aa56795732aaef4f7af5711e1a4bc93a57d444398023a43",
+    },
     # _pex.fingerprint(BPD1): hashes its parent epc3's fingerprint and every declaration above
-    fingerprint="c549f75b8f8fac951042f74047bd07c6e0c1da6ac0c3116b34d12026c79e654b",
+    fingerprint="def05280a8cc233f0c3c61b35ad361bebabc7d27f8e2ae31f37f86a71ebebea8",
     note="the start bypass detector (detect and alert only): a package that notices a Dump to Grid or Charge Battery session that turned active without ECCO's own record "
          "of the start, always records an incident in its own helpers and raises a persistent notification (Charge Battery only with a fact true); it prevents nothing, writes nothing on the dongle, the inverter or "
          "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
