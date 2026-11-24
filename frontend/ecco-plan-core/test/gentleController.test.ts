@@ -719,7 +719,7 @@ test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 
   for (const [k, v] of Object.entries(v1Defaults)) assert.equal((DEFAULT_GENTLE_PARAMS as unknown as Record<string, number>)[k], v, "v1 default " + k);
   assert.equal(DEFAULT_GENTLE_PARAMS.maxDecreaseStepW, DEFAULT_GENTLE_PARAMS.hardMaxW, "the slew is off by default (never binds)");
   assert.equal(GENTLE_RECOMMENDED_PARAMS.maxDecreaseStepW, 1000);
-  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit; v3 G5: the explicit basis
+  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED", actuatorProfile: "UNCONSTRAINED" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit; v3 G5: the explicit basis
   // the golden digest is sensitive: one changed v1 field changes it
   const bent = (i: GentleInput) => ({ ...planGentle(i), neededW: (planGentle(i).neededW ?? 0) + 1 });
   assert.notEqual(v1Fingerprint(bent), GOLDEN_V1_DIGEST);

@@ -98,6 +98,8 @@ provisional ones it used in `provisionalInUse`.
 | `fallbackPolicy` | KEEP_CURRENT | PROVISIONAL | what to hold when the plan cannot run: `KEEP_CURRENT`, `USE_STATIC_PLAN` or `NONE` | the owner's choice |
 | `unknownDemandPolicy` | FALLBACK | PROVISIONAL | unknown demand with a known grid limit: `FALLBACK` (the default: no recommendation, nothing is guessed) or `ASSUME_PROVISIONAL` (an explicit option: plans from `assumedDemandW`, status `DEGRADED`, never `OK`) | the owner's choice |
 | `setpointBasis` | UNSETTLED | PROVISIONAL | what the setpoint S means to the actuator: `GRID_AC` (grid-side watts), `BATTERY_DC` (battery-side watts) or `UNSETTLED` (the default: every cap holds under either) | live proof of the actuator's convention |
+| `actuatorProfile` | UNCONSTRAINED | PROVISIONAL | the ONE path a recommendation could later be applied through (`FREE_POWER_LEASE`, `TOU_SLOT_EDITOR`, `RATE_CONTROLLER_PROPOSED`); its step, range, dwell and changes per window tighten the parameters, never loosen them; UNCONSTRAINED changes nothing | the owner's decision on which path (none is authorised today) |
+| `setpointOvershoot` | 1 | PROVISIONAL | the realised power was ABOVE the commanded setpoint on the saved nights, so every cap converted to setpoint units is divided by this factor; 1 = off; the recommended gentle value is 1.1 (`GENTLE_RECOMMENDED_PARAMS`) | commanded against measured power at several setpoints |
 | `targetSocPct` | owner setting | OWNER_SET | the charge target, 10-100; never lowered by the model | the owner's setting |
 | `bufferMin` | 60 min | OWNER_SET | finish-early buffer, 0-120 in 5-minute steps (`GENTLE_DEFAULT_BUFFER_MIN` is the default helpers and tests use) | the owner's setting |
 | `gridImportLimitW` | owner setting or unknown | OWNER_SET | the KNOWN safe grid import limit; unknown means no headroom constraint | the owner's or installer's figure |
@@ -255,6 +257,25 @@ Settled, kept here because it was once an open question: the Energy Actions card
 never calls the model). The bundle was rebuilt from these sources (commit 87c71f3) and is declared by the pin-chain entry `epc4` (commit 8a7c054). The two
 commits can only be dropped as a pair: dropping both returns to the older bundle that the older pin declares, and each one alone leaves the chain suites
 red. The card's behaviour and its golden renders are unchanged.
+
+### Resolved limits and the actuator profiles (24 Nov 2026, offline evidence; still read only)
+
+Full write-up and sources: `docs/reports/gentle-2026-11-24/GENTLE_LIMITS_AND_AUTHORITY.md` in the private project record.
+
+- **One authoritative maximum-charge-power basis** (`MAX_CHARGE_POWER_BASIS`, `maxChargePowerCeiling`): a SETPOINT bound, the smaller of the firmware
+  slot-power bound and the owner's operating limit. It is not a measured battery-side power, not the grid import limit, not the inverter's rated power and
+  not a BMS limit: on four saved nights the realised battery-side power was above it and the grid import well above it. Those limits stay separate named
+  ceilings with their own basis; the `setpointOvershoot` allowance keeps the real power inside them.
+- **Actuator profiles** (`GENTLE_ACTUATOR_PROFILES`, `policy.actuatorProfile`): `FREE_POWER_LEASE` fixes the rate at the START (no adjustment, so a later
+  change, in practice a safety decrease, is reported as not applicable with a stop recommended, and a shortfall is said to be unrepairable inside the
+  window); `TOU_SLOT_EDITOR` allows one coarse adjustment per window with a 60 minute dwell (proposed policy; the owner confirms each write);
+  `RATE_CONTROLLER_PROPOSED` is the unbuilt controller (the model's own 6 changes, 30 minute dwell). The decision's `actuator` block says which constraints
+  applied. Nothing is authorised: every profile has `automaticApplyAuthorised: false`, and `actuationSupported` stays false.
+- **Finish-early deadline**: `bufferMin` may be left out; it is then 60 minutes (`GENTLE_DEFAULT_BUFFER_MIN`); the owner's value 0-120 in steps of 5 wins.
+- **Target not reachable**: the best effort is the highest safe rate, the target is never lowered, the status says TARGET_AT_RISK or TARGET_UNREACHABLE.
+- Still open (not changed here): the setpoint unit (`setpointBasis` stays UNSETTLED), the BMS taper shape (the saved nights show a flat plateau, then a
+  drop within about five minutes to a low tail, not the model's linear taper; no SOC series was available to place the drop), and the response at rates
+  below the top one (no data).
 
 ## Gentle rate advice (read only, offline, unreleased)
 

@@ -38,6 +38,145 @@ export type PowerBasis = "GRID_AC" | "BATTERY_DC";
 export type SetpointBasis = PowerBasis | "UNSETTLED";
 export type ParamKind = "PROVISIONAL" | "OWNER_SET" | "MEASURED_REQUIRED";
 
+/** The name of the single authoritative maximum-charge-power ceiling (see MAX_CHARGE_POWER_BASIS). */
+export const MAX_CHARGE_POWER_NAME = "max_charge_power_effective";
+
+/**
+ * THE one authoritative maximum-charge-power basis of this model (offline resolution, 24 Nov 2026). It is a SETPOINT bound: the largest value the slot
+ * power and the Free Power setpoints accept (a compile-time firmware bound, 8000 W today), lowered by the owner's operating limit; the effective figure
+ * is the smaller of the two (the same rule as the effective maximum grid charge power figure of the site). It is NOT a measured battery-side power, NOT
+ * the grid import limit, NOT the inverter's rated power and NOT a BMS limit: on four recorded nights the battery-side charge power was above it and the
+ * grid import was well above it, so each of those stays a separate NAMED ceiling with its own basis, and this figure is never raised by them.
+ */
+export const MAX_CHARGE_POWER_BASIS = Object.freeze({
+  name: MAX_CHARGE_POWER_NAME,
+  kind: "SETPOINT_BOUND" as const,
+  authoritativeW: LIMITS.chargePowerMax,
+  effectiveRule: "min(firmware setpoint bound, owner operating limit); unknown when either is unknown",
+  source: "the firmware slot-power bound (compile time) and the owner's grid charge operating limit helper; the planner's effective maximum grid charge power figure",
+  isNot: Object.freeze([
+    "a measured battery-side charge power (the realised power was above it on the nights checked)",
+    "the grid import limit (the import was above it, and it is separate and unknown)",
+    "the inverter's rated power or the battery's own current limit",
+    "a BMS limit or a derating",
+  ]),
+  confidence: "Established by code for what it is; the realised power against it is established by saved data for one setpoint only; the setpoint unit stays UNSETTLED",
+});
+
+/** The effective maximum charge power as ONE named ceiling: the smaller of the firmware setpoint bound and the owner's operating limit; unknown (never guessed) when either is unknown. */
+export function maxChargePowerCeiling(firmwareBoundW: number | null | undefined, operatingLimitW: number | null | undefined, ageMin?: number | null): NamedCeiling {
+  const known = isNum(firmwareBoundW) && firmwareBoundW >= 0 && isNum(operatingLimitW) && operatingLimitW >= 0;
+  const c: NamedCeiling = { name: MAX_CHARGE_POWER_NAME, watts: known ? Math.min(firmwareBoundW as number, operatingLimitW as number) : null };
+  if (ageMin !== undefined) c.ageMin = ageMin;
+  return c;
+}
+
+export type ActuatorProfileId = "UNCONSTRAINED" | "FREE_POWER_LEASE" | "TOU_SLOT_EDITOR" | "RATE_CONTROLLER_PROPOSED";
+
+/** What a path that could apply a recommended rate allows. Every number is a CONSTRAINT on the model, never an authorisation: none is authorised to apply a recommendation. */
+export interface ActuatorProfile {
+  id: ActuatorProfileId;
+  label: string;
+  /** What the setpoint is on this path and in which unit. */
+  setpointUnit: string;
+  /** Granularity and range of the setpoint on this path. */
+  stepW: number;
+  minW: number;
+  maxW: number;
+  /** Least minutes between two changes. */
+  minDwellMin: number;
+  /** Ordinary changes after the START that the path allows per window (0 = the rate is fixed at the START). */
+  maxAdjustmentsPerWindow: number;
+  /** False when a rate can be set at the START only. */
+  midWindowAdjustment: boolean;
+  /** True when every change needs the owner's own typed confirmation (not automatic). */
+  ownerConfirmationPerChange: boolean;
+  existsToday: boolean;
+  /** Always false: no path is authorised to apply a model recommendation. */
+  automaticApplyAuthorised: false;
+  limitation: string;
+  source: string;
+  /** Where each number comes from: CODE, DOCS, PROPOSED_POLICY (a design choice, not a device limit) or NOT_BUILT. */
+  confidence: string;
+}
+
+export const GENTLE_ACTUATOR_PROFILES: Readonly<Record<ActuatorProfileId, Readonly<ActuatorProfile>>> = Object.freeze({
+  UNCONSTRAINED: Object.freeze({
+    id: "UNCONSTRAINED", label: "No path assumed (the generic model)", setpointUnit: "W (generic)", stepW: 100, minW: LIMITS.chargePowerMin, maxW: LIMITS.chargePowerMax,
+    minDwellMin: 0, maxAdjustmentsPerWindow: 100, midWindowAdjustment: true, ownerConfirmationPerChange: false, existsToday: false, automaticApplyAuthorised: false as const,
+    limitation: "No path is assumed: the generic model's own parameters apply unchanged.", source: "the model's defaults", confidence: "NOT_BUILT",
+  }),
+  FREE_POWER_LEASE: Object.freeze({
+    id: "FREE_POWER_LEASE", label: "Free Power start (a fixed rate for a duration)", setpointUnit: "W, staged once; the firmware turns it into a grid-charge current at the battery voltage of that moment and sets the slot powers to it",
+    stepW: 100, minW: LIMITS.chargePowerMin, maxW: LIMITS.chargePowerMax, minDwellMin: 0, maxAdjustmentsPerWindow: 0, midWindowAdjustment: false, ownerConfirmationPerChange: false,
+    existsToday: true, automaticApplyAuthorised: false as const,
+    limitation: "The rate is fixed at the START and verified against; a change from outside during a lease blocks the automatic restore; there is no stop at a target SOC.",
+    source: "firmware Free Power START and restore classifier; docs/product-ui/FEASIBILITY_MATRIX.md 2.2", confidence: "CODE",
+  }),
+  TOU_SLOT_EDITOR: Object.freeze({
+    id: "TOU_SLOT_EDITOR", label: "Guarded TOU slot editor (slot power), owner confirms each write", setpointUnit: "W, the slot power setting (a multiple of 100, 500 to the firmware bound)",
+    stepW: 100, minW: LIMITS.chargePowerMin, maxW: LIMITS.chargePowerMax, minDwellMin: 60, maxAdjustmentsPerWindow: 1, midWindowAdjustment: true, ownerConfirmationPerChange: true,
+    existsToday: true, automaticApplyAuthorised: false as const,
+    limitation: "One field of one slot per request through Review, a typed confirmation and Apply; no durable snapshot and no rollback; refused near slot boundaries, in a lease and on clock-change nights; no live proof of a charge-rate response below the top rate.",
+    source: "the TOU editor package and docs (one field per request, 500 to 8000 W in steps of 100); dwell and adjustment count are PROPOSED policy, not device limits", confidence: "CODE for the range and step; PROPOSED_POLICY for dwell and count",
+  }),
+  RATE_CONTROLLER_PROPOSED: Object.freeze({
+    id: "RATE_CONTROLLER_PROPOSED", label: "A guarded rate controller (does not exist)", setpointUnit: "W, the slot power setting, changed by a firmware controller on the Dump to Grid V1.1 pattern",
+    stepW: 100, minW: LIMITS.chargePowerMin, maxW: LIMITS.chargePowerMax, minDwellMin: 30, maxAdjustmentsPerWindow: 6, midWindowAdjustment: true, ownerConfirmationPerChange: false,
+    existsToday: false, automaticApplyAuthorised: false as const,
+    limitation: "Not built, not reviewed, not proven: the proof list in GENTLE_LIVE_ACTUATION_PROOF.md must exist first.",
+    source: "docs/product-ui/FEASIBILITY_MATRIX.md 2.2 (the Dump V1.1 limits are the template); the numbers are the model's own proposals", confidence: "NOT_BUILT",
+  }),
+});
+
+/** What a decision says about the path it assumed. */
+export interface ActuatorReport {
+  profile: ActuatorProfileId;
+  label: string;
+  existsToday: boolean;
+  midWindowAdjustment: boolean;
+  maxAdjustmentsPerWindow: number;
+  minDwellMin: number;
+  stepW: number;
+  rangeW: [number, number];
+  setpointUnit: string;
+  ownerConfirmationPerChange: boolean;
+  automaticApplyAuthorised: false;
+  /** The parameters this profile tightened (a profile never loosens a parameter). */
+  tightened: string[];
+  /** Whether the recommended change could be applied on this path: null when no change is recommended. */
+  applicableNow: boolean | null;
+  limitation: string;
+}
+
+/** The profile's constraints over the parameters: the stricter value always wins, a profile never loosens a parameter. */
+export function applyActuatorProfile(p: GentleParams, id: ActuatorProfileId): { params: GentleParams; tightened: string[] } {
+  const a = GENTLE_ACTUATOR_PROFILES[id];
+  const out: GentleParams = { ...p };
+  const tightened: string[] = [];
+  const set = (k: "stepW" | "minW" | "hardMaxW" | "dwellMin" | "maxChanges", v: number) => {
+    if (out[k] !== v) {
+      out[k] = v;
+      tightened.push(k);
+    }
+  };
+  if (p.stepW % a.stepW !== 0) set("stepW", ceilStep(p.stepW, a.stepW));
+  set("minW", Math.max(p.minW, a.minW));
+  set("hardMaxW", Math.min(p.hardMaxW, a.maxW));
+  set("dwellMin", Math.max(p.dwellMin, a.minDwellMin));
+  set("maxChanges", Math.min(p.maxChanges, a.maxAdjustmentsPerWindow));
+  return { params: out, tightened };
+}
+
+function actuatorReport(id: ActuatorProfileId, tightened: string[], p: GentleParams | null): ActuatorReport {
+  const a = GENTLE_ACTUATOR_PROFILES[id];
+  return {
+    profile: id, label: a.label, existsToday: a.existsToday, midWindowAdjustment: a.midWindowAdjustment, maxAdjustmentsPerWindow: p ? p.maxChanges : a.maxAdjustmentsPerWindow,
+    minDwellMin: p ? p.dwellMin : a.minDwellMin, stepW: p ? p.stepW : a.stepW, rangeW: p ? [p.minW, p.hardMaxW] : [a.minW, a.maxW], setpointUnit: a.setpointUnit,
+    ownerConfirmationPerChange: a.ownerConfirmationPerChange, automaticApplyAuthorised: false, tightened, applicableNow: null, limitation: a.limitation,
+  };
+}
+
 /** A safe power ceiling candidate. `watts` null / undefined / not a finite number >= 0 means UNKNOWN (never guessed). */
 export interface NamedCeiling {
   name: string;
@@ -136,6 +275,13 @@ export interface GentleParams {
   maxGridLimitAgeMin: number;
   /** Slew limit: a decrease goes down by at most this much per change. At or above hardMaxW it never binds (the v1 behaviour). An increase needed for the deadline may exceed it (JUMP_FOR_DEADLINE). */
   maxDecreaseStepW: number;
+  /**
+   * Realised against commanded (offline evidence, one setpoint): on four recorded nights the battery-side charge power was ABOVE the commanded
+   * setpoint, so a setpoint is not an upper bound of the real power. This factor (1 = off, the default) divides every cap that is converted to
+   * setpoint units (a battery-side or grid-side ceiling, the grid headroom) so the REAL power stays inside it: S x factor must not exceed the limit.
+   * PROVISIONAL: measured at one setpoint only; the recommended profile uses 1.1.
+   */
+  setpointOvershoot: number;
 }
 
 export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
@@ -164,10 +310,11 @@ export const DEFAULT_GENTLE_PARAMS: Readonly<GentleParams> = Object.freeze({
   maxCeilingAgeMin: 60,
   maxGridLimitAgeMin: 60,
   maxDecreaseStepW: LIMITS.chargePowerMax,
+  setpointOvershoot: 1,
 });
 
-/** The provisional gentle profile a caller may spread over the defaults: the slew is OFF by default so the v1 behaviour is unchanged. */
-export const GENTLE_RECOMMENDED_PARAMS: Readonly<Partial<GentleParams>> = Object.freeze({ maxDecreaseStepW: 1000 });
+/** The provisional gentle profile a caller may spread over the defaults: the slew and the overshoot allowance are OFF by default so the v1 behaviour is unchanged. */
+export const GENTLE_RECOMMENDED_PARAMS: Readonly<Partial<GentleParams>> = Object.freeze({ maxDecreaseStepW: 1000, setpointOvershoot: 1.1 });
 
 export interface GentlePolicy {
   /** What to hold when the controller cannot run (unknown or stale SOC, unknown ceiling, unusable household input). */
@@ -180,9 +327,14 @@ export interface GentlePolicy {
   unknownDemandPolicy: UnknownDemandPolicy;
   /** What the setpoint means to the actuator (see `SetpointBasis`). The default UNSETTLED is safe under either convention; settle it before relying on exact caps. */
   setpointBasis: SetpointBasis;
+  /**
+   * The ONE path a recommendation could later be applied through; its constraints (step, range, dwell, changes per window, fixed rate at the START)
+   * tighten the parameters. UNCONSTRAINED (the default) assumes no path and changes nothing. Naming a path authorises nothing.
+   */
+  actuatorProfile: ActuatorProfileId;
 }
 
-export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED" });
+export const DEFAULT_GENTLE_POLICY: Readonly<GentlePolicy> = Object.freeze({ fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED", actuatorProfile: "UNCONSTRAINED" });
 
 export interface ParamProvenance {
   kind: ParamKind;
@@ -220,8 +372,10 @@ const KINDS: Record<string, readonly [ParamKind, string]> = {
   fallbackPolicy: ["PROVISIONAL", "the owner's choice"],
   unknownDemandPolicy: ["PROVISIONAL", "the owner's choice"],
   setpointBasis: ["PROVISIONAL", "live proof of what the actuator's setpoint means: AC grid watts or DC battery watts"],
+  actuatorProfile: ["PROVISIONAL", "the owner's decision on which one path may later apply a recommendation (none is authorised today)"],
+  setpointOvershoot: ["PROVISIONAL", "commanded setpoint against measured battery-side and grid-side power at several setpoints (the saved nights hold one setpoint only, and the real power was above it)"],
   targetSocPct: ["OWNER_SET", "the owner's charge target"],
-  bufferMin: ["OWNER_SET", "the owner's finish-early buffer"],
+  bufferMin: ["OWNER_SET", "the owner's finish-early buffer (60 minutes when not given)"],
   gridImportLimitW: ["OWNER_SET", "the owner's or installer's safe grid import limit (unknown means no headroom constraint)"],
 };
 
@@ -279,8 +433,8 @@ export interface HouseholdInput {
 export interface GentleInput {
   /** 10-100 (100 allowed). Never changed by the model. */
   targetSocPct: number;
-  /** Finish-before-window-end buffer, 0-120 minutes in 5-minute steps. */
-  bufferMin: number;
+  /** Finish-before-window-end buffer, 0-120 minutes in 5-minute steps. Missing = GENTLE_DEFAULT_BUFFER_MIN (60): the battery should be at the target about an hour before the window ends. */
+  bufferMin?: number;
   /** The owner's wall-clock window and the clock day it falls on; the real length is worked out with elapsedMinutes. */
   chargeWindow: { startMin: number; endMin: number; clockDay: ClockDay };
   /** Real minutes since the window opened (a monotonic count; not the wall clock). */
@@ -359,7 +513,8 @@ export type GentleCode =
   | "SOLAR_NOT_CREDITED"
   | "FORECAST_STALE"
   | "CEILING_STALE"
-  | "GRID_LIMIT_STALE";
+  | "GRID_LIMIT_STALE"
+  | "ACTUATOR_FIXED_RATE";
 
 export interface FallbackInfo {
   /** True when the controller could not run its normal plan and the fallback policy was consulted (the status says why). */
@@ -445,6 +600,8 @@ export interface GentleDecision {
   limitedBy: "NONE" | "CEILING" | "GRID_HEADROOM";
   /** True when an increase needed for the deadline is larger than the slew limit (JUMP_FOR_DEADLINE). */
   jumpForDeadline: boolean;
+  /** The path this decision assumed and what it can and cannot do (see GENTLE_ACTUATOR_PROFILES). Describes constraints only; applies nothing. */
+  actuator: ActuatorReport;
 }
 
 const MAX_HORIZON_MIN = 2 * 1440;
@@ -476,15 +633,16 @@ export function smallestKnownCeiling(ceilings: readonly NamedCeiling[]): { watts
 }
 
 /** The capped fraction of a grid-side figure that a setpoint can use: 1 when S is grid-side watts, the conversion efficiency otherwise (UNSETTLED included). */
-export function setpointScale(basis: SetpointBasis, conversionEff: number): number {
-  return basis === "GRID_AC" ? 1 : conversionEff;
+export function setpointScale(basis: SetpointBasis, conversionEff: number, overshoot = 1): number {
+  return (basis === "GRID_AC" ? 1 : conversionEff) / overshoot;
 }
 
 /** A named ceiling in setpoint watts: only a GRID_AC (or unrecognised) label is converted, and only to a lower figure, never a higher one. */
-export function ceilingInSetpointUnits(c: NamedCeiling, basis: SetpointBasis, conversionEff: number): number {
+export function ceilingInSetpointUnits(c: NamedCeiling, basis: SetpointBasis, conversionEff: number, overshoot = 1): number {
   const w = c.watts as number;
-  if (c.basis === undefined || c.basis === null || c.basis === "BATTERY_DC") return w;
-  return w * setpointScale(basis, conversionEff);
+  if (c.basis === undefined || c.basis === null) return w;
+  if (c.basis === "BATTERY_DC") return w / overshoot;
+  return w * setpointScale(basis, conversionEff, overshoot);
 }
 
 /** True when an age is given and it is not a number of minutes from 0 to the limit (a ceiling with no age counts as current). */
@@ -623,6 +781,7 @@ function mergePolicy(over: Partial<GentlePolicy> | undefined): GentlePolicy {
     if (over.fallbackPolicy !== undefined) out.fallbackPolicy = over.fallbackPolicy;
     if (over.unknownDemandPolicy !== undefined) out.unknownDemandPolicy = over.unknownDemandPolicy;
     if (over.setpointBasis !== undefined) out.setpointBasis = over.setpointBasis;
+    if (over.actuatorProfile !== undefined) out.actuatorProfile = over.actuatorProfile;
   }
   return out;
 }
@@ -631,6 +790,7 @@ function policyProblem(pol: GentlePolicy): string | null {
   if (pol.fallbackPolicy !== "KEEP_CURRENT" && pol.fallbackPolicy !== "USE_STATIC_PLAN" && pol.fallbackPolicy !== "NONE") return "fallbackPolicy must be KEEP_CURRENT, USE_STATIC_PLAN or NONE.";
   if (pol.unknownDemandPolicy !== "ASSUME_PROVISIONAL" && pol.unknownDemandPolicy !== "FALLBACK") return "unknownDemandPolicy must be ASSUME_PROVISIONAL or FALLBACK.";
   if (pol.setpointBasis !== "GRID_AC" && pol.setpointBasis !== "BATTERY_DC" && pol.setpointBasis !== "UNSETTLED") return "setpointBasis must be GRID_AC, BATTERY_DC or UNSETTLED.";
+  if (!Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, pol.actuatorProfile)) return "actuatorProfile must be UNCONSTRAINED, FREE_POWER_LEASE, TOU_SLOT_EDITOR or RATE_CONTROLLER_PROPOSED.";
   return null;
 }
 
@@ -656,6 +816,7 @@ function paramProblem(p: GentleParams): string | null {
   if (p.maxCeilingAgeMin <= 0 || p.maxCeilingAgeMin > 1440) return "maxCeilingAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxGridLimitAgeMin <= 0 || p.maxGridLimitAgeMin > 1440) return "maxGridLimitAgeMin must be above 0 and at most 1440 minutes.";
   if (p.maxDecreaseStepW < p.stepW) return "maxDecreaseStepW must be at least one step.";
+  if (p.setpointOvershoot < 1 || p.setpointOvershoot > 1.5) return "setpointOvershoot must be 1 to 1.5 (1 = off).";
   // A slew step smaller than the hysteresis could never save the hysteresis: every slewed decrease would spend a change for less than the rule asks.
   if (p.maxDecreaseStepW < p.hardMaxW && p.maxDecreaseStepW < p.hysteresisW) return "maxDecreaseStepW must be at least hysteresisW (a slewed decrease must save the hysteresis), or leave the slew off.";
   if (p.socRegressionTolPct < 0 || p.socRegressionTolPct > 50) return "socRegressionTolPct must be 0-50.";
@@ -665,7 +826,8 @@ function paramProblem(p: GentleParams): string | null {
 
 function inputProblem(i: GentleInput): string | null {
   if (!isNum(i.targetSocPct) || i.targetSocPct < GENTLE_BOUNDS.targetMin || i.targetSocPct > GENTLE_BOUNDS.targetMax) return "The target must be 10-100 %.";
-  if (!isNum(i.bufferMin) || i.bufferMin < GENTLE_BOUNDS.bufferMin || i.bufferMin > GENTLE_BOUNDS.bufferMax || i.bufferMin % GENTLE_BOUNDS.bufferStep !== 0) return "The finish buffer must be 0-120 minutes in 5-minute steps.";
+  const bufMin = i.bufferMin === undefined ? GENTLE_DEFAULT_BUFFER_MIN : i.bufferMin;
+  if (!isNum(bufMin) || bufMin < GENTLE_BOUNDS.bufferMin || bufMin > GENTLE_BOUNDS.bufferMax || bufMin % GENTLE_BOUNDS.bufferStep !== 0) return "The finish buffer must be 0-120 minutes in 5-minute steps.";
   if (!isNum(i.capacityKwh) || i.capacityKwh <= 0) return "The capacity must be a positive number of kWh.";
   if (!isNum(i.capacityUpPct) || i.capacityUpPct < 0) return "The capacity band must be a number of percent, 0 or more.";
   if (i.learnedCapacityKwh !== undefined && i.learnedCapacityKwh !== null && (!isNum(i.learnedCapacityKwh) || i.learnedCapacityKwh <= 0)) return "The learned capacity must be a positive number of kWh or null.";
@@ -724,6 +886,7 @@ function shell(status: GentleStatus, targetSocPct: number, reasons: string[], co
     headroomCapW: null,
     limitedBy: "NONE",
     jumpForDeadline: false,
+    actuator: actuatorReport("UNCONSTRAINED", [], null),
   };
 }
 
@@ -881,7 +1044,7 @@ function evalHousehold(h: HouseholdInput | undefined | null, p: GentleParams, po
   // Solar is NOT inside the hard limit by default: a cloud or an over-forecast can take it away faster than a re-plan reacts, and the import would then
   // cross the known limit. Only the share `solarCreditPct` (0 by default, an explicit and validated parameter that belongs behind a measured forecast
   // skill gate) of the bounded solar is credited to the cap. The bounded solar is still computed and reported, labelled as information only.
-  const scale = setpointScale(pol.setpointBasis, p.setpointConversionEff);
+  const scale = setpointScale(pol.setpointBasis, p.setpointConversionEff, p.setpointOvershoot);
   ev.scale = scale;
   const potential = solarKnown && solarProf !== null && conf > 0;
   const credit = p.solarCreditPct / 100;
@@ -1013,20 +1176,26 @@ export function planGentle(input: GentleInput): GentleDecision {
   const used = input && isNum(input.changesUsed) ? input.changesUsed : 0;
   const fail = (reason: string, p: GentleParams | null = null) => shell("INVALID", target, [reason + " Nothing is recommended."], ["INVALID_INPUT"], p, used);
   if (!input || typeof input !== "object") return fail("The input is missing.");
-  const p = mergeParams(input.params);
-  const pp = paramProblem(p);
+  const p0 = mergeParams(input.params);
+  const pp = paramProblem(p0);
   if (pp) return fail(pp);
   const pol = mergePolicy(input.policy);
   const polProblem = policyProblem(pol);
-  if (polProblem) return fail(polProblem, p);
+  if (polProblem) return fail(polProblem, p0);
+  // The chosen path's constraints tighten the parameters (the stricter value wins); UNCONSTRAINED changes nothing.
+  const applied = applyActuatorProfile(p0, pol.actuatorProfile);
+  const p = applied.params;
+  const pp2 = paramProblem(p);
+  if (pp2) return fail("The actuator profile " + pol.actuatorProfile + " leaves the parameters inconsistent: " + pp2, p0);
   const ip = inputProblem(input);
   if (ip) return fail(ip, p);
+  const bufferMin = input.bufferMin === undefined ? GENTLE_DEFAULT_BUFFER_MIN : input.bufferMin;
 
   const windowReal = windowRealMinutes(input.chargeWindow.startMin, input.chargeWindow.endMin, input.chargeWindow.clockDay) as number;
-  const toDeadline = windowReal - input.bufferMin - input.elapsedMin;
+  const toDeadline = windowReal - bufferMin - input.elapsedMin;
   const toEnd = windowReal - input.elapsedMin;
   const cMin = ceilStep(p.minW, p.stepW);
-  const ceil = effectiveCeiling(input.ceilings, p.maxCeilingAgeMin, (c) => ceilingInSetpointUnits(c, pol.setpointBasis, p.setpointConversionEff));
+  const ceil = effectiveCeiling(input.ceilings, p.maxCeilingAgeMin, (c) => ceilingInSetpointUnits(c, pol.setpointBasis, p.setpointConversionEff, p.setpointOvershoot));
   const known = ceil.best;
   const cCeil = known === null ? null : floorStep(Math.min(known.watts, p.hardMaxW), p.stepW);
   const staleCeilingNote = "A named ceiling is stale (" + ceil.staleNames.join(", ") + "; older than " + p.maxCeilingAgeMin + " min or no valid age): a stale value cannot make a setpoint safe on its own" + (ceil.staleCaps ? ", and the stale value is lower than every fresh one, so it still caps" : "") + ".";
@@ -1036,6 +1205,7 @@ export function planGentle(input: GentleInput): GentleDecision {
   const mk = (status: GentleStatus, reasons: string[], codes: GentleCode[]) => {
     const d = shell(status, target, reasons, codes, p, used, pol.fallbackPolicy);
     d.setpointBasis = pol.setpointBasis;
+    d.actuator = actuatorReport(pol.actuatorProfile, applied.tightened, p);
     return d;
   };
   const withFallback = (d: GentleDecision, why: string, names: readonly string[]): GentleDecision => {
@@ -1163,6 +1333,11 @@ export function planGentle(input: GentleInput): GentleDecision {
       }
       if (out.status === "TARGET_AT_RISK" || out.status === "TARGET_UNREACHABLE") out.reasons.push("The target is NOT guaranteed.");
     }
+    if ((out.status === "TARGET_AT_RISK" || out.status === "TARGET_UNREACHABLE") && !out.actuator.midWindowAdjustment) {
+      // With the rate fixed at the START nothing inside the window can repair a shortfall; the model says so instead of implying a later correction.
+      if (!out.codes.includes("ACTUATOR_FIXED_RATE")) out.codes.push("ACTUATOR_FIXED_RATE");
+      out.reasons.push("On this path the rate is fixed at the START, so a shortfall cannot be corrected inside the window: the choices are a larger buffer, an earlier start or the owner's own override. The recommended START rate is the highest safe one, never a lower target.");
+    }
     return out;
   };
   // The lowest step whose forward simulation reaches the target by the deadline (finish time is monotone in the setpoint). With a `lead`, the first
@@ -1188,6 +1363,16 @@ export function planGentle(input: GentleInput): GentleDecision {
     if (c.extra) out.codes.push(...c.extra);
     out.jumpForDeadline = c.extra !== undefined && c.extra.includes("JUMP_FOR_DEADLINE");
     out.reasons.push(c.reason);
+    if (c.change !== "NONE") {
+      // A fixed-rate path can set the rate at the START only: a later change (in practice a safety decrease) cannot be applied on it, and a stop is the safe action.
+      const fixed = c.change !== "START" && !out.actuator.midWindowAdjustment;
+      out.actuator.applicableNow = !fixed;
+      if (fixed) {
+        out.codes.push("ACTUATOR_FIXED_RATE");
+        out.reasons.push("This path fixes the rate at the START: the change to " + c.w + " W cannot be applied on it. Keep the rate only if it is safe; otherwise stop. A stop is recommended here.");
+        out.stopRecommended = true;
+      }
+    }
     // The START and a safety decrease do not draw on the budget; an ordinary increase or decrease does.
     out.changesUsed = used + (c.change === "INCREASE" || c.code === "DECREASE_SAVING" ? 1 : 0);
     out.changesLeft = Math.max(0, p.maxChanges - out.changesUsed);
@@ -1207,8 +1392,8 @@ export function planGentle(input: GentleInput): GentleDecision {
   if (toDeadline <= 0) {
     out.status = "DEADLINE_PASSED";
     out.codes.push("DEADLINE_PASSED");
-    out.reasons.push(input.bufferMin >= windowReal ? "The finish-early buffer (" + input.bufferMin + " min) is as long as the " + windowReal + " min window: the deadline is not after the window opens. The target is not lowered." : "The finish-early deadline has passed with the battery at " + soc + " % (target " + target + " %). The target is not lowered.");
-    if (input.bufferMin >= windowReal) out.codes.push("BUFFER_AS_LONG_AS_WINDOW");
+    out.reasons.push(bufferMin >= windowReal ? "The finish-early buffer (" + bufferMin + " min) is as long as the " + windowReal + " min window: the deadline is not after the window opens. The target is not lowered." : "The finish-early deadline has passed with the battery at " + soc + " % (target " + target + " %). The target is not lowered.");
+    if (bufferMin >= windowReal) out.codes.push("BUFFER_AS_LONG_AS_WINDOW");
     if (toEnd > 0) {
       const c = choose(cMax, cMax, cMax, cur, sinceChange, budgetLeft, p, ctx(true));
       finalise(c);
@@ -1231,7 +1416,7 @@ export function planGentle(input: GentleInput): GentleDecision {
       out.codes.push("TARGET_AT_RISK");
       let b: number | null = null;
       if (lateBy !== null) {
-        const nb = input.bufferMin - ceilStep(lateBy, GENTLE_BOUNDS.bufferStep);
+        const nb = bufferMin - ceilStep(lateBy, GENTLE_BOUNDS.bufferStep);
         b = nb >= GENTLE_BOUNDS.bufferMin ? nb : null;
       }
       out.suggestedBufferMin = b;
