@@ -777,7 +777,9 @@ test("round 3 F2 (MAJOR): a rate in force that an ordinary change set INSIDE the
   }
   assert.equal(okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 0 }).status, "OK", "a START is anchored at its own rate, margin 94.5");
   assert.equal(okAt({ setpointW: 8000, lastChangeAtMin: -30, changesUsed: 1 }).status, "OK");
-  assert.ok(!okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 }, { elapsedMin: -30, drainBoundW: 0 }).codes.includes("KNEE_RATE_UNKNOWN"));
+  const beforeWindow = okAt({ setpointW: 8000, lastChangeAtMin: -40, changesUsed: 1 }, { elapsedMin: -30, drainBoundW: 0 });
+  assert.notEqual(beforeWindow.status, "INPUTS_UNUSABLE", "a planned call: " + beforeWindow.codes.join(","));
+  assert.ok(!beforeWindow.codes.includes("KNEE_RATE_UNKNOWN"));
   // the window start is the edge: set at 0 is not inside the window, set at 0.5 is; a time that is not given (null) with a counted change cannot be placed, so it counts
   assert.ok(!okAt({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 1 }).codes.includes("KNEE_RATE_UNKNOWN"));
   assert.ok(okAt({ setpointW: 8000, lastChangeAtMin: 0.5, changesUsed: 1 }).codes.includes("KNEE_RATE_UNKNOWN"));
@@ -1016,4 +1018,143 @@ test("round 3 F8: at or above the target with a lease in force the advice says t
   const stop = plan({ elapsedMin: 60, socPct: 85, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 } });
   assert.equal(stop.status, "STOP_RECOMMENDED");
   assert.doesNotMatch(stop.needed.join(" "), /keeps charging past the target/);
+});
+
+// ---- round 3 F10: the mutants that survived the behavioural suites (H05 to H32 of the review), each killed by a by-hand assertion of its own --------------------------
+test("round 3 F10 H05: the pessimistic world reaches the deadline only when BOTH consistent starts do (a deadline between the two finishes is a miss) (by hand)", () => {
+  // the lease at 1900 W, minute 93, reading 90 (1 min old), target 91, deadline 195 (buffer 105): 1.9 x 0.9 = 1.71 kW = 0.082268 points a minute. The start on the plateau
+  // (89) reaches the knee in 12.2 minutes, the cliff minute gives 0.0463 points, the tail 0.0102835 points a minute carries the last 0.9537: 198.9. The start past the knee
+  // (the knee 90, the fall over) carries its 1 point on that tail: 190.2. The deadline 195 lies between them: the later one decides, so it is NOT reached
+  const perMin = (1.9 * 0.9) / 60 / PK;
+  const plain = 93 + 1 / perMin + 1 + (1 - (1.125 / 2) * perMin) / (0.125 * perMin);
+  const past = 93 + 1 / (0.125 * perMin);
+  assert.ok(past < 195 && 195 < plain, "the deadline lies between the two starts: " + past + " < 195 < " + plain);
+  const p = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 93, socPct: 90, targetSocPct: 91, bufferMin: 105, inForce: { setpointW: 1900, lastChangeAtMin: -60, changesUsed: 0 } });
+  near(band(p).pessimisticHeld.finishMin, plain, 0.05, "the later start");
+  assert.equal(band(p).pessimisticHeld.reachedByDeadline, false);
+  assert.equal(band(p).pessimistic.reachedByDeadline, false);
+  assert.notEqual(p.status, "OK");
+  // and with the deadline after both (buffer 90: 210) it is reached
+  assert.equal(band(plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 93, socPct: 90, targetSocPct: 91, bufferMin: 90, inForce: { setpointW: 1900, lastChangeAtMin: -60, changesUsed: 0 } })).pessimisticHeld.reachedByDeadline, true);
+});
+
+test("round 3 F10 H10, H11: the jump allowance is the resolution, the tolerance and 60 points an hour from the PREVIOUS reading to NOW (by hand)", () => {
+  // previous 20 at minute 0, now minute 6 (a reading 1 minute old): 6 minutes = 0.1 hour: 1 + 3 + 60 x 0.1 = 10 points: 30 is plausible, 30.1 is not. Counting the hours only to
+  // the reading (5 minutes) would refuse 30 (allowance 9); doubling them (the allowance 16) would accept 30.1
+  const at = (socPct: number): GentleNightPlan => plan({ elapsedMin: 6, socPct, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } });
+  assert.notEqual(at(30).status, "INPUTS_UNUSABLE");
+  assert.equal(at(30).assumptions?.socAtPlanStartPct, 30, "accepted as read");
+  assert.deepEqual(at(30.1).codes, ["SOC_IMPLAUSIBLE"]);
+  // a longer interval allows more: 30 minutes = 0.5 hour: 1 + 3 + 30 = 34 points
+  assert.notEqual(plan({ elapsedMin: 30, socPct: 54, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } }).status, "INPUTS_UNUSABLE");
+  assert.deepEqual(plan({ elapsedMin: 30, socPct: 54.1, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } }).codes, ["SOC_IMPLAUSIBLE"]);
+});
+
+test("round 3 F10 H21: at exactly minute 0 nothing has charged: a rate in force there is crossed at like a START, so a raise is credited; half a minute later it is held (by hand)", () => {
+  // the editor, 2000 W set at minute -200, reading 92 taken at minute 0, target 95: at minute 0 the knee is crossed at the rate in force then, like the START at 3100 W
+  // (the same number as the pinned call 30 minutes before the window); a half minute later the optimistic estimate of the reading (92 + 1.0) is past the knee 90 and a
+  // rate that has charged is held
+  const at = (elapsedMin: number): GentleNightPlan => plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin, socAgeMin: 0, drainBoundW: 0, socPct: 92, targetSocPct: 95, inForce: { setpointW: 2000, lastChangeAtMin: -200, changesUsed: 0 } });
+  const zero = at(0);
+  assert.equal(zero.now.change, "INCREASE");
+  assert.equal(zero.now.setpointW, 3100);
+  assert.equal(zero.status, "OK");
+  assert.ok(!zero.codes.includes("HELD_PAST_KNEE"));
+  const later = at(0.5);
+  assert.equal(later.now.change, "KEEP");
+  assert.ok(later.codes.includes("HELD_PAST_KNEE"));
+});
+
+test("round 3 F10 H26: the efficiency band must be ordered minimum <= expected <= maximum", () => {
+  // the defaults are 0.90 <= 0.95 <= 0.97: each order broken on its own is refused, a valid band is not
+  for (const params of [{ chargeEffMin: 0.96 }, { chargeEffMax: 0.94 }, { chargeEff: 0.98 }, { chargeEff: 0.89 }, { chargeEffMin: 0.97, chargeEff: 0.95, chargeEffMax: 0.9 }]) {
+    assert.deepEqual(plan({ params }).codes, ["PARAMS_INVALID"], JSON.stringify(params));
+  }
+  assert.equal(plan({ params: { chargeEffMin: 0.92, chargeEff: 0.92, chargeEffMax: 0.92 } }).status, "OK", "equal is allowed");
+  assert.equal(plan({ params: { chargeEffMin: 0.8, chargeEff: 0.9, chargeEffMax: 1 } }).status, "OK");
+});
+
+test("round 3 F10 H28: the path's setpoint step tightens a coarser parameter step: 150 W becomes the editor's 100 W multiple above it, 200 W, and the minimum follows (by hand)", () => {
+  // every path takes 100 W steps; a 150 W step is not a multiple of 100, so it is raised to 200 W (the profile never loosens a parameter): the lowest setpoint is 500 W
+  // rounded up to a multiple of 200, 600 W, and a recommendation is a multiple of 200
+  const p = plan({ params: { stepW: 150 } });
+  assert.equal(p.now.stepW, 200);
+  assert.equal(p.now.minW, 600);
+  assert.equal((p.now.setpointW as number) % 200, 0);
+  assert.equal(p.status, "OK");
+  const q = plan({ params: { stepW: 300 } });
+  assert.equal(q.now.stepW, 300, "a multiple of 100 stays as given");
+  assert.equal((q.now.setpointW as number) % 300, 0);
+});
+
+test("round 3 F10 H30: the deadline has not passed AT the deadline minute; it has half a minute later", () => {
+  assert.ok(!plan({ elapsedMin: 240, socPct: 70 }).codes.includes("DEADLINE_PASSED_WINDOW_OPEN"));
+  assert.ok(plan({ elapsedMin: 240.5, socPct: 70 }).codes.includes("DEADLINE_PASSED_WINDOW_OPEN"));
+  assert.ok(!plan({ elapsedMin: 239.5, socPct: 70 }).codes.includes("DEADLINE_PASSED_WINDOW_OPEN"));
+});
+
+test("round 3 F10 H31, H32: the knee estimate takes the reading, never the drained SOC, and counts the charge since the reading from the first minute of the window (by hand)", () => {
+  // H31: the editor, 2000 W set at minute -200, a reading of 88.6 taken at minute -10 (15 minutes old at minute 5), 3000 W of drain bound. Nothing charged before the window:
+  // 10 idle minutes = 0.5 kWh = 1.728 points of drain, so the plan starts from 86.87; but the OPTIMISTIC estimate of the reading takes no drain (the bound is pessimistic): 88.6
+  // + 1.0 + the charge since the reading (5 minutes at 2000 W x 1.1 = 0.634 points) = 90.23, past the knee: the rate in force is HELD. From the drained SOC it would be 88.51 and the
+  // raise would be credited
+  const h31 = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 5, socAgeMin: 15, socPct: 88.6, targetSocPct: 95, drainBoundW: 3000, inForce: { setpointW: 2000, lastChangeAtMin: -200, changesUsed: 0 } });
+  near(h31.assumptions?.socAtPlanStartPct, 88.6 - (3 * 10) / 60 / OPT, 0.006, "the plan starts from the drained SOC");
+  near(h31.assumptions?.kneeEstimatePct, 88.6 + 1.0 + (5 * 2000 * 1.1) / 60000 / OPT, 0.006, "the knee estimate does not");
+  assert.equal(h31.now.change, "KEEP");
+  assert.ok(h31.codes.includes("HELD_PAST_KNEE"));
+  // H32: minute 1, a reading 1 minute old (taken at minute 0), 3000 W in force since before the window, 88.85: the charge since the reading is 1 minute at 3000 W x 1.1 = 0.190
+  // points, so 88.85 + 1.0 + 0.190 = 90.04: held. Skipping the first minute of the window (elapsed > 1) would leave 89.85 and credit a raise
+  const h32 = plan({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 1, socAgeMin: 1, socPct: 88.85, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: -60, changesUsed: 0 } });
+  near(h32.assumptions?.chargeSinceReadingPct, (1 * 3000 * 1.1) / 60000 / OPT, 0.006, "one minute of charge");
+  assert.equal(h32.now.change, "KEEP");
+  assert.ok(h32.codes.includes("HELD_PAST_KNEE"));
+  // a hair lower (88.8: 89.99) the knee is surely ahead and the raise is credited
+  assert.equal(plan({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 1, socAgeMin: 1, socPct: 88.8, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: -60, changesUsed: 0 } }).now.change, "INCREASE");
+});
+
+test("round 3 F10 H08, H16, H17, H25: the knees of the expected and optimistic worlds stay below 100, the buffer that fits stops at 120, the expected finish is from now, a stale demand is not used by the STOP check (by hand)", () => {
+  // H08: the expected knee is the pessimistic one plus 5 and the optimistic plus 10, at most 99.5 (a world with a knee at 100 would never fall)
+  const k = plan().assumptions as Record<string, number>;
+  assert.deepEqual([k.kneePessimisticPct, k.kneeExpectedPct, k.kneeOptimisticPct], [90, 95, 99.5]);
+  const k97 = plan({ params: { kneeSocPct: 97 } }).assumptions as Record<string, number>;
+  assert.deepEqual([k97.kneeExpectedPct, k97.kneeOptimisticPct], [99.5, 99.5]);
+  const k996 = plan({ params: { kneeSocPct: 99.6 } }).assumptions as Record<string, number>;
+  assert.deepEqual([k996.kneeExpectedPct, k996.kneeOptimisticPct], [99.6, 99.6], "a pessimistic knee at or above 99.5 is not raised");
+  // H16: 3 points x 0.346412 kWh at the minimum 0.45 kW = 138.6 minutes, 161.4 before the window end (300): the largest buffer is 120, not the 160 that fits
+  const roomy = plan({ targetSocPct: 22, socPct: 20 });
+  assert.equal(roomy.now.setpointW, 500);
+  assert.equal(roomy.bufferThatWouldFitMin, 120);
+  // H17: before the window the expected finish is counted from NOW: 90 minutes more than from the window start
+  const early = plan({ elapsedMin: -90, preWindowDrainW: 0 });
+  const fin = early.expectedFinish as NonNullable<typeof early.expectedFinish>;
+  near(fin.inMin, fin.atMin + 90, 0.11, "the expected finish from now");
+  // H25: a known grid limit with a STALE demand is DEMAND_UNKNOWN: the STOP check then compares with the limit alone (8000 x 0.85 / 1.1 = 6181, floored 6100 W), not with a
+  // headroom taken from the stale demand (3400 W): 5200 W in force is below 6100 W, so no STOP
+  const stale = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, household: { gridImportLimitW: 8000, demandPeakW: 3000, demandAgeMin: 20 }, inForce: { setpointW: 5200, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(stale.status, "INPUTS_UNUSABLE");
+  assert.deepEqual(stale.codes, ["DEMAND_UNKNOWN"]);
+  assert.equal(stale.stopRecommended, false);
+  // the same demand, fresh, is the headroom (8000 - 3000 x 1.2) x 0.85 / 1.1 = 3400 W: 5200 W is above it, a STOP
+  const fresh = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, household: { gridImportLimitW: 8000, demandPeakW: 3000, demandAgeMin: 15 }, inForce: { setpointW: 5200, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(fresh.status, "STOP_RECOMMENDED");
+  assert.equal(fresh.now.ceilingW, 3400);
+});
+
+test("round 3 F10 H18, H19: a re-plan reads the world's DISPLAYED reading and keeps the reading uncertainty: a world whose own reading puts the knee within reach holds its rate (by hand)", () => {
+  // UNCONSTRAINED, minute 100, reading 85.3 (1 minute old), 3000 W set at minute 95 (the dwell of 30 minutes holds it), target 95. The first re-plan is 30 minutes on (tick 130).
+  // EXPECTED world: 0.95 x 3 kW / 60 / 0.317 = 0.14984 points a minute: 89.795 at the tick, +1.0 of uncertainty = 90.795 >= 90: the knee may be passed, HOLD (no later point).
+  //   Without the uncertainty (89.795 < 90) it would plan a raise at 130 (H19).
+  // PESSIMISTIC world: starts at 84.3 (reading - 1.0), 0.12991 points a minute: 88.197 at the tick, DISPLAYED 89.197, +1.0 = 90.197 >= 90: HOLD, so it is the held world. Read at its
+  //   true position (88.197 + 1.0 < 90) it would raise (H18)
+  const p = plan({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 100, socPct: 85.3, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: 95, changesUsed: 0 } });
+  assert.equal(p.now.change, "KEEP");
+  assert.ok(p.codes.includes("HELD_DWELL"));
+  assert.equal(p.trajectory.length, 1, JSON.stringify(p.trajectory));
+  assert.deepEqual(band(p).pessimistic, band(p).pessimisticHeld, "the pessimistic policy world never changes the rate");
+  // the tick sits 30 minutes on: the arithmetic of the comments
+  const exp = 85.3 + 30 * ((3 * 0.95) / 60 / 0.317);
+  const pess = 85.3 - 1.0 + 30 * ((3 * 0.9) / 60 / PK);
+  assert.ok(exp < 90 && exp + 1.0 >= 90, "expected world reads " + exp);
+  assert.ok(pess + 1.0 < 90 && pess + 2.0 >= 90, "pessimistic world is at " + pess);
 });

@@ -19,9 +19,13 @@
 //    (and the target is above it) a rate in force is held, and the pessimistic world takes the WORSE of its two consistent starts: past the knee (at the
 //    knee or above, the fall over, the tail anchored at the lower of the rate in force and the rate tried: a raise is never credited) and not yet past it
 //    (on the plateau from the pessimistic start). A START, or a call before the window (nothing has charged yet), starts on the plateau, the knee crossed
-//    at the start rate: a START is monotone in the SOC.
+//    at the start rate: a START is monotone in the SOC. The power the knee was crossed at is the rate in force UNLESS that rate was set by an ordinary change
+//    (changesUsed >= 1) inside the window while the knee may already have been passed when it was set: an outside raise after the knee would otherwise be credited
+//    at the new rate; the earlier rate is not in the record, so the tail is then anchored at the LOWEST setpoint (the worst case, KNEE_RATE_UNKNOWN) and OK needs
+//    the deadline to hold even so (round 3 F2).
 //  * Rate: the lowest 100 W step (not below 500 W) whose PESSIMISTIC simulation reaches the target by the deadline, from the measured SOC. When none does,
-//    the highest safe rate, status TARGET_AT_RISK (inside the buffer) or UNREACHABLE; the target is never lowered.
+//    the highest safe rate, status TARGET_AT_RISK (inside the buffer, or when the highest rate the path can still apply would make the window) or UNREACHABLE
+//    (not even that rate does; a path that cannot change the rate, or a spent change budget, is judged at the rate in force); the target is never lowered.
 //  * Status OK never relies on a later change: no path makes one by itself (each needs the owner, or the path does not exist), so OK is judged with the
 //    first rate HELD for the rest of the window; when only a planned later change makes the deadline the status is TARGET_AT_RISK (RELIES_ON_LATER_CHANGE).
 //  * Adaptation is honest: the trajectory is the closed-loop policy run on the expected world (re-plan from the measured SOC at each dwell interval,

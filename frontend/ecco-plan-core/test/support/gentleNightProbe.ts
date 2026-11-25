@@ -159,6 +159,57 @@ export function signature(m: Mod): Record<string, string> {
     night({ elapsedMin: 60, socPct: 40, inForce: { setpointW: 0, lastChangeAtMin: 50, changesUsed: 6 } }), assumed({ elapsedMin: -720, socPct: 10, targetSocPct: 90, preWindowDrainW: 30000 }),
     night({ elapsedMin: 5, socPct: 90, targetSocPct: 90.5, inForce: f2000 }), night({ elapsedMin: 5, socPct: 90, targetSocPct: 91, inForce: f2000 }),
     small({ ceilings: [maxChargePowerCeiling(8000, 6000)], household: { gridImportLimitW: 9358, demandPeakW: 1429, demandAgeMin: 1 } })]);
+  // ---- the third independent review of 8999cdf (round 3: F1 to F10): one key per fixed behaviour, so that every mutant of the new logic differs from the golden
+  type Force = NonNullable<GentleNightInput["inForce"]>;
+  const l2000 = (lastChangeAtMin: number | null, changesUsed = 0): Force => ({ setpointW: 2000, lastChangeAtMin, changesUsed });
+  const r3Win = { chargeWindow: { startMin: 600, endMin: 900 }, bufferMin: 60, elapsedMin: 30, socPct: 91, socAgeMin: 0, targetSocPct: 95, actuatorProfile: "TOU_SLOT_EDITOR" } as const;
+  const raised = (lastChangeAtMin: number | null, changesUsed: number, over: Partial<GentleNightInput> = {}): unknown => assumed({ ...r3Win, inForce: { setpointW: 8000, lastChangeAtMin, changesUsed }, ...over });
+  rec("r3Start", () => [assumed({ actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 58, socPct: 40, drainBoundW: 3000, elapsedMin: 15, socAgeMin: 14.5, inForce: l2000(14) }),
+    assumed({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 15, socAgeMin: 5, inForce: l2000(11.5) }), assumed({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 15, socAgeMin: 5, inForce: l2000(12) }),
+    small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 15, socAgeMin: 5, inForce: l2000(12.5) }), assumed({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 15, socAgeMin: 5, inForce: l2000(null) }),
+    assumed({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 15, socAgeMin: 5, inForce: l2000(10) }),
+    assumed({ actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 58, socPct: 40, drainBoundW: 3000, elapsedMin: 12, socAgeMin: 15, inForce: l2000(10) })]);
+  rec("r3Fall", () => [small({ elapsedMin: -120, socPct: 44, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: -180 } }), small({ elapsedMin: -120, socPct: 44, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 55.6, elapsedMin: -180 } }),
+    small({ elapsedMin: 60, socPct: 44.5, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: 40 } }), small({ elapsedMin: 60, socPct: 44.2, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: 40 } }),
+    small({ elapsedMin: 60, socPct: 44, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: 40 }, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } }),
+    small({ elapsedMin: 60, socPct: 45.7, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: 40 }, inForce: { setpointW: 3000, lastChangeAtMin: 50, changesUsed: 0 } }),
+    small({ elapsedMin: -120, socPct: 44, socAgeMin: 1, previousSoc: { socPct: 50, elapsedMin: -180 } }), small({ elapsedMin: -90, preWindowDrainW: 30001 })]);
+  rec("r3KneeRate", () => [raised(25, 1), raised(25, 0), raised(-30, 1), raised(0, 1), raised(0.5, 1), raised(null, 1), raised(25, 1, { targetSocPct: 90 }), raised(-40, 1, { elapsedMin: -30, drainBoundW: 0 }),
+    raised(28, 1, { socPct: 87.4, socAgeMin: 5, drainBoundW: 0 }), raised(28, 1, { socPct: 87.5, socAgeMin: 5, drainBoundW: 0 }), raised(10, 1, { socPct: 88.9, socAgeMin: 5, drainBoundW: 0 }), raised(10, 1, { socPct: 89, socAgeMin: 5, drainBoundW: 0 }),
+    raised(25, 1, { chargeWindow: { startMin: 100, endMin: 1100 }, bufferMin: 0, targetSocPct: 91.5 }), night({ ...r3Win, inForce: { setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 } })]);
+  const lease6 = (inForce: unknown, over: Partial<GentleNightInput> = {}): unknown => small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: inForce as GentleNightInput["inForce"], ...over });
+  rec("r3Breach", () => [lease6({ setpointW: 8000, lastChangeAtMin: 0 }), lease6({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0.5 }), lease6({ setpointW: 8000, changesUsed: 0 }), lease6({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { params: { replanMin: 20 } }),
+    lease6({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { actuatorProfile: "MAGIC" as never }), lease6({ setpointW: 8000 }, { actuatorProfile: "MAGIC" as never }),
+    lease6({ setpointW: 5500, lastChangeAtMin: 0, changesUsed: 0 }, { ceilings: [maxChargePowerCeiling(8000, 8000)], params: { hardMaxW: 5000, replanMin: 20 } }),
+    lease6({ setpointW: 6000, lastChangeAtMin: 0 }, { ceilings: [maxChargePowerCeiling(8000, 8000)], household: { gridImportLimitW: 3000, demandPeakW: 2500, demandAgeMin: 1 } }),
+    lease6({ setpointW: 8000, changesUsed: 0.5 }, { actuatorProfile: "TOU_SLOT_EDITOR", params: { replanMin: 20 } }), lease6({ setpointW: 6000 }, { socPct: null }), lease6({ setpointW: "8000" }, { socPct: null }),
+    plan({ actuatorProfile: "MAGIC" as never }).codes, plan({ params: { replanMin: 20 } }).codes]);
+  const nullProto = Object.create(null) as never;
+  rec("r3Names", () => [small({ elapsedMin: 60, socPct: 40, ceilings: [{ name: nullProto, watts: 5000 }] }), small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [{ name: nullProto, watts: 5000 }], inForce: { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 } }),
+    small({ ceilings: [{ name: 7 as never, watts: 5000 }] }), plan({ actuatorProfile: nullProto }).codes, plan({ actuatorProfile: 7 as never }).codes]);
+  rec("r3Unreach", () => [night({ actuatorProfile: "UNCONSTRAINED", targetSocPct: 95, bufferMin: 90, chargeWindow: { startMin: 303, endMin: 541 }, elapsedMin: 0.5, socPct: 88.27706020426044, socAgeMin: 2.0001, ceilings: [{ name: "max_charge_power_effective", watts: 5000 }], inForce: { setpointW: 500, lastChangeAtMin: -0.5, changesUsed: 0 } }),
+    small({ actuatorProfile: "UNCONSTRAINED", targetSocPct: 95, bufferMin: 90, chargeWindow: { startMin: 303, endMin: 541 }, elapsedMin: 0.5, socPct: 88.27706020426044, socAgeMin: 2.0001, ceilings: [{ name: "max_charge_power_effective", watts: 1500 }], inForce: { setpointW: 500, lastChangeAtMin: -0.5, changesUsed: 0 } }),
+    small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } }), small({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 1 } }),
+    small({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 6 } })]);
+  rec("r3Above", () => [night({ actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 99.6, elapsedMin: 10, socPct: 99.4, socAgeMin: 0 }), night({ actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 99.6, elapsedMin: -60, drainBoundW: 0, socPct: 99.3, socAgeMin: 0 })]);
+  rec("r3Floor", () => [night({ actuatorProfile: "TOU_SLOT_EDITOR", chargeWindow: { startMin: 174, endMin: 428 }, elapsedMin: 0, socPct: 79.083, socAgeMin: 2, capacityKwh: 64.93, ceilings: [maxChargePowerCeiling(8000, 4100)], drainBoundW: 22230, targetSocPct: 90.5 }),
+    night({ actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 60.05, socPct: 40 }), night({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 250, socPct: 89.8, targetSocPct: 90, inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } })]);
+  rec("r3NoNeed", () => [text({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 85, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } }), text({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 60, socPct: 85, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } }),
+    text({ elapsedMin: 60, socPct: 85 }), text({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 85, inForce: { setpointW: 0, lastChangeAtMin: 0, changesUsed: 0 } })]);
+  rec("r3Either", () => night({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 93, socPct: 90, targetSocPct: 91, bufferMin: 105, inForce: { setpointW: 1900, lastChangeAtMin: -60, changesUsed: 0 } }));
+  rec("r3Knees", () => [plan().assumptions, plan({ params: { kneeSocPct: 97 } }).assumptions, plan({ params: { kneeSocPct: 99.6 } }).assumptions]);
+  rec("r3Jump", () => [small({ elapsedMin: 6, socPct: 30, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } }), small({ elapsedMin: 6, socPct: 30.1, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } }),
+    small({ elapsedMin: 30, socPct: 54, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } }), small({ elapsedMin: 30, socPct: 54.1, socAgeMin: 1, previousSoc: { socPct: 20, elapsedMin: 0 } })]);
+  rec("r3Fit", () => [night({ targetSocPct: 22, socPct: 20 }), plan({ elapsedMin: -90, preWindowDrainW: 0, actuatorProfile: "FREE_POWER_LEASE" }).expectedFinish]);
+  rec("r3Zero", () => [0, 0.5].map((elapsedMin) => assumed({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin, socAgeMin: 0, drainBoundW: 0, socPct: 92, targetSocPct: 95, inForce: { setpointW: 2000, lastChangeAtMin: -200, changesUsed: 0 } })));
+  rec("r3StaleDemand", () => [small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, household: { gridImportLimitW: 8000, demandPeakW: 3000, demandAgeMin: 20 }, inForce: { setpointW: 5200, lastChangeAtMin: 0, changesUsed: 0 } }),
+    small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, household: { gridImportLimitW: 8000, demandPeakW: 3000, demandAgeMin: 15 }, inForce: { setpointW: 5200, lastChangeAtMin: 0, changesUsed: 0 } })]);
+  rec("r3Eff", () => [{ chargeEffMin: 0.96 }, { chargeEffMax: 0.94 }, { chargeEff: 0.98 }, { chargeEff: 0.89 }, { chargeEffMin: 0.92, chargeEff: 0.92, chargeEffMax: 0.92 }].map((params) => small({ params })));
+  rec("r3Step", () => [night({ params: { stepW: 150 } }), night({ params: { stepW: 300 } })]);
+  rec("r3DeadlineMinute", () => [239.5, 240, 240.5].map((elapsedMin) => small({ elapsedMin, socPct: 70 })));
+  rec("r3KneeDrain", () => assumed({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 5, socAgeMin: 15, socPct: 88.6, targetSocPct: 95, drainBoundW: 3000, inForce: { setpointW: 2000, lastChangeAtMin: -200, changesUsed: 0 } }));
+  rec("r3FirstMinute", () => [88.8, 88.85].map((socPct) => assumed({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 1, socAgeMin: 1, socPct, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: -60, changesUsed: 0 } })));
+  rec("r3Replan", () => night({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 100, socPct: 85.3, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: 95, changesUsed: 0 } }));
   return out;
 }
 
@@ -307,4 +358,45 @@ export const MUTANTS: readonly Mutant[] = [
   { id: "N22: a forced decrease on the TOU editor is worded as an ordinary change", from: "if (first.codes.includes(\"FORCED_BELOW_CEILING\")) return \"The owner's guarded TOU editor, as soon as possible:", to: "if (false) return \"The owner's guarded TOU editor, as soon as possible:", keys: ["touText"] },
   { id: "N23: before the window a rate in force is held past the knee like a charging one (the 52ed09e MINOR)", from: "const charging = cur !== null && now > 0;", to: "const charging = cur !== null;", keys: ["beforeWindowHold"] },
   { id: "N24: the earlier name of the drain bound is ignored", from: "? drainNew : drainOld;", to: "? drainNew : undefined;", keys: ["drain", "drainWindow"] },
+  // ---- round 3: the third independent review of 8999cdf (its surviving mutants H04 to H32, then the mutants of its own fixes), each killed by a behavioural assertion
+  { id: "R3 H04: the SOC at the deadline of the two starts is the higher one", from: "socAtDeadlinePct: Math.min(a.socAtDeadlinePct, b.socAtDeadlinePct),", to: "socAtDeadlinePct: Math.max(a.socAtDeadlinePct, b.socAtDeadlinePct),", keys: ["kneeOptimistic"] },
+  { id: "R3 H05: the pessimistic world reaches the deadline when either of its two starts does", from: "reachedByDeadline: a.reachedByDeadline && b.reachedByDeadline,", to: "reachedByDeadline: a.reachedByDeadline || b.reachedByDeadline,", keys: ["r3Either"] },
+  { id: "R3 H08: the expected and optimistic knees may reach 100", from: "Math.min(99.5, kneeP + add)", to: "Math.min(100, kneeP + add)", keys: ["r3Knees"] },
+  { id: "R3 H10: the jump allowance counts the hours only to the reading, not to now", from: "const hours = (elapsed - prev.elapsedMin) / 60;", to: "const hours = (elapsed - age - prev.elapsedMin) / 60;", keys: ["r3Jump"] },
+  { id: "R3 H11: the jump allowance counts the hours twice", from: "const hours = (elapsed - prev.elapsedMin) / 60;", to: "const hours = (elapsed - prev.elapsedMin) / 30;", keys: ["r3Jump"] },
+  { id: "R3 H13: any drain bound is accepted (no 30 kW cap)", from: "drain <= 30000 ? drain : null;", to: "drain <= 3e9 ? drain : null;", keys: ["r3Fall"] },
+  { id: "R3 H16: the buffer that would fit is not capped at 120", from: "Math.min(120, Math.floor((W - pf) / 5 + EPS) * 5)", to: "Math.floor((W - pf) / 5 + EPS) * 5", keys: ["r3Fit"] },
+  { id: "R3 H17: the expected finish is counted from the window start before it opens", from: "inMin: Math.round((ef - elapsed) * 10) / 10,", to: "inMin: Math.round((ef - Math.max(elapsed, 0)) * 10) / 10,", keys: ["beforeWindow", "r3Fit"] },
+  { id: "R3 H18: a re-plan reads the world's true position, not its displayed reading", from: "const shown = st.soc - w.offset;", to: "const shown = st.soc;", keys: ["r3Replan"] },
+  { id: "R3 H19: a re-plan's knee estimate drops the reading uncertainty", from: "const ch = choose(c, shown, shown + c.upOffset, tk, tk, f);", to: "const ch = choose(c, shown, shown, tk, tk, f);", keys: ["r3Replan"] },
+  { id: "R3 H20: the projection re-plans after the deadline", from: "if (tk >= c.deadline - EPS || tk >= c.windowEnd) break;", to: "if (tk >= c.windowEnd) break;", keys: ["r3Floor", "deadlinePassed"] },
+  { id: "R3 H21: a rate in force counts as charging at the first minute of the window", from: "const charging = cur !== null && now > 0;", to: "const charging = cur !== null && now >= 0;", keys: ["r3Zero"] },
+  { id: "R3 H25: the STOP check uses a stale demand", from: "dage <= P.maxHouseholdAgeMin;", to: "dage <= 1e9;", keys: ["r3StaleDemand"] },
+  { id: "R3 H26: the efficiency band order is not checked", from: "if (!(p.chargeEffMin <= p.chargeEff && p.chargeEff <= p.chargeEffMax)) return \"The efficiency band must satisfy min <= expected <= max.\";", to: "", keys: ["r3Eff"] },
+  { id: "R3 H28: the path's step is not applied to the parameters", from: "return { ...merged, stepW: tightened.stepW, minW: tightened.minW,", to: "return { ...merged, stepW: merged.stepW, minW: tightened.minW,", keys: ["r3Step"] },
+  { id: "R3 H30: the deadline counts as passed at the deadline minute itself", from: "if (elapsed > deadline) codes.push(\"DEADLINE_PASSED_WINDOW_OPEN\");", to: "if (elapsed >= deadline) codes.push(\"DEADLINE_PASSED_WINDOW_OPEN\");", keys: ["r3DeadlineMinute"] },
+  { id: "R3 H31: the knee estimate starts from the drained SOC", from: "const kneeEstimate = soc + ctx.upOffset + sincePct;", to: "const kneeEstimate = socPlan + ctx.upOffset + sincePct;", keys: ["r3KneeDrain"] },
+  { id: "R3 H32: the charge since the reading is skipped in the first minute of the window", from: "if (force.setpointW !== null && elapsed > 0) {", to: "if (force.setpointW !== null && elapsed > 1) {", keys: ["r3FirstMinute"] },
+  { id: "R3 F1: the minutes from the reading to the START are not idle", from: "return Math.max(0, Math.min(b, 0) - a) + Math.max(0, Math.min(b, setAt) - Math.max(a, 0));", to: "return Math.max(0, Math.min(b, 0) - a);", keys: ["r3Start"] },
+  { id: "R3 F1: a rate with no set time counts all its minutes idle", from: "force.lastChangeAtMin === null ? -Infinity : force.lastChangeAtMin;", to: "force.lastChangeAtMin === null ? Infinity : force.lastChangeAtMin;", keys: ["r3Start"] },
+  { id: "R3 F7: a fall against the previous reading is never excused by the drain bound", from: "const fall = drainW === null ? 0 : (drainW * idleBetween(prev.elapsedMin, readAt)) / 60 / 1000 / fewestKwhPerPct;", to: "const fall = 0;", keys: ["r3Fall"] },
+  { id: "R3 F7: the fall is excused over the minutes up to now, not up to the reading", from: "idleBetween(prev.elapsedMin, readAt)", to: "idleBetween(prev.elapsedMin, elapsed)", keys: ["r3Fall"] },
+  { id: "R3 F2: the knee rate is never unknown", from: "const kneeRateUnknown = force.setpointW !== null &&", to: "const kneeRateUnknown = false &&", keys: ["r3KneeRate"] },
+  { id: "R3 F2: a START counts as a change of the rate", from: "force.changesUsed >= 1 &&", to: "force.changesUsed >= 0 &&", keys: ["r3KneeRate"] },
+  { id: "R3 F2: a change made before the window opened counts", from: "(force.lastChangeAtMin === null || force.lastChangeAtMin > 0)", to: "(force.lastChangeAtMin === null || force.lastChangeAtMin > -1e9)", keys: ["r3KneeRate"] },
+  { id: "R3 F2: the position at the change ignores the charge possible before it", from: "kneeMayBePassed(ctx, soc + ctx.upOffset + preChangePct)", to: "kneeMayBePassed(ctx, soc + ctx.upOffset)", keys: ["r3KneeRate"] },
+  { id: "R3 F2: the worst-case tail is anchored at the rate in force, not the lowest setpoint", from: "{ ...force, kneeFloorW: minW }", to: "{ ...force, kneeFloorW: force.setpointW as number }", keys: ["r3KneeRate"] },
+  { id: "R3 F2: the held pessimistic world forgets the lowest-setpoint anchor", from: "Math.min(inForceW, first.rateW, force0.kneeFloorW ?? Infinity)", to: "Math.min(inForceW, first.rateW)", keys: ["r3KneeRate"] },
+  { id: "R3 F3: a record with a malformed change count is not compared with the ceiling", from: "|| !isNum(f.setpointW) || f.setpointW <= 0) return null;", to: "|| !isNum(f.setpointW) || f.setpointW <= 0 || !Number.isInteger(f.changesUsed)) return null;", keys: ["r3Breach"] },
+  { id: "R3 F3: invalid parameters or an unknown path hide a rate above the ceiling", from: "return b === null ? refuse(\"INPUTS_UNUSABLE\", why, {}, extra) : breachRefusal(b, \"INPUTS_UNUSABLE\", why, {}, extra, known, Q);", to: "return refuse(\"INPUTS_UNUSABLE\", why, {}, extra);", keys: ["r3Breach"] },
+  { id: "R3 F3: an unknown path is taken as one that can lower the rate", from: "known === null ? true : !GENTLE_ACTUATOR_PROFILES[known].midWindowAdjustment", to: "known === null ? false : !GENTLE_ACTUATOR_PROFILES[known].midWindowAdjustment", keys: ["r3Breach"] },
+  { id: "R3 F3: the valid parameters are not kept for the comparison", from: "if (isNum(v) && v >= b[0] && v <= b[1]) out[k] = v;", to: "if (false) out[k] = v as number;", keys: ["r3Breach"] },
+  { id: "R3 F9: a ceiling name is converted with String (throws for an object with no prototype)", from: "nameOf(nc.name)", to: "String(nc.name)", keys: ["r3Names"] },
+  { id: "R3 F9: the profile name is looked up unchecked (throws for an object with no prototype)", from: "const profileKnown = typeof profileGiven === \"string\" && Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, profileGiven);", to: "const profileKnown = Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, profileGiven as string);", keys: ["r3Names"] },
+  { id: "R3 F4: UNREACHABLE is judged on the rate in force held again", from: "const topOk = topFinish !== null && topFinish <= W + EPS;", to: "const topOk = false;", keys: ["r3Unreach"] },
+  { id: "R3 F4: a path that cannot raise the rate is judged at the highest rate", from: "const mayRaise = inForceW === null || (ctx.midWindow && ctx.maxChanges > 0 && force.changesUsed < ctx.maxChanges);", to: "const mayRaise = true;", keys: ["r3Unreach"] },
+  { id: "R3 F5: a world above the target at its start finishes before now", from: "if (st.soc >= target - EPS) return st.t;", to: "", keys: ["r3Above"] },
+  { id: "R3 F6: the SOC at the deadline is rounded, not floored", from: "Math.floor(Math.min(c.target, socAtDeadline) * 10 + 1e-9) / 10", to: "Math.round(Math.min(c.target, socAtDeadline) * 10) / 10", keys: ["r3Floor", "F"] },
+  { id: "R3 F6: a reached SOC at the deadline is rounded to a tenth", from: "reachedExact ? c.target :", to: "reachedExact ? Math.round(c.target * 10) / 10 :", keys: ["r3Floor"] },
+  { id: "R3 F8: a lease in force at the target is told the same as no rate in force", from: "const needed = inW === null ?", to: "const needed = true ?", keys: ["r3NoNeed"] },
 ];
