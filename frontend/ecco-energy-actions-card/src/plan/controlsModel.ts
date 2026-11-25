@@ -12,7 +12,7 @@
 // reads back the plan revision, the guarded script's own answer and BOTH records and says confirmed, still pending, or NOT confirmed.
 import { OVERRIDE_KINDS, OVERRIDE_LABELS, expiryChoices, formatDurationMin, startConfiguredOverride } from "../../../ecco-plan-core/src/index.ts";
 import type { ClockContext, OverrideConfig, OverrideKind } from "../../../ecco-plan-core/src/index.ts";
-import { stateText } from "./adapter.ts";
+import { CURRENT_RESERVE_MAX, CURRENT_RESERVE_MIN, stateNumber, stateText } from "./adapter.ts";
 import type { StatesLike } from "./adapter.ts";
 import { HELPER_IDS } from "./helpers.ts";
 import type { KindRecord, PlanSnapshotWithHelpers } from "./helpers.ts";
@@ -56,23 +56,44 @@ export interface InstallVM {
   missing: string[];
 }
 
-/** The one short status line above the override controls. */
+/**
+ * The one short status line above the override controls. "ready" means everything the controls rely on was found and readable; "ready_with_gaps" means
+ * a start can be sent but something the plan reads was not found; "revision_unreadable" means the stored plan revision cannot be read, which the installed
+ * start script refuses every start for.
+ */
 export interface ReadinessVM {
-  kind: "ready" | "needs_confirmation" | "confirmation_unreadable" | "limits_unusable" | "partial" | "not_installed";
+  kind: "ready" | "ready_with_gaps" | "revision_unreadable" | "needs_confirmation" | "confirmation_unreadable" | "limits_unusable" | "partial" | "not_installed";
   text: string;
 }
 
-/** The two reserves, kept apart: what the battery's backup reserve is NOW, and what Prepare for power cut would raise it TO. */
+/** The reserve ECCO's plan uses now, as the installed effective-reserve sensor publishes it (a whole percent from 0 to 100), or why it cannot be read. */
+export interface PlanReserveReading {
+  known: boolean;
+  value: number | null;
+  /** Why it is unknown ("" when known). */
+  reason: string;
+}
+
+/**
+ * The reserves, kept apart: what the OWNER's backup reserve is now, what ECCO's plan uses now (only shown when it can differ from the owner's: an override
+ * record is held, or the plan's own figure differs from the owner's), and what Prepare for power cut would raise it TO.
+ */
 export interface ReserveVM {
   nowPct: number | null;
   /** Why the reserve now is unknown ("" when known). */
   nowReason: string;
   targetPct: number | null;
   targetReason: string;
-  /** "Reserve now 5 %" and "Power cut target 80 %" in the owner's words, or the honest reason when a figure is not known. */
+  /** The reserve ECCO's plan uses now (the effective-reserve sensor); null while it is not shown. */
+  planPct: number | null;
+  /** Why the plan's reserve is unknown while it is shown ("" otherwise). */
+  planReason: string;
+  /** "Reserve now 5 %" (or "Your reserve 5 %" while the plan's reserve is shown beside it) and "Power cut target 80 %" in the owner's words, or the honest reason when a figure is not known. */
   nowText: string;
   targetText: string;
-  /** true: the target is above the reserve now, so Prepare for power cut can raise it; false: it cannot; null: not known. */
+  /** "Plan reserve now 80 %" or "Plan reserve now unknown (why)"; null while the plan's reserve is not shown. */
+  planText: string | null;
+  /** true: the target is above the reserve the plan will use for the owner's value (rounded up), so Prepare for power cut can raise it; false: it cannot; null: not known. */
   canRaise: boolean | null;
 }
 
@@ -197,10 +218,15 @@ export function readInstall(states: StatesLike, guardedStart: string | null | un
 }
 
 export const READY_TEXT = "Overrides ready.";
+export const READY_GAPS_LEAD = "Overrides only partly ready.";
 export const CONFIRM_TEXT = "Turn on the confirmation switch: override limits reviewed and confirmed.";
 
-/** One short, truthful status line: say "not installed" only when the guarded scripts are really absent. */
-export function readinessOf(install: InstallVM, confirmed: boolean | null, startPolicy: { ok: boolean; reasons?: readonly string[] }): ReadinessVM {
+/**
+ * One short, truthful status line: say "not installed" only when BOTH guarded scripts are really absent, name the one that is missing when only one is, and say
+ * "Overrides ready." only when nothing the controls rely on is missing or unreadable. `revisionReason` is why the stored plan revision cannot be read, or null when
+ * it can be (the installed start script refuses every start while it cannot).
+ */
+export function readinessOf(install: InstallVM, confirmed: boolean | null, startPolicy: { ok: boolean; reasons?: readonly string[] }, revisionReason: string | null): ReadinessVM {
   if (!install.startScript && !install.cancelScript) {
     return { kind: "not_installed", text: "Overrides are not installed: the guarded scripts (" + PLAN_CONTROL_IDS.start_script + ", " + PLAN_CONTROL_IDS.cancel_script + ") were not found." };
   }
@@ -211,23 +237,43 @@ export function readinessOf(install: InstallVM, confirmed: boolean | null, start
   if (confirmed === false) return { kind: "needs_confirmation", text: CONFIRM_TEXT };
   if (confirmed === null) return { kind: "confirmation_unreadable", text: "The confirmation switch (override limits reviewed and confirmed) cannot be read, so no override can be started." };
   if (!startPolicy.ok) return { kind: "limits_unusable", text: "The override limits are not usable: " + ((startPolicy.reasons && startPolicy.reasons[0]) || "see the limits below.") };
+  if (revisionReason !== null) return { kind: "revision_unreadable", text: revisionReason.replace(/\.$/, "") + ", so no override can be started." };
   const gaps: string[] = [];
   if (!install.effectiveReserve) gaps.push("the effective-reserve sensor");
   if (!install.exportHold) gaps.push("the export-hold sensor");
   if (install.guardedDump === "missing") gaps.push("the guarded Dump to Grid start script");
-  return { kind: "ready", text: gaps.length ? READY_TEXT + " Not found: " + gaps.join(", ") + "." : READY_TEXT };
+  return gaps.length ? { kind: "ready_with_gaps", text: READY_GAPS_LEAD + " Not found: " + gaps.join(", ") + "." } : { kind: "ready", text: READY_TEXT };
 }
 
-/** The reserve now and the power cut target, kept apart. The target is the policy value (10 to 100); the reserve now is read by the backend's own rule (0 to 100). */
-export function reserveVM(nowPct: number | null, nowReason: string, targetPct: number | null, targetReason: string): ReserveVM {
-  const canRaise = nowPct !== null && targetPct !== null ? targetPct > nowPct : null;
+/** The reserve ECCO's plan uses now, read from the installed effective-reserve sensor by its own rule (a whole percent from 0 to 100); anything else is unknown. */
+export function readPlanReserve(states: StatesLike): PlanReserveReading {
+  const id = BACKEND_SENSOR_IDS.effective_reserve;
+  if (states[id] === undefined) return { known: false, value: null, reason: "the effective-reserve sensor was not found" };
+  if (stateText(states, id) === null) return { known: false, value: null, reason: "the effective-reserve sensor cannot be read" };
+  const n = stateNumber(states, id);
+  if (n === null || n < CURRENT_RESERVE_MIN || n > CURRENT_RESERVE_MAX) return { known: false, value: null, reason: "the effective-reserve sensor does not read a percentage from " + CURRENT_RESERVE_MIN + " to " + CURRENT_RESERVE_MAX };
+  return { known: true, value: n, reason: "" };
+}
+
+/**
+ * The reserve now and the power cut target, kept apart. The target is the policy value (10 to 100); the reserve now is read by the backend's own rule (0 to 100).
+ * `plan` is the reserve ECCO's plan uses now, passed only when it is to be shown beside the owner's (an override record is held, or it differs from the owner's):
+ * the owner's figure is then labelled "Your reserve" so that the two cannot be mistaken for one another. The target must be above the owner's reserve ROUNDED UP,
+ * because the installed effective-reserve sensor rounds the owner's value up (79.5 is published as 80), so a target of 80 over it raises nothing.
+ */
+export function reserveVM(nowPct: number | null, nowReason: string, targetPct: number | null, targetReason: string, plan: PlanReserveReading | null = null): ReserveVM {
+  const canRaise = nowPct !== null && targetPct !== null ? targetPct > Math.ceil(nowPct) : null;
+  const label = plan !== null ? "Your reserve" : "Reserve now";
   return {
     nowPct,
     nowReason,
     targetPct,
     targetReason,
-    nowText: nowPct !== null ? "Reserve now " + nowPct + " %" : "Reserve now unknown (" + nowReason + ")",
+    planPct: plan !== null && plan.known ? plan.value : null,
+    planReason: plan !== null && !plan.known ? plan.reason : "",
+    nowText: nowPct !== null ? label + " " + nowPct + " %" : label + " unknown (" + nowReason + ")",
     targetText: targetPct !== null ? "Power cut target " + targetPct + " %" : "Power cut target unknown (" + targetReason + ")",
+    planText: plan === null ? null : plan.known ? "Plan reserve now " + plan.value + " %" : "Plan reserve now unknown (" + plan.reason + ")",
     canRaise,
   };
 }
@@ -243,9 +289,13 @@ export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
   const currentReservePct = reserve && reserve.known ? reserve.value : null;
   const startCfg: OverrideConfig | null = h.startPolicy.ok ? h.startPolicy.config : null;
   const install = readInstall(ctx.states, ctx.guardedStart);
-  const readiness = readinessOf(install, h.confirmed, h.startPolicy.ok ? { ok: true } : { ok: false, reasons: h.startPolicy.reasons });
+  const readiness = readinessOf(install, h.confirmed, h.startPolicy.ok ? { ok: true } : { ok: false, reasons: h.startPolicy.reasons }, h.revision.known ? null : h.revision.reason);
   const reserveNow = ctx.snap.currentReserve;
-  const reservePair = reserveVM(currentReservePct, reserveNow ? reserveNow.reason : "The backup reserve cannot be read.", startCfg ? startCfg.cutReservePct : null, "the override limits are not usable");
+  // The reserve ECCO's plan uses is shown beside the owner's while any override record is held (it can then be above the owner's), or whenever the installed
+  // sensor reads a figure that differs from the owner's (for example the owner's 79.5 rounded up to 80); otherwise the owner's reserve stands alone.
+  const planRead = readPlanReserve(ctx.states);
+  const showPlanReserve = h.active.length > 0 || h.held.length > 0 || (planRead.known && (currentReservePct === null || planRead.value !== currentReservePct));
+  const reservePair = reserveVM(currentReservePct, reserveNow ? reserveNow.reason : "The backup reserve cannot be read.", startCfg ? startCfg.cutReservePct : null, "the override limits are not usable", showPlanReserve ? planRead : null);
   const last = stateText(ctx.states, PLAN_CONTROL_IDS.last_result);
 
   const kinds: KindControlVM[] = OVERRIDE_KINDS.map((kind) => {
@@ -260,8 +310,13 @@ export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
       const probe = all.length ? all[0] : null;
       const verdict = startConfiguredOverride(kind, nowMin, probe ? probe.expiryMin : null, h.startPolicy, { clock: ctx.clock, currentReservePct });
       if (!verdict.ok && (verdict.code === "RESERVE_UNKNOWN" || verdict.code === "RESERVE_BELOW_CURRENT")) blockedReason = verdict.error;
-      // The installed backend allows a target equal to the reserve now (it raises nothing); the card offers only a start that RAISES it.
-      else if (kind === "prepare_power_cut" && reservePair.nowPct !== null && reservePair.targetPct === reservePair.nowPct) blockedReason = "The power cut target (" + reservePair.targetPct + " %) is not above the reserve now (" + reservePair.nowPct + " %), so it cannot raise the reserve.";
+      // The installed backend allows a target equal to the reserve now, or between the owner's value and that value rounded up (it raises nothing: the
+      // effective-reserve sensor rounds the owner's reserve UP); the card offers only a start that RAISES it.
+      else if (kind === "prepare_power_cut" && reservePair.canRaise === false) {
+        const now = reservePair.nowPct as number;
+        const used = Math.ceil(now);
+        blockedReason = "The power cut target (" + reservePair.targetPct + " %) is not above the reserve now (" + now + " %" + (used === now ? "" : ", which the plan uses as " + used + " %") + "), so it cannot raise the reserve.";
+      }
       else if (all.length === 0) blockedReason = "No length fits the owner's limits.";
       else {
         choices = all.map((c) => ({

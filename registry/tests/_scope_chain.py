@@ -1381,15 +1381,16 @@ ECF1 = Entry(
     added_files=_ecf1.ADDED_FILES,
     frozen_reverts=dict(_ecf1.FROZEN_REVERTERS),
     frozen_checkpoints={   # sha256 (LF) of each file after ecf1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
-        _ecf1.README_REL: "1e6c9fe1e3c7419da499970a9f887ed1b6f176de4bbc0145e8714e1db9d4a9ec",
-        _ecf1.DIST_REL: "a0cce4b86fee4bdd7377c202ec0784c296175489b77f5bdd79fe6c40390f0416",
+        _ecf1.README_REL: "d799ff82d0a6227018a37bec59adb5a40e489cb9ac20d813de0fad8cfab3aa12",
+        _ecf1.DIST_REL: "2270a0bec2ceda208c3d8677c7449d94d26615016b225de3b0be9137d7e8ccea",
     },
     # _pex.fingerprint(ECF1): hashes its parent epc3's fingerprint and every declaration above
-    fingerprint="96a6771e2e06da81037fab4d9b00a409f948fac1e33f16ae01de991d84437d90",
+    fingerprint="5a12da39569c96a885d41c8f5730310830319807d9d35f0e758e1af8993e8d3c",
     note="the Energy Actions card corrections after the first install: the current backup reserve is read by the installed scripts' rule (a number from 0 "
          "to 100, so 5 percent is valid) and kept apart from the power-cut target (10 to 100, offered only while above the reserve now), installed is "
-         "derived from the entities that exist instead of a static line, and the guarded Plan section is compact (folded text with one-line summaries); "
-         "the card README and the rebuilt bundle: ZERO firmware, Home Assistant package, deployment, registry data, Intelligence or ecco_core change, "
+         "derived from the entities that exist instead of a static line (ready only when nothing is missing and the plan revision can be read), and the "
+         "guarded Plan section is compact (folded text with one-line summaries); the owner's reserve is labelled apart from the reserve the plan uses, "
+         "and a target must be above the owner's reserve rounded up; the card README and the rebuilt bundle: ZERO firmware, Home Assistant package, deployment, registry data, Intelligence or ecco_core change, "
          "ZERO Modbus operation, no new service call",
 )
 POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, ECF1)

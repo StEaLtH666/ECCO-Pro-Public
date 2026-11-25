@@ -39,6 +39,11 @@ export const OVERRIDES_LINE_NONE_HELPER = "Quick overrides: none active.";
 export const OVERRIDES_STATUS_NOTE =
   "Status only: nothing in this view starts, cancels or enforces an override. An override can only hold back ECCO's own export starts or raise the reserve ECCO's plan uses; it never writes the inverter's table, does not change the inverter's own reserve and never stops a running session.";
 
+// The guarded (compact) view has working Start and Cancel controls, so the line above would be false there. This one says the true, narrower thing,
+// and it stands only right after the list of records it is about (view.ts overrideBlock, compact variant).
+export const OVERRIDES_RECORDS_NOTE =
+  "This list only shows the records Home Assistant holds: nothing in it starts, cancels or enforces an override. Start and Cancel are under Quick overrides. An override only holds back ECCO's own export starts or raises the reserve ECCO's plan uses, and never stops a running session.";
+
 export interface FigureVM {
   key: string;
   label: string;
@@ -134,11 +139,14 @@ export interface OverrideBlockVM {
   /** The proposed defaults, shown only while the limits are not usable. They are never applied. */
   proposed: string[];
   revisionText: string;
+  /** The status-only line of the view WITHOUT controls (the helpers are read but no Start or Cancel is offered). */
+  note: string;
+  /** The records-only line of the guarded view WITH controls: stands after the records, only when there are records. */
+  recordsNote: string;
   rows: OverrideRowVM[];
   /** Kinds Home Assistant holds, or may hold, that are not shown as running rows above. */
   held: HeldRowVM[];
   problems: string[];
-  note: string;
 }
 
 export interface PlanVM {
@@ -314,6 +322,7 @@ function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
     held: h.held.map((r) => ({ kind: r.kind, label: r.label, text: heldText(r, h.nowMin), note: r.note })),
     problems: [...h.problems],
     note: OVERRIDES_STATUS_NOTE,
+    recordsNote: OVERRIDES_RECORDS_NOTE,
   };
 }
 
@@ -366,7 +375,8 @@ export interface CompactVM {
   limitsAttention: boolean;
 }
 
-const SUMMARY_LABEL: Record<string, string> = { import: "Import", export: "Export", solar: "Solar", reserve: "Reserve" };
+// The Reserve figure is always the owner's own backup reserve helper (never the reserve ECCO's plan uses, which an override can raise), so the one-line summary says so.
+const SUMMARY_LABEL: Record<string, string> = { import: "Import", export: "Export", solar: "Solar", reserve: "Your reserve" };
 
 export function compactSummaries(vm: PlanVM): CompactVM {
   const parts = vm.figures.filter((f) => f.known && SUMMARY_LABEL[f.key] !== undefined).map((f) => (SUMMARY_LABEL[f.key] as string) + " " + f.text);

@@ -142,6 +142,8 @@ export function controlsProblems(Card: Ctor): string[] {
       const textC = flatten((c.card as unknown as { _renderPlan(): unknown })._renderPlan());
       const segC = textC.split('data-control=prepare_power_cut')[1] ?? "";
       if (/data-choice=/.test(segC)) bad.push("Prepare for power cut is offered below the current reserve");
+      // The reason is the plan core's own refusal (the layer that knows a target below the reserve now), not only the card's later raise-only check.
+      if (!/below the current backup reserve \(85 %\)/.test(segC)) bad.push("the reason for a power-cut reserve below the current reserve does not say so");
       if (!(textC.split('data-control=hold_battery')[1]?.split('data-control=skip_tonight')[0] ?? "").includes("data-choice=")) bad.push("Hold battery is blocked by the reserve");
       const noScripts = helperStates(planStates());
       const d = mk(noScripts);

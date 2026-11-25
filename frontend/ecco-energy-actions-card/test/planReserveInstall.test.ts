@@ -4,15 +4,15 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CURRENT_RESERVE_MAX, CURRENT_RESERVE_MIN, buildPlanSnapshot, readCurrentReserve } from "../src/plan/adapter.ts";
 import { HELPER_IDS, buildPlanSnapshotWithHelpers } from "../src/plan/helpers.ts";
-import { BACKEND_SENSOR_IDS, CONFIRM_TEXT, READY_TEXT, buildControlsVM, readInstall, readinessOf, reserveVM } from "../src/plan/controlsModel.ts";
-import { OVERRIDES_LINE_NONE_HELPER, compactSummaries, presentPlan } from "../src/plan/present.ts";
+import { BACKEND_SENSOR_IDS, CONFIRM_TEXT, READY_GAPS_LEAD, READY_TEXT, buildControlsVM, readInstall, readPlanReserve, readinessOf, reserveVM } from "../src/plan/controlsModel.ts";
+import { OVERRIDES_LINE_NONE_HELPER, OVERRIDES_STATUS_NOTE, compactSummaries, presentPlan } from "../src/plan/present.ts";
 import { PLAN_CONTROL_IDS } from "../src/plan/planActions.ts";
 import { clockContextFrom } from "../src/plan/clock.ts";
 import { renderPlanSection } from "../src/plan/view.ts";
 import { renderPlanControls } from "../src/plan/controls.ts";
 import { flatten, loadCardClass } from "./support/loadCard.ts";
 import { loadMutantCard } from "./support/mutantCard.ts";
-import { NOW_MS, helperStates } from "./support/overrideFixtures.ts";
+import { NOW_MS, helperStates, running } from "./support/overrideFixtures.ts";
 import { PLAN_CONFIG, planConfig, planStates } from "./support/planFixtures.ts";
 import { GUARDED_START, scriptStates } from "./support/controlsProbe.ts";
 import { RESERVE_CASES, SENSORS, reserveInstallProblems } from "./support/reserveProbe.ts";
@@ -107,15 +107,57 @@ test("both reserves are shown: 'Reserve now 5 %' and 'Power cut target 80 %'; th
   assert.equal(k?.reserve?.canRaise, true);
   assert.ok((k?.choices.length ?? 0) > 0);
   assert.equal(vm?.kinds.find((x) => x.kind === "hold_battery")?.reserve, null);
-  assert.deepEqual(reserveVM(5, "", 80, ""), { nowPct: 5, nowReason: "", targetPct: 80, targetReason: "", nowText: "Reserve now 5 %", targetText: "Power cut target 80 %", canRaise: true });
+  assert.deepEqual(reserveVM(5, "", 80, ""), { nowPct: 5, nowReason: "", targetPct: 80, targetReason: "", planPct: null, planReason: "", nowText: "Reserve now 5 %", targetText: "Power cut target 80 %", planText: null, canRaise: true });
   assert.equal(reserveVM(80, "", 80, "").canRaise, false);
   assert.equal(reserveVM(null, "x", 80, "").canRaise, null);
   assert.match(flatten(renderPlanSection(cfg(), states as never, NOW_MS, renderPlanControls(() => undefined))), /Reserve now 5 %<\/span> &middot; <span data-reserve-target>Power cut target 80 %/);
 });
 
+test("the owner's reserve and the reserve ECCO's plan uses are labelled apart ('Your reserve', 'Plan reserve now') whenever the plan's can differ", () => {
+  // with the plan's reserve given, the owner's figure is 'Your reserve' and the plan's stands beside it; without it, the plain 'Reserve now' stays
+  assert.deepEqual(reserveVM(5, "", 80, "", { known: true, value: 80, reason: "" }), { nowPct: 5, nowReason: "", targetPct: 80, targetReason: "", planPct: 80, planReason: "", nowText: "Your reserve 5 %", targetText: "Power cut target 80 %", planText: "Plan reserve now 80 %", canRaise: true });
+  const unknownPlan = reserveVM(5, "", 80, "", { known: false, value: null, reason: "the effective-reserve sensor was not found" });
+  assert.equal(unknownPlan.planText, "Plan reserve now unknown (the effective-reserve sensor was not found)");
+  assert.equal(unknownPlan.planPct, null);
+  assert.equal(unknownPlan.nowText, "Your reserve 5 %");
+  assert.equal(reserveVM(null, "x", 80, "", { known: true, value: 80, reason: "" }).nowText, "Your reserve unknown (x)");
+  assert.equal(reserveVM(5, "", 80, "", null).planText, null);
+  // the plan's own reserve reading follows the installed sensor's rule: a whole percent from 0 to 100, anything else is unknown
+  const read = (state: string | undefined) => readPlanReserve(state === undefined ? {} : { [BACKEND_SENSOR_IDS.effective_reserve]: { state } });
+  assert.deepEqual(read("80"), { known: true, value: 80, reason: "" });
+  assert.deepEqual(read("0"), { known: true, value: 0, reason: "" });
+  assert.deepEqual(read("100"), { known: true, value: 100, reason: "" });
+  for (const bad of ["101", "100.5", "-1", "150", "abc", "NaN", "1e3"]) assert.equal(read(bad).known, false, bad);
+  for (const dead of ["unknown", "unavailable", ""]) assert.match(read(dead).reason, /cannot be read/, dead);
+  assert.match(read(undefined).reason, /was not found/);
+  assert.match(read("150").reason, /does not read a percentage from 0 to 100/);
+});
+
+test("a target must be above the owner's reserve rounded UP (the installed sensor rounds it up: 79.5 is published as 80), so 79.5 against 80 raises nothing and is not offered", () => {
+  assert.equal(reserveVM(79.5, "", 80, "").canRaise, false);
+  assert.equal(reserveVM(79.01, "", 80, "").canRaise, false);
+  assert.equal(reserveVM(79, "", 80, "").canRaise, true);
+  assert.equal(reserveVM(9.9, "", 10, "").canRaise, false);
+  assert.equal(reserveVM(99.9, "", 100, "").canRaise, false);
+  assert.equal(reserveVM(4.9, "", 80, "").canRaise, true);
+  const states = configured();
+  states[PLAN_CONFIG.reserve] = { state: "79.5" };
+  states[SENSORS.effective_reserve] = { state: "80" };
+  const snap = buildPlanSnapshotWithHelpers(cfg(), states as never, NOW_MIN);
+  const vm = buildControlsVM({ snap, states: states as never, nowMs: NOW_MS, clock: clockContextFrom(NOW_MS, () => 0) });
+  const k = vm?.kinds.find((x) => x.kind === "prepare_power_cut");
+  assert.deepEqual(k?.choices, []);
+  assert.equal(k?.blockedReason, "The power cut target (80 %) is not above the reserve now (79.5 %, which the plan uses as 80 %), so it cannot raise the reserve.");
+  assert.equal(k?.reserve?.nowText, "Your reserve 79.5 %", "the plan's own figure (80) differs from the owner's, so both are labelled");
+  assert.equal(k?.reserve?.planText, "Plan reserve now 80 %");
+  assert.equal(k?.reserve?.canRaise, false);
+  assert.ok((vm?.kinds.find((x) => x.kind === "hold_battery")?.choices.length ?? 0) > 0, "Hold battery does not depend on the reserve");
+  assert.ok((vm?.kinds.find((x) => x.kind === "skip_tonight")?.choices.length ?? 0) > 0, "Skip tonight does not depend on the reserve");
+});
+
 test("the reserve table of the card end to end: 0, 4.9, 5, 9.9, 10, 80, 100, 100.1, NaN, unknown, unavailable against target 80, and the target's own floor", () => {
   assert.ok(RESERVE_CASES.length >= 16);
-  for (const c of ["0", "4.9", "5", "9.9", "10", "80", "100", "100.1", "NaN", "unknown", "unavailable"]) assert.ok(RESERVE_CASES.some((x) => x.state === c), c);
+  for (const c of ["0", "4.9", "5", "9.9", "10", "79", "79.5", "79.9", "80", "100", "100.01", "100.05", "100.1", "NaN", "unknown", "unavailable"]) assert.ok(RESERVE_CASES.some((x) => x.state === c), c);
   assert.deepEqual(reserveInstallProblems(Card as never), []);
 });
 
@@ -150,23 +192,39 @@ test("installed is read from the entities that exist: the two plan scripts, the 
 
 test("the readiness status: 'Overrides ready.', the confirmation message, or 'not installed' only when the scripts are really absent", () => {
   const all = readInstall({ [PLAN_CONTROL_IDS.start_script]: { state: "off" }, [PLAN_CONTROL_IDS.cancel_script]: { state: "off" }, [HELPER_IDS.confirmed]: { state: "on" }, [SENSORS.effective_reserve]: { state: "5" }, [SENSORS.export_hold]: { state: "clear" } }, null);
-  assert.deepEqual(readinessOf(all, true, { ok: true }), { kind: "ready", text: READY_TEXT });
+  assert.deepEqual(readinessOf(all, true, { ok: true }, null), { kind: "ready", text: READY_TEXT });
   assert.equal(READY_TEXT, "Overrides ready.");
-  assert.deepEqual(readinessOf(all, false, { ok: false, reasons: ["The owner has not confirmed"] }), { kind: "needs_confirmation", text: CONFIRM_TEXT });
+  assert.deepEqual(readinessOf(all, false, { ok: false, reasons: ["The owner has not confirmed"] }, null), { kind: "needs_confirmation", text: CONFIRM_TEXT });
   assert.equal(CONFIRM_TEXT, "Turn on the confirmation switch: override limits reviewed and confirmed.");
-  assert.equal(readinessOf(all, null, { ok: false }).kind, "confirmation_unreadable");
-  const unusable = readinessOf(all, true, { ok: false, reasons: ["Hold battery default is longer than its maximum."] });
+  assert.equal(readinessOf(all, null, { ok: false }, null).kind, "confirmation_unreadable");
+  const unusable = readinessOf(all, true, { ok: false, reasons: ["Hold battery default is longer than its maximum."] }, null);
   assert.equal(unusable.kind, "limits_unusable");
   assert.match(unusable.text, /Hold battery default is longer than its maximum\./);
   const none = readInstall({}, null);
-  assert.equal(readinessOf(none, true, { ok: true }).kind, "not_installed");
-  assert.match(readinessOf(none, true, { ok: true }).text, /not installed/);
+  assert.equal(readinessOf(none, true, { ok: true }, null).kind, "not_installed");
+  assert.match(readinessOf(none, true, { ok: true }, null).text, /not installed/);
   const onlyCancel = readInstall({ [PLAN_CONTROL_IDS.cancel_script]: { state: "off" } }, null);
-  assert.equal(readinessOf(onlyCancel, true, { ok: true }).kind, "partial");
-  assert.match(readinessOf(onlyCancel, true, { ok: true }).text, /ecco_plan_override_start was not found/);
-  for (const ok of [readinessOf(all, true, { ok: true }), readinessOf(all, false, { ok: false })]) assert.ok(!/not installed/i.test(ok.text));
+  assert.equal(readinessOf(onlyCancel, true, { ok: true }, null).kind, "partial");
+  assert.match(readinessOf(onlyCancel, true, { ok: true }, null).text, /ecco_plan_override_start was not found/);
+  assert.ok(!/not installed/i.test(readinessOf(onlyCancel, true, { ok: true }, null).text), "'not installed' is said only when BOTH guarded scripts are absent");
+  const onlyStart = readInstall({ [PLAN_CONTROL_IDS.start_script]: { state: "off" } }, null);
+  assert.equal(readinessOf(onlyStart, true, { ok: true }, null).kind, "partial");
+  assert.equal(readinessOf(onlyStart, true, { ok: true }, null).text, "Only part of the override package is installed: " + PLAN_CONTROL_IDS.cancel_script + " was not found, so overrides cannot be started or cancelled here.");
+  for (const ok of [readinessOf(all, true, { ok: true }, null), readinessOf(all, false, { ok: false }, null)]) assert.ok(!/not installed/i.test(ok.text));
+  // a missing plan sensor or guarded Dump start is a gap: a start can be sent, but 'Overrides ready.' is not said
   const lacking = readInstall({ [PLAN_CONTROL_IDS.start_script]: { state: "off" }, [PLAN_CONTROL_IDS.cancel_script]: { state: "off" } }, GUARDED_START);
-  assert.equal(readinessOf(lacking, true, { ok: true }).text, "Overrides ready. Not found: the effective-reserve sensor, the export-hold sensor, the guarded Dump to Grid start script.");
+  assert.deepEqual(readinessOf(lacking, true, { ok: true }, null), { kind: "ready_with_gaps", text: "Overrides only partly ready. Not found: the effective-reserve sensor, the export-hold sensor, the guarded Dump to Grid start script." });
+  assert.equal(READY_GAPS_LEAD, "Overrides only partly ready.");
+  assert.ok(!readinessOf(lacking, true, { ok: true }, null).text.includes(READY_TEXT));
+  const noSensors = readInstall({ [PLAN_CONTROL_IDS.start_script]: { state: "off" }, [PLAN_CONTROL_IDS.cancel_script]: { state: "off" } }, null);
+  assert.equal(readinessOf(noSensors, true, { ok: true }, null).text, "Overrides only partly ready. Not found: the effective-reserve sensor, the export-hold sensor.");
+  // an unreadable plan revision: the installed start script refuses every start, so the status says so (after the switch and the limits, which come first)
+  assert.deepEqual(readinessOf(all, true, { ok: true }, "The stored plan revision cannot be read."), { kind: "revision_unreadable", text: "The stored plan revision cannot be read, so no override can be started." });
+  assert.equal(readinessOf(all, true, { ok: true }, "The stored plan revision is not a whole number.").text, "The stored plan revision is not a whole number, so no override can be started.");
+  assert.equal(readinessOf(lacking, true, { ok: true }, "The stored plan revision cannot be read.").kind, "revision_unreadable", "the revision outranks the gaps");
+  assert.equal(readinessOf(all, false, { ok: false }, "The stored plan revision cannot be read.").kind, "needs_confirmation", "the switch comes first");
+  assert.equal(readinessOf(all, true, { ok: false, reasons: ["x"] }, "The stored plan revision cannot be read.").kind, "limits_unusable", "the limits come first");
+  assert.equal(readinessOf(none, true, { ok: true }, "The stored plan revision cannot be read.").kind, "not_installed", "the missing scripts come first");
 });
 
 test("the stale 'guarded start path ... not installed' line is gone: the none-active line says only what is true, whether or not the scripts exist", () => {
@@ -184,14 +242,48 @@ test("the stale 'guarded start path ... not installed' line is gone: the none-ac
 
 test("the rendered section tells the truth about the installed overrides (ready, switch off, scripts absent)", () => {
   const render = (states: Record<string, unknown>, extra: Record<string, unknown> = {}): string => flatten(renderPlanSection(cfg(extra), states as never, NOW_MS, renderPlanControls(() => undefined)));
-  const ready = render(configured());
+  const sensors = { [SENSORS.effective_reserve]: { state: "20" }, [SENSORS.export_hold]: { state: "clear" } };
+  const ready = render(configured(sensors));
   assert.ok(ready.includes('data-readiness=ready role="status">Overrides ready.'));
   assert.ok(!/starting one needs|which is not installed/.test(ready));
+  // the two plan sensors absent: not 'Overrides ready.' (a warning-coloured ready-with-gaps status instead)
+  const gaps = render(configured());
+  assert.ok(gaps.includes('data-readiness=ready_with_gaps role="status">Overrides only partly ready. Not found: the effective-reserve sensor, the export-hold sensor.'));
+  assert.ok(!gaps.includes("Overrides ready."));
+  // the plan revision unreadable: the start script refuses every start, so not 'Overrides ready.' either
+  const norev = render(configured({ ...sensors, [HELPER_IDS.revision]: { state: "unavailable" } }));
+  assert.ok(norev.includes('data-readiness=revision_unreadable role="status">The stored plan revision cannot be read, so no override can be started.'));
+  assert.ok(!norev.includes("Overrides ready."));
+  // the warning colour of both new kinds
+  const css = src("plan/controls.ts");
+  assert.ok(/\.plan-readiness\[data-readiness="ready_with_gaps"\],\s*\.plan-readiness\[data-readiness="revision_unreadable"\] \{\s*color: var\(--eaa-warning\);/.test(css), "ready_with_gaps and revision_unreadable are warning-coloured");
   const off = render(configured({ [HELPER_IDS.confirmed]: { state: "off" } }));
   assert.ok(off.includes("Turn on the confirmation switch: override limits reviewed and confirmed."));
   const absent = render(helperStates(planStates()));
   assert.ok(absent.includes("The guarded scripts were not found") && absent.includes("not installed here"));
   assert.ok(absent.includes("data-controls-missing data-readiness=not_installed") && !absent.includes("data-readiness=ready"));
+  // one script absent: the status text names it; it is not 'not installed' (that is said only when both are absent)
+  for (const gone of [PLAN_CONTROL_IDS.start_script, PLAN_CONTROL_IDS.cancel_script]) {
+    const part = render(configured({ [gone]: undefined }));
+    assert.ok(part.includes("data-controls-missing data-readiness=partial>Only part of the override package is installed: " + gone + " was not found, so overrides cannot be started or cancelled here."), gone);
+    assert.ok(!/not installed|guarded scripts were not found/.test(part.replace(/Partial protection only[^<]*/, "")), gone);
+    assert.ok(!part.includes("data-choice=") && !part.includes('class="plan-readiness"'), gone);
+  }
+});
+
+test("the guarded view no longer says 'Status only' next to working Start and Cancel; the view without controls still does", () => {
+  const states = running(configured(), "hold_battery", 40, 200);
+  const guarded = flatten(renderPlanSection(cfg(), states as never, NOW_MS, renderPlanControls(() => undefined)));
+  assert.ok(!guarded.includes("Status only:") && !guarded.includes("nothing in this view starts, cancels or enforces an override"));
+  assert.ok(guarded.includes('data-records-note>This list only shows the records Home Assistant holds: nothing in it starts, cancels or enforces an override. Start and Cancel are under Quick overrides.'));
+  const idle = flatten(renderPlanSection(cfg(), configured() as never, NOW_MS, renderPlanControls(() => undefined)));
+  assert.ok(!idle.includes("data-records-note") && !idle.includes("Status only:"), "no record: no note at all in the guarded view");
+  // the read-only views keep their exact lines: helpers read but no controls offered (stage-2 status-only view), and no helpers at all (the goldens)
+  const statusOnly = flatten(renderPlanSection(cfg(), states as never, NOW_MS));
+  assert.ok(statusOnly.includes(OVERRIDES_STATUS_NOTE) && !statusOnly.includes("data-records-note"));
+  assert.ok(OVERRIDES_STATUS_NOTE.startsWith("Status only: nothing in this view starts, cancels or enforces an override."));
+  const noHelpers = flatten(renderPlanSection(cfg(), planStates() as never, NOW_MS, renderPlanControls(() => undefined)));
+  assert.ok(!noHelpers.includes("Status only:") && !noHelpers.includes("data-records-note"));
 });
 
 // ---- the compact layout -----------------------------------------------------------------------------------------------------------------------
@@ -224,14 +316,14 @@ test("the guarded section is compact: folded regions with one-line summaries, cl
 test("the one-line summaries say what is folded", () => {
   const vm = presentPlan(buildPlanSnapshotWithHelpers(cfg(), configured() as never, NOW_MIN));
   const s = compactSummaries(vm);
-  assert.equal(s.tomorrow, "Import 4.5 kWh · Export 2.2 kWh · Solar 11.4 kWh · Reserve 20 %");
+  assert.equal(s.tomorrow, "Import 4.5 kWh · Export 2.2 kWh · Solar 11.4 kWh · Your reserve 20 %");
   assert.match(s.limits ?? "", /^Limits in force · .*revision 12/);
   assert.equal(s.limitsAttention, false);
   assert.equal(s.tou, vm.tou.headline);
   const nothing = compactSummaries(presentPlan(buildPlanSnapshotWithHelpers(cfg(), configured({}) as never, NOW_MIN)));
   assert.ok(nothing.tomorrow.length > 0);
   const noAdvice = presentPlan(buildPlanSnapshotWithHelpers(cfg(), helperStates(scriptStates(planStates(false))) as never, NOW_MIN));
-  assert.equal(compactSummaries(noAdvice).tomorrow, "Reserve 20 %", "known figures only, never a placeholder");
+  assert.equal(compactSummaries(noAdvice).tomorrow, "Your reserve 20 %", "known figures only, never a placeholder");
   const bad = compactSummaries(presentPlan(buildPlanSnapshotWithHelpers(cfg(), configured({ [HELPER_IDS.min_expiry]: { state: "0" } }) as never, NOW_MIN)));
   assert.match(bad.limits ?? "", /^Limits not usable/);
   assert.equal(bad.limitsAttention, true);
@@ -255,11 +347,34 @@ const MUTANTS: { label: string; file: string; find: string; put: string; times?:
   { label: "a reserve outside the plan model is not carried by the field", file: "plan/adapter.ts", find: 'if (p === "reserve.backupPct" && r.value === null && currentReserve.known && currentReserve.value !== null) {', put: "if (false) {" },
   { label: "the field shows the model's placeholder instead of the reserve now", file: "plan/adapter.ts", find: "        known: true,\n        value: currentReserve.value,", put: "        known: true,\n        value: rec.value," },
   { label: "Tomorrow's Plan keeps the model's placeholder reserve", file: "plan/adapter.ts", find: "? { ...t.reservePct, value: (reserveField as FieldInfo).value }", put: "? t.reservePct" },
-  { label: "an equal target is offered", file: "plan/controlsModel.ts", find: "reservePair.targetPct === reservePair.nowPct) blockedReason", put: "false) blockedReason" },
-  { label: "every target not equal to the reserve now is blocked", file: "plan/controlsModel.ts", find: "reservePair.targetPct === reservePair.nowPct) blockedReason", put: "reservePair.targetPct !== reservePair.nowPct) blockedReason" },
-  { label: "the reserve now is not labelled", file: "plan/controlsModel.ts", find: '"Reserve now " + nowPct + " %"', put: '"Reserve " + nowPct + " %"' },
+  { label: "an equal target is offered", file: "plan/controlsModel.ts", find: "reservePair.canRaise === false) {", put: "false) {" },
+  { label: "every target is blocked", file: "plan/controlsModel.ts", find: "reservePair.canRaise === false) {", put: "reservePair.canRaise !== null) {" },
+  { label: "the reserve now is not labelled", file: "plan/controlsModel.ts", find: 'const label = plan !== null ? "Your reserve" : "Reserve now";', put: 'const label = plan !== null ? "Your reserve" : "Reserve";' },
   { label: "the power cut target is not labelled", file: "plan/controlsModel.ts", find: '"Power cut target " + targetPct + " %"', put: '"Target " + targetPct + " %"' },
-  { label: "an unknown reserve is not called unknown", file: "plan/controlsModel.ts", find: '"Reserve now unknown (" + nowReason + ")"', put: '"Reserve now 0 %"' },
+  { label: "an unknown reserve is not called unknown", file: "plan/controlsModel.ts", find: 'label + " unknown (" + nowReason + ")"', put: 'label + " 0 %"' },
+  // ---- the five minors of the independent review (25 Nov 2026) ----
+  { label: "a reserve of 100.01 is accepted (anything from 100 to 100.05)", file: "plan/adapter.ts", find: "n < CURRENT_RESERVE_MIN || n > CURRENT_RESERVE_MAX", put: "n < CURRENT_RESERVE_MIN || n > CURRENT_RESERVE_MAX + 0.05" },
+  { label: "the status is ready when only the cancel script is missing", file: "plan/controlsModel.ts", find: "if (!install.startScript || !install.cancelScript) {", put: "if (!install.startScript) {" },
+  { label: "the status follows the reserve-aware policy, not the start limits", file: "plan/controlsModel.ts", find: "h.startPolicy.ok ? { ok: true } : { ok: false, reasons: h.startPolicy.reasons }, h.revision.known", put: "h.policy.ok ? { ok: true } : { ok: false, reasons: h.policy.reasons }, h.revision.known" },
+  { label: "the owner's raw reserve is compared with the target, not the rounded-up one (79.5 against 80 is offered)", file: "plan/controlsModel.ts", find: "targetPct > Math.ceil(nowPct)", put: "targetPct > nowPct" },
+  { label: "'Overrides ready.' is said although something was not found", file: "plan/controlsModel.ts", find: 'return gaps.length ? { kind: "ready_with_gaps", text: READY_GAPS_LEAD + " Not found: " + gaps.join(", ") + "." } : { kind: "ready", text: READY_TEXT };', put: 'return { kind: "ready", text: gaps.length ? READY_TEXT + " Not found: " + gaps.join(", ") + "." : READY_TEXT };' },
+  { label: "an unreadable plan revision is not said", file: "plan/controlsModel.ts", find: "if (revisionReason !== null) return {", put: "if (false) return {" },
+  { label: "the plan revision is read as always readable", file: "plan/controlsModel.ts", find: "h.revision.known ? null : h.revision.reason", put: "null" },
+  { label: "the status text of one missing script is the generic not-installed sentence", file: "plan/controls.ts", find: 'vm.readiness.kind === "partial" ? vm.readiness.text : ', put: 'false ? vm.readiness.text : ' },
+  { label: "the plan's reserve is not shown while an override record is held", file: "plan/controlsModel.ts", find: "const showPlanReserve = h.active.length > 0 || h.held.length > 0 || (", put: "const showPlanReserve = (" },
+  { label: "the plan's reserve is always shown", file: "plan/controlsModel.ts", find: "const showPlanReserve = h.active.length > 0 || h.held.length > 0 || (planRead.known && (currentReservePct === null || planRead.value !== currentReservePct));", put: "const showPlanReserve = true;" },
+  { label: "the plan's reserve is not shown when it differs from the owner's with nothing running", file: "plan/controlsModel.ts", find: "|| (planRead.known && (currentReservePct === null || planRead.value !== currentReservePct));", put: ";" },
+  { label: "the owner's reserve keeps the label 'Reserve now' beside the plan's", file: "plan/controlsModel.ts", find: 'const label = plan !== null ? "Your reserve" : "Reserve now";', put: 'const label = "Reserve now";' },
+  { label: "the plan's reserve is not labelled as the plan's", file: "plan/controlsModel.ts", find: '"Plan reserve now " + plan.value + " %"', put: '"Reserve now " + plan.value + " %"' },
+  { label: "an unreadable plan reserve is not called unknown", file: "plan/controlsModel.ts", find: '"Plan reserve now unknown (" + plan.reason + ")"', put: '"Plan reserve now 0 %"' },
+  { label: "a plan reserve outside 0 to 100 is taken as a figure", file: "plan/controlsModel.ts", find: "if (n === null || n < CURRENT_RESERVE_MIN || n > CURRENT_RESERVE_MAX) return {", put: "if (n === null) return {" },
+  { label: "an unreadable plan reserve sensor is not told apart from a wrong one", file: "plan/controlsModel.ts", find: 'if (stateText(states, id) === null) return { known: false, value: null, reason: "the effective-reserve sensor cannot be read" };', put: "" },
+  { label: "the Tomorrow's Plan summary says a bare 'Reserve'", file: "plan/present.ts", find: 'reserve: "Your reserve" }', put: 'reserve: "Reserve" }' },
+  { label: "the reserve figure inside the Tomorrow's Plan fold keeps the bare label", file: "plan/view.ts", find: 'figure(f.key === "reserve" ? { ...f, label: "Your reserve" } : f)', put: "figure(f)" },
+  { label: "the stale 'Status only' line is back in the guarded view", file: "plan/view.ts", find: "${overrideBlock(vm.overrideBlock, true)}", put: "${overrideBlock(vm.overrideBlock)}" },
+  { label: "the stale 'Status only' line is kept beside the records note", file: "plan/view.ts", find: "${compact ? nothing : html`", put: "${false ? nothing : html`" },
+  { label: "the records note is dropped", file: "plan/view.ts", find: "${compact && (b.rows.length || b.held.length) ? html`", put: "${false ? html`" },
+  { label: "the records note is shown when there is no record", file: "plan/view.ts", find: "${compact && (b.rows.length || b.held.length) ? html`", put: "${compact ? html`" },
   { label: "the switch being off is not said", file: "plan/controlsModel.ts", find: 'if (confirmed === false) return { kind: "needs_confirmation", text: CONFIRM_TEXT };', put: "" },
   { label: "the switch is read as always on", file: "plan/controlsModel.ts", find: "readinessOf(install, h.confirmed,", put: "readinessOf(install, true," },
   { label: "absent scripts are not called not installed", file: "plan/controlsModel.ts", find: "if (!install.startScript && !install.cancelScript) {", put: "if (false) {" },

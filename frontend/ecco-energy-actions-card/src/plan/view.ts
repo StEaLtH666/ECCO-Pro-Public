@@ -62,11 +62,15 @@ function heldRow(r: HeldRowVM): TemplateResult {
   `;
 }
 
-/** Shown only when the proposed plan helper entities exist: the override limits, the stored revision and any active override. */
-function overrideBlock(b: OverrideBlockVM): TemplateResult {
+/**
+ * Shown only when the proposed plan helper entities exist: the override limits, the stored revision and any active override. `compact` is the guarded
+ * view, which has Start and Cancel controls: its trailing "Status only: nothing in this view starts, cancels or enforces an override" is replaced by a note
+ * scoped to the records it follows (and shown only when there are records). Without `compact` the markup is exactly what it was.
+ */
+function overrideBlock(b: OverrideBlockVM, compact = false): TemplateResult {
   return html`
     <div class="plan-override-block" data-block="overrides">
-      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}${b.held.length ? html`<ul class="plan-settings" data-override-held-list>${b.held.map(heldRow)}</ul>` : nothing}
+      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}${b.held.length ? html`<ul class="plan-settings" data-override-held-list>${b.held.map(heldRow)}</ul>` : nothing}${compact && (b.rows.length || b.held.length) ? html`<p class="plan-reason" data-records-note>${b.recordsNote}</p>` : nothing}
       <p class="plan-reason" data-override-policy=${b.policyOk ? "ok" : "unusable"}>${b.policyLine}</p>
       ${b.reasons.length ? html`<ul class="plan-reasons">${b.reasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
       ${b.warnings.length ? html`<ul class="plan-reasons">${b.warnings.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
@@ -80,8 +84,8 @@ function overrideBlock(b: OverrideBlockVM): TemplateResult {
             </details>
           `
         : nothing}
-      <p class="plan-reason">${b.revisionText}</p>
-      <p class="plan-reason">${b.note}</p>
+      <p class="plan-reason">${b.revisionText}</p>${compact ? nothing : html`
+      <p class="plan-reason">${b.note}</p>`}
     </div>
   `;
 }
@@ -121,7 +125,7 @@ function planBodyCompact(vm: PlanVM, controls: TemplateResult, sum: CompactVM): 
         <details class="plan-why plan-fold" data-fold="tomorrow">
           <summary><h3 class="plan-heading">Tomorrow's Plan</h3><span class="plan-fold-line" data-summary="tomorrow">${sum.tomorrow}</span></summary>
           ${vm.adviceNote ? html`<p class="plan-reason plan-advice-note">${vm.adviceNote}</p>` : nothing}
-          <dl class="plan-figures">${vm.figures.map(figure)}</dl>
+          <dl class="plan-figures">${vm.figures.map((f) => figure(f.key === "reserve" ? { ...f, label: "Your reserve" } : f))}</dl>
           <details class="plan-why">
             <summary>Why?</summary>
             <ul>${vm.why.map((w) => html`<li data-origin=${w.origin}>${w.text}</li>`)}</ul>
@@ -134,7 +138,7 @@ function planBodyCompact(vm: PlanVM, controls: TemplateResult, sum: CompactVM): 
         <p class="plan-overrides">${vm.overridesLine}</p>${vm.overrideBlock
           ? html`<details class="plan-why plan-fold ${sum.limitsAttention ? "needs-attention" : ""}" data-fold="limits">
               <summary><span class="plan-fold-title">Override limits and records</span><span class="plan-fold-line" data-summary="limits">${sum.limits}</span></summary>
-              ${overrideBlock(vm.overrideBlock)}
+              ${overrideBlock(vm.overrideBlock, true)}
             </details>`
           : nothing}${controls}
       </div>

@@ -50,7 +50,7 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
       </div>
       <p class="plan-reason plan-effect" data-effect>${KIND_SHORT[k.kind] ?? ""}</p>
       ${k.reserve
-        ? html`<p class="plan-reason plan-reserve-line" data-reserve-line><span data-reserve-now>${k.reserve.nowText}</span> &middot; <span data-reserve-target>${k.reserve.targetText}</span></p>`
+        ? html`<p class="plan-reason plan-reserve-line" data-reserve-line><span data-reserve-now>${k.reserve.nowText}</span>${k.reserve.planText !== null ? html` &middot; <span data-reserve-plan>${k.reserve.planText}</span>` : nothing} &middot; <span data-reserve-target>${k.reserve.targetText}</span></p>`
         : nothing}
       ${k.note ? html`<p class="plan-reason" data-control-note role="note">${k.note}</p>` : nothing}
       ${k.belowReserve ? html`<p class="plan-reason plan-below-reserve" data-below-reserve role="note">${k.belowReserve}</p>` : nothing}
@@ -87,7 +87,7 @@ export function controlsView(vm: ControlsVM, dispatch: (call: PlanServiceCall) =
       </details>
       <p class="plan-reason plan-limitation" data-plan-limitation role="note">${START_BUTTON_LIMITATION}</p>
       ${vm.missingScripts.length
-        ? html`<p class="plan-reason" data-controls-missing data-readiness=${vm.readiness.kind}>The guarded scripts were not found (${vm.missingScripts.join(", ")}), so the overrides are not installed here and no override can be started or cancelled.</p>`
+        ? html`<p class="plan-reason" data-controls-missing data-readiness=${vm.readiness.kind}>${vm.readiness.kind === "partial" ? vm.readiness.text : "The guarded scripts were not found (" + vm.missingScripts.join(", ") + "), so the overrides are not installed here and no override can be started or cancelled."}</p>`
         : vm.kinds.map((k) => kindView(k, dispatch))}
       ${vm.lastResult ? html`<p class="plan-reason plan-result" data-plan-result role="status">Last answer: ${vm.lastResult}</p>` : nothing}
     </div>
@@ -134,7 +134,9 @@ export const controlStyles = css`
   }
   .plan-readiness[data-readiness="needs_confirmation"],
   .plan-readiness[data-readiness="confirmation_unreadable"],
-  .plan-readiness[data-readiness="limits_unusable"] {
+  .plan-readiness[data-readiness="limits_unusable"],
+  .plan-readiness[data-readiness="ready_with_gaps"],
+  .plan-readiness[data-readiness="revision_unreadable"] {
     color: var(--eaa-warning);
   }
   .plan-effect,
