@@ -68,9 +68,12 @@
 #   - One check runs at a time: a second change of a sensor while a check is waiting (its 45 s at most) is dropped silently. The dongle runs one
 #     operation at a time, so that is a flap, not a second session. A flap AFTER a check has finished is checked as a new start: ECCO's record
 #     must then be younger than 10 s, so a flap of an ECCO start that comes more than 10 s later is reported as outside ECCO's own paths.
-#   - Interrupted checks: a Home Assistant restart, or an automation reload, during the 45 s of a check leaves the last-check text at PENDING;
-#     the next Home Assistant start or automation reload turns it into CANNOT CLASSIFY with one notification. A restart while a session is
-#     running, with no check pending, raises nothing.
+#   - Interrupted checks: a Home Assistant restart, or an automation reload that RE-CREATES the detect automation (its own configuration
+#     changed), during the 45 s of a check leaves the last-check text at PENDING; the next Home Assistant start or automation reload turns it
+#     into CANNOT CLASSIFY with one notification. An automation reload that leaves the detect automation UNCHANGED does not interrupt a running
+#     check (Home Assistant keeps an unchanged automation and its running instance): the check finishes and gives its own notice alone, and the
+#     interrupted-check automation stays silent while the detect automation has a running instance. A restart while a session is running, with
+#     no check pending, raises nothing.
 #   - An ECCO scheduled start that raced a raw press (the script's own press was refused as already active) is reported as outside ECCO's own
 #     paths, because the script's result is then FAILED, not STARTED OK; ECCO's own end-of-run alert covers the same event.
 #   - A notice is "no ECCO record found", not proof: an ECCO run whose STARTED OK arrives later than 45 s, or whose result reads UNCONFIRMED or
@@ -176,7 +179,7 @@ automation:
           guard_state: "{{ states('script.ecco_dump_to_grid_start_guarded') }}"
           guard_age: "{{ started_ts - (as_timestamp(state_attr('script.ecco_dump_to_grid_start_guarded', 'last_triggered'), 0)) }}"
           guarded: "{{ kind == 'dump_to_grid' and guard_state in ['on', 'off'] and guard_age >= 0 and guard_age <= 180 and not any_fact }}"
-      # 2. The check is marked PENDING, so that a restart or an automation reload during the wait is not silent (see the interrupted-check automation).
+      # 2. The check is marked PENDING, so that a restart, or an automation reload that cancels this run, during the wait is not silent (see the interrupted-check automation).
       - action: input_text.set_value
         target:
           entity_id: input_text.ecco_start_bypass_last_check
@@ -305,7 +308,7 @@ automation:
                 target:
                   entity_id: input_text.ecco_start_bypass_last_check
                 data:
-                  value: "{{ ('BYPASS NOTICE - ' ~ kind_name ~ ' active at ' ~ clock ~ ': no ECCO record of this start was found within 45 s (detected only; ' ~ ('see the notification' if popup_wanted else 'recorded without a popup: no plan fact was true') ~ ')')[:250] }}"
+                  value: "{{ ('BYPASS NOTICE - ' ~ kind_name ~ ' active at ' ~ clock ~ ': no ECCO record of this start was found within 45 s (detected only; ' ~ ('see the notification' if (popup_wanted and not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on')) else ('popup muted by the mute switch' if popup_wanted else 'recorded without a popup: no plan fact was true')) ~ ')')[:250] }}"
         # CANNOT_CLASSIFY: no positive record and a marker could not be read. Never an all clear.
         default:
           - variables:
@@ -336,9 +339,10 @@ automation:
   - id: ecco_start_bypass_interrupted
     alias: "ECCO - Start bypass detector: a check was interrupted"
     description: >-
-      Notification and record only. If the last check is still PENDING when Home Assistant starts or the automations are reloaded, that check was
-      interrupted (a run lasts at most 45 seconds): it becomes CANNOT CLASSIFY with one notification. Silent when no check is pending, which is
-      every ordinary start and reload, including a restart while a session is running.
+      Notification and record only. If the last check is still PENDING when Home Assistant starts or the automations are reloaded, and the detect
+      automation has no running instance, that check was interrupted (a run lasts at most 45 seconds): it becomes CANNOT CLASSIFY with one
+      notification. Silent when no check is pending, which is every ordinary start and reload, including a restart while a session is running,
+      and silent while the detect automation is still running its check (an automation reload that leaves the detect automation unchanged keeps it).
     mode: single
     max_exceeded: silent
     triggers:
@@ -351,6 +355,11 @@ automation:
     conditions:
       - condition: template
         value_template: "{{ states('input_text.ecco_start_bypass_last_check').startswith('PENDING') }}"
+      # An automation reload keeps an UNCHANGED automation (and its running check) alive: only a check whose detect automation has no running
+      # instance any more was interrupted. Without this, any automation reload during the 45 s of a live check raised a false notice.
+      - condition: template
+        value_template: >-
+          {{ (states.automation | selectattr('attributes.id', 'eq', 'ecco_start_bypass_detect') | map(attribute='attributes.current') | first | default(0) | int(0)) == 0 }}
     actions:
       - variables:
           pending: "{{ states('input_text.ecco_start_bypass_last_check') }}"

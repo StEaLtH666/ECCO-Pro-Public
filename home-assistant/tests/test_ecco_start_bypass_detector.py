@@ -22,10 +22,14 @@ The REAL package YAML runs under the FPS1 interpreter (_ha_script_sim.py, throug
   [3] markers     the verdict over a grid of schedule texts (own form, stale, recovery, failed, blocked, unreadable) x guarded start (age, state)
                   x facts, against an independent model; the 45 s wait, the 10 s freshness window and the 180 s guard window at their edges
   [4] unreadable  a marker that cannot be read is CANNOT CLASSIFY (a notification, no counter, never an all clear, no log noise)
-  [5] restart     a restart or reconnect with a session running raises nothing; a restart or an automation reload during a check becomes one
-                  CANNOT CLASSIFY, and a storm of restarts adds none; an ordinary start or reload is silent
+  [5] restart     a restart or reconnect with a session running raises nothing; a restart or an automation reload that re-creates the detect
+                  automation during a check becomes one CANNOT CLASSIFY, and a storm of restarts adds none; an ordinary start or reload is silent;
+                  D1 (L3, 25 Nov 2026): an automation reload that leaves the detect automation UNCHANGED keeps its running check, which finishes and
+                  gives its own notice ALONE (no false "check interrupted" notice): the interrupted-check automation reads the detect automation's
+                  `current` (modelled here from the interpreter's own running state) and stays silent while it is 1
   [6] repeats     a flap during a check is dropped silently; a new start after a check is a new check; the documented flap limit is pinned
-  [7] mute        the mute switch hides the popups and never the record (Charge Battery included)
+  [7] mute        the mute switch hides the popups and never the record (Charge Battery included); D2 (L3, 25 Nov 2026): while muted, the last-check
+                  text of a start that would have raised a popup says "popup muted by the mute switch", never "see the notification"
   [8] mutation    in-memory mutants of the package, each caught
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
@@ -302,6 +306,23 @@ check("the header states the notice wording and the Charge Battery notice policy
                                    "has no guarded path, so every start from the card would otherwise raise a popup and train the owner to mute the detector",
                                    "hides the popups only", "no phone push and no card display yet", "An administrator can mute the popups, switch the two automations off, or write the detector's helpers",
                                    "Any run of the guarded start script in the 180 s before the session counts as ECCO's start")))
+check("the header and the interrupted-check automation state the reload rule (D1, L3 25 Nov 2026): a reload that re-creates the detect automation interrupts a check; an unchanged detect automation keeps its "
+      "running check, which finishes and gives its own notice alone; the interrupted-check automation stays silent while the detect automation has a running instance; two template conditions guard it",
+      all(s in head_flat for s in ("an automation reload that RE-CREATES the detect automation (its own configuration changed)",
+                                   "An automation reload that leaves the detect automation UNCHANGED does not interrupt a running check",
+                                   "the check finishes and gives its own notice alone",
+                                   "stays silent while the detect automation has a running instance"))
+      and "has no running instance" in DET_TEXT and "an automation reload that leaves the detect automation unchanged keeps it" in re.sub(r"\s+", " ", DET_TEXT)
+      and [c.get("condition") for c in next(a for a in DET_PKG["automation"] if a["id"] == "ecco_start_bypass_interrupted")["conditions"]] == ["template", "template"])
+README_FLAT = re.sub(r"\s+", " ", (ROOT / "frontend" / "ecco-plan-core" / "README.md").read_text(encoding="utf-8"))
+check("the plan-core README states the same: a reload that re-creates the detect automation gives one CANNOT CLASSIFY, an unchanged detect automation keeps its running check (the check gives its own notice alone), "
+      "and while muted the last-check text says the popup was muted by the mute switch",
+      all(s in README_FLAT for s in ("an automation reload that re-creates the detect automation (its own configuration changed), during the 45 s of a check gives one CANNOT CLASSIFY",
+                                     "an automation reload that leaves the detect automation unchanged does not interrupt a running check (Home Assistant keeps an unchanged automation and its running instance)",
+                                     "the interrupted-check automation stays silent while the detect automation has a running instance",
+                                     "says `popup muted by the mute switch`")))
+check("the last-check text distinguishes a muted popup from a raised one and from a popup the policy did not want (three texts, each present once in the package)",
+      DET_TEXT.count("'popup muted by the mute switch'") == 1 and DET_TEXT.count("'see the notification'") == 1 and DET_TEXT.count("'recorded without a popup: no plan fact was true'") == 1)
 _wait_s = re.findall(r'timeout: "00:00:(\d\d)"', DET_TEXT)
 check("the wait for ECCO's record is 45 s and every text that names the wait (header, notice, record, last check) says 45 s and no other number of seconds",
       _wait_s == ["45"] and set(re.findall(r"within (\d+) s", DET_TEXT)) == {"45"} and DET_TEXT.count("was found within 45 s") >= 4, f"{_wait_s} {sorted(set(re.findall(r'within (\d+) s', DET_TEXT)))}")
@@ -320,6 +341,39 @@ check("the deployment manifest lists the package exactly once, to /config/packag
 # ================================================================================================================================
 # the worlds
 # ================================================================================================================================
+class AutoState:
+    """One automation entity as `states.automation` yields it in Home Assistant: `attributes.id` is the automation's own id and `attributes.current` the number of its
+    instances running right now (an automation's conditions are evaluated BEFORE its own run is counted). Built from the interpreter's own automation object, never set by hand."""
+
+    def __init__(self, a, hide_current: bool = False):
+        self.entity_id = "automation." + a.id
+        self.state = "on" if a.ready else "unavailable"
+        self.attributes = {"id": a.id} if hide_current else {"id": a.id, "current": 1 if a.running else 0}
+
+
+class DetStates(S._States):
+    """The interpreter's `states`, plus `states.automation` over the automations of the world's CURRENT Home Assistant instance (the shared interpreter has no automation entities;
+    this models only what the interrupted-check condition reads). mode "nocurrent": the entities carry no `current` attribute; "absent": no automation entity at all."""
+
+    def __init__(self, world, autos, mode: str = "normal"):
+        super().__init__(world)
+        self._autos = autos
+        self.mode = mode
+
+    def __getattr__(self, domain):
+        if domain == "automation":
+            if self.mode == "absent":
+                return []
+            return [AutoState(a, self.mode == "nocurrent") for a in self._autos()]
+        return super().__getattr__(domain)
+
+
+def install_automation_states(pw, mode: str = "normal") -> DetStates:
+    st = DetStates(pw.w, lambda: pw.ha.automations, mode)
+    pw.w.env.globals["states"] = st
+    return st
+
+
 class Light:
     """The detector package alone. The plan sensors, the schedule texts, the guarded script and the dongle's sensors are plain states that the case sets;
     the case schedules every event at an explicit offset from the instant the session turns active (`start`)."""
@@ -328,6 +382,7 @@ class Light:
         self.pw = P.PlanWorld(T0, [copy.deepcopy(DET_PKG if pkg is None else pkg)], ZONE)
         self.w = self.pw.w
         w = self.w
+        self.states = install_automation_states(self.pw)
         D.add_ha_filters(w)
         for e, s in ((ACTIVE[DUMP], "off"), (ACTIVE[FREE], "off"), (LAST[DUMP], (texts or {}).get(DUMP, "")), (LAST[FREE], (texts or {}).get(FREE, "")),
                      (STOP, stop), (HOLD, hold), (EFF, reserve)):
@@ -427,9 +482,10 @@ def record_for(kind, hold, reserve, stop, clock="21:00") -> str:
             f"Override: {ov}. Stop SOC below reserve: {bl}. Plan reading unreadable: {rd}. Detected only; not stopped.")
 
 
-def check_for(kind, popup, clock="21:00") -> str:
+def check_for(kind, popup, clock="21:00", muted=False) -> str:
+    """The last-check text of a start with no ECCO record. popup: the notice policy wants a popup; muted: the mute switch is on (D2: the popup is then not raised and the text says so)."""
     return (f"BYPASS NOTICE - {KIND_NAME[kind]} active at {clock}: no ECCO record of this start was found within 45 s (detected only; "
-            + ("see the notification)" if popup else "recorded without a popup: no plan fact was true)"))
+            + (("popup muted by the mute switch)" if muted else "see the notification)") if popup else "recorded without a popup: no plan fact was true)"))
 
 
 # ---- the cases ------------------------------------------------------------------------------------------------------------------
@@ -792,6 +848,108 @@ def case_restart(pkg) -> list[str]:
     return bad
 
 
+def reload_unchanged(L: Light) -> None:
+    """An automation reload that leaves the detect automation UNCHANGED (L3, Core 2026.11.0: Home Assistant keeps an unchanged automation and its running instance) fires
+    automation_reloaded and nothing else: the running check survives and the interrupted-check automation's event trigger fires."""
+    L.pw.ha.fire_event("automation_reloaded")
+
+
+DETECT_CURRENT = "{{ states.automation | selectattr('attributes.id', 'eq', 'ecco_start_bypass_detect') | map(attribute='attributes.current') | first }}"
+INTERRUPTED_FIRED = lambda L: [a.fired for a in L.pw.ha.automations if a.id == "ecco_start_bypass_interrupted"][0]   # noqa: E731
+
+
+def case_reload_unchanged(pkg) -> list[str]:
+    """D1 (found on L3, 25 Nov 2026): an automation reload during a LIVE check, with the detect automation unchanged, must not raise the interrupted-check notice: the check goes on, finishes
+    at 45 s and gives its own notice alone. A check whose detect automation is no longer running (a restart, a re-created automation, a stale PENDING marker) is still reported."""
+    bad: list[str] = []
+    # (a) the model itself: the detect automation's `current` is 1 while its check runs and 0 once it is over (read by a query that is not the package's)
+    L = Light(pkg)
+    before = L.w.render(DETECT_CURRENT).strip()
+    L.set_at(0, ACTIVE[DUMP], "on")
+    L.w.run_until(L.t_start + 10)
+    during = L.w.render(DETECT_CURRENT).strip()
+    L.w.run_until(L.t_start + 80)
+    after = L.w.render(DETECT_CURRENT).strip()
+    if (before, during, after) != ("0", "1", "0"):
+        bad.append(f"the model of the detect automation's current: before {before!r} during {during!r} after {after!r}")
+    # (b) an unchanged reload at several points of the 45 s wait: the real notice alone, never the interrupted one
+    for kind, hold in ((DUMP, "clear"), (FREE, "held"), (FREE, "clear")):
+        popup = popup_expected(kind, hold, "20.0", "30.0")
+        for off in (1.0, 12.0, 30.0, 44.0):
+            L = Light(pkg, hold=hold)
+            L.set_at(0, ACTIVE[kind], "on")
+            L.w.run_until(L.t_start + off)
+            if not L.s(CHECK).startswith("PENDING - ") or L.w.render(DETECT_CURRENT).strip() != "1":
+                bad.append(f"{kind} {hold} +{off}: no live check to reload into: {L.s(CHECK)[:30]!r}")
+                continue
+            reload_unchanged(L)
+            L.w.run_until(L.t_start + 80)
+            cr = L.creates()
+            if [n for _t, n in cr] != ([NOTE[kind]] if popup else []) or set(L.w.notifications) - ({NOTE[kind]} if popup else set()):
+                bad.append(f"{kind} {hold} reload unchanged at +{off}: notifications {cr} (the real notice alone is {popup})")
+            if L.s(CHECK) != check_for(kind, popup) or L.count() != 1.0 or L.s(KIND) != kind or L.s(TEXT) != record_for(kind, hold, "20.0", "30.0"):
+                bad.append(f"{kind} {hold} reload unchanged at +{off}: check {L.s(CHECK)[:70]!r} count {L.s(COUNT)} kind {L.s(KIND)!r}")
+            if INTERRUPTED_FIRED(L):
+                bad.append(f"{kind} {hold} reload unchanged at +{off}: the interrupted-check automation ran: {INTERRUPTED_FIRED(L)}")
+            if popup and cr and not (WAIT - 1 <= cr[0][0] <= 60):
+                bad.append(f"{kind} {hold} reload unchanged at +{off}: the real notice came at {cr[0][0]} s")
+            bad += quiet(L)
+    # (c) a storm of unchanged reloads inside one check: still the real notice alone
+    L = Light(pkg)
+    L.set_at(0, ACTIVE[DUMP], "on")
+    for off in (3.0, 9.0, 20.0, 31.0):
+        L.w.at(L.t_start + off, lambda: reload_unchanged(L))
+    L.w.run_until(L.t_start + 80)
+    if [n for _t, n in L.creates()] != [NOTE[DUMP]] or L.count() != 1.0 or L.s(CHECK) != check_for(DUMP, True) or INTERRUPTED_FIRED(L):
+        bad.append(f"a storm of unchanged reloads: {L.creates()} count {L.s(COUNT)} check {L.s(CHECK)[:60]!r} interrupted {INTERRUPTED_FIRED(L)}")
+    bad += quiet(L)
+    # (d) an unchanged reload, then ECCO's own record arrives: the check settles as ECCO's start and nothing at all is raised
+    L = Light(pkg)
+    L.set_at(0, ACTIVE[DUMP], "on")
+    L.w.at(L.t_start + 12, lambda: reload_unchanged(L))
+    L.set_at(20, LAST[DUMP], OWN_TEXT[DUMP])
+    L.w.run_until(L.t_start + 80)
+    if L.creates() or L.w.notifications or L.count() != 0.0 or not L.s(CHECK).startswith("ECCO START - ") or INTERRUPTED_FIRED(L):
+        bad.append(f"an unchanged reload before ECCO's own record: {L.creates()} count {L.s(COUNT)} check {L.s(CHECK)[:60]!r}")
+    bad += quiet(L)
+    # (e) muted: no popup of either kind, the record and the muted last-check wording
+    L = Light(pkg, muted=True)
+    L.set_at(0, ACTIVE[DUMP], "on")
+    L.w.at(L.t_start + 12, lambda: reload_unchanged(L))
+    L.w.run_until(L.t_start + 80)
+    if L.creates() or L.w.notifications or L.count() != 1.0 or L.s(CHECK) != check_for(DUMP, True, muted=True) or INTERRUPTED_FIRED(L):
+        bad.append(f"muted, an unchanged reload during a check: {L.creates()} count {L.s(COUNT)} check {L.s(CHECK)[:90]!r}")
+    # (f) a check whose detect automation is NOT running is still reported when the automations reload: a stale PENDING marker (a restored value, the run lost) is not hidden
+    for mode, label in (("normal", "no running instance"), ("nocurrent", "an automation entity without a current attribute"), ("absent", "no detect automation entity")):
+        L = Light(pkg)
+        L.states.mode = mode
+        L.w.set(CHECK, "PENDING - " + KIND_NAME[DUMP] + " became active at 21:00; checking whether ECCO started it")
+        reload_unchanged(L)
+        L.w.run_until(L.w.t + 60)
+        if [n for _t, n in L.creates()] != [UNCL] or L.count() != 0.0 or not L.s(CHECK).startswith(
+                "CANNOT CLASSIFY - interrupted by a Home Assistant restart or an automation reload (not an all clear); it was: " + KIND_NAME[DUMP] + " became active at 21:00"):
+            bad.append(f"a stale PENDING marker with {label}, then an automation reload: {L.creates()} {L.s(CHECK)[:70]!r}")
+        bad += quiet(L)
+    # the same marker at a Home Assistant start (nothing can be running then), in every model of the entity
+    for mode in ("normal", "nocurrent", "absent"):
+        L = Light(pkg)
+        L.w.set(CHECK, "PENDING - " + KIND_NAME[FREE] + " became active at 21:00; checking whether ECCO started it")
+        L.states.mode = mode
+        reload_ha(L, ha_start=True, reload_event=False)
+        L.w.run_until(L.w.t + 60)
+        if [n for _t, n in L.creates()] != [UNCL] or not L.s(CHECK).startswith("CANNOT CLASSIFY - interrupted by"):
+            bad.append(f"a stale PENDING marker at a Home Assistant start (entity model {mode}): {L.creates()} {L.s(CHECK)[:50]!r}")
+    # (g) a RE-CREATED detect automation (its own configuration changed: the run is cancelled) is still one CANNOT CLASSIFY, with the reload event on top
+    L = Light(pkg)
+    L.set_at(0, ACTIVE[DUMP], "on")
+    L.w.run_until(L.t_start + 12)
+    reload_ha(L, ha_start=False, reload_event=True)
+    L.w.run_until(L.t_start + 100)
+    if [n for _t, n in L.creates()] != [UNCL] or L.count() != 0.0 or not L.s(CHECK).startswith("CANNOT CLASSIFY - interrupted by"):
+        bad.append(f"a re-created detect automation during a check: {L.creates()} {L.s(CHECK)[:50]!r}")
+    return bad
+
+
 def case_repeats(pkg) -> list[str]:
     bad: list[str] = []
     # a flap during a check is dropped silently: one notice, one count
@@ -884,6 +1042,27 @@ def case_mute(pkg) -> list[str]:
     L.go(DUMP)
     if len(L.creates()) != 1:
         bad.append("an unavailable mute switch silenced the notice (it must notify)")
+    if L.s(CHECK) != check_for(DUMP, True):
+        bad.append(f"an unavailable mute switch raised the popup, so the last check must say so: {L.s(CHECK)[:90]!r}")
+    # D2 (L3, 25 Nov 2026): the last-check text says what happened to the popup. Muted: no popup, so it never says "see the notification"
+    for kind, hold in ((DUMP, "clear"), (DUMP, "held"), (FREE, "held"), (FREE, "unavailable")):
+        L = Light(pkg, hold=hold, muted=True).go(kind)
+        if L.creates() or L.s(CHECK) != check_for(kind, True, muted=True) or "see the notification" in L.s(CHECK) or L.count() != 1.0 or L.s(TEXT) != record_for(kind, hold, "20.0", "30.0"):
+            bad.append(f"muted {kind} ({hold}): the last check {L.s(CHECK)[:120]!r} (popups {L.creates()})")
+        L = Light(pkg, hold=hold).go(kind)
+        if L.s(CHECK) != check_for(kind, True) or "muted" in L.s(CHECK) or len(L.creates()) != 1:
+            bad.append(f"unmuted {kind} ({hold}): the last check {L.s(CHECK)[:120]!r}")
+    L = Light(pkg, muted=True).go(FREE)       # muted AND no popup wanted: it says no popup was wanted, not that the mute hid one
+    if L.s(CHECK) != check_for(FREE, False) or "muted" in L.s(CHECK):
+        bad.append(f"muted quiet Charge Battery: {L.s(CHECK)[:120]!r}")
+    # the switch is read when the notice is decided: muted during the wait, no popup and the text says so; unmuted during the wait, the popup and the text says so
+    for to, popups in (("on", []), ("off", [NOTE[DUMP]])):
+        L = Light(pkg, muted=(to == "off"))
+        L.set_at(0, ACTIVE[DUMP], "on")
+        L.set_at(20, MUTED, to)
+        L.w.run_until(L.t_start + 80)
+        if [n for _t, n in L.creates()] != popups or L.s(CHECK) != check_for(DUMP, True, muted=(to == "on")) or L.count() != 1.0:
+            bad.append(f"the mute switch turned {to} during the wait: {L.creates()} {L.s(CHECK)[:100]!r}")
     return bad
 
 
@@ -924,7 +1103,7 @@ BATTERY_QUICK = (
     ("raw Dump to Grid", lambda p: case_raw(p, DUMP)), ("raw Charge Battery", lambda p: case_raw(p, FREE)),
     ("Charge Battery notice policy", case_policy), ("held_by", case_held_by), ("the other kind's record", case_cross_kind),
     ("markers", case_markers_core), ("ECCO starts settle at once", case_ecco_fast), ("facts", lambda p: case_facts(p, True)),
-    ("guard with a fact true", case_guard_facts), ("unreadable markers", case_unreadable), ("restart", case_restart),
+    ("guard with a fact true", case_guard_facts), ("unreadable markers", case_unreadable), ("restart", case_restart), ("reload with the detect automation unchanged", case_reload_unchanged),
     ("repeats", case_repeats), ("flap limit", case_flap_limit), ("mute", case_mute), ("timing", case_timing),
 )
 
@@ -954,6 +1133,7 @@ def battery(text: str, first_only: bool = True) -> list[str]:
 # ================================================================================================================================
 def arm_detector(pw):
     """Only the detector's two automations run (the schedule packages' own automations are not part of these cases)."""
+    install_automation_states(pw)       # the interrupted-check condition reads states.automation
     for a in pw.ha.automations:
         if a.id.startswith("ecco_start_bypass"):
             a.setup()
@@ -1199,6 +1379,22 @@ pw.w.run_until(pw.w.t + 200)
 check("[5] end to end: Home Assistant restarts during a scheduled Dump to Grid session (the sensor goes unavailable, then on): the real packages load again, and the detector raises nothing",
       detector_creates(pw) == [] and pw.w.state(COUNT) == "0.0" and pw.w.state(CHECK).startswith("ECCO START - "), f"{detector_creates(pw)} {pw.w.state(CHECK)[:50]}")
 
+bad_ru = case_reload_unchanged(None)
+check("[5] D1: an automation reload that leaves the detect automation UNCHANGED, at 1, 12, 30 and 44 s of a live check (Dump to Grid; Charge Battery with a fact and quiet), in a storm of reloads, before ECCO's own "
+      "record and while muted, gives the real notice alone (no 'check interrupted' popup, no second CANNOT CLASSIFY, the record and the last check as for a start without a reload); a stale PENDING marker "
+      "(no running detect automation, its entity without a current attribute, or no entity) and a re-created detect automation are still reported once", bad_ru == [], str(bad_ru[:3]))
+pw, d = heavy_dump(owner=40)
+d.stop_soc = 45
+pw.w.set(D.D_SOC, "45.0")
+d.manual_start(pw.w.t + 1, duration=30, power=2000, stop_soc=45)
+pw.w.run_until(pw.w.t + 12)
+_live = pw.w.state(CHECK).startswith("PENDING - ")
+pw.ha.fire_event("automation_reloaded")
+pw.w.run_until(pw.w.t + 100)
+check("[5] D1 end to end: a raw Dump to Grid press through the real dongle model with the real packages, and an automation reload (detect automation unchanged) 12 s into the check: the real notice alone, the incident "
+      "recorded once, no 'check interrupted' notice", _live and d.successes == 1 and detector_creates(pw) == [NOTE[DUMP]] and pw.w.state(COUNT) == "1.0" and UNCL not in pw.w.notifications
+      and pw.w.state(CHECK) == check_for(DUMP, True), f"{_live} {detector_creates(pw)} {pw.w.state(CHECK)[:80]}")
+
 print("[6] repeats")
 bad_p = case_repeats(None)
 check("[6] a flap or the other kind during a check is dropped silently (one notice, count 1); a new start after a check is a new check (the second notice replaces the first, count 2); "
@@ -1209,6 +1405,9 @@ check("[6] PINNED LIMIT: a flap of the sensor after a recognised ECCO start is a
 print("[7] mute")
 bad_m = case_mute(None)
 check("[7] the mute switch hides the popups (bypass, cannot classify, interrupted) and never the record or the last-check text; off or unavailable notifies", bad_m == [], str(bad_m[:3]))
+check("[7] D2: while the mute switch is on, the last-check text of a start that would have raised a popup says 'popup muted by the mute switch' (never 'see the notification'), for both kinds, with every fact "
+      "clear or true; unmuted, off or unavailable it says 'see the notification' and a popup is raised; a start the policy holds back says 'recorded without a popup' whether muted or not; the switch is "
+      "read when the notice is decided", bad_m == [], str(bad_m[:3]))
 check("[7] no helper refused a write in any world above", P.PlanWorld.rejected_all == [], str(P.PlanWorld.rejected_all[:2]))
 
 # ================================================================================================================================
@@ -1223,6 +1422,28 @@ def nth_replace(text, old, new, n):
 
 
 MUT_MUTE = "value_template: \"{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') }}\""
+# D1 and D2 (L3, 25 Nov 2026): the interrupted-check condition and the last-check wording of a muted popup
+D1_COND = "{{ (states.automation | selectattr('attributes.id', 'eq', 'ecco_start_bypass_detect') | map(attribute='attributes.current') | first | default(0) | int(0)) == 0 }}"
+D2_EXPR = "('see the notification' if (popup_wanted and not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on')) else ('popup muted by the mute switch' if popup_wanted else 'recorded without a popup: no plan fact was true'))"
+D2_COND = "(popup_wanted and not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on'))"
+OLD_EXPR_PLACEHOLDER = "('see the notification' if popup_wanted else 'recorded without a popup: no plan fact was true')"
+MUTANTS_D1D2 = [
+    ("[D1] the interrupted-check automation ignores the detect automation's running check (the condition is always true)", D1_COND, "{{ true }}", None),
+    ("[D1] the pre-fix package: the added condition is removed (any automation reload during a live check raises the interrupted notice)",
+     "      - condition: template\n        value_template: >-\n          " + D1_COND + "\n", "", None),
+    ("[D1] the condition is inverted (the interrupted notice only while the detect automation runs)", "| int(0)) == 0 }}", "| int(0)) != 0 }}", None),
+    ("[D1] the condition counts the interrupted-check automation's own instances, not the detect automation's", "'eq', 'ecco_start_bypass_detect')", "'eq', 'ecco_start_bypass_interrupted')", None),
+    ("[D1] a detect automation that cannot be read counts as running (default 1: a lost check is silent)", "| first | default(0) | int(0)) == 0", "| first | default(1) | int(0)) == 0", None),
+    ("[D1] the condition passes while one instance runs (<= 1)", "| int(0)) == 0 }}", "| int(0)) <= 1 }}", None),
+    ("[D1] the condition reads the automation's state (on) instead of its running count", "map(attribute='attributes.current')", "map(attribute='state')", None),
+    ("[D1] the condition selects every automation except the detect one", "selectattr('attributes.id', 'eq', 'ecco_start_bypass_detect')", "selectattr('attributes.id', 'ne', 'ecco_start_bypass_detect')", None),
+    ("[D2] the pre-fix wording: the last check says 'see the notification' although the mute switch is on", D2_EXPR, OLD_EXPR_PLACEHOLDER, None),
+    ("[D2] the mute test of the last check is inverted (muted wording while unmuted)", D2_COND, "(popup_wanted and is_state('input_boolean.ecco_start_bypass_notice_muted', 'on'))", None),
+    ("[D2] the muted wording is also written when the policy wanted no popup", "('popup muted by the mute switch' if popup_wanted else 'recorded without a popup: no plan fact was true')", "'popup muted by the mute switch'", None),
+    ("[D2] the muted wording is written for Dump to Grid only", D2_COND, "(popup_wanted and not (kind == 'dump_to_grid' and is_state('input_boolean.ecco_start_bypass_notice_muted', 'on')))", None),
+    ("[D2] an unavailable mute switch reads as muted in the last check although the popup is raised", D2_COND, "(popup_wanted and is_state('input_boolean.ecco_start_bypass_notice_muted', 'off'))", None),
+    ("[D2] the muted wording blames the plan facts instead of the mute switch", "'popup muted by the mute switch'", "'recorded without a popup: no plan fact was true'", None),
+]
 MUTANTS = [
     ("a start from unavailable counts (the off -> on condition removed)", "{{ trigger.from_state is not none and trigger.from_state.state == 'off' }}", "{{ true }}", None),
     ("a start from anything but on counts (!= 'on')", "trigger.from_state.state == 'off' }}", "trigger.from_state.state != 'on' }}", None),
@@ -1283,7 +1504,7 @@ MUTANTS = [
     ("the mute switch hides the incident count too", "value: \"{{ new_count }}\"", "value: \"{{ 0 if is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') else new_count }}\"", None),
     ("the mute switch hides the incident text too", "value: \"{{ record_text[:250] }}\"", "value: \"{{ '' if is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') else record_text[:250] }}\"", None),
     ("the Charge Battery cannot-classify popup is held back by the policy", MUT_MUTE, "value_template: \"{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') and kind == 'dump_to_grid' }}\"", 1),
-    ("the last check claims a notification that was not raised", "('see the notification' if popup_wanted else 'recorded without a popup: no plan fact was true')", "'see the notification'", None),
+    ("the last check claims a notification that was not raised", D2_EXPR, "'see the notification'", None),
     # ---- the notice wording: no ECCO record found, never that ECCO did not start it ----
     ("the notice asserts again that ECCO did not start it", ", and no ECCO record of this start was found within 45 s: neither", ". ECCO did not start it: neither", None),
     ("the notice drops the caution that it can be an ECCO run with a late record", "Note that this can be an ECCO run whose record was late or unconfirmed: read the schedule last result before ending anything.\n\n                        At the moment",
@@ -1306,6 +1527,7 @@ MUTANTS = [
     ("a Dump to Grid session accepts the Free Power STARTED OK as well (either text counts)", "{{ guarded or (o is not none and (o.state is match(",
      "{{ guarded or (states.input_text.ecco_free_power_schedule_last_result is not none and (states.input_text.ecco_free_power_schedule_last_result.state is match('STARTED OK - [0-9]+W for [0-9]+ min')) and as_timestamp(states.input_text.ecco_free_power_schedule_last_result.last_updated, 0) >= started_ts - 10) or (o is not none and (o.state is match(", None),
 ]
+MUTANTS = MUTANTS + MUTANTS_D1D2
 killed = 0
 for label, old, new, nth in MUTANTS:
     n = DET_TEXT.count(old)
@@ -1322,6 +1544,10 @@ for label, old, new, nth in MUTANTS:
         print(f"  FAIL  mutant survived: {label}")
 check(f"{len(MUTANTS)} mutants, all caught (44 for the first version; 3 or more each for the notice wording, the Charge Battery notice policy, held_by and the other kind's record)",
       killed == len(MUTANTS) and len(MUTANTS) >= 44 + 3 * 4, f"{killed}/{len(MUTANTS)}")
+check(f"{len(MUTANTS_D1D2)} new mutants undo D1 (the interrupted-check condition: removed, always true, inverted, wrong automation, wrong default, wrong count, wrong attribute, wrong selection) and D2 (the muted wording: "
+      "the pre-fix text, inverted, kept for a quiet start, Dump to Grid only, an unavailable switch, the wrong reason), each caught",
+      len(MUTANTS_D1D2) >= 14 and all(f"mutant survived: {m[0]}" not in FAILURES and f"mutant anchor: {m[0]}" not in FAILURES for m in MUTANTS_D1D2)
+      and sum(1 for m in MUTANTS_D1D2 if m[0].startswith("[D1]")) >= 4 and sum(1 for m in MUTANTS_D1D2 if m[0].startswith("[D2]")) >= 4)
 check("the full battery holds on the package as written", battery(DET_TEXT, first_only=False) == [])
 _harmless = DET_TEXT.replace("Notification and record only. When a Dump", "Notification and record only (restated). When a Dump")
 check("a harmless rewrite (an automation description) survives, and a rewrite of a pinned result text does not",
