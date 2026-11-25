@@ -233,7 +233,10 @@ slot powers and restores it first (REG:2612-2658). A change by anyone else durin
 (REG:2744-2754). Essentials (1) has never been exercised. 245 has no write path at all (REG:3801-3837; pinned by
 `registry/tests/test_write_surface_invariants.py`); two published descriptions disagree on whether it caps export only or the
 combined load and grid output (RE:60-62); the owner decided it stays read-only. It is a native hard ceiling of unknown scope and
-must never be used as an operational setpoint (REQ-B16).
+must never be used as an operational setpoint (REQ-B16). No separate "maximum sell power" register is decoded or polled by this
+firmware: 245 is the only export-power limit the repository knows, and whether the inverter has another is UNKNOWN. The
+zero-export behaviour is the 244 value 2 (the normal policy on the reference installation) with the trickle-feed magnitude 206
+(read-only).
 
 ### 4.10 Peak shaving (280, 292, 293)
 
