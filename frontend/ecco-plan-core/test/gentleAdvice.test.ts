@@ -568,3 +568,13 @@ function randomInput(r: () => number): GentleAdviceInput {
   if (r() < 0.1) input.params = { minW: pick([300, 500, 800, 1000]), taperStartSocPct: pick([50, 90, 98]), topHoldMin: pick([0, 20, 60]) };
   return input;
 }
+
+test("round 3 F9: a safe ceiling whose name cannot be converted to text (an object with no prototype) does not make the advice throw; the warning lists it as unnamed", () => {
+  const bare = Object.create(null) as never;
+  const a = advise({ ceilings: [{ name: bare, watts: 5000 }, { name: "owner_maximum", watts: 6200 }] });
+  assert.deepEqual(a.warnings.map((w) => w.code), ["CEILING_AGE_UNKNOWN"]);
+  assert.match(a.warnings[0]!.text, /: unnamed, owner_maximum\./);
+  assert.equal(a.actuationSupported, false);
+  // the ordinary names are listed as before
+  assert.match(advise({ ceilings: [{ name: "owner_maximum", watts: 5000 }, { name: "b", watts: 6200 }] }).warnings[0]!.text, /: owner_maximum, b\./);
+});

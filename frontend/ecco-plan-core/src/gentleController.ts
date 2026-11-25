@@ -622,12 +622,17 @@ export function windowRealMinutes(startMin: number, endMin: number, clockDay: Cl
   return wall === 0 ? null : elapsedMinutes(startMin, wall, clockDay);
 }
 
+/** A ceiling's name as the plan shows it: only a string is used; anything else (a missing name, an object with no prototype, whose conversion throws) is "unnamed". */
+function ceilingLabel(name: unknown): string {
+  return typeof name === "string" ? name : "unnamed";
+}
+
 /** The smallest KNOWN ceiling (finite, >= 0), or null when none is known. A tie keeps the first name. */
 export function smallestKnownCeiling(ceilings: readonly NamedCeiling[]): { watts: number; name: string } | null {
   let best: { watts: number; name: string } | null = null;
   for (const c of ceilings) {
     if (!c || !isNum(c.watts) || c.watts < 0) continue;
-    if (best === null || c.watts < best.watts) best = { watts: c.watts, name: String(c.name) };
+    if (best === null || c.watts < best.watts) best = { watts: c.watts, name: ceilingLabel(c.name) };
   }
   return best;
 }
@@ -673,9 +678,9 @@ export function effectiveCeiling(ceilings: readonly NamedCeiling[], maxAgeMin: n
     if (!c || !isNum(c.watts) || c.watts < 0) continue;
     const w = toSetpoint(c);
     if (ceilingIsStale(c, maxAgeMin)) {
-      staleNames.push(String(c.name));
-      if (stale1 === null || w < stale1.watts) stale1 = { watts: w, name: String(c.name) };
-    } else if (fresh1 === null || w < fresh1.watts) fresh1 = { watts: w, name: String(c.name) };
+      staleNames.push(ceilingLabel(c.name));
+      if (stale1 === null || w < stale1.watts) stale1 = { watts: w, name: ceilingLabel(c.name) };
+    } else if (fresh1 === null || w < fresh1.watts) fresh1 = { watts: w, name: ceilingLabel(c.name) };
   }
   if (fresh1 === null) return { best: null, staleNames, staleCaps: false };
   if (stale1 !== null && stale1.watts < fresh1.watts) return { best: stale1, staleNames, staleCaps: true };

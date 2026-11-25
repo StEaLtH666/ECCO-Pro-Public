@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { planGentleNight, windowFromSlotTable, NIGHT_CODES } from "../src/gentleNight.ts";
 import type { GentleNightInput, GentleNightPlan, NightCode } from "../src/gentleNight.ts";
-import { GENTLE_ACTUATOR_PROFILES, maxChargePowerCeiling } from "../src/gentleController.ts";
+import { GENTLE_ACTUATOR_PROFILES, effectiveCeiling, maxChargePowerCeiling, smallestKnownCeiling } from "../src/gentleController.ts";
 import { rng, slot } from "./fixtures.ts";
 
 const ORD = { changeAtMin: 0, deltaMin: 0 } as const;
@@ -469,9 +469,20 @@ test("confirmation BLOCKER 2: on a path that can change, an early return with a 
   assert.equal(fine.status, "INPUTS_UNUSABLE");
   assert.deepEqual(fine.codes, ["NO_SOC"]);
   assert.match(fine.needed.join(" "), /the fallback holds whatever is in force/);
-  // before the parameters and the path are known no STOP can be decided: those refusals stay as they were
-  assert.deepEqual(plan({ actuatorProfile: "FREE_POWER_LEASE", params: { setpointOvershoot: 2 }, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 }).codes, ["PARAMS_INVALID"]);
-  assert.deepEqual(plan({ actuatorProfile: "MAGIC" as unknown as "UNCONSTRAINED", ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 }).codes, ["PROFILE_INVALID"]);
+  // before the parameters and the path are known these two refusals used to stay plain whatever was in force (the documented exclusions, "no STOP can be decided");
+  // round 3 F3 removes them: with nothing in force, or a rate at the ceiling, they are still the plain refusals
+  assert.deepEqual(plan({ actuatorProfile: "FREE_POWER_LEASE", params: { setpointOvershoot: 2 }, ceilings: [maxChargePowerCeiling(8000, 6000)] }).codes, ["PARAMS_INVALID"]);
+  assert.deepEqual(plan({ actuatorProfile: "MAGIC" as unknown as "UNCONSTRAINED", ceilings: [maxChargePowerCeiling(8000, 6000)] }).codes, ["PROFILE_INVALID"]);
+  assert.deepEqual(plan({ actuatorProfile: "FREE_POWER_LEASE", params: { setpointOvershoot: 2 }, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } }).codes, ["PARAMS_INVALID"]);
+  // ... and with 8000 W in force above the 6000 W owner limit they are a STOP on a path that cannot lower the rate (the changed expectation: it was ["PARAMS_INVALID"] and
+  // ["PROFILE_INVALID"] with the text "the fallback holds whatever is in force")
+  const badParams = plan({ actuatorProfile: "FREE_POWER_LEASE", params: { setpointOvershoot: 2 }, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(badParams.status, "STOP_RECOMMENDED");
+  assert.deepEqual(badParams.codes, ["PARAMS_INVALID", "FORCED_BELOW_CEILING", "ACTUATOR_FIXED_RATE"]);
+  const badProfile = plan({ actuatorProfile: "MAGIC" as unknown as "UNCONSTRAINED", ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(badProfile.status, "STOP_RECOMMENDED");
+  assert.deepEqual(badProfile.codes, ["PROFILE_INVALID", "FORCED_BELOW_CEILING", "ACTUATOR_FIXED_RATE"]);
+  assert.equal(badProfile.profile, null);
 });
 
 test("confirmation survivors R05, R06, R09, R07 and MINOR: a STOP gives the needed rate at the ceiling, no finish, margin or fit, and the band of the rate in force; an off-step rate above the ceiling is forced or stopped (by hand)", () => {
@@ -789,4 +800,136 @@ test("round 3 F2 (MAJOR): a rate in force that an ordinary change set INSIDE the
   assert.equal(wide.status, "OK");
   near(band(wide).pessimisticHeld.finishMin, 30 + ((1.5 * PK) / 0.05625) * 60, 0.2, "at the lowest tail");
   near(band(plan({ ...roomy, inForce: { setpointW: 8000, lastChangeAtMin: 25, changesUsed: 0 } })).pessimisticHeld.finishMin, 30 + ((1.5 * PK) / 0.9) * 60, 0.2, "at the rate in force (a START)");
+});
+
+test("round 3 F3 (MAJOR): a rate in force above a known ceiling is compared whenever it is a finite number above 0 W, whatever the bookkeeping fields, the parameters or the path name say: a STOP on a path that cannot lower it, never 'the fallback holds whatever is in force'", () => {
+  // the review's cases: a lease of 8000 W against the 6000 W owner limit, the record's bookkeeping malformed (it answered INPUT_INVALID with the fallback line)
+  type ForceT = NonNullable<GentleNightInput["inForce"]>;
+  const lease = (inForce: unknown, over: Partial<GentleNightInput> = {}): GentleNightPlan => plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: inForce as ForceT, ...over });
+  const stops = (p: GentleNightPlan, first: NightCode, what: string): void => {
+    assert.equal(p.status, "STOP_RECOMMENDED", what + ": " + p.codes.join(","));
+    assert.equal(p.stopRecommended, true, what);
+    assert.equal(p.now.change, "STOP", what);
+    assert.deepEqual(p.codes, [first, "FORCED_BELOW_CEILING", "ACTUATOR_FIXED_RATE"], what);
+    assert.equal(p.now.ceilingW, 6000, what);
+    assert.match(p.needed.join(" "), /Stop the charge on this path: the rate in force \(8000 W\) is above the safe ceiling \(6000 W/, what);
+    assert.doesNotMatch(p.needed.join(" "), /fallback holds/, what);
+  };
+  const malformed: Array<[string, unknown]> = [
+    ["changesUsed missing", { setpointW: 8000, lastChangeAtMin: 0 }], ["changesUsed 0.5", { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0.5 }], ["changesUsed negative", { setpointW: 8000, lastChangeAtMin: 0, changesUsed: -1 }],
+    ["changesUsed a string", { setpointW: 8000, lastChangeAtMin: 0, changesUsed: "0" }], ["lastChangeAtMin missing", { setpointW: 8000, changesUsed: 0 }], ["lastChangeAtMin NaN", { setpointW: 8000, lastChangeAtMin: NaN, changesUsed: 0 }],
+    ["lastChangeAtMin a string", { setpointW: 8000, lastChangeAtMin: "0", changesUsed: 0 }], ["both missing", { setpointW: 8000 }],
+  ];
+  for (const [what, rec] of malformed) stops(lease(rec), "INPUT_INVALID", what);
+  // the grid case: a 6000 W lease against a 3000 W import limit with 2500 W of fresh demand (the headroom is 0 W: below the lowest setpoint)
+  const grid = lease({ setpointW: 6000, lastChangeAtMin: 0 }, { ceilings: [maxChargePowerCeiling(8000, 8000)], household: { gridImportLimitW: 3000, demandPeakW: 2500, demandAgeMin: 1 } });
+  assert.equal(grid.status, "STOP_RECOMMENDED");
+  assert.deepEqual(grid.codes, ["INPUT_INVALID", "FORCED_BELOW_CEILING", "ACTUATOR_FIXED_RATE", "HEADROOM_BELOW_MIN"]);
+  assert.equal(grid.now.ceilingName, "grid_headroom");
+  // the earlier exclusions: invalid parameters and an unknown path (taken as one that cannot lower the rate); the valid parameters are kept and the invalid ones fall back to their defaults
+  stops(lease({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { params: { replanMin: 20 } }), "PARAMS_INVALID", "an invalid parameter");
+  stops(lease({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { actuatorProfile: "FREE_POWER_LEAS" as never }), "PROFILE_INVALID", "a profile typo");
+  stops(lease({ setpointW: 8000 }, { actuatorProfile: "MAGIC" as never }), "PROFILE_INVALID", "an unknown path and a malformed record at once");
+  assert.equal(lease({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { actuatorProfile: "MAGIC" as never }).profile, null, "an unknown path has no profile report");
+  const kept = lease({ setpointW: 5500, lastChangeAtMin: 0, changesUsed: 0 }, { ceilings: [maxChargePowerCeiling(8000, 8000)], params: { hardMaxW: 5000, replanMin: 20 } });
+  assert.equal(kept.status, "STOP_RECOMMENDED", "the valid hardMaxW 5000 is kept");
+  assert.equal(kept.now.ceilingW, 5000);
+  assert.equal(kept.now.ceilingName, "firmware_setpoint_bound");
+  // on a path that CAN lower the rate the refusal stays and says it must come down (never the fallback line), also for a malformed record and invalid parameters
+  for (const over of [{}, { params: { replanMin: 20 } }]) {
+    const tou = lease({ setpointW: 8000, changesUsed: 0.5 }, { actuatorProfile: "TOU_SLOT_EDITOR", ...over });
+    assert.equal(tou.status, "INPUTS_UNUSABLE");
+    assert.equal(tou.stopRecommended, false);
+    assert.ok(tou.codes.includes("FORCED_BELOW_CEILING") && !tou.codes.includes("ACTUATOR_FIXED_RATE"), tou.codes.join(","));
+    assert.match(tou.needed.join(" "), /must come down to at most 6000 W whatever else is unknown/);
+    assert.doesNotMatch(tou.needed.join(" "), /fallback holds/);
+  }
+  // no breach, no STOP: a malformed record at the ceiling, or no usable rate at all (a string, a negative number, NaN, a 0 W rate that means not charging), keeps the plain refusal
+  for (const rec of [{ setpointW: 6000 }, { setpointW: "8000", lastChangeAtMin: 0, changesUsed: 0 }, { setpointW: -8000, lastChangeAtMin: 0, changesUsed: 0 }, { setpointW: NaN }, { setpointW: Infinity }, { setpointW: 0 }, null]) {
+    const p = lease(rec, { socPct: null });
+    assert.equal(p.status, "INPUTS_UNUSABLE", JSON.stringify(rec));
+    assert.equal(p.stopRecommended, false, JSON.stringify(rec));
+    assert.match(p.needed.join(" "), /the fallback holds whatever is in force/, JSON.stringify(rec));
+  }
+  // with no named ceiling the only known one is the firmware bound (8000 W): 9000 W in force is above it (a STOP), 6100 W is not (nothing known is breached: the plain refusal)
+  const none = lease({ setpointW: 9000, changesUsed: 0.5 }, { ceilings: [] });
+  assert.equal(none.status, "STOP_RECOMMENDED");
+  assert.equal(none.now.ceilingW, 8000);
+  assert.equal(none.now.ceilingName, "firmware_setpoint_bound");
+  assert.deepEqual(none.codes, ["INPUT_INVALID", "FORCED_BELOW_CEILING", "ACTUATOR_FIXED_RATE"]);
+  assert.match(lease({ setpointW: 6100, changesUsed: 0.5 }, { ceilings: [] }).needed.join(" "), /the fallback holds whatever is in force/);
+  // a seeded sweep over every refusal kind, every path (and an unknown one), a sound and a malformed record, rates above 6000 W: the plan is never the fallback line, and on a
+  // path that cannot lower the rate (the lease, an unknown one) it is a STOP
+  const r = rng(307);
+  const refusals: Array<Partial<GentleNightInput>> = [{}, { targetSocPct: 5 }, { bufferMin: 7 }, { chargeWindow: null as never }, { clockDay: null as never }, { elapsedMin: NaN }, { socPct: null }, { socAgeMin: 30 }, { socPct: 101 },
+    { capacityKwh: 0 }, { params: { setpointOvershoot: 2 } }, { drainBoundW: 5, preWindowDrainW: 9 }, { elapsedMin: -30 }, { socPct: 99 }, { household: { gridImportLimitW: -5 } }];
+  const paths = ["FREE_POWER_LEASE", "TOU_SLOT_EDITOR", "UNCONSTRAINED", "RATE_CONTROLLER_PROPOSED", "NO_SUCH_PATH"] as const;
+  const records: unknown[] = [{ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }, { setpointW: 6100 }, { setpointW: 9000, lastChangeAtMin: "x", changesUsed: 0 }, { setpointW: 7000, lastChangeAtMin: 0, changesUsed: 1.5 }];
+  let stopped = 0;
+  for (let i = 0; i < 400; i++) {
+    const path = paths[Math.floor(r() * paths.length)] as (typeof paths)[number];
+    const over = refusals[Math.floor(r() * refusals.length)] as Partial<GentleNightInput>;
+    const p = plan({ elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], ...over, actuatorProfile: path as never, inForce: records[Math.floor(r() * records.length)] as ForceT });
+    assert.doesNotMatch(p.needed.join(" "), /fallback holds/, path + " " + JSON.stringify(over) + " " + p.codes.join(","));
+    if (path === "FREE_POWER_LEASE" || path === "NO_SUCH_PATH") {
+      assert.equal(p.status, "STOP_RECOMMENDED", path + " " + JSON.stringify(over) + " " + p.codes.join(","));
+      stopped++;
+    }
+  }
+  assert.ok(stopped > 100, "sweep stops: " + stopped);
+});
+
+test("round 3 F9: the planner never throws for a ceiling name that cannot be converted to text, nor for a profile name or any junk in any field (prototype-less objects, symbols, bigints, functions, proxies, objects whose conversion throws)", () => {
+  const bare = Object.create(null) as never;
+  // the review's case: a ceiling name with no prototype threw 'Cannot convert object to primitive value', with or without a rate in force
+  for (const inForce of [undefined, { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 }]) {
+    const p = plan({ elapsedMin: 60, socPct: 40, ceilings: [{ name: bare, watts: 5000 }], inForce });
+    assert.equal(p.now.ceilingW, 5000);
+    assert.equal(p.now.ceilingName, "unnamed");
+    assert.equal(p.status, inForce === undefined ? "TARGET_AT_RISK" : "STOP_RECOMMENDED");
+  }
+  // a name is used only when it is a string; the real one is unchanged
+  assert.equal(plan({ ceilings: [{ name: 7 as never, watts: 5000 }, maxChargePowerCeiling(8000, 6000)] }).now.ceilingName, "unnamed");
+  assert.equal(plan({ ceilings: [{ name: ["a"] as never, watts: 5000 }] }).now.ceilingName, "unnamed");
+  assert.equal(plan({ ceilings: [{ name: "grid_charge_limit", watts: 5000 }] }).now.ceilingName, "grid_charge_limit");
+  assert.equal(plan().now.ceilingName, "max_charge_power_effective");
+  // the controller's own helpers (the night planner uses effectiveCeiling; planGentle uses both)
+  assert.deepEqual(smallestKnownCeiling([{ name: bare, watts: 5000 }, { name: "b", watts: 6000 }]), { watts: 5000, name: "unnamed" });
+  assert.deepEqual(effectiveCeiling([{ name: bare, watts: 5000 }, { name: bare, watts: 3000, ageMin: 999 }], 60), { best: { watts: 3000, name: "unnamed" }, staleNames: ["unnamed"], staleCaps: true });
+  assert.deepEqual(smallestKnownCeiling([{ name: "owner", watts: 5000 }]), { watts: 5000, name: "owner" });
+  // a profile that is an object with no prototype, a symbol, or an object whose conversion throws is an unknown path, not a throw
+  const thrower = { toString() { throw new Error("toString"); }, valueOf() { throw new Error("valueOf"); } };
+  for (const profile of [bare, Symbol("p"), thrower, 7, []]) assert.deepEqual(plan({ actuatorProfile: profile as never }).codes, ["PROFILE_INVALID"]);
+  // junk in every field and every record field, the throwing kinds included: never a throw, never an actuation, always a code from the closed list
+  const r = rng(308);
+  const junk: unknown[] = [bare, Symbol("s"), 10n, () => 1, new Proxy({}, {}), [bare], thrower, [thrower], { name: thrower, watts: 5000 }, NaN, Infinity, -1, "x", null, undefined, true, [], {}];
+  const full: Record<string, unknown> = {
+    targetSocPct: 80, chargeWindow: { startMin: 30, endMin: 330 }, clockDay: ORD, elapsedMin: 60, socPct: 40, socAgeMin: 1, capacityKwh: 31.7, ceilings: [maxChargePowerCeiling(8000, 6000)],
+    household: { gridImportLimitW: 9000, demandPeakW: 1000, demandAgeMin: 1 }, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 }, actuatorProfile: "TOU_SLOT_EDITOR",
+    previousSoc: { socPct: 39, elapsedMin: 50 }, drainBoundW: 100, params: { dropMin: 5 }, learnedCapacityKwh: 30,
+  };
+  let planned = 0;
+  for (let i = 0; i < 1500; i++) {
+    const o: Record<string, unknown> = JSON.parse(JSON.stringify(full));
+    const keys = Object.keys(o);
+    const k = keys[Math.floor(r() * keys.length)] as string;
+    const pick = junk[Math.floor(r() * junk.length)];
+    const v = o[k];
+    if (r() < 0.5 || v === null || typeof v !== "object") o[k] = pick;
+    else if (Array.isArray(v)) o[k] = [pick, ...v];
+    else {
+      const kk = Object.keys(v as object);
+      (v as Record<string, unknown>)[kk[Math.floor(r() * kk.length)] as string] = pick;
+    }
+    let p: GentleNightPlan | null = null;
+    try {
+      p = planGentleNight(o as unknown as GentleNightInput);
+    } catch (e) {
+      assert.fail("threw for " + k + ": " + String(e));
+    }
+    assert.equal(p.actuationSupported, false);
+    for (const c of p.codes) assert.ok((NIGHT_CODES as readonly string[]).includes(c), c);
+    planned++;
+  }
+  assert.equal(planned, 1500);
 });

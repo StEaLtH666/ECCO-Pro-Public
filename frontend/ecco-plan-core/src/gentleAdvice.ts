@@ -168,7 +168,7 @@ function warningsOf(input: GentleAdviceInput): AdviceWarning[] {
   const ceilings: unknown[] = Array.isArray(input.ceilings) ? input.ceilings : [];
   const undated: string[] = [];
   for (const c of ceilings as Array<{ name?: unknown; watts?: unknown; ageMin?: unknown } | null>) {
-    if (c !== null && typeof c === "object" && isNum(c.watts) && c.watts >= 0 && (c.ageMin === undefined || c.ageMin === null)) undated.push(String(c.name));
+    if (c !== null && typeof c === "object" && isNum(c.watts) && c.watts >= 0 && (c.ageMin === undefined || c.ageMin === null)) undated.push(typeof c.name === "string" ? c.name : "unnamed");
   }
   if (undated.length > 0) {
     out.push({ code: "CEILING_AGE_UNKNOWN", text: "These safe ceilings came with no age and are taken as current: " + undated.join(", ") + ". A limit that changed, or a reading that went quiet, would not be noticed." });

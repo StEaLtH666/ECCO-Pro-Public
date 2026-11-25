@@ -30,8 +30,10 @@
 //    after the first is `conditional`: it is re-computed from the measured SOC when the time comes. With no profile named, the most restrictive path that
 //    exists (FREE_POWER_LEASE) is assumed and said.
 //  * A rate in force above a KNOWN ceiling (the firmware bound, any named ceiling converted to setpoint units, the grid limit: with a fresh demand the
-//    headroom, without one the limit alone) is checked BEFORE every refusal that follows the parameters and the profile: on a path that cannot lower it
-//    after the START, or when the ceiling is below the lowest setpoint, the answer is STOP_RECOMMENDED; a refusal never says the fallback holds it.
+//    headroom, without one the limit alone) is checked BEFORE every refusal, whenever the rate in force is a finite number above 0 W whatever the bookkeeping
+//    fields (changes used, time of the last change) say, and also before the refusals for invalid parameters (the invalid ones fall back to the defaults for the
+//    check) and for an unknown path (taken as one that cannot lower the rate): on a path that cannot lower it after the START, or when the ceiling is below the
+//    lowest setpoint, the answer is STOP_RECOMMENDED; a refusal never says the fallback holds it (round 3 F3).
 //  * Unknown data is never guessed: stale or unknown SOC, capacity or limits give INPUTS_UNUSABLE. A KNOWN grid import limit with an unknown or stale
 //    demand also gives INPUTS_UNUSABLE; an UNKNOWN grid import limit applies no cap and says so (GRID_LIMIT_UNKNOWN_NO_CAP). While nothing charges the
 //    battery (before the window; inside it with no rate in force, or before the rate in force was set when that was after the reading) it supplies the house:
@@ -715,6 +717,24 @@ function paramsProblem(p: GentleNightParams): string | null {
   return null;
 }
 
+/** The parameters with every invalid one replaced by its default: used only to compare a rate in force with the known ceilings before a refusal for invalid parameters. */
+function saneParams(given: Record<string, unknown>): GentleNightParams {
+  const out: GentleNightParams = { ...DEFAULT_NIGHT_PARAMS };
+  for (const k of Object.keys(BOUNDS) as (keyof GentleNightParams)[]) {
+    const v = given[k];
+    const b = BOUNDS[k];
+    if (isNum(v) && v >= b[0] && v <= b[1]) out[k] = v;
+  }
+  return out;
+}
+
+/** The parameters as the plan uses them: the path's constraints tighten the step, the minimum, the maximum, the dwell and the change budget (never loosen them). */
+function pathParams(merged: GentleNightParams, profileId: ActuatorProfileId | null): GentleNightParams {
+  if (profileId === null) return { ...merged, hardMaxW: Math.min(merged.hardMaxW, LIMITS.chargePowerMax) };
+  const tightened = applyActuatorProfile({ ...DEFAULT_GENTLE_PARAMS, stepW: merged.stepW, minW: merged.minW, hardMaxW: merged.hardMaxW, dwellMin: merged.dwellMin, maxChanges: merged.maxChanges }, profileId).params;
+  return { ...merged, stepW: tightened.stepW, minW: tightened.minW, hardMaxW: Math.min(tightened.hardMaxW, LIMITS.chargePowerMax), dwellMin: tightened.dwellMin, maxChanges: tightened.maxChanges };
+}
+
 /** A rate in force above the lowest KNOWN ceiling (see ceilingBreach). `stop`: the path cannot lower it to the ceiling (fixed path, or no setpoint is that low). */
 interface Breach {
   inForceW: number;
@@ -725,15 +745,22 @@ interface Breach {
   stop: boolean;
 }
 
+/** A ceiling's name as the plan shows it: only a string is used; anything else (a missing name, an object with no prototype, whose conversion throws) is "unnamed". */
+function nameOf(name: unknown): string {
+  return typeof name === "string" ? name : "unnamed";
+}
+
 /**
- * Whether a well-formed rate in force is above the lowest ceiling KNOWN from the inputs, before any of them is checked for anything else: the firmware bound,
- * every named ceiling with a known value (converted to setpoint units; a stale one still counts, a STOP is the conservative answer), and a known grid
- * import limit (with a fresh demand the headroom; without one the limit alone, which bounds the headroom for any demand), floored to the step like the
- * planning ceiling. null when no rate is in force, the record is not well formed, or the rate is not above that ceiling.
+ * Whether the rate in force is above the lowest ceiling KNOWN from the inputs, before any of them is checked for anything else: the firmware bound, every
+ * named ceiling with a known value (converted to setpoint units; a stale one still counts, a STOP is the conservative answer), and a known grid import limit
+ * (with a fresh demand the headroom; without one the limit alone, which bounds the headroom for any demand), floored to the step like the planning ceiling. The
+ * rate in force counts whenever it is a finite number above 0 W: a record whose bookkeeping (changes used, time of the last change) is malformed still holds
+ * that rate (round 3 F3; the earlier check returned null for it and the refusal said the fallback holds whatever is in force). null when no rate is in force
+ * or the rate is not above that ceiling.
  */
 function ceilingBreach(input: GentleNightInput, P: GentleNightParams, fixed: boolean): Breach | null {
   const f = input.inForce;
-  if (f === undefined || f === null || typeof f !== "object" || !isNum(f.setpointW) || f.setpointW <= 0 || !Number.isInteger(f.changesUsed) || f.changesUsed < 0 || (f.lastChangeAtMin !== null && !isNum(f.lastChangeAtMin))) return null;
+  if (f === undefined || f === null || typeof f !== "object" || !isNum(f.setpointW) || f.setpointW <= 0) return null;
   let low = P.hardMaxW;
   let name = "firmware_setpoint_bound";
   const take = (watts: number, n: string): void => {
@@ -743,7 +770,7 @@ function ceilingBreach(input: GentleNightInput, P: GentleNightParams, fixed: boo
     }
   };
   if (Array.isArray(input.ceilings)) {
-    for (const nc of input.ceilings) if (nc !== null && typeof nc === "object" && isNum(nc.watts) && nc.watts >= 0) take(ceilingInSetpointUnits(nc, "UNSETTLED", P.setpointConversionEff, P.setpointOvershoot), String(nc.name));
+    for (const nc of input.ceilings) if (nc !== null && typeof nc === "object" && isNum(nc.watts) && nc.watts >= 0) take(ceilingInSetpointUnits(nc, "UNSETTLED", P.setpointConversionEff, P.setpointOvershoot), nameOf(nc.name));
   }
   const hh = input.household !== undefined && input.household !== null && typeof input.household === "object" ? input.household : {};
   const limit = hh.gridImportLimitW;
@@ -756,7 +783,9 @@ function ceilingBreach(input: GentleNightInput, P: GentleNightParams, fixed: boo
   }
   const ceilingW = floorStep(low, P.stepW);
   if (!(f.setpointW > ceilingW + EPS)) return null;
-  return { inForceW: f.setpointW, changesUsed: f.changesUsed, ceilingW, ceilingName: name, fixed, stop: fixed || ceilingW < ceilStep(P.minW, P.stepW) };
+  // a malformed count is not trusted: it is shown as all used (it only fills the profile report of a refusal)
+  const used = Number.isInteger(f.changesUsed) && f.changesUsed >= 0 ? f.changesUsed : P.maxChanges;
+  return { inForceW: f.setpointW, changesUsed: used, ceilingW, ceilingName: name, fixed, stop: fixed || ceilingW < ceilStep(P.minW, P.stepW) };
 }
 
 function profileReport(profileId: ActuatorProfileId, P: GentleNightParams, usedAfter: number): NightProfileReport {
@@ -776,7 +805,7 @@ function profileReport(profileId: ActuatorProfileId, P: GentleNightParams, usedA
 }
 
 /** A refusal with a rate in force above a known ceiling: a STOP when the path cannot lower it (never "the fallback holds it"), else a forced-decrease note. */
-function breachRefusal(b: Breach, status: NightStatus, why: NightCode[], bits: Partial<GentleNightPlan>, extra: string, profileId: ActuatorProfileId, P: GentleNightParams): GentleNightPlan {
+function breachRefusal(b: Breach, status: NightStatus, why: NightCode[], bits: Partial<GentleNightPlan>, extra: string, profileId: ActuatorProfileId | null, P: GentleNightParams): GentleNightPlan {
   const codes: NightCode[] = [...why];
   const add = (k: NightCode): void => {
     if (!codes.includes(k)) codes.push(k);
@@ -794,7 +823,7 @@ function breachRefusal(b: Breach, status: NightStatus, why: NightCode[], bits: P
   return refuse(b.stop ? "STOP_RECOMMENDED" : status, codes, {
     ...bits,
     now: { setpointW: null, change: b.stop ? "STOP" : "NONE", neededW: null, neededMeetsDeadline: null, ceilingW: b.ceilingW, ceilingName: b.ceilingName, minW: lowest, stepW: P.stepW },
-    stopRecommended: b.stop, needed: ["Nothing here applies the rate: a person or a future controller has to.", line], profile: profileReport(profileId, P, b.changesUsed),
+    stopRecommended: b.stop, needed: ["Nothing here applies the rate: a person or a future controller has to.", line], profile: profileId === null ? null : profileReport(profileId, P, b.changesUsed),
   }, extra);
 }
 
@@ -826,13 +855,23 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const merged: GentleNightParams = { ...DEFAULT_NIGHT_PARAMS };
   for (const k of Object.keys(DEFAULT_NIGHT_PARAMS) as (keyof GentleNightParams)[]) if ((given as Record<string, unknown>)[k] !== undefined) merged[k] = (given as Record<string, number>)[k] as number;
   const bad = paramsProblem(merged);
-  if (bad !== null) return refuse("INPUTS_UNUSABLE", ["PARAMS_INVALID"], {}, bad);
   const profileNamed = input.actuatorProfile !== undefined;
-  const profileId: ActuatorProfileId = profileNamed ? (input.actuatorProfile as ActuatorProfileId) : "FREE_POWER_LEASE";
-  if (!Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, profileId)) return refuse("INPUTS_UNUSABLE", ["PROFILE_INVALID"]);
-  const tightened = applyActuatorProfile({ ...DEFAULT_GENTLE_PARAMS, stepW: merged.stepW, minW: merged.minW, hardMaxW: merged.hardMaxW, dwellMin: merged.dwellMin, maxChanges: merged.maxChanges }, profileId).params;
+  const profileGiven = profileNamed ? input.actuatorProfile : "FREE_POWER_LEASE";
+  // a name only counts when it is a string and one of the four (an object with no prototype would throw in the lookup)
+  const profileKnown = typeof profileGiven === "string" && Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, profileGiven);
+  if (bad !== null || !profileKnown) {
+    // Round 3 F3: a rate in force above a known ceiling is not hidden by these two refusals. The parameters that are valid are kept and the invalid ones fall back to
+    // their defaults for the comparison; an unknown path is taken as one that cannot lower the rate (a STOP), a known one as it is.
+    const known: ActuatorProfileId | null = profileKnown ? (profileGiven as ActuatorProfileId) : null;
+    const Q = pathParams(saneParams(given as Record<string, unknown>), known);
+    const b = ceilingBreach(input, Q, known === null ? true : !GENTLE_ACTUATOR_PROFILES[known].midWindowAdjustment);
+    const why: NightCode[] = [bad !== null ? "PARAMS_INVALID" : "PROFILE_INVALID"];
+    const extra = bad !== null ? bad : "";
+    return b === null ? refuse("INPUTS_UNUSABLE", why, {}, extra) : breachRefusal(b, "INPUTS_UNUSABLE", why, {}, extra, known, Q);
+  }
+  const profileId = profileGiven as ActuatorProfileId;
   const profile = GENTLE_ACTUATOR_PROFILES[profileId];
-  const P: GentleNightParams = { ...merged, stepW: tightened.stepW, minW: tightened.minW, hardMaxW: Math.min(tightened.hardMaxW, LIMITS.chargePowerMax), dwellMin: tightened.dwellMin, maxChanges: tightened.maxChanges };
+  const P: GentleNightParams = pathParams(merged, profileId);
   const fixedPath = !profile.midWindowAdjustment;
   // a rate in force above a known ceiling is checked before every refusal from here on: a STOP when the path cannot lower it, never "the fallback holds it"
   const breach = ceilingBreach(input, P, fixedPath);
