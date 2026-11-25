@@ -14,6 +14,7 @@ import { OVERRIDE_KINDS, OVERRIDE_LABELS, expiryChoices, formatDurationMin, star
 import type { ClockContext, OverrideConfig, OverrideKind } from "../../../ecco-plan-core/src/index.ts";
 import { stateText } from "./adapter.ts";
 import type { StatesLike } from "./adapter.ts";
+import { HELPER_IDS } from "./helpers.ts";
 import type { KindRecord, PlanSnapshotWithHelpers } from "./helpers.ts";
 import { PLAN_CONTROL_IDS, cancelOverrideCall, startOverrideCall } from "./planActions.ts";
 import { belowReserveSentence, heldText } from "./present.ts";
@@ -39,6 +40,42 @@ export interface CancelAttempt {
 }
 export type CancelLedger = { [K in OverrideKind]?: CancelAttempt };
 
+/**
+ * What the installed backend looks like from the states: the plan scripts, the confirmation switch and the two plan sensors, and the guarded Dump to
+ * Grid start when the card is configured with one. Derived from what EXISTS in Home Assistant, never from a static assumption: "not installed" is said
+ * only when the entity is really absent.
+ */
+export interface InstallVM {
+  startScript: boolean;
+  cancelScript: boolean;
+  confirmationSwitch: boolean;
+  effectiveReserve: boolean;
+  exportHold: boolean;
+  guardedDump: "not_configured" | "installed" | "missing";
+  /** Entity ids that were looked for and not found (the guarded Dump start only when the card names one). */
+  missing: string[];
+}
+
+/** The one short status line above the override controls. */
+export interface ReadinessVM {
+  kind: "ready" | "needs_confirmation" | "confirmation_unreadable" | "limits_unusable" | "partial" | "not_installed";
+  text: string;
+}
+
+/** The two reserves, kept apart: what the battery's backup reserve is NOW, and what Prepare for power cut would raise it TO. */
+export interface ReserveVM {
+  nowPct: number | null;
+  /** Why the reserve now is unknown ("" when known). */
+  nowReason: string;
+  targetPct: number | null;
+  targetReason: string;
+  /** "Reserve now 5 %" and "Power cut target 80 %" in the owner's words, or the honest reason when a figure is not known. */
+  nowText: string;
+  targetText: string;
+  /** true: the target is above the reserve now, so Prepare for power cut can raise it; false: it cannot; null: not known. */
+  canRaise: boolean | null;
+}
+
 export interface KindControlVM {
   kind: OverrideKind;
   label: string;
@@ -58,10 +95,16 @@ export interface KindControlVM {
   cancel: PlanServiceCall | null;
   /** Prepare for power cut only: set while the battery is below the reserve it raised, in the owner's words. */
   belowReserve: string | null;
+  /** Prepare for power cut only: the reserve now and the power cut target, side by side. null for the other kinds. */
+  reserve: ReserveVM | null;
 }
 
 export interface ControlsVM {
   kinds: KindControlVM[];
+  /** What exists in Home Assistant (scripts, switch, sensors, guarded Dump start), from the states. */
+  install: InstallVM;
+  /** The short status above the controls: ready, needs the confirmation switch, or really not installed. */
+  readiness: ReadinessVM;
   /** The scripts' own last answer ("STARTED ...", "REFUSED CODE - reason", "CANCELLED ..."), verbatim, or null. */
   lastResult: string | null;
   /** Guarded scripts the card cannot find: the controls are not offered until they exist. */
@@ -73,6 +116,8 @@ export interface ControlsContext {
   states: StatesLike;
   nowMs: number;
   clock: ClockContext | null;
+  /** The card's `dump_to_grid.guarded_start` script id, if it names one (its existence is looked for in the states). */
+  guardedStart?: string | null;
   /** The Cancel clicks the card remembers (controls.ts keeps them for the page); absent means none. */
   cancels?: CancelLedger;
 }
@@ -125,6 +170,68 @@ function cancelReadback(kind: OverrideKind, label: string, attempt: CancelAttemp
   return { outcome: "not_confirmed", text: "Cancel NOT confirmed for " + label + ": " + lead + "." + KEEPS };
 }
 
+/** The two plan sensors the installed backend publishes (home-assistant/packages/ecco_plan_helpers.yaml); the guarded Dump to Grid start reads both. */
+export const BACKEND_SENSOR_IDS = {
+  effective_reserve: "sensor.ecco_plan_effective_reserve",
+  export_hold: "sensor.ecco_plan_export_hold",
+} as const;
+
+/** What exists in the states. Pure: a missing entity is absent, whatever its value would have been. */
+export function readInstall(states: StatesLike, guardedStart: string | null | undefined): InstallVM {
+  const has = (id: string): boolean => states[id] !== undefined;
+  const startScript = has(PLAN_CONTROL_IDS.start_script);
+  const cancelScript = has(PLAN_CONTROL_IDS.cancel_script);
+  const confirmationSwitch = has(HELPER_IDS.confirmed);
+  const effectiveReserve = has(BACKEND_SENSOR_IDS.effective_reserve);
+  const exportHold = has(BACKEND_SENSOR_IDS.export_hold);
+  const guardedId = typeof guardedStart === "string" && guardedStart !== "" ? guardedStart : null;
+  const guardedDump: InstallVM["guardedDump"] = guardedId === null ? "not_configured" : has(guardedId) ? "installed" : "missing";
+  const missing: string[] = [];
+  if (!startScript) missing.push(PLAN_CONTROL_IDS.start_script);
+  if (!cancelScript) missing.push(PLAN_CONTROL_IDS.cancel_script);
+  if (!confirmationSwitch) missing.push(HELPER_IDS.confirmed);
+  if (!effectiveReserve) missing.push(BACKEND_SENSOR_IDS.effective_reserve);
+  if (!exportHold) missing.push(BACKEND_SENSOR_IDS.export_hold);
+  if (guardedDump === "missing" && guardedId !== null) missing.push(guardedId);
+  return { startScript, cancelScript, confirmationSwitch, effectiveReserve, exportHold, guardedDump, missing };
+}
+
+export const READY_TEXT = "Overrides ready.";
+export const CONFIRM_TEXT = "Turn on the confirmation switch: override limits reviewed and confirmed.";
+
+/** One short, truthful status line: say "not installed" only when the guarded scripts are really absent. */
+export function readinessOf(install: InstallVM, confirmed: boolean | null, startPolicy: { ok: boolean; reasons?: readonly string[] }): ReadinessVM {
+  if (!install.startScript && !install.cancelScript) {
+    return { kind: "not_installed", text: "Overrides are not installed: the guarded scripts (" + PLAN_CONTROL_IDS.start_script + ", " + PLAN_CONTROL_IDS.cancel_script + ") were not found." };
+  }
+  if (!install.startScript || !install.cancelScript) {
+    const gone = !install.startScript ? PLAN_CONTROL_IDS.start_script : PLAN_CONTROL_IDS.cancel_script;
+    return { kind: "partial", text: "Only part of the override package is installed: " + gone + " was not found, so overrides cannot be started or cancelled here." };
+  }
+  if (confirmed === false) return { kind: "needs_confirmation", text: CONFIRM_TEXT };
+  if (confirmed === null) return { kind: "confirmation_unreadable", text: "The confirmation switch (override limits reviewed and confirmed) cannot be read, so no override can be started." };
+  if (!startPolicy.ok) return { kind: "limits_unusable", text: "The override limits are not usable: " + ((startPolicy.reasons && startPolicy.reasons[0]) || "see the limits below.") };
+  const gaps: string[] = [];
+  if (!install.effectiveReserve) gaps.push("the effective-reserve sensor");
+  if (!install.exportHold) gaps.push("the export-hold sensor");
+  if (install.guardedDump === "missing") gaps.push("the guarded Dump to Grid start script");
+  return { kind: "ready", text: gaps.length ? READY_TEXT + " Not found: " + gaps.join(", ") + "." : READY_TEXT };
+}
+
+/** The reserve now and the power cut target, kept apart. The target is the policy value (10 to 100); the reserve now is read by the backend's own rule (0 to 100). */
+export function reserveVM(nowPct: number | null, nowReason: string, targetPct: number | null, targetReason: string): ReserveVM {
+  const canRaise = nowPct !== null && targetPct !== null ? targetPct > nowPct : null;
+  return {
+    nowPct,
+    nowReason,
+    targetPct,
+    targetReason,
+    nowText: nowPct !== null ? "Reserve now " + nowPct + " %" : "Reserve now unknown (" + nowReason + ")",
+    targetText: targetPct !== null ? "Power cut target " + targetPct + " %" : "Power cut target unknown (" + targetReason + ")",
+    canRaise,
+  };
+}
+
 /** null when the plan helpers are not configured (no controls at all, the section stays exactly as it was). */
 export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
   const h = ctx.snap.helpers;
@@ -135,6 +242,10 @@ export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
   const reserve = ctx.snap.fields.find((f) => f.path === "reserve.backupPct");
   const currentReservePct = reserve && reserve.known ? reserve.value : null;
   const startCfg: OverrideConfig | null = h.startPolicy.ok ? h.startPolicy.config : null;
+  const install = readInstall(ctx.states, ctx.guardedStart);
+  const readiness = readinessOf(install, h.confirmed, h.startPolicy.ok ? { ok: true } : { ok: false, reasons: h.startPolicy.reasons });
+  const reserveNow = ctx.snap.currentReserve;
+  const reservePair = reserveVM(currentReservePct, reserveNow ? reserveNow.reason : "The backup reserve cannot be read.", startCfg ? startCfg.cutReservePct : null, "the override limits are not usable");
   const last = stateText(ctx.states, PLAN_CONTROL_IDS.last_result);
 
   const kinds: KindControlVM[] = OVERRIDE_KINDS.map((kind) => {
@@ -149,6 +260,8 @@ export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
       const probe = all.length ? all[0] : null;
       const verdict = startConfiguredOverride(kind, nowMin, probe ? probe.expiryMin : null, h.startPolicy, { clock: ctx.clock, currentReservePct });
       if (!verdict.ok && (verdict.code === "RESERVE_UNKNOWN" || verdict.code === "RESERVE_BELOW_CURRENT")) blockedReason = verdict.error;
+      // The installed backend allows a target equal to the reserve now (it raises nothing); the card offers only a start that RAISES it.
+      else if (kind === "prepare_power_cut" && reservePair.nowPct !== null && reservePair.targetPct === reservePair.nowPct) blockedReason = "The power cut target (" + reservePair.targetPct + " %) is not above the reserve now (" + reservePair.nowPct + " %), so it cannot raise the reserve.";
       else if (all.length === 0) blockedReason = "No length fits the owner's limits.";
       else {
         choices = all.map((c) => ({
@@ -177,7 +290,8 @@ export function buildControlsVM(ctx: ControlsContext): ControlsVM | null {
       blockedReason,
       cancel: row || held ? cancelOverrideCall(kind, revision) : null,
       belowReserve,
+      reserve: kind === "prepare_power_cut" ? reservePair : null,
     };
   });
-  return { kinds, lastResult: last, missingScripts };
+  return { kinds, install, readiness, lastResult: last, missingScripts };
 }
