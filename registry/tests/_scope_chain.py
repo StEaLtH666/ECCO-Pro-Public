@@ -133,6 +133,7 @@ import _ovw2_scope as _ovw2  # noqa: E402
 import _ovw3_scope as _ovw3  # noqa: E402
 import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
+import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
@@ -1391,7 +1392,32 @@ BPD1 = Entry(
          "of the start, always records an incident in its own helpers and raises a persistent notification (Charge Battery only with a fact true); it prevents nothing, writes nothing on the dongle, the inverter or "
          "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1)
+# ptt1 (the Power Flow Today chart's tooltip stays inside the card and the viewport; _ptt1_scope.py): made on public main c6e5a588 after isp1, the
+# newest entry when it was built (its fingerprint is sealed after isp1's and is sealed again if another entry merges first). The
+# `Power Flow Today` chart (custom:apexcharts-card; the same chart three times, in the Overview, Intelligence and System views) shows a
+# shared tooltip with five readings; ApexCharts places it from the plot grid only and the card's own `overflow: hidden` cuts it, so on
+# the Overview chart the last reading (SOC) is cut off. ptt1 adds ONE key to each of the three charts, apex_config.chart.events.mounted,
+# an EVAL string (the chart already uses EVAL strings for its TOU annotation) that moves the tooltip the shortest way inside the card
+# and the viewport (a MutationObserver on the chart and one pure function; it writes only the tooltip's style.left and style.top, and
+# cleans up when the chart is destroyed). FROZEN edit (PEX): the dashboard (_ptt1_scope.FROZEN_REVERTERS; as of isp1 it is the 7.23.0
+# file, ovw3's checkpoint, byte for byte); the dashboard version is NOT bumped (the same precedent as wsc1; VERSION.yaml and the header
+# notes are untouched, so the v7.23.0 pins stand). Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no
+# checkpoint, no delta, no op path; ZERO firmware, Home Assistant package, deployment manifest, registry, Intelligence or ecco_core byte;
+# ZERO Modbus operation; no service call, no entity, no network access; every other section, view and chart value is byte-identical.
+PTT1 = Entry(
+    id="ptt1", pr="PTT1", commit="unmerged",
+    added_files=_ptt1.ADDED_FILES,
+    frozen_reverts=dict(_ptt1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ptt1; as of pub0 it is its pub0 state (manifest result)
+        _ptt1.DASHBOARD_REL: "4ced46e37d720744c1d7ea555bf363da1069899235814dddb9c2cc79bfa6a73e",
+    },
+    # _pex.fingerprint(PTT1): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="83ff93b6873d6e5f8464601616b0a216379ee08aec571f134639906560e09faf",
+    note="the Power Flow Today chart's shared tooltip stays inside the card and the viewport: one EVAL key (apex_config.chart.events.mounted) "
+         "per chart, three identical charts; display only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, "
+         "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
