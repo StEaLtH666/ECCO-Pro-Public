@@ -106,7 +106,9 @@ actions = set(re.findall(r"action:\s*([a-z_]+\.[a-z_]+)", text))
 allowed = {"input_text.set_value", "number.set_value", "switch.turn_on", "switch.turn_off", "button.press",
            "input_boolean.turn_off", "script.ecco_dump_to_grid_start_scheduled",
            # dgs1: a failed or missed scheduled start raises (and a later start clears) a persistent notification
-           "persistent_notification.create", "persistent_notification.dismiss"}
+           "persistent_notification.create", "persistent_notification.dismiss",
+           # r9: the capture automation writes the captured Home Assistant start into the package's own helper
+           "input_datetime.set_datetime"}
 check("every service the package calls is staging/arm/press/helper-only", actions <= allowed, f"{sorted(actions - allowed)}")
 check("no modbus/esphome raw-write services", not re.search(r"modbus\.|esphome\.|write_register", text))
 check("the only firmware entities touched are the Dump staging numbers, the Dump write-enable and the Dump START button",
