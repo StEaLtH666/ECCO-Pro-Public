@@ -21,6 +21,7 @@ Times are epoch seconds; the local zone is fixed at UTC+1 (BST), which is what t
 from __future__ import annotations
 
 import ast
+import contextlib
 import heapq
 import itertools
 import math
@@ -30,6 +31,25 @@ import jinja2
 import jinja2.sandbox
 
 LOCAL = timezone(timedelta(hours=1))
+# The PEP 495 fold used when a NAIVE local string is read (Home Assistant's as_timestamp of "YYYY-MM-DD HH:MM:SS"). 0 is the RECALLED
+# Home Assistant / CPython behaviour: a repeated time is its FIRST occurrence and a skipped time is read with the offset in force before
+# the change. It is not verified against a real Home Assistant (the clock-change examination, proposal P-F, is still open); the r9 clock
+# change suite also runs the other reading (fold 1) so that nothing depends on which one is right.
+FOLD = 0
+
+
+@contextlib.contextmanager
+def local_zone(tz, fold: int = 0):
+    """Run a block with another local zone (for example zoneinfo.ZoneInfo("Europe/London"), whose clock changes the fixed UTC+1 default
+    cannot show) and, optionally, the other fold for a naive local string. Everything that reads LOCAL or FOLD at call time follows it
+    (parse_local, local_str, now(), timestamp_custom, the dump simulator's timestamp_local); the previous zone is restored on exit."""
+    global LOCAL, FOLD
+    saved = (LOCAL, FOLD)
+    LOCAL, FOLD = tz, fold
+    try:
+        yield
+    finally:
+        LOCAL, FOLD = saved
 
 
 class Unsupported(Exception):
@@ -53,7 +73,7 @@ def local_str(ts: float) -> str:
 
 
 def parse_local(s: str) -> float:
-    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL).timestamp()
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL, fold=FOLD).timestamp()
 
 
 _MISSING = object()
@@ -97,9 +117,10 @@ def _truthy(value) -> bool:
 class _StateObj:
     """What `states.domain.object` returns in a template: the state and its last_changed (aware datetime)."""
 
-    def __init__(self, state: str, last_changed: float):
+    def __init__(self, state: str, last_changed: float, last_updated: float | None = None):
         self.state = state
         self.last_changed = datetime.fromtimestamp(last_changed, LOCAL)
+        self.last_updated = datetime.fromtimestamp(last_changed if last_updated is None else last_updated, LOCAL)
 
 
 class _States:
@@ -121,7 +142,7 @@ class _States:
                 eid = f"{domain}.{obj}"
                 if eid not in w.states:
                     return None
-                return _StateObj(w.states[eid][0], w.changed_at.get(eid, 0.0))
+                return _StateObj(w.states[eid][0], w.changed_at.get(eid, 0.0), w.updated_at.get(eid))
         return _Domain()
 
 
@@ -130,6 +151,8 @@ class World:
 
     def __init__(self, t0: float):
         self.t = t0
+        self.clock_offset = 0.0           # Home Assistant's clock minus the true time (a host without an RTC booting with a wrong clock)
+        self.ntp_off = False              # the dongle's NTP time text is not published (test hook)
         self.states: dict[str, tuple[str, dict]] = {}
         self.history: list[tuple[float, str, str]] = []
         self.template_entities: dict[str, str] = {}
@@ -147,13 +170,13 @@ class World:
         env = jinja2.sandbox.ImmutableSandboxedEnvironment(undefined=jinja2.StrictUndefined,
                                                            extensions=["jinja2.ext.loopcontrols"])
         self.changed_at: dict[str, float] = {}
+        self.updated_at: dict[str, float] = {}      # last_updated: any write that changed the state or its attributes
         env.globals.update(states=_States(self), is_state=self.is_state, state_attr=self.state_attr,
                            now=self.now, as_timestamp=self.as_timestamp, namespace=jinja2.utils.Namespace)
         env.filters.update({
             "int": lambda v, d=_MISSING: _num(v, d, lambda x: int(float(x))),
             "float": lambda v, d=_MISSING: _num(v, d, float),
-            "timestamp_custom": lambda v, fmt="%Y-%m-%d %H:%M:%S", local=True: datetime.fromtimestamp(
-                float(v), LOCAL if local else timezone.utc).strftime(fmt),
+            "timestamp_custom": self._timestamp_custom,
             "round": self._round,
         })
         self.env = env
@@ -161,7 +184,15 @@ class World:
 
     # --- clock and events -------------------------------------------------------------------------------------
     def now(self) -> datetime:
-        return datetime.fromtimestamp(self.t, LOCAL)
+        return datetime.fromtimestamp(self.t + self.clock_offset, LOCAL)
+
+    def publish_ntp_time(self, period: float = 60.0) -> None:
+        """The dongle's `NTP Time` text sensor (a TRUE-time string, published about once a minute while its NTP is synced)."""
+        def tick():
+            if not self.ntp_off:
+                self.set("sensor.ecco_clock_dongle_ntp_time", local_str(self.t))
+            self.after(period, tick)
+        tick()
 
     def at(self, when: float, fn) -> None:
         heapq.heappush(self._q, (when, next(self._seq), fn))
@@ -196,8 +227,9 @@ class World:
         if old is not None and old[0] == state and (attrs is None or attrs == old[1]):
             return
         self.states[entity_id] = (state, dict(attrs or (old[1] if old else {})))
+        self.updated_at[entity_id] = self.t + self.clock_offset      # stamped by Home Assistant's own clock
         if old is None or old[0] != state:
-            self.changed_at[entity_id] = self.t
+            self.changed_at[entity_id] = self.t + self.clock_offset
         self.history.append((self.t, entity_id, state))
         self._changed()
 
@@ -234,6 +266,17 @@ class World:
         except (TypeError, ValueError):
             if default is _MISSING:
                 raise SimError(f"as_timestamp could not parse {value!r} and no default was given")
+            return default
+
+    @staticmethod
+    def _timestamp_custom(value, fmt="%Y-%m-%d %H:%M:%S", local=True, default=_MISSING):
+        """Home Assistant's timestamp_custom(format_string, local=True, default): a value that cannot be converted raises unless a
+        default is given, which is then returned (the package's classifier gives every call one, so it can never raise)."""
+        try:
+            return datetime.fromtimestamp(float(value), LOCAL if local else timezone.utc).strftime(fmt)
+        except (TypeError, ValueError, OverflowError, OSError):
+            if default is _MISSING:
+                raise SimError(f"timestamp_custom could not convert {value!r} and no default was given")
             return default
 
     @staticmethod
@@ -300,6 +343,9 @@ class World:
                 handler = lambda e, d, s=svc: self.set(e, "on" if s == "turn_on" else "off")  # noqa: E731
             elif domain == "input_number" and svc == "set_value":
                 handler = lambda e, d: self.set(e, f"{float(d['value'])}")  # noqa: E731
+            elif domain == "input_datetime" and svc == "set_datetime" and "timestamp" in data:
+                def handler(e, d):                  # a date+time helper set from an epoch (local time), as Home Assistant does
+                    self.set(e, local_str(float(d["timestamp"])))
             elif domain == "input_datetime" and svc == "set_datetime":
                 def handler(e, d):
                     hh, mm, ss = (int(x) for x in str(d["time"]).split(":"))
@@ -808,6 +854,7 @@ class Dongle:
                      (E_STATUS, "IDLE - no Free Power override active")):
             world.set(e, s)
         world.at(world.t + 7.0, self._attempts_tick)
+        world.publish_ntp_time()
         world.service_handlers.update({
             "switch.turn_on": self._switch(True), "switch.turn_off": self._switch(False),
             "button.press": self._press, "number.set_value": self._number,

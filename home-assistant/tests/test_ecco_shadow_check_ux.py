@@ -775,9 +775,9 @@ PKG_SURFACE = {name: {k: len(v) for k, v in d.items() if k != "template"} for na
 check("14: no new HA control surface: the per-package count of every non-template key (script / automation / input_*) is exactly the FB-B3 one",
       PKG_SURFACE == {
           "ecco_battery_outlook_influx.yaml": {"sensor": 1}, "ecco_canonical_telemetry.yaml": {},
-          "ecco_dump_to_grid_schedule.yaml": {"input_boolean": 1, "input_datetime": 1, "input_number": 3, "input_text": 1, "script": 2, "automation": 3},
+          "ecco_dump_to_grid_schedule.yaml": {"input_boolean": 1, "input_datetime": 2, "input_number": 3, "input_text": 1, "script": 2, "automation": 4},   # r9: +1 captured-start helper, +1 capture automation
           "ecco_fallback_profile_actions.yaml": {"script": 4}, "ecco_fallback_status.yaml": {"input_boolean": 1},
-          "ecco_free_power_schedule.yaml": {"input_boolean": 1, "input_datetime": 1, "input_number": 2, "input_text": 1, "script": 2, "automation": 3},
+          "ecco_free_power_schedule.yaml": {"input_boolean": 1, "input_datetime": 2, "input_number": 2, "input_text": 1, "script": 2, "automation": 4},   # r9: +1 captured-start helper, +1 capture automation
           "ecco_manual_controls_helpers.yaml": {"input_datetime": 6, "input_number": 12, "automation": 8, "script": 1},
           "ecco_pro.yaml": {"input_select": 2, "input_boolean": 8, "input_number": 25, "input_datetime": 2, "automation": 3},
           "ecco_runtime_config.yaml": {}, "ecco_supervision_heartbeat.yaml": {"automation": 1}, "ecco_system_health.yaml": {}, "ecco_tou_schedule.yaml": {}},

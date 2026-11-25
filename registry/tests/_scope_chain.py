@@ -127,6 +127,7 @@ import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
 import _ovw3_scope as _ovw3  # noqa: E402
+import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
@@ -1258,7 +1259,41 @@ ISP1 = Entry(
          "Intelligence engine, runtime or ecco_core change, ZERO Modbus operation, no service call other than "
          "persistent_notification.create, the production dashboard untouched",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1)
+# r9 (no automatic start of a missed scheduled run after a Home Assistant restart; _r9_scope.py): the owner's requirement of 12 Nov 2026
+# (docs/dev/grid-loss-interlock-spec.md section 5 R9), made on the export after isp1. FROZEN edits (PEX): the Export to Grid and the Charge
+# Battery schedule packages (_r9_scope.FROZEN_REVERTERS); as of isp1 each is the isp1-state blob byte for byte. CHAIN-PINNED edit (owner
+# decision of 18 Nov 2026, R9 first as its own pull request): the deployment manifest, COMMENTS ONLY, two short blocks above the two package
+# stanzas stating that R9 needs a FULL Home Assistant restart, not a reload (_r9_scope.PINNED_REVERTERS), declared exactly as acfg1's and
+# isp1's manifest edits are. Each package gains a
+# captured-Home-Assistant-start helper written only by a new capture automation on the `homeassistant` start event, a fail-closed guard
+# (`missed_run`) on both start paths (the schedule watchdog and the startup recovery), and a record / notification / disarm of a missed run in
+# place of its start; future occurrences and the on-time start are unchanged. Measured, not declared: no delta, no op path; ZERO firmware,
+# registry, dashboard or card byte and no manifest byte other than those two comment blocks (no stanza, key, value or order moves); no register
+# and no dongle entity written that was not written before (the one new service call is input_datetime.set_datetime on the package's own helper).
+R9 = Entry(
+    id="r9", pr="R9", commit="unmerged",
+    reverts=dict(_r9.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after r9 (the FULL-restart comment blocks)
+        HA_MANIFEST: "0d844bf7f2c904b5f2db6e91f071657a3073edc97a05bc5bf28467ce24930d8f",
+    },
+    added_files=_r9.ADDED_FILES,
+    frozen_reverts=dict(_r9.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after r9
+        _r9.DUMP_REL: "97d1af088d9c8912e5098b98eadb5bdb1a48faa5808111d766174ac1ab0f58f3",
+        _r9.FREE_REL: "e0917a5d43bdf68ab8a90aadc0bae0394d4c59f8181a5ad61858a4e002438249",
+        _r9.PKGTEST_REL: "2e85448a97c195bbf8bf5c16621df81e9f077d5b673abc1324128b4f807dcfb1",
+        _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
+    },
+    # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="d90142a0205112514b1d0f94402ca1e990327a323a4cb55bed0a7f1b5bb7b274",
+    note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
+         "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
+         "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "
+         "disarmed instead of started, future occurrences and the on-time start unchanged; the deployment manifest gains comments "
+         "only (the FULL Home Assistant restart requirement on both package stanzas): ZERO firmware, registry, dashboard or card "
+         "change, no new inverter or dongle write",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

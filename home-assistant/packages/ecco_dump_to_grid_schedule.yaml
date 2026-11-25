@@ -9,6 +9,25 @@
 #
 # NOT LIVE-PROVEN - see docs/DUMP_TO_GRID_V1.md.
 #
+# CLOCK CHANGES (owner decision of 20 Nov 2026; offline, not installed; clock-change examination of 19 Nov 2026, proposals P-A and P-B). Arming
+# REFUSES a start time that is a skipped local time (the hour that does not exist when the UK clocks go forward), a repeated one (the hour that
+# happens twice when they go back) or one that cannot be read, with "REJECTED - the start time is a skipped, repeated or unreadable local time
+# (clock change); pick another time". The check comes BEFORE 'must be in the future', so arming in the second 01:xx hour for a 01:xx start gets this
+# text and not a misleading 'must be in the future'. It reads the helper's text, converts it to an instant and back, and refuses when the text does
+# not survive the round trip (a skipped time), when the same text one hour away reads the same (a repeated time) or when a conversion fails (fail
+# closed). The deadlines in this package were already epoch arithmetic and are exact across a clock change. The check runs when the schedule is
+# armed (the card locks the start while it is armed). How Home Assistant's template functions read a naive local time (the first occurrence of a
+# repeated time, the offset before the change for a skipped one) and which zone they use is RECALLED, not verified: a supervised read-only template
+# check on the real Home Assistant (proposal P-F) is still open. The check refuses a repeated time on either reading.
+# The arm-time TOU slot check walks the run window on the REAL INSTANTS: for each minute of the run it takes the local minute of the day of (start +
+# that many minutes) through the local timestamp conversion, so a window that crosses a clock change checks the slots it really covers. It used to
+# add minutes to the start's wall-clock minute: on the day the clocks go forward it did not see a charge slot that begins after the skipped hour (00:30
+# for 120 minutes covers 00:30-01:00 and then 02:00-03:30 local, not 00:30-02:30), and on the day they go back it refused a clear window (00:45 for
+# 240 minutes ends at 03:45 local). A minute whose local time cannot be read refuses the arm. The window is bounded by the duration helper (at most
+# 240 minutes), and an unreadable slot table still defers to the firmware, as before. The firmware's own START gate walks the window the old way (read
+# from its text, not run) and is NOT changed here (a firmware change is a separate flash), so on the day the clocks go forward the arm check is the
+# only one that sees a charge slot after the skipped hour.
+#
 # DGS1 (2026-10-12 review, after the 11 Oct scheduled Free Power incident, FPS1): the Dump to Grid
 # start gate is the same shape as Free Power's. It refuses a press at once, with no side effect
 # (one status text, the write enable turned off, no Modbus I/O, no counter), while any Modbus frame
@@ -29,6 +48,21 @@
 #     full duration, a late start ends within about a minute of the window end;
 #   - a readiness check 5 min before, a missed-trigger watchdog 3 min after, restart recovery, and a
 #     persistent notification for every failure or miss; the write enable always ends off.
+#
+# R9 (2026-11, owner requirement of 12 Nov): a missed scheduled run is never started after a Home Assistant restart. A start
+# time earlier than the captured Home Assistant start (or any start time while that capture is unknown or stale: fail closed)
+# is recorded as `MISSED - not started after a Home Assistant restart`, notified and disarmed by BOTH the watchdog and the
+# startup recovery; a future occurrence stays armed and starts on time. Header text above predates R9: where it speaks of the
+# watchdog or restart recovery starting a late run, read R9.
+# DEVIATION (deliberate): the captured Home Assistant start means 'when the clock was first trusted', which can be seconds to
+# minutes after the true boot. A start in that gap counts as missed (fail closed): if its on-time trigger fired it runs normally;
+# only a LOST on-time trigger is refused by the watchdog. The dongle's NTP Time text carries local time without an offset, so the
+# check assumes Home Assistant's time zone is Europe/London (otherwise the capture stays unknown and everything fails closed); an
+# unambiguous comparison needs a future firmware change to publish an offset or an epoch.
+# DEPLOY: install this change with a FULL Home Assistant restart (not a package reload). The capture runs only on the start
+# event, so after a reload the captured start stays unknown and every guard fails closed: the watchdog will NOT rescue a lost
+# on-time start until the next full restart. The capture also waits (up to 10 minutes) for the dongle's NTP to be synced and
+# for Home Assistant's clock to agree with it; if that never happens the capture stays unknown (fail closed).
 
 input_boolean:
   ecco_dump_to_grid_schedule_armed:
@@ -38,6 +72,15 @@ input_boolean:
 input_datetime:
   ecco_dump_to_grid_schedule_start:
     name: ECCO Dump to Grid Schedule Start
+    has_date: true
+    has_time: true
+
+  # R9 (no automatic start of a missed run after a Home Assistant restart): the time Home Assistant last
+  # started, written ONLY by ecco_dump_to_grid_ha_start_capture on the `homeassistant` start event. Never edit
+  # it by hand. Helpers are restored across a restart, so a value this boot did not write is stale: the guards
+  # then treat the start as unknown and fail closed (nothing starts).
+  ecco_dump_to_grid_ha_start:
+    name: ECCO Dump to Grid HA Start (captured)
     has_date: true
     has_time: true
 
@@ -549,6 +592,29 @@ automation:
                 data:
                   value: >-
                     REJECTED - scheduled Stop SOC {{ scheduled_stop_soc }}% outside safe range 10-90%
+          # Clock changes (owner decision of 20 Nov 2026, proposal P-A): a start time that is a skipped, a repeated or an unreadable local time is
+          # refused, BEFORE 'must be in the future' (which would be misleading for a 01:xx start armed in the second 01:xx hour). The label is
+          # converted to an instant and back: a skipped label does not survive the round trip, a repeated one reads the same one hour away, and
+          # every conversion carries a default so that a conversion that fails refuses instead of raising (fail closed).
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {%- set s = states('input_datetime.ecco_dump_to_grid_schedule_start') -%}
+                  {%- set t = as_timestamp(s, 0) -%}
+                  {%- set f = '%Y-%m-%d %H:%M:%S' -%}
+                  {{ t <= 0
+                     or (t | timestamp_custom(f, true, 'unreadable')) != s
+                     or ((t + 3600) | timestamp_custom(f, true, 'unreadable')) == s
+                     or ((t - 3600) | timestamp_custom(f, true, 'unreadable')) == s }}
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                data:
+                  value: "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
           - conditions:
               - condition: template
                 value_template: "{{ start_ts <= as_timestamp(now()) }}"
@@ -596,10 +662,16 @@ automation:
           # runs from its time to slot i+1's, slot 6 wrapping to slot 1. Only
           # ever refuses; if the slot sensors are unavailable it defers to the
           # firmware's own check.
+          # Clock changes (owner decision of 20 Nov 2026, proposal P-B): the run window is walked on the REAL INSTANTS, not as continuous wall-clock
+          # minutes. For each minute k of the run the local minute of the day is taken from the instant (start + k minutes) through the local timestamp
+          # conversion, so a window that crosses a clock change checks the slots it really covers (00:30 for 120 minutes on the day the clocks go forward
+          # covers 00:30-01:00 and then 02:00-03:30 local; 00:45 for 240 minutes on the day they go back ends at 03:45 local). A minute whose local time
+          # cannot be read refuses the arm (fail closed); an unreadable slot table still defers to the firmware. The run is bounded by the duration helper
+          # (at most 240 minutes). The firmware's own START gate is not changed by this (a firmware change is a separate flash).
           - conditions:
               - condition: template
                 value_template: >-
-                  {% set ns = namespace(ok=true, starts=[], charges=[], hit=0) %}
+                  {% set ns = namespace(ok=true, starts=[], charges=[], hit=0, bad=false) %}
                   {% for i in range(1, 7) %}
                     {% set t = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_time') %}
                     {% set c = states('sensor.ecco_clock_dongle_ecco_timezone' ~ i ~ '_charge') %}
@@ -611,11 +683,15 @@ automation:
                     {% endif %}
                   {% endfor %}
                   {% if ns.ok and (start_ts | float(0)) > 0 %}
-                    {% set st = (start_ts | float(0)) | timestamp_local %}
-                    {% set m0 = (st[11:13] | int) * 60 + (st[14:16] | int) %}
                     {% set dur = states('input_number.ecco_dump_to_grid_schedule_duration') | int(0) %}
                     {% for k in range(0, dur + 1) %}
-                      {% set m = (m0 + k) % 1440 %}
+                      {% set sk = ((start_ts | float(0)) + k * 60) | timestamp_local %}
+                      {% set hh = sk[11:13] | int(-1) %}
+                      {% set mi = sk[14:16] | int(-1) %}
+                      {% if hh < 0 or hh > 23 or mi < 0 or mi > 59 %}
+                        {% set ns.bad = true %}
+                      {% endif %}
+                      {% set m = hh * 60 + mi %}
                       {% for i in range(0, 6) %}
                         {% set s = ns.starts[i] %}
                         {% set e = ns.starts[(i + 1) % 6] %}
@@ -626,7 +702,7 @@ automation:
                       {% endfor %}
                     {% endfor %}
                   {% endif %}
-                  {{ ns.hit > 0 }}
+                  {{ ns.hit > 0 or ns.bad }}
             sequence:
               - action: input_boolean.turn_off
                 target:
@@ -688,6 +764,17 @@ automation:
           fired_for: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}"
           start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
           end_ts: "{{ (start_ts | float(0)) + (states('input_number.ecco_dump_to_grid_schedule_duration') | int(1)) * 60 }}"
+          # R9: a start time earlier than the captured Home Assistant start is a missed run, and so is any start
+          # time while the capture is unknown or stale (fail closed). Compared directly, never via last_changed.
+          ha_start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_ha_start'), 0) }}"
+          ha_start_known: >-
+            {% set c = states('input_datetime.ecco_dump_to_grid_ha_start') %}
+            {% set cs = as_timestamp(c, 0) %}
+            {% set o = states.input_datetime.ecco_dump_to_grid_ha_start %}
+            {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+            {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+               and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           - conditions:
               - condition: trigger
@@ -725,6 +812,41 @@ automation:
                         Dump to Grid is due at {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} but would be refused now:
                         {{ blockers }}. ECCO will still try at the start time (and retry transient refusals for
                         up to 10 minutes), but clear these first if you can.
+          # R9: a start time that fell before Home Assistant started (or while its start is unknown) is a missed
+          # run. It is recorded, notified and disarmed, never started. Listed BEFORE the watchdog's start below.
+          - conditions:
+              - condition: trigger
+                id: watchdog
+              - condition: state
+                entity_id: script.ecco_dump_to_grid_start_scheduled
+                state: "off"
+              - condition: template
+                value_template: "{{ missed_run }}"
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_dump_to_grid_schedule
+                  title: "ECCO: scheduled Dump to Grid was missed"
+                  message: >-
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
+                    It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
+              # Disarm only the schedule this miss was for (the owner may have re-armed a new one).
+              - if:
+                  - condition: template
+                    value_template: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') == fired_for }}"
+                then:
+                  - action: input_boolean.turn_off
+                    target:
+                      entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: >-
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
           - conditions:
               - condition: trigger
                 id: watchdog
@@ -732,6 +854,9 @@ automation:
               - condition: state
                 entity_id: script.ecco_dump_to_grid_start_scheduled
                 state: "off"
+              # R9 guard: never the start of a missed run (the branch above records it).
+              - condition: template
+                value_template: "{{ not missed_run }}"
             sequence:
               - action: persistent_notification.create
                 data:
@@ -776,6 +901,36 @@ automation:
                     target:
                       entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
 
+  # R9: capture the time Home Assistant started, once per start, so the two start paths that run after a
+  # restart (the startup recovery and the watchdog) can tell a missed run from a start that fell while Home
+  # Assistant was running. Written nowhere else; never derived from any entity's last_changed.
+  - id: ecco_dump_to_grid_ha_start_capture
+    alias: "ECCO - Capture Home Assistant start time (Dump to Grid)"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      # The clock must be trustworthy before it is captured: a host without an RTC can boot with a clock that is behind, and a capture
+      # of that early time would pass the staleness check (last_updated is stamped by the same clock). Wait (bounded) until the dongle's
+      # NTP is synced and Home Assistant's time agrees with the dongle's NTP time (published about once a minute, so 120 s is allowed).
+      # If that never happens the helper is left alone: unknown or stale, and every guard fails closed.
+      - wait_template: >-
+          {% set n = states('sensor.ecco_clock_dongle_ntp_time') %}
+          {{ is_state('binary_sensor.ecco_clock_dongle_ntp_synced', 'on')
+             and (as_timestamp(now()) - as_timestamp(n, 0)) | abs <= 120 }}
+        timeout: "00:10:00"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ wait.completed }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ecco_dump_to_grid_ha_start
+            data:
+              timestamp: "{{ as_timestamp(now()) | int }}"
+
   - id: ecco_dump_to_grid_schedule_startup_recovery
     alias: "ECCO - Recover scheduled Dump to Grid after Home Assistant restart"
     mode: single
@@ -798,6 +953,16 @@ automation:
             continue_on_error: true
             target:
               entity_id: switch.ecco_clock_dongle_dump_to_grid_write_enable
+      # R9: give the capture (it waits for a trustworthy clock) a bounded time before judging; unknown after that fails closed.
+      - wait_template: >-
+          {% set c = states('input_datetime.ecco_dump_to_grid_ha_start') %}
+          {% set cs = as_timestamp(c, 0) %}
+          {% set o = states.input_datetime.ecco_dump_to_grid_ha_start %}
+          {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+          {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+             and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+        timeout: "00:03:00"
+        continue_on_timeout: true
       - variables:
           fired_for: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') }}"
           start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_schedule_start'), 0) }}"
@@ -806,6 +971,16 @@ automation:
           stop_soc: "{{ states('input_number.ecco_dump_to_grid_schedule_stop_soc') | int(25) }}"
           end_ts: "{{ start_ts + (duration_min * 60) }}"
           now_ts: "{{ as_timestamp(now()) }}"
+          # R9: same definition as the fire automation's guard (the package test pins them identical).
+          ha_start_ts: "{{ as_timestamp(states('input_datetime.ecco_dump_to_grid_ha_start'), 0) }}"
+          ha_start_known: >-
+            {% set c = states('input_datetime.ecco_dump_to_grid_ha_start') %}
+            {% set cs = as_timestamp(c, 0) %}
+            {% set o = states.input_datetime.ecco_dump_to_grid_ha_start %}
+            {% set u = as_timestamp(o.last_updated, 0) if o is not none else 0 %}
+            {{ o is not none and c not in ['unknown', 'unavailable', ''] and cs > 1000000000
+               and cs <= as_timestamp(now()) and u > 0 and (u - cs) | abs <= 10 }}
+          missed_run: "{{ not ha_start_known or (start_ts | float(0)) <= (ha_start_ts | float(0)) }}"
       - choose:
           # Not armed any more, or the on-time start is already running: nothing to recover.
           - conditions:
@@ -844,6 +1019,14 @@ automation:
               - action: input_boolean.turn_off
                 target:
                   entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+          # R9: a start time between the Home Assistant start and this evaluation is not a missed run: the normal
+          # triggers own it (the on-time start fired, or is still to fire); this recovery neither starts nor disarms it.
+          - conditions:
+              - condition: template
+                value_template: "{{ not missed_run and now_ts < end_ts }}"
+            sequence: []
+          # R9: a start time before the Home Assistant start (or an unknown / stale capture: fail closed) with the
+          # window still open is a missed run. It is NOT started: recorded, notified, and only it is disarmed.
           - conditions:
               - condition: template
                 value_template: "{{ now_ts < end_ts }}"
@@ -851,17 +1034,12 @@ automation:
               - action: persistent_notification.create
                 data:
                   notification_id: ecco_dump_to_grid_schedule
-                  title: "ECCO: scheduled Dump to Grid start was missed"
+                  title: "ECCO: scheduled Dump to Grid was missed"
                   message: >-
-                    Home Assistant restarted during the scheduled Dump to Grid window. ECCO is starting it now
-                    for the rest of the window, ending by {{ (end_ts | float(0)) | timestamp_custom('%H:%M') }}.
-              - action: script.ecco_dump_to_grid_start_scheduled
-                continue_on_error: true
-                data:
-                  duration_minutes: "{{ duration_min }}"
-                  power_w: "{{ power_w }}"
-                  stop_soc: "{{ stop_soc }}"
-                  window_end_ts: "{{ end_ts }}"
+                    The {{ (start_ts | float(0)) | timestamp_custom('%H:%M') }} scheduled Dump to Grid start
+                    {{ 'fell before Home Assistant started.' if ha_start_known else
+                    'was not started: the Home Assistant start time was unknown, so ECCO could not tell whether it fell before Home Assistant started (failed closed).' }}
+                    It was NOT started and the schedule is disarmed. Arm a new schedule if you still want it.
               - if:
                   - condition: template
                     value_template: "{{ states('input_datetime.ecco_dump_to_grid_schedule_start') == fired_for }}"
@@ -869,6 +1047,13 @@ automation:
                   - action: input_boolean.turn_off
                     target:
                       entity_id: input_boolean.ecco_dump_to_grid_schedule_armed
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_dump_to_grid_schedule_last_result
+                    data:
+                      value: >-
+                        {{ 'MISSED - not started after a Home Assistant restart' if ha_start_known else
+                        'MISSED - not started: the Home Assistant start time was unknown, so ECCO could not tell whether the start fell before it (failed closed)' }}
         default:
           - action: input_boolean.turn_off
             target:
