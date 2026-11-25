@@ -342,11 +342,11 @@ fixed nights of the older model).
 | `status` | Meaning |
 |---|---|
 | `OK` | the pessimistic simulation **with the first rate held** for the rest of the window (`band.pessimisticHeld`) reaches the target by the deadline: no path makes a later change by itself (each needs the owner, or the path does not exist), so OK never relies on one |
-| `TARGET_AT_RISK` | the pessimistic world misses the deadline but the expected world makes it, or the pessimistic one finishes inside the buffer, or only a planned later change would make it (`RELIES_ON_LATER_CHANGE`); with nothing in force the setpoint is the highest safe rate and `bufferThatWouldFitMin` says how long a buffer would still fit |
-| `UNREACHABLE` | not before the window ends, even at the highest safe rate; the target is never lowered |
-| `STOP_RECOMMENDED` | the rate in force is above a known ceiling on a path that cannot change it after the START (`FREE_POWER_LEASE`, `ACTUATOR_FIXED_RATE`), or above a ceiling below the lowest setpoint on any path. It is checked **before every refusal** once the parameters and the path are known (NO_NEED, WINDOW_OVER, a clock-change night, unknown or stale data, CEILING_BELOW_MIN, HEADROOM_BELOW_MIN, DEMAND_UNKNOWN, ...), against every KNOWN ceiling: the firmware bound, each named ceiling converted to setpoint units (a stale one still counts), and a known grid limit (with a fresh demand the headroom, without one the limit alone). `now.change` is `STOP`, no setpoint, no trajectory, no expected finish, margin or buffer that fits, `stopRecommended` true; the band, when the inputs give one, is the rate in force held (what happens if nothing is done). A refusal never says "the fallback holds whatever is in force" in that state; on a path that can lower the rate it says the rate must come down (`FORCED_BELOW_CEILING`) |
-| `NO_NEED` | the reading is at or above the target (at 100 the `TOP_OF_CHARGE_TAIL` caution says the BMS may go on charging) |
-| `INPUTS_UNUSABLE` | unknown, stale or implausible data, no fresh known ceiling, a known grid limit with no fresh demand, an invalid parameter or buffer, the window over, a rate in force above 0 W but below the minimum or off the step (`IN_FORCE_INVALID`), a last change after now (`INPUT_INVALID`), a call before the window with no drain bound (`PRE_WINDOW_DRAIN_UNKNOWN`), more than 2 minutes since the reading with nothing charging and no drain bound (`DRAIN_UNKNOWN_AGED_READING`): nothing is recommended and the codes say why |
+| `TARGET_AT_RISK` | the pessimistic world misses the deadline but the expected world makes it, or the pessimistic one finishes inside the buffer, or only a planned later change would make it (`RELIES_ON_LATER_CHANGE`), or the highest safe rate the path can still apply would reach the target inside the window although the rate in force held does not (a rate that only the dwell holds low); with nothing in force the setpoint is the highest safe rate and `bufferThatWouldFitMin` says how long a buffer would still fit |
+| `UNREACHABLE` | not before the window ends, even at the highest safe rate the path can still apply (round 3: a rate that only the dwell holds low is `TARGET_AT_RISK`; a path that cannot change the rate, the lease, and a spent change budget cannot raise it, so for them the rate in force held is the answer); the target is never lowered |
+| `STOP_RECOMMENDED` | the rate in force is above a known ceiling on a path that cannot change it after the START (`FREE_POWER_LEASE`, `ACTUATOR_FIXED_RATE`), or above a ceiling below the lowest setpoint on any path. It is checked **before every refusal** (NO_NEED, WINDOW_OVER, a clock-change night, unknown or stale data, CEILING_BELOW_MIN, HEADROOM_BELOW_MIN, DEMAND_UNKNOWN, ...) **whenever the rate in force is a finite number above 0 W, whatever the bookkeeping fields (changes used, time of the last change) say**, and also before the refusals for invalid parameters (the valid ones are kept, the invalid ones fall back to their defaults for the comparison) and for an unknown path (taken as one that cannot lower the rate; no profile report), against every KNOWN ceiling: the firmware bound, each named ceiling converted to setpoint units (a stale one still counts), and a known grid limit (with a fresh demand the headroom, without one the limit alone). `now.change` is `STOP`, no setpoint, no trajectory, no expected finish, margin or buffer that fits, `stopRecommended` true; the band, when the inputs give one, is the rate in force held (what happens if nothing is done). A refusal never says "the fallback holds whatever is in force" in that state; on a path that can lower the rate it says the rate must come down (`FORCED_BELOW_CEILING`) |
+| `NO_NEED` | the reading is at or above the target (at 100 the `TOP_OF_CHARGE_TAIL` caution says the BMS may go on charging). With the Free Power lease in force the plan says the lease has no stop at a target SOC and keeps charging past the target, and that stopping it is the owner's choice (it used to say nothing is to be applied) |
+| `INPUTS_UNUSABLE` | unknown, stale or implausible data, no fresh known ceiling, a known grid limit with no fresh demand, an invalid parameter or buffer, the window over, a rate in force above 0 W but below the minimum or off the step (`IN_FORCE_INVALID`), a last change after now (`INPUT_INVALID`), a call before the window with no drain bound (`PRE_WINDOW_DRAIN_UNKNOWN`), more than 2 minutes since the reading with nothing charging (no rate in force, before the window, or before the rate in force was set when that was after the reading) and no drain bound (`DRAIN_UNKNOWN_AGED_READING`): nothing is recommended and the codes say why |
 | `CLOCK_CHANGE_NIGHT_REFUSED` | the window overlaps the hour a clock change skips or repeats (edges included): the real length is not known, so no plan, like the R9 schedule packages |
 
 - **Window and deadline.** The window comes from the slot-table times in wall-clock minutes (`windowFromSlotTable` reads the one run of Grid slots from a
@@ -355,9 +355,12 @@ fixed nights of the older model).
   the house, so the plan starts from the reading **less a pessimistic drain bound** (`drainBoundW`, battery-side W; the earlier name `preWindowDrainW` is still
   accepted, and when both are given they must agree), counted in the most points per kWh the bands allow (the smaller of the trusted and learned capacity)
   over the minutes since the reading in which nothing charged: before the window the reading's age plus the time to the window; inside it with no rate in
-  force the reading's age (continuous at the window start); with a rate in force only the part of the age before the window opened. Before the window the
-  bound is required (`PRE_WINDOW_DRAIN_UNKNOWN`); inside it, beyond `maxUncountedDrainMin` (2 minutes) of such time (`DRAIN_UNKNOWN_AGED_READING`), and up to
-  that the drain is not counted and the plan says so (`DRAIN_NOT_COUNTED`). `assumptions` reports the start SOC (`socAtPlanStartPct`), those minutes and the
+  force the reading's age (continuous at the window start); with a rate in force the part of the age before the window opened **and, when the rate was set
+  after the reading (`inForce.lastChangeAtMin`), the minutes from the reading to it** (round 3 F1: a START made after the reading used to drop that drain; what
+  ran before the set time is not known, and counting it idle is always the conservative way for the SOC, so a changed rate is covered too; a time of `null` =
+  long ago counts none). Before the window the bound is required (`PRE_WINDOW_DRAIN_UNKNOWN`); inside it, beyond `maxUncountedDrainMin` (2 minutes) of such
+  time (`DRAIN_UNKNOWN_AGED_READING`), and up to that the drain is not counted and the plan says so (`DRAIN_NOT_COUNTED`). The same minutes excuse a **fall**
+  against `previousSoc` up to the drain bound (round 3 F7: a battery legitimately drains before the window; the tolerance of 3 points alone refused it). `assumptions` reports the start SOC (`socAtPlanStartPct`), those minutes and the
   drain counted.
 - **Rate.** The lowest 100 W step, never below 500 W and never above the ceiling = the smaller of the firmware bound (8000 W) and the owner limit (one named
   ceiling, `maxChargePowerCeiling`; an unknown or stale-only ceiling is never guessed), whose **pessimistic** simulation reaches the target by the deadline. A
@@ -377,7 +380,20 @@ fixed nights of the older model).
   consistent starts**: past the knee (at the knee or above, the fall over, the tail anchored at the lower of the rate in force and the rate tried: a raise
   inside the uncertainty is never credited) and not yet past it (on the plateau from the pessimistic start). A START, or a call before the window (nothing
   has charged yet, so a slot power set is not held), starts on the plateau with the knee crossed at the start rate (at the start itself, with the one-minute
-  cliff, when the start is already above it): a START is monotone in the SOC, also for targets above the knee.
+  cliff, when the start is already above it): a START is monotone in the SOC, also for targets above the knee. **What the knee was crossed at** (round 3 F2): it is
+  the rate in force, UNLESS that rate was set by an ordinary change (the record counts at least one, `changesUsed >= 1`) inside the window (after minute 0, or
+  with no time given) while the knee may already have been passed when it was set (the reading plus the charge possible up to the change, optimistic, at or
+  past the pessimistic knee of a target above it). An outside raise after the knee was crossed at a lower rate would otherwise be credited at the new rate
+  while the battery stays on the old low tail (the review: 2000 W raised to 8000 W, reading 91, target 95: OK, margin 94.5; the truth needs 7.7 hours). The
+  earlier rate is not in the record, so the pessimistic tail is anchored at the **lowest setpoint** any path can hold (the worst case; `KNEE_RATE_UNKNOWN`), and
+  OK needs the deadline to hold even then. A START (`changesUsed` 0), a change before the window opened, a target at or below the knee and a call before the
+  window are not affected. The cost: after any counted change with the reading within about 1.5 points of the knee OK is withheld even when the knee was in
+  fact crossed at the new rate (the planner cannot tell its own raise from an outside one); a caller that knows the knee-time rate could be given an input for
+  it later (none is built). **The three policy worlds of the band are scenarios, not bounds** (round 3 F4): each re-plans from its own measured SOC, so on an
+  adaptive path a world that is behind can raise a rate that a world that is ahead holds, and their finishes can come out of order; with the rate held
+  (`pessimisticHeld`, every flat path) pessimistic >= expected >= optimistic holds. The SOC at the deadline is **floored** to a tenth, never above the
+  target (a rounded value showed the target for a world that had not reached it); after the deadline it is the SOC now. A world that starts at or above the
+  target has finished NOW (no finish lies before now or before the window opens).
 - **Inputs and bands.** SOC with its age (15 minutes), the usable capacity (the trusted helper, the larger of it and a learned figure for the charge, the
   smaller for the drain and the charge since the reading, plus a 6 % band), charge
   efficiency 0.95 (band 0.90 to 0.97), the sensor scale error (3 %), the reading resolution and noise (the pessimistic start is the reading minus half the
@@ -405,19 +421,29 @@ fixed nights of the older model).
   rate crosses the knee AFTER that reading; `drainTo` drains the battery to the house), `test/gentleNightSafety.test.ts` (each finding of the independent
   review of 25 Nov 2026 and of its confirmation review pinned by a by-hand value: one test per refusal path for the STOP, each surviving mutant of the
   confirmation review killed by a behavioural assertion), `test/gentleNightGolden.test.ts` (the older model pinned) and `test/gentleNightMutants.test.ts`
-  (134 single-line mutants, each killed against the **committed** golden probe `test/gentleNightProbe.golden.json`, which the real source must also equal;
+  (186 single-line mutants, each killed against the **committed** golden probe `test/gentleNightProbe.golden.json`, which the real source must also equal;
   regenerate it only for a reviewed change with `node test/support/writeNightProbeGolden.ts`). **Mutation score against the behavioural assertion suites
-  alone** (the four suites above, without the probe): 134 of 134 killed, measured by `python -I -B tools/night_mutation_score.py` (one Node process at a
-  time, a private copy of the package).
+  alone** (the four suites above, without the probe): 186 of 186 killed, measured by `python -I -B tools/night_mutation_score.py` (one Node process at a
+  time, a private copy of the package). The third review's 34 new mutants (H01 to H34): 14 were killed by the suites before the round 3 tests; 30 of them are now in the list (ids
+  `R3 H..`), each killed by the suites alone. The other four need no test: H02, H07 and H29 are equivalent (H02: once a world that starts at or above the
+  target finishes at once, the clamp it mutates can never act; H07: `pessFinish` returns nothing unless BOTH starts reach by the deadline, and its value is
+  only compared with the deadline, so taking the earlier of the two cannot change an answer; H29: a decrease is only made while the knee is surely ahead,
+  so the expected and optimistic worlds never start past their own knee at a lowered rate) and H09 is now the code itself. The list also holds the
+  mutants of the round 3 fixes themselves (`R3 F1` to `R3 F9`).
 - **What the closed loop shows, and what it does not.** Inside the declared envelope a night that is `OK` at the first call makes the deadline in the truth
   battery in every seeded night: in the worst corner of the envelope, near the knee with an outside rate in force, with a first reading 10 to 15 minutes old
   whose knee was crossed after it (0 misses), and for a START from a 15 minute old reading while the house drains the battery at 3000 W (at -0.5, 0 and
   +0.5 minutes from the window start). Inside the envelope (a realised power at most the overshoot allowance times the setpoint) no raise is recommended once
-  the truth is past its knee, for readings up to the age limit, because the charge possible since the reading is counted. Not covered: a raise applied LATER than it was recommended, after the knee was crossed at the earlier rate (the
-  tail is then anchored at a rate the planner is not told; see `unknowns`), and a START after an earlier charge in the same window crossed the knee.
+  the truth is past its knee, for readings up to the age limit, because the charge possible since the reading is counted. Round 3 adds two corners, on the same
+  independent truth battery: a lease STARTed AFTER the reading while the house draws the 3000 W bound (OK only when the truth makes the deadline, for rates
+  from far below to a little above the planner's own START, at both scale errors, targets 58 and 80, START 1, 7 and 14 minutes in), and an outside raise
+  after the knee was crossed at 1000 to 3000 W (the truth tail stays on the old rate): of 193 planned nights the earlier source called 167 OK and 30 of them
+  missed, now none is called OK (the truth made 144 of them: the price of the worst case, see the taper paragraph). Still not covered: a START after an earlier
+  charge in the same window crossed the knee.
   Outside the envelope (knee from 85, tail from 0, a trickle) only the safety invariants are claimed.
 - **Not known, and said so in every plan (`unknowns`):** the setpoint unit (AC grid watts, DC battery watts or amps), the BMS response at rates below the top
-  rate (no data), the SOC at the taper drop, the live BMS limit, and the rate at which the knee was crossed when the rate in force was changed after it. The
+  rate (no data), the SOC at the taper drop, the live BMS limit, and the rate at which the knee was crossed when the rate in force was changed inside the window
+  while the knee may already have been passed (the tail is then taken at the lowest setpoint). The
   plan treats the setpoint as grid-side watts for the energy, which is the pessimistic reading under either unit. The expected and optimistic worlds of the
   band start from the reading itself: the charge since an aged reading is counted only for the knee, so their finish is late by up to that charge. What
   would be needed to apply a rate is in `needed` (the owner's guarded editor, the Free Power start, or a rate controller that must first pass the proofs in
