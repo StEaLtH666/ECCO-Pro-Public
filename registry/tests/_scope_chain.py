@@ -137,6 +137,7 @@ import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
+import _ttr1_scope as _ttr1  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
 
 FIRMWARE = "firmware/ecco_clock_dongle_stage3_4_free_power.yaml"
@@ -1391,7 +1392,23 @@ BPD1 = Entry(
          "of the start, always records an incident in its own helpers and raises a persistent notification (Charge Battery only with a fact true); it prevents nothing, writes nothing on the dongle, the inverter or "
          "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1)
+# ttr1 (time trust: THREE CLOCKS, ONE EXPLICIT TIMING-SAFETY INPUT, read only; offline, nothing installed; _ttr1_scope.py): made on the export after bpd1. ADDED: the package, its suite and the
+# test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path; ZERO firmware, registry data,
+# Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; the package is template entities only (no automation, helper, script, trigger, action or service call) and writes nothing.
+TTR1 = Entry(
+    id="ttr1", pr="TTR1", commit="unmerged",
+    reverts=dict(_ttr1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after ttr1
+        HA_MANIFEST: "33cb328a26b70490c211b2f386f7ecdafb1fab7d86915e08077b830779cd67b3",
+    },
+    added_files=_ttr1.ADDED_FILES,
+    # _pex.fingerprint(TTR1): hashes its parent bpd1's fingerprint and every declaration above
+    fingerprint="abf69f320f127c5a966d462cb50a345623fe4a4b651b1d71173b2b85afef53b1",
+    note="the time trust inputs (read only): a trust state for each of three clocks (Home Assistant, the dongle's NTP time, the inverter's), the worst of the three and three yes/no consumers, as template "
+         "entities that read eight entities the dongle already publishes and write nothing; an input that is missing, unavailable, unknown or not a finite number is never TRUSTED; nothing is wired to a "
+         "gate yet; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, TTR1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
