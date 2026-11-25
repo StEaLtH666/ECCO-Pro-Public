@@ -196,7 +196,11 @@ export interface TrajectoryPoint {
 export interface WorldOutcome {
   /** Real minutes since the window opened at which the target is reached, or null when not within the window. */
   finishMin: number | null;
-  /** SOC (reading scale) at the deadline under the trajectory; the target once reached (the charge stops there). */
+  /**
+   * SOC (reading scale) at the deadline under the trajectory: the target as given once it is reached (the charge stops there); otherwise the world's SOC,
+   * FLOORED to a tenth and never above the target (a rounded value could show the target for a world that has not reached it). Once the deadline has passed
+   * (window still open) it is the SOC NOW, the one at the deadline being in the past.
+   */
   socAtDeadlinePct: number;
   reachedByDeadline: boolean;
 }
@@ -294,7 +298,7 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   GRID_LIMIT_UNKNOWN_NO_CAP: "The grid import limit is unknown, so no grid cap is applied (the plan does not know it would be crossed).",
   CEILING_AGE_UNKNOWN: "A safe ceiling came with no age and is taken as current.",
   BEFORE_WINDOW: "The window has not opened: the plan starts at the window start from the reading less the given drain bound over the reading's age and the time to the window (nothing charges before the window opens).",
-  DEADLINE_PASSED_WINDOW_OPEN: "The deadline has passed but the window is still open: best effort only.",
+  DEADLINE_PASSED_WINDOW_OPEN: "The deadline has passed but the window is still open: best effort only. The SOC shown for the deadline is then the SOC now (never above the target): the one at the deadline is in the past.",
   RATE_NOT_ENOUGH_ALONE: "The expected world reaches the deadline but the pessimistic world does not.",
   PESSIMISTIC_MISSES_DEADLINE: "The pessimistic simulation misses the deadline at the highest safe rate.",
   RELIES_ON_LATER_CHANGE: "The pessimistic world only makes the deadline with a planned later change, and no path makes one by itself (each needs the owner, or the path does not exist): judged with the first rate held, the status is not OK.",
@@ -421,6 +425,9 @@ function fallIntegral(a: number, b: number, tr: number, drop: number): number {
  * target is reached, or null. The plateau is linear; after the knee the factor falls to the tail, which is anchored to the plateau power at the knee.
  */
 function advance(w: World, st: SimState, rateW: number, until: number, target: number): number | null {
+  // a world that starts at or above the target (the optimistic one starts half a point above the reading) has reached it NOW: never before now, never before
+  // the window opens (the crossing is not extrapolated backwards)
+  if (st.soc >= target - EPS) return st.t;
   if (!(rateW > 0)) {
     // no charge at all (a guard: a rate in force is validated and a candidate is at least the minimum, so this never divides by zero)
     if (st.t < until) st.t = until;
@@ -643,15 +650,21 @@ function project(c: Ctx, w: World, reading0: number, now: number, first: Choice,
         }
       }
     }
+    // the SOC at the deadline: the target as given once it is reached; otherwise the world's SOC, never above the target and FLOORED to a tenth (a rounded value
+    // could show the target for a world that has not reached it). Once the deadline has passed it is the SOC NOW (the one at the deadline is in the past).
     let socAtDeadline = c.target;
+    let reachedExact = true;
     if (finish === null) {
       finish = advance(w, st, f.setpointW as number, Math.max(c.deadline, st.t), c.target);
       if (finish === null) {
         socAtDeadline = st.soc;
+        reachedExact = false;
         finish = advance(w, st, f.setpointW as number, Math.max(c.windowEnd, st.t), c.target);
       }
     }
-    const out: WorldOutcome = { finishMin: finish, socAtDeadlinePct: Math.round(Math.min(100, socAtDeadline) * 10) / 10, reachedByDeadline: finish !== null && finish <= c.deadline + EPS };
+    const out: WorldOutcome = {
+      finishMin: finish, socAtDeadlinePct: reachedExact ? c.target : Math.floor(Math.min(c.target, socAtDeadline) * 10 + 1e-9) / 10, reachedByDeadline: finish !== null && finish <= c.deadline + EPS,
+    };
     if (outcome === null) {
       segments = seg;
       outcome = out;

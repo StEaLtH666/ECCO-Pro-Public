@@ -38,8 +38,9 @@ test("BLOCKER 1: the knee is decided from the reading's optimistic estimate: fro
   // by hand, reading 90: the pessimistic world takes the worse of its two consistent starts (confirmation review MINOR: the earlier start on the tail at 89,
   // below its own knee, was a state the model cannot be in). Past the knee: AT the knee 90 on the tail, 225 W for 235 min: 0.88125 kWh = 2.544 points, so
   // 92.54. Not yet past it: the plateau from 89 at 1.8 kW (0.086603 points a minute) reaches 90 in 11.55 min, the cliff minute adds 0.0487 points, then the
-  // tail 0.010825 points a minute for 222.45 min adds 2.408: 92.46. The lower of the two, to a tenth: 92.5 (91.5 before, kept as a killed mutant)
-  near(band(gen({ elapsedMin: 5, socPct: 90, targetSocPct: 95, inForce })).pessimisticHeld.socAtDeadlinePct, 92.5, 0.05, "SOC at the deadline");
+  // tail 0.010825 points a minute for 222.45 min adds 2.408: 92.46. The lower of the two, shown FLOORED to a tenth (never above the exact value: round 3
+  // review F6; it was rounded to 92.5 before, and 91.5 before that, kept as a killed mutant): 92.4
+  assert.equal(band(gen({ elapsedMin: 5, socPct: 90, targetSocPct: 95, inForce })).pessimisticHeld.socAtDeadlinePct, 92.4, "SOC at the deadline");
   // the threshold also counts the charge possible since the reading (confirmation review BLOCKER): the reading is 1 min old and 2000 W is in force, so
   // 1 x 2000 x 1.1 / 60000 / 0.289301 = 0.1267 points: held from 90 - 1.0 - 0.1267 = 88.873 (inclusive). Just below it (88.8 + 1.1267 < 90) the knee is
   // surely ahead: the raise is credited and made; at 88.9 (90.027) it is held (88.9 was the first reading credited before, without the age)
@@ -278,10 +279,11 @@ test("MAJOR 7 survivors: the optimistic band, a miss inside the buffer, the lowe
   const min = plan({ socPct: 79 });
   assert.equal(min.now.setpointW, 500);
   assert.ok(min.codes.includes("RATE_AT_MINIMUM"));
-  // the SOC at the deadline, not the target: 3000 W for 180 min = 8.1 kWh = 23.38 points from 9, so 32.4
+  // the SOC at the deadline, not the target: 3000 W for 180 min = 8.1 kWh = 23.38 points from 9 = 32.38, shown FLOORED to a tenth (round 3 review F6: never above
+  // the exact value; it was rounded to 32.4 before): 32.3
   const none = plan({ targetSocPct: 100, socPct: 10, bufferMin: 120, ceilings: [maxChargePowerCeiling(8000, 3000)] });
   assert.equal(none.status, "UNREACHABLE");
-  assert.equal(band(none).pessimistic.socAtDeadlinePct, Math.round((9 + (2.7 * 3) / PK) * 10) / 10);
+  assert.equal(band(none).pessimistic.socAtDeadlinePct, Math.floor((9 + (2.7 * 3) / PK) * 10) / 10);
   // the buffer that fits rounds DOWN: 8000 W from 39 to 95: plateau 51 points 147.22 min, the cliff minute 0.1949 points, the tail 4.8051 points at
   // 0.9 kW 110.97 min: 259.2 min, 40.8 min before the window end, so 40 (not 45)
   const risk = plan({ targetSocPct: 95, socPct: 40 });
@@ -584,4 +586,85 @@ test("confirmation MINOR: what is needed on the TOU editor follows the change: a
   assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 30, inForce: { setpointW: 6000, lastChangeAtMin: 20, changesUsed: 0 } }).needed[1] as string, /^Nothing to change on the guarded TOU editor now: the charge slot power stays at 6000 W/);
   assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } }).needed[1] as string, /changing the charge slot power to \d+ W now/);
   assert.match(plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 100, socPct: 40, inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } }).needed[1] as string, /lease in force keeps 6000 W/);
+});
+
+// ---- the third independent review (round 3, tip 8999cdf: 1 BLOCKER, 2 MAJOR, 7 MINOR): each finding pinned by its reproduction and a by-hand value -----------
+// The reviewer's inputs are used as given; each test says what the earlier source answered.
+const worlds = (p: GentleNightPlan) => [band(p).pessimistic, band(p).expected, band(p).optimistic, band(p).pessimisticHeld];
+
+test("round 3 F5: a world that starts at or above the target has reached it NOW: no finish lies before now or before the window opens (by hand)", () => {
+  // the review's case: reading 99.4, target 99.6, minute 10. The optimistic world starts half a point above the reading, at 99.9, above the target: it has
+  // finished NOW, at 10 (the earlier source extrapolated the crossing backwards: 4.25, before now)
+  const a = plan({ targetSocPct: 99.6, elapsedMin: 10, socPct: 99.4, socAgeMin: 0, actuatorProfile: "FREE_POWER_LEASE" });
+  assert.equal(band(a).optimistic.finishMin, 10);
+  assert.equal(band(a).optimistic.reachedByDeadline, true);
+  assert.ok((band(a).expected.finishMin as number) > 10 && (band(a).pessimistic.finishMin as number) > 10, "the other worlds are not there yet");
+  assert.ok((a.expectedFinish as NonNullable<typeof a.expectedFinish>).inMin > 0);
+  // before the window opens nothing charges: the window start is the earliest finish (the review's pre-window case gave -14.65)
+  const pre = plan({ targetSocPct: 99.6, elapsedMin: -60, drainBoundW: 0, socPct: 99.3, socAgeMin: 0 });
+  assert.ok(pre.codes.includes("BEFORE_WINDOW"));
+  assert.equal(band(pre).optimistic.finishMin, 0);
+  // a seeded sweep with the reading within 1.2 points below the target, before, at and after the window opens and the deadline, on every path: no world finishes before now
+  const r = rng(305);
+  const profiles = ["UNCONSTRAINED", "FREE_POWER_LEASE", "TOU_SLOT_EDITOR", "RATE_CONTROLLER_PROPOSED"] as const;
+  let nearTarget = 0;
+  for (let i = 0; i < 600; i++) {
+    const targetSocPct = 85 + Math.floor(r() * 16);
+    const socPct = Math.round((targetSocPct - r() * 1.2) * 100) / 100;
+    const elapsedMin = Math.floor(r() * 330) - 60;
+    const p = plan({ targetSocPct, socPct, elapsedMin, socAgeMin: Math.floor(r() * 3), drainBoundW: 0, actuatorProfile: profiles[Math.floor(r() * 4)] as (typeof profiles)[number] });
+    if (p.band === null) continue;
+    nearTarget++;
+    for (const w of worlds(p)) assert.ok(w.finishMin === null || w.finishMin >= Math.max(elapsedMin, 0) - 1e-9, "a finish before now: " + w.finishMin + " at " + elapsedMin + " " + JSON.stringify([targetSocPct, socPct]));
+  }
+  assert.ok(nearTarget > 500, "planned " + nearTarget);
+});
+
+test("round 3 F6: the SOC at the deadline is FLOORED to a tenth, so it never shows the target for a world that has not reached it; after the deadline it is the SOC now, never above the target (by hand)", () => {
+  // the review's TOU case: 4100 W from 79.083 (2 min old, drain bound 22230 W: 1.25 points), target 90.5, deadline 194. Pessimistic start 77.83 - 1.0 = 76.83,
+  // 3.69 kW / 60 / (64.93 x 1.06 / 0.97 / 100 = 0.70954 kWh per point) = 0.08668 points a minute: the knee 90 at minute 151.9, the cliff minute 0.04876 points,
+  // the tail 0.010835 points a minute for the 41.1 min left: 90.494 at the deadline, 0.006 short of the target: shown 90.4 (90.5 rounded, with "not reached")
+  const t = plan({ actuatorProfile: "TOU_SLOT_EDITOR", chargeWindow: { startMin: 174, endMin: 428 }, elapsedMin: 0, socPct: 79.083, socAgeMin: 2, capacityKwh: 64.93, ceilings: [maxChargePowerCeiling(8000, 4100)], drainBoundW: 22230, targetSocPct: 90.5 });
+  const start = 79.083 - (22.23 * 2) / 60 / ((64.93 * 0.94) / 1.03 / 100) - 1.0;
+  const perMin = (4.1 * 0.9) / 60 / ((64.93 * 1.06) / 0.97 / 100);
+  const exact = 90 + ((1 + 0.125) / 2) * perMin + 0.125 * perMin * (194 - (90 - start) / perMin - 1);
+  assert.ok(exact > 90.45 && exact < 90.5, "the by-hand value " + exact);
+  assert.equal(band(t).pessimisticHeld.reachedByDeadline, false);
+  assert.equal(band(t).pessimisticHeld.socAtDeadlinePct, Math.floor(exact * 10) / 10);
+  assert.equal(band(t).pessimisticHeld.socAtDeadlinePct, 90.4);
+  // the invariant over a sweep of capacities around it: a world that has reached the target shows it exactly, one that has not shows less than it, in whole tenths
+  let near = 0;
+  for (let i = 0; i < 400; i++) {
+    const p = plan({ actuatorProfile: "TOU_SLOT_EDITOR", chargeWindow: { startMin: 174, endMin: 428 }, socPct: 79.083, socAgeMin: 2, capacityKwh: 64.5 + i * 0.002, ceilings: [maxChargePowerCeiling(8000, 4100)], drainBoundW: 22230, targetSocPct: 90.5 });
+    for (const w of worlds(p)) {
+      if (w.reachedByDeadline) assert.equal(w.socAtDeadlinePct, 90.5);
+      else {
+        assert.ok(w.socAtDeadlinePct < 90.5, "shows the target while not reached: " + w.socAtDeadlinePct);
+        assert.ok(Math.abs(w.socAtDeadlinePct * 10 - Math.round(w.socAtDeadlinePct * 10)) < 1e-6, "whole tenths: " + w.socAtDeadlinePct);
+        if (w.socAtDeadlinePct === 90.4) near++;
+      }
+    }
+  }
+  assert.ok(near > 20, "cases within a tenth of the target: " + near);
+  // a target that is not a whole tenth is shown as given once it is reached (the earlier rounding showed 90.1 for 90.05)
+  const odd = plan({ targetSocPct: 60.05, socPct: 40 });
+  assert.equal(band(odd).pessimisticHeld.reachedByDeadline, true);
+  assert.equal(band(odd).pessimisticHeld.socAtDeadlinePct, 60.05);
+  // after the deadline (window still open) it is the SOC NOW: the optimistic world starts above the target (89.8 + 0.5 = 90.3 against 90) and shows the target, not
+  // 90.3; the expected world 89.8, the pessimistic one 88.8; nothing is "reached by the deadline"
+  const late = plan({ elapsedMin: 250, socPct: 89.8, targetSocPct: 90, inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.ok(late.codes.includes("DEADLINE_PASSED_WINDOW_OPEN"));
+  assert.deepEqual(worlds(late).map((w) => w.socAtDeadlinePct), [88.8, 89.8, 90, 88.8]);
+  assert.deepEqual(worlds(late).map((w) => w.reachedByDeadline), [false, false, false, false]);
+  // and over a sweep after the deadline, no world is above the target and none is reached by it
+  const r = rng(306);
+  for (let i = 0; i < 300; i++) {
+    const targetSocPct = 80 + Math.floor(r() * 21);
+    const p = plan({ targetSocPct, socPct: Math.round((targetSocPct - r() * 3) * 10) / 10, elapsedMin: 241 + Math.floor(r() * 50), inForce: { setpointW: 500 + 100 * Math.floor(r() * 76), lastChangeAtMin: 0, changesUsed: 0 } });
+    if (p.band === null) continue;
+    for (const w of worlds(p)) {
+      assert.ok(w.socAtDeadlinePct <= targetSocPct, "above the target after the deadline: " + w.socAtDeadlinePct + " against " + targetSocPct);
+      assert.equal(w.reachedByDeadline, false);
+    }
+  }
 });
