@@ -149,9 +149,16 @@ export interface NightHousehold {
 /** What is in force now (the caller's own record). `lastChangeAtMin` is real minutes since the window opened (negative before it), never after now. */
 export interface NightInForce {
   setpointW: number | null;
-  /** When the rate in force was set; null = before the reading and long ago (no dwell applies). A time after `elapsedMin` is refused. */
+  /**
+   * When the rate in force was set; null = before the reading and long ago (no dwell applies). A time after `elapsedMin` is refused. Two things follow from it:
+   * the minutes from the reading to a time after the reading count as idle (the house drained the battery: a drain bound is needed beyond a few), and a time
+   * inside the window with a counted change (below) may mean the knee was crossed at an earlier, unknown rate (KNEE_RATE_UNKNOWN).
+   */
   lastChangeAtMin: number | null;
-  /** Ordinary changes since the START (the START and a forced decrease below the ceiling do not count). */
+  /**
+   * Ordinary changes since the START (the START and a forced decrease below the ceiling do not count). It is a SAFETY input: a count of 1 or more, set inside the
+   * window, tells the planner that an earlier rate may have been the one the knee was crossed at, so keep it true (an outside change by the owner counts too).
+   */
   changesUsed: number;
 }
 
