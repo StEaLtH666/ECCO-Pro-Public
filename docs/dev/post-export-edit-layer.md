@@ -262,6 +262,28 @@ model returns data and says `actuationSupported: false`.
 
 Gentle Smart Charging v2 (18 Nov 2026) changes the CONTENT of those same three added files and of the plan-core `README.md` only: no file is added, so `epc3` is not re-sealed and no declaration changes. It stays read only (`actuationSupported: false`, `guarantee: 'NONE'`); no firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, no Modbus operation and no service call.
 
+## What epc4 changed
+
+`epc4` (`registry/tests/_epc4_scope.py`) declares ONE frozen edit: the Energy Actions card's rebuilt `dist/ecco-energy-actions-card.js` after the
+Gentle Smart Charging work (the model review fixes G1 to G7 and the model constraints from the offline limits and authority resolution, 20 to 24 Nov
+2026). It sits AFTER `ecf1` in the chain (`epc3`, `ecf1`, `epc4`): its pairs run from the bundle `ecf1` declares (the card corrections) to the bundle
+the combined sources build, and its fingerprint is hash-linked to `ecf1`'s. The card never calls the model, but plan-core's index re-exports it and the
+bundler keeps the model's top-level constants (the default parameters, the default policy, the provenance table and the call that builds it, and now the
+max-charge-power basis table and the four actuator profiles). The Gentle work changed them, so a build of the sources is no longer byte-identical to the
+bundle `ecf1` declares. The change is declared by a NEW entry instead of re-sealing `ecf1`: `ecf1` stays exactly as the card-corrections branch has it, so
+that branch can go to production first and this one can be stacked on it later; undoing `epc4` lands on `ecf1`'s bundle checkpoint byte for byte.
+
+The module holds 987 exact (before, after) pairs, generated from the real diff and round-trip-checked: 12 are the model's constants and 975 are the
+minifier's renames of short names that those constants shift. Measured: the same two source trees built with the identifier minifier switched off differ in
+17 regions, all inside the model's constants; and with the one file `src/gentleController.ts` put back to its text at `ecf1`'s tip, the combined tree builds
+`ecf1`'s bundle byte for byte (`gentleAdvice.ts`, `gentleNight.ts` and `time.ts` add not one byte). The plan-core files the Gentle work adds or edits are
+`epc1` / `epc3` added files or lie outside every pinned set, so their content is not declared. No firmware, Home Assistant package, deployment, registry,
+Intelligence or ecco_core byte changes, no Modbus operation, no service call; the model stays read only.
+
+The rebuilt bundle and the entry are ONE commit: dropping both returns to the bundle `ecf1` declares, which is consistent and just as inert. If `ecf1`
+(the card corrections) or an older entry changes, the bundle is rebuilt from the new sources, the pairs and the bundle checkpoint are regenerated and
+`epc4` is sealed again (its parent link changed); nothing else moves.
+
 ## 18 Nov 2026: the OVW1 pin correction, the Stage 3 limitation text and the bundle rebuild
 
 - **`test_ovw1_transition` [1] and [2] (owner decision of 17 Nov 2026).** The card folder as of ovw1 has 28 Git-tracked files. After `epc1` and `epc2`

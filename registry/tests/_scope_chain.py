@@ -126,6 +126,7 @@ import _epc1_scope as _epc1  # noqa: E402
 import _epc2_scope as _epc2  # noqa: E402
 import _epc3_scope as _epc3  # noqa: E402
 import _ecf1_scope as _ecf1  # noqa: E402
+import _epc4_scope as _epc4  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1393,7 +1394,30 @@ ECF1 = Entry(
          "and a target must be above the owner's reserve rounded up; the card README and the rebuilt bundle: ZERO firmware, Home Assistant package, deployment, registry data, Intelligence or ecco_core change, "
          "ZERO Modbus operation, no new service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, ECF1)
+# epc4 (the Energy Actions card bundle rebuilt from the plan-core sources after the Gentle Smart Charging work: the model review fixes G1 to G7 and the model
+# constraints from the offline limits and authority resolution; offline, nothing installed or actuated; _epc4_scope.py): made on the export after ecf1, so
+# its parent is ecf1 (the card corrections) and the bundle it edits is ecf1's. ONE FROZEN edit (PEX): the card's rebuilt dist/ecco-energy-actions-card.js
+# (enrolled by esb1; ecf1 declared its previous state). The card never calls the model, but plan-core's index re-exports it and the bundler keeps the
+# model's top-level constants, which the Gentle work changed: 987 hunks, 12 of them in those constants (inert) and 975 the minifier's consistent renames
+# (measured: with the one model source file put back to its text at ecf1's tip, the combined tree builds ecf1's bundle byte for byte). ADDED: its scope
+# module. The plan-core files the Gentle work adds or edits are epc1 / epc3 added files or lie outside every pinned set (not declared). epc1 to epc3, ecf1,
+# r9 and isp1 are untouched; undoing epc4 lands on ecf1's checkpoint. Measured, not declared: no chain-pinned reverter, no delta, no op path; ZERO
+# firmware, Home Assistant package, deployment, registry, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; no service call and no write
+# of any kind.
+EPC4 = Entry(
+    id="epc4", pr="EPC4", commit="unmerged",
+    added_files=_epc4.ADDED_FILES,
+    frozen_reverts=dict(_epc4.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the bundle after epc4; as of ecf1 it is ecf1's checkpoint, as of pub0 its enrolled hash
+        _epc4.DIST_REL: "8aa9e1365768cc0999c5c50fce8da9f25d911782785c456365f2539fdd6200f9",
+    },
+    # _pex.fingerprint(EPC4): hashes its parent ecf1's fingerprint and every declaration above
+    fingerprint="70d283cb01221b0d0696ad7c4e8db3f0cc5a0eaf84c21f0dfb83f4df66ad27cd",
+    note="the Energy Actions card bundle rebuilt from the plan-core sources after the Gentle model work (987 hunks: 12 in the controller "
+         "model's constants, which the card never calls, and 975 minifier renames); the model stays read only: ZERO firmware, Home "
+         "Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, ECF1, EPC4)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

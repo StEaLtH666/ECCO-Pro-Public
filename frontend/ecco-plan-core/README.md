@@ -254,9 +254,11 @@ explicit; fallbacks respect the window end; SOC plausibility; an ambiguous clock
   the cap. This is a documented trade-off and an owner parameter decision: hold only after a cap-driven decrease, or shorten the hold while the target is at risk.
 
 Settled, kept here because it was once an open question: the Energy Actions card bundle carries the model's default constants as inert dead code (the card
-never calls the model). The bundle was rebuilt from these sources (commit 87c71f3) and is declared by the pin-chain entry `epc4` (commit 8a7c054). The two
-commits can only be dropped as a pair: dropping both returns to the older bundle that the older pin declares, and each one alone leaves the chain suites
-red. The card's behaviour and its golden renders are unchanged.
+never calls the model). The bundle was rebuilt from these sources and is declared by the pin-chain entry `epc4`, which sits AFTER `ecf1` (the card
+corrections) in the chain: the rebuilt bundle, the entry and this paragraph are ONE commit of this stack, so they can only be dropped together, and dropping
+them returns to the bundle `ecf1` declares. Measured: with `src/gentleController.ts` alone put back to its text at the card-corrections tip, these sources
+build that bundle byte for byte, so the whole bundle difference comes from the model's constants. The card's behaviour and its golden renders are
+unchanged, and a headless-browser run of the card with each of the two bundles renders the same DOM and stylesheet text.
 
 ### Resolved limits and the actuator profiles (24 Nov 2026, offline evidence; still read only)
 
