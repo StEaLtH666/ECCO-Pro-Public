@@ -1,4 +1,5 @@
-// Host replay harness for firmware/proposed/ecco_gentle_rate_core.h (driven by test_gentle_rate_core_host.py).
+// Host replay harness for docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h (driven by
+// test_gentle_rate_core_host.py).
 //
 // Reads commands on stdin, one per line, and prints exactly what docs/dev/gentle-rate-controller/vector_runner.py
 // prints for the reference model, so Python can compare the two traces line by line:

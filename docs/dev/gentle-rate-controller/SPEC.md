@@ -1,7 +1,7 @@
 # Guarded charge-rate controller (GRC): specification, revision 2
 
 Status: **offline design only.** The decision core exists as an executable reference model (`reference_model.py`) and
-as a dependency-free firmware header (`firmware/proposed/ecco_gentle_rate_core.h`) proven equal to it. Nothing is wired
+as a dependency-free firmware header (`proposed/ecco_gentle_rate_core.h` in this folder) proven equal to it. Nothing is wired
 into the firmware YAML or any Home Assistant package, nothing has been flashed, nothing has touched an inverter. No
 live proof exists; section 13 lists the ones that must come first, in order, each with its own owner authorisation.
 

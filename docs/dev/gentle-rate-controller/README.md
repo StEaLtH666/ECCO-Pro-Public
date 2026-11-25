@@ -59,7 +59,7 @@ settle, the measured ratio must stay within 50-150 %, and a weak or wrong-way re
 | `vector_runner.py` | vector expansion (with the result echo, silent inverter, midnight frame), the seeded fuzz generator, serialisation for the C++ harness |
 | `simulator.py` | closed-loop nights against an independent truth battery (unknown gain, lag, taper, noise, 1 % SOC, Modbus outages, a clamping inverter, grid loss) and a Home Assistant planner |
 | `test_reference_model.py` | the model's proof suite |
-| `../../../firmware/proposed/ecco_gentle_rate_core.h` | the firmware-ready core (C++17, `<cstddef>`/`<cstdint>` only, no ESP dependency), not included by any YAML; it moves to `firmware/include/` only with the integration's scope-chain entry (the FB-B2 suite pins that directory) |
+| `proposed/ecco_gentle_rate_core.h` | the firmware-ready core (C++17, `<cstddef>`/`<cstdint>` only, no ESP dependency), not included by any YAML and kept outside `firmware/` (the FB-C3 suite hashes every tracked `.h` / `.yaml` / `.md` under `firmware/`, the FB-B2 suite pins the header set of `firmware/include/`); it moves to `firmware/include/` only with the integration's scope-chain entry `grc1` |
 | `../../../registry/tests/test_gentle_rate_core_host.py`, `gentle_rate_harness.cpp` | the host C++ proof that the header equals the model |
 
 ## Running the proofs
@@ -94,8 +94,9 @@ never skips, without one. `make_vectors.py` regenerates `vectors.json`; the mode
 - Existing checks run one at a time on this tree, all exit 0: `tools/validate_repo.py`; tools `test_public_privacy`,
   `test_run_offline_tests`, `test_firmware_equivalence`; registry `test_scope_chain`, `test_tag_inventory`,
   `test_fallback_save_scope`, `test_offline_suite_exit_codes`, `test_capability_registry`; ecco_core
-  `test_core_boundaries`. (With the header in `firmware/include/`, `test_fallback_save_scope` fails its header-set pin;
-  that is why it waits in `firmware/proposed/`.)
+  `test_core_boundaries`. (Any new tracked `.h` under `firmware/` breaks the FB-C3 firmware tree pin of
+  `test_failback_shadow_ha_contract`, and one in `firmware/include/` also the FB-B2 header-set pin of
+  `test_fallback_save_scope`: that is why the header waits in `proposed/` here.)
 
 ## Not established (SPEC section 14)
 

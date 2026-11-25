@@ -23,8 +23,10 @@
 //   A_RESTORE(value): persist record(); read the register (no answer: OP_NO_ANSWER); classify_restore(live, original,
 //                     v, p, q): CLS_ALREADY -> OP_OK_NOWRITE, CLS_FOREIGN -> OP_FOREIGN (write nothing), CLS_OWNED ->
 //                     write `value`, read back, OP_OK or OP_FAIL with op_value = the readback.
-// This header is NOT wired into any firmware YAML. It lives in firmware/proposed/ until the integration moves it to
-// firmware/include/ together with its scope-chain entry (the FB-B2 suite pins the set of headers in firmware/include/).
+// This header is NOT wired into any firmware YAML. It lives in docs/dev/gentle-rate-controller/proposed/, outside
+// firmware/ (two suites pin what git tracks under firmware/: the FB-C3 tree hash of every .h / .yaml / .md and the
+// FB-B2 header set of firmware/include/), until the integration moves it to firmware/include/ together with its
+// scope-chain entry grc1.
 //
 // Time: uptime is millis()-style unsigned 32-bit arithmetic, wrap safe; the wall clock is epoch seconds (0 = not
 // valid). Power in W, SOC in tenths of a percent. Every division has non-negative operands (identical to Python //).

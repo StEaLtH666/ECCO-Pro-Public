@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Host C++ compile and replay proof of firmware/proposed/ecco_gentle_rate_core.h against the GRC reference model.
+"""Host C++ compile and replay proof of docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h
+against the GRC reference model.
 
 The header is the pure decision core of the guarded charge-rate controller (spec docs/dev/gentle-rate-controller/
 SPEC.md revision 2); docs/dev/gentle-rate-controller/reference_model.py is its executable specification and
@@ -42,7 +43,7 @@ from dataclasses import fields
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "firmware" / "proposed" / "ecco_gentle_rate_core.h"
+HEADER = ROOT / "docs" / "dev" / "gentle-rate-controller" / "proposed" / "ecco_gentle_rate_core.h"
 HARNESS = ROOT / "registry" / "tests" / "gentle_rate_harness.cpp"
 MODEL_DIR = ROOT / "docs" / "dev" / "gentle-rate-controller"
 

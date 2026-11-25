@@ -2,7 +2,8 @@
 """Guarded charge-rate controller (GRC): the pure decision core, as an executable reference model.
 
 Executable specification of docs/dev/gentle-rate-controller/SPEC.md (revision 2). The firmware form is
-firmware/proposed/ecco_gentle_rate_core.h; registry/tests/test_gentle_rate_core_host.py proves the header produces the
+docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h; registry/tests/test_gentle_rate_core_host.py proves
+the header produces the
 same trace as this model on every vector of vectors.json and on a seeded random fuzz.
 
 What it decides: whether a lease may start, which single slot-power value to write next (or none), when the lease

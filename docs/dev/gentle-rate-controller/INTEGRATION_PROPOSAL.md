@@ -1,6 +1,6 @@
 # GRC integration: patch proposal (NOT applied)
 
-Nothing in this file is applied. It states exactly what a real integration of `firmware/proposed/ecco_gentle_rate_core.h`
+Nothing in this file is applied. It states exactly what a real integration of `proposed/ecco_gentle_rate_core.h`
 (SPEC revision 2) would change, so the change can be reviewed, sized and authorised before anyone writes it. Every item
 below touches a pinned or production artefact and therefore needs its own PR, its own review by someone other than its
 author, and the owner's authorisation for any flash or live step (SPEC section 13: L3 onwards).
@@ -14,11 +14,13 @@ ${ecco_inverter_tou_power_ceiling_w}`, `script_step_ms` equal to the `wait_until
 `grc_execute`). The header's own `static_assert(op_timeout_ms > script_steps * script_step_ms + script_queue_ms)`
 keeps a timed-out operation over before its result could arrive.
 
-**The header moves into the build**: `git mv firmware/proposed/ecco_gentle_rate_core.h firmware/include/` (byte
-identical) and `esphome: includes:` gains `include/ecco_gentle_rate_core.h` (after `ecco_rtc_policy.h`). The header
-waits in `firmware/proposed/` in this offline stage because `registry/tests/test_fallback_save_scope.py` pins the set of
-headers in `firmware/include/` ("a later PR declares its own in added_files"): the move is legal only together with
-the chain entry below.
+**The header moves into the build**: `git mv docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h
+firmware/include/` (byte identical) and `esphome: includes:` gains `include/ecco_gentle_rate_core.h` (after
+`ecco_rtc_policy.h`). The header waits outside `firmware/` in this offline stage because two suites pin what git tracks
+there: `registry/tests/test_failback_shadow_ha_contract.py` hashes every tracked `.h` / `.yaml` / `.md` under
+`firmware/` (the FB-C3 tree pin: any new file there fails it) and `registry/tests/test_fallback_save_scope.py` pins the
+set of headers in `firmware/include/` ("a later PR declares its own in added_files"): the move is legal only together
+with the chain entry `grc1` below, which declares the header in `added_files`.
 
 **Globals**: `grc_core` (an `ecco_grc::Core`, not restored: rebuilt at boot from the record), `grc_last_op` (the
 result to report: `op`, `op_seq`, `op_kind`, `op_value`), `grc_rx_ms` (the `millis()` of the last answered Modbus read;
