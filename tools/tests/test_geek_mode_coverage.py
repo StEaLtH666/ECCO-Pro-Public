@@ -13,6 +13,8 @@ universe is COMPUTED from code, never typed), and every way of getting that wron
   [5] MUTATIONS (each must fail with the right message): a source dropped; an attribute dropped; an invented attribute; an undeclared
       attribute added to a scratch copy of the contract (constant and payload; constant only); an undeclared advice key; a new
       automation; a new entity; a changed description; an orphan text; a missing text; an unalerted status
+  [5b] a diagnostics section that another change adds (the Ghost update's advice_incidents) has its text in DIAG_SECTIONS_ARRIVING: unused
+      on a tree without the section, used on one with it, never a way to hide a missing text, and the regeneration a merge needs
 
 Test-only, no network, nothing live. Scratch copies live in the system temp directory and are removed.
 """
@@ -20,6 +22,7 @@ Test-only, no network, nothing live. Scratch copies live in the system temp dire
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import re
 import sys
@@ -329,6 +332,111 @@ try:
     T.ENTITY_ATTRS["intel.status"]["zz_stale_text"] = T.N("a text for an attribute that is gone")
     with_text_mutation("a stale entity text", lambda: None, lambda: T.ENTITY_ATTRS["intel.status"].pop("zz_stale_text"),
                        "ORPHAN text (entity layer, intel.status) for attribute zz_stale_text")
+    # ---- a text that arrives with ANOTHER change (blocker B1 of the merge rehearsal of 25 Nov 2026: the Ghost update adds the diagnostics
+    # section advice_incidents, which has a text here; on a tree without that section the text must change nothing, on a tree with it the
+    # text must be used, and neither case may hide a missing text) ----
+    ARR = T.DIAG_SECTIONS_ARRIVING
+    FIXED_SENTENCE = " Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."
+    check("[arriving] the arriving texts are exactly one, for advice_incidents (a new entry is a deliberate edit of this pin)", sorted(ARR) == ["advice_incidents"], str(sorted(ARR)))
+    check("[arriving] the text is plain ASCII, a sentence or more, and its note stays under the card's 400-character cut (cleanText)",
+          all(isinstance(t, str) and t.isascii() and t.strip().endswith(".") and len(t) + len(FIXED_SENTENCE) <= 400 for t in ARR.values()),
+          str({k: len(v) + len(FIXED_SENTENCE) for k, v in ARR.items()}))
+    check("[arriving] it says what the section shows and what it does not prove (no proof of a complete log) and that nothing is applied",
+          all(w in ARR["advice_incidents"] for w in ("failed", "read back", "no proof", "Nothing is applied")))
+    check("[arriving] it names no site value: no entity id, no address, no digit run (the privacy suite scans the same file)",
+          not re.search(r"[a-z0-9_]+\.[a-z0-9_]+_[a-z0-9_]+|\d{3,}|://", ARR["advice_incidents"]))
+    SEC = "advice_incidents"
+    real_has = SEC in cu.diag_sections        # False on a tree without the Ghost update's code, True on a tree that has it (a merged tree)
+    cu_without = dataclasses.replace(cu, diag_sections=[k for k in cu.diag_sections if k != SEC])
+    cu_with = dataclasses.replace(cu, diag_sections=cu_without.diag_sections + [SEC])
+    ex_here = {e["id"]: e for e in cat["exceptions"]}
+    check("[arriving] on this tree the committed catalogue holds the advice_incidents exception exactly when the code has the section",
+          (f"diag.{SEC}" in ex_here) == real_has, f"code has it: {real_has}; catalogue has it: {f'diag.{SEC}' in ex_here}")
+    check("[arriving] and the arriving table is not an orphan: the texts build the committed catalogue byte for byte",
+          G._json_bytes(G.build_catalogue(cu, T), 4) == (ROOT / G.CATALOGUE_REL).read_bytes())
+    built, built_without = G.build_catalogue(cu_with, T), G.build_catalogue(cu_without, T)
+    ex_built = {e["id"]: e for e in built["exceptions"]}
+    ex_without = {e["id"]: e for e in built_without["exceptions"]}
+    check("[arriving] on a tree without the section the text is unused: no advice_incidents exception, the other exceptions as they are",
+          f"diag.{SEC}" not in ex_without and [e for e in cat["exceptions"] if e["id"] != f"diag.{SEC}"] == built_without["exceptions"])
+    check("[arriving] on a tree whose code has the section the text is used: one more exception, advice_incidents, not shown in any state",
+          set(ex_built) - set(ex_without) == {f"diag.{SEC}"} and set(ex_without) <= set(ex_built)
+          and ex_built[f"diag.{SEC}"]["reason"] == "not_exposed_in_states" and ex_built[f"diag.{SEC}"]["what"] == f"Diagnostics download section '{SEC}'",
+          str(set(ex_built) ^ set(ex_without)))
+    check("[arriving] its note is the arriving text plus the fixed sentence of every unshown section, and fits the card's 400 characters",
+          ex_built[f"diag.{SEC}"]["note"] == ARR[SEC] + FIXED_SENTENCE and len(ex_built[f"diag.{SEC}"]["note"]) <= 400)
+    check("[arriving] every other part of the catalogue and every other exception is exactly as without it (sorted in place)",
+          {k: v for k, v in built.items() if k != "exceptions"} == {k: v for k, v in built_without.items() if k != "exceptions"}
+          and [e for e in built["exceptions"] if e["id"] != f"diag.{SEC}"] == built_without["exceptions"]
+          and [e["id"] for e in built["exceptions"]] == sorted(e["id"] for e in built["exceptions"]))
+    check("[arriving] the catalogue it builds is valid (ecco-geek-catalogue/1) and passes the coverage function",
+          G.validate_catalogue(built) == [] and G.coverage_problems(built, cu_with) == [], str(G.validate_catalogue(built)[:2]))
+
+    def refuse(label, universe, expect):
+        try:
+            G.build_catalogue(universe, T)
+            check(f"[arriving] mutation '{label}' is refused", False, "no error raised")
+        except G.CoverageError as exc:
+            check(f"[arriving] mutation '{label}': {expect!r}", expect in str(exc), str(exc)[:300])
+
+    saved_arr = ARR.pop(SEC)
+    try:
+        refuse("a section the code has with no text in either table (the failure this change fixes: UNCATALOGUED)", cu_with,
+               f"UNCATALOGUED diagnostics section {SEC}")
+        T.DIAG_SECTIONS[SEC] = saved_arr
+        refuse("the same text moved to DIAG_SECTIONS while the code lacks the section (still an orphan: only the arriving table waits)", cu_without,
+               f"ORPHAN text for diagnostics section {SEC}")
+    finally:
+        T.DIAG_SECTIONS.pop(SEC, None)
+        ARR[SEC] = saved_arr
+    T.DIAG_SECTIONS[SEC] = "A second text for the same section."
+    try:
+        refuse("a key in both tables", cu_with, "has a text in DIAG_SECTIONS and in DIAG_SECTIONS_ARRIVING")
+    finally:
+        T.DIAG_SECTIONS.pop(SEC)
+    ARR["zz_blank"] = "  "
+    try:
+        refuse("an empty arriving text, even on a tree that lacks the section", cu_without, "DIAG_SECTIONS_ARRIVING zz_blank: must be a non-empty text")
+    finally:
+        ARR.pop("zz_blank")
+    ARR["zz_not_here"] = "A text for a section no code has."
+    try:
+        built_zz = G.build_catalogue(cu_without, T)
+        check("[arriving] an arriving text for a section the code lacks is unused (not an exception, not an error)",
+              "diag.zz_not_here" not in {e["id"] for e in built_zz["exceptions"]} and G._json_bytes(built_zz, 4) == G._json_bytes(built_without, 4))
+    finally:
+        ARR.pop("zz_not_here")
+    check("[arriving] after these mutations the arriving table is as written", sorted(ARR) == [SEC] and ARR[SEC] == saved_arr and SEC not in T.DIAG_SECTIONS)
+
+    # the same, end to end: a scratch copy of the code that HAS the section (this tree's code if it has it, else the coordinator with the
+    # section added), run through the tool as CI runs it. Against a catalogue and ledger that describe the tree WITHOUT the section, --check
+    # says DRIFT (not UNCATALOGUED); the regeneration the message asks for writes the exception, and --check then passes. That regeneration
+    # is the step a merge of this change with the Ghost update needs (docs, section 23). On a tree that has the section already, the
+    # committed files are the regenerated ones, so --check passes at once and the regeneration changes nothing.
+    d, o = scratch_dir(), scratch_dir()
+    try:
+        copy_read_set(d)
+        if not real_has:
+            patch_file(d / "custom_components/ecco_intelligence/coordinator.py", '"mode": MODE, "versions": {"integration_version"',
+                       f'"{SEC}": {{}}, "mode": MODE, "versions": {{"integration_version"')
+        copy_outputs(o)
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(d), "--out-root", str(o))
+        if real_has:
+            check("[arriving] scratch tree with the section, committed files already regenerated: --check passes", rc == 0, out[-300:])
+        else:
+            check("[arriving] scratch tree with the section: --check is DRIFT on the catalogue and the ledger, not UNCATALOGUED",
+                  rc == 1 and "UNCATALOGUED" not in out and "DRIFT" in out and "intelligence.catalogue.json" in out
+                  and "GEEK_MODE_COVERAGE_LEDGER_intelligence.md" in out, out[-400:])
+        rc, out = run_tool("geek_mode_coverage.py", "--repo-root", str(d), "--out-root", str(o))
+        check("[arriving] scratch tree with the section: the regeneration writes the three files", rc == 0 and out.count("wrote ") == 3, out[-300:])
+        rc, out = run_tool("geek_mode_coverage.py", "--check", "--repo-root", str(d), "--out-root", str(o))
+        check("[arriving] then --check passes (negative control of the DRIFT line above)", rc == 0, out[-300:])
+        exc_scratch = {e["id"]: e for e in json.loads((o / G.CATALOGUE_REL).read_bytes())["exceptions"]}
+        check("[arriving] the regenerated catalogue holds the one advice_incidents exception, with the arriving text, and no other change to the exceptions",
+              set(exc_scratch) - set(ex_without) == {f"diag.{SEC}"} and set(ex_without) <= set(exc_scratch)
+              and exc_scratch[f"diag.{SEC}"]["note"] == ARR[SEC] + FIXED_SENTENCE, str(set(exc_scratch) ^ set(ex_without)))
+    finally:
+        cleanup(d, o)
     check("after the mutations the texts build the committed catalogue again", G._json_bytes(G.build_catalogue(cu, T), 4) == (ROOT / G.CATALOGUE_REL).read_bytes())
 finally:
     cleanup(S1, O1)

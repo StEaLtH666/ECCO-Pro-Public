@@ -14,7 +14,9 @@ What it does, in order:
      classes, options, units, the diagnostics download), the standalone dashboard and the Production card's read lists.
   2. Builds the catalogue `ecco-geek-catalogue/1` (frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json) from that
      universe and the plain-words texts in tools/geek_mode_texts_intelligence.py. A universe member without a text, or a text
-     without a universe member, is an error: the catalogue cannot silently lag the code, and an invented entry cannot linger.
+     without a universe member, is an error: the catalogue cannot silently lag the code, and an invented entry cannot linger. One kept-apart
+     exception: a text in DIAG_SECTIONS_ARRIVING (a diagnostics section that ANOTHER change adds to the download) waits unused until this
+     tree's code has the section, then is used as a DIAG_SECTIONS text; on a tree without the section it changes nothing.
   3. Builds the information coverage ledger (docs/product-ui/GEEK_MODE_COVERAGE_LEDGER_intelligence.md and its machine form
      frontend/ecco-mode-shell/catalogue/intelligence.ledger.json): every source and attribute as COVERED, every exception with its
      reason, and (with a live shape listing) the live comparison: UNDECLARED, NOT_PRESENT_LIVE, NOT_CHECKED_LIVE.
@@ -932,10 +934,21 @@ def build_exceptions(u: Universe, T, problems: list) -> list:
         out.append({"id": ident, "what": what, "reason": reason, "note": note})
 
     covered = diag_covered(u, T, problems)
+    # DIAG_SECTIONS_ARRIVING: texts written ahead of the change that adds the section to the download. A text there is used only when
+    # this tree's code HAS the section (below); otherwise it waits unused and is neither an orphan nor an exception. It cannot hide a
+    # missing text: a section the code has and neither table describes is UNCATALOGUED, and a key in both tables is refused.
+    arriving = T.DIAG_SECTIONS_ARRIVING
+    for key in sorted(set(T.DIAG_SECTIONS) & set(arriving)):
+        problems.append(f"diagnostics section {key} has a text in DIAG_SECTIONS and in DIAG_SECTIONS_ARRIVING: keep one")
+    for key, text in sorted(arriving.items()):
+        if not isinstance(text, str) or not text.strip():
+            problems.append(f"DIAG_SECTIONS_ARRIVING {key}: must be a non-empty text")
     for key in u.diag_sections:
         meta = T.DIAG_SECTIONS.get(key)
         if meta is None:
-            problems.append(f"UNCATALOGUED diagnostics section {key}: no text in DIAG_SECTIONS")
+            meta = arriving.get(key)
+        if meta is None:
+            problems.append(f"UNCATALOGUED diagnostics section {key}: no text in DIAG_SECTIONS or DIAG_SECTIONS_ARRIVING")
             continue
         if key in covered:
             continue                      # the same information is a status attribute with a row: not an exception

@@ -51,7 +51,7 @@ preview and the example dashboard; section 12 records how they were joined.
 | File | What it is |
 |---|---|
 | `tools/geek_mode_coverage.py` | computes the available universe FROM CODE, builds the catalogue and the ledger, validates the catalogue against the schema, compares with the live shape; `--check` regenerates and compares |
-| `tools/geek_mode_texts_intelligence.py` | the plain-words texts (titles, descriptions, alerts, exceptions); data only; the tool refuses a missing or an orphan text |
+| `tools/geek_mode_texts_intelligence.py` | the plain-words texts (titles, descriptions, alerts, exceptions); data only; the tool refuses a missing or an orphan text (one kept-apart exception, section 23) |
 | `tools/gen_geek_fixtures.py` | the synthetic state fixtures, built from the real contract builders; `--check` |
 | `frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json` | the catalogue, schema `ecco-geek-catalogue/1` |
 | `frontend/ecco-mode-shell/catalogue/intelligence.ledger.json` | the ledger in machine form, schema `ecco-geek-ledger/1` |
@@ -235,7 +235,8 @@ live shape: each fails with its own message.
    into a generic core (schema validator, JSON layout, ledger, live comparison, Markdown, `--check`) and one small view module per
    tab (universe plus texts), so the second tab adds a module, not a copy.
 3. Generate the catalogue, the ledger and the fixtures; run `--check` and the suites. Anything the code exposes that has no text, or
-   a text for something that is gone, fails the build.
+   a text for something that is gone, fails the build (one kept-apart exception: a text for a diagnostics section that another change
+   adds waits unused until the code has it, section 23).
 4. Take a live shape listing once (read only; names, types and sizes, no values) and run the comparison: `UNDECLARED` is a finding.
 5. In the dashboard, wrap the tab's EXISTING card (and its controls) as children of the shell, Production-visible, with the
    catalogue included inline. Do not change the existing cards, helpers or dashboards.
@@ -1577,3 +1578,31 @@ Every node command of the round went through the guard wrapper (3 GB heap, kill 
 - `preview/strip-check.html`, `preview/check-strip.mjs`, `preview/strip-check-lib.mjs`: **comments only** (section 22.6).
 - `test/static.test.mjs`, `test/core.test.mjs`, `test/perf.test.mjs`, `test/real-catalogue.test.mjs`, `test/scan.test.mjs`, `test/strip-check.test.mjs`, `test/differential.test.mjs`, `test/coverage.test.mjs`, `test/minidom.mjs`: **not changed**. The rule that a test whose text reads a clock carries the `[wall-clock]` tag still holds for the new tests (the planted clock calls in `async.test.mjs` are built from pieces, and the helpers that read a clock live in `async-net.mjs`).
 - `README.md`: a paragraph, three table rows (element, async, cache), the mutation row (518), the count of broken copies of the self-test (38, it said 31) and the sentence about the headless frames. This document: section 22.
+
+## 23. A text that arrives with another change (25 Nov 2026: blocker B1 of the merge rehearsal)
+
+The merge rehearsal of 25 Nov 2026 found that the Ghost update (PR 62, `dev/intel-value-ghost`) adds one top-level section, `advice_incidents`, to the integration's diagnostics download (the coordinator returns it; the download adds a `stored` member to it). This tool refuses a diagnostics section that has no text, so on any tree that has both changes `geek_mode_coverage.py --check`, `test_geek_mode_ledger.py` and `test_geek_mode_coverage.py` failed with "UNCATALOGUED diagnostics section advice_incidents". A text added to `DIAG_SECTIONS` alone does not fix it: this change's own code has no such section, so the same tool then refuses the text as an orphan ("the download no longer has it"). No committed catalogue can be right for both trees, because the catalogue is the output of the code of the tree it sits in.
+
+### 23.1 What was changed (tools and tests only; nothing shipped)
+
+- `tools/geek_mode_texts_intelligence.py`: a second table, `DIAG_SECTIONS_ARRIVING`, with the text of `advice_incidents`. The text says what the section shows (each time writing the advice to the advice log failed or could not be read back; when, attempts, cycles missed, kind of error), what it does not prove (only the newest incidents are kept and one still open at a restart is lost, so an empty list is no proof of a complete log) and that nothing is applied. As the note of an exception it is 390 characters; the card cuts a note at 400.
+- `tools/geek_mode_coverage.py`: a text in `DIAG_SECTIONS_ARRIVING` is used exactly as a `DIAG_SECTIONS` text on a tree whose code has the section, and waits unused on a tree without it (it is not an orphan and changes nothing there). Nothing else was loosened: a section the code has that neither table describes is still UNCATALOGUED; a text in `DIAG_SECTIONS` for a section the code lacks is still an ORPHAN; a key in both tables, or an empty arriving text, is an error.
+- `tools/tests/test_geek_mode_coverage.py`: 21 checks appended (block 5b of the suite header): the table is exactly the one entry, the text's length, ASCII and wording, the unused case (the committed catalogue is byte for byte what it was), the used case (one more exception and nothing else changes), four refused mutations and one unused case, and an end-to-end run on a scratch copy of the code that has the section (DRIFT, not UNCATALOGUED, until the regeneration; then `--check` passes). No existing check was edited.
+- On this tree the generated files are byte-identical to before (the catalogue, the ledger in both forms, the generated dashboard text, the card, the example and the resource plan keep their sizes and sha256): **no pin was changed**.
+
+### 23.2 What a merge with the Ghost update needs (a mechanical step, the same in either order)
+
+On the merged tree the committed catalogue and ledger describe the tree without the section, so `--check` says DRIFT (and the ledger and coverage suites fail) until they are regenerated. The step, in this order:
+
+1. `python tools/geek_mode_coverage.py` writes the catalogue, the ledger (JSON) and the ledger (Markdown); the review is one exception, `diag.advice_incidents`, in each (the ledger then counts 29 exceptions, 24 of them not exposed in states).
+2. `python tools/geek_mode_dashboard_config.py --out <file>` gives the new size and sha256 of the generated dashboard text. Repin, in `tools/tests/test_ecco_mode_shell_card.py`, `CAT_SIZE`, `CAT_SHA256`, `LEDGER_SIZE`, `LEDGER_SHA256_PREFIX`, `CONFIG_SIZE` and `CONFIG_SHA256` (a deliberate edit of that suite; the card, the example and the resource plan stay as they are).
+3. The checklist's line for the generated dashboard text (`GEEK_MODE_U1_GO_CHECKLIST.md`: its suite requires the pin suite's values), the two size figures of the runbook's section 2 (documentary) and the count of exceptions in `frontend/ecco-mode-shell/README.md` (28 to 29; the example suite requires it). The runbook's round records keep the sizes and hashes of the artefacts that were installed from `ef363d0`.
+4. Run the Python suites of the Geek Mode change and the node suites that read the real catalogue (`real-catalogue`, `coverage`, `generated-config`); nothing in them changes.
+
+### 23.3 What it means for what is installed
+
+Nothing that is installed differs from what the repository now holds on this tree: no card file, no resource, no dashboard text and no kit changed. After the regeneration of 23.2 the generated dashboard text, which the owner pastes into the admin-only dashboard, differs from the installed one by one entry in the catalogue's "not shown" list; the installed dashboard needs no change to keep working, and a re-paste, which is the owner's step in the Home Assistant UI, only adds that one line.
+
+### 23.4 What is not covered
+
+The text is read from the Ghost update's code and its documents; it has not been checked against a real download. The tool reads the sections from the return of `coordinator.diagnostics` only, so two top-level keys that `diagnostics.py` adds around it, `loaded` and the Ghost update's `ghost` block (a simulation with money figures), are outside its universe and have no text: a limit of the tool, not changed here.

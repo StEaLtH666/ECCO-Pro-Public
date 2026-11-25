@@ -514,6 +514,18 @@ DIAG_SECTIONS = {
     "liveness": "How recently the input data was seen to change.",
     "proposed_constants": "The engineering limits (proposed values, not owner decisions) the integration runs with.",
 }
+# Texts for diagnostics sections that ANOTHER change adds to the download (here: the Ghost update's advice-log incidents), written
+# before that change is merged with this one. The tool uses such a text only on a tree whose code HAS the section, exactly as a
+# DIAG_SECTIONS text; on a tree without it the text waits unused and changes nothing (the catalogue and the ledger stay byte-identical,
+# and it is not an orphan). A section the code has that neither table describes is still UNCATALOGUED, and a key in both tables is an
+# error. The note the card shows is this text plus one fixed sentence (116 characters) and the card cuts a note at 400 characters
+# (cleanText in ecco-mode-shell.js), so keep a text under 280 characters; the coverage suite checks it. Once the other change has
+# landed, move the text up into DIAG_SECTIONS.
+DIAG_SECTIONS_ARRIVING = {
+    "advice_incidents": "Incidents of Intelligence's advice log: each time writing its advice failed or could not be read back (when, attempts, "
+                        "cycles missed, kind of error). Only the newest are kept; one open at a restart is lost, so an empty list is no proof "
+                        "of a complete log. Nothing is applied.",
+}
 # the diagnostics sections whose information is ALSO a status attribute with a Geek Mode row (section -> the status attributes);
 # the tool checks each claim against the real attributes, and such a section is covered, not an exception
 DIAG_COVERED = {"mode": ("mode",), "status": ("status",), "reason_codes": ("reason_codes",), "generated_at": ("generated_at",),
