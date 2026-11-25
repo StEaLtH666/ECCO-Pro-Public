@@ -313,3 +313,42 @@ a render of this repository differed from it and a whole-file dashboard deploy w
 frozen edit is the dashboard (two exact (before, after) pairs). The dashboard version is not bumped (the precedent is `wsc1` and `ptt1`). The site
 policy's protected layer (the Overview's flow card) is byte-identical, so the preservation gate's hash for it is unchanged. ZERO firmware, Home
 Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call of its own.
+
+## What ovw5 changed
+
+`ovw5` gives the Solar series of each of the three `Power Flow Today` charts its own `group_by` block in the repository's own dashboard
+(`registry/tests/_ovw5_scope.py`; pinned by `home-assistant/tests/test_ecco_power_flow_solar_fill.py`): `func: avg`, `duration: 5min`,
+`fill: last`; four lines per chart, twelve in all. The SOC series of the same charts already has such a block. The change was applied to the
+production Overview on 25 Nov 2026 first (the owner saw the tooltip list Solar alone); until this entry the repository's dashboard still had the
+old text, so a whole-file dashboard deployment of a render of this repository would have put it back. It edits no chain-pinned artifact. Its one
+frozen edit is the dashboard: ONE exact (before, after) pair (the Solar series, and the same with its `group_by`), found and made exactly three
+times, once per chart. The post-export layer requires every declared hunk to occur exactly once, so the pair is declared as three hunks, each
+reaching back through its own chart's grid options, title and series list; that also makes each occurrence provably the Solar series of a
+`Power Flow Today` chart. The dashboard version is not bumped (the precedent is `wsc1`, `ptt1` and `ovw4`). The site policy's protected layer (the
+Overview's flow card) is byte-identical. ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus
+operation, no service call, no entity, no network access.
+
+**Why.** apexcharts-card (a third-party card that is not part of this repository; the installed 2.2.3, read from its source) shows the shared
+tooltip with every series only while all series have the same time points; when one series has fewer, it falls back to the series nearest the
+cursor. Every series of the chart is grouped per 5 minutes with `fill: 'null'` (an empty bucket becomes a null point) and the card drops the
+trailing buckets of a series that hold no value (empty, or a single null point). Whenever the PV reading did not change inside the newest bucket
+(evening and night) the Solar series ended one bucket before the others and the tooltip listed Solar alone. With `fill: last` an empty bucket
+takes the last known value, so Solar ends with the others. Only the Solar series changed: House, Battery and Grid keep `fill: 'null'`, SOC keeps
+its own `fill: last`.
+
+**The trade-off (recorded, not removed).**
+
+- `fill: last` has no age limit: the card offers `last`, `zero` and `null` only. A reading that keeps its last value (a held, stale value) is
+  drawn flat, exactly as a steady reading would be; with `fill: 'null'` such a case showed a gap only because its bucket was empty, which is the
+  very artefact that broke the tooltip. A stuck but held PV value is therefore not distinguishable from a steady one on this chart.
+- An entity that goes `unavailable` still draws a gap. The card turns a state that is not a number into a null point; that makes its bucket
+  non-empty, so it is not filled, and the empty buckets after it take that null as their last value, so the gap lasts until a number arrives.
+  `fill: last` does not turn an outage into a flat line.
+- Only buckets up to now are filled; the rest of the 24 hour span stays empty.
+
+**A future freshness limit (not built).** The card has no age bound, so a bounded fill cannot be set on the chart alone (a bounded `last` for
+Solar with `fill: 'null'` for the other four series is not possible). The option is a template sensor, used as the Solar series' entity with
+`fill: last`, that reports `unavailable` unless the dongle's telemetry is live: `binary_sensor.<slug>_telemetry_online` is on and
+`sensor.<slug>_last_telemetry_update` is no older than about 180 s. An outage and stale telemetry would then both draw a gap. It costs one new
+Home Assistant package entity and a dashboard series-entity edit, that is another gated dashboard change and another post-export entry. It is not
+built, not part of ovw5, and needs the owner's go like any dashboard change.

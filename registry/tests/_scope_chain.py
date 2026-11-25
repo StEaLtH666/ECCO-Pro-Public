@@ -132,6 +132,7 @@ import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
 import _ovw3_scope as _ovw3  # noqa: E402
 import _ovw4_scope as _ovw4  # noqa: E402
+import _ovw5_scope as _ovw5  # noqa: E402
 import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _ptt1_scope as _ptt1  # noqa: E402
@@ -1441,7 +1442,33 @@ OVW4 = Entry(
          "dump_to_grid.guarded_start, as Stage 3's card supports them; display configuration only, the dashboard version is not bumped: "
          "ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4)
+# ovw5 (the Solar series of each Power Flow Today chart carries its own group_by with fill last; _ovw5_scope.py): made on public main after ovw4
+# (the newest entry when it was built; its fingerprint is sealed after ovw4's and is sealed again if another entry merges first). The chart
+# (custom:apexcharts-card, three copies) shows its shared five-series tooltip only while every series has the same time points; with the
+# empty-bucket fill `null` the Solar series ended one 5-minute bucket early whenever the PV reading had not changed, and the tooltip listed
+# Solar alone. The SOC series already has its own group_by with fill last; ovw5 gives Solar the same (func avg, duration 5min, fill last: four
+# lines per chart, twelve in all). It was applied to the production Overview first (25 Nov 2026); this entry records it so that a whole-file
+# dashboard deployment cannot undo it. FROZEN edit (PEX): the dashboard (_ovw5_scope.FROZEN_REVERTERS; as of ovw4 it is ovw4's checkpoint,
+# byte for byte); ONE exact pair found and made exactly three times (declared as three hunks, one per chart); the dashboard version is NOT
+# bumped (the precedent of wsc1, ptt1 and ovw4). The trade-off (fill last has no age limit; an unavailable entity still draws a gap; no freshness
+# limit is built) is recorded in docs/dev/post-export-edit-layer.md. The site policy's protected layer (the Overview's flow card) is untouched.
+# Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant
+# package, deployment manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no service call, no entity, no network access.
+OVW5 = Entry(
+    id="ovw5", pr="OVW5", commit="unmerged",
+    added_files=_ovw5.ADDED_FILES,
+    frozen_reverts=dict(_ovw5.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ovw5; as of pub0 it is its pub0 state (manifest result)
+        _ovw5.DASHBOARD_REL: "2236750f709dd0ef4b15d708bfec3228856671efb982b0f0d6732cacb29deaee",
+    },
+    # _pex.fingerprint(OVW5): hashes its parent ovw4's fingerprint and every declaration above
+    fingerprint="22fbad72a6b1ad72d0f0576deb98ab978d6d4957bb452efbe2cb9ed5e095e26e",
+    note="the Solar series of each Power Flow Today chart gets its own group_by (func avg, duration 5min, fill last), as the SOC series "
+         "already has, so the five-series tooltip stays whole when Solar has no reading change in the newest bucket; display configuration "
+         "only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core "
+         "change, ZERO Modbus operation, no service call, no entity",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

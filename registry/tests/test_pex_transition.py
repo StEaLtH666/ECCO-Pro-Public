@@ -296,6 +296,7 @@ LEDGER = {   # file -> exact number of calls of each _pex function
     "home-assistant/tests/test_ecco_schedule_manual_restore.py": {"read": 1, "as_of": 2, "fingerprint": 1, "record": 1},   # smr1: the manifest as of fcc1 and its declaration's hash link; acu1: +1 as_of (today's manifest read as of smr1: acu1 adds a stanza after smr1)
     "home-assistant/tests/test_ecco_tou_slot_settings_edit.py": {"fingerprint": 3, "record": 3, "checkpoint": 6},   # acs1: its declaration's hash link, and the manifest's checkpoints as of acs1 and as of hd1 (equal: acs1 does not edit it); acs1c: +1 fingerprint, +1 record (its declaration's hash link) and +2 checkpoint (the manifest as of acs1c and as of acu1, its parent); acs1x: the same again (+1, +1, +2: as of acs1x and as of acs1c, its parent)
     "home-assistant/tests/test_ecco_power_chart_tooltip.py": {"as_of": 1},   # ptt1: the dashboard as of ptt1 (later entries edit the dashboard again after it)
+    "home-assistant/tests/test_ecco_power_flow_solar_fill.py": {"as_of": 1},   # ovw5: the dashboard as of ovw5 (a later entry may edit the dashboard again)
     "home-assistant/tests/test_ecco_intelligence_package.py": {"read": 2, "as_of": 2, "fingerprint": 1, "record": 1},   # isp1: VERSION.yaml and the manifest as of ovw3 and as of isp1 (two helpers; a later entry's edits undone), and its declaration's hash link
 }
 OWN_PEX = {"registry/tests/_pex.py", "registry/tests/_pex0_scope.py", "registry/tests/test_pex_transition.py"}

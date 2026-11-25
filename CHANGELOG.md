@@ -792,6 +792,19 @@ The transaction, ownership, stop and restore model and the Modbus write surface 
   `home-assistant/tests/test_ecco_power_chart_tooltip.py` (an exhaustive grid for the pure function against an independent oracle, 19
   mutants of it, a DOM stand-in for the glue with 10 mutants, the structural proof that nothing else in the dashboard moved) and the
   exact reverter `registry/tests/_ptt1_scope.py`.
+- **Power Flow Today chart: the tooltip lists all five readings (the Solar series fills an empty 5-minute bucket with its last value)**
+  (`home-assistant/dashboards/ecco_pro.yaml`, post-export entry `ovw5`; the dashboard stays at 7.23.0, staged, not live-proven).
+  apexcharts-card shows the shared tooltip with every series only while all series have the same time points. All series of the chart turned
+  an empty 5-minute bucket into a null point (`fill: 'null'`) and the card drops a series' trailing buckets that hold no value, so whenever
+  the PV reading did not change inside the newest bucket (evening, night) the Solar series ended one bucket before the others and the
+  tooltip listed Solar alone. Each of the three copies of the chart (Overview, Intelligence, System) now gives the Solar series its own
+  `group_by` (`func: avg`, `duration: 5min`, `fill: last`; four lines per chart, twelve in all), as the SOC series already has. The same edit
+  was applied to the production Overview on 25 Nov 2026; this entry records it in the repository so that a whole-file dashboard deployment
+  cannot undo it. Trade-off, recorded in `docs/dev/post-export-edit-layer.md`: `fill: last` has no age limit, so a held, stale PV value is
+  drawn flat like a steady one, and an entity that goes `unavailable` still draws a gap; a freshness limit (a template sensor gated by the
+  dongle's telemetry) is described there and not built. No other series, colour, value, axis, legend, annotation, grid or third-party card
+  change, no service call, no entity. New suite `home-assistant/tests/test_ecco_power_flow_solar_fill.py` and the exact reverter
+  `registry/tests/_ovw5_scope.py`.
 
 ### Fixed (documentation)
 

@@ -1808,6 +1808,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -3940,6 +3944,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -7101,6 +7109,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
