@@ -124,6 +124,11 @@ class H:
         self.texts = [DUMP_TEXT, FP_TEXT] + ([smr] if smr is not None else [])
         w = self.w = S.World(S.parse_local(DAY + "17:50:00"))
         D.add_ha_filters(w)
+        # PLAN (stage 3): the scheduled start reads the plan's two sensors and fails closed without them. Here no override runs and the
+        # effective reserve is at the lowest Stop SOC (10 %, so no Stop SOC of this suite is raised); the plan cases are proved by
+        # test_ecco_plan_enforcement.py.
+        w.set("sensor.ecco_plan_export_hold", "clear")
+        w.set("sensor.ecco_plan_effective_reserve", "10")
         self.ha = S.HA(w, [yaml.safe_load(x) for x in self.texts])
         self.f = S.Dongle(w, outcome=fp_outcome)
         fph = dict(w.service_handlers)

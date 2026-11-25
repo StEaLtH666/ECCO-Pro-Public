@@ -143,6 +143,7 @@ class DumpDongle(S.Dongle):
                      (D_BATT, "80.0")):
             world.set(e, s)
         world.at(world.t + 7.0, self._attempts_tick)
+        world.publish_ntp_time()
         world.service_handlers.update({
             "switch.turn_on": self._switch(True), "switch.turn_off": self._switch(False),
             "button.press": self._press, "number.set_value": self._number,

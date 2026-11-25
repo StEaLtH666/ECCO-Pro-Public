@@ -1,0 +1,383 @@
+# ECCO Pro - start bypass detector: DETECT AND ALERT ONLY (option O2 of the R9 / Stage 3 integration plan, section 6)
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see frontend/ecco-plan-core/README.md ("Start-button bypass detector").
+#
+# WHY. The dongle exposes software buttons (START DUMP TO GRID - NOW, START FREE POWER - CHARGE NOW). Anything that can call a Home Assistant
+# service (the UI, an automation, a script, a voice assistant if the entity is exposed, a client holding the API key) can stage a Stop SOC,
+# turn the write enable on and press one. The firmware has no notion of ECCO's plan (override holds, the effective reserve, R9's missed-run
+# record), so such a start is not bound by any of it (release gate RG-ST3). Closing that needs a firmware gate (a flash, approved separately).
+# This package does the small thing Home Assistant alone can do: it NOTICES such a start and says so.
+#
+# WHAT IT DOES. When a Dump to Grid (Export to Grid) session or a Free Power (Charge Battery) session turns ACTIVE (the dongle's own "active"
+# binary sensor goes off -> on, a verified start), it reads, at that instant, three facts about the plan, then waits up to 45 seconds for ECCO's
+# own record of that start:
+#   - ECCO'S SCHEDULED RUN: the schedule package's last-result text reads "STARTED OK - <n>W for <m> min ..." and was written no earlier than 10 s
+#     before the session turned active (that text is written only inside the run, after its own press and a verified start; the startup recovery's
+#     "STARTED OK - running ..." and every FAILED / BLOCKED / CANCELLED / UNCONFIRMED text do not match);
+#   - ECCO'S GUARDED START (Dump to Grid only; Charge Battery has no guarded start): script.ecco_dump_to_grid_start_guarded was triggered 0 to 180 s
+#     before AND none of the three facts below was true (its own checks would have passed). A guarded script that was triggered and REFUSED, followed
+#     by a raw press, is therefore still reported whenever a fact is true; with every fact false a raw press right after a refusal looks like the
+#     guarded start (the plan would have allowed it, so nothing is lost).
+# Either record: nothing to report (only the last-check text is written). Neither record, every marker readable: a BYPASS NOTICE (below). It says
+# "no ECCO record of this start was found within 45 s" and NEVER that ECCO did not start it: this can be an ECCO run whose record was late or
+# unconfirmed (the schedule's last result then says so; the owner reads it before ending anything). A marker that cannot be read and no positive
+# record: CANNOT CLASSIFY, never an all clear.
+#
+# THE THREE FACTS (read when the session turned active, reported in the notice):
+#   (i)   an export hold was ACTIVE: sensor.ecco_plan_export_hold reads held (Hold battery, Skip tonight or Prepare for power cut);
+#   (ii)  the Stop SOC staged on the dongle (number.ecco_clock_dongle_dump_to_grid_stop_soc) was BELOW sensor.ecco_plan_effective_reserve
+#         (Dump to Grid only; both must be finite numbers from 0 to 100, read exactly as the guarded start reads them);
+#   (iii) a plan reading was UNREADABLE or INVALID: the hold sensor reads neither held nor clear, the effective reserve cannot be read or is not
+#         a number from 0 to 100, or (Dump to Grid) the staged Stop SOC cannot be read.
+# Charge Battery is not gated by Hold battery or Skip tonight at all (plan-core README, residual 3), so for it (ii) does not apply and (i) and (iii)
+# are shown for information; they also decide whether a popup is raised for it (the notice policy below).
+#
+# NOTICE POLICY (release coordinator decision, 23 Nov 2026). The incident RECORD (time, kind, text and counter, and the last-check text) is ALWAYS
+# written for a start with no ECCO record, and is never muted. The persistent NOTIFICATION (the popup) is raised:
+#   - for Dump to Grid: on EVERY start with no ECCO record (a guarded start exists for it, so a start that skipped it is worth a popup);
+#   - for Charge Battery (Free Power): ONLY when at least one of the facts (i) an export hold is active or (iii) a plan reading is unreadable or
+#     invalid is true ((ii) does not apply to it), or when the check is CANNOT CLASSIFY (that notice is never held back);
+#   - WHY: the card's own Start for Charge Battery has no guarded path, so every start from the card would otherwise raise a popup and train the
+#     owner to mute the detector. A Charge Battery start with every fact false leaves the record and the last-check text, and no popup.
+# The single mute switch hides the popups only, for every kind and every notice; the incident record is never muted.
+#
+# THE NOTICE. A persistent notification (the repository's only notification pattern: persistent_notification, one fixed id per kind so a new
+# incident replaces the old one; it is never dismissed by this package) and a small incident record in the helpers below: the time, the kind, a
+# short text and a counter. The wording says plainly that NO ECCO RECORD of the start was found within 45 s (not that ECCO did not start it), that
+# this can be an ECCO run whose record was late or unconfirmed (read the schedule last result before ending anything), and that a deliberate start
+# from the dongle's own screen or button, or a start by the owner through the Energy Actions card when no guarded start is configured, is ALSO
+# outside ECCO's guarded path and is reported as such (informational): this package cannot tell a deliberate owner start from anything else.
+# The only channel is the Home Assistant UI notification and the records: no phone push and no card display yet.
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_start_bypass_detector.py).
+#   - It NEVER actuates. The only services it calls are persistent_notification.create, input_text.set_value, input_number.set_value and
+#     input_datetime.set_datetime, and the only entities it writes are the helpers in this file. No button, switch, number, select, script or
+#     esphome call, no dongle, inverter, TOU slot, Stop SOC, write enable, End / Restore or ECCO control is ever written or pressed.
+#   - It is fail safe and quiet: every read has a default, an entity that cannot be read produces CANNOT CLASSIFY (never an all clear and never an
+#     error in the log), and an automation run that is dropped because one is already running is silent.
+#   - It adds no template entity (so no template reload) and reads only entities this repository already contains.
+#
+# WHAT IT DOES NOT DO, AND ITS LIMITS (stated plainly; nothing here is a lock).
+#   - It PREVENTS NOTHING. It makes a start outside ECCO's own paths VISIBLE within about a minute (up to 45 s of waiting for ECCO's own record,
+#     so a raw start is reported at about 45 s; a recognised ECCO start is settled at once). It does not stop a session, press End, or change a
+#     helper or a setting. A firmware gate (a flash, approved separately) is the only thing that binds the dongle's own Start button.
+#   - It is BLIND while Home Assistant is down, and for a session that started while it was down: after a restart the sensor goes unavailable ->
+#     on, which is not a start, so nothing is raised for a session already running. Check the dongle after any outage.
+#   - A script or client that uses the API key or a Home Assistant token LOOKS LIKE A PERSON: it is reported as outside ECCO's guarded path like
+#     every other raw start, and cannot be told apart from the owner pressing the dongle's own button.
+#   - One check runs at a time: a second change of a sensor while a check is waiting (its 45 s at most) is dropped silently. The dongle runs one
+#     operation at a time, so that is a flap, not a second session. A flap AFTER a check has finished is checked as a new start: ECCO's record
+#     must then be younger than 10 s, so a flap of an ECCO start that comes more than 10 s later is reported as outside ECCO's own paths.
+#   - Interrupted checks: a Home Assistant restart, or an automation reload that RE-CREATES the detect automation (its own configuration
+#     changed), during the 45 s of a check leaves the last-check text at PENDING; the next Home Assistant start or automation reload turns it
+#     into CANNOT CLASSIFY with one notification. An automation reload that leaves the detect automation UNCHANGED does not interrupt a running
+#     check (Home Assistant keeps an unchanged automation and its running instance): the check finishes and gives its own notice alone, and the
+#     interrupted-check automation stays silent while the detect automation has a running instance. A restart while a session is running, with
+#     no check pending, raises nothing.
+#   - An ECCO scheduled start that raced a raw press (the script's own press was refused as already active) is reported as outside ECCO's own
+#     paths, because the script's result is then FAILED, not STARTED OK; ECCO's own end-of-run alert covers the same event.
+#   - A notice is "no ECCO record found", not proof: an ECCO run whose STARTED OK arrives later than 45 s, or whose result reads UNCONFIRMED or
+#     FAILED although the session is its own, is reported the same way. Read the schedule's last result before ending anything.
+#   - Any run of the guarded start script in the 180 s before the session counts as ECCO's start while no fact is true, whatever the script did
+#     (it leaves no record but Home Assistant's own last_triggered), so a raw press right after a refused guarded start reads as ECCO START when every
+#     fact is false (the guarded start refuses only on a fact).
+#   - An administrator can mute the popups, switch the two automations off, or write the detector's helpers (a record, the counter): nothing here
+#     is a lock, and it records nothing of who did it.
+#   - The record outlives a restart, the notification does not, and a hard power loss can lose both: as recalled (not verified), Home Assistant keeps
+#     persistent notifications in memory only, and saves helper states every 15 minutes and at a clean stop, so a PENDING marker, a counter or a
+#     record written in the last 15 minutes before a crash may be lost.
+#   - Recalled, NOT verified on a real Home Assistant (the offline model of them is in the test suite): that a script entity's last_triggered
+#     attribute is readable as a time by as_timestamp, that `states.input_text.<id>.last_updated` moves only when the text changes, that
+#     trigger.from_state is the previous state object for a state trigger with `to` set, that the `match` test and `wait.completed` behave as
+#     modelled, that the dongle's active sensor does not pass through off on a reconnect, and that a set text identical to the old one does not
+#     move last_updated.
+#
+# INSTALL. Needs the Stage 3 packages (ecco_plan_helpers.yaml, ecco_dump_to_grid_guarded_start.yaml and the two schedule packages, R9 first) in
+# the same or an earlier deployment: it reads their sensors, text helpers and script, and without them every start is CANNOT CLASSIFY or a notice
+# with unreadable facts. Best installed in the SAME deployment as Stage 3 (one full Home Assistant restart, no extra restart). Installed later,
+# on its own, it needs NO restart: reload the helper domains (input_boolean, input_datetime, input_number, input_text) and automations, never
+# "reload all". It creates no template entity, so no template reload is needed. Nothing here is meant to be exposed to a voice assistant.
+
+input_boolean:
+  ecco_start_bypass_notice_muted:
+    name: ECCO start bypass detector, popup notices muted (the record still updates)
+
+input_datetime:
+  ecco_start_bypass_last_time:
+    name: ECCO start bypass detector, time of the last bypass notice
+    has_date: true
+    has_time: true
+
+input_number:
+  ecco_start_bypass_count:
+    name: ECCO start bypass detector, bypass notices raised (counter)
+    min: 0
+    max: 1000000
+    step: 1
+    mode: box
+
+input_text:
+  ecco_start_bypass_last_kind:
+    name: ECCO start bypass detector, kind of the last bypass notice (dump_to_grid or free_power)
+    max: 32
+  ecco_start_bypass_last_text:
+    name: ECCO start bypass detector, text of the last bypass notice
+    max: 255
+  ecco_start_bypass_last_check:
+    name: ECCO start bypass detector, result of the last check (PENDING, ECCO START, BYPASS NOTICE or CANNOT CLASSIFY)
+    max: 255
+
+automation:
+  - id: ecco_start_bypass_detect
+    alias: "ECCO - Start bypass detector (detect and alert only)"
+    description: >-
+      Notification and record only. When a Dump to Grid or Free Power session turns active it looks for ECCO's own record of the start (the
+      scheduled run's STARTED OK, or the guarded start). With neither within 45 s it records an incident (always) and raises a persistent
+      notification (Dump to Grid always; Free Power only when an override is active or a plan reading is unreadable): no ECCO record of that start
+      was found (a deliberate start from the dongle's own screen counts; so can an ECCO run whose record was late). It prevents nothing, calls no
+      dongle, inverter or ECCO control service, and writes only this package's helpers.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+        to: "on"
+        id: dump_to_grid
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+        to: "on"
+        id: free_power
+    conditions:
+      # A start is a change FROM off. unavailable / unknown -> on (a Home Assistant restart or a dongle reconnect with a session already running) is not.
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state == 'off' }}"
+    actions:
+      # 1. The facts, read at the instant the session turned active (before the wait below).
+      - variables:
+          kind: "{{ trigger.id }}"
+          kind_name: "{{ 'Dump to Grid (Export to Grid)' if trigger.id == 'dump_to_grid' else 'Free Power (Charge Battery)' }}"
+          started_ts: "{{ as_timestamp(now()) }}"
+          clock: "{{ started_ts | timestamp_custom('%H:%M', true, '--:--') }}"
+          plan_hold: "{{ states('sensor.ecco_plan_export_hold') }}"
+          # The reserve and the staged Stop SOC are read exactly as the guarded start reads them: a finite number from 0 to 100, tested as a positive
+          # range. plan_reserve -1 = cannot be read (or below 0), -2 = not a finite number from 0 to 100; staged_stop_soc -1 = cannot be read or not 0 to 100.
+          plan_reserve: >-
+            {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+            {%- if r >= 0 and r <= 100 -%}{{ r }}
+            {%- elif r < 0 -%}-1
+            {%- else -%}-2
+            {%- endif -%}
+          staged_stop_soc: >-
+            {%- set s = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(-1) -%}
+            {{ s if (s >= 0 and s <= 100) else -1 }}
+          f_override: "{{ plan_hold == 'held' }}"
+          f_below: "{{ kind == 'dump_to_grid' and plan_reserve >= 0 and staged_stop_soc >= 0 and staged_stop_soc < plan_reserve }}"
+          f_unreadable: "{{ plan_hold not in ['held', 'clear'] or plan_reserve < 0 or (kind == 'dump_to_grid' and staged_stop_soc < 0) }}"
+          any_fact: "{{ f_override or f_below or f_unreadable }}"
+          # The guarded Dump to Grid start (it records nothing of its own but Home Assistant's last_triggered): triggered 0 to 180 s before this
+          # session turned active, and its own checks would pass now (no fact true). Not read for Charge Battery (it has no guarded start).
+          guard_state: "{{ states('script.ecco_dump_to_grid_start_guarded') }}"
+          guard_age: "{{ started_ts - (as_timestamp(state_attr('script.ecco_dump_to_grid_start_guarded', 'last_triggered'), 0)) }}"
+          guarded: "{{ kind == 'dump_to_grid' and guard_state in ['on', 'off'] and guard_age >= 0 and guard_age <= 180 and not any_fact }}"
+      # 2. The check is marked PENDING, so that a restart, or an automation reload that cancels this run, during the wait is not silent (see the interrupted-check automation).
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.ecco_start_bypass_last_check
+        data:
+          value: "{{ ('PENDING - ' ~ kind_name ~ ' became active at ' ~ clock ~ '; checking whether ECCO started it')[:250] }}"
+      # 3. ECCO's own record of the start: the guarded start (known now) or the schedule's own verified STARTED OK, written no earlier than 10 s
+      # before this session turned active. A scheduled run writes it within a second of the session turning active; waiting at most 45 s is the
+      # settle time for a raw start. The text must match the run's own form, so the startup recovery's "STARTED OK - running" never counts.
+      - wait_template: >-
+          {% if kind == 'dump_to_grid' %}{% set o = states.input_text.ecco_dump_to_grid_schedule_last_result %}
+          {% else %}{% set o = states.input_text.ecco_free_power_schedule_last_result %}{% endif %}
+          {{ guarded or (o is not none and (o.state is match('STARTED OK - [0-9]+W for [0-9]+ min')) and as_timestamp(o.last_updated, 0) >= started_ts - 10) }}
+        timeout: "00:00:45"
+        continue_on_timeout: true
+      # 4. The verdict. ECCO_GUARDED / ECCO_SCHEDULED: ECCO's own record was seen. CANNOT_CLASSIFY: no record and a marker cannot be read.
+      # BYPASS: no record and every marker readable.
+      - variables:
+          sched_text: >-
+            {{ states('input_text.ecco_dump_to_grid_schedule_last_result') if kind == 'dump_to_grid' else states('input_text.ecco_free_power_schedule_last_result') }}
+          sched_readable: "{{ sched_text not in ['unknown', 'unavailable'] }}"
+          guard_readable: "{{ kind != 'dump_to_grid' or guard_state in ['on', 'off'] }}"
+          verdict: >-
+            {%- if guarded -%}ECCO_GUARDED
+            {%- elif wait.completed -%}ECCO_SCHEDULED
+            {%- elif not sched_readable or not guard_readable -%}CANNOT_CLASSIFY
+            {%- else -%}BYPASS
+            {%- endif -%}
+      - choose:
+          # ECCO's own start: nothing to report. Only the last-check text is written.
+          - conditions:
+              - condition: template
+                value_template: "{{ verdict in ['ECCO_GUARDED', 'ECCO_SCHEDULED'] }}"
+            sequence:
+              - action: input_text.set_value
+                continue_on_error: true
+                target:
+                  entity_id: input_text.ecco_start_bypass_last_check
+                data:
+                  value: >-
+                    {{ ('ECCO START - ' ~ kind_name ~ ' at ' ~ clock ~ ': ' ~ ('the guarded start ran ' ~ (guard_age | round(0) | int) ~ ' s earlier and its checks were clear' if verdict == 'ECCO_GUARDED' else 'the scheduled run recorded its own verified start (STARTED OK)') ~ '. Nothing to report.')[:250] }}
+          # Outside ECCO's scheduled or guarded start: the notice, then the record.
+          - conditions:
+              - condition: template
+                value_template: "{{ verdict == 'BYPASS' }}"
+            sequence:
+              - variables:
+                  t_override: >-
+                    {%- if f_override -%}an override was ACTIVE (Hold battery, Skip tonight or Prepare for power cut; held by {{ state_attr('sensor.ecco_plan_export_hold', 'held_by') | default('unknown', true) }})
+                    {%- elif plan_hold == 'clear' -%}no override was active
+                    {%- else -%}the override records could NOT be read (the hold sensor said {{ plan_hold }})
+                    {%- endif -%}
+                  t_below: >-
+                    {%- if kind != 'dump_to_grid' -%}not applicable to Charge Battery (it has no Stop SOC)
+                    {%- elif plan_reserve < 0 or staged_stop_soc < 0 -%}cannot be compared: the {{ 'effective reserve' if plan_reserve < 0 else 'staged Stop SOC' }} could not be read or was not a number from 0 to 100
+                    {%- elif f_below -%}the staged Stop SOC ({{ staged_stop_soc | round(0) | int }} %) was BELOW the effective reserve ({{ plan_reserve | round(0) | int }} %)
+                    {%- else -%}the staged Stop SOC ({{ staged_stop_soc | round(0) | int }} %) was not below the effective reserve ({{ plan_reserve | round(0) | int }} %)
+                    {%- endif -%}
+                  t_read: >-
+                    {%- if f_unreadable -%}a plan reading was UNREADABLE or INVALID (override records: {{ plan_hold }}; effective reserve: {{ 'unreadable' if plan_reserve == -1 else ('invalid' if plan_reserve == -2 else 'ok') }}{{ ('; staged Stop SOC: ' ~ ('ok' if staged_stop_soc >= 0 else 'unreadable')) if kind == 'dump_to_grid' else '' }})
+                    {%- else -%}the plan readings were readable
+                    {%- endif -%}
+                  title_tail: >-
+                    {%- if kind == 'dump_to_grid' and any_fact -%}- WHILE A PLAN CHECK WOULD HAVE REFUSED IT
+                    {%- elif kind != 'dump_to_grid' and (f_override or f_unreadable) -%}- with an override active or unreadable
+                    {%- else -%}(informational)
+                    {%- endif -%}
+                  record_text: >-
+                    {{ (kind_name ~ ' at ' ~ clock ~ ': no ECCO record of this start was found within 45 s (maybe a late or unconfirmed ECCO run). Override: ' ~ ('ACTIVE' if f_override else ('none' if plan_hold == 'clear' else 'UNREADABLE')) ~ '. Stop SOC below reserve: ' ~ ('n/a' if kind != 'dump_to_grid' else ('YES' if f_below else ('cannot compare' if (plan_reserve < 0 or staged_stop_soc < 0) else 'no'))) ~ '. Plan reading unreadable: ' ~ ('YES' if f_unreadable else 'no') ~ '. Detected only; not stopped.')[:250] }}
+                  # The popup policy: Dump to Grid always; Charge Battery only when a fact is true. The record below is written either way.
+                  popup_wanted: "{{ kind == 'dump_to_grid' or any_fact }}"
+                  new_count: "{{ [(states('input_number.ecco_start_bypass_count') | int(0)) + 1, 1000000] | min }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') }}"
+                  - condition: template
+                    value_template: "{{ popup_wanted }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: "{{ 'ecco_start_bypass_dump_to_grid' if kind == 'dump_to_grid' else 'ecco_start_bypass_free_power' }}"
+                      title: "{{ 'ECCO: ' ~ kind_name ~ ' became active with NO ECCO record of its start ' ~ title_tail }}"
+                      message: |-
+                        {{ kind_name }} became active at {{ clock }}, and no ECCO record of this start was found within 45 s: neither ECCO's scheduled run (its own verified STARTED OK) nor ECCO's guarded start left one. Unless it is an ECCO run after all, it was started OUTSIDE ECCO's own paths.
+
+                        That includes a deliberate start from the dongle's own screen or button, the Energy Actions card's own Start when no guarded start is set up (Charge Battery has no guarded start), and any script, voice assistant or client that holds Home Assistant access or the dongle's API key. It may well have been you: this notice cannot tell.
+
+                        Note that this can be an ECCO run whose record was late or unconfirmed: read the schedule last result before ending anything.
+
+                        At the moment it became active:
+                        - override: {{ t_override }};
+                        - Stop SOC: {{ t_below }};
+                        - plan readings: {{ t_read }}.
+                        {%- if kind != 'dump_to_grid' %}
+                        ECCO does not gate a Charge Battery start on these. This popup is raised only because at least one of them was true: a Charge Battery start with all of them clear is recorded without a popup.
+                        {%- endif %}
+
+                        If it was not an ECCO run and not you, end the session with End and restore on the dongle and check who has access.
+
+                        This is detection only. It makes a start outside ECCO's own paths VISIBLE within about a minute and PREVENTS NOTHING: it did not stop this start and cannot stop one. It sees nothing while Home Assistant is down, and a script that uses the API key looks like a person.
+              - action: input_datetime.set_datetime
+                continue_on_error: true
+                target:
+                  entity_id: input_datetime.ecco_start_bypass_last_time
+                data:
+                  timestamp: "{{ started_ts | int }}"
+              - action: input_text.set_value
+                continue_on_error: true
+                target:
+                  entity_id: input_text.ecco_start_bypass_last_kind
+                data:
+                  value: "{{ kind }}"
+              - action: input_text.set_value
+                continue_on_error: true
+                target:
+                  entity_id: input_text.ecco_start_bypass_last_text
+                data:
+                  value: "{{ record_text[:250] }}"
+              - action: input_number.set_value
+                continue_on_error: true
+                target:
+                  entity_id: input_number.ecco_start_bypass_count
+                data:
+                  value: "{{ new_count }}"
+              - action: input_text.set_value
+                continue_on_error: true
+                target:
+                  entity_id: input_text.ecco_start_bypass_last_check
+                data:
+                  value: "{{ ('BYPASS NOTICE - ' ~ kind_name ~ ' active at ' ~ clock ~ ': no ECCO record of this start was found within 45 s (detected only; ' ~ ('see the notification' if (popup_wanted and not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on')) else ('popup muted by the mute switch' if popup_wanted else 'recorded without a popup: no plan fact was true')) ~ ')')[:250] }}"
+        # CANNOT_CLASSIFY: no positive record and a marker could not be read. Never an all clear.
+        default:
+          - variables:
+              why: >-
+                {%- if not sched_readable and not guard_readable -%}the schedule result and the guarded start script could not be read
+                {%- elif not sched_readable -%}the schedule result could not be read
+                {%- else -%}the guarded start script could not be read
+                {%- endif -%}
+          - if:
+              - condition: template
+                value_template: "{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_start_bypass_unclassified
+                  title: "{{ 'ECCO: a ' ~ kind_name ~ ' start could not be classified (not an all clear)' }}"
+                  message: >-
+                    A {{ kind_name }} session became active at {{ clock }}, and ECCO could not tell whether it started it, because {{ why }}. This is NOT an all clear: the start may have been outside ECCO's own paths. Check how it was started, and that the ECCO plan, guarded start and schedule packages are installed and loaded.
+
+                    This is detection only and prevents nothing.
+          - action: input_text.set_value
+            continue_on_error: true
+            target:
+              entity_id: input_text.ecco_start_bypass_last_check
+            data:
+              value: "{{ ('CANNOT CLASSIFY - ' ~ kind_name ~ ' became active at ' ~ clock ~ '; ' ~ why ~ ' (not an all clear)')[:250] }}"
+
+  - id: ecco_start_bypass_interrupted
+    alias: "ECCO - Start bypass detector: a check was interrupted"
+    description: >-
+      Notification and record only. If the last check is still PENDING when Home Assistant starts or the automations are reloaded, and the detect
+      automation has no running instance, that check was interrupted (a run lasts at most 45 seconds): it becomes CANNOT CLASSIFY with one
+      notification. Silent when no check is pending, which is every ordinary start and reload, including a restart while a session is running,
+      and silent while the detect automation is still running its check (an automation reload that leaves the detect automation unchanged keeps it).
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: homeassistant
+        event: start
+        id: start
+      - trigger: event
+        event_type: automation_reloaded
+        id: reloaded
+    conditions:
+      - condition: template
+        value_template: "{{ states('input_text.ecco_start_bypass_last_check').startswith('PENDING') }}"
+      # An automation reload keeps an UNCHANGED automation (and its running check) alive: only a check whose detect automation has no running
+      # instance any more was interrupted. Without this, any automation reload during the 45 s of a live check raised a false notice.
+      - condition: template
+        value_template: >-
+          {{ (states.automation | selectattr('attributes.id', 'eq', 'ecco_start_bypass_detect') | map(attribute='attributes.current') | first | default(0) | int(0)) == 0 }}
+    actions:
+      - variables:
+          pending: "{{ states('input_text.ecco_start_bypass_last_check') }}"
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('input_boolean.ecco_start_bypass_notice_muted', 'on') }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_start_bypass_unclassified
+              title: "ECCO: a start check was interrupted (not an all clear)"
+              message: >-
+                Home Assistant restarted, or its automations were reloaded, while ECCO was checking whether a Dump to Grid or Free Power start was ECCO's own. The check did not finish, so that start is NOT classified, and this is not an all clear: it may have been a start outside ECCO's own paths. Check how it was started. The check was: {{ pending }}
+
+                This is detection only and prevents nothing.
+      - action: input_text.set_value
+        continue_on_error: true
+        target:
+          entity_id: input_text.ecco_start_bypass_last_check
+        data:
+          value: "{{ ('CANNOT CLASSIFY - interrupted by a Home Assistant restart or an automation reload (not an all clear); it was: ' ~ pending[10:])[:250] }}"
