@@ -21,7 +21,8 @@ pointer tracking, window scroll / resize, cleanup).
   [6]  the glue against a DOM stand-in: no tooltip, inactive tooltip, bottom overflow fixed once and never re-written (no loop), pointer
        and touch tracking, scroll / resize, a detached card, destroy and re-mount clean up, only style.left / style.top are written
   [7]  mutants of the glue: each killed by [6]
-  [8]  the chain: ptt1 is the newest post-export entry and declares exactly this dashboard edit; the frozen checkpoint is the file's hash
+  [8]  the chain: ptt1 declares exactly this dashboard edit; the frozen checkpoint is the hash of the dashboard as ptt1 left it (a later
+       post-export entry may edit the dashboard again: this suite reads it as of ptt1, with the newer entries undone)
 """
 
 from __future__ import annotations
@@ -58,7 +59,9 @@ def sha(text: str) -> str:
 
 
 DASH_REL = P.DASHBOARD_REL
-NEW_TEXT = (ROOT / DASH_REL).read_text(encoding="utf-8")
+import _pex  # noqa: E402  (PEX: this suite pins the dashboard as ptt1 left it; later post-export entries edit the dashboard again)
+# PEX: the live dashboard with every post-export entry newer than ptt1 undone (exact, sha256-checked at every step): ptt1's own state
+NEW_TEXT = _pex.as_of(DASH_REL, "ptt1", (ROOT / DASH_REL).read_text(encoding="utf-8"))
 try:
     OLD_TEXT = P.pre_ptt1_dashboard(NEW_TEXT)
 except AssertionError as exc:   # a failed proof, never a skipped one
