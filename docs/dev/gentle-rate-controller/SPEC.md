@@ -237,7 +237,8 @@ the restore attempts and the free retries are persisted, so a boot loop cannot m
 only when the inverter answered** (an exception or a readback that differs); NO_ANSWER and DEFERRED give the attempt
 and the write back (a free retry) and the restore is retried after the backoff, at most `restore_free_max` times a
 night; no restore is emitted at all until the inverter has answered a read within 30 s (at a boot: since that boot),
-and the time the restore is owed while the inverter answers is bounded by `restore_stall_ms`. The backoff is measured
+and the time the restore is owed while the inverter answers is bounded by `restore_stall_ms` (RAM only: it restarts
+at a boot; the free retries and the attempts are persisted, and Home Assistant's 15 min timer survives restarts). The backoff is measured
 as elapsed time since it was set and latches once over (no absolute-time comparison: a restore blocked for more than
 24.8 days is still emitted at the first answered read).
 
@@ -369,4 +370,4 @@ appears on the real system at all.
 | MINOR: `lost_lease_slots` against the staging numbers | against the saved fallback profile's slot powers (durable, owner-saved) and, in HA, against HA's copy of `original` | units `lost_lease`; INTEGRATION H1, section 4 |
 | MINOR: survivors of the reviewer's mutants G01, G03, G04, G07, G08, G14, G15, G18, G19, G22 | one vector each; the fuzz now emits FAIL(q) then FAIL(-1), END and grid loss while a write is in flight, grid loss while settling, window offsets of 119-121 s, 2^31 ms gaps, off-grid originals; all 22 model and 12 header twins in the suites | V200-V239 |
 | MINOR: `charging_min_w = 1` divided by zero | `config_ok` requires `charging_min_w >= 2 * round_w`; `desired` also tests `p_ref <= 0` (defence in depth, unreachable) | units config_ok |
-| MINOR: L4's configuration needed a flash; L6 did not test what a real outage does | L5a / L8a; the L7 note | section 13 |
+| MINOR: revision 2's L4 configuration needed a flash; its L6 did not test what a real outage does | L5a / L8a; the L7 note | section 13 |

@@ -124,6 +124,23 @@ never skips, without one. `make_vectors.py` regenerates `vectors.json`; the mode
   is refused; their edge-heavy differential fuzz (300 sequences, 121464 lines, ASan and UBSan, all seven states): header
   equal to model. Their bad-plan nights (400 each) give 0 worse with the site floor at the real capacity; with the
   revision 2 default of 20 kWh the same nights give their numbers again (118, 296, 0, 160), so the change is the floor.
+- Existing checks, one process at a time. On the header move (af39c72): every registry suite whose source names
+  `firmware/` or `git ls-files` (67), plus `test_offline_suite_exit_codes`, `test_write_surface_analyzer_fail_closed`,
+  `test_write_surface_invariants`, `test_pub0_privacy`, `test_ovw2_transition`, ecco_core `test_core_boundaries`,
+  tools `test_firmware_assembly`, `test_firmware_equivalence`, `test_public_privacy`, `test_run_offline_tests` and
+  `tools/validate_repo.py`: 75 of 78 exit 0; the other three are this Windows host, not the tree:
+  `test_rtc_policy` and `test_fallback_durable_host_compile` need a native g++ that can run what it builds (the CI
+  runner has one; neither reads anything these commits change), and `test_dump_to_grid_v1` needs its own folder on
+  `sys.path`, which `-I` removes (exit 0 run as CI runs it, with `-B`). On revision 3: the model and host suites,
+  `validate_repo`, `test_public_privacy`, `test_scope_chain`, `test_pex_transition`, `test_pub0_transition`,
+  `test_pub0_privacy`, `test_offline_suite_exit_codes`, `test_fallback_save_scope`, `test_tag_inventory`,
+  `test_failback_shadow_ha_contract` (the PR 67 CI failure: the firmware tree is the 14 files of main again),
+  `test_fallback_nvs_keyhash`, `test_write_surface_analyzer_fail_closed`, `test_core_boundaries`,
+  `test_lic0_transition`, `test_fallback_capture_scope`, `test_fallback_profile_schema`, `test_fallback_live_match`,
+  `test_esb1_transition`, `test_ovw1_transition`, `test_ovw2_transition`, `test_capability_registry`,
+  `test_firmware_assembly`, `test_firmware_equivalence`, `test_run_offline_tests`, `test_fresh_history_fallback`,
+  `test_fallback_durable_model` and `test_dump_to_grid_v1` (without `-I`): all 29 exit 0. No suite pins or hashes
+  `docs/dev/`; the repository-wide header scans read `firmware/` and the named code folders, not `docs/`.
 
 ### REPORT (numbers, not pass/fail: `test_reference_model.py` prints them)
 
@@ -168,4 +185,7 @@ the lifetime count restarting); (3) the late-readback rule (only the one abandon
 integration that could deliver results out of order; (4) the commit bound of 65 a night against the NVS wear budget;
 (5) the reordered ladder, in particular L1's procedure and whether L2/L3 need the HA grid-loss automation; (6) the
 writer table of SPEC section 12 against the firmware source, and the fallback profile gate; (7) whether C0 should be
-the first deliverable and the GRC kept for later, given the REPORT.
+the first deliverable and the GRC kept for later, given the REPORT; (8) the stall bound is RAM-only (it restarts at a
+boot, while the free retries and attempts are persisted): a lock that sticks again after every stuck-lock restart would
+restart the dongle about every 3 min without the firmware ever latching RESTORE_STALLED, and only HA's restart-proof
+15 min timer (INTEGRATION section 4) alerts then; whether to persist a boot-recovery count is open.

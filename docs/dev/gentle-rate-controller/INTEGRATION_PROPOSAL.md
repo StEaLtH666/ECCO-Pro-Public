@@ -92,8 +92,9 @@ GRC restore of `original` through (SPEC section 12).
 - The change-scope chain (`registry/tests/_scope_chain.py`): a new entry `grc1` with exact-match reverters for every
   YAML edit above and `added_files` naming the header, so the older byte-for-byte pins keep proving "nothing else
   moved"; no existing pin is re-hashed.
-- `tools/check_firmware_equivalence.py` on the PR: L0/L1 differ by exactly the entries above, L2 shows exactly one new
-  write path; L3 (`--generate`) for both targets.
+- `tools/check_firmware_equivalence.py` on the PR (its own equivalence levels, not the proof ladder): levels L0/L1
+  differ by exactly the entries above, level L2 shows exactly one new write path; level L3 (`--generate`) for both
+  targets.
 - `registry/tests/test_gentle_rate_core_host.py` follows the header's move (its `HEADER` path) and gains the
   integration's own checks (the YAML lambdas call exactly the documented hooks, `grc_execute` reports a result with
   the sequence and kind on every path including DEFERRED, NO_ANSWER and an exception, every operation uses `Out.slot`,
@@ -130,7 +131,10 @@ inactive and the slot power read back equal to the owner's value; otherwise Rest
 - **Alerts**: the GRC state FAULT (any reason, RESTORE_STALLED included) or the lost-lease mask non-zero raises a
   persistent notification at once with the reason, `original`, the live slot power and the two ways back (Restore
   original, the editor); **the GRC in RESTORING for more than 15 min** raises one too (an inverter that never answers
-  stops the firmware from acting at all; HA's own timer covers it).
+  stops the firmware from acting at all; HA's own timer covers it). That timer is a timestamp helper set at the first
+  RESTORING and cleared only when the GRC publishes IDLE, so a dongle restart (the entity unavailable, then RESTORING
+  again) does not reset it: the firmware's own stall bound is RAM-only and restarts with every boot, and a lock that
+  sticks again after each stuck-lock restart (about every 3 min) would otherwise never reach either bound.
 - **Guarded start script** `script.ecco_gentle_rate_start`: refuses unless the owner armed tonight (an
   `input_boolean.ecco_gentle_tonight` the owner sets in the evening; it turns itself off at 06:00), a fresh plan exists,
   no other lease is active, it is not a clock-change night; turns the firmware enable on, presses START five minutes
