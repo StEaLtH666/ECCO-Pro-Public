@@ -387,8 +387,8 @@ fixed nights of the older model).
   while the battery stays on the old low tail (the review: 2000 W raised to 8000 W, reading 91, target 95: OK, margin 94.5; the truth needs 7.7 hours). The
   earlier rate is not in the record, so the pessimistic tail is anchored at the **lowest setpoint** any path can hold (the worst case; `KNEE_RATE_UNKNOWN`), and
   OK needs the deadline to hold even then. A START (`changesUsed` 0), a change before the window opened, a target at or below the knee and a call before the
-  window are not affected. The cost: after any counted change with the reading within about 1.5 points of the knee OK is withheld even when the knee was in
-  fact crossed at the new rate (the planner cannot tell its own raise from an outside one); a caller that knows the knee-time rate could be given an input for
+  window are not affected. The cost: after any counted change made inside the window, from a reading of about 89 up (the reading plus its 1.0 of uncertainty and the charge
+  possible up to the change reaching the pessimistic knee 90), OK is withheld even when the knee was in fact crossed at the new rate (the planner cannot tell its own raise from an outside one); a caller that knows the knee-time rate could be given an input for
   it later (none is built). **The three policy worlds of the band are scenarios, not bounds** (round 3 F4): each re-plans from its own measured SOC, so on an
   adaptive path a world that is behind can raise a rate that a world that is ahead holds, and their finishes can come out of order; with the rate held
   (`pessimisticHeld`, every flat path) pessimistic >= expected >= optimistic holds. The SOC at the deadline is **floored** to a tenth, never above the
