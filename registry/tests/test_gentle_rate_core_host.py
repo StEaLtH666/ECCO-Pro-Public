@@ -3,21 +3,23 @@
 against the GRC reference model.
 
 The header is the pure decision core of the guarded charge-rate controller (spec docs/dev/gentle-rate-controller/
-SPEC.md revision 2); docs/dev/gentle-rate-controller/reference_model.py is its executable specification and
+SPEC.md revision 3); docs/dev/gentle-rate-controller/reference_model.py is its executable specification and
 vectors.json holds the golden vectors. This suite proves the header equals the model:
 
   [1] compiler: a GCC C++ compiler that can also RUN executables must exist. It FAILS, never skips. Search order:
       $ECCO_CXX, g++ / c++ on PATH, then (only on a Windows development PC) the WSL g++ (Ubuntu-24.04) through
       built-in path translation (C:\\x\\y -> /mnt/c/x/y).
   [2] the header compiles under -std=gnu++17 and gnu++20 with -Wall -Wextra -Wpedantic -Werror -fsyntax-only,
-      included twice; the default configuration passes config_ok (static_assert in the header);
+      included twice; the default configuration FAILS config_ok (no site capacity floor) and site_config(floor)
+      passes it (static_asserts in the header and in the probe);
   [3] the enumerations of the header (states, actions, results, reasons, decode statuses) carry exactly the model's
       numbers, and the harness reads every model configuration and input field;
   [4] the model meets every hand-computed expectation of vectors.json (so CI checks the golden vectors too), and
       EXECUTABLE PROOF: the harness (registry/tests/gentle_rate_harness.cpp) replays every golden vector (with its
-      boot record and restarts, with each result echoing the sequence number and kind it answers), the unit vectors
-      (classifier with the owned readback, the lost-lease warning, record decode of valid, corrupted and truncated
-      records) and FUZZ_SEQUENCES seeded fuzz sequences; every printed line must equal the model's line;
+      boot record and restarts from the record last COMMITTED, with each result echoing the sequence number and
+      kind it answers), the unit vectors (classifier with the owned readback, the lost-lease warning, record decode
+      of valid, corrupted, truncated and valid-CRC-but-wrong records) and FUZZ_SEQUENCES seeded fuzz sequences;
+      every printed line (the tick, the boot, the RAM record and the flash record) must equal the model's line;
   [5] SANITIZERS: the same harness built with -fsanitize=address,undefined replays the vectors and 200 fuzz
       sequences without a report;
   [6] MUTATION: faults injected into a COPY of the header must each make [4] fail;
@@ -140,8 +142,7 @@ def find_xtensa() -> str | None:
 # ===========================================================================================================
 # The replay input and the model's expected output
 # ===========================================================================================================
-REC_FIELDS = ["flags", "slot", "reason", "original", "v", "p", "night_id", "writes_night", "changes",
-              "restore_attempts", "lease_end", "q"]
+REC_FIELDS = VR.REC_FIELDS
 
 
 def vector_program(vectors: list[dict]) -> tuple[list[str], list[str], list[str]]:
@@ -153,11 +154,11 @@ def vector_program(vectors: list[dict]) -> tuple[list[str], list[str], list[str]
         inp += [VR.serialise_config(cfg), "S"]
         if v.get("boot") is not None:
             r = M.Record(**v["boot"])
-            inp.append("B " + " ".join(str(getattr(r, k)) for k in REC_FIELDS) + f" {VR.NOW0}")
+            inp.append("B " + VR.serialise_record(r) + f" {VR.NOW0}")
         lines, bad, _, items = VR.run(v, M)
         for kind, x in items:
             if kind == "R":
-                inp.append("R " + str(-2 if x.get("absent") else x.get("corrupt", -1)))
+                inp.append("R " + str(-2 if x.get("absent") else x.get("corrupt", -1)) + f" {x['now_ms']}")
             else:
                 inp.append(VR.serialise_in(x))
         inp.append("E")
@@ -181,26 +182,31 @@ def fuzz_program(n: int, seed: int) -> tuple[list[str], list[str]]:
 def unit_program() -> tuple[list[str], list[str]]:
     import json
     units = json.loads((MODEL_DIR / "vectors.json").read_text(encoding="utf-8"))["units"]
-    inp, exp = [VR.serialise_config(M.Config()), "S"], []
+    cfg = M.Config()
+    for k, v in VR.FRAME_CONFIG.items():
+        setattr(cfg, k, v)
+    inp, exp = [VR.serialise_config(cfg), "S"], []
     for live, orig, v, p, q, _want in units["classify"]:
         inp.append(f"K {live} {orig} {v} {p} {q}")
         exp.append(f"K {M.classify_restore(live, orig, v, p, q)}")
     for live, table, _want in units["lost_lease"]:
         inp.append("W " + " ".join(str(x) for x in list(live) + list(table)))
         exp.append(f"W {M.lost_lease_slots(live, table)}")
-    cfg = M.Config()
     blobs = []
     for r in units["records"]:
         blobs.append(M.encode_record(M.Record(**r["fields"])))
     good = blobs[0]
+    for hexs, _want in units["raw"]:
+        blobs.append(bytes.fromhex(hexs))
     for k in range(len(good)):
         blobs.append(good[:k] + bytes([good[k] ^ 0x01]) + good[k + 1:])
-    for n in (0, 1, 27, 28, 31):
+    for n in (0, 1, 31, 32, 43, 44, 47):
         blobs.append(good[:n] if n else b"")
+    blobs.append(good + b"\x00")
     for b in blobs:
         st, rec = M.decode_record(b, cfg)
         inp.append("H " + b.hex())
-        exp.append("H " + " ".join(str(x) for x in [st] + [getattr(rec, k) for k in REC_FIELDS]))
+        exp.append("H " + " ".join(str(x) for x in [st] + [getattr(rec, k) for k in REC_FIELDS] + list(rec.hist)))
     return inp, exp
 
 
@@ -244,7 +250,9 @@ def run(tmp: Path) -> None:
     (inc / HEADER.name).write_text(header_text, encoding="utf-8", newline="\n")
     tu = tmp / "twice.cpp"
     tu.write_text(f'#include "{HEADER.name}"\n#include "{HEADER.name}"\n'
-                  "static_assert(ecco_grc::config_ok(ecco_grc::Config{}), \"defaults\");\nint main() { return 0; }\n",
+                  "static_assert(!ecco_grc::config_ok(ecco_grc::Config{}), \"no usable default floor\");\n"
+                  "static_assert(ecco_grc::config_ok(ecco_grc::site_config(30000)), \"a site floor\");\n"
+                  "int main() { return 0; }\n",
                   encoding="utf-8", newline="\n")
     for std in ("gnu++17", "gnu++20"):
         r = cxx.run([f"-std={std}", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-fsyntax-only", "-I", inc, tu])
@@ -361,7 +369,8 @@ def run(tmp: Path) -> None:
               "unsigned long is unproven here (CI and the integration build cover it)")
     else:
         xtu = tmp / "xt.cpp"
-        xtu.write_text(f'#include "{HEADER.name}"\nint grc_probe() {{ return ecco_grc::config_ok(ecco_grc::Config{{}}); }}\n',
+        xtu.write_text(f'#include "{HEADER.name}"\n'
+                       'int grc_probe() { return ecco_grc::config_ok(ecco_grc::site_config(30000)); }\n',
                        encoding="utf-8")
         r = subprocess.run([xt, "-std=gnu++17", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", "-I", str(inc), str(xtu)],
                            capture_output=True, text=True, timeout=600)
@@ -372,7 +381,7 @@ HEADER_MUTANTS = [
     ("floor clamp removed", "return (int32_t) imax(c.floor_w, imin(ceiling, r));", "return (int32_t) imin(ceiling, r);"),
     ("ceiling ignores the pre-lease value", "int64_t hard = imin(original, c.fw_bound_w) / c.round_w * c.round_w;",
      "int64_t hard = (int64_t) c.fw_bound_w / c.round_w * c.round_w;"),
-    ("no step cap", "raw = imax((int64_t) v - c.max_step_w, imin((int64_t) v + c.max_step_w, raw));", "(void) 0;"),
+    ("no step cap", "r = imax(lo, imin(hi, r));", "(void) 0;"),
     ("no hysteresis", "if (iabs(delta) < c.hyst_w) return;", "if (iabs(delta) < 0) return;"),
     ("dwell is the settle time", "if (elapsed(i.now_ms, last_change_ms) < c.dwell_ms) return;",
      "if (elapsed(i.now_ms, last_change_ms) < c.settle_ms) return;"),
@@ -385,7 +394,7 @@ HEADER_MUTANTS = [
      "if (i.live_sp != v && i.live_sp != p) return R_CONFIG_DRIFT;"),
     ("restore attempts unbounded", "if (restore_attempts >= c.max_restore_attempts) {\n          fault(o, R_RESTORE_FAILED);",
      "if (false) {\n          fault(o, R_RESTORE_FAILED);"),
-    ("the record CRC is not checked", "if (get32(d + 28) != crc32(d, 28)) { o.status = DEC_BAD_CRC; return o; }", ""),
+    ("the record CRC is not checked", "if (get32(d + 44) != crc32(d, 44)) { o.status = DEC_BAD_CRC; return o; }", ""),
     ("the pending value is not owned", "if (live == v || live == p || (q >= 0 && live == q)) return CLS_OWNED;",
      "if (live == v || (q >= 0 && live == q)) return CLS_OWNED;"),
     ("two leases a night", "if (night_used) return R_REFUSE_NIGHT_USED;", ""),
@@ -408,16 +417,18 @@ HEADER_MUTANTS = [
     # ---- revision 2 (the review findings), each also a model mutant
     ("no restore operation timeout",
      "} else if (res == OP_FAIL || elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {\n        op_pending = false;\n"
-     "        if (res == OP_FAIL) own_readback(i);\n        if (restore_attempts >= c.max_restore_attempts) {",
+     "        if (res == OP_FAIL) {\n          own_readback(i, o);\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        if (restore_attempts >= c.max_restore_attempts) {",
      "} else if (res == OP_FAIL) {\n        op_pending = false;\n"
-     "        if (res == OP_FAIL) own_readback(i);\n        if (restore_attempts >= c.max_restore_attempts) {"),
+     "        if (res == OP_FAIL) {\n          own_readback(i, o);\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        if (restore_attempts >= c.max_restore_attempts) {"),
     ("the in_slot wrap branch is never true", "if (start > end) return m >= start || m < end;",
      "if (start > end) return false;"),
     ("an unanswered restore spends an attempt", "restore_attempts = (int32_t) imax(0, restore_attempts - 1);", "(void) 0;"),
     ("the restore does not wait for the inverter to answer",
-     "if (i.rx_age_ms > c.rx_fresh_ms) return;\n    if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING);",
-     "if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING);"),
-    ("a clamped readback is not owned", "q = i.op_value;\n      begin_restore(i, o, R_READBACK_MISMATCH);",
+     "if (i.rx_age_ms > c.rx_fresh_ms) return;\n    if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve)",
+     "if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve)"),
+    ("a clamped readback is not owned", "set_q(i.op_value, o);\n      begin_restore(i, o, R_READBACK_MISMATCH);",
      "begin_restore(i, o, R_WRITE_FAILED);"),
     ("the classifier ignores the owned readback", "if (live == v || live == p || (q >= 0 && live == q)) return CLS_OWNED;",
      "if (live == v || live == p) return CLS_OWNED;"),
@@ -444,9 +455,8 @@ HEADER_MUTANTS = [
      "if (cap != capacity_wh) capacity_wh = cap;"),
     ("the guard accepts any taper knee", "int64_t knee = imin(tgt, imin(taper_pct, c.taper_max_pct) * 10);",
      "int64_t knee = imin(tgt, (int64_t) taper_pct * 10);"),
-    ("the owner ceiling bypasses the step cap",
-     "int64_t owner = imax(i.plan.ceiling_w, (imax(0, (int64_t) v - c.max_step_w) + c.round_w - 1) / c.round_w * c.round_w);",
-     "int64_t owner = i.plan.ceiling_w;"),
+    ("the owner ceiling bypasses the step cap", "int64_t ceiling = imin(hard, imax(i.plan.ceiling_w, lo));",
+     "int64_t ceiling = imin(hard, (int64_t) i.plan.ceiling_w);"),
     ("grid loss ignored in a lease", "if (grid_pending) return R_GRID_LOSS;", ""),
     ("START with the grid lost", "if (!i.grid_ok) return R_REFUSE_GRID;", ""),
     ("grid loss not acted on at the verified write",
@@ -456,6 +466,101 @@ HEADER_MUTANTS = [
     ("an unanswered change does not end the lease",
      "} else if (res == OP_NO_ANSWER) {\n      begin_restore(i, o, R_WRITE_UNANSWERED);",
      "} else if (false) {\n      begin_restore(i, o, R_WRITE_UNANSWERED);"),
+    # ---- revision 3 (the confirmation review), each also a model mutant
+    ("the free retries unbounded", "if (free_night >= c.restore_free_max) {\n          fault(o, R_RESTORE_STALLED);",
+     "if (false) {\n          fault(o, R_RESTORE_STALLED);"),
+    ("the free retries not persisted", "    r.free_night = (uint8_t) free_night;\n", ""),
+    ("the boot forgets the free retries", "    free_night = rec.free_night;\n", ""),
+    ("no stall bound", "if (stall_ms >= c.restore_stall_ms) { fault(o, R_RESTORE_STALLED); return; }", ""),
+    ("the stall bound counts a silent inverter", "if (i.rx_age_ms <= c.rx_fresh_ms) {\n      uint64_t s",
+     "if (true) {\n      uint64_t s"),
+    ("the stall bound adds a whole tick gap", "(d < c.rx_fresh_ms ? d : c.rx_fresh_ms)", "d"),
+    ("an owned readback is not committed", "q = value;\n      o.commit = true;", "q = value;"),
+    ("the late readback of an abandoned operation is not owned",
+     "if (i.op == OP_FAIL) own_readback(i, o);\n    }\n    return OP_NONE;", "(void) 0;\n    }\n    return OP_NONE;"),
+    ("a late result owns more than once",
+     "      late_seq = 0;\n      late_kind = A_NONE;\n      if (i.op == OP_FAIL) own_readback(i, o);",
+     "      if (i.op == OP_FAIL) own_readback(i, o);"),
+    ("the write timeout does not remember the abandoned write",
+     "late_seq = op_seq;\n      late_kind = op_kind;\n      begin_restore(i, o, R_OP_TIMEOUT);",
+     "begin_restore(i, o, R_OP_TIMEOUT);"),
+    ("G19 a later -1 readback erases q",
+     "if (i.op_value >= 0 && i.op_value != original && i.op_value != v && i.op_value != p) set_q(i.op_value, o);",
+     "if (i.op_value != original && i.op_value != v && i.op_value != p) set_q(i.op_value, o);"),
+    ("G04 a 0 W readback not owned", "if (res == OP_FAIL && i.op_value >= 0 && i.op_value != v && i.op_value != p) {",
+     "if (res == OP_FAIL && i.op_value > 0 && i.op_value != v && i.op_value != p) {"),
+    ("G03 the owner restore's readback not owned",
+     "        if (res == OP_FAIL) {\n          own_readback(i, o);\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        last_reason = R_RESTORE_FAILED;",
+     "        if (res == OP_FAIL) {\n          (void) 0;\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        last_reason = R_RESTORE_FAILED;"),
+    ("G14 the owner's Restore original never times out",
+     "} else if (res == OP_FAIL || elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {\n        op_pending = false;\n"
+     "        if (res == OP_FAIL) {\n          own_readback(i, o);\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        last_reason = R_RESTORE_FAILED;",
+     "} else if (res == OP_FAIL) {\n        op_pending = false;\n"
+     "        if (res == OP_FAIL) {\n          own_readback(i, o);\n        } else {\n          late_seq = op_seq;\n"
+     "          late_kind = op_kind;\n        }\n        last_reason = R_RESTORE_FAILED;"),
+    ("G23 an unanswered restore in FAULT keeps the operation pending",
+     "      } else if (res == OP_NO_ANSWER || res == OP_DEFERRED) {\n        op_pending = false;\n"
+     "        if (free_night < c.restore_free_max) {",
+     "      } else if (res == OP_NO_ANSWER || res == OP_DEFERRED) {\n        if (free_night < c.restore_free_max) {"),
+    ("G24 the restore is not begun in the tick of a clamped readback",
+     "      set_q(i.op_value, o);\n      begin_restore(i, o, R_READBACK_MISMATCH);",
+     "      set_q(i.op_value, o);\n      begin_restore(i, o, R_READBACK_MISMATCH);\n      return;"),
+    ("the core leases without a site floor", "if (!config_ok(c)) return R_REFUSE_CONFIG;", ""),
+    ("G10 the lower step bound rounds down", "int64_t lo = round_up((int64_t) v - c.max_step_w, c.round_w);",
+     "int64_t lo = imax(0, (int64_t) v - c.max_step_w) / c.round_w * c.round_w;"),
+    ("no upper step bound", "r = imax(lo, imin(hi, r));", "r = imax(lo, r);"),
+    ("no lower step bound", "r = imax(lo, imin(hi, r));", "r = imin(hi, r);"),
+    ("the backoff compared by absolute time (the 24.8-day wrap)",
+     "if (restore_hold && elapsed(i.now_ms, restore_from_ms) >= c.restore_backoff_ms) restore_hold = false;",
+     "restore_hold = (uint32_t) (i.now_ms - restore_from_ms - c.restore_backoff_ms) >= 0x80000000u;"),
+    ("the 7-day ceiling ignored",
+     "if ((int64_t) week_writes() + n > c.week_write_ceiling - reserve) return R_REFUSE_WEEK_BUDGET;", ""),
+    ("the lifetime ceiling ignored",
+     "if ((int64_t) life_writes + n > c.life_write_ceiling - reserve) return R_REFUSE_LIFE_BUDGET;", ""),
+    ("the night roll drops the closing night", "if (age == k) nw[j] = writes_night;", "if (age == k) nw[j] = 0;"),
+    ("the night roll does not shift the window", "else if (age > k) nw[j] = hist[age - k - 1];", ""),
+    ("the 7-day window not persisted", "for (int k = 0; k < 6; k++) r.hist[k] = (uint8_t) hist[k];", ""),
+    ("the lifetime count not persisted", "    r.life_writes = life_writes;\n", ""),
+    ("an unanswered operation keeps its lifetime count", "    if (life_writes > 0) life_writes--;\n", ""),
+    ("no night roll in FAULT", "if ((st == IDLE || st == ARMED || st == FAULT) && !night_unknown",
+     "if ((st == IDLE || st == ARMED) && !night_unknown"),
+    ("G15 the restore path's night ceiling removed",
+     "if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve) { fault(o, R_NIGHT_CEILING); return; }", ""),
+    ("the lease restore takes the owner's reserved write",
+     "if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve) { fault(o, R_NIGHT_CEILING); return; }",
+     "if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING); return; }"),
+    ("a corrupt record boots with empty counts",
+     "      night_unknown = true;\n      night_used = true;\n      writes_night = c.night_write_ceiling;\n"
+     "      free_night = c.restore_free_max;\n      for (int k = 0; k < 6; k++) hist[k] = c.night_write_ceiling;\n", ""),
+    ("the unknown night is never adopted",
+     "if (night_unknown && i.night_id != 0) { night_id = i.night_id; night_unknown = false; }", ""),
+    ("ACK clears the night's counts", "      clear_lease();\n      state = IDLE;\n      last_reason = R_ACKED;",
+     "      clear_lease();\n      writes_night = 0;\n      night_used = false;\n      state = IDLE;\n"
+     "      last_reason = R_ACKED;"),
+    ("a night number going backwards accepted", " || i.night_id < night_id) return R_REFUSE_CLOCK;",
+     ") return R_REFUSE_CLOCK;"),
+    ("an action names no slot", "    o.slot = slot;\n", "    o.slot = 0;\n"),
+    ("START ignores which slot the configuration describes", "if (i.cfg_slot != pl.slot || !i.slot_grid",
+     "if (!i.slot_grid"),
+    ("the lease ignores which slot the configuration describes", "if (i.cfg_slot != slot || !i.slot_grid",
+     "if (!i.slot_grid"),
+    ("G01 the rx gate inclusive",
+     "if (i.rx_age_ms > c.rx_fresh_ms) return;\n    if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve)",
+     "if (i.rx_age_ms >= c.rx_fresh_ms) return;\n    if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve)"),
+    ("G07 grid loss ignored while SETTLING", "if (!i.grid_ok) grid_pending = true;\n    if (st == ADJUSTING)",
+     "if (!i.grid_ok && st != SETTLING) grid_pending = true;\n    if (st == ADJUSTING)"),
+    ("G08 the lease's window tolerance doubled",
+     "if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_PLAN_WINDOW;",
+     "if (iabs(pl.window_end - slot_end) > 2 * c.window_match_s) return R_PLAN_WINDOW;"),
+    ("G18 the lease's window check one-sided",
+     "if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_PLAN_WINDOW;",
+     "if (pl.window_end - slot_end > c.window_match_s) return R_PLAN_WINDOW;"),
+    ("G22 END outranks the latched grid loss at the verified write",
+     "if (grid_pending) { begin_restore(i, o, R_GRID_LOSS); restoring(i, o, OP_NONE); return; }",
+     "if (grid_pending && !end_pending) { begin_restore(i, o, R_GRID_LOSS); restoring(i, o, OP_NONE); return; }"),
 ]
 
 

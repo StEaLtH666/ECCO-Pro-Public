@@ -4,7 +4,7 @@
 //
 // WHAT IT IS. Header-only, dependency-free C++17 (standard integer headers only: no heap, no STL container, no
 // printf family, no Arduino or ESPHome include, no static or global state). It is the firmware form of
-// docs/dev/gentle-rate-controller/SPEC.md revision 2 and mirrors docs/dev/gentle-rate-controller/reference_model.py
+// docs/dev/gentle-rate-controller/SPEC.md revision 3 and mirrors docs/dev/gentle-rate-controller/reference_model.py
 // line for line; registry/tests/test_gentle_rate_core_host.py proves the two produce the same trace on every golden
 // vector and on a seeded random fuzz, under -Wall -Wextra -Werror and the address / undefined-behaviour sanitizers.
 //
@@ -14,22 +14,27 @@
 //
 // WHAT IT DOES NOT DO. It never performs a Modbus request, a storage access, a log line or a publish. The caller (the
 // integration proposed in docs/dev/gentle-rate-controller/INTEGRATION_PROPOSAL.md) owns, for every action, and
-// reports the outcome in a later In::op together with In::op_seq = Out::seq and In::op_kind = Out::action:
+// reports the outcome in a later In::op together with In::op_seq = Out::seq and In::op_kind = Out::action, always on
+// the register 256 + Out::slot - 1:
 //   (not run)         the bus was not free or the previous grc_execute still runs: OP_DEFERRED, nothing written.
 //   A_WRITE(value):   persist record() FIRST when Out::commit (save before write); read the slot power register (no
-//                     answer: OP_NO_ANSWER, nothing written) and require ownership_ok_for_write(live, core.v) (else
-//                     OP_FOREIGN, nothing written); write ONE register (256 + slot - 1); read it back; OP_OK only when
-//                     the readback equals `value`, else OP_FAIL with op_value = the readback (-1 unanswered).
-//   A_RESTORE(value): persist record(); read the register (no answer: OP_NO_ANSWER); classify_restore(live, original,
-//                     v, p, q): CLS_ALREADY -> OP_OK_NOWRITE, CLS_FOREIGN -> OP_FOREIGN (write nothing), CLS_OWNED ->
-//                     write `value`, read back, OP_OK or OP_FAIL with op_value = the readback.
+//                     reply at all: OP_NO_ANSWER, nothing written; an exception reply: OP_FAIL) and require
+//                     ownership_ok_for_write(live, core.v) (else OP_FOREIGN, nothing written); write ONE register;
+//                     read it back; OP_OK only when the readback equals `value`, else OP_FAIL with op_value = the
+//                     readback (-1 unanswered).
+//   A_RESTORE(value): persist record(); read the register (no reply: OP_NO_ANSWER; an exception: OP_FAIL);
+//                     classify_restore(live, original, v, p, q): CLS_ALREADY -> OP_OK_NOWRITE, CLS_FOREIGN ->
+//                     OP_FOREIGN (write nothing), CLS_OWNED -> write `value`, read back, OP_OK or OP_FAIL with
+//                     op_value = the readback.
+// Every tick whose Out::commit is set persists record() before anything else, whether or not it carries an action.
 // This header is NOT wired into any firmware YAML. It lives in docs/dev/gentle-rate-controller/proposed/, outside
 // firmware/ (two suites pin what git tracks under firmware/: the FB-C3 tree hash of every .h / .yaml / .md and the
 // FB-B2 header set of firmware/include/), until the integration moves it to firmware/include/ together with its
 // scope-chain entry grc1.
 //
-// Time: uptime is millis()-style unsigned 32-bit arithmetic, wrap safe; the wall clock is epoch seconds (0 = not
-// valid). Power in W, SOC in tenths of a percent. Every division has non-negative operands (identical to Python //).
+// Time: uptime is millis()-style unsigned 32-bit arithmetic, compared only as elapsed intervals (wrap safe for any
+// interval below 2^32 ms); the wall clock is epoch seconds (0 = not valid). Power in W, SOC in tenths of a percent.
+// Every division has non-negative operands (identical to Python //).
 
 #include <cstddef>
 #include <cstdint>
@@ -55,7 +60,8 @@ enum Reason : uint8_t {
   R_REFUSE_SOC = 10, R_REFUSE_PLAN_INVALID = 11, R_REFUSE_PLAN_STALE = 12, R_REFUSE_CONFIG_STALE = 13,
   R_REFUSE_SLOT = 14, R_REFUSE_SLOT_POWER = 15, R_REFUSE_TARGET_MET = 16, R_REFUSE_NOT_CHARGING = 17,
   R_REFUSE_IMPLAUSIBLE = 18, R_REFUSE_TOO_LATE = 19, R_REFUSE_TARGET_AT_RISK = 20, R_REFUSE_WRITE_BUDGET = 21,
-  R_REFUSE_GRID = 22, R_REFUSE_RESTORE = 23,
+  R_REFUSE_GRID = 22, R_REFUSE_RESTORE = 23, R_REFUSE_WEEK_BUDGET = 24, R_REFUSE_LIFE_BUDGET = 25,
+  R_REFUSE_CONFIG = 26,
   // lifecycle events
   R_ARMED = 40, R_DISARMED = 41, R_ARM_EXPIRED = 42, R_LEASE_STARTED = 43, R_WRITE_REQUESTED = 44,
   R_WRITE_VERIFIED = 45, R_RESPONSE_OK = 46, R_RESPONSE_WEAK = 47, R_BMS_LIMITED = 48, R_RESTORE_REQUESTED = 49,
@@ -69,7 +75,7 @@ enum Reason : uint8_t {
   R_WRONG_DIRECTION = 81, R_NO_RESPONSE = 82, R_IMPLAUSIBLE_GAIN = 83, R_BOOT_RECOVERY = 84, R_GRID_LOSS = 85,
   R_READBACK_MISMATCH = 86, R_PLAN_WINDOW = 87, R_WRITE_DEFERRED = 88, R_WRITE_UNANSWERED = 89,
   // latched faults (no automatic write; owner review)
-  R_FOREIGN = 100, R_RESTORE_FAILED = 101, R_RECORD_CORRUPT = 102, R_NIGHT_CEILING = 103
+  R_FOREIGN = 100, R_RESTORE_FAILED = 101, R_RECORD_CORRUPT = 102, R_NIGHT_CEILING = 103, R_RESTORE_STALLED = 104
 };
 
 enum DecodeStatus : uint8_t {
@@ -79,7 +85,9 @@ enum DecodeStatus : uint8_t {
 
 constexpr uint32_t NEVER = 0xFFFFFFFFu;  // In::rx_age_ms: the inverter has not answered any read since this boot
 
-// Firmware substitutions; the defaults are the proposed production values (SPEC section 5).
+// Firmware substitutions; the defaults are the proposed production values (SPEC section 5), EXCEPT capacity_floor_wh:
+// it has NO usable default (0 fails config_ok, so START refuses with R_REFUSE_CONFIG). The integration builds its
+// Config with site_config(${grc_capacity_floor_wh}) and static_asserts that it is at least the usable capacity.
 struct Config {
   int32_t floor_w = 500;
   int32_t round_w = 100;
@@ -92,7 +100,12 @@ struct Config {
   int32_t judge_samples = 4;
   int32_t max_changes = 6;
   int32_t max_restore_attempts = 3;
-  int32_t night_write_ceiling = 9;
+  int32_t owner_restore_reserve = 1;
+  int32_t night_write_ceiling = 10;
+  int32_t week_write_ceiling = 42;
+  int32_t life_write_ceiling = 4000;
+  int32_t restore_free_max = 10;
+  uint32_t restore_stall_ms = 600000;
   uint32_t restore_backoff_ms = 30000;
   uint32_t op_timeout_ms = 15000;
   uint32_t plan_max_age_ms = 1200000;
@@ -123,7 +136,7 @@ struct Config {
   uint32_t watchdog_extra_ms = 600000;
   uint32_t rx_fresh_ms = 30000;
   int32_t window_match_s = 120;
-  int32_t capacity_floor_wh = 20000;
+  int32_t capacity_floor_wh = 0;
   int32_t taper_max_pct = 95;
   int32_t script_steps = 3;
   uint32_t script_step_ms = 3000;
@@ -134,17 +147,31 @@ constexpr bool config_ok(const Config &c) {
   return c.round_w > 0 && c.floor_w > 0 && c.floor_w % c.round_w == 0 && c.fw_bound_w % c.round_w == 0 &&
          c.fw_bound_w >= c.floor_w + c.hyst_w && c.fw_bound_w <= 8000 && 0 < c.hyst_w && c.max_step_w >= c.hyst_w &&
          c.max_step_w % c.round_w == 0 && c.settle_ms < c.dwell_ms && c.judge_samples >= 1 && c.max_changes >= 1 &&
-         c.max_restore_attempts >= 1 && c.night_write_ceiling >= c.max_changes + c.max_restore_attempts &&
-         c.night_write_ceiling <= 255 && c.gain_min_pct < c.gain_max_pct && c.response_min_pct > 0 &&
+         c.max_restore_attempts >= 1 && c.owner_restore_reserve >= 1 &&
+         c.night_write_ceiling >= c.max_changes + c.max_restore_attempts + c.owner_restore_reserve &&
+         c.night_write_ceiling <= 255 && c.week_write_ceiling >= c.night_write_ceiling &&
+         c.life_write_ceiling >= c.week_write_ceiling && c.life_write_ceiling <= 1000000 &&
+         1 <= c.restore_free_max && c.restore_free_max <= 255 &&
+         (uint64_t) c.restore_stall_ms >= 2 * ((uint64_t) c.restore_backoff_ms + c.op_timeout_ms) &&
+         c.restore_stall_ms <= 3600000 && c.gain_min_pct < c.gain_max_pct && c.response_min_pct > 0 &&
          c.plan_max_age_ms < c.arm_window_ms && c.op_timeout_ms > 0 && c.restore_backoff_ms > 0 &&
          0 < c.guard_tail_pct && c.guard_tail_pct <= c.guard_derate_pct && c.guard_derate_pct <= 100 &&
-         c.script_steps >= 1 && c.script_step_ms > 0 &&
+         c.charging_min_w >= 2 * c.round_w && c.script_steps >= 1 && c.script_step_ms > 0 &&
          (uint64_t) c.op_timeout_ms > (uint64_t) c.script_steps * c.script_step_ms + c.script_queue_ms &&
          c.end_margin_s > c.clock_skew_max_s + 60 && 60 < c.window_match_s && c.window_match_s <= 600 &&
          1000 <= c.capacity_floor_wh && c.capacity_floor_wh <= 100000 && 50 <= c.taper_max_pct &&
-         c.taper_max_pct <= 100 && c.rx_fresh_ms > 0;
+         c.taper_max_pct <= 100 && 0 < c.rx_fresh_ms && c.rx_fresh_ms < c.restore_stall_ms;
 }
-static_assert(config_ok(Config{}), "the default GRC configuration must be valid");
+
+// The site's configuration: the proposed defaults with the site's capacity floor (SPEC section 5).
+constexpr Config site_config(int32_t capacity_floor_wh) {
+  Config c{};
+  c.capacity_floor_wh = capacity_floor_wh;
+  return c;
+}
+static_assert(!config_ok(Config{}), "the default GRC configuration has no site capacity floor and must be unusable");
+static_assert(config_ok(site_config(1000)) && config_ok(site_config(100000)),
+              "the defaults with any plausible site capacity floor are valid");
 // An operation the core times out must really be over: grc_execute's bounded worst case (every Modbus step at its
 // wait_until bound, behind the bus queue) is shorter than op_timeout_ms, so a late result can only be a stale one.
 static_assert((uint64_t) Config{}.op_timeout_ms >
@@ -173,11 +200,11 @@ struct In {
   uint32_t now_ms = 0;
   int64_t epoch = 0;
   int32_t local_min = -1;
-  uint32_t night_id = 0;
+  uint32_t night_id = 0;    // local DAY NUMBER of the window's start (rolls at local noon), 0 = unknown
   bool clock_change_night = false;
   int32_t inv_skew_s = -1;
   bool rtc_busy = false;
-  bool mutex_busy = false;  // the shared write mutex, the bus, OR the GRC's own operation still running
+  bool mutex_busy = false;  // the shared write mutex, the bus, OR the GRC's own grc_execute still running
   uint32_t other = 0;
   bool fault = false;
   bool arm = false;
@@ -191,6 +218,7 @@ struct In {
   uint32_t tel_age_ms = 0;
   uint32_t sample_seq = 0;
   uint32_t cfg_age_ms = 0;
+  int32_t cfg_slot = 0;        // the slot the configuration fields below describe (core.slot during a lease)
   int32_t live_sp = -1;
   int32_t slot_start_min = 0;
   int32_t slot_end_min = 0;
@@ -208,19 +236,21 @@ struct In {
 struct Out {
   uint8_t action = A_NONE;
   int32_t value = 0;
-  uint32_t seq = 0;  // with an action: its sequence number, echoed back with the result
+  uint32_t seq = 0;   // with an action: its sequence number, echoed back with the result
+  int32_t slot = 0;   // with an action: the slot (1..6) whose power register (256 + slot - 1) it targets
   bool disarm = false;
   bool commit = false;
   uint8_t event = R_NONE;
 };
 
 // ------------------------------------------------------------------------------------------------- pure helpers
+// Wrap-safe uptime difference (exact for any interval below 2^32 ms, 49.7 days).
 constexpr uint32_t elapsed(uint32_t now, uint32_t then) { return (uint32_t) (now - then); }
-constexpr bool due(uint32_t now, uint32_t at) { return (uint32_t) (now - at) < 0x80000000u; }
 constexpr int64_t imin(int64_t a, int64_t b) { return a < b ? a : b; }
 constexpr int64_t imax(int64_t a, int64_t b) { return a > b ? a : b; }
 constexpr int64_t iabs(int64_t a) { return a < 0 ? -a : a; }
 constexpr int32_t mod1440(int32_t x) { return ((x % 1440) + 1440) % 1440; }
+constexpr int64_t round_up(int64_t x, int64_t step) { return (imax(0, x) + step - 1) / step * step; }
 
 constexpr bool in_slot(int32_t m, int32_t start, int32_t end) {
   if (m < 0 || m >= 1440) return false;
@@ -265,9 +295,10 @@ constexpr uint8_t classify_restore(int32_t live, int32_t original, int32_t v, in
 
 constexpr bool ownership_ok_for_write(int32_t live, int32_t v) { return live == v; }
 
-// At a boot with NO record: bit k-1 set for each slot k whose live power is below the owner's table value (the
-// editor's stored value), a lowered value a lost record may have left. A warning only; nothing is written on it.
-// -1 = unknown, never a warning.
+// At a boot with NO record: bit k-1 set for each slot k whose live power is below the OWNER's value for it, a lowered
+// value a lost record may have left. `table` is a durable owner copy (the saved fallback profile's six slot powers,
+// FB-B2), never the editor's staging numbers (manual_slotN_power: restore_value false, initial 8000). A warning only;
+// nothing is written on it. -1 = unknown (no saved profile), never a warning.
 constexpr uint32_t lost_lease_slots(const int32_t live[6], const int32_t table[6]) {
   uint32_t mask = 0;
   for (int k = 0; k < 6; k++) {
@@ -277,10 +308,10 @@ constexpr uint32_t lost_lease_slots(const int32_t live[6], const int32_t table[6
 }
 
 // ------------------------------------------------------------------------------------------------- the record
-constexpr size_t REC_SIZE = 32;
+constexpr size_t REC_SIZE = 48;
 constexpr uint16_t REC_MAGIC = 0x5247;
-constexpr uint8_t REC_VERSION = 2;
-constexpr uint8_t F_ACTIVE = 1, F_FAULT = 2, F_NIGHT_USED = 4, F_READBACK = 8;
+constexpr uint8_t REC_VERSION = 3;
+constexpr uint8_t F_ACTIVE = 1, F_FAULT = 2, F_NIGHT_USED = 4, F_READBACK = 8, F_NIGHT_UNKNOWN = 16;
 
 struct Record {
   uint8_t flags = 0;
@@ -293,8 +324,11 @@ struct Record {
   uint8_t writes_night = 0;
   uint8_t changes = 0;
   uint8_t restore_attempts = 0;
+  uint8_t free_night = 0;   // unanswered or deferred restores this night
   uint32_t lease_end = 0;
-  uint16_t q = 0;  // the owned readback, meaningful only with F_READBACK
+  uint16_t q = 0;           // the owned readback, meaningful only with F_READBACK
+  uint8_t hist[6] = {};     // writes of the nights night_id - 1 .. night_id - 6
+  uint32_t life_writes = 0;
 };
 
 struct RecordBytes {
@@ -333,12 +367,12 @@ constexpr RecordBytes encode_record(const Record &r) {
   o.b[16] = r.writes_night;
   o.b[17] = r.changes;
   o.b[18] = r.restore_attempts;
-  o.b[19] = 0;
+  o.b[19] = r.free_night;
   put32(o.b + 20, r.lease_end);
   put16(o.b + 24, r.q);
-  o.b[26] = 0;
-  o.b[27] = 0;
-  put32(o.b + 28, crc32(o.b, 28));
+  for (int k = 0; k < 6; k++) o.b[26 + k] = r.hist[k];
+  put32(o.b + 32, r.life_writes);
+  put32(o.b + 44, crc32(o.b, 44));
   return o;
 }
 
@@ -353,7 +387,7 @@ constexpr Decoded decode_record(const uint8_t *d, size_t n, const Config &c) {
   Decoded o{};
   if (d == nullptr) { o.status = DEC_ABSENT; return o; }
   if (n != REC_SIZE) { o.status = DEC_BAD_SIZE; return o; }
-  if (get32(d + 28) != crc32(d, 28)) { o.status = DEC_BAD_CRC; return o; }
+  if (get32(d + 44) != crc32(d, 44)) { o.status = DEC_BAD_CRC; return o; }
   if (get16(d) != REC_MAGIC) { o.status = DEC_BAD_MAGIC; return o; }
   if (d[2] != REC_VERSION) { o.status = DEC_BAD_VERSION; return o; }
   Record r{};
@@ -367,10 +401,17 @@ constexpr Decoded decode_record(const uint8_t *d, size_t n, const Config &c) {
   r.writes_night = d[16];
   r.changes = d[17];
   r.restore_attempts = d[18];
+  r.free_night = d[19];
   r.lease_end = get32(d + 20);
   r.q = (uint16_t) get16(d + 24);
-  bool ok = (r.flags & ~15u) == 0 && d[19] == 0 && d[26] == 0 && d[27] == 0 && r.writes_night <= c.night_write_ceiling;
+  for (int k = 0; k < 6; k++) r.hist[k] = d[26 + k];
+  r.life_writes = get32(d + 32);
+  bool ok = (r.flags & ~31u) == 0 && r.writes_night <= c.night_write_ceiling;
+  for (int k = 36; k < 44; k++) ok = ok && d[k] == 0;
+  for (int k = 0; k < 6; k++) ok = ok && r.hist[k] <= c.night_write_ceiling;
+  ok = ok && r.free_night <= c.restore_free_max;
   if (!(r.flags & F_READBACK)) ok = ok && r.q == 0;
+  if (r.flags & F_NIGHT_UNKNOWN) ok = ok && r.night_id == 0 && !(r.flags & F_ACTIVE);
   if (r.flags & F_ACTIVE) {
     ok = ok && r.slot >= 1 && r.slot <= 6 && r.original >= c.floor_w + c.hyst_w && r.original <= c.fw_bound_w;
     ok = ok && r.v >= c.floor_w && r.v <= r.original && r.p >= c.floor_w && r.p <= r.original;
@@ -394,7 +435,11 @@ class Core {
   bool arm_latch = false;
   uint32_t night_id = 0;
   bool night_used = false;
+  bool night_unknown = false;
   int32_t writes_night = 0;
+  int32_t free_night = 0;
+  int32_t hist[6] = {};
+  uint32_t life_writes = 0;
   uint8_t last_reason = R_NONE;
   bool seen = false;
   uint32_t last_seq = 0;
@@ -411,10 +456,15 @@ class Core {
   uint8_t op_kind = A_NONE;
   uint32_t op_seq = 0;
   uint32_t op_start_ms = 0;
+  uint32_t late_seq = 0;
+  uint8_t late_kind = A_NONE;
   bool end_pending = false;
   bool grid_pending = false;
   int32_t restore_attempts = 0;
-  uint32_t restore_next_ms = 0;
+  bool restore_hold = false;
+  uint32_t restore_from_ms = 0;
+  uint32_t stall_ms = 0;
+  uint32_t stall_mark_ms = 0;
   int32_t p0 = 0, p_ref = 0, gain_pct = 0, ineffective = 0;
   bool bms_limited = false;
   int32_t runaway_n = 0, stop_n = 0, judge_n = 0;
@@ -439,10 +489,15 @@ class Core {
     op_kind = A_NONE;
     op_seq = 0;
     op_start_ms = 0;
+    late_seq = 0;
+    late_kind = A_NONE;
     end_pending = false;
     grid_pending = false;
     restore_attempts = 0;
-    restore_next_ms = 0;
+    restore_hold = false;
+    restore_from_ms = 0;
+    stall_ms = 0;
+    stall_mark_ms = 0;
     p0 = p_ref = gain_pct = ineffective = 0;
     bms_limited = false;
     runaway_n = stop_n = judge_n = 0;
@@ -452,16 +507,26 @@ class Core {
     last_soc = soc_max = -1;
   }
 
+  // Every write of this night and the six before it (the rolling 7-day window).
+  int32_t week_writes() const {
+    int32_t s = writes_night;
+    for (int k = 0; k < 6; k++) s += hist[k];
+    return s;
+  }
+
   Record record() const {
     bool lease = state == LEASED || state == ADJUSTING || state == SETTLING || state == RESTORING ||
                  (state == FAULT && original != 0);
     bool rb = lease && q >= 0;
     Record r{};
     r.flags = (uint8_t) ((lease ? F_ACTIVE : 0) | (state == FAULT ? F_FAULT : 0) | (night_used ? F_NIGHT_USED : 0) |
-                         (rb ? F_READBACK : 0));
+                         (rb ? F_READBACK : 0) | (night_unknown ? F_NIGHT_UNKNOWN : 0));
     r.reason = last_reason;
     r.night_id = night_id;
     r.writes_night = (uint8_t) writes_night;
+    r.free_night = (uint8_t) free_night;
+    for (int k = 0; k < 6; k++) r.hist[k] = (uint8_t) hist[k];
+    r.life_writes = life_writes;
     if (lease) {
       r.slot = (uint8_t) slot;
       r.original = (uint16_t) original;
@@ -482,10 +547,25 @@ class Core {
     *this = Core(keep);
     arm_latch = true;
     if (status == DEC_ABSENT) return;
-    if (status != DEC_OK) { state = FAULT; last_reason = R_RECORD_CORRUPT; return; }
+    if (status != DEC_OK) {
+      // original is unknown, and so are the night's counts: the boot's night is taken as used with every count of the
+      // 7-day window full (START refused until they age out); adopted on the first tick with a night
+      state = FAULT;
+      last_reason = R_RECORD_CORRUPT;
+      night_unknown = true;
+      night_used = true;
+      writes_night = c.night_write_ceiling;
+      free_night = c.restore_free_max;
+      for (int k = 0; k < 6; k++) hist[k] = c.night_write_ceiling;
+      return;
+    }
     night_id = rec.night_id;
     writes_night = rec.writes_night;
+    free_night = rec.free_night;
+    for (int k = 0; k < 6; k++) hist[k] = rec.hist[k];
+    life_writes = rec.life_writes;
     night_used = (rec.flags & F_NIGHT_USED) != 0;
+    night_unknown = (rec.flags & F_NIGHT_UNKNOWN) != 0;
     last_reason = rec.reason;
     if (rec.flags & F_ACTIVE) {
       slot = rec.slot; original = rec.original; v = rec.v; p = rec.p;
@@ -497,7 +577,7 @@ class Core {
       if (restore_attempts >= c.max_restore_attempts) { state = FAULT; last_reason = R_RESTORE_FAILED; return; }
       state = RESTORING;
       last_reason = R_BOOT_RECOVERY;
-      restore_next_ms = now_ms;
+      stall_mark_ms = now_ms;
     }
   }
 
@@ -506,8 +586,10 @@ class Core {
     bool fresh = i.tel_ok && (!seen || i.sample_seq != last_seq);
     if (i.tel_ok) { seen = true; last_seq = i.sample_seq; }
     if (!i.arm) arm_latch = false;
-    uint8_t res = result(i, o);
+    if (night_unknown && i.night_id != 0) { night_id = i.night_id; night_unknown = false; }
     uint8_t st = state;
+    if ((st == IDLE || st == ARMED || st == FAULT) && !night_unknown && i.night_id > night_id) roll_night(i.night_id);
+    uint8_t res = result(i, o);
     if (st == FAULT) { faulted(i, o, res); return o; }
     if (st == IDLE) {
       if (i.start) { o.event = R_REFUSE_NOT_ARMED; last_reason = R_REFUSE_NOT_ARMED; }
@@ -535,12 +617,46 @@ class Core {
 
  private:
   // The result reported for the OUTSTANDING operation, else OP_NONE. A result for any other sequence or kind (a late
-  // result of an abandoned operation, a duplicate) is stale: ignored, never taken as this one's outcome.
-  uint8_t result(const In &i, Out &o) const {
+  // result of an abandoned operation, a duplicate) is stale: ignored, never taken as this one's outcome. The late
+  // result of the operation this lease abandoned at its timeout still carries the register's newest value
+  // (operations run one at a time), so its readback is owned (never its outcome).
+  uint8_t result(const In &i, Out &o) {
     if (i.op == OP_NONE) return OP_NONE;
     if (op_pending && i.op_seq == op_seq && i.op_kind == op_kind) return i.op;
     o.event = R_STALE_RESULT;
+    if (late_seq != 0 && i.op_seq == late_seq && i.op_kind == late_kind) {
+      late_seq = 0;
+      late_kind = A_NONE;
+      if (i.op == OP_FAIL) own_readback(i, o);
+    }
     return OP_NONE;
+  }
+
+  // A new night: the closing night's writes join the 7-day window (hist[j] = night nid - 1 - j), every night without
+  // a record counts 0, the night's counters restart.
+  void roll_night(uint32_t nid) {
+    int64_t k = night_id != 0 ? (int64_t) nid - (int64_t) night_id : 7;
+    int32_t nw[6] = {};
+    for (int j = 0; j < 6; j++) {
+      int64_t age = j + 1;
+      if (age == k) nw[j] = writes_night;
+      else if (age > k) nw[j] = hist[age - k - 1];
+    }
+    for (int j = 0; j < 6; j++) hist[j] = nw[j];
+    night_id = nid;
+    night_used = false;
+    writes_night = 0;
+    free_night = 0;
+  }
+
+  // R_NONE when n more change writes fit every write ceiling with the restores and the owner's restore still
+  // reserved; else the refusal. A restore is never refused by these ceilings.
+  uint8_t budget(int32_t n) const {
+    int64_t reserve = (int64_t) c.max_restore_attempts + c.owner_restore_reserve;
+    if ((int64_t) writes_night + n > c.night_write_ceiling - reserve) return R_REFUSE_WRITE_BUDGET;
+    if ((int64_t) week_writes() + n > c.week_write_ceiling - reserve) return R_REFUSE_WEEK_BUDGET;
+    if ((int64_t) life_writes + n > c.life_write_ceiling - reserve) return R_REFUSE_LIFE_BUDGET;
+    return R_NONE;
   }
 
   void armed(const In &i, Out &o) {
@@ -558,8 +674,9 @@ class Core {
 
   uint8_t start_check(const In &i) {
     const Plan &pl = i.plan;
-    if (i.night_id == 0 || i.epoch == 0 || i.local_min < 0) return R_REFUSE_CLOCK;
-    if (i.night_id != night_id) { night_id = i.night_id; night_used = false; writes_night = 0; }
+    if (!config_ok(c)) return R_REFUSE_CONFIG;
+    if (i.night_id == 0 || i.epoch == 0 || i.local_min < 0 || i.night_id < night_id) return R_REFUSE_CLOCK;
+    if (i.night_id != night_id) roll_night(i.night_id);
     if (night_used) return R_REFUSE_NIGHT_USED;
     if (i.clock_change_night) return R_REFUSE_CLOCK_CHANGE;
     if (i.inv_skew_s < 0 || i.inv_skew_s > c.clock_skew_max_s) return R_REFUSE_INVERTER_CLOCK;
@@ -572,7 +689,8 @@ class Core {
     if (!plan_ok(pl, c)) return R_REFUSE_PLAN_INVALID;
     if (pl.age_ms > c.plan_max_age_ms) return R_REFUSE_PLAN_STALE;
     if (i.cfg_age_ms > c.config_stale_ms) return R_REFUSE_CONFIG_STALE;
-    if (!i.slot_grid || i.slot_target != pl.target || !in_slot(i.local_min, i.slot_start_min, i.slot_end_min))
+    if (i.cfg_slot != pl.slot || !i.slot_grid || i.slot_target != pl.target ||
+        !in_slot(i.local_min, i.slot_start_min, i.slot_end_min))
       return R_REFUSE_SLOT;
     int64_t slot_end = slot_end_epoch(i.epoch, i.local_min, i.slot_end_min);
     if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_REFUSE_SLOT;
@@ -586,8 +704,7 @@ class Core {
     if (guard_trips(i.epoch, i.soc, pl.target, (int32_t) imax(pl.capacity_wh, c.capacity_floor_wh), i.batt_w, slot_end,
                     pl.taper))
       return R_REFUSE_TARGET_AT_RISK;
-    if (writes_night + 1 > c.night_write_ceiling - c.max_restore_attempts) return R_REFUSE_WRITE_BUDGET;
-    return R_NONE;
+    return budget(1);
   }
 
   void begin_lease(const In &i, Out &o) {
@@ -628,7 +745,7 @@ class Core {
     }
     if (res == OP_FOREIGN) { op_pending = false; fault(o, R_FOREIGN); return; }
     if (res == OP_FAIL && i.op_value >= 0 && i.op_value != v && i.op_value != p) {
-      q = i.op_value;
+      set_q(i.op_value, o);
       begin_restore(i, o, R_READBACK_MISMATCH);
     } else if (res == OP_FAIL) {
       begin_restore(i, o, R_WRITE_FAILED);
@@ -639,6 +756,8 @@ class Core {
     } else if (res == OP_DEFERRED) {
       begin_restore(i, o, R_WRITE_DEFERRED);
     } else if (elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {
+      late_seq = op_seq;
+      late_kind = op_kind;
       begin_restore(i, o, R_OP_TIMEOUT);
     } else {
       return;
@@ -666,7 +785,8 @@ class Core {
     if (pl.age_ms > c.plan_max_age_ms) return R_PLAN_LOST;
     if (pl.slot != slot || pl.target != target) return R_PLAN_INVALID;
     if (i.cfg_age_ms > c.config_stale_ms) return R_CONFIG_STALE;
-    if (!i.slot_grid || i.slot_target != target || !in_slot(i.local_min, i.slot_start_min, i.slot_end_min))
+    if (i.cfg_slot != slot || !i.slot_grid || i.slot_target != target ||
+        !in_slot(i.local_min, i.slot_start_min, i.slot_end_min))
       return R_CONFIG_DRIFT;
     int64_t slot_end = slot_end_epoch(i.epoch, i.local_min, i.slot_end_min);
     if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_PLAN_WINDOW;
@@ -746,7 +866,7 @@ class Core {
   void lease(const In &i, Out &o, bool fresh) {
     if (fresh) p_ref = (int32_t) ((3 * (int64_t) p_ref + imax(0, i.batt_w)) / 4);
     if (bms_limited || changes >= c.max_changes) return;
-    if (writes_night + 1 > c.night_write_ceiling - c.max_restore_attempts) return;
+    if (budget(1) != R_NONE) return;
     if (elapsed(i.now_ms, last_change_ms) < c.dwell_ms) return;
     if (i.rtc_busy || i.mutex_busy) return;
     int32_t d = desired(i);
@@ -757,17 +877,20 @@ class Core {
   }
 
   // The next setpoint: a RELATIVE step from the present one scaled by wanted over realised power (robust to the
-  // unknown setpoint unit), capped per step, rounded to the grid, inside [floor, min(original, bound, owner)]: the hard
-  // ceiling min(original, bound) rounded down to the grid, the owner ceiling approached by at most one step per change.
+  // unknown setpoint unit), rounded to the grid, then held within one step of the present value by grid bounds
+  // (ceil(v - step), floor(v + step): never more than max_step_w even from a value off the grid), inside [floor,
+  // min(original, bound, owner)]: the hard ceiling min(original, bound) rounded down to the grid, the owner ceiling
+  // approached by at most one step per change. p_ref <= 0 cannot reach the division (config_ok keeps
+  // charging_min_w / 2 >= round_w > 0); the test stays as defence in depth.
   int32_t desired(const In &i) const {
-    if (p_ref < c.charging_min_w / 2) return v;
+    if (p_ref <= 0 || p_ref < c.charging_min_w / 2) return v;
     int64_t raw = (int64_t) v * plan_power(i.plan, i.epoch) / p_ref;
-    raw = imax((int64_t) v - c.max_step_w, imin((int64_t) v + c.max_step_w, raw));
-    raw = imax(0, raw);
-    int64_t r = (raw + c.round_w / 2) / c.round_w * c.round_w;
+    int64_t r = (imax(0, raw) + c.round_w / 2) / c.round_w * c.round_w;
+    int64_t lo = round_up((int64_t) v - c.max_step_w, c.round_w);
+    int64_t hi = ((int64_t) v + c.max_step_w) / c.round_w * c.round_w;
+    r = imax(lo, imin(hi, r));
     int64_t hard = imin(original, c.fw_bound_w) / c.round_w * c.round_w;
-    int64_t owner = imax(i.plan.ceiling_w, (imax(0, (int64_t) v - c.max_step_w) + c.round_w - 1) / c.round_w * c.round_w);
-    int64_t ceiling = imin(hard, owner);
+    int64_t ceiling = imin(hard, imax(i.plan.ceiling_w, lo));
     return (int32_t) imax(c.floor_w, imin(ceiling, r));
   }
 
@@ -781,13 +904,25 @@ class Core {
     o.action = kind;
     o.value = value;
     o.seq = seq;
+    o.slot = slot;
     o.commit = true;
+  }
+
+  void count_write() {
+    writes_night++;
+    if (life_writes < 0xFFFFFFFFu) life_writes++;
+  }
+
+  // An operation that wrote nothing (NO_ANSWER, DEFERRED) returns its write to every count.
+  void give_back() {
+    writes_night = (int32_t) imax(0, writes_night - 1);
+    if (life_writes > 0) life_writes--;
   }
 
   void emit_write(const In &i, Out &o, int32_t d) {
     p = d;
     changes++;
-    writes_night++;
+    count_write();
     emit(i, o, A_WRITE, d);
     state = ADJUSTING;
     if (o.event == R_NONE) o.event = R_WRITE_REQUESTED;
@@ -797,16 +932,44 @@ class Core {
     state = RESTORING;
     last_reason = reason;
     op_pending = false;
-    restore_next_ms = i.now_ms;
+    restore_hold = false;
+    stall_ms = 0;
+    stall_mark_ms = i.now_ms;
     if (o.event == R_NONE || o.event == R_STALE_RESULT) o.event = reason;
   }
 
-  // A readback taken under the GRC's own lock right after its own write is a value the lease caused: owned.
-  void own_readback(const In &i) {
-    if (i.op_value >= 0 && i.op_value != original && i.op_value != v && i.op_value != p) q = i.op_value;
+  // A new owned readback is committed at once, whatever else the tick does (an emitted restore, a busy bus).
+  void set_q(int32_t value, Out &o) {
+    if (value != q) {
+      q = value;
+      o.commit = true;
+    }
+  }
+
+  // A readback taken under the GRC's own lock right after its own write is a value the lease caused: owned. A
+  // readback that went unanswered (-1) never erases it.
+  void own_readback(const In &i, Out &o) {
+    if (i.op_value >= 0 && i.op_value != original && i.op_value != v && i.op_value != p) set_q(i.op_value, o);
+  }
+
+  void hold(const In &i) {
+    restore_hold = true;
+    restore_from_ms = i.now_ms;
+  }
+
+  // The restore-owed time while the inverter answers: each tick adds the time since the previous one (at most
+  // rx_fresh_ms), only when the inverter answered within rx_fresh_ms. A silent inverter adds nothing.
+  void stall_tick(const In &i) {
+    uint32_t d = elapsed(i.now_ms, stall_mark_ms);
+    stall_mark_ms = i.now_ms;
+    if (i.rx_age_ms <= c.rx_fresh_ms) {
+      uint64_t s = (uint64_t) stall_ms + (d < c.rx_fresh_ms ? d : c.rx_fresh_ms);
+      stall_ms = s > c.restore_stall_ms ? c.restore_stall_ms : (uint32_t) s;
+    }
   }
 
   void restoring(const In &i, Out &o, uint8_t res) {
+    stall_tick(i);
     if (op_pending) {
       if (res == OP_OK || res == OP_OK_NOWRITE) {
         op_pending = false;
@@ -818,37 +981,50 @@ class Core {
         op_pending = false;
         fault(o, R_FOREIGN);
       } else if (res == OP_NO_ANSWER || res == OP_DEFERRED) {
-        // nothing was written: the attempt and the write are given back; the restore stays owed
+        // nothing was written: the attempt and the write are given back; the restore stays owed (a free retry, at
+        // most restore_free_max a night)
         op_pending = false;
         restore_attempts = (int32_t) imax(0, restore_attempts - 1);
-        writes_night = (int32_t) imax(0, writes_night - 1);
-        restore_next_ms = i.now_ms + c.restore_backoff_ms;
+        give_back();
+        free_night++;
         o.event = res == OP_NO_ANSWER ? R_RESTORE_UNANSWERED : R_RESTORE_DEFERRED;
         o.commit = true;
+        if (free_night >= c.restore_free_max) {
+          fault(o, R_RESTORE_STALLED);
+        } else {
+          hold(i);
+        }
       } else if (res == OP_FAIL || elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {
         op_pending = false;
-        if (res == OP_FAIL) own_readback(i);
+        if (res == OP_FAIL) {
+          own_readback(i, o);
+        } else {
+          late_seq = op_seq;
+          late_kind = op_kind;
+        }
         if (restore_attempts >= c.max_restore_attempts) {
           fault(o, R_RESTORE_FAILED);
         } else {
-          restore_next_ms = i.now_ms + c.restore_backoff_ms;
+          hold(i);
           o.event = R_RESTORE_RETRY;
         }
       }
       return;
     }
-    if (!due(i.now_ms, restore_next_ms) || i.rtc_busy || i.mutex_busy) return;
+    if (restore_hold && elapsed(i.now_ms, restore_from_ms) >= c.restore_backoff_ms) restore_hold = false;
+    if (stall_ms >= c.restore_stall_ms) { fault(o, R_RESTORE_STALLED); return; }
+    if (restore_hold || i.rtc_busy || i.mutex_busy) return;
     if (i.rx_age_ms > c.rx_fresh_ms) return;
-    if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING); return; }
+    if (writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve) { fault(o, R_NIGHT_CEILING); return; }
     restore_attempts++;
-    writes_night++;
+    count_write();
     emit(i, o, A_RESTORE, original);
     if (o.event == R_NONE || o.event == R_STALE_RESULT) o.event = R_RESTORE_REQUESTED;
   }
 
-  // FAULT writes nothing on its own. The owner may accept the current state (ACK, with a fresh configuration read) or
-  // ask for one classified restore of the original (Restore original), which the night's write ceiling bounds and
-  // whose failure leaves the FAULT latched.
+  // FAULT writes nothing on its own. The owner may accept the current state (ACK, with a fresh configuration read; the
+  // night's counts are kept) or ask for one classified restore of the original (Restore original), which the night's
+  // write ceiling bounds (one write is always reserved for it) and whose failure leaves the FAULT latched.
   void faulted(const In &i, Out &o, uint8_t res) {
     if (op_pending) {
       if (res == OP_OK || res == OP_OK_NOWRITE) {
@@ -865,12 +1041,20 @@ class Core {
         o.commit = true;
       } else if (res == OP_NO_ANSWER || res == OP_DEFERRED) {
         op_pending = false;
-        writes_night = (int32_t) imax(0, writes_night - 1);
+        if (free_night < c.restore_free_max) {
+          give_back();
+          free_night++;
+        }
         o.event = res == OP_NO_ANSWER ? R_RESTORE_UNANSWERED : R_RESTORE_DEFERRED;
         o.commit = true;
       } else if (res == OP_FAIL || elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {
         op_pending = false;
-        if (res == OP_FAIL) own_readback(i);
+        if (res == OP_FAIL) {
+          own_readback(i, o);
+        } else {
+          late_seq = op_seq;
+          late_kind = op_kind;
+        }
         last_reason = R_RESTORE_FAILED;
         o.event = R_RESTORE_FAILED;
         o.commit = true;
@@ -891,7 +1075,7 @@ class Core {
         o.event = R_REFUSE_RESTORE;
         return;
       }
-      writes_night++;
+      count_write();
       emit(i, o, A_RESTORE, original);
       o.event = R_OWNER_RESTORE;
     }

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Guarded charge-rate controller (GRC): the pure decision core, as an executable reference model.
 
-Executable specification of docs/dev/gentle-rate-controller/SPEC.md (revision 2). The firmware form is
+Executable specification of docs/dev/gentle-rate-controller/SPEC.md (revision 3). The firmware form is
 docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h; registry/tests/test_gentle_rate_core_host.py proves
-the header produces the
-same trace as this model on every vector of vectors.json and on a seeded random fuzz.
+the header produces the same trace as this model on every vector of vectors.json and on a seeded random fuzz.
 
 What it decides: whether a lease may start, which single slot-power value to write next (or none), when the lease
 must end and be restored, and when to latch a fault. What it never does: I/O. The caller (the firmware integration)
@@ -35,10 +34,10 @@ A_NONE, A_WRITE, A_RESTORE = range(3)
 ACTION_NAMES = ["NONE", "WRITE", "RESTORE"]
 
 # OK: done and read back equal. OK_NOWRITE: a restore found the original. FAIL: the inverter answered and it did not
-# work (an exception, a readback that differs, or a write sent whose readback went unanswered). FOREIGN: the fresh
-# read found a value the lease does not own; nothing written. NO_ANSWER: the inverter did not answer the fresh read
-# that precedes every write; nothing written. DEFERRED: the operation was not run (bus not free, or the previous run
-# still executing); nothing written.
+# work: an exception response (to the fresh read or the write), a readback that differs, or a write sent whose
+# readback went unanswered. FOREIGN: the fresh read found a value the lease does not own; nothing written. NO_ANSWER:
+# the fresh read that precedes every write got NO reply at all (a timeout, never an exception); nothing written.
+# DEFERRED: the operation was not run (bus not free, or the previous run still executing); nothing written.
 OP_NONE, OP_OK, OP_OK_NOWRITE, OP_FAIL, OP_FOREIGN, OP_NO_ANSWER, OP_DEFERRED = range(7)
 OP_NAMES = ["NONE", "OK", "OK_NOWRITE", "FAIL", "FOREIGN", "NO_ANSWER", "DEFERRED"]
 
@@ -72,6 +71,9 @@ R_REFUSE_TARGET_AT_RISK = 20
 R_REFUSE_WRITE_BUDGET = 21
 R_REFUSE_GRID = 22
 R_REFUSE_RESTORE = 23
+R_REFUSE_WEEK_BUDGET = 24
+R_REFUSE_LIFE_BUDGET = 25
+R_REFUSE_CONFIG = 26
 R_ARMED = 40
 R_DISARMED = 41
 R_ARM_EXPIRED = 42
@@ -123,12 +125,14 @@ R_FOREIGN = 100
 R_RESTORE_FAILED = 101
 R_RECORD_CORRUPT = 102
 R_NIGHT_CEILING = 103
+R_RESTORE_STALLED = 104
 REASONS = {k: v for k, v in globals().items() if k.startswith("R_") and isinstance(v, int)}
 REASON_NAMES = {v: k for k, v in REASONS.items()}
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Configuration (firmware substitutions; defaults are the proposed production values)
+# Configuration (firmware substitutions; defaults are the proposed production values, except capacity_floor_wh: it
+# has NO usable default and must be set by the site, SPEC section 5)
 # ---------------------------------------------------------------------------------------------------------------
 @dataclass
 class Config:
@@ -143,7 +147,12 @@ class Config:
     judge_samples: int = 4             # fresh telemetry samples averaged to judge a response
     max_changes: int = 6               # change writes per lease (the START write included)
     max_restore_attempts: int = 3      # ANSWERED restore failures per lease (an unanswered one is not counted)
-    night_write_ceiling: int = 9       # every write of the night: changes + restores (flash wear unknown)
+    owner_restore_reserve: int = 1     # writes of the night kept for the owner's Restore original
+    night_write_ceiling: int = 10      # every write of the night: changes + restores + the owner's reserve
+    week_write_ceiling: int = 42       # every write of the last 7 nights (flash wear NOT ESTABLISHED)
+    life_write_ceiling: int = 4000     # every write since the record exists (flash wear NOT ESTABLISHED)
+    restore_free_max: int = 10         # unanswered or deferred restores per night (they spend no attempt)
+    restore_stall_ms: int = 600_000    # a restore owed this long while the inverter answers: FAULT RESTORE_STALLED
     restore_backoff_ms: int = 30_000
     op_timeout_ms: int = 15_000        # an operation without any result is a failure
     plan_max_age_ms: int = 1_200_000   # 20 min without a plan hand-over = Home Assistant lost
@@ -174,7 +183,7 @@ class Config:
     watchdog_extra_ms: int = 600_000
     rx_fresh_ms: int = 30_000          # a restore is emitted only when the inverter answered a read this recently
     window_match_s: int = 120          # the plan's window end must lie this close to the slot's own end
-    capacity_floor_wh: int = 20_000    # the firmware's own capacity for the target guard (site substitution)
+    capacity_floor_wh: int = 0         # SITE SUBSTITUTION, no usable default: at least the usable capacity (SPEC 5)
     taper_max_pct: int = 95            # the highest taper knee the target guard accepts from a plan
     script_steps: int = 3              # Modbus steps of one grc_execute run (fresh read, write, readback)
     script_step_ms: int = 3_000        # each bounded by the existing 3 s wait_until
@@ -182,19 +191,27 @@ class Config:
 
 
 def config_ok(c: Config) -> bool:
-    """Structural validity of a configuration (the integration static_asserts the production values)."""
+    """Structural validity of a configuration (the integration static_asserts the production values). The default
+    Config is NOT valid: capacity_floor_wh must be set by the site (no usable default)."""
     return (c.round_w > 0 and c.floor_w > 0 and c.floor_w % c.round_w == 0 and c.fw_bound_w % c.round_w == 0
             and c.fw_bound_w >= c.floor_w + c.hyst_w and c.fw_bound_w <= 8000
             and 0 < c.hyst_w and c.max_step_w >= c.hyst_w and c.max_step_w % c.round_w == 0
             and c.settle_ms < c.dwell_ms and c.judge_samples >= 1 and c.max_changes >= 1
-            and c.max_restore_attempts >= 1 and c.night_write_ceiling >= c.max_changes + c.max_restore_attempts
-            and c.night_write_ceiling <= 255 and c.gain_min_pct < c.gain_max_pct and c.response_min_pct > 0
+            and c.max_restore_attempts >= 1 and c.owner_restore_reserve >= 1
+            and c.night_write_ceiling >= c.max_changes + c.max_restore_attempts + c.owner_restore_reserve
+            and c.night_write_ceiling <= 255 and c.week_write_ceiling >= c.night_write_ceiling
+            and c.life_write_ceiling >= c.week_write_ceiling and c.life_write_ceiling <= 1_000_000
+            and 1 <= c.restore_free_max <= 255
+            and c.restore_stall_ms >= 2 * (c.restore_backoff_ms + c.op_timeout_ms) and c.restore_stall_ms <= 3_600_000
+            and c.gain_min_pct < c.gain_max_pct and c.response_min_pct > 0
             and c.plan_max_age_ms < c.arm_window_ms and c.op_timeout_ms > 0 and c.restore_backoff_ms > 0
             and 0 < c.guard_tail_pct <= c.guard_derate_pct <= 100
+            and c.charging_min_w >= 2 * c.round_w
             and c.script_steps >= 1 and c.script_step_ms > 0
             and c.op_timeout_ms > c.script_steps * c.script_step_ms + c.script_queue_ms
             and c.end_margin_s > c.clock_skew_max_s + 60 and 60 < c.window_match_s <= 600
-            and 1000 <= c.capacity_floor_wh <= 100000 and 50 <= c.taper_max_pct <= 100 and c.rx_fresh_ms > 0)
+            and 1000 <= c.capacity_floor_wh <= 100000 and 50 <= c.taper_max_pct <= 100
+            and 0 < c.rx_fresh_ms < c.restore_stall_ms)
 
 
 @dataclass
@@ -218,11 +235,11 @@ class In:
     now_ms: int = 0
     epoch: int = 0
     local_min: int = -1
-    night_id: int = 0
+    night_id: int = 0           # local DAY NUMBER of the window's start (rolls at local noon), 0 = unknown
     clock_change_night: bool = False
     inv_skew_s: int = -1
     rtc_busy: bool = False
-    mutex_busy: bool = False    # the shared write mutex, the bus, OR the GRC's own operation still running
+    mutex_busy: bool = False    # the shared write mutex, the bus, OR the GRC's own grc_execute still running
     other: int = 0
     fault: bool = False
     arm: bool = False
@@ -236,6 +253,7 @@ class In:
     tel_age_ms: int = 0
     sample_seq: int = 0
     cfg_age_ms: int = 0
+    cfg_slot: int = 0           # the slot the configuration fields below describe (core.slot during a lease)
     live_sp: int = -1
     slot_start_min: int = 0
     slot_end_min: int = 0
@@ -255,6 +273,7 @@ class Out:
     action: int = A_NONE
     value: int = 0
     seq: int = 0                # with an action: its sequence number, echoed back with the result
+    slot: int = 0               # with an action: the slot (1..6) whose power register (256 + slot - 1) it targets
     disarm: bool = False
     commit: bool = False
     event: int = R_NONE
@@ -264,11 +283,8 @@ class Out:
 # Pure helpers
 # ---------------------------------------------------------------------------------------------------------------
 def elapsed(now: int, then: int) -> int:
+    """Wrap-safe uptime difference (exact for any interval below 2^32 ms, 49.7 days)."""
     return (now - then) & MASK32
-
-
-def due(now: int, at: int) -> bool:
-    return ((now - at) & MASK32) < 0x80000000
 
 
 def mod1440(x: int) -> int:
@@ -290,6 +306,10 @@ def slot_end_epoch(epoch: int, local_min: int, slot_end_min: int) -> int:
     """The slot's own end on the dongle clock, never later than the real end: the whole minutes to the slot's end
     from the present local minute (wrapping midnight), less the up to 60 s already gone in that minute."""
     return epoch + mod1440(slot_end_min - local_min) * 60 - 60
+
+
+def round_up(x: int, step: int) -> int:
+    return (max(0, x) + step - 1) // step * step
 
 
 def plan_ok(pl: Plan, c: Config) -> bool:
@@ -335,9 +355,10 @@ def ownership_ok_for_write(live: int, v: int) -> bool:
 
 
 def lost_lease_slots(live: list, table: list) -> int:
-    """At a boot with NO record: bit k-1 set for each slot k whose live power is below the owner's table value (the
-    editor's stored value), a lowered value a lost record may have left. A warning only; nothing is written on it.
-    -1 = unknown, never a warning."""
+    """At a boot with NO record: bit k-1 set for each slot k whose live power is below the OWNER's value for it, a
+    lowered value a lost record may have left. `table` is a durable owner copy (the saved fallback profile's six slot
+    powers, FB-B2), never the editor's staging numbers (manual_slotN_power: restore_value false, initial 8000). A
+    warning only; nothing is written on it. -1 = unknown (no saved profile), never a warning."""
     mask = 0
     for k in range(6):
         if live[k] >= 0 and table[k] >= 0 and live[k] < table[k]:
@@ -346,12 +367,12 @@ def lost_lease_slots(live: list, table: list) -> int:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# The durable record (32 bytes, little endian, CRC-32 over bytes 0..27)
+# The durable record (48 bytes, little endian, CRC-32 over bytes 0..43)
 # ---------------------------------------------------------------------------------------------------------------
-REC_SIZE = 32
+REC_SIZE = 48
 REC_MAGIC = 0x5247
-REC_VERSION = 2
-F_ACTIVE, F_FAULT, F_NIGHT_USED, F_READBACK = 1, 2, 4, 8
+REC_VERSION = 3
+F_ACTIVE, F_FAULT, F_NIGHT_USED, F_READBACK, F_NIGHT_UNKNOWN = 1, 2, 4, 8, 16
 DEC_OK, DEC_ABSENT, DEC_BAD_SIZE, DEC_BAD_CRC, DEC_BAD_MAGIC, DEC_BAD_VERSION, DEC_BAD_VALUE = range(7)
 
 
@@ -367,8 +388,11 @@ class Record:
     writes_night: int = 0
     changes: int = 0
     restore_attempts: int = 0
+    free_night: int = 0         # unanswered or deferred restores this night
     lease_end: int = 0
     q: int = 0                  # the owned readback, meaningful only with F_READBACK
+    hist: list = field(default_factory=lambda: [0] * 6)   # writes of the nights night_id - 1 .. night_id - 6
+    life_writes: int = 0
 
 
 def encode_record(r: Record) -> bytes:
@@ -385,12 +409,13 @@ def encode_record(r: Record) -> bytes:
     b[16] = r.writes_night & 0xFF
     b[17] = r.changes & 0xFF
     b[18] = r.restore_attempts & 0xFF
-    b[19] = 0
+    b[19] = r.free_night & 0xFF
     b[20:24] = (r.lease_end & MASK32).to_bytes(4, "little")
     b[24:26] = (r.q & 0xFFFF).to_bytes(2, "little")
-    b[26] = 0
-    b[27] = 0
-    b[28:32] = (zlib.crc32(bytes(b[0:28])) & MASK32).to_bytes(4, "little")
+    for k in range(6):
+        b[26 + k] = r.hist[k] & 0xFF
+    b[32:36] = (r.life_writes & MASK32).to_bytes(4, "little")
+    b[44:48] = (zlib.crc32(bytes(b[0:44])) & MASK32).to_bytes(4, "little")
     return bytes(b)
 
 
@@ -400,7 +425,7 @@ def decode_record(b: bytes | None, c: Config) -> tuple[int, Record]:
         return DEC_ABSENT, r
     if len(b) != REC_SIZE:
         return DEC_BAD_SIZE, r
-    if int.from_bytes(b[28:32], "little") != (zlib.crc32(bytes(b[0:28])) & MASK32):
+    if int.from_bytes(b[44:48], "little") != (zlib.crc32(bytes(b[0:44])) & MASK32):
         return DEC_BAD_CRC, r
     if int.from_bytes(b[0:2], "little") != REC_MAGIC:
         return DEC_BAD_MAGIC, r
@@ -411,12 +436,17 @@ def decode_record(b: bytes | None, c: Config) -> tuple[int, Record]:
     r.v = int.from_bytes(b[8:10], "little")
     r.p = int.from_bytes(b[10:12], "little")
     r.night_id = int.from_bytes(b[12:16], "little")
-    r.writes_night, r.changes, r.restore_attempts = b[16], b[17], b[18]
+    r.writes_night, r.changes, r.restore_attempts, r.free_night = b[16], b[17], b[18], b[19]
     r.lease_end = int.from_bytes(b[20:24], "little")
     r.q = int.from_bytes(b[24:26], "little")
-    ok = (r.flags & ~15) == 0 and b[19] == 0 and b[26] == 0 and b[27] == 0 and r.writes_night <= c.night_write_ceiling
+    r.hist = [b[26 + k] for k in range(6)]
+    r.life_writes = int.from_bytes(b[32:36], "little")
+    ok = (r.flags & ~31) == 0 and all(x == 0 for x in b[36:44]) and r.writes_night <= c.night_write_ceiling
+    ok = ok and all(h <= c.night_write_ceiling for h in r.hist) and r.free_night <= c.restore_free_max
     if not r.flags & F_READBACK:
         ok = ok and r.q == 0
+    if r.flags & F_NIGHT_UNKNOWN:
+        ok = ok and r.night_id == 0 and not r.flags & F_ACTIVE
     if r.flags & F_ACTIVE:
         ok = ok and 1 <= r.slot <= 6 and c.floor_w + c.hyst_w <= r.original <= c.fw_bound_w
         ok = ok and c.floor_w <= r.v <= r.original and c.floor_w <= r.p <= r.original
@@ -440,7 +470,11 @@ class Core:
         self.arm_latch = False
         self.night_id = 0
         self.night_used = False
+        self.night_unknown = False
         self.writes_night = 0
+        self.free_night = 0
+        self.hist = [0] * 6
+        self.life_writes = 0
         self.last_reason = R_NONE
         self.seen = False
         self.last_seq = 0
@@ -467,10 +501,15 @@ class Core:
         self.op_kind = A_NONE
         self.op_seq = 0
         self.op_start_ms = 0
+        self.late_seq = 0
+        self.late_kind = A_NONE
         self.end_pending = False
         self.grid_pending = False
         self.restore_attempts = 0
-        self.restore_next_ms = 0
+        self.restore_hold = False
+        self.restore_from_ms = 0
+        self.stall_ms = 0
+        self.stall_mark_ms = 0
         self.p0 = 0
         self.p_ref = 0
         self.gain_pct = 0
@@ -485,13 +524,19 @@ class Core:
         self.last_soc = -1
         self.soc_max = -1
 
+    def week_writes(self) -> int:
+        """Every write of this night and the six before it (the rolling 7-day window)."""
+        return self.writes_night + sum(self.hist)
+
     # ---- the durable record of this core ------------------------------------------------------------------
     def record(self) -> Record:
         lease = self.state in (LEASED, ADJUSTING, SETTLING, RESTORING) or (self.state == FAULT and self.original != 0)
         rb = lease and self.q >= 0
         flags = ((F_ACTIVE if lease else 0) | (F_FAULT if self.state == FAULT else 0)
-                 | (F_NIGHT_USED if self.night_used else 0) | (F_READBACK if rb else 0))
-        r = Record(flags=flags, reason=self.last_reason, night_id=self.night_id, writes_night=self.writes_night)
+                 | (F_NIGHT_USED if self.night_used else 0) | (F_READBACK if rb else 0)
+                 | (F_NIGHT_UNKNOWN if self.night_unknown else 0))
+        r = Record(flags=flags, reason=self.last_reason, night_id=self.night_id, writes_night=self.writes_night,
+                   free_night=self.free_night, hist=list(self.hist), life_writes=self.life_writes)
         if lease:
             r.slot, r.original, r.v, r.p = self.slot, self.original, self.v, self.p
             r.changes, r.restore_attempts, r.lease_end = self.changes, self.restore_attempts, self.lease_end
@@ -508,10 +553,17 @@ class Core:
         if status == DEC_ABSENT:
             return
         if status != DEC_OK:
+            # original is unknown, and so are the night's counts: the boot's night is taken as used with every count
+            # of the 7-day window full (START refused until they age out); adopted on the first tick with a night
             self.state, self.last_reason = FAULT, R_RECORD_CORRUPT
+            self.night_unknown, self.night_used = True, True
+            self.writes_night, self.free_night = self.c.night_write_ceiling, self.c.restore_free_max
+            self.hist = [self.c.night_write_ceiling] * 6
             return
-        self.night_id, self.writes_night = rec.night_id, rec.writes_night
+        self.night_id, self.writes_night, self.free_night = rec.night_id, rec.writes_night, rec.free_night
+        self.hist, self.life_writes = list(rec.hist), rec.life_writes
         self.night_used = bool(rec.flags & F_NIGHT_USED)
+        self.night_unknown = bool(rec.flags & F_NIGHT_UNKNOWN)
         self.last_reason = rec.reason
         if rec.flags & F_ACTIVE:
             self.slot, self.original, self.v, self.p = rec.slot, rec.original, rec.v, rec.p
@@ -525,7 +577,7 @@ class Core:
                 self.state, self.last_reason = FAULT, R_RESTORE_FAILED
                 return
             self.state, self.last_reason = RESTORING, R_BOOT_RECOVERY
-            self.restore_next_ms = now_ms & MASK32
+            self.stall_mark_ms = now_ms & MASK32
 
     # ---- one tick ----------------------------------------------------------------------------------------
     def step(self, i: In) -> Out:
@@ -535,8 +587,12 @@ class Core:
             self.seen, self.last_seq = True, i.sample_seq
         if not i.arm:
             self.arm_latch = False
-        res = self._result(i, o)
+        if self.night_unknown and i.night_id != 0:
+            self.night_id, self.night_unknown = i.night_id, False
         st = self.state
+        if st in (IDLE, ARMED, FAULT) and not self.night_unknown and i.night_id > self.night_id:
+            self._roll_night(i.night_id)
+        res = self._result(i, o)
         if st == FAULT:
             self._faulted(i, o, res)
             return o
@@ -575,13 +631,46 @@ class Core:
 
     def _result(self, i: In, o: Out) -> int:
         """The result reported for the OUTSTANDING operation, else OP_NONE. A result for any other sequence or kind (a
-        late result of an abandoned operation, a duplicate) is stale: ignored, never taken as this one's outcome."""
+        late result of an abandoned operation, a duplicate) is stale: ignored, never taken as this one's outcome. The
+        late result of the operation this lease abandoned at its timeout still carries the register's newest value
+        (operations run one at a time), so its readback is owned (never its outcome)."""
         if i.op == OP_NONE:
             return OP_NONE
         if self.op_pending and i.op_seq == self.op_seq and i.op_kind == self.op_kind:
             return i.op
         o.event = R_STALE_RESULT
+        if self.late_seq != 0 and i.op_seq == self.late_seq and i.op_kind == self.late_kind:
+            self.late_seq, self.late_kind = 0, A_NONE
+            if i.op == OP_FAIL:
+                self._own_readback(i, o)
         return OP_NONE
+
+    def _roll_night(self, nid: int) -> None:
+        """A new night: the closing night's writes join the 7-day window (hist[j] = night nid - 1 - j), every night
+        without a record counts 0, the night's counters restart."""
+        k = nid - self.night_id if self.night_id != 0 else 7
+        new = [0] * 6
+        for j in range(6):
+            age = j + 1
+            if age == k:
+                new[j] = self.writes_night
+            elif age > k:
+                new[j] = self.hist[age - k - 1]
+        self.hist = new
+        self.night_id, self.night_used, self.writes_night, self.free_night = nid, False, 0, 0
+
+    def _budget(self, n: int) -> int:
+        """R_NONE when n more change writes fit every write ceiling with the restores and the owner's restore still
+        reserved; else the refusal. A restore is never refused by these ceilings."""
+        c = self.c
+        reserve = c.max_restore_attempts + c.owner_restore_reserve
+        if self.writes_night + n > c.night_write_ceiling - reserve:
+            return R_REFUSE_WRITE_BUDGET
+        if self.week_writes() + n > c.week_write_ceiling - reserve:
+            return R_REFUSE_WEEK_BUDGET
+        if self.life_writes + n > c.life_write_ceiling - reserve:
+            return R_REFUSE_LIFE_BUDGET
+        return R_NONE
 
     # ---- states ------------------------------------------------------------------------------------------
     def _armed(self, i: In, o: Out) -> None:
@@ -607,10 +696,12 @@ class Core:
 
     def _start_check(self, i: In) -> int:
         c, pl = self.c, i.plan
-        if i.night_id == 0 or i.epoch == 0 or i.local_min < 0:
+        if not config_ok(c):
+            return R_REFUSE_CONFIG
+        if i.night_id == 0 or i.epoch == 0 or i.local_min < 0 or i.night_id < self.night_id:
             return R_REFUSE_CLOCK
         if i.night_id != self.night_id:
-            self.night_id, self.night_used, self.writes_night = i.night_id, False, 0
+            self._roll_night(i.night_id)
         if self.night_used:
             return R_REFUSE_NIGHT_USED
         if i.clock_change_night:
@@ -635,7 +726,8 @@ class Core:
             return R_REFUSE_PLAN_STALE
         if i.cfg_age_ms > c.config_stale_ms:
             return R_REFUSE_CONFIG_STALE
-        if not i.slot_grid or i.slot_target != pl.target or not in_slot(i.local_min, i.slot_start_min, i.slot_end_min):
+        if i.cfg_slot != pl.slot or not i.slot_grid or i.slot_target != pl.target or \
+                not in_slot(i.local_min, i.slot_start_min, i.slot_end_min):
             return R_REFUSE_SLOT
         slot_end = slot_end_epoch(i.epoch, i.local_min, i.slot_end_min)
         if abs(pl.window_end - slot_end) > c.window_match_s:
@@ -655,9 +747,7 @@ class Core:
         if self._guard_trips(i.epoch, i.soc, pl.target, max(pl.capacity_wh, c.capacity_floor_wh), i.batt_w, slot_end,
                              pl.taper):
             return R_REFUSE_TARGET_AT_RISK
-        if self.writes_night + 1 > c.night_write_ceiling - c.max_restore_attempts:
-            return R_REFUSE_WRITE_BUDGET
-        return R_NONE
+        return self._budget(1)
 
     def _begin_lease(self, i: In, o: Out) -> None:
         c, pl = self.c, i.plan
@@ -699,7 +789,7 @@ class Core:
             self._fault(o, R_FOREIGN)
             return
         if res == OP_FAIL and i.op_value >= 0 and i.op_value != self.v and i.op_value != self.p:
-            self.q = i.op_value
+            self._set_q(i.op_value, o)
             self._begin_restore(i, o, R_READBACK_MISMATCH)
         elif res == OP_FAIL:
             self._begin_restore(i, o, R_WRITE_FAILED)
@@ -710,6 +800,7 @@ class Core:
         elif res == OP_DEFERRED:
             self._begin_restore(i, o, R_WRITE_DEFERRED)
         elif elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:
+            self.late_seq, self.late_kind = self.op_seq, self.op_kind
             self._begin_restore(i, o, R_OP_TIMEOUT)
         else:
             return
@@ -750,7 +841,8 @@ class Core:
             return R_PLAN_INVALID
         if i.cfg_age_ms > c.config_stale_ms:
             return R_CONFIG_STALE
-        if not i.slot_grid or i.slot_target != self.target or not in_slot(i.local_min, i.slot_start_min, i.slot_end_min):
+        if i.cfg_slot != self.slot or not i.slot_grid or i.slot_target != self.target or \
+                not in_slot(i.local_min, i.slot_start_min, i.slot_end_min):
             return R_CONFIG_DRIFT
         slot_end = slot_end_epoch(i.epoch, i.local_min, i.slot_end_min)
         if abs(pl.window_end - slot_end) > c.window_match_s:
@@ -851,7 +943,7 @@ class Core:
             self.p_ref = (3 * self.p_ref + max(0, i.batt_w)) // 4
         if self.bms_limited or self.changes >= c.max_changes:
             return
-        if self.writes_night + 1 > c.night_write_ceiling - c.max_restore_attempts:
+        if self._budget(1) != R_NONE:
             return
         if elapsed(i.now_ms, self.last_change_ms) < c.dwell_ms:
             return
@@ -867,19 +959,21 @@ class Core:
 
     def _desired(self, i: In) -> int:
         """The next setpoint: a RELATIVE step from the present one, scaled by wanted over realised power (robust to
-        the unknown setpoint unit), capped per step, rounded, inside [floor, min(original, bound, owner)]. The hard
-        ceiling min(original, bound) is rounded DOWN to the step (a pre-lease value off the 100 W grid is only ever
-        written back by the restore); the owner ceiling from the plan is approached by at most one step per change."""
+        the unknown setpoint unit), rounded to the grid, then held within one step of the present value by grid
+        bounds (ceil(v - step), floor(v + step): never more than max_step_w even from a value off the grid), inside
+        [floor, min(original, bound, owner)]. The hard ceiling min(original, bound) is rounded DOWN to the grid (a
+        pre-lease value off the grid is only ever written back by the restore); the owner ceiling from the plan is
+        approached by at most one step per change."""
         c = self.c
-        if self.p_ref < c.charging_min_w // 2:
+        if self.p_ref <= 0 or self.p_ref < c.charging_min_w // 2:
             return self.v
         raw = self.v * plan_power(i.plan, i.epoch) // self.p_ref
-        raw = max(self.v - c.max_step_w, min(self.v + c.max_step_w, raw))
-        raw = max(0, raw)
-        r = (raw + c.round_w // 2) // c.round_w * c.round_w
+        r = (max(0, raw) + c.round_w // 2) // c.round_w * c.round_w
+        lo = round_up(self.v - c.max_step_w, c.round_w)
+        hi = (self.v + c.max_step_w) // c.round_w * c.round_w
+        r = max(lo, min(hi, r))
         hard = min(self.original, c.fw_bound_w) // c.round_w * c.round_w
-        owner = max(i.plan.ceiling_w, (max(0, self.v - c.max_step_w) + c.round_w - 1) // c.round_w * c.round_w)
-        ceiling = min(hard, owner)
+        ceiling = min(hard, max(i.plan.ceiling_w, lo))
         return max(c.floor_w, min(ceiling, r))
 
     def _emit(self, i: In, o: Out, kind: int, value: int) -> None:
@@ -887,12 +981,21 @@ class Core:
         if self.seq == 0:
             self.seq = 1
         self.op_pending, self.op_kind, self.op_seq, self.op_start_ms = True, kind, self.seq, i.now_ms
-        o.action, o.value, o.seq, o.commit = kind, value, self.seq, True
+        o.action, o.value, o.seq, o.slot, o.commit = kind, value, self.seq, self.slot, True
+
+    def _count_write(self) -> None:
+        self.writes_night += 1
+        self.life_writes = min(self.life_writes + 1, MASK32)
+
+    def _give_back(self) -> None:
+        """An operation that wrote nothing (NO_ANSWER, DEFERRED) returns its write to every count."""
+        self.writes_night = max(0, self.writes_night - 1)
+        self.life_writes = max(0, self.life_writes - 1)
 
     def _emit_write(self, i: In, o: Out, d: int) -> None:
         self.p = d
         self.changes += 1
-        self.writes_night += 1
+        self._count_write()
         self._emit(i, o, A_WRITE, d)
         self.state = ADJUSTING
         if o.event == R_NONE:
@@ -902,17 +1005,38 @@ class Core:
         self.state = RESTORING
         self.last_reason = reason
         self.op_pending = False
-        self.restore_next_ms = i.now_ms
+        self.restore_hold = False
+        self.stall_ms, self.stall_mark_ms = 0, i.now_ms
         if o.event in (R_NONE, R_STALE_RESULT):
             o.event = reason
 
-    def _own_readback(self, i: In) -> None:
-        """A readback taken under the GRC's own lock right after its own write is a value the lease caused: owned."""
+    def _set_q(self, value: int, o: Out) -> None:
+        """A new owned readback is committed at once, whatever else the tick does (an emitted restore, a busy bus)."""
+        if value != self.q:
+            self.q = value
+            o.commit = True
+
+    def _own_readback(self, i: In, o: Out) -> None:
+        """A readback taken under the GRC's own lock right after its own write is a value the lease caused: owned.
+        A readback that went unanswered (-1) never erases it."""
         if i.op_value >= 0 and i.op_value != self.original and i.op_value != self.v and i.op_value != self.p:
-            self.q = i.op_value
+            self._set_q(i.op_value, o)
+
+    def _hold(self, i: In) -> None:
+        self.restore_hold, self.restore_from_ms = True, i.now_ms
+
+    def _stall_tick(self, i: In) -> None:
+        """The restore-owed time while the inverter answers: each tick adds the time since the previous one (at most
+        rx_fresh_ms), only when the inverter answered within rx_fresh_ms. A silent inverter adds nothing."""
+        c = self.c
+        d = elapsed(i.now_ms, self.stall_mark_ms)
+        self.stall_mark_ms = i.now_ms
+        if i.rx_age_ms <= c.rx_fresh_ms:
+            self.stall_ms = min(c.restore_stall_ms, self.stall_ms + min(d, c.rx_fresh_ms))
 
     def _restoring(self, i: In, o: Out, res: int) -> None:
         c = self.c
+        self._stall_tick(i)
         if self.op_pending:
             if res in (OP_OK, OP_OK_NOWRITE):
                 self.op_pending = False
@@ -923,40 +1047,53 @@ class Core:
                 self.op_pending = False
                 self._fault(o, R_FOREIGN)
             elif res in (OP_NO_ANSWER, OP_DEFERRED):
-                # nothing was written: the attempt and the write are given back; the restore stays owed
+                # nothing was written: the attempt and the write are given back; the restore stays owed (a free
+                # retry, at most restore_free_max a night)
                 self.op_pending = False
                 self.restore_attempts = max(0, self.restore_attempts - 1)
-                self.writes_night = max(0, self.writes_night - 1)
-                self.restore_next_ms = (i.now_ms + c.restore_backoff_ms) & MASK32
+                self._give_back()
+                self.free_night += 1
                 o.event = R_RESTORE_UNANSWERED if res == OP_NO_ANSWER else R_RESTORE_DEFERRED
                 o.commit = True
+                if self.free_night >= c.restore_free_max:
+                    self._fault(o, R_RESTORE_STALLED)
+                else:
+                    self._hold(i)
             elif res == OP_FAIL or elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:
                 self.op_pending = False
                 if res == OP_FAIL:
-                    self._own_readback(i)
+                    self._own_readback(i, o)
+                else:
+                    self.late_seq, self.late_kind = self.op_seq, self.op_kind
                 if self.restore_attempts >= c.max_restore_attempts:
                     self._fault(o, R_RESTORE_FAILED)
                 else:
-                    self.restore_next_ms = (i.now_ms + c.restore_backoff_ms) & MASK32
+                    self._hold(i)
                     o.event = R_RESTORE_RETRY
             return
-        if not due(i.now_ms, self.restore_next_ms) or i.rtc_busy or i.mutex_busy:
+        if self.restore_hold and elapsed(i.now_ms, self.restore_from_ms) >= c.restore_backoff_ms:
+            self.restore_hold = False
+        if self.stall_ms >= c.restore_stall_ms:
+            self._fault(o, R_RESTORE_STALLED)
+            return
+        if self.restore_hold or i.rtc_busy or i.mutex_busy:
             return
         if i.rx_age_ms > c.rx_fresh_ms:
             return
-        if self.writes_night + 1 > c.night_write_ceiling:
+        if self.writes_night + 1 > c.night_write_ceiling - c.owner_restore_reserve:
             self._fault(o, R_NIGHT_CEILING)
             return
         self.restore_attempts += 1
-        self.writes_night += 1
+        self._count_write()
         self._emit(i, o, A_RESTORE, self.original)
         if o.event in (R_NONE, R_STALE_RESULT):
             o.event = R_RESTORE_REQUESTED
 
     def _faulted(self, i: In, o: Out, res: int) -> None:
         """FAULT writes nothing on its own. The owner may accept the current state (ACK, with a fresh configuration
-        read) or ask for one classified restore of the original (Restore original), which the night's write ceiling
-        bounds and whose failure leaves the FAULT latched."""
+        read; the night's counts are kept) or ask for one classified restore of the original (Restore original),
+        which the night's write ceiling bounds (one write is always reserved for it) and whose failure leaves the
+        FAULT latched."""
         c = self.c
         if self.op_pending:
             if res in (OP_OK, OP_OK_NOWRITE):
@@ -970,13 +1107,17 @@ class Core:
                 o.event, o.commit = R_FOREIGN, True
             elif res in (OP_NO_ANSWER, OP_DEFERRED):
                 self.op_pending = False
-                self.writes_night = max(0, self.writes_night - 1)
+                if self.free_night < c.restore_free_max:
+                    self._give_back()
+                    self.free_night += 1
                 o.event = R_RESTORE_UNANSWERED if res == OP_NO_ANSWER else R_RESTORE_DEFERRED
                 o.commit = True
             elif res == OP_FAIL or elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:
                 self.op_pending = False
                 if res == OP_FAIL:
-                    self._own_readback(i)
+                    self._own_readback(i, o)
+                else:
+                    self.late_seq, self.late_kind = self.op_seq, self.op_kind
                 self.last_reason = R_RESTORE_FAILED
                 o.event, o.commit = R_RESTORE_FAILED, True
             return
@@ -990,7 +1131,7 @@ class Core:
             if self.original == 0 or busy or self.writes_night + 1 > c.night_write_ceiling:
                 o.event = R_REFUSE_RESTORE
                 return
-            self.writes_night += 1
+            self._count_write()
             self._emit(i, o, A_RESTORE, self.original)
             o.event = R_OWNER_RESTORE
 
@@ -1004,6 +1145,7 @@ class Core:
 def trace_line(core: Core, o: Out) -> str:
     """The canonical per-tick text both the model and the header harness print."""
     return " ".join(str(x) for x in (
-        core.state, o.action, o.value, o.seq, int(o.disarm), int(o.commit), o.event, core.v, core.p, core.q,
+        core.state, o.action, o.value, o.seq, o.slot, int(o.disarm), int(o.commit), o.event, core.v, core.p, core.q,
         core.changes, core.writes_night, core.restore_attempts, core.gain_pct, core.p_ref, core.last_reason,
-        int(core.bms_limited), core.ineffective, core.lease_end))
+        int(core.bms_limited), core.ineffective, core.lease_end, core.free_night, core.week_writes(), core.life_writes,
+        core.stall_ms, int(core.restore_hold), int(core.night_unknown), core.night_id))

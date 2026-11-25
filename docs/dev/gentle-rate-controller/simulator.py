@@ -6,9 +6,16 @@ The truth model is deliberately not the core's arithmetic: real-valued SOC and p
 unknown setpoint-to-battery gain `k` (the setpoint unit is NOT ESTABLISHED, so it varies by scenario), a BMS taper
 above a knee, a grid-charge-current cap, telemetry noise and 1 % SOC resolution; optionally a Modbus outage (the
 inverter answers nothing: no frame, no configuration read, every operation NO_ANSWER), an inverter that stores a
-written slot power clamped or rounded (the readback differs), and a grid outage (no grid charge). The glue echoes each
-result with the action's sequence number and kind. The core under test is passed in as a module (the reference model,
-or a mutant of it), so the same nights also kill mutants.
+written slot power clamped or rounded (the readback differs), a grid outage (no grid charge), a restore the
+integration can never run (DEFERRED), whose fresh read is never answered while telemetry is (NO_ANSWER) or answered
+with an exception (FAIL), and a bus that is busy exactly when a result arrives. The glue echoes each result with the
+action's sequence number and kind and persists the record ONLY on Out.commit. The core under test is passed in as a
+module (the reference model, or a mutant of it), so the same nights also kill mutants.
+
+The site's capacity_floor_wh (no usable default, SPEC section 5) is set per scenario: by default the real capacity
+rounded up (a site that set it to its usable capacity); `floor_band` and `floor_wh` model a site whose figure is off.
+`baseline` is today (the original slot power all night); `baseline_fixed` is candidate C0 (one evening write of a
+planned fixed slot power through the existing editor, the morning write back).
 """
 
 from __future__ import annotations
@@ -23,14 +30,17 @@ E_MID = E_WIN - 30 * 60
 NOW_BASE = 3_000_000_000         # uptime at the window start (the night crosses the 32-bit wrap)
 NIGHT = 20261125
 TICK_S = 10
+WINDOW_S = 300 * 60              # the charge slot 00:30-05:30
 
 
 @dataclass
 class Scenario:
     name: str = "normal"
     seed: int = 0
-    capacity_wh: float = 30000.0
+    capacity_wh: float = 30000.0       # the real (truth) usable capacity
     plan_capacity_factor: float = 1.06
+    floor_wh: float = -1.0             # the site's capacity_floor_wh; < 0: capacity_wh * floor_band
+    floor_band: float = 1.0
     k: float = 1.025
     soc0: float = 30.0
     target: int = 100
@@ -58,10 +68,22 @@ class Scenario:
     grid_down: tuple = (-1, -1)        # [from, to) s: no grid
     store_round_w: int = 0             # the inverter stores a written value rounded down to this step (0 = exact)
     store_min_w: int = 0               # ... and never below this
+    restore_mode: str = ""             # "deferred" | "no_answer" | "exception": every restore the glue is asked for
+    busy_at_result: bool = False       # the bus is busy (mutex_busy) on every tick that carries a result
+    reboot_after_fail: bool = False    # a restart on the tick after the first FAIL result that carries a readback
+    restore_differs: int = 0           # the first restore write is stored as this value (0 = exact)
 
     def store(self, value: int) -> int:
         v = value // self.store_round_w * self.store_round_w if self.store_round_w > 0 else value
         return max(v, self.store_min_w)
+
+
+def site_config(sc: Scenario, M):
+    """The core's configuration as the site would build it: the proposed defaults plus the site's floor."""
+    c = M.Config()
+    floor = sc.floor_wh if sc.floor_wh > 0 else sc.capacity_wh * sc.floor_band
+    c.capacity_floor_wh = max(1000, min(100000, int(math.ceil(floor / 100.0)) * 100))
+    return c
 
 
 def plan_power_w(soc_x10: int, now_epoch: int, deadline: int, cap_wh: float, target: int) -> int:
@@ -99,23 +121,43 @@ class Plant:
         return int(self.soc) * 10, int(round(self.p + self.rng.gauss(0.0, 30.0)))
 
 
-def baseline(sc: Scenario) -> dict:
-    """Today's behaviour: the slot power stays at the original value all night."""
+def baseline_fixed(sc: Scenario, sp: int) -> dict:
+    """A fixed slot power all night: today's behaviour with sp = the original, candidate C0 with sp = a planned value
+    written the evening before. reached_s = first time at the target (-1 = not in the window); mean_charge_w = the
+    mean battery power while charging (above 200 W) before the target."""
     pl = Plant(sc, random.Random(sc.seed))
-    t, reached, peak, energy_lease = 0, -1, 0.0, 0.0
-    while t < 5 * 3600:
-        pl.step(TICK_S, sc.original_sp)
+    t, reached, peak, e, n = 0, -1, 0.0, 0.0, 0
+    while t < WINDOW_S:
+        pl.step(TICK_S, sp)
         t += TICK_S
         peak = max(peak, pl.p)
+        if reached < 0 and pl.p > 200:
+            e, n = e + pl.p, n + 1
         if reached < 0 and pl.soc >= sc.target:
             reached = t
-    return {"reached_s": reached, "peak_w": peak}
+    return {"reached_s": reached, "peak_w": peak, "mean_charge_w": (e / n if n else 0.0)}
+
+
+def baseline(sc: Scenario) -> dict:
+    """Today's behaviour: the slot power stays at the original value all night."""
+    return baseline_fixed(sc, sc.original_sp)
+
+
+def c0_setpoint(sc: Scenario, soc_est: float, margin: float = 1.0, k_assumed: float = 1.0) -> int:
+    """Candidate C0's one evening value: the planner's realised power for the window (finish by the deadline minus
+    the taper reserve), from an ESTIMATED SOC at the window start, divided by an ASSUMED gain (the setpoint unit is
+    not established), times a safety margin; rounded up to 100 W, within [500, original]. No feedback afterwards."""
+    deadline = E_WIN + 240 * 60
+    want = plan_power_w(int(max(0.0, min(100.0, soc_est)) * 10), E_WIN, deadline,
+                        sc.capacity_wh * sc.plan_capacity_factor, sc.target)
+    sp = int(math.ceil(want / k_assumed * margin / 100.0)) * 100
+    return max(500, min(sc.original_sp, sp))
 
 
 def run_night(sc: Scenario, M, cfg=None) -> dict:
     """One night 00:30-05:40 with the core in the loop. Returns the trace facts and the list of violated properties."""
     rng = random.Random(sc.seed * 7919 + 17)
-    c = cfg or M.Config()
+    c = cfg or site_config(sc, M)
     core = M.Core(c)
     plant = Plant(sc, random.Random(sc.seed))
     reg = sc.original_sp
@@ -128,29 +170,36 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
     soc_x10, batt = plant.telemetry()
     deadline, window_end = E_WIN + 240 * 60, E_WIN + 300 * 60
     plan = M.Plan(valid=True, slot=1, target=sc.target, deadline=deadline, window_end=window_end,
-                  ceiling_w=sc.owner_ceiling, capacity_wh=int(sc.capacity_wh * sc.plan_capacity_factor),
+                  ceiling_w=sc.owner_ceiling, capacity_wh=max(1000, int(sc.capacity_wh * sc.plan_capacity_factor)),
                   taper=sc.plan_taper, n=1)
     viol: list[str] = []
     writes = []          # (t, value)
     reg_writes = 0
+    commits = 0
     restore_fails_left = sc.restore_fail_count
+    restore_differs_left = 1 if sc.restore_differs else 0
     leased_at, restoring_seen, reached, peak, lease_energy, lease_s = -1, False, -1, 0.0, 0.0, 0
+    charge_e, charge_n = 0.0, 0
     events = []
     lease_at_foreign = False
     grid_lost_in_lease = -1
+    reboot_due = False
+    rebooted_after_fail = False
+    restoring_answered = 0
     t = 0
     while t <= 310 * 60:
         now_ms = (NOW_BASE + t * 1000) & MASK32
         epoch = E_WIN + t
         down = sc.modbus_down[0] <= t < sc.modbus_down[1]
         grid = not (sc.grid_down[0] <= t < sc.grid_down[1])
-        if t in sc.reboot_at_s:
+        if t in sc.reboot_at_s or reboot_due:
             status, rec = M.decode_record(nvs, c)
             core = M.Core(c)
             core.boot(status, rec, now_ms)
             pending = (M.OP_NONE, 0, 0, -1)
             rx_age = M.NEVER
             events.append((t, "REBOOT"))
+            reboot_due = False
         if t == sc.foreign_at_s:
             reg = sc.foreign_value
             lease_at_foreign = core.state in (M.LEASED, M.ADJUSTING, M.SETTLING)
@@ -174,18 +223,23 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
         if t == sc.start_at_s - 60:
             arm = True
         rtc = sc.rtc_busy[0] <= t < sc.rtc_busy[1]
-        mutex = rng.random() < sc.mutex_busy_prob
+        mutex = rng.random() < sc.mutex_busy_prob or (sc.busy_at_result and pending[0] != M.OP_NONE)
+        if pending[0] == M.OP_FAIL and pending[3] >= 0 and sc.reboot_after_fail and not rebooted_after_fail:
+            reboot_due, rebooted_after_fail = True, True
         i = M.In(now_ms=now_ms, epoch=epoch, local_min=((epoch - E_MID) // 60) % 1440, night_id=NIGHT,
                  clock_change_night=False, inv_skew_s=4, rtc_busy=rtc, mutex_busy=mutex, other=0, fault=False,
                  arm=arm, start=(t == sc.start_at_s), end=(t == sc.end_at_s), ack=False, op=pending[0],
                  op_seq=pending[1], op_kind=pending[2], op_value=pending[3], rx_age_ms=rx_age, grid_ok=grid,
                  soc=soc_x10, batt_w=batt, tel_ok=True, tel_age_ms=tel_age, sample_seq=seq, cfg_age_ms=cfg_age,
-                 live_sp=live_seen, slot_start_min=30, slot_end_min=330, slot_grid=True, slot_target=sc.target,
-                 plan=plan)
+                 cfg_slot=1, live_sp=live_seen, slot_start_min=30, slot_end_min=330, slot_grid=True,
+                 slot_target=sc.target, plan=plan)
         plan.age_ms = plan_age
         pending = (M.OP_NONE, 0, 0, -1)
         state_before = core.state
+        q_before = core.q
         o = core.step(i)
+        if core.q != q_before and not o.commit:
+            viol.append(f"t={t}: the owned readback changed without a commit")
         if not grid and state_before in (M.LEASED, M.SETTLING) and grid_lost_in_lease < 0:
             grid_lost_in_lease = t
             if core.state != M.RESTORING or (not (rtc or mutex) and o.action != M.A_RESTORE):
@@ -195,8 +249,11 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
         commit_ok = not (sc.commit_fail_from_s >= 0 and t >= sc.commit_fail_from_s)
         if o.commit and commit_ok:
             nvs = M.encode_record(core.record())
+            commits += 1
         if o.action != M.A_NONE and (rtc or mutex):
             viol.append(f"t={t}: action while the bus was busy")
+        if o.action != M.A_NONE and o.slot != 1:
+            viol.append(f"t={t}: action names slot {o.slot}, the lease's slot is 1")
         if o.action == M.A_RESTORE and rx_age > c.rx_fresh_ms:
             viol.append(f"t={t}: RESTORE while the inverter had not answered for {rx_age} ms")
         if o.action == M.A_WRITE and not grid:
@@ -232,8 +289,12 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
                 viol.append(f"t={t}: RESTORE {o.value} is not the original {core.original}")
             cls = M.classify_restore(reg, core.original, core.v, core.p, core.q)
             events.append((t, "RESTORE", "down" if down else cls))
-            if down:
+            if down or sc.restore_mode == "no_answer":
                 pending = (M.OP_NO_ANSWER,) + tag + (-1,)
+            elif sc.restore_mode == "deferred":
+                pending = (M.OP_DEFERRED,) + tag + (-1,)
+            elif sc.restore_mode == "exception":
+                pending = (M.OP_FAIL,) + tag + (-1,)          # an exception response to the fresh read: answered
             elif cls == M.CLS_ALREADY:
                 pending = (M.OP_OK_NOWRITE,) + tag + (reg,)
             elif cls == M.CLS_FOREIGN:
@@ -242,6 +303,10 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
                 restore_fails_left -= 1
                 reg_writes += 1
                 pending = (M.OP_FAIL,) + tag + (-1,)
+            elif restore_differs_left > 0:
+                restore_differs_left -= 1
+                reg, reg_writes = sc.restore_differs, reg_writes + 1
+                pending = (M.OP_FAIL,) + tag + (reg,)
             else:
                 reg, reg_writes = sc.store(o.value), reg_writes + 1
                 pending = ((M.OP_OK if reg == o.value else M.OP_FAIL),) + tag + (reg,)
@@ -253,6 +318,13 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
             peak = max(peak, plant.p)
         if core.state == M.RESTORING:
             restoring_seen = True
+            if rx_age <= c.rx_fresh_ms:
+                restoring_answered += TICK_S
+            if restoring_answered > 2 * (c.restore_stall_ms // 1000):
+                viol.append(f"t={t}: RESTORING for {restoring_answered} s while the inverter answers (unbounded)")
+                restoring_answered = 0
+        else:
+            restoring_answered = 0
         if core.state == M.IDLE:
             restoring_seen = False
         if core.changes > c.max_changes or core.writes_night > c.night_write_ceiling:
@@ -260,6 +332,8 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
         if reg > sc.original_sp and not (sc.foreign_at_s >= 0 and t >= sc.foreign_at_s):
             viol.append(f"t={t}: slot power {reg} above the original")
         plant.step(TICK_S, reg, grid)
+        if reached < 0 and plant.p > 200:
+            charge_e, charge_n = charge_e + plant.p, charge_n + 1
         if reached < 0 and plant.soc >= sc.target:
             reached = t
         if t > 0 and t % TICK_S == 0:
@@ -274,7 +348,7 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
             core.state == M.FAULT and core.last_reason == M.R_FOREIGN))
     else:
         final_ok = reg == sc.original_sp or (core.state == M.FAULT and core.last_reason in (
-            M.R_RESTORE_FAILED, M.R_RECORD_CORRUPT, M.R_NIGHT_CEILING))
+            M.R_RESTORE_FAILED, M.R_RECORD_CORRUPT, M.R_NIGHT_CEILING, M.R_RESTORE_STALLED))
     if not final_ok:
         viol.append(f"end: slot power {reg}, state {M.STATE_NAMES[core.state]}, last {M.REASON_NAMES.get(core.last_reason)}")
     if core.state == M.FAULT and core.last_reason == M.R_FOREIGN and sc.foreign_at_s < 0:
@@ -284,7 +358,7 @@ def run_night(sc: Scenario, M, cfg=None) -> dict:
     return {"viol": viol, "reached_s": reached, "peak_w": peak, "writes": writes, "reg_writes": reg_writes,
             "final_state": M.STATE_NAMES[core.state], "last_reason": M.REASON_NAMES.get(core.last_reason),
             "leased_at": leased_at, "mean_lease_w": (lease_energy / lease_s if lease_s else 0.0), "events": events,
-            "final_reg": reg}
+            "final_reg": reg, "commits": commits, "mean_charge_w": (charge_e / charge_n if charge_n else 0.0)}
 
 
 def normal_scenarios(n: int, seed0: int) -> list[Scenario]:
@@ -296,6 +370,33 @@ def normal_scenarios(n: int, seed0: int) -> list[Scenario]:
                             soc0=rng.uniform(10, 60), target=rng.choice([80, 90, 100]), knee=rng.uniform(96.5, 98.5),
                             tail_w=rng.uniform(1200, 2700), mutex_busy_prob=rng.choice([0.0, 0.02]),
                             plan_taper=rng.choice([90, 97])))
+    return out
+
+
+# The families the never-worse check runs besides the normal nights (revision 3, MAJOR 3): plans that understate the
+# capacity, the review's bad plan (capacity 1 kWh, taper 100, the right window), a taper of 100 alone, and a plan that
+# asks for nothing (p = 0). The site's floor is at least the real capacity in every one of them.
+FAMILIES = ("understated", "bad_plan", "taper100", "p0")
+
+
+def family_scenarios(family: str, n: int, seed0: int, floor_band: float = 1.0, floor_wh: float = -1.0) -> list[Scenario]:
+    out = []
+    rng = random.Random(seed0 * 31 + len(family))
+    for k in range(n):
+        cap = rng.uniform(26000, 34000)
+        sc = Scenario(name=family, seed=seed0 + k, capacity_wh=cap, plan_capacity_factor=rng.uniform(1.0, 1.1),
+                      k=rng.uniform(0.96, 1.06), soc0=rng.choice([10, 20, 30, 40, 50, 60]),
+                      target=rng.choice([80, 90, 100]), knee=rng.uniform(96.5, 98.5), tail_w=rng.uniform(1200, 2700),
+                      plan_taper=rng.choice([90, 97]), floor_band=floor_band, floor_wh=floor_wh)
+        if family == "understated":
+            sc.plan_capacity_factor = rng.uniform(0.03, 0.9)
+        elif family == "bad_plan":
+            sc.plan_capacity_factor, sc.plan_taper = 1000.0 / cap, 100
+        elif family == "taper100":
+            sc.plan_taper = 100
+        elif family == "p0":
+            sc.plan_scale = 0.0
+        out.append(sc)
     return out
 
 
@@ -336,4 +437,19 @@ def fault_scenarios(seed0: int) -> list[Scenario]:
         Scenario(name="inverter_rounds", seed=s + 27, soc0=25, target=90, store_round_w=1000),
         Scenario(name="inverter_clamps", seed=s + 28, soc0=25, target=90, store_min_w=5800),
         Scenario(name="grid_outage", seed=s + 29, soc0=25, target=90, grid_down=(3000, 3600)),
+        # revision 3: a restore that can never run, never answered while telemetry is, or refused with an exception;
+        # a clamped write whose result tick has the bus busy then a restart; a restore readback that differs then a
+        # restart inside the backoff; an RTC correction that never ends after the lease; a modbus outage of an hour
+        Scenario(name="restore_deferred_always", seed=s + 30, soc0=25, target=90, end_at_s=3000,
+                 restore_mode="deferred"),
+        Scenario(name="restore_no_answer_always", seed=s + 31, soc0=25, target=90, end_at_s=3000,
+                 restore_mode="no_answer"),
+        Scenario(name="restore_exception_always", seed=s + 32, soc0=25, target=90, end_at_s=3000,
+                 restore_mode="exception"),
+        Scenario(name="clamp_busy_result_reboot", seed=s + 33, soc0=25, target=90, store_min_w=5800,
+                 busy_at_result=True, reboot_after_fail=True),
+        Scenario(name="restore_differs_reboot", seed=s + 34, soc0=25, target=90, end_at_s=3000, restore_differs=7500,
+                 reboot_after_fail=True),
+        Scenario(name="rtc_stuck_after_end", seed=s + 35, soc0=25, target=90, end_at_s=3000, rtc_busy=(3000, 99999)),
+        Scenario(name="modbus_down_60min_guard", seed=s + 36, soc0=25, target=90, modbus_down=(3000, 6600)),
     ]

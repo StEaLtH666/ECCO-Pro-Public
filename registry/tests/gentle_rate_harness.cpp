@@ -2,14 +2,16 @@
 // test_gentle_rate_core_host.py).
 //
 // Reads commands on stdin, one per line, and prints exactly what docs/dev/gentle-rate-controller/vector_runner.py
-// prints for the reference model, so Python can compare the two traces line by line:
+// prints for the reference model, so Python can compare the two traces line by line. The durable record is modelled
+// as the firmware keeps it: the bytes on flash (`nvs`) change only on a tick whose Out::commit is set.
 //   C <config fields>                       set the configuration (vector_runner.CONFIG_FIELDS order)
-//   S                                       new sequence: a fresh core with the configuration
-//   B <record fields> <now_ms>              boot from a crafted record (encode, decode, boot)    -> BOOT ...
-//   T <In fields> <Plan fields> <t[8]> <p[8]>  one tick                                          -> trace line
-//   R <k>                                   restart: the core's own record, byte k ^ 0x5A when k >= 0,
-//                                           no record at all when k == -2; decode; boot          -> BOOT ...
-//   E                                       end of sequence                                      -> REC <hex>
+//   S                                       new sequence: a fresh core with the configuration, no record on flash
+//   B <record fields> <hist[6]> <now_ms>    boot from a crafted record (encode, store, decode, boot)  -> BOOT ...
+//   T <In fields> <Plan fields> <t[8]> <p[8]>  one tick (commit: store the record)                    -> trace line
+//   R <k> [<now_ms>]                        restart from the stored record: byte k ^ 0x5A when k >= 0, no record at
+//                                           all when k == -2; decode; boot at now_ms (default: the last
+//                                           tick's)                                                    -> BOOT ...
+//   E                                       end of sequence                          -> REC <ram hex> <nvs hex | ->
 //   K <live> <original> <v> <p> <q>         restore classifier                                   -> K <class>
 //   H <hex>                                 decode a record                                      -> H <status> <fields>
 //   W <live[6]> <table[6]>                  lost-lease warning mask                              -> W <mask>
@@ -37,18 +39,26 @@ struct Tok {
     p = e;
     return v;
   }
+  // true when another number follows on the line (an optional trailing field)
+  bool more() const {
+    const char *s = p;
+    while (*s == ' ') s++;
+    return (*s >= '0' && *s <= '9') || *s == '-';
+  }
 };
 
 void print_trace(const Core &c, const Out &o) {
-  std::printf("%d %d %d %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %lld\n", c.state, o.action, o.value,
-              (unsigned) o.seq, o.disarm ? 1 : 0, o.commit ? 1 : 0, o.event, c.v, c.p, c.q, c.changes, c.writes_night,
-              c.restore_attempts, c.gain_pct, c.p_ref, c.last_reason, c.bms_limited ? 1 : 0, c.ineffective,
-              (long long) c.lease_end);
+  std::printf("%d %d %d %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %lld %d %d %u %u %d %d %u\n", c.state,
+              o.action, o.value, (unsigned) o.seq, o.slot, o.disarm ? 1 : 0, o.commit ? 1 : 0, o.event, c.v, c.p, c.q,
+              c.changes, c.writes_night, c.restore_attempts, c.gain_pct, c.p_ref, c.last_reason, c.bms_limited ? 1 : 0,
+              c.ineffective, (long long) c.lease_end, c.free_night, c.week_writes(), (unsigned) c.life_writes,
+              (unsigned) c.stall_ms, c.restore_hold ? 1 : 0, c.night_unknown ? 1 : 0, (unsigned) c.night_id);
 }
 
 void print_boot(const Core &c) {
-  std::printf("BOOT %d %d %d %d %d %d %d %d\n", c.state, c.v, c.p, c.q, c.changes, c.writes_night, c.restore_attempts,
-              c.last_reason);
+  std::printf("BOOT %d %d %d %d %d %d %d %d %d %d %u %d %u\n", c.state, c.v, c.p, c.q, c.changes, c.writes_night,
+              c.restore_attempts, c.last_reason, c.free_night, c.week_writes(), (unsigned) c.life_writes,
+              c.night_unknown ? 1 : 0, (unsigned) c.night_id);
 }
 
 void print_hex(const uint8_t *b, size_t n) {
@@ -67,16 +77,26 @@ Record read_record(Tok &t) {
   r.writes_night = (uint8_t) t.next();
   r.changes = (uint8_t) t.next();
   r.restore_attempts = (uint8_t) t.next();
+  r.free_night = (uint8_t) t.next();
   r.lease_end = (uint32_t) t.next();
   r.q = (uint16_t) t.next();
+  r.life_writes = (uint32_t) t.next();
+  for (auto &h : r.hist) h = (uint8_t) t.next();
   return r;
 }
+
+// The record on flash: absent until the first commit (or a crafted boot record).
+struct Nvs {
+  bool present = false;
+  RecordBytes b{};
+};
 
 }  // namespace
 
 int main() {
   Config cfg{};
   Core core{};
+  Nvs nvs{};
   uint32_t last_now = 0;
   while (std::fgets(g_line, sizeof g_line, stdin)) {
     char op = g_line[0];
@@ -87,10 +107,11 @@ int main() {
       for (auto *f : i32) *f = (int32_t) t.next();
       cfg.dwell_ms = (uint32_t) t.next();
       cfg.settle_ms = (uint32_t) t.next();
-      cfg.judge_samples = (int32_t) t.next();
-      cfg.max_changes = (int32_t) t.next();
-      cfg.max_restore_attempts = (int32_t) t.next();
-      cfg.night_write_ceiling = (int32_t) t.next();
+      int32_t *counts[] = {&cfg.judge_samples, &cfg.max_changes, &cfg.max_restore_attempts, &cfg.owner_restore_reserve,
+                           &cfg.night_write_ceiling, &cfg.week_write_ceiling, &cfg.life_write_ceiling,
+                           &cfg.restore_free_max};
+      for (auto *f : counts) *f = (int32_t) t.next();
+      cfg.restore_stall_ms = (uint32_t) t.next();
       cfg.restore_backoff_ms = (uint32_t) t.next();
       cfg.op_timeout_ms = (uint32_t) t.next();
       cfg.plan_max_age_ms = (uint32_t) t.next();
@@ -116,12 +137,14 @@ int main() {
       cfg.script_queue_ms = (uint32_t) t.next();
     } else if (op == 'S') {
       core = Core(cfg);
+      nvs = Nvs{};
       last_now = 0;
     } else if (op == 'B') {
       Record r = read_record(t);
       uint32_t now = (uint32_t) t.next();
-      RecordBytes b = encode_record(r);
-      Decoded d = decode_record(b.b, REC_SIZE, cfg);
+      nvs.b = encode_record(r);
+      nvs.present = true;
+      Decoded d = decode_record(nvs.b.b, REC_SIZE, cfg);
       core = Core(cfg);
       core.boot(d.status, d.rec, now);
       print_boot(core);
@@ -148,6 +171,7 @@ int main() {
       i.tel_age_ms = (uint32_t) t.next();
       i.sample_seq = (uint32_t) t.next();
       i.cfg_age_ms = (uint32_t) t.next();
+      i.cfg_slot = (int32_t) t.next();
       i.live_sp = (int32_t) t.next();
       i.slot_start_min = (int32_t) t.next();
       i.slot_end_min = (int32_t) t.next();
@@ -174,24 +198,34 @@ int main() {
       for (int k = 0; k < PLAN_POINTS; k++) pl.p[k] = (int32_t) t.next();
       last_now = i.now_ms;
       Out o = core.step(i);
+      if (o.commit) {
+        nvs.b = encode_record(core.record());
+        nvs.present = true;
+      }
       print_trace(core, o);
     } else if (op == 'R') {
       long long k = t.next();
-      RecordBytes b = encode_record(core.record());
+      uint32_t boot_now = t.more() ? (uint32_t) t.next() : last_now;   // the vectors pass the boot's uptime
       Decoded d{};
       if (k == -2) {
+        nvs = Nvs{};
+        d = decode_record(nullptr, 0, cfg);
+      } else if (!nvs.present) {
         d = decode_record(nullptr, 0, cfg);
       } else {
-        if (k >= 0 && k < (long long) REC_SIZE) b.b[k] ^= 0x5A;
-        d = decode_record(b.b, REC_SIZE, cfg);
+        if (k >= 0 && k < (long long) REC_SIZE) nvs.b.b[k] ^= 0x5A;
+        d = decode_record(nvs.b.b, REC_SIZE, cfg);
       }
       core = Core(cfg);
-      core.boot(d.status, d.rec, last_now);
+      core.boot(d.status, d.rec, boot_now);
       print_boot(core);
     } else if (op == 'E') {
       RecordBytes b = encode_record(core.record());
       std::printf("REC ");
       print_hex(b.b, REC_SIZE);
+      std::printf(" ");
+      if (nvs.present) print_hex(nvs.b.b, REC_SIZE);
+      else std::printf("-");
       std::printf("\n");
     } else if (op == 'K') {
       int32_t live = (int32_t) t.next(), orig = (int32_t) t.next(), v = (int32_t) t.next(), p = (int32_t) t.next();
@@ -205,7 +239,7 @@ int main() {
     } else if (op == 'H') {
       char *s = t.p;
       while (*s == ' ') s++;
-      uint8_t buf[64];
+      uint8_t buf[96];
       size_t n = 0;
       while (s[0] && s[1] && s[0] != '\n' && s[0] != '\r' && n < sizeof buf) {
         char h[3] = {s[0], s[1], 0};
@@ -214,9 +248,11 @@ int main() {
       }
       Decoded d = decode_record(buf, n, cfg);
       const Record &r = d.rec;
-      std::printf("H %d %d %d %d %d %d %d %u %d %d %d %u %d\n", d.status, r.flags, r.slot, r.reason, r.original, r.v,
-                  r.p, (unsigned) r.night_id, r.writes_night, r.changes, r.restore_attempts, (unsigned) r.lease_end,
-                  r.q);
+      std::printf("H %d %d %d %d %d %d %d %u %d %d %d %d %u %d %u", d.status, r.flags, r.slot, r.reason, r.original,
+                  r.v, r.p, (unsigned) r.night_id, r.writes_night, r.changes, r.restore_attempts, r.free_night,
+                  (unsigned) r.lease_end, r.q, (unsigned) r.life_writes);
+      for (auto h : r.hist) std::printf(" %d", h);
+      std::printf("\n");
     } else if (op == '\n' || op == '\r' || op == '#') {
       continue;
     } else {
