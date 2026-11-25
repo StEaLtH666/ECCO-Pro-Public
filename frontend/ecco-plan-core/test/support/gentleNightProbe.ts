@@ -132,7 +132,7 @@ export function signature(m: Mod): Record<string, string> {
   const free = (over: Partial<GentleNightInput>): unknown => small({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease, ...over });
   const rc = (over: Partial<GentleNightInput>): unknown => assumed({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, targetSocPct: 95, inForce: rc3000, ...over });
   rec("ageKnee", () => [rc({ socPct: 86.1 }), rc({ socPct: 86.2 }), rc({ socPct: 86.2, socAgeMin: 1 }), rc({ elapsedMin: 5, socPct: 86.2, drainBoundW: 0 }),
-    rc({ socPct: 80, inForce: { setpointW: 3000, lastChangeAtMin: 15, changesUsed: 1 } }), rc({ socPct: 80, learnedCapacityKwh: 25 })]);
+    rc({ socPct: 80, inForce: { setpointW: 3000, lastChangeAtMin: 15, changesUsed: 1 }, drainBoundW: 0 }), rc({ socPct: 80, learnedCapacityKwh: 25 })]);
   rec("kneeExact", () => [small({ elapsedMin: 5, socAgeMin: 0, socPct: 89, targetSocPct: 95, inForce: f2000 }), small({ elapsedMin: 5, socAgeMin: 0, socPct: 88.99, targetSocPct: 95, inForce: f2000 })]);
   rec("worseOfTwo", () => [night({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 86.2, targetSocPct: 91, inForce: rc3000 }),
     night({ elapsedMin: 100, socPct: 90.9, targetSocPct: 95, inForce: { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 } })]);
@@ -199,9 +199,9 @@ export const MUTANTS: readonly Mutant[] = [
   { id: "a stale SOC is used", from: "age > P.maxSocAgeMin", to: "age > 1e9", keys: ["staleSoc"] },
   { id: "an unknown SOC age is accepted", from: "if (!isNum(age) || age < 0 ||", to: "if (age < 0 ||", keys: ["staleSoc"] },
   { id: "an unknown SOC is read as zero", from: "if (soc === null || soc === undefined || !isNum(soc)) return halt(\"INPUTS_UNUSABLE\", [\"NO_SOC\"]);", to: "if (soc === undefined) return halt(\"INPUTS_UNUSABLE\", [\"NO_SOC\"]);", keys: ["noSoc"] },
-  { id: "a falling SOC reading is never implausible", from: "soc < prev.socPct - P.socRegressionTolPct ||", to: "false ||", keys: ["socRegression"] },
-  { id: "a jump in the SOC reading is never implausible", from: "|| soc > prev.socPct + P.socResolutionPct + P.socRegressionTolPct + P.socJumpPctPerHour * hours", to: "|| false", keys: ["socJump"] },
-  { id: "R7: a previous reading from the future is accepted", from: "|| prev.elapsedMin > elapsed)", to: ")", keys: ["prevFuture"] },
+  { id: "a falling SOC reading is never implausible", from: "if (soc < prev.socPct - P.socRegressionTolPct - fall) return halt(", to: "if (false) return halt(", keys: ["socRegression"] },
+  { id: "a jump in the SOC reading is never implausible", from: "if (soc > prev.socPct + P.socResolutionPct + P.socRegressionTolPct + P.socJumpPctPerHour * hours) return halt(", to: "if (false) return halt(", keys: ["socJump"] },
+  { id: "R7: a previous reading from the future is accepted", from: "|| prevGiven.elapsedMin > elapsed)", to: ")", keys: ["prevFuture"] },
   { id: "a SOC above 100 is accepted", from: "if (soc < 0 || soc > 100) return halt(", to: "if (soc < 0) return halt(", keys: ["socRange"] },
   { id: "a zero capacity is accepted", from: "if (!isNum(nominal) || nominal <= 0 || nominal > 500)", to: "if (!isNum(nominal) || nominal > 500)", keys: ["capacityUnusable"] },
   { id: "the learned capacity is ignored", from: "Math.max(nominal, learned)", to: "nominal", keys: ["learnedCap"] },
@@ -210,8 +210,8 @@ export const MUTANTS: readonly Mutant[] = [
   { id: "BLOCKER 3: a rate in force below the minimum is used", from: "(inW < minW - EPS ||", to: "(inW < 0 ||", keys: ["inForceInvalid"] },
   { id: "BLOCKER 3: a rate in force off the step is used", from: "|| Math.abs(inW / P.stepW - Math.round(inW / P.stepW)) > 1e-9)", to: "|| false)", keys: ["inForceInvalid"] },
   { id: "MAJOR 4: a missing drain bound before the window is taken as none (the SOC unchanged until the window opens)", from: "? drainNew : drainOld;", to: "? drainNew : (drainOld ?? 0);", keys: ["drain"] },
-  { id: "MAJOR 4: the drain before the window is ignored", from: "socPlan = Math.max(0, soc - (drain * idleMin) / 60 / 1000 / fewestKwhPerPct);", to: "socPlan = soc;", keys: ["drain", "drainWindow"] },
-  { id: "MAJOR 4: the drain ignores the reading's age", from: "age + Math.max(0, -elapsed) : Math.max(0, age - elapsed);", to: "0 + Math.max(0, -elapsed) : Math.max(0, 0 - elapsed);", keys: ["drain", "drainWindow"] },
+  { id: "MAJOR 4: the drain before the window is ignored", from: "socPlan = Math.max(0, soc - (drainW * idleMin) / 60 / 1000 / fewestKwhPerPct);", to: "socPlan = soc;", keys: ["drain", "drainWindow"] },
+  { id: "MAJOR 4: the drain ignores the reading's age", from: "const readAt = elapsed - age;", to: "const readAt = elapsed;", keys: ["drain", "drainWindow"] },
   { id: "MAJOR 4: the drain is counted in the trusted capacity, not the fewest kWh per point", from: "const fewestKwhPerPct = (capFew * (1 - P.capacityBandPct / 100)) / (1 + P.socScaleErrPct / 100) / 100;", to: "const fewestKwhPerPct = capFew / 100;", keys: ["drain", "drainWindow"] },
   { id: "a battery exactly at the target still has something to charge", from: "if (socPlan >= target) {", to: "if (socPlan > target) {", keys: ["noNeedEqual"] },
   { id: "a window that has just ended is still planned", from: "if (elapsed >= W) return halt(", to: "if (elapsed > W) return halt(", keys: ["windowOver"] },
@@ -292,9 +292,9 @@ export const MUTANTS: readonly Mutant[] = [
   { id: "N07: the pessimistic start past the knee lies below the knee (the impossible state of 52ed09e)", from: "soc: Math.min(100, Math.max(c.pess.knee, reading + c.pess.offset))", to: "soc: Math.min(100, reading + c.pess.offset)", keys: ["kneeOptimistic", "worseOfTwo"] },
   { id: "N08: a decision past the knee takes only the start past it (the plateau start dropped)", from: "return plain === null || tail === null ? null : Math.max(plain, tail);", to: "return tail;", keys: ["worseOfTwo"] },
   { id: "N09: the projection past the knee leaves out the start past it", from: "if (isPess && first.pastKnee && anchorW !== null) starts.push(", to: "if (false) starts.push(", keys: ["worseOfTwo"] },
-  { id: "N10: a START inside the window ignores the drain over the reading's age (the confirmation MAJOR)", from: "const idleMin = force.setpointW === null ? age + Math.max(0, -elapsed) :", to: "const idleMin = force.setpointW === null ? Math.max(0, -elapsed) + (elapsed < 0 ? age : 0) :", keys: ["drainWindow"] },
+  { id: "N10: a START inside the window ignores the drain over the reading's age (the confirmation MAJOR)", from: "const setAt = force.setpointW === null ? Infinity :", to: "const setAt = force.setpointW === null ? -Infinity :", keys: ["drainWindow"] },
   { id: "N11: no drain bound is required for an aged reading inside the window", from: "else if (idleMin > P.maxUncountedDrainMin + EPS) return halt(", to: "else if (false) return halt(", keys: ["drainWindow"] },
-  { id: "N12: with a rate in force the whole age counts as drain", from: ": Math.max(0, age - elapsed);", to: ": age + Math.max(0, -elapsed);", keys: ["drainWindow"] },
+  { id: "N12: with a rate in force the whole age counts as drain", from: "const setAt = force.setpointW === null ? Infinity : force.lastChangeAtMin === null ? -Infinity : force.lastChangeAtMin;", to: "const setAt = Infinity;", keys: ["drainWindow"] },
   { id: "N13: a last change after now is accepted", from: "if (given0.lastChangeAtMin !== null && given0.lastChangeAtMin > elapsed + EPS) return halt(", to: "if (false) return halt(", keys: ["futureChange"] },
   { id: "N14: the STOP check ignores a grid limit whose demand is unknown", from: "take(Math.max(0, (gridSide * P.setpointConversionEff) / P.setpointOvershoot),", to: "if (demandFresh) take(Math.max(0, (gridSide * P.setpointConversionEff) / P.setpointOvershoot),", keys: ["earlyStop"] },
   { id: "N15: a reading at the target is never a STOP (the lease has no stop at a target SOC)", from: "return halt(\"NO_NEED\", c0,", to: "return refuse(\"NO_NEED\", c0,", keys: ["earlyStop"] },

@@ -320,8 +320,12 @@ test("confirmation BLOCKER 1: the knee estimate counts the charge possible since
   const early = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 5, socAgeMin: 15, socPct: 86.2, targetSocPct: 95, inForce: rc3000, drainBoundW: 0 });
   near(early.assumptions?.chargeSinceReadingPct, (5 * 3000 * 1.1) / 60000 / OPT, 0.006, "only the window part of the age charges");
   assert.equal(early.assumptions?.idleSinceReadingMin, 10);
-  // a change made after the reading: before it the rate is not known, so the firmware bound: 10 min at 8000 W, then 5 min at 3000 W: 6.0203 points
-  const changed = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 80, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: 15, changesUsed: 1 } });
+  // a change made after the reading: before it the rate is not known, so the firmware bound: 10 min at 8000 W, then 5 min at 3000 W: 6.0203 points. Since round 3
+  // (F1) those 10 minutes also count as idle for the SOC, so they need a drain bound (0 W here: the knee estimate does not use the drain); without one the input
+  // is refused (the same record was planned with those minutes dropped before)
+  const changedIn = { actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 80, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: 15, changesUsed: 1 } } as const;
+  assert.deepEqual(plan(changedIn).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  const changed = plan({ ...changedIn, drainBoundW: 0 });
   near(changed.assumptions?.chargeSinceReadingPct, ((10 * 8000 + 5 * 3000) * 1.1) / 60000 / OPT, 0.006, "an unknown rate before a change after the reading");
   // the most points per kWh: a learned capacity SMALLER than the trusted one counts (25 kWh: 3.616 points)
   const small = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 80, targetSocPct: 95, inForce: rc3000, learnedCapacityKwh: 25 });
@@ -667,4 +671,72 @@ test("round 3 F6: the SOC at the deadline is FLOORED to a tenth, so it never sho
       assert.equal(w.reachedByDeadline, false);
     }
   }
+});
+
+test("round 3 F1 (BLOCKER): a rate in force that was SET after the reading leaves the minutes from the reading to it idle: the drain counts, and the review's case is no longer OK (by hand)", () => {
+  // the review's case: reading 40 taken at minute 0.5 (age 14.5 at minute 15), the lease STARTed at minute 14 at 2000 W, the house drawing up to 3000 W from the
+  // battery in between: 13.5 idle minutes = 0.675 kWh = 2.333 points of the most points per kWh. The earlier source counted none (OK, margin 5.6); the truth at the
+  // envelope's corner (shown 40 = clean 39.0) reaches 58 at minute 255.9, after the deadline 240
+  const f1 = { actuatorProfile: "FREE_POWER_LEASE", targetSocPct: 58, socPct: 40, drainBoundW: 3000 } as const;
+  const p = plan({ ...f1, elapsedMin: 15, socAgeMin: 14.5, inForce: { setpointW: 2000, lastChangeAtMin: 14, changesUsed: 0 } });
+  const drained = (3 * 13.5) / 60 / OPT;
+  assert.equal(p.assumptions?.idleSinceReadingMin, 13.5);
+  near(p.assumptions?.socAtPlanStartPct, 40 - drained, 0.006, "the SOC the plan starts from");
+  // pessimistic start 40 - 2.333 - 1.0, 2000 W x 0.9 = 1.8 kW held from minute 15
+  near(band(p).pessimisticHeld.finishMin, 15 + (((58 - (40 - drained - 1)) * PK) / 1.8) * 60, 0.1, "the held finish");
+  assert.equal(p.status, "TARGET_AT_RISK");
+  assert.equal(band(p).pessimisticHeld.reachedByDeadline, false);
+  assert.ok((p.marginMin as number) < -20 && (p.marginMin as number) > -22, "the margin " + p.marginMin);
+  // without a bound the 13.5 minutes (more than the 2 that may go uncounted) are refused, never guessed
+  assert.deepEqual(plan({ ...f1, drainBoundW: undefined, elapsedMin: 15, socAgeMin: 14.5, inForce: { setpointW: 2000, lastChangeAtMin: 14, changesUsed: 0 } }).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  // the minutes are those from the reading to the rate being set, no more: set BEFORE the reading (minute 0) nothing is idle; the limit of 2 is inclusive
+  const idle = (lastChangeAtMin: number | null): GentleNightPlan => plan({ ...f1, drainBoundW: undefined, elapsedMin: 15, socAgeMin: 5, inForce: { setpointW: 2000, lastChangeAtMin, changesUsed: 0 } });
+  for (const before of [0, 9.99, 10, null]) {
+    assert.equal(idle(before).assumptions?.idleSinceReadingMin, 0, String(before));
+    assert.ok(!idle(before).codes.includes("DRAIN_NOT_COUNTED"), String(before));
+  }
+  assert.equal(idle(11.5).assumptions?.idleSinceReadingMin, 1.5);
+  assert.ok(idle(11.5).codes.includes("DRAIN_NOT_COUNTED"));
+  assert.equal(idle(12).assumptions?.idleSinceReadingMin, 2);
+  assert.ok(idle(12).codes.includes("DRAIN_NOT_COUNTED"), "exactly 2 minutes may go uncounted");
+  assert.deepEqual(idle(12.5).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  // both parts count when the reading was taken before the window opened: reading at minute -3 (age 15 at minute 12), the rate set at minute 10: 3 + 10 minutes
+  const both = plan({ ...f1, elapsedMin: 12, socAgeMin: 15, inForce: { setpointW: 2000, lastChangeAtMin: 10, changesUsed: 0 } });
+  assert.equal(both.assumptions?.idleSinceReadingMin, 13);
+  // a rate set before the window opens (minute -20) with the reading taken at -25: only the 25 minutes before the window, as before
+  assert.equal(plan({ ...f1, elapsedMin: -10, socAgeMin: 15, inForce: { setpointW: 2000, lastChangeAtMin: -20, changesUsed: 0 } }).assumptions?.idleSinceReadingMin, 25);
+  // a START the planner itself recommended stays OK once it is applied (the same reading asked again a minute later): 2200 W at minute 13.9 (13.4 idle minutes), then
+  // {2200 W, set at 13.9} at minute 15 with the same reading: the same start SOC, 1.2 minutes of margin
+  const start = plan({ ...f1, elapsedMin: 13.9, socAgeMin: 13.4 });
+  assert.equal(start.now.change, "START");
+  assert.equal(start.now.setpointW, 2200);
+  assert.equal(start.status, "OK");
+  const applied = plan({ ...f1, elapsedMin: 15, socAgeMin: 14.5, inForce: { setpointW: 2200, lastChangeAtMin: 13.9, changesUsed: 0 } });
+  assert.equal(applied.status, "OK");
+  assert.equal(applied.assumptions?.socAtPlanStartPct, start.assumptions?.socAtPlanStartPct);
+  near(applied.marginMin, 240 - (15 + (((58 - (40 - (3 * 13.4) / 60 / OPT - 1)) * PK) / 1.98) * 60), 0.1, "the applied START's margin");
+});
+
+test("round 3 F7: a fall against the previous reading is allowed up to the drain bound over the minutes in which nothing charged (before the window, or with nothing in force); never with a rate in force (by hand)", () => {
+  // the review's case: 50 % at minute -180, 44 % at minute -121 (age 1 at -120), a drain bound of 2500 W given: 59 minutes, 2.458 kWh = 8.497 points of the most points
+  // per kWh, plus the tolerance 3: a fall of up to 11.497 is plausible (refused before: 6 > 3)
+  const pre = (socPct: number, prevPct: number, over: Partial<GentleNightInput> = {}): GentleNightPlan => plan({ elapsedMin: -120, socPct, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: prevPct, elapsedMin: -180 }, ...over });
+  assert.ok(!pre(44, 50).codes.includes("SOC_IMPLAUSIBLE"));
+  assert.equal(pre(44, 50).status, "OK");
+  assert.ok(!pre(44, 55.4).codes.includes("SOC_IMPLAUSIBLE"), "a fall of 11.4 <= 11.497");
+  assert.deepEqual(pre(44, 55.6).codes, ["SOC_IMPLAUSIBLE"]);
+  // no bound given: the tolerance alone, as before (and the missing bound would refuse the plan anyway)
+  assert.deepEqual(plan({ elapsedMin: -120, socPct: 44, socAgeMin: 1, previousSoc: { socPct: 50, elapsedMin: -180 } }).codes, ["SOC_IMPLAUSIBLE"]);
+  assert.deepEqual(pre(44, 50, { drainBoundW: 0 }).codes, ["SOC_IMPLAUSIBLE"], "a bound of 0 W excuses nothing");
+  // inside the window with nothing in force: previous 50 at minute 40, 4.5 / 4.2 now at 59 (age 1): 19 idle minutes = 2.736 points, so 5.736 allowed
+  const open = (socPct: number, over: Partial<GentleNightInput> = {}): GentleNightPlan => plan({ elapsedMin: 60, socPct, socAgeMin: 1, drainBoundW: 2500, previousSoc: { socPct: 50, elapsedMin: 40 }, ...over });
+  assert.ok(!open(44.5).codes.includes("SOC_IMPLAUSIBLE"), "a fall of 5.5 <= 5.736");
+  assert.deepEqual(open(44.2).codes, ["SOC_IMPLAUSIBLE"], "a fall of 5.8 > 5.736");
+  // a rate in force since before the previous reading charges: no minute is idle, a fall of 6 is refused whatever the bound
+  assert.deepEqual(open(44, { inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } }).codes, ["SOC_IMPLAUSIBLE"]);
+  // a rate set at minute 50 (after the previous reading at 40, before the reading at 59): the minutes 40 to 50 are idle: 10 minutes = 1.44 points, so 4.44 allowed
+  assert.ok(!open(45.7, { inForce: { setpointW: 3000, lastChangeAtMin: 50, changesUsed: 0 } }).codes.includes("SOC_IMPLAUSIBLE"), "a fall of 4.3 <= 4.44");
+  assert.deepEqual(open(45.4, { inForce: { setpointW: 3000, lastChangeAtMin: 50, changesUsed: 0 } }).codes, ["SOC_IMPLAUSIBLE"], "a fall of 4.6 > 4.44");
+  // a rise is judged as before (the allowance is for falls only)
+  assert.deepEqual(plan({ socPct: 40, elapsedMin: 6, previousSoc: { socPct: 20, elapsedMin: 0 }, drainBoundW: 3000 }).codes, ["SOC_IMPLAUSIBLE"]);
 });

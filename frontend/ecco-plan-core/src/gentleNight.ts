@@ -34,9 +34,9 @@
 //    after the START, or when the ceiling is below the lowest setpoint, the answer is STOP_RECOMMENDED; a refusal never says the fallback holds it.
 //  * Unknown data is never guessed: stale or unknown SOC, capacity or limits give INPUTS_UNUSABLE. A KNOWN grid import limit with an unknown or stale
 //    demand also gives INPUTS_UNUSABLE; an UNKNOWN grid import limit applies no cap and says so (GRID_LIMIT_UNKNOWN_NO_CAP). While nothing charges the
-//    battery (before the window; inside it with no rate in force) it supplies the house: a bound on that drain is required before the window, and inside
-//    it once the reading is older than a few minutes. A rate in force of 0 W is "not charging" (a START); one below the minimum or off the step (at or
-//    below the ceiling) is refused.
+//    battery (before the window; inside it with no rate in force, or before the rate in force was set when that was after the reading) it supplies the house:
+//    a bound on that drain is required before the window, and inside it once those minutes exceed a few. A rate in force of 0 W is "not charging" (a START);
+//    one below the minimum or off the step (at or below the ceiling) is refused.
 import { ACTUATION_REASON, CONTROLLER_LABEL, DEFAULT_GENTLE_PARAMS, GENTLE_ACTUATOR_PROFILES, applyActuatorProfile, ceilingInSetpointUnits, effectiveCeiling, windowRealMinutes } from "./gentleController.ts";
 import type { ActuatorProfileId, NamedCeiling } from "./gentleController.ts";
 import { fmt, norm, span } from "./time.ts";
@@ -162,8 +162,9 @@ export interface GentleNightInput {
    * A PESSIMISTIC (high) bound on the battery's net discharge in W, battery side, while nothing charges it (the house load not covered by solar, divided by
    * the discharge efficiency). It is counted, in the most points per kWh the bands allow, over the minutes since the reading in which nothing charged the
    * battery: before the window the reading's age plus the time to the window; inside it with no rate in force the reading's age; with a rate in force the
-   * part of the age before the window opened. Required before the window (PRE_WINDOW_DRAIN_UNKNOWN), and inside it once those minutes exceed
-   * `maxUncountedDrainMin` (DRAIN_UNKNOWN_AGED_READING); never guessed.
+   * part of the age before the window opened and, when the rate was set AFTER the reading (`inForce.lastChangeAtMin`), the minutes from the reading to it
+   * (what ran before is not known: the drain is counted, the conservative way). Required before the window (PRE_WINDOW_DRAIN_UNKNOWN), and inside it once
+   * those minutes exceed `maxUncountedDrainMin` (DRAIN_UNKNOWN_AGED_READING); never guessed. It also excuses a fall against `previousSoc` over such minutes.
    */
   drainBoundW?: number | null;
   /** The earlier name of `drainBoundW` (still accepted; when both are given they must be equal). */
@@ -270,7 +271,7 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   WINDOW_OVER: "The charge window is over: nothing is planned.",
   NO_SOC: "The SOC is unknown: nothing is recommended.",
   STALE_SOC: "The SOC reading is older than the limit: nothing is recommended.",
-  SOC_IMPLAUSIBLE: "The SOC reading is outside 0 to 100 or jumps against the previous one: nothing is recommended.",
+  SOC_IMPLAUSIBLE: "The SOC reading is outside 0 to 100, or falls (beyond the drain bound given, over the minutes in which nothing charged) or jumps against the previous one: nothing is recommended.",
   CAPACITY_UNUSABLE: "The usable capacity is unknown or not a positive number: nothing is recommended.",
   PARAMS_INVALID: "A parameter is not a number inside its bounds.",
   PROFILE_INVALID: "The actuator profile is not one of the four known paths.",
@@ -308,7 +309,7 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   IN_FORCE_ZERO_NOT_CHARGING: "The rate in force is 0 W: taken as not charging, so the recommendation is a START (the change count given is kept).",
   PRE_WINDOW_DRAIN_UNKNOWN: "The window has not opened and no bound on the battery drain until it opens was given: the SOC at the window start is not known, so nothing is recommended (never guessed).",
   PROFILE_DEFAULT_MOST_RESTRICTIVE: "No actuator path was named: the most restrictive path that exists (the Free Power start, one fixed rate) is assumed.",
-  DRAIN_UNKNOWN_AGED_READING: "Nothing charged the battery for longer than the limit since the reading (no rate in force, or the reading was taken before the window opened) and no bound on the battery drain was given: the SOC now is not known, so nothing is recommended (never guessed).",
+  DRAIN_UNKNOWN_AGED_READING: "Nothing charged the battery for longer than the limit since the reading (no rate in force, or the reading was taken before the window opened, or the rate in force was set after the reading) and no bound on the battery drain was given: the SOC now is not known, so nothing is recommended (never guessed).",
   DRAIN_NOT_COUNTED: "No drain bound was given: the drain over the few minutes since the reading in which nothing charged the battery (at most the limit) is not counted.",
 });
 
@@ -855,11 +856,14 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const age = input.socAgeMin;
   if (!isNum(age) || age < 0 || age > P.maxSocAgeMin) return halt("INPUTS_UNUSABLE", ["STALE_SOC"]);
   if (soc < 0 || soc > 100) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
-  const prev = input.previousSoc;
-  if (prev !== undefined && prev !== null) {
-    if (typeof prev !== "object" || !isNum(prev.socPct) || !isNum(prev.elapsedMin) || prev.elapsedMin > elapsed) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
+  const prevGiven = input.previousSoc;
+  let prev: { socPct: number; elapsedMin: number } | null = null;
+  if (prevGiven !== undefined && prevGiven !== null) {
+    if (typeof prevGiven !== "object" || !isNum(prevGiven.socPct) || !isNum(prevGiven.elapsedMin) || prevGiven.elapsedMin > elapsed) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
+    prev = prevGiven;
     const hours = (elapsed - prev.elapsedMin) / 60;
-    if (soc < prev.socPct - P.socRegressionTolPct || soc > prev.socPct + P.socResolutionPct + P.socRegressionTolPct + P.socJumpPctPerHour * hours) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
+    // a rise: at most the resolution, the tolerance and the jump allowance per hour (a fall is judged below, once the drain bound and the minutes in which nothing charged are known)
+    if (soc > prev.socPct + P.socResolutionPct + P.socRegressionTolPct + P.socJumpPctPerHour * hours) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
   }
   // capacity: the larger of the trusted figure and a learned one for the charge, the smaller for the drain and the charge since the reading; never guessed
   const learned = input.learnedCapacityKwh;
@@ -878,16 +882,32 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const deadline = W - buffer;
   // the fewest kWh per point the bands allow (the most points per kWh): the drain and the charge since the reading are counted in it
   const fewestKwhPerPct = (capFew * (1 - P.capacityBandPct / 100)) / (1 + P.socScaleErrPct / 100) / 100;
-  // the minutes since the reading in which nothing charged the battery (it supplied the house): with nothing in force all of them, and until the window
-  // opens before it; with a rate in force only those before the window opened (nothing charges before it)
-  const idleMin = force.setpointW === null ? age + Math.max(0, -elapsed) : Math.max(0, age - elapsed);
+  // the minutes of [a, b] (real minutes since the window opened) in which nothing charged the battery, so it supplied the house: all of them before the window
+  // opens (nothing charges before it) and, inside it, all of them with nothing in force; with a rate in force only those before it was SET (round 3 F1: a START
+  // made after the reading leaves the minutes from the reading to the START idle; what ran before a set time is not known, and counting it idle is always the
+  // conservative way for the SOC); a rate whose time is not given (null: long ago) is in force for all of them
+  const readAt = elapsed - age;
+  const idleBetween = (a: number, b: number): number => {
+    if (!(b > a)) return 0;
+    const setAt = force.setpointW === null ? Infinity : force.lastChangeAtMin === null ? -Infinity : force.lastChangeAtMin;
+    return Math.max(0, Math.min(b, 0) - a) + Math.max(0, Math.min(b, setAt) - Math.max(a, 0));
+  };
+  // the minutes since the reading in which nothing charged the battery (until the window opens when it has not)
+  const idleMin = idleBetween(readAt, Math.max(elapsed, 0));
   const drainNew = input.drainBoundW;
   const drainOld = input.preWindowDrainW;
   if (drainNew !== undefined && drainNew !== null && drainOld !== undefined && drainOld !== null && drainNew !== drainOld) return halt("INPUTS_UNUSABLE", ["INPUT_INVALID"], {}, "drainBoundW and its earlier name preWindowDrainW disagree.");
   const drain = drainNew !== undefined && drainNew !== null ? drainNew : drainOld;
+  const drainW = isNum(drain) && drain >= 0 && drain <= 30000 ? drain : null;
+  // a fall against the previous reading (round 3 F7): the tolerance, plus, with a drain bound, what the house can draw over the minutes between the two readings
+  // in which nothing charged (before the window the battery legitimately falls; a refusal there was wrong with a bound given)
+  if (prev !== null) {
+    const fall = drainW === null ? 0 : (drainW * idleBetween(prev.elapsedMin, readAt)) / 60 / 1000 / fewestKwhPerPct;
+    if (soc < prev.socPct - P.socRegressionTolPct - fall) return halt("INPUTS_UNUSABLE", ["SOC_IMPLAUSIBLE"]);
+  }
   let socPlan = soc;
   if (idleMin > EPS) {
-    if (isNum(drain) && drain >= 0 && drain <= 30000) socPlan = Math.max(0, soc - (drain * idleMin) / 60 / 1000 / fewestKwhPerPct);
+    if (drainW !== null) socPlan = Math.max(0, soc - (drainW * idleMin) / 60 / 1000 / fewestKwhPerPct);
     else if (elapsed < 0) return halt("INPUTS_UNUSABLE", ["PRE_WINDOW_DRAIN_UNKNOWN"]);
     else if (idleMin > P.maxUncountedDrainMin + EPS) return halt("INPUTS_UNUSABLE", ["DRAIN_UNKNOWN_AGED_READING"]);
     else codes.push("DRAIN_NOT_COUNTED");
