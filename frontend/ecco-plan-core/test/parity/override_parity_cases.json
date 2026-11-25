@@ -1,0 +1,668 @@
+{
+ "schema": "ecco-plan-override-parity/1",
+ "note": "One table, two evaluators: the plan core validator (test/overrideParity.test.ts) and the Home Assistant guarded script (home-assistant/tests/test_ecco_plan_helpers_package.py). Both must give exactly `expect` for every case. Times are local in `zone`; clock_day is the plan core's name for the clock change that falls between now and the Skip tonight end time.",
+ "zone": "Europe/London",
+ "policy": {
+  "confirmed": true,
+  "min_expiry": 15,
+  "hold_default": 240,
+  "hold_cap": 1440,
+  "skip_until": "07:00:00",
+  "skip_cap": 1440,
+  "cut_default": 1440,
+  "cut_cap": 4320,
+  "cut_reserve": 80
+ },
+ "cases": [
+  {
+   "id": "hold_default",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 240
+   }
+  },
+  {
+   "id": "hold_explicit_90",
+   "kind": "hold_battery",
+   "expiry_min": 90,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 90
+   }
+  },
+  {
+   "id": "hold_at_cap",
+   "kind": "hold_battery",
+   "expiry_min": 1440,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 1440
+   }
+  },
+  {
+   "id": "hold_above_cap",
+   "kind": "hold_battery",
+   "expiry_min": 1445,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_ABOVE_CAP",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_below_min",
+   "kind": "hold_battery",
+   "expiry_min": 10,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_BELOW_MIN",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_at_min",
+   "kind": "hold_battery",
+   "expiry_min": 15,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 15
+   }
+  },
+  {
+   "id": "hold_zero",
+   "kind": "hold_battery",
+   "expiry_min": 0,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_BELOW_MIN",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_negative",
+   "kind": "hold_battery",
+   "expiry_min": -5,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_BELOW_MIN",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_fraction",
+   "kind": "hold_battery",
+   "expiry_min": 90.5,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_NOT_WHOLE",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_fraction_below_min",
+   "kind": "hold_battery",
+   "expiry_min": 7.5,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_NOT_WHOLE",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "hold_until_local",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": true,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 570
+   }
+  },
+  {
+   "id": "skip_default_until_ordinary",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 570
+   }
+  },
+  {
+   "id": "skip_explicit_300",
+   "kind": "skip_tonight",
+   "expiry_min": 300,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 300
+   }
+  },
+  {
+   "id": "skip_until_over_cap",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_cap": 480
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_ABOVE_CAP",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "skip_until_under_min",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 06:50:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_BELOW_MIN",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "skip_same_minute_means_tomorrow",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 07:00:30",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 1440
+   }
+  },
+  {
+   "id": "skip_spring_day",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2027-03-27 22:30:00",
+   "clock_day": "spring",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 450
+   }
+  },
+  {
+   "id": "skip_autumn_day",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2027-10-30 22:30:00",
+   "clock_day": "autumn",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 570
+   }
+  },
+  {
+   "id": "skip_spring_fits_cap_only_by_real_minutes",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_cap": 480
+   },
+   "owner_reserve": 40,
+   "now_local": "2027-03-27 22:30:00",
+   "clock_day": "spring",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 450
+   }
+  },
+  {
+   "id": "skip_autumn_longer_than_the_wall_clock",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_cap": 540
+   },
+   "owner_reserve": 40,
+   "now_local": "2027-10-30 22:30:00",
+   "clock_day": "autumn",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_ABOVE_CAP",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "cut_default",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 1440
+   }
+  },
+  {
+   "id": "cut_at_cap",
+   "kind": "prepare_power_cut",
+   "expiry_min": 4320,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 4320
+   }
+  },
+  {
+   "id": "cut_above_cap",
+   "kind": "prepare_power_cut",
+   "expiry_min": 4325,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "EXPIRY_ABOVE_CAP",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "cut_reserve_unknown",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": null,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "RESERVE_UNKNOWN",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "cut_reserve_below_current",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "cut_reserve": 30
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "RESERVE_BELOW_CURRENT",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "cut_reserve_equal_to_current",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "cut_reserve": 40
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 1440
+   }
+  },
+  {
+   "id": "hold_does_not_need_the_reserve",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": null,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": true,
+    "code": "",
+    "expiry_min": 240
+   }
+  },
+  {
+   "id": "unconfirmed",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "confirmed": false
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_UNCONFIRMED",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_off_step",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "min_expiry": 12
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_default_above_cap",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "hold_default": 1500
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_cut_default_above_cap",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "cut_default": 5000
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_cap_above_hard_ceiling",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "hold_cap": 5000
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_skip_until_before_0300",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_until": "02:30:00"
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_skip_until_with_seconds",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_until": "07:00:30"
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_reserve_out_of_range",
+   "kind": "prepare_power_cut",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "cut_reserve": 5
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_unreadable_limit",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "hold_cap": null
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "invalid_skip_cap_below_minimum",
+   "kind": "skip_tonight",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "skip_cap": 10
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_INVALID",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "unknown_kind",
+   "kind": "dump_everything",
+   "expiry_min": 60,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "UNKNOWN_KIND",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "unknown_kind_wins_over_expiry",
+   "kind": "dump_everything",
+   "expiry_min": 5,
+   "until_local": false,
+   "policy": {},
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "UNKNOWN_KIND",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "unconfirmed_wins_over_invalid",
+   "kind": "hold_battery",
+   "expiry_min": null,
+   "until_local": false,
+   "policy": {
+    "confirmed": false,
+    "min_expiry": 12
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "POLICY_UNCONFIRMED",
+    "expiry_min": 0
+   }
+  },
+  {
+   "id": "reserve_below_current_wins_over_cap",
+   "kind": "prepare_power_cut",
+   "expiry_min": 5000,
+   "until_local": false,
+   "policy": {
+    "cut_reserve": 30
+   },
+   "owner_reserve": 40,
+   "now_local": "2026-11-17 21:30:00",
+   "clock_day": "ordinary",
+   "expect": {
+    "ok": false,
+    "code": "RESERVE_BELOW_CURRENT",
+    "expiry_min": 0
+   }
+  }
+ ]
+}
