@@ -187,7 +187,8 @@ def check_phase_registry() -> None:
     FAILS); a PHASE_SENSITIVE_EXTENDED_ONLY prefix must be registered and is required to match only in extended mode."""
     executed = PASSES + REPRODUCED + FAILURES
     hits = {p: sum(1 for n in executed if n.startswith(p)) for p in PHASE_SENSITIVE_TAGS}
-    stale = [p for p, n in hits.items() if not n and (EXTENDED or p not in PHASE_SENSITIVE_EXTENDED_ONLY)]
+    stale = [p for p, n in hits.items() if not n and (EXTENDED or p not in PHASE_SENSITIVE_EXTENDED_ONLY)
+             and not (R9 and p in R9_REPLACED_TAGS)]
     bad = ([p for p in PHASE_SENSITIVE_EXTENDED_ONLY if p not in PHASE_SENSITIVE_TAGS]
            + [p for p, why in PHASE_SENSITIVE_TAGS.items() if not p.strip() or not isinstance(why, str)
               or not why.strip()])
@@ -210,6 +211,16 @@ import _lab_fw as L  # noqa: E402
 import _lab_ha as H  # noqa: E402
 
 SUITE = "test_lab_ha_lifecycle"
+# V0.2: the source generation. On a tree with R9 (PR 58: no automatic start of a missed scheduled run after a Home Assistant
+# restart, and the Charge Battery / Export to Grid result-integrity fix) two of this suite's seven findings do not reproduce:
+# F-HF02-2 (SMR1 says RESTORED with schedule values after a crash in STARTING) and F-HF03-2 (the recovery starts a new Dump
+# lease after a whole-site cut); F-HF02-1 is narrowed to its scope (b) (a second session after the owner's End and a second
+# lease after a firmware early end are gone, the false MISSED after a natural end remains). Every base-tree check below is
+# unchanged; each R9 branch pins the closure or narrowing with the same scenario inputs.
+R9 = H.R9
+R9_CLOSED = ("F-HF02-2", "F-HF03-2")      # F-HF02-1 is NARROWED, not closed: its scope (b) still reproduces
+CLOSED_SEEN: list[str] = []
+R9_REPLACED_TAGS = ("finding-reproduces:F-HF03-2 (",)     # tagged check prefixes with no check on an R9 tree (closed there)
 FIXED_LOCAL = S.LOCAL
 U0 = C.utc_of_local(2026, 10, 21, 11, 50)          # synthetic Wednesday (BST); every world starts here
 ST = C.utc_of_local(2026, 10, 21, 12, 0)           # the synthetic scheduled start, 12:00:00 BST
@@ -720,6 +731,25 @@ def finding(fid: str, text: str) -> None:
     print(T.finding_line(fid, safe(text)))
 
 
+def closed(fid: str, text: str) -> None:
+    """V0.2, a tree with R9 only: the finding does not reproduce there (R9, PR 58, closes it); no FINDING line is printed (the
+    suite's LAB-SUMMARY 'finding' counts reproduced findings only) and the closure is pinned by the 'closed-by-r9:' checks
+    next to this line, each as exact as the 'finding-reproduces:' check it replaces."""
+    if not R9 or fid not in R9_CLOSED:
+        raise L.LabHarnessError(f"closed({fid!r}): only a finding in R9_CLOSED, and only on a tree with R9")
+    if fid not in CLOSED_SEEN:
+        CLOSED_SEEN.append(fid)
+    print(f"  info  CLOSED-BY-R9  {fid} {safe(text)}")
+
+
+def narrowed(fid: str, text: str) -> None:
+    """V0.2, a tree with R9 only: part of the finding's scope no longer reproduces (the rest still does, so the finding stays
+    counted and printed by its remaining scope); an info line, pinned by the 'closed-by-r9:' check next to it."""
+    if not R9 or fid not in FINDINGS:
+        raise L.LabHarnessError(f"narrowed({fid!r}): only a finding of FINDINGS, and only on a tree with R9")
+    print(f"  info  NARROWED-BY-R9  {fid} {safe(text)}")
+
+
 def unsupported(uid: str, text: str) -> None:
     """One UNSUPPORTED line per unsupported point met (uid = the catalogue unsupported id; repeats are separate points)."""
     UNSUPPORTED_POINTS.append(uid)
@@ -1086,15 +1116,25 @@ def section_hf02_starting() -> None:
         last = cw.last_result("fp")
         info(f"FPS1 after the restart: {last!r}; 'missed' alerts created {len(missed)}; notifications at the end "
              f"{sorted(cw.notifications())}")
-        check("documented recovery: the killed run is recovered for the rest of the window (one 'start was missed' "
-              "alert, a fresh run, STARTED OK ending by 12:20, the alert dismissed by the success)",
-              len(missed) == 1 and last.startswith("STARTED OK - 3000W for 1") and "ends by 12:20" in last
-              and cw.notifications() == {} and any(t > t_r + down and s.startswith("STARTING") for t, s in res), last)
+        if not R9:
+            check("documented recovery: the killed run is recovered for the rest of the window (one 'start was missed' "
+                  "alert, a fresh run, STARTED OK ending by 12:20, the alert dismissed by the success)",
+                  len(missed) == 1 and last.startswith("STARTED OK - 3000W for 1") and "ends by 12:20" in last
+                  and cw.notifications() == {} and any(t > t_r + down and s.startswith("STARTING") for t, s in res), last)
+        else:
+            check("R9 recovery (PR 58, replaces the documented late start): the killed run is NOT started late - one 'start was "
+                  "missed' alert that nothing dismisses, the result 'MISSED - not started after a Home Assistant restart', no "
+                  "START press and no run after the restart, the schedule disarmed",
+                  len(missed) == 1 and last.startswith("MISSED - not started after a Home Assistant restart")
+                  and sorted(cw.notifications()) == [NOTE_ID["fp"]] and cw.ha_state(H.ARMED["fp"]) == "off"
+                  and not [e for e in start_presses(cw, "fp") if e["t_utc"] > t_r]
+                  and not any(t > t_r + down and s.startswith("STARTING") for t, s in res), last)
         hf, fwv = hf_inv(cw, params={"INV-HF-ARM-OFF": {"grace_s": bound}}), fw_inv(cw)
         check("no coupled invariant (INV-HF-*, the write-enable grace at the documented bound) and no firmware invariant "
-              "violated; one lease; the SMR1 obligation survived the graceful restart (RESTORED with the owner's 40 min)",
+              "violated; " + ("one lease; " if not R9 else "no lease (R9: nothing was started); ")
+              + "the SMR1 obligation survived the graceful restart (RESTORED with the owner's 40 min)",
               not hf and not fwv
-              and len(lease_starts(cw, "fp")) == 1 and cw.smr1_state("fp").startswith("RESTORED")
+              and len(lease_starts(cw, "fp")) == (0 if R9 else 1) and cw.smr1_state("fp").startswith("RESTORED")
               and cw.ha_state(S.E_DUR) == "40.0", f"{invs(hf)} {invs(fwv)} {cw.smr1_state('fp')[:60]}")
         check("INV-HF-PRESS-PROOF holds (every retry followed a gate refusal, never a passed gate) and INV-HF-NEVER-SILENT "
               "holds (the killed run was closed by the recovery's 'start was missed' alert)",
@@ -1108,12 +1148,23 @@ def section_hf02_starting() -> None:
     cw, smp = run_restart_starting(IDLE, ons[1] + 0.05, down, gap, rtc=rtc, until=ST + 300)
     try:
         res = [s for _t, s in results_of(cw, "fp")]
-        check("RTC variant: the gate refused with the RTC text before the restart, the recovery then started the rest of "
-              "the window once the lock window ended; one lease, write enable ON within the documented bound",
-              any("REJECTED - RTC correction currently active" in s for s in res)
-              and cw.last_result("fp").startswith("STARTED OK") and len(lease_starts(cw, "fp")) == 1
-              and (left_on(cw, smp, ons[1] + 0.05)["s"] or 1e9) <= bound
-              and not hf_inv(cw, ["INV-HF-ARM-OFF"], grace_s=bound), safe(res[-1]))
+        if not R9:
+            check("RTC variant: the gate refused with the RTC text before the restart, the recovery then started the rest of "
+                  "the window once the lock window ended; one lease, write enable ON within the documented bound",
+                  any("REJECTED - RTC correction currently active" in s for s in res)
+                  and cw.last_result("fp").startswith("STARTED OK") and len(lease_starts(cw, "fp")) == 1
+                  and (left_on(cw, smp, ons[1] + 0.05)["s"] or 1e9) <= bound
+                  and not hf_inv(cw, ["INV-HF-ARM-OFF"], grace_s=bound), safe(res[-1]))
+        else:
+            check("RTC variant (R9, PR 58, replaces the late start): the gate refused with the RTC text before the restart, the "
+                  "recovery then does NOT start the rest of the window (MISSED, one alert, schedule disarmed); no lease, write "
+                  "enable ON within the documented bound",
+                  any("REJECTED - RTC correction currently active" in s for s in res)
+                  and cw.last_result("fp").startswith("MISSED - not started after a Home Assistant restart")
+                  and cw.ha_state(H.ARMED["fp"]) == "off" and len(notes_created(cw, NOTE_ID["fp"])) == 1
+                  and not lease_starts(cw, "fp") and not [e for e in start_presses(cw, "fp") if e["t_utc"] > ons[1] + 0.05]
+                  and (left_on(cw, smp, ons[1] + 0.05)["s"] or 1e9) <= bound
+                  and not hf_inv(cw, ["INV-HF-ARM-OFF"], grace_s=bound), safe(res[-1]))
     finally:
         cw.close()
     print("[HF-02.7] crash rollback to BEFORE the arm while the write enable is ON (armed rolls back to off)")
@@ -1164,6 +1215,14 @@ def section_hf02_active() -> None:
     expect = {10.0: "STARTED OK - running (Home Assistant restarted during the session)",
               25.0: "STARTED OK - running (Home Assistant restarted during the session)",
               230.0: "STARTED OK - Free Power is active; this run could not confirm the start as its own"}
+    # R9 (PR 58, the Charge Battery result-integrity fix): the recovery writes STARTED OK only over a result that already starts
+    # with STARTED; after the crash rollback the result is the pre-run ARMED text, so a 10 / 25 s gap reads UNCONFIRMED (the
+    # lease is still authoritative); at 230 s the recovery's bounded wait for the dongle ends first, it reads the dongle once the
+    # capture is known and says the same: the removed 'could not confirm the start as its own' fallback no longer turns the result
+    # into a success at any gap
+    if R9:
+        unc = "UNCONFIRMED - Free Power is active after a Home Assistant restart, but this schedule did not confirm that it started it"
+        expect = {10.0: unc, 25.0: unc, 230.0: unc}
     for gap, text in expect.items():
         cw = run_active_restart(gap=gap)
         try:
@@ -1171,7 +1230,10 @@ def section_hf02_active() -> None:
             info(f"gap {gap:.0f} s: FPS1 {last[:90]!r}; SMR1 {cw.smr1_state('fp')[:40]!r}; numbers {cw.ha_state(S.E_PWR)} W"
                  f" / {cw.ha_state(S.E_DUR)} min")
             check(f"reconnect gap {gap:.0f} s: the firmware lease is authoritative - no second START press, one lease, "
-                  f"'armed' off again, the result {text[:40]!r}...", last.startswith(text)
+                  f"'armed' off again, the result {text[:40]!r}..." if not R9 else
+                  f"R9 reconnect gap {gap:.0f} s: the firmware lease is authoritative - no second START press, one lease, "
+                  f"'armed' off again, the result {text[:40]!r}... (never STARTED OK)",
+                  last.startswith(text) and not (R9 and last.startswith("STARTED OK"))
                   and len(start_presses(cw, "fp")) == 1 and len(lease_starts(cw, "fp")) == 1
                   and cw.ha_state(H.ARMED["fp"]) == "off" and not check_press_proof(cw.log)
                   and not hf_inv(cw, ["INV-HF-ONE-LEASE", "INV-HF-OWNER-INTENT", "INV-HF-NO-FALSE-SUCCESS"]), safe(last))
@@ -1215,18 +1277,30 @@ def section_hf02_end_restart() -> None:
             last = cw.last_result(dom)
             missed = notes_created(cw, f"ecco_{'free_power' if dom == 'fp' else 'dump_to_grid'}_schedule")
             nid = NOTE_ID[dom]
-            finding("F-HF02-1", f"{label}: owner End at +{t_end - ST:.0f} s, crash rollback -> a second lease from "
-                                f"+{(starts[-1] - ST) if starts else -1:.0f} s ({last[:60]})")
-            info(f"{label}: 'missed' alert created {len(missed)}x and dismissed by the success (notifications at the end "
-                 f"{sorted(cw.notifications())}); firmware {cw.fw_status(dom)[:50]!r}")
-            check(f"finding-reproduces:F-HF02-1 ({label}): exactly one INV-HF-OWNER-INTENT violation; one schedule "
-                  "START press after the owner's End; two firmware leases; the second one fully gated (STARTED OK); "
-                  "its 'start was missed' alert created once and dismissed by the run's own success",
-                  invs(v) == ["INV-HF-OWNER-INTENT"] and len(after) == 1 and len(starts) == 2
-                  and last.startswith("STARTED OK - ") and "(attempt 1;" in last and len(missed) == 1
-                  and nid not in cw.notifications(), f"{v} {last} {sorted(cw.notifications())}")
-            check(f"{label}: the firmware invariants hold through it (the second session is a new, gated START)",
-                  not fw_inv(cw), str(invs(fw_inv(cw))))
+            if not R9:
+                finding("F-HF02-1", f"{label}: owner End at +{t_end - ST:.0f} s, crash rollback -> a second lease from "
+                                    f"+{(starts[-1] - ST) if starts else -1:.0f} s ({last[:60]})")
+                info(f"{label}: 'missed' alert created {len(missed)}x and dismissed by the success (notifications at the end "
+                     f"{sorted(cw.notifications())}); firmware {cw.fw_status(dom)[:50]!r}")
+                check(f"finding-reproduces:F-HF02-1 ({label}): exactly one INV-HF-OWNER-INTENT violation; one schedule "
+                      "START press after the owner's End; two firmware leases; the second one fully gated (STARTED OK); "
+                      "its 'start was missed' alert created once and dismissed by the run's own success",
+                      invs(v) == ["INV-HF-OWNER-INTENT"] and len(after) == 1 and len(starts) == 2
+                      and last.startswith("STARTED OK - ") and "(attempt 1;" in last and len(missed) == 1
+                      and nid not in cw.notifications(), f"{v} {last} {sorted(cw.notifications())}")
+                check(f"{label}: the firmware invariants hold through it (the second session is a new, gated START)",
+                      not fw_inv(cw), str(invs(fw_inv(cw))))
+            else:
+                narrowed("F-HF02-1", f"{label}: owner End at +{t_end - ST:.0f} s, crash rollback -> no second session ({last[:60]})")
+                check(f"closed-by-r9:F-HF02-1 ({label}): no INV-HF-OWNER-INTENT violation; no schedule START press after the "
+                      "owner's End; one firmware lease (the run's own); the recovery records 'MISSED - not started after a Home "
+                      "Assistant restart', its alert is created once and nothing dismisses it, the schedule is disarmed",
+                      not v and not after and len(starts) == 1
+                      and last.startswith("MISSED - not started after a Home Assistant restart") and len(missed) == 1
+                      and nid in cw.notifications() and cw.ha_state(H.ARMED[dom]) == "off",
+                      f"{v} {last} {sorted(cw.notifications())} {len(starts)} {len(after)}")
+                check(f"{label}: the firmware invariants hold through it (no second session: R9)",
+                      not fw_inv(cw), str(invs(fw_inv(cw))))
         finally:
             cw.close()
     print("[HF-02.4s] the same root cause without an owner End: (a) a scheduled Dump the firmware ended itself "
@@ -1240,14 +1314,25 @@ def section_hf02_end_restart() -> None:
         starts, last = lease_starts(cw, "dump"), cw.last_result("dump")
         fw_end = [x for t, x in fw_texts(cw, "dump_end") if ST < t < ST + 500]
         missed = notes_created(cw, NOTE_ID["dump"])
-        finding("F-HF02-1", f"scope (a): firmware end {safe(fw_end[:1])[:46]}, crash rollback -> a new Dump lease from "
-                            f"+{(starts[-1] - ST) if starts else -1:.0f} s")
-        check("finding-reproduces:F-HF02-1 (scope a, firmware early end): the firmware ended the lease itself before the "
-              "crash; the recovery starts a second, gated lease (STARTED OK) for the rest of the window and its alert is "
-              "dismissed by that success; no coupled or firmware invariant flags it (no owner End: INV-HF-OWNER-INTENT "
-              "does not apply)", bool(fw_end) and fw_end[0].startswith("CONTROLLER NO RESPONSE") and len(starts) == 2
-              and starts[1] > ST + 500 and last.startswith("STARTED OK - 1000W for 2") and len(missed) == 1
-              and cw.notifications() == {} and not hf_inv(cw) and not fw_inv(cw), f"{starts} {safe(last)} {fw_end[:1]}")
+        if not R9:
+            finding("F-HF02-1", f"scope (a): firmware end {safe(fw_end[:1])[:46]}, crash rollback -> a new Dump lease from "
+                                f"+{(starts[-1] - ST) if starts else -1:.0f} s")
+            check("finding-reproduces:F-HF02-1 (scope a, firmware early end): the firmware ended the lease itself before the "
+                  "crash; the recovery starts a second, gated lease (STARTED OK) for the rest of the window and its alert is "
+                  "dismissed by that success; no coupled or firmware invariant flags it (no owner End: INV-HF-OWNER-INTENT "
+                  "does not apply)", bool(fw_end) and fw_end[0].startswith("CONTROLLER NO RESPONSE") and len(starts) == 2
+                  and starts[1] > ST + 500 and last.startswith("STARTED OK - 1000W for 2") and len(missed) == 1
+                  and cw.notifications() == {} and not hf_inv(cw) and not fw_inv(cw), f"{starts} {safe(last)} {fw_end[:1]}")
+        else:
+            narrowed("F-HF02-1", f"scope (a): firmware end {safe(fw_end[:1])[:46]}, crash rollback -> no new Dump lease ({last[:50]})")
+            check("closed-by-r9:F-HF02-1 (scope a, firmware early end): the firmware ended the lease itself before the crash; "
+                  "the recovery does NOT start a second lease for the rest of the window (one lease in all), records 'MISSED - "
+                  "not started after a Home Assistant restart', its alert is created once and nothing dismisses it, the "
+                  "schedule is disarmed; no coupled or firmware invariant fails",
+                  bool(fw_end) and fw_end[0].startswith("CONTROLLER NO RESPONSE") and len(starts) == 1
+                  and last.startswith("MISSED - not started after a Home Assistant restart") and len(missed) == 1
+                  and sorted(cw.notifications()) == [NOTE_ID["dump"]] and cw.ha_state(H.ARMED["dump"]) == "off"
+                  and not hf_inv(cw) and not fw_inv(cw), f"{starts} {safe(last)} {fw_end[:1]}")
     finally:
         cw.close()
     cw = world()
@@ -1269,7 +1354,9 @@ def section_hf02_end_restart() -> None:
     finally:
         cw.close()
     result("HF-02", "F-HF02-1 reproduced: second session after the owner's End (Free Power, Dump to Grid), second lease "
-                    "after a firmware early end, false MISSED after a natural end")
+                    "after a firmware early end, false MISSED after a natural end" if not R9 else
+                    "F-HF02-1 narrowed by R9: no second session after the owner's End, no second lease after a firmware early "
+                    "end; the false MISSED after a natural end still reproduces")
     print("[HF-02.5] End & Restore followed by a GRACEFUL restart (restore-state saved at the clean stop): at +300 / "
           "+360 s, and early (End +120 s, restart +150 s, before the fire automation's 3-min watchdog)")
     for t_end, t_restart in ((ST + 300, ST + 360), (ST + 120, ST + 150)):
@@ -1295,14 +1382,26 @@ def section_hf02_end_restart() -> None:
                  if e["t_utc"] > t_crash]
         info(f"durations the schedule staged before the crash {staged}, after it {after}; SMR1 saved the OLD value of "
              f"the first tracked post-crash step as the owner's ({num:g} min)")
-        finding("F-HF02-2",f"SMR1 {st[:70]!r} while the owner's 8000 W / 40 min are lost (numbers read "
-                            f"{cw.ha_state(S.E_PWR)} W / {num:g} min)")
-        check("finding-reproduces:F-HF02-2: SMR1 says RESTORED with no notification while the numbers hold schedule "
-              "values (power 3000 W; the 'restored' duration is one the schedule staged before the crash), exactly one "
-              "INV-HF-NO-FALSE-SUCCESS violation", st.startswith("RESTORED ") and
-              "restored: duration" in st and num in staged and num != 40.0 and cw.ha_state(S.E_PWR) == "3000.0"
-              and invs(v) == ["INV-HF-NO-FALSE-SUCCESS"] and cw.notifications() == {}, f"{st} {staged} {v}")
-        result("HF-02", "F-HF02-2 reproduced (crash in STARTING -> SMR1 false RESTORED)")
+        if not R9:
+            finding("F-HF02-2",f"SMR1 {st[:70]!r} while the owner's 8000 W / 40 min are lost (numbers read "
+                                f"{cw.ha_state(S.E_PWR)} W / {num:g} min)")
+            check("finding-reproduces:F-HF02-2: SMR1 says RESTORED with no notification while the numbers hold schedule "
+                  "values (power 3000 W; the 'restored' duration is one the schedule staged before the crash), exactly one "
+                  "INV-HF-NO-FALSE-SUCCESS violation", st.startswith("RESTORED ") and
+                  "restored: duration" in st and num in staged and num != 40.0 and cw.ha_state(S.E_PWR) == "3000.0"
+                  and invs(v) == ["INV-HF-NO-FALSE-SUCCESS"] and cw.notifications() == {}, f"{st} {staged} {v}")
+            result("HF-02", "F-HF02-2 reproduced (crash in STARTING -> SMR1 false RESTORED)")
+        else:
+            closed("F-HF02-2", f"SMR1 {st[:40]!r}: after the crash the recovery re-stages nothing (the owner's 8000 W / 40 min "
+                               f"stay lost: numbers read {cw.ha_state(S.E_PWR)} W / {num:g} min)")
+            check("closed-by-r9:F-HF02-2: after the crash in STARTING the recovery does not re-stage a clamped duration, so SMR1 "
+                  "never says RESTORED with a schedule value (no RESTORED text, no INV-HF-NO-FALSE-SUCCESS violation); the "
+                  "owner's values stay lost as the documented SMR1-UNCLEAN-SHUTDOWN consequence (power 3000 W, the duration is "
+                  "one the schedule staged before the crash, nothing staged after it), no lease, no notification claims success",
+                  not st.startswith("RESTORED") and not v and not after and num in staged and num != 40.0
+                  and cw.ha_state(S.E_PWR) == "3000.0" and not lease_starts(cw, "fp")
+                  and cw.last_result("fp").startswith(("MISSED", "FAILED", "CANCELLED")), f"{st} {staged} {after} {v} {cw.last_result('fp')[:40]}")
+            result("HF-02", "F-HF02-2 closed by R9 (crash in STARTING: nothing re-staged, no SMR1 false RESTORED)")
     finally:
         cw.close()
     print("[HF-02.8] the owner moves the start helper to tomorrow (without disarming) while the run retries; with and "
@@ -1609,7 +1708,17 @@ def section_hf03_site(grid) -> None:
               "never resumed it itself (INV-NO-RESUME and every firmware invariant hold; INV-BOOT-MIRROR judged at the "
               "new boot, stored Dump marker RESTORE_REQUIRED)", ended and not o["fw"] and mirror,
               f"{invs(o['fw'])} {mirror}")
-        if o["new"]:
+        if R9:
+            if "F-HF03-2" not in CLOSED_SEEN:
+                closed("F-HF03-2", f"whole-site cut: no new Dump lease at any of the {len(rows)} grid points (DGS1 {o['last'][:58]})")
+            check(f"{tag}: R9 (PR 58, replaces the new lease and the 'STARTED OK - running' claim): the recovery does NOT start a "
+                  "new Dump lease (no START gate pass, INV-HF-NO-RESUME holds) and writes no success text: it records 'MISSED - "
+                  "not started after a Home Assistant restart' (one alert, kept; the firmware had already ended the lease at "
+                  "its boot) and disarms the schedule",
+                  o["new"] == 0 and o["gates"] == 0 and not o["nr"] and not o["false_success"] and not o["running_claim"]
+                  and o["last"].startswith("MISSED - not started after a Home Assistant restart") and o["missed"] == 1
+                  and o["notes_end"] == [NOTE_ID["dump"]], f"{o}")
+        elif o["new"]:
             finding("F-HF03-2", f"{tag}: DGS1 recovery started a new Dump lease ({o['last'][:58]})")
             check(f"finding-reproduces:F-HF03-2 ({tag}): exactly one NEW firmware lease after the cut (one START gate "
                   "pass), a fresh gated START with the schedule's Stop SOC 20 %; its 'start was missed' alert is created "
@@ -1625,7 +1734,8 @@ def section_hf03_site(grid) -> None:
     n_new = sum(1 for r in rows if r[2]["new"])
     info("related (not counted again): after the new lease ends, SMR1 can report RESTORED with a schedule value - the "
          "F-HF02-2 mechanism of HF-02.6; the end lies beyond this run horizon")
-    result("HF-03", f"whole-site cut: new Dump lease at {n_new}/{len(rows)} grid points (F-HF03-2)")
+    result("HF-03", f"whole-site cut: new Dump lease at {n_new}/{len(rows)} grid points (F-HF03-2)" if not R9 else
+           f"whole-site cut: no new Dump lease at any of the {len(rows)} grid points (F-HF03-2 closed by R9)")
 
 
 # =============================================================================================================================
@@ -2237,6 +2347,8 @@ def section_negative_controls() -> None:
     fps1, smr1 = H.package_text("fps1"), H.package_text("smr1")
     fwt = T.read_source_text(FW)
 
+    nc1_obs: dict = {}
+
     def nc_hf02_1():
         old = ("                id: start\n            sequence:\n              - action: script.ecco_free_power_start_"
                "scheduled\n                continue_on_error: true\n                data:\n                  duration_minutes:"
@@ -2248,26 +2360,45 @@ def section_negative_controls() -> None:
         cw, _t = run_end_then_restart("fp", rollback=None, until=ST + 600, t_end=ST + 120, t_crash=ST + 150,
                                       texts={"fps1": mutate(fps1, old, new, "NC-HF02-1")})
         try:
+            nc1_obs.update(last=cw.last_result("fp"), presses=len(start_presses(cw, "fp")), leases=len(lease_starts(cw, "fp")))
             return hf_inv(cw, ["INV-HF-OWNER-INTENT"])
         finally:
             cw.close()
-    negative_control("NC-HF02-1", "HF-02", "FPS1 fire automation: the on-time start never disarms the schedule after "
-                     "its run (End +120 s, graceful restart +150 s)", "INV-HF-OWNER-INTENT", nc_hf02_1)
+    if not R9:
+        negative_control("NC-HF02-1", "HF-02", "FPS1 fire automation: the on-time start never disarms the schedule after "
+                         "its run (End +120 s, graceful restart +150 s)", "INV-HF-OWNER-INTENT", nc_hf02_1)
+    else:
+        # R9 (PR 58): the startup recovery has no start path any more (a start time before the captured Home Assistant start is
+        # MISSED, never started), so the fire automation's disarm is no longer the only thing between the owner's End and a
+        # second session: the same mutant is NOT killed on this tree (defence in depth), and says so exactly
+        mviol = nc_hf02_1()
+        NC_RESULTS.append({"id": "NC-HF02-1", "family": "HF-02", "mutation": "FPS1 fire automation: the on-time start never "
+                           "disarms the schedule after its run (End +120 s, graceful restart +150 s)",
+                           "target": "INV-HF-OWNER-INTENT", "outcome": "survived (defence in depth)",
+                           "detail": "R9: the recovery never starts a missed run"})
+        check("R9 defence in depth (NC-HF02-1, expected to survive): with the fire automation's disarm removed the owner's End "
+              "is still not followed by a second session (R9's recovery records MISSED and starts nothing): no "
+              "INV-HF-OWNER-INTENT violation, one START press and one lease in all",
+              not mviol and nc1_obs.get("presses") == 1 and nc1_obs.get("leases") == 1
+              and str(nc1_obs.get("last", "")).startswith("MISSED - not started after a Home Assistant restart"), str(nc1_obs))
     old_g = ('                  - condition: state\n                    entity_id: input_boolean.ecco_free_power_schedule_'
              'armed\n                    state: "off"')
     cw, _t = run_end_then_restart("fp", rollback=None, until=ST + 600,
                                   texts={"fps1": mutate(fps1, old_g, old_g.replace('"off"', '"lab_never"'), "NC-HF02-1b")})
     try:
         surv = (not hf_inv(cw, ["INV-HF-OWNER-INTENT"]) and len(start_presses(cw, "fp")) == 1
-                and cw.last_result("fp") == "CANCELLED - scheduled Free Power cancelled before it started")
+                and (cw.last_result("fp") == "CANCELLED - scheduled Free Power cancelled before it started" if not R9 else
+                     cw.last_result("fp").startswith("MISSED - not started after a Home Assistant restart")))
     finally:
         cw.close()
     NC_RESULTS.append({"id": "NC-HF02-1b", "family": "HF-02", "mutation": "FPS1 startup recovery armed-off guard never "
                        "matches", "target": "INV-HF-OWNER-INTENT", "outcome": "survived (defence in depth)",
                        "detail": "the start script's own cancel check stops the run"})
     check("defence in depth (NC-HF02-1b, expected to survive): with only the recovery's 'not armed any more' guard "
-          "disabled, the start script's own cancel check (armed off) ends the run CANCELLED before any press",
-          surv)
+          "disabled, the start script's own cancel check (armed off) ends the run CANCELLED before any press" if not R9 else
+          "R9 defence in depth (NC-HF02-1b, expected to survive): with only the recovery's 'not armed any more' guard "
+          "disabled, the recovery still starts nothing (no second press, no INV-HF-OWNER-INTENT violation): it records "
+          "'MISSED - not started after a Home Assistant restart'", surv)
 
     def nc_hf02_2():
         old = ('            entity_id: script.ecco_free_power_start_scheduled\n            state: "off"\n        then:\n'
@@ -2451,31 +2582,50 @@ def section_extended() -> None:
     cw, t_end = run_end_then_restart("fp", rollback=ST - 120, gap=230.0)
     try:
         v = hf_inv(cw, ["INV-HF-OWNER-INTENT"])
-        finding("F-HF02-1", f"reconnect gap 230 s: second lease {cw.last_result('fp')[:60]}")
-        check("finding-reproduces:F-HF02-1 (gap 230 s): the second session still starts once the dongle reconnects",
-              invs(v) == ["INV-HF-OWNER-INTENT"] and len(lease_starts(cw, "fp")) == 2, str(v))
+        if not R9:
+            finding("F-HF02-1", f"reconnect gap 230 s: second lease {cw.last_result('fp')[:60]}")
+            check("finding-reproduces:F-HF02-1 (gap 230 s): the second session still starts once the dongle reconnects",
+                  invs(v) == ["INV-HF-OWNER-INTENT"] and len(lease_starts(cw, "fp")) == 2, str(v))
+        else:
+            narrowed("F-HF02-1", f"reconnect gap 230 s: no second lease ({cw.last_result('fp')[:60]})")
+            check("closed-by-r9:F-HF02-1 (gap 230 s): after the owner's End and a crash with a 230 s reconnect gap the recovery "
+                  "still starts nothing: no INV-HF-OWNER-INTENT violation and one lease in all; it records MISSED",
+                  not v and len(lease_starts(cw, "fp")) == 1 and cw.last_result("fp").startswith("MISSED - not started"),
+                  f"{v} {cw.last_result('fp')[:80]}")
     finally:
         cw.close()
     print("[EXT-4] whole-site power cut during a scheduled FREE POWER (the analogue)")
     cw, t_cut = run_site_cut(60.0, 5.0, dom="fp")
     try:
         o = site_outcome(cw, "fp", t_cut)
-        if o["new"]:
-            finding("F-HF03-2", f"Free Power analogue: FPS1 recovery started a new lease ({o['last'][:58]})")
-        check("Free Power analogue (HA down 60 s, dongle down 5 s): the firmware ended the lease (S3) and FPS1 started a "
-              "new one for the rest of the window, its alert dismissed by the success; firmware invariants hold",
-              o["new"] == 1 and not o["fw"] and o["last"].startswith("STARTED OK - 3000W") and o["missed"] == 1
-              and o["notes_end"] == [], f"{o}")
+        if R9:
+            check("closed-by-r9:F-HF03-2 (Free Power analogue, HA down 60 s, dongle down 5 s): the firmware ended the lease (S3) and "
+                  "FPS1 starts NO new one: it records MISSED, one alert that nothing dismisses; firmware invariants hold",
+                  o["new"] == 0 and not o["fw"] and o["last"].startswith("MISSED - not started after a Home Assistant restart")
+                  and o["missed"] == 1 and o["notes_end"] == [NOTE_ID["fp"]], f"{o}")
+        else:
+            if o["new"]:
+                finding("F-HF03-2", f"Free Power analogue: FPS1 recovery started a new lease ({o['last'][:58]})")
+            check("Free Power analogue (HA down 60 s, dongle down 5 s): the firmware ended the lease (S3) and FPS1 started a "
+                  "new one for the rest of the window, its alert dismissed by the success; firmware invariants hold",
+                  o["new"] == 1 and not o["fw"] and o["last"].startswith("STARTED OK - 3000W") and o["missed"] == 1
+                  and o["notes_end"] == [], f"{o}")
     finally:
         cw.close()
     print("[EXT-5] dump_plant (MODEL plant) variant: a 3000 W scheduled Dump cut mid-window (+15 min)")
     cw, t_cut = run_site_cut(60.0, 5.0, plant=True, cut=ST + 900, until=ST + 1300)
     try:
         o = site_outcome(cw, "dump", t_cut)
-        if o["new"]:
-            finding("F-HF03-2", f"mid-window with the plant MODEL: {o['last'][:58]}")
-        check("plant variant: the same mechanism mid-window - one new gated lease after the firmware's no-resume end",
-              o["new"] == 1 and not o["fw"] and o["last"].startswith("STARTED OK - 3000W for 1"), f"{o}")
+        if R9:
+            check("closed-by-r9:F-HF03-2 (plant variant, mid-window): after the firmware's no-resume end the recovery starts "
+                  "no new lease: it records MISSED and one alert",
+                  o["new"] == 0 and not o["fw"] and o["last"].startswith("MISSED - not started after a Home Assistant restart")
+                  and o["missed"] == 1, f"{o}")
+        else:
+            if o["new"]:
+                finding("F-HF03-2", f"mid-window with the plant MODEL: {o['last'][:58]}")
+            check("plant variant: the same mechanism mid-window - one new gated lease after the firmware's no-resume end",
+                  o["new"] == 1 and not o["fw"] and o["last"].startswith("STARTED OK - 3000W for 1"), f"{o}")
     finally:
         cw.close()
     print("[EXT-6] HF-09 analogues of the other domain, and the 'silent' policy of the retry-window outage")
@@ -2523,9 +2673,11 @@ check("S.LOCAL is the sim's own fixed object and no CoupledWorld is left open at
       and not H._OPEN)
 # V0.1 finding register (brief B6.3; precedent test_lab_dst_rtc.section_register)
 check("finding register: every FINDINGS entry was reproduced and printed, and no reclassified id (F-HF05-1) is a "
-      "FINDINGS entry or printed a FINDING line", sorted(FINDING_SEEN) == sorted(FINDINGS)
+      "FINDINGS entry or printed a FINDING line" + (" (on a tree with R9: every FINDINGS entry but the closed ones, and each closed one "
+      "pinned by its closed-by-r9 checks)" if R9 else ""), sorted(FINDING_SEEN + CLOSED_SEEN) == sorted(FINDINGS)
+      and sorted(CLOSED_SEEN) == (sorted(R9_CLOSED) if R9 else []) and not set(FINDING_SEEN) & set(CLOSED_SEEN)
       and not set(RECLASSIFIED) & (set(FINDINGS) | set(FINDING_SEEN))
-      and all(f not in s["findings"] for s in SCENARIOS for f in RECLASSIFIED), str(FINDING_SEEN))
+      and all(f not in s["findings"] for s in SCENARIOS for f in RECLASSIFIED), str(FINDING_SEEN) + str(CLOSED_SEEN))
 for _fid, _why in sorted(RECLASSIFIED.items()):
     info(f"reclassified: {_fid} -> {_why}")
 print("[summary] scenarios")

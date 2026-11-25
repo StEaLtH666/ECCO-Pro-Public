@@ -14,6 +14,13 @@ PUBLIC API
              POWER_HELPER, STOP_SOC_HELPER, LAST_RESULT, SCHEDULE_STATUS, SCRIPT, SMR1_STATE, ACTIVE, ARM, NUMBERS; firmware
              button ids START_BUTTON / END_BUTTON; FW_ACTIONS (the firmware environment / fault actions fw_action() accepts);
              SOURCE_ANCHORS [(path, text)] (the self-test re-counts each, exactly once)
+  V0.2    the package generation the worktree has (the source generations of _lab_trace.GENERATIONS): R9 (R9 / PR 58: both
+             schedule packages carry the Home Assistant start-time capture and never start a missed run after a restart; a
+             bool judged on the two capture automation ids) and PLAN_GATE (Stage 3 / PR 59: the scheduled Dump to Grid start
+             reads the plan hold and reserve; judged on the sensor read); r9_present(texts=None), plan_gate_present(texts),
+             set_plan_standins(world, texts) -> bool, E_PLAN_HOLD / E_PLAN_RESERVE / PLAN_HOLD_CLEAR / PLAN_RESERVE_PCT, E_NTP_TIME,
+             DATETIME_DEFAULT (see MODEL ASSUMPTIONS 'Plan gate' and 'Date-and-time helpers'); both flags are False on a base tree,
+             where every function above behaves exactly as before
   errors     LabHarnessError / LabUnsupported (the _lab_fw classes, re-exported); S.Unsupported for an unmapped dongle
              entity; S.ServiceError for a call to an offline dongle under offline_policy='raise'
   Latency(press_s=(0.117,), cmd_s=0.03, publish_s=0.12, op_s=0.58, commit_s=0.01, no_response_s=2.0, timeout_s=3.0)
@@ -47,7 +54,8 @@ PUBLIC API
               owner_set(entity, value, at_utc=None, via='ha' | 'dongle'); owner_press(button, at_utc=None, via='ha' |
               'dongle'); restart_ha(at_utc, down_s, rollback_to_utc=None, clear_notifications=True, reconnect_gap_s=10.0,
               reset_last_changed=True); reboot_dongle(at_utc, down_s=5.0, nvs_fault=None, reconnect_gap_s=None);
-              api_outage(at_utc, down_s); set_env(at_utc=None, **telemetry values); fw_action(name, at_utc=None, **args);
+              api_outage(at_utc, down_s); set_env(at_utc=None, **telemetry values); plan_env(at_utc=None, hold=None,
+              reserve=None) (V0.2, a tree with the Stage 3 plan gate: the synthetic plan sensors); fw_action(name, at_utc=None, **args);
               dump_plant(house_w=50, soc_drop_s=180, period_s=5) (MODEL plant stand-in, see MODEL ASSUMPTIONS)
               (at_utc None = now, else scheduled on the World clock)
     observers schedule_status(dom), last_result(dom), smr1_state(dom), notifications(), ha_state(entity), ha_visible(),
@@ -166,6 +174,18 @@ MODEL ASSUMPTIONS (lab choices; HA-side ones marked ASSUMPTION are INFERRED Home
     :14-23): HA renders it on those triggers and keeps the value in between. Render-on-read gives the same value because
     its state and availability templates read only the dongle ceiling sensor and the operating-limit helper, both
     watched by the block's state trigger; the static guard (FAIL-LOUD GUARDS) re-checks that condition at every load.
+  - Plan gate (V0.2, a tree with Stage 3 only): the scheduled Dump to Grid start reads sensor.ecco_plan_export_hold and
+    sensor.ecco_plan_effective_reserve (home-assistant/packages/ecco_plan_helpers.yaml) and fails closed without them
+    (BLOCKED, reason OVERRIDE_UNREADABLE). The plan package is NOT loaded: its guarded override scripts, first-run seed and
+    now() templates are the subject of the plan suites, and the lab's static guard refuses its template attributes. A world
+    whose DGS1 reads the gate holds the two sensors at SYNTHETIC values ('clear'; the Stop SOC helper's minimum, 10 %), as the
+    repository's own Dump to Grid suites set them, so a scenario meets the real DGS1 start with nothing held and never has a
+    Stop SOC raised or blocked; plan_env(at_utc, hold=, reserve=) changes them (a world without the gate refuses it). What the
+    plan itself decides (overrides, the reserve arithmetic, the press-time recheck) is not exercised here.
+  - Date-and-time helpers (V0.2, a tree whose packages read states.input_datetime.<helper>, R9's capture guard): such a helper
+    exists in Home Assistant from the start, at its 1970 default when it has no value of its own (the plan suites' sim holds the
+    same default), so the world sets every has_date helper it lacks at DATETIME_DEFAULT before the packages start; the sim leaves
+    them unset and then has no input_datetime domain, so R9's templates raise. A base package set reads no such object and gets none.
   - Offline: a service call while the API link is down is dropped silently (offline_policy='silent', ASSUMPTION: HA's
     entity service call skips an unavailable ESPHome entity) or raises S.ServiceError (offline_policy='raise', the
     _ha_dump_sim.py:15 ASSUMPTION); a command in flight when the link drops is lost. A whole-view republish follows every
@@ -174,7 +194,8 @@ MODEL ASSUMPTIONS (lab choices; HA-side ones marked ASSUMPTION are INFERRED Home
     stop); crash = rollback_to_utc: every package helper (input_*) is rolled back to its value at that instant (HA saves
     restore-state every 15 minutes and at a clean stop, ecco_schedule_manual_restore.yaml:37 / docs/dev/schedule-manual-
     restore.md:71); persistent notifications are cleared at start (not restored by HA); restored helpers' last_changed is
-    the start instant (HA writes fresh state objects); dongle entities read 'unavailable' from HA start until the ESPHome
+    the start instant (HA writes fresh state objects; on a tree with R9 the sim also keeps last_updated, which the capture's
+    staleness guard reads, and it is the start instant too, so a value this boot did not write reads as stale); dongle entities read 'unavailable' from HA start until the ESPHome
     reconnect reconnect_gap_s later.
   - reboot_dongle: a power cut at at_utc (state captured there, entities unavailable at once), the power back at at_utc +
     down_s, on_boot boot_ms later (FirmwareWorld.reboot_from: FULL on_boot, RAM fresh, ALWAYS_OFF arms OFF, attempt
@@ -307,6 +328,19 @@ LIMIT_SENSOR_NAME = "ECCO Config Maximum Grid Charge Power"
 E_LIMIT = S.E_LIMIT
 E_CEILING = f"sensor.{S.P}inverter_tou_power_ceiling"
 E_OPERATING_LIMIT = "input_number.ecco_max_grid_charge_power"
+E_NTP_TIME = f"sensor.{S.P}ntp_time"          # the dongle's 'NTP Time' text (V0.2: read by R9's start-time capture)
+# V0.2 (Stage 3, PR 59): the scheduled Dump to Grid start reads two sensors of home-assistant/packages/ecco_plan_helpers.yaml
+# and fails closed (BLOCKED, reason OVERRIDE_UNREADABLE) without them. That package is NOT loaded here (its guarded override
+# scripts, its first-run seed and its now() templates are the subject of the plan suites, home-assistant/tests/
+# test_ecco_plan_helpers_package.py and test_ecco_plan_enforcement.py, and its template attributes are options this lab's
+# static guard refuses); a coupled world whose DGS1 has the gate holds the two sensors at SYNTHETIC values, as the repository's
+# own Dump to Grid suites do. Nothing is held and the reserve is the Stop SOC helper's minimum, so it never raises or blocks
+# a staged Stop SOC; plan_env() changes either at a World time.
+E_PLAN_HOLD = "sensor.ecco_plan_export_hold"
+E_PLAN_RESERVE = "sensor.ecco_plan_effective_reserve"
+PLAN_HOLD_CLEAR = "clear"
+PLAN_RESERVE_PCT = 10
+DATETIME_DEFAULT = "1970-01-01 00:00:00"       # a date-and-time helper with no value of its own in Home Assistant (MODEL, V0.2)
 DOMS = ("fp", "dump")
 _PKG_OF = {"fp": "fps1", "dump": "dgs1"}
 ARMED = {"fp": "input_boolean.ecco_free_power_schedule_armed", "dump": "input_boolean.ecco_dump_to_grid_schedule_armed"}
@@ -528,6 +562,46 @@ def package_text(name: str) -> str:
     if rel not in _TEXTS:
         _TEXTS[rel] = T.read_source_text(rel)
     return _TEXTS[rel]
+
+
+def plan_gate_present(texts) -> bool:
+    """Does any of the package texts read the Stage 3 plan hold sensor (a tree with PR 59)? Judged on the sensor read, never on
+    comments: a package that does not read it needs no stand-in, and a world built from such texts holds none (so a base-tree
+    world is byte-for-byte what it was)."""
+    return any(f"states('{E_PLAN_HOLD}')" in t for t in texts)
+
+
+R9_CAPTURE_IDS = {"fps1": "ecco_free_power_ha_start_capture", "dgs1": "ecco_dump_to_grid_ha_start_capture"}
+
+
+def r9_present(texts=None) -> bool:
+    """Do both schedule packages carry R9's missed-run guard (a tree with PR 58)? Judged on their automation ids (the Home
+    Assistant start-time capture automations R9 added), never on comments or on a digest; a package set that lacks either one
+    is a base-behaviour set. texts: {package name: text}; default the worktree's packages."""
+    for name, aid in R9_CAPTURE_IDS.items():
+        text = (texts or {}).get(name) if texts is not None else package_text(name)
+        pkg = yaml.safe_load(text) if text else None
+        if not isinstance(pkg, dict) or aid not in {a.get("id") for a in pkg.get("automation") or [] if isinstance(a, dict)}:
+            return False
+    return True
+
+
+def set_plan_standins(world, texts) -> bool:
+    """On an S.World (a coupled world's, or a bare one a suite builds for the HA models): when the package texts read the
+    Stage 3 plan gate, put the two plan sensors at their SYNTHETIC values (nothing held, the reserve at the Stop SOC helper's
+    minimum); True when they were set, False (nothing written) for a package set with no plan gate."""
+    if not plan_gate_present(texts):
+        return False
+    world.set(E_PLAN_HOLD, PLAN_HOLD_CLEAR)
+    world.set(E_PLAN_RESERVE, f"{PLAN_RESERVE_PCT}")
+    return True
+
+
+# The worktree's package features (V0.2): which behaviour the suites' expectations follow. R9: a missed scheduled run is never
+# started after a Home Assistant restart (PR 58); PLAN_GATE: the scheduled Dump to Grid start reads the plan hold and reserve
+# (PR 59). Both are False on a base tree, so every base-tree expectation is the one the suites always had.
+R9 = r9_present()
+PLAN_GATE = plan_gate_present([package_text("dgs1")])
 
 
 def package_dongle_ids(texts) -> list:
@@ -1650,6 +1724,7 @@ class CoupledWorld:
             raise LabHarnessError("the firmware did not reach utc_start after its warm-up")
         self.w.set(E_OPERATING_LIMIT, f"{float(grid_charge_limit_w)}")
         self.w.template_entities[E_LIMIT] = limit_template()
+        self.plan_gate = set_plan_standins(self.w, self.package_texts.values())     # V0.2: the Stage 3 plan stand-ins
         self.dongle.connect_initial()
         self.ha = self._new_ha()
         self.ha_up = True
@@ -1712,7 +1787,19 @@ class CoupledWorld:
         return handler
 
     def _new_ha(self) -> S.HA:
-        ha = S.HA(self.w, [yaml.safe_load(t) for t in self.package_texts.values()])
+        pkgs = [yaml.safe_load(t) for t in self.package_texts.values()]
+        ha = S.HA(self.w, pkgs)
+        # V0.2: a package that reads `states.input_datetime.<helper>` (R9's capture guard) needs the helper to EXIST, as in Home
+        # Assistant, where a date-and-time helper with no value of its own reads the 1970 default (the plan suites' sim says so,
+        # _plan_sim.py); the sim leaves a date-and-time helper unset and then has no `input_datetime` domain at all, so the
+        # template raises. A helper that has a state (an arm, a restore) keeps it; a base package set reads no such object and
+        # is left exactly as it was.
+        if any("states.input_datetime." in t for t in self.package_texts.values()):
+            for pk in pkgs:
+                for k, spec in (pk.get("input_datetime") or {}).items():
+                    e = f"input_datetime.{k}"
+                    if isinstance(spec, dict) and spec.get("has_date") and e not in self.w.states:
+                        self.w.set(e, DATETIME_DEFAULT)
         orig = ha._action
 
         def tagged(act, v):   # pattern from home-assistant/tests/test_ecco_schedule_manual_restore.py:100-112, per instance
@@ -1915,6 +2002,8 @@ class CoupledWorld:
                 ids = [e for e in self._helper_ids() if e in self.w.states]
                 for e in ids:
                     self.w.changed_at[e] = self.w.t
+                    if hasattr(self.w, "updated_at"):     # V0.2: the sim of a tree with R9 keeps last_updated too; the restore
+                        self.w.updated_at[e] = self.w.t   # writes a fresh state object, so both timestamps are the start instant
                 self._log("ha.last_changed_reset", {"n": len(ids)})
             self.ha.start()
             self._schedule_time_triggers()
@@ -1971,6 +2060,25 @@ class CoupledWorld:
         """MODEL: the inverter's live telemetry image (FirmwareWorld.telemetry(poll=False)); the firmware's own telemetry
         interval reads it at its next slot."""
         self._at(at_utc, lambda: self.dongle.entry(fn=lambda: self.fw.telemetry(poll=False, **values)))
+
+    def plan_env(self, at_utc=None, hold=None, reserve=None) -> None:
+        """MODEL (V0.2, a tree with the Stage 3 plan gate only): set the synthetic plan sensors at a World time - hold the
+        export hold sensor's state ('clear', 'held', 'unknown', 'unavailable', ...) and / or reserve the effective reserve's
+        state text. It writes the two stand-in sensors (never the plan package, which is not loaded); a world whose DGS1 has no
+        plan gate refuses it, so a base tree cannot be driven by a value nothing reads."""
+        if not self.plan_gate:
+            raise LabHarnessError("plan_env: the loaded packages do not read the plan hold sensor (no Stage 3 gate)")
+        if hold is not None and not isinstance(hold, str):
+            raise LabHarnessError(f"plan_env: hold must be a str state, got {hold!r}")
+        if reserve is not None and not isinstance(reserve, (str, int, float)) or isinstance(reserve, bool):
+            raise LabHarnessError(f"plan_env: reserve must be a str or a number, got {reserve!r}")
+
+        def go():
+            if hold is not None:
+                self.w.set(E_PLAN_HOLD, hold)
+            if reserve is not None:
+                self.w.set(E_PLAN_RESERVE, str(reserve))
+        self._at(at_utc, go)
 
     def fw_action(self, name: str, at_utc=None, **args) -> None:
         """A firmware environment / fault action of _lab_fw.ACTIONS (FW_ACTIONS only), run as firmware work now."""

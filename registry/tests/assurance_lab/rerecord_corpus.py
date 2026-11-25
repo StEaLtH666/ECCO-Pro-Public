@@ -10,6 +10,8 @@ pinned in requirements-ci.txt (PyYAML, Jinja2), as the suites do.
     python -B registry/tests/assurance_lab/rerecord_corpus.py FW-01-a FW-01-b         # re-record these documents
     python -B registry/tests/assurance_lab/rerecord_corpus.py FW-06-a --allow-digest-change FW-06-a
     python -B registry/tests/assurance_lab/rerecord_corpus.py --all --pin-tier-sources  # B1 tier pins into the files
+    python -B registry/tests/assurance_lab/rerecord_corpus.py --generation r9s3 --all   # the overlay documents (V0.2, below)
+    python -B registry/tests/assurance_lab/rerecord_corpus.py --generation r9s3 --from-base HF-02-a   # a NEW overlay document
 
 WHAT IT DOES
   Every corpus document pins the files it was recorded from (source_digests: LF-normalised sha256, the
@@ -39,6 +41,13 @@ WHAT IT DOES
   pinned file counts as stale) and those whose anchors are no longer found exactly once at their recorded lines.
   Exit 1 when any is stale.
   Writes only <corpus>/<id>.json files that already exist (and their transient .tmp siblings); never anything else.
+  V0.2 SOURCE GENERATIONS (_lab_trace.GENERATIONS). A base document pins the base generation's sources, so it is re-recorded on
+  a tree of that generation only (the tool refuses on any other tree and says which generation the tree is). The coupled
+  documents also exist as OVERLAY documents corpus/<generation>/<id>.json, which pin that generation's sources and carry its
+  expectations; a tree of that generation replays them in place of the base ones (_lab_trace.load_doc). --generation <id>
+  re-records the overlay documents of that generation (--all, ids, --check as above) and refuses on a tree that is not of it;
+  --from-base lets a document with no overlay yet start from its base document (the overlay is created: read its expectations
+  against what this generation does before committing it; a failing expectation stops the recording, naming it).
 
 EXIT  0 ok (re-recorded, or nothing stale with --check); 1 a document failed, was refused or (--check) is stale;
       2 usage error.
@@ -58,7 +67,9 @@ from pathlib import Path  # noqa: E402
 
 HERE = Path(__file__).resolve().parent            # registry/tests/assurance_lab
 ROOT = HERE.parents[2]                             # repository root
-CORPUS_DIR = HERE / "corpus"
+CORPUS_BASE_DIR = HERE / "corpus"
+CORPUS_DIR = CORPUS_BASE_DIR                       # main() points it at corpus/<generation>/ for --generation
+GENERATION = None                                  # the --generation id, or None (the base documents)
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 for p in (HERE, ROOT / "registry" / "tests", ROOT / "registry", ROOT / "home-assistant" / "tests", ROOT / "tools"):
     if str(p) not in sys.path:
@@ -79,9 +90,14 @@ def id_problem(doc_id: str) -> str | None:
     if not ID_RE.match(doc_id) or doc_id.endswith(".json"):
         return f"not a corpus document id: {doc_id!r} (use the id, e.g. FW-01-a)"
     f = CORPUS_DIR / f"{doc_id}.json"
+    if FROM_BASE and GENERATION is not None and (CORPUS_BASE_DIR / f"{doc_id}.json").is_file():
+        return None                                 # --from-base: the overlay may not exist yet, its base document does
     if not f.is_file() or f.resolve().parent != CORPUS_DIR.resolve():
         return f"no corpus document {doc_id!r} in {CORPUS_DIR.relative_to(ROOT).as_posix()}"
     return None
+
+
+FROM_BASE = False
 
 
 def corpus_path(doc_id: str) -> Path:
@@ -92,8 +108,21 @@ def corpus_path(doc_id: str) -> Path:
     return CORPUS_DIR / f"{doc_id}.json"
 
 
+def load_for_record(doc_id: str) -> dict:
+    """The document a re-record starts from: the file itself (never the active generation's overlay in place of a base
+    document: overlay=False), or, with --from-base and no overlay yet, the base document of the same id."""
+    f = corpus_path(doc_id)
+    if not f.is_file() and FROM_BASE and GENERATION is not None:
+        f = CORPUS_BASE_DIR / f"{doc_id}.json"
+    return T.load_doc(f, overlay=False)
+
+
 def all_ids() -> list[str]:
-    return [f.stem for f in sorted(CORPUS_DIR.glob("*.json"))]
+    ids = [f.stem for f in sorted(CORPUS_DIR.glob("*.json"))]
+    if FROM_BASE and GENERATION is not None:        # --from-base --all: every COUPLED base document without an overlay too
+        ids = sorted(set(ids) | {f.stem for f in CORPUS_BASE_DIR.glob("*.json")
+                                 if T.load_doc(f, overlay=False)["tier"] == "coupled"})
+    return ids
 
 
 def stale_report(doc: dict) -> tuple[list[str], list[str]]:
@@ -117,7 +146,7 @@ def stale_report(doc: dict) -> tuple[list[str], list[str]]:
 def check_main(ids: list[str]) -> int:
     n_stale = 0
     for doc_id in ids:
-        doc = T.load_doc(corpus_path(doc_id))
+        doc = load_for_record(doc_id)
         paths, anchors = stale_report(doc)
         if paths or anchors:
             n_stale += 1
@@ -135,7 +164,7 @@ def rerecord_main(ids: list[str], allowed: set[str], tier_pins: bool = False) ->
     for doc_id in ids:
         f = corpus_path(doc_id)
         try:
-            doc = T.load_doc(f)
+            doc = load_for_record(doc_id)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):     # record() replays; the engine prints nothing, kept quiet anyway
                 new = T.record(doc, tier_pins=tier_pins)
@@ -151,17 +180,21 @@ def rerecord_main(ids: list[str], allowed: set[str], tier_pins: bool = False) ->
                  for a, b in zip(doc["source_anchors"], new["source_anchors"]) if a["line_at_record"] != b["line_at_record"]]
         what = "; ".join(([f"source_digests changed for {', '.join(changed_src)}"] if changed_src else [])
                          + ([f"anchor lines moved: {', '.join(moved)}"] if moved else []))
-        if new_digest != old_digest:
+        new_overlay = FROM_BASE and GENERATION is not None and not f.is_file()
+        if new_overlay:
+            print(f"  NEW      {doc_id}: overlay for generation {GENERATION} from the base document (trace_digest "
+                  f"{old_digest[:12]} -> {new_digest[:12]})")
+        elif new_digest != old_digest:
             if doc_id not in allowed:
                 print(f"  REFUSED  {doc_id}: trace_digest would change {old_digest} -> {new_digest} (pass "
                       f"--allow-digest-change {doc_id} if the change is intended and explained)")
                 bad += 1
                 continue
             print(f"  ALLOWED  {doc_id}: trace_digest {old_digest} -> {new_digest}" + (f"; {what}" if what else ""))
-        if new_text.encode("ascii") == f.read_bytes().replace(b"\r\n", b"\n"):
+        if f.is_file() and new_text.encode("ascii") == f.read_bytes().replace(b"\r\n", b"\n"):
             print(f"  same     {doc_id}: unchanged")
             continue
-        if new_digest == old_digest:
+        if new_digest == old_digest and not new_overlay:
             print(f"  update   {doc_id}: trace_digest unchanged" + (f"; {what}" if what else ""))
         planned.append((f, new_text))
     if bad:
@@ -169,7 +202,7 @@ def rerecord_main(ids: list[str], allowed: set[str], tier_pins: bool = False) ->
         return 1
     for f, text in planned:
         target = f.resolve()
-        if target.parent != CORPUS_DIR.resolve() or not target.is_file():
+        if target.parent != CORPUS_DIR.resolve() or not (target.is_file() or (FROM_BASE and GENERATION is not None)):
             raise SystemExit(f"refusing to write outside the corpus directory: {target}")
         tmp = target.with_name(target.name + ".tmp")
         tmp.write_bytes(text.encode("ascii"))
@@ -188,7 +221,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="only report stale documents (no replay, nothing written)")
     ap.add_argument("--pin-tier-sources", action="store_true",
                     help="also pin the document tier's _lab_trace.TIER_SOURCES in source_digests (see the docstring)")
+    ap.add_argument("--generation", metavar="ID", default=None,
+                    help="re-record the overlay documents corpus/<ID>/ of a later source generation (V0.2); the tree must be "
+                         "of that generation (default: the base documents, on a base tree)")
+    ap.add_argument("--from-base", action="store_true",
+                    help="with --generation: a document with no overlay yet starts from its base document")
     args = ap.parse_args(argv)
+    global CORPUS_DIR, GENERATION, FROM_BASE
+    here = T.generation()
+    if args.generation is None:
+        if args.from_base:
+            ap.error("--from-base needs --generation")
+        if here != T.GENERATION_BASE:
+            ap.error(f"the base documents are re-recorded on a tree of the base source generation; this tree is "
+                     f"{here or 'of no recorded generation (a mixed or edited tree: the tiered drift rule names the file)'}"
+                     + (f": use --generation {here} for its overlay documents" if here else ""))
+    else:
+        if args.generation == T.GENERATION_BASE or args.generation not in T.GENERATIONS:
+            ap.error(f"--generation names a later source generation, one of {[g for g in T.GENERATIONS if g != T.GENERATION_BASE]}")
+        if here != args.generation:
+            ap.error(f"--generation {args.generation}: this tree is {here or 'of no recorded generation'}, not that generation")
+        GENERATION, FROM_BASE = args.generation, args.from_base
+        CORPUS_DIR = CORPUS_BASE_DIR / args.generation
+        CORPUS_DIR.mkdir(exist_ok=True)
     if args.all and args.ids:
         ap.error("give --all or document ids, not both")
     if not args.all and not args.ids and not args.check:

@@ -448,6 +448,24 @@ DUMP_TOU_REFUSED_HA = "REJECTED - window overlaps a TOU slot with a charge sourc
 RTC_REFUSED = "REJECTED - RTC correction currently active"
 CORPUS_DIR = HERE / "corpus"
 
+# V0.2: the source generation. On a tree with R9 (PR 58) the two schedule packages refuse an arm whose start is a skipped, a repeated
+# or an unreadable local time (REJECTED, clock-change text), and the DGS1 arm-time slot check walks the run on the real instants:
+# F-HF08-1 and F-HF08-2 (a repeated-hour arm 'in the past', a skipped-hour arm run an hour from the typed time) do not reproduce, and
+# the DGS1 half of F-HF08-3 (the arm walk's DST blindness) is gone; the firmware START gate keeps SG-25 (F-HF08-3 stays, on its
+# firmware-gate evidence). Every base-tree check below is unchanged; each R9 branch pins the closure with the same scenario inputs.
+R9 = H.R9
+R9_CLOSED = ("F-HF08-1", "F-HF08-2")
+R9_REFUSAL = "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
+CLOSED_SEEN: list[str] = []
+if R9:
+    # the generation's drafts (corpus/r9s3/): the three coupled HF-08 documents keep their actions and metadata and pin the refusals
+    for _d in CORPUS_DRAFTS:
+        if _d["id"] in ("HF-08-a", "HF-08-b", "HF-08-c"):
+            _dom, _armed = (("dump", "input_boolean.ecco_dump_to_grid_schedule_armed") if _d["id"] == "HF-08-c" else
+                            ("fp", "input_boolean.ecco_free_power_schedule_armed"))
+            _d["expect"] = [_exp("last_result", "==", R9_REFUSAL, dom=_dom), _exp("ha_state", "==", "off", entity=_armed)]
+            _d["notes"] += (" On a tree with R9 (PR 58) this document pins the CLOSURE of the finding it belongs to: the arm is REFUSED "
+                            "with the clock-change text and nothing starts (the base-tree expectations are in corpus/).")
 FINDINGS: dict[str, str] = {}
 UNSUPPORTED_POINTS: list[str] = []   # one catalogue id per printed UNSUPPORTED line (none: no construct here is unmodelled)
 NC_RESULTS: list[tuple[str, str]] = []
@@ -457,6 +475,15 @@ def finding(fid: str, text: str) -> None:
     if fid not in FINDINGS:
         FINDINGS[fid] = text
         print(_ascii(T.finding_line(fid, text)))
+
+
+def closed(fid: str, text: str) -> None:
+    """A tree with R9 only: the finding does not reproduce (no FINDING line); the 'closed-by-r9:' checks next to it pin the closure."""
+    if not R9 or fid not in R9_CLOSED:
+        raise L.LabHarnessError(f"closed({fid!r}): only a finding in R9_CLOSED, and only on a tree with R9")
+    if fid not in CLOSED_SEEN:
+        CLOSED_SEEN.append(fid)
+    print(f"  info  CLOSED-BY-R9  {fid} {_ascii(text)}")
 
 
 def info(text: str) -> None:
@@ -904,17 +931,24 @@ def section_hf08() -> None:
     a = coupled(u0, [("fp", "2026-10-25 01:30:00", 60, 3000, None, 60)], FALL - 1800 + 3600 + 120, mid=FALL - 1800 + 120)
     st = first_status(a, "fp", "STARTING")
     rs = first_status(a, "fp", "RESTORING")
-    check("HF-08 A: an armed 2026-10-25 01:30 start resolves to the first (BST) copy, 00:30Z (fold=0), and fires there",
-          a["arms"][0]["start_utc"] == FALL - 1800 and st is not None and FALL - 1800 <= st < FALL - 1800 + 10,
-          f"{a['arms']} STARTING at {r3(st)}")
-    v = check_epoch_end("fp", st or 0, 60, a["mid"]["free_power_end_epoch"], rs)
-    check("HF-08 A: INV-EPOCH-END - the lease end is the START second + 3600 s in UTC (01:30 GMT) and the restore starts "
-          "at the first watchdog slot after it", not v, str(v))
-    check("HF-08 A: the run completes (COMPLETED, RESTORED OK) with no coupled or firmware invariant violation",
-          a["status"]["fp"] == "COMPLETED" and any(x.startswith(FP_STATUS_PREFIX) for _t, d, x in a["fw"] if d == "fp")
-          and not a["inv"] and not a["fw_inv"], f"{a['status']} {a['inv']} {a['fw_inv'][:2]}")
-    info(f"HF-08 A: FPS1 result {a['last']['fp']!r}; window overrun {a['overruns'][0]['overrun_s']} s; digest "
-         f"{a['digest'][:16]}")
+    if R9:
+        check("HF-08 A (R9, PR 58, replaces the run): an armed 2026-10-25 01:30 start (the repeated hour) is REFUSED at arm time "
+              "with the clock-change text; nothing is armed, started or written, and no coupled or firmware invariant fails",
+              a["last"]["fp"] == R9_REFUSAL and a["armed"]["fp"] == "off" and a["status"]["fp"] == "IDLE" and st is None
+              and not any(d == "fp" for _t, d, x in a["fw"] if x.startswith(("STARTING", "ACTIVE", "RESTORING")))
+              and not a["inv"] and not a["fw_inv"], f"{a['last']['fp']!r} {a['status']} {a['inv']}")
+    else:
+        check("HF-08 A: an armed 2026-10-25 01:30 start resolves to the first (BST) copy, 00:30Z (fold=0), and fires there",
+              a["arms"][0]["start_utc"] == FALL - 1800 and st is not None and FALL - 1800 <= st < FALL - 1800 + 10,
+              f"{a['arms']} STARTING at {r3(st)}")
+        v = check_epoch_end("fp", st or 0, 60, a["mid"]["free_power_end_epoch"], rs)
+        check("HF-08 A: INV-EPOCH-END - the lease end is the START second + 3600 s in UTC (01:30 GMT) and the restore starts "
+              "at the first watchdog slot after it", not v, str(v))
+        check("HF-08 A: the run completes (COMPLETED, RESTORED OK) with no coupled or firmware invariant violation",
+              a["status"]["fp"] == "COMPLETED" and any(x.startswith(FP_STATUS_PREFIX) for _t, d, x in a["fw"] if d == "fp")
+              and not a["inv"] and not a["fw_inv"], f"{a['status']} {a['inv']} {a['fw_inv'][:2]}")
+        info(f"HF-08 A: FPS1 result {a['last']['fp']!r}; window overrun {a['overruns'][0]['overrun_s']} s; digest "
+             f"{a['digest'][:16]}")
     # B: arming during the second 01:xx
     b = coupled(FALL + 300, [("fp", "2026-10-25 01:40:00", 20, 3000, None, 60)], FALL + 390)
     b2 = coupled(FALL + 300, [("fp", "2026-10-25 02:10:00", 20, 3000, None, 60)], FALL + 390)
@@ -926,16 +960,23 @@ def section_hf08() -> None:
     check("HF-08 B control: in the second 01:xx an arm for 02:10 (unambiguous) is ARMED for 02:10Z",
           b2["last"]["fp"].startswith("ARMED - 2026-10-25 02:10:00") and b2["arms"][0]["start_utc"] == FALL + 4200,
           b2["last"]["fp"])
-    finding("F-HF08-1", "FINDING-NEW (FPS1, publicly undocumented; the DGS1 mirror is under the SG-25 operational "
-            "restriction; availability / diagnostics, low): an input_datetime 01:xx on 2026-10-25 always means the BST copy "
-            "(fold=0 ASSUMPTION), so a 01:xx meant as GMT and armed beforehand runs an hour early, armed at 01:06 GMT for "
-            "01:40 it is refused 'scheduled start must be in the future', and 60 min from 01:30 BST reports 'ends by 01:30'")
-    check("finding-reproduces:F-HF08-1", b["last"]["fp"] == "REJECTED - scheduled start must be in the future"
-          and b["armed"]["fp"] == "off" and b["arms"][0]["start_utc"] == FALL - 1200
-          and a["last"]["fp"] == "STARTED OK - 3000W for 60 min (attempt 1; ends by 01:30)", f"{b['last']} {a['last']}")
-    check("finding-reproduces:F-HF08-1 (DGS1 has the same arm check: the second-copy 01:40 Dump arm is refused alike)",
-          bd["last"]["dump"] == "REJECTED - scheduled start must be in the future" and bd["armed"]["dump"] == "off",
-          str(bd["last"]))
+    if R9:
+        closed("F-HF08-1", "a second-copy 01:40 arm of 2026-10-25 is refused with the clock-change text (Free Power and Dump to Grid)")
+        check("closed-by-r9:F-HF08-1: armed at 01:06 GMT for 01:40 (the repeated hour) Free Power and Dump to Grid are both "
+              "REFUSED with the clock-change text, not the misleading 'scheduled start must be in the future'; nothing is armed",
+              b["last"]["fp"] == R9_REFUSAL and b["armed"]["fp"] == "off" and bd["last"]["dump"] == R9_REFUSAL
+              and bd["armed"]["dump"] == "off", f"{b['last']} {bd['last']}")
+    else:
+        finding("F-HF08-1", "FINDING-NEW (FPS1, publicly undocumented; the DGS1 mirror is under the SG-25 operational "
+                "restriction; availability / diagnostics, low): an input_datetime 01:xx on 2026-10-25 always means the BST copy "
+                "(fold=0 ASSUMPTION), so a 01:xx meant as GMT and armed beforehand runs an hour early, armed at 01:06 GMT for "
+                "01:40 it is refused 'scheduled start must be in the future', and 60 min from 01:30 BST reports 'ends by 01:30'")
+        check("finding-reproduces:F-HF08-1", b["last"]["fp"] == "REJECTED - scheduled start must be in the future"
+              and b["armed"]["fp"] == "off" and b["arms"][0]["start_utc"] == FALL - 1200
+              and a["last"]["fp"] == "STARTED OK - 3000W for 60 min (attempt 1; ends by 01:30)", f"{b['last']} {a['last']}")
+        check("finding-reproduces:F-HF08-1 (DGS1 has the same arm check: the second-copy 01:40 Dump arm is refused alike)",
+              bd["last"]["dump"] == "REJECTED - scheduled start must be in the future" and bd["armed"]["dump"] == "off",
+              str(bd["last"]))
     # C: a Free Power window spanning 01:00 UTC
     c = coupled(u0, [("fp", "2026-10-25 00:45:00", 120, 3000, None, 60)], FALL + 2700 + 120,
                 mid=FALL - 600)
@@ -950,15 +991,23 @@ def section_hf08() -> None:
     u2 = C.utc_of_local(2027, 3, 28, 0, 0)
     d = coupled(u2, [("fp", "2027-03-28 01:30:00", 30, 3000, None, 60)], SPRING + 1800 + 1800 + 120, mid=SPRING + 1900)
     std = first_status(d, "fp", "STARTING")
-    finding("F-HF08-2", "FINDING-NEW (FPS1, publicly undocumented; diagnostics / UX, low): the nonexistent 2027-03-28 01:30 "
-            "is ARMED with no warning and runs one hour from the typed wall time (02:30 BST under the fold=0 gap "
-            "ASSUMPTION; 00:30 GMT under fold=1); the ARMED text echoes '01:30', the STARTED text says 'ends by 03:00'")
-    check("finding-reproduces:F-HF08-2", d["last"]["fp"] == "STARTED OK - 3000W for 30 min (attempt 1; ends by 03:00)"
-          and d["arms"][0]["start_utc"] == SPRING + 1800 and std is not None and SPRING + 1800 <= std < SPRING + 1810,
-          f"{d['last']} {d['arms']} {r3(std)}")
-    vd = check_epoch_end("fp", std or 0, 30, d["mid"]["free_power_end_epoch"], first_status(d, "fp", "RESTORING"))
-    check("HF-08 D: INV-EPOCH-END holds for the shifted run (30 min of real time from 01:30Z) and the run completes",
-          not vd and d["status"]["fp"] == "COMPLETED" and not d["inv"], str(vd))
+    if R9:
+        closed("F-HF08-2", "the nonexistent 2027-03-28 01:30 is refused at arm time with the clock-change text")
+        check("closed-by-r9:F-HF08-2: the nonexistent 2027-03-28 01:30 (the hour the clocks skip) is REFUSED with the clock-change "
+              "text, nothing is armed or started (no run an hour from the typed time); HF-08 D's epoch property is carried by the "
+              "unambiguous windows HF-08 C and the spring DGS1 case of E / F",
+              d["last"]["fp"] == R9_REFUSAL and d["armed"]["fp"] == "off" and d["status"]["fp"] == "IDLE" and std is None
+              and not d["inv"] and not d["fw_inv"], f"{d['last']} {d['status']} {d['inv']}")
+    else:
+        finding("F-HF08-2", "FINDING-NEW (FPS1, publicly undocumented; diagnostics / UX, low): the nonexistent 2027-03-28 01:30 "
+                "is ARMED with no warning and runs one hour from the typed wall time (02:30 BST under the fold=0 gap "
+                "ASSUMPTION; 00:30 GMT under fold=1); the ARMED text echoes '01:30', the STARTED text says 'ends by 03:00'")
+        check("finding-reproduces:F-HF08-2", d["last"]["fp"] == "STARTED OK - 3000W for 30 min (attempt 1; ends by 03:00)"
+              and d["arms"][0]["start_utc"] == SPRING + 1800 and std is not None and SPRING + 1800 <= std < SPRING + 1810,
+              f"{d['last']} {d['arms']} {r3(std)}")
+        vd = check_epoch_end("fp", std or 0, 30, d["mid"]["free_power_end_epoch"], first_status(d, "fp", "RESTORING"))
+        check("HF-08 D: INV-EPOCH-END holds for the shifted run (30 min of real time from 01:30Z) and the run completes",
+              not vd and d["status"]["fp"] == "COMPLETED" and not d["inv"], str(vd))
     # E / F: DGS1 arm walk + firmware gate with a synthetic charge slot near the change
     cases = (("fall", u0, "2026-10-25 01:35:00", FALL - 1500, 60, BANK_FALL),
              ("spring", u2, "2027-03-28 00:45:00", SPRING - 900, 60, BANK_SPRING))
@@ -967,6 +1016,31 @@ def section_hf08() -> None:
                     mid=start_utc + 600)
         ste, end_r = first_status(e, "dump", "STARTING"), next((t for t, d_, x in e["fw"] if d_ == "dump_end"
                                                                 and x == "DURATION EXPIRED"), None)
+        if R9:
+            # R9 (PR 58): HA refuses first - the fall start is a repeated local time (clock-change text), the spring window is
+            # walked on the real instants and its real overlap with the 02:00-02:30 slot is seen (the DGS1 mirror is fixed); the
+            # firmware START gate is not changed (a separate flash), so F-HF08-3 stays on the firmware-gate evidence below
+            want = R9_REFUSAL if night == "fall" else DUMP_TOU_REFUSED_HA
+            real, walked = real_overlap_min(start_utc, mins, bank), walked_overlap_min(start_utc, mins, bank)
+            check(f"HF-08 {night} (R9, PR 58, replaces the admission): DGS1 refuses {start} + {mins} min at arm time "
+                  + ("(the repeated 01:35: clock-change text)" if night == "fall" else
+                     "(its arm walk now sees the real 30 min overlap with the 02:00-02:30 charge slot)")
+                  + ", nothing is armed or started and the firmware gate is never reached; no coupled or firmware invariant "
+                  "violation", e["last"]["dump"].startswith(want) and e["armed"]["dump"] == "off" and ste is None
+                  and e["mid"]["dump_start_tou_conflict_slot"] == 0 and not e["inv"] and not e["fw_inv"]
+                  and (night == "fall" or real == 30), f"{e['last']['dump']} real {real} walked {walked}")
+            g = fw_dump({"fall": FALL - 1560, "spring": SPRING - 960}[night], bank, start_utc, mins,
+                        run_to=start_utc + mins * 60 + 30)
+            viol = check_slot_clear(f"HF-08 {night} firmware gate alone", start_utc, mins, bank)
+            finding("F-HF08-3", "FINDING-KNOWN:SG-25: the firmware Dump START gate walks local minutes from the start's wall "
+                    "time; on both change nights it admits a Dump lease that really overlaps a grid-charge slot for 30 min "
+                    "(R9 fixed the DGS1 arm-walk mirror, so the coupled run is refused earlier; the evidence is the firmware gate "
+                    "alone); RT-03 shows the RTC-step variant (formerly F-RT03-1)")
+            check(f"finding-reproduces:F-HF08-3 ({night}, firmware gate alone: HA refuses earlier on a tree with R9)",
+                  invs(viol) == ["INV-DST-TOU-SLOT-CLEAR"] and real == 30 and walked == 0
+                  and g["start_status"].startswith("ACTIVE") and g["conflict"] == 0,
+                  f"real {real} walked {walked} {viol} {g['start_status'][:40]} {g['conflict']}")
+            continue
         ve = check_epoch_end("dump", ste or 0, mins, e["mid"]["dump_end_epoch"], end_r)
         check(f"HF-08 {night}: DGS1 arms {start} + {mins} min, fires at the fold=0 instant, the firmware gate admits it "
               f"(conflict 0) and the lease ends on its UTC epoch (INV-EPOCH-END)",
@@ -994,10 +1068,17 @@ def section_hf08() -> None:
     # spurious refusal on the fall night: the walked minutes 02:00-02:30 lie outside the real span of 01:35 BST + 60 min (they
     # happen that night, but only after the lease has ended at 01:35 GMT)
     s = coupled(u0, [("dump", "2026-10-25 01:35:00", 60, 3000, 20, 240)], u0 + 300, bank=BANK_SPRING)
-    check("HF-08 fall: with a 02:00-02:30 slot DGS1 refuses 01:35 BST + 60 min although the lease ends 01:35 GMT and never "
-          "reaches local 02:00 (fail-closed spurious refusal, part of the documented SG-25 behaviour)",
-          s["last"]["dump"].startswith(DUMP_TOU_REFUSED_HA) and real_overlap_min(FALL - 1500, 60, BANK_SPRING) == 0,
-          s["last"]["dump"])
+    if R9:
+        check("HF-08 fall (R9, PR 58, replaces the spurious refusal): with a 02:00-02:30 slot DGS1 refuses 01:35 BST + 60 min "
+              "because 01:35 is a repeated local time (clock-change text, the refusal no longer comes from a local-minute walk "
+              "that the lease never reaches)",
+              s["last"]["dump"].startswith(R9_REFUSAL) and real_overlap_min(FALL - 1500, 60, BANK_SPRING) == 0,
+              s["last"]["dump"])
+    else:
+        check("HF-08 fall: with a 02:00-02:30 slot DGS1 refuses 01:35 BST + 60 min although the lease ends 01:35 GMT and never "
+              "reaches local 02:00 (fail-closed spurious refusal, part of the documented SG-25 behaviour)",
+              s["last"]["dump"].startswith(DUMP_TOU_REFUSED_HA) and real_overlap_min(FALL - 1500, 60, BANK_SPRING) == 0,
+              s["last"]["dump"])
     # firmware gate alone (FirmwareWorld, London WallClock)
     for night, boot, start_at, bank in (("fall", FALL - 1560, FALL - 1500, BANK_FALL),
                                         ("spring", SPRING - 960, SPRING - 900, BANK_SPRING)):
@@ -1090,8 +1171,17 @@ def dgs1_sweep() -> None:
         out[name] = rows
         miss = [(r[0], r[1]) for r in rows if r[2] and r[3] > 0]
         info(f"DGS1 sweep {name}: ARMED with a real overlap (SG-25 miss) {miss}")
-        check(f"DGS1 sweep {name}: the arm walk misses at least one real overlap (SG-25 reproduces in the HA layer)",
-              bool(miss), str(rows[:4]))
+        if R9:
+            # R9 (PR 58): the arm walk is on the real instants and a start in the repeated or skipped hour is refused
+            kinds = [C.local_kind(y, mo, dd, int(r[0][:2]), int(r[0][3:])) for r in rows]
+            wrong = [(r[0], r[1], r[2], r[3], k) for r, k in zip(rows, kinds)
+                     if (k != "normal" and r[2]) or (k == "normal" and r[2] != (r[3] == 0))]
+            check(f"DGS1 sweep {name} (R9, PR 58, replaces the SG-25 miss): the arm walk misses no real overlap in the HA layer: a "
+                  "start in the repeated or skipped hour is refused and every other start is ARMED exactly when its window has no "
+                  "real overlap with a charge slot", not miss and not wrong, f"{wrong[:4]} {rows[:4]}")
+        else:
+            check(f"DGS1 sweep {name}: the arm walk misses at least one real overlap (SG-25 reproduces in the HA layer)",
+                  bool(miss), str(rows[:4]))
     info(f"DGS1 sweep runtime {time.perf_counter() - t0:.1f} s")
 
 
@@ -1551,8 +1641,11 @@ def section_corpus() -> None:
 def section_register() -> None:
     print("\n[6] finding register (after the independent review)")
     check("every printed FINDING is a registered finding and every registered finding was reproduced; no reclassified id "
-          "printed a FINDING line", sorted(FINDINGS) == sorted(FINDINGS_META) and not set(FINDINGS) & set(RECLASSIFIED),
-          f"{sorted(FINDINGS)}")
+          "printed a FINDING line" + (" (on a tree with R9: every registered finding but the closed ones, each closed one pinned "
+                                      "by its closed-by-r9 check)" if R9 else ""),
+          sorted(set(FINDINGS) | set(CLOSED_SEEN)) == sorted(FINDINGS_META) and not set(FINDINGS) & set(RECLASSIFIED)
+          and sorted(CLOSED_SEEN) == (sorted(R9_CLOSED) if R9 else []) and not set(FINDINGS) & set(CLOSED_SEEN),
+          f"{sorted(FINDINGS)} {CLOSED_SEEN}")
     for fid, why in sorted(RECLASSIFIED.items()):
         info(f"reclassified after review: {fid} -> {why}")
 

@@ -1339,6 +1339,95 @@ def section_bytecode_guard() -> None:
           and all(caught.values()), str(caught))
 
 
+def section_generations() -> None:
+    print("[11c] V0.2 source generations (_lab_trace): the generation table, generation_of, the drift rule per generation, "
+          "anchor alternatives and the overlay redirect")
+    import re
+    import tempfile
+    base = T.GENERATIONS[T.GENERATION_BASE]["sources"]
+    r9 = T.GENERATIONS[T.GENERATION_R9S3]["sources"]
+    hex64 = re.compile(r"^[0-9a-f]{64}$")
+    check("the generation table: base and r9s3 each pin exactly the four GENERATION_FILES by lowercase sha256, every one is a "
+          "behavioural file of the tier table, and no file has the same digest in both generations",
+          sorted(base) == sorted(r9) == list(T.GENERATION_FILES) and len(T.GENERATION_FILES) == 4
+          and all(hex64.match(v) for v in [*base.values(), *r9.values()])
+          and all(T.source_tier(p_) == "behavioural" for p_ in T.GENERATION_FILES)
+          and all(base[p_] != r9[p_] for p_ in T.GENERATION_FILES))
+    check("this tree is exactly one recorded source generation (generation() is 'base' or 'r9s3', never None)",
+          T.generation() in T.GENERATIONS, str(T.generation()))
+    mixed = dict(r9)
+    mixed[T._GEN_DGS1] = base[T._GEN_DGS1]
+    missing = {k: v for k, v in base.items() if k != T._GEN_FPS1}
+    edited = dict(base, **{T._GEN_FPS1: "0" * 64})
+    check("generation_of: the four base digests are 'base' and the four r9s3 digests 'r9s3'; a mix of the two, a missing file "
+          "and an edited file are no generation (None)",
+          T.generation_of(base.get) == "base" and T.generation_of(r9.get) == "r9s3" and T.generation_of(mixed.get) is None
+          and T.generation_of(missing.get) is None and T.generation_of(edited.get) is None)
+    smr1 = "home-assistant/packages/ecco_schedule_manual_restore.yaml"
+    pinned = {**base, smr1: "a" * 64}
+    on_r9 = T.drift_report(pinned, {}, sha_of={**r9, smr1: "a" * 64}.get)
+    on_base = T.drift_report(pinned, {}, sha_of={**base, smr1: "a" * 64}.get)
+    on_mix = T.drift_report(pinned, {}, sha_of={**mixed, smr1: "a" * 64}.get)
+    on_edit = T.drift_report(pinned, {}, sha_of={**edited, smr1: "a" * 64}.get)
+    on_smr1 = T.drift_report(pinned, {}, sha_of={**r9, smr1: "b" * 64}.get)
+    check("the tiered drift rule per generation: a tree of exactly one recorded generation has no drift item; a mix of the two "
+          "generations, an edited file and an edited behavioural file outside the four (on a tree of a recorded generation) "
+          "each fail naming the changed file as a behavioural source",
+          not on_base.items and not on_r9.items
+          and sorted(i.path for i in on_mix.items) == sorted(p_ for p_ in T.GENERATION_FILES if p_ != T._GEN_DGS1)
+          and [i.path for i in on_edit.items] == [T._GEN_FPS1] and [i.path for i in on_smr1.items] == [smr1]
+          and all(m.startswith("behavioural source changed: ") for r in (on_mix, on_edit, on_smr1) for m, _d in r.failures()),
+          f"{[i.path for i in on_mix.items]} {[i.path for i in on_edit.items]} {[i.path for i in on_smr1.items]}")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        key = ("a.txt", "OLD text")
+        T.ANCHOR_ALTERNATIVES[key] = ("NEW text",)
+        try:
+            def n(content: str, name: str = "a.txt") -> int:
+                (root / name).write_text(content, encoding="utf-8")
+                return T.anchor_count(name, "OLD text", root)[0]
+            counts = (n("x OLD text y\n"), n("x NEW text y\n"), n("OLD text and NEW text\n"), n("neither\n"),
+                      n("OLD text, OLD text\n"), n("NEW text only\n", "c.txt"))
+            (root / "a.txt").write_text("a\nb NEW text\n", encoding="utf-8")
+            line_ok = T.anchor_line("a.txt", "OLD text", root) == 2
+            (root / "a.txt").write_text("OLD text and NEW text\n", encoding="utf-8")
+            both_refused = raises(T.AnchorError, T.anchor_line, "a.txt", "OLD text", root)[0]
+        finally:
+            del T.ANCHOR_ALTERNATIVES[key]
+        check("anchor alternatives: the base text and its registered alternative each count one, both together two and neither "
+              "zero (an anchor that wants exactly once fails on both and on neither), a repeated text counts twice, the "
+              "alternative applies to its registered (path, text) pair only, anchor_line finds the alternative's line and "
+              "refuses both",
+              counts == (1, 1, 2, 0, 2, 0) and line_ok and both_refused, str(counts))
+        check("every registered anchor alternative names a behavioural-tier or anchor-read path of the tier table, an "
+              "alternative that is not its base text, and no alternative contains or is contained in its base text",
+              all(T.source_tier(p_) in ("behavioural", "non-behavioural") and alts and all(
+                  a and a != txt and a not in txt and txt not in a for a in alts)
+                  for (p_, txt), alts in T.ANCHOR_ALTERNATIVES.items()))
+        corpus = root / "corpus"
+        (corpus / "r9s3").mkdir(parents=True)
+        for rel in ("X.json", "Y.json", "r9s3/X.json"):
+            (corpus / rel).write_text("{}", encoding="utf-8")
+        saved = T.generation
+        try:
+            T.generation = lambda root=T.ROOT: "r9s3"
+            on_r9_x, on_r9_y = T.doc_file(corpus / "X.json"), T.doc_file(corpus / "Y.json")
+            outside = T.doc_file(root / "X.json")
+            T.generation = lambda root=T.ROOT: "base"
+            on_base_x = T.doc_file(corpus / "X.json")
+            T.generation = lambda root=T.ROOT: None
+            on_none_x = T.doc_file(corpus / "X.json")
+        finally:
+            T.generation = saved
+        check("the overlay redirect (doc_file): on a tree of a later generation a document with an overlay is read from "
+              "corpus/<generation>/, one without stays the base file, a path outside a corpus directory is never redirected, "
+              "and a base tree or a tree of no generation reads the base file; corpus_doc_files lists the base documents "
+              "first, then the overlays",
+              on_r9_x == corpus / "r9s3" / "X.json" and on_r9_y == corpus / "Y.json" and outside == root / "X.json"
+              and on_base_x == corpus / "X.json" and on_none_x == corpus / "X.json"
+              and [f.relative_to(corpus).as_posix() for f in T.corpus_doc_files(corpus)] == ["X.json", "Y.json", "r9s3/X.json"])
+
+
 # =============================================================================================================================
 # run
 # =============================================================================================================================
@@ -1362,6 +1451,7 @@ try:
 finally:
     T.unregister_tier(TIER)
 check("the in-test tier is unregistered again (no process-global leftover)", not T.registered(TIER)["factory"])
+section_generations()
 section_summary_helpers()
 section_bytecode_guard()
 check("S.LOCAL is the module's original fixed UTC+1 zone at the end", S.LOCAL.utcoffset(None) == timedelta(hours=1))

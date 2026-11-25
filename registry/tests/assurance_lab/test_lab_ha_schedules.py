@@ -1490,6 +1490,7 @@ def model_premise(dom: str, outcome: str) -> dict:
     w.set(f"sensor.{S.P}dump_to_grid_recovery_state", "NONE")
     w.set(f"sensor.{S.P}free_power_recovery_state", "NONE")
     w.set(S.E_LIMIT, "8000")
+    H.set_plan_standins(w, [H.package_text(n) for n in ("dgs1", "fps1", "smr1")])    # V0.2: Stage 3's plan gate (synthetic)
     for dm in H.DOMS:
         w.set(H.ARMED[dm], "off")
         w.set(H.LAST_RESULT[dm], "")

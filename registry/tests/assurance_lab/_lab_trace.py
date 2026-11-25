@@ -55,8 +55,19 @@ PUBLIC API
                                               scenario's priority) and finding_priority (PRIORITIES or null: the
                                               highest root-cause priority among the counted owners of the catalogue
                                               findings that list the document), both or neither; notes (str)
-  load_doc(path, *, tiers=None) -> dict       strict JSON (duplicate keys, NaN / Infinity raise) + validate_doc
+  load_doc(path, *, tiers=None, overlay=True) -> dict   strict JSON (duplicate keys, NaN / Infinity raise) + validate_doc; on a tree of a
+                                              non-base source generation (V0.2, below) it reads that generation's overlay
+                                              document corpus/<generation>/<name> when one exists (doc_file(path) names the file)
   load_corpus(directory, *, tiers=None) -> [doc, ...]   every *.json in name order; the file stem must equal doc['id']
+  V0.2 SOURCE GENERATIONS. The lab was recorded on public main a7235433 (generation 'base'). The merge sequence of 25 Nov
+      2026 changes exactly four behavioural files (R9, PR 58: both schedule packages and the two HA simulators; Stage 3,
+      PR 59: the Dump to Grid package again): generation 'r9s3'. GENERATIONS {id: {label, sources {path: sha256}}} lists each
+      known generation's digests of GENERATION_FILES; generation(root=ROOT) -> id | None (None: the four files match no known
+      generation, a mixed or edited tree: the tiered drift rule then fails, naming the file). A tree of a known generation
+      passes the baseline drift rule (drift_report judges it against that generation's digests), loads its overlay corpus
+      documents (load_doc) and judges its anchors by ANCHOR_ALTERNATIVES. Nothing here changes what a base tree does.
+  ANCHOR_ALTERNATIVES {(path, base text): (alternative text, ...)}: an anchor the merge sequence rewrote; anchor_count counts
+      the base text plus its alternatives (the sum must still be exactly 1 where a check wants exactly once)
   dumps_doc(doc) -> str                       validated, sorted-key, indent-2, ASCII JSON + LF (the corpus file form)
   replay(doc, *, root=ROOT, tiers=None) -> ReplayResult(ok, failed_expectations, digest, drift, log, drifted_paths,
       digest_mismatch, anchor_problems, observations)
@@ -351,13 +362,24 @@ def source_digest(path: str, root=ROOT) -> str:
     return hashlib.sha256(_file(path, root).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
+def anchor_texts(path: str, text: str) -> tuple[str, ...]:
+    """The base anchor text and its registered alternatives (ANCHOR_ALTERNATIVES: the text a later source generation
+    rewrote it to). An anchor with no alternative is just (text,)."""
+    return (text,) + tuple(ANCHOR_ALTERNATIVES.get((path, text), ()))
+
+
 def anchor_count(path: str, text: str, root=ROOT) -> tuple[int, int | None]:
-    """(occurrences of `text` in the file, 1-based line of the first occurrence or None)."""
+    """(occurrences of `text` in the file, 1-based line of the first occurrence or None). An anchor that has registered
+    alternatives (ANCHOR_ALTERNATIVES) counts the base text plus every alternative, so a check that wants exactly one finds
+    exactly one in a tree that has the old text and in a tree that has the rewritten one, and fails in a tree that has
+    both or neither."""
     if not isinstance(text, str) or not text:
         raise LabTraceError("anchor text must be a non-empty str")
     src = read_source_text(path, root)
-    n = src.count(text)
-    return n, (src[:src.find(text)].count("\n") + 1 if n else None)
+    texts = anchor_texts(path, text)
+    n = sum(src.count(t) for t in texts)
+    first = min((src.find(t) for t in texts if t in src), default=-1)
+    return n, (src[:first].count("\n") + 1 if n else None)
 
 
 def anchor_line(path: str, text: str, root=ROOT) -> int:
@@ -738,8 +760,33 @@ def _no_constant(name):
     raise CorpusSchemaError(f"non-finite JSON constant {name}")
 
 
-def load_doc(path, *, tiers=None) -> dict:
-    text = Path(path).read_bytes().decode("utf-8")
+def doc_file(path) -> Path:
+    """The file load_doc reads for the corpus document at `path`: on a tree of a known non-base source generation, that
+    generation's overlay document (corpus/<generation>/<same name>) when there is one, else `path` itself. A document outside
+    a corpus directory, and every document on a base tree, is read from `path`."""
+    p = Path(path)
+    gen = generation()
+    if gen in (None, GENERATION_BASE) or p.parent.name != "corpus":
+        return p
+    ov = p.parent / gen / p.name
+    return ov if ov.is_file() else p
+
+
+def corpus_doc_files(directory) -> list[Path]:
+    """Every corpus document file under `directory`: the base documents (directory/*.json) and each known later generation's
+    overlay documents (directory/<generation>/*.json), base first, each group in name order. The lab pins all of them."""
+    d = Path(directory)
+    out = sorted(d.glob("*.json"))
+    for gid in GENERATIONS:
+        if gid != GENERATION_BASE:
+            out += sorted((d / gid).glob("*.json"))
+    return out
+
+
+def load_doc(path, *, tiers=None, overlay: bool = True) -> dict:
+    """Strict load + validate_doc. overlay=True (the default) reads the active generation's overlay document in place of a base
+    one (doc_file); overlay=False reads exactly `path` (the re-record tool and the schema checks of the overlay files)."""
+    text = (doc_file(path) if overlay else Path(path)).read_bytes().decode("utf-8")
     doc = json.loads(text, object_pairs_hook=_no_dupes, parse_constant=_no_constant)
     return validate_doc(doc, tiers=tiers)
 
@@ -878,6 +925,90 @@ def record(draft, *, root=ROOT, tiers=None, tier_pins: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
+# V0.2: source generations. The lab is recorded against one tree (public main a7235433, generation 'base'). The merge sequence
+# of 25 Nov 2026 puts R9 (PR 58) and the Stage 3 plan helpers (PR 59) on main before the lab: they change four behavioural
+# files, and ONLY those four (the tier table below lists 27). A tree whose four files are exactly one known generation's is
+# judged against that generation: the baseline drift rule accepts it, a document of the generation's overlay corpus replaces
+# the base one (load_doc), and rewritten anchors are counted through ANCHOR_ALTERNATIVES. Any other combination of the four
+# files (an edit, a mix, a third state) matches no generation and fails the tiered drift rule exactly as before: a changed
+# behavioural file still needs the re-record procedure, there is now just more than one recorded state it may be in.
+# ---------------------------------------------------------------------------------------------------------------------------
+GENERATION_BASE = "base"
+GENERATION_R9S3 = "r9s3"
+_GEN_FPS1 = "home-assistant/packages/ecco_free_power_schedule.yaml"
+_GEN_DGS1 = "home-assistant/packages/ecco_dump_to_grid_schedule.yaml"
+_GEN_DUMP_SIM = "home-assistant/tests/_ha_dump_sim.py"
+_GEN_SCRIPT_SIM = "home-assistant/tests/_ha_script_sim.py"
+GENERATION_FILES = tuple(sorted((_GEN_FPS1, _GEN_DGS1, _GEN_DUMP_SIM, _GEN_SCRIPT_SIM)))
+GENERATIONS: dict[str, dict] = {
+    GENERATION_BASE: {
+        "label": "public main a7235433 (the recorded baseline): R9 and the Stage 3 plan helpers are not merged",
+        "sources": {
+            _GEN_DGS1: "95c7ed6eeec8ed51b7b43fa0b34f5d3499c3074685af4d7734441be0e4447833",
+            _GEN_FPS1: "b8734bd9e59333b47cafd12d36fef0e75b529a87562e3a81a21f5afcbcf7c949",
+            _GEN_DUMP_SIM: "c1568207022fdbea452fd2bf231a3eb489f722f051fe7726acf746174f8fe6cc",
+            _GEN_SCRIPT_SIM: "f7b4c9beac7bc5de03668fae27f16e36e96abab2e5538a6d03622184b249e49b",
+        }},
+    GENERATION_R9S3: {
+        "label": "R9 (PR 58: no start of a missed run after a Home Assistant restart, clock-change arming, Charge Battery "
+                 "result integrity) and the Stage 3 plan helpers (PR 59: the scheduled Dump to Grid start reads the plan "
+                 "hold and reserve) merged",
+        "sources": {
+            _GEN_DGS1: "1af5c0a51f540a7de4dcaa9effeb1cff95b789bc1219e06a36699309c4bdc2a6",
+            _GEN_FPS1: "e0917a5d43bdf68ab8a90aadc0bae0394d4c59f8181a5ad61858a4e002438249",
+            _GEN_DUMP_SIM: "c62fbb1e553e3828932bef28d3cc54d6ab335b510334c9f5fc104e8c23a0c619",
+            _GEN_SCRIPT_SIM: "bd11183b53d41fbe42836f78aacc5e2b7454bb248e826fbbfaeeb8a444e2f4df",
+        }},
+}
+# An anchor the merge sequence rewrote: {(path, base text): (the text of the other generation, ...)}. anchor_count counts the
+# base text plus its alternatives. Each alternative names the SAME evidence in the rewritten file (the code the base text
+# cited, where it now lives); an alternative never makes an anchor weaker: the count must still be exactly 1.
+_R9_RECOVERY = ("# R9: give the capture (it waits for a trustworthy clock) a bounded time before judging; unknown after that "
+                "fails closed.")
+ANCHOR_ALTERNATIVES: dict[tuple[str, str], tuple[str, ...]] = {
+    # the startup recovery of both schedule packages: the base text is the notice that the recovery IS STARTING the rest of the
+    # window; R9 (PR 58) removed that start, and its one comment line inside the same automation (once per package) marks the
+    # place where the recovery now judges missed or not
+    (_GEN_FPS1, "Home Assistant restarted during the scheduled Free Power window. ECCO is starting it now"): (_R9_RECOVERY,),
+    (_GEN_DGS1, "Home Assistant restarted during the scheduled Dump to Grid window. ECCO is starting it now"): (_R9_RECOVERY,),
+    # the DGS1 arm-time slot walk: the base text is the first local-minute read of the continuous walk; R9 (PR 58) walks the
+    # run on the real instants, one local time of day per minute k (timestamp_local), still inside the same arm validation
+    (_GEN_DGS1, "{% set m0 = (st[11:13] | int) * 60 + (st[14:16] | int) %}"):
+        ("{% set sk = ((start_ts | float(0)) + k * 60) | timestamp_local %}",),
+    # the HA simulator's reader of a naive local string: R9 added the PEP 495 fold the reading uses
+    (_GEN_SCRIPT_SIM, "replace(tzinfo=LOCAL).timestamp()"): ("replace(tzinfo=LOCAL, fold=FOLD).timestamp()",),
+}
+_GEN_CACHE: dict[str, str | None] = {}
+
+
+def generation_of(sha_of) -> str | None:
+    """The known source generation whose digests of GENERATION_FILES all equal sha_of(path), else None (sha_of: path ->
+    LF-normalised sha256 or None). The base generation is tried first; the sets of two generations never overlap."""
+    for gid, g in GENERATIONS.items():
+        if all(sha_of(p) == sha for p, sha in g["sources"].items()):
+            return gid
+    return None
+
+
+def generation(root=ROOT) -> str | None:
+    """The source generation of the tree at `root` (cached per root): GENERATION_BASE, GENERATION_R9S3 or None."""
+    key = str(Path(root).resolve())
+    if key not in _GEN_CACHE:
+        def sha(p):
+            f = Path(root) / p
+            return source_digest(p, root) if f.is_file() else None
+        _GEN_CACHE[key] = generation_of(sha)
+    return _GEN_CACHE[key]
+
+
+def generation_note(root=ROOT) -> str:
+    """One line for a suite's output header: which recorded source generation this tree is."""
+    g = generation(root)
+    return (f"source generation: {g} ({GENERATIONS[g]['label'][:60]}...)" if g else
+            "source generation: NONE (the four generation files match no recorded generation: the tiered drift rule fails)")
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
 # B1 (V0.1): source tiers and the tiered drift rule - the single source of truth used by test_lab_replay_corpus [2] / [5],
 # gen_catalogue (build, --check, baseline.tiers) and run_lab.baseline_status
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -903,7 +1034,11 @@ DRIFT_RULE = ("a changed lab file is a FAIL ('re-generate the catalogue'); a cha
               "ECCO_LAB_STRICT_BASELINE=1 (the environment value '1' exactly) keeps the whole-baseline rule (any pinned "
               "difference FAILS, under the check-name prefix 'gen_catalogue drift rule (STRICT)'). Every corpus document "
               "is judged against its own source_digests plus its tier's TIER_SOURCES (the tier pins, recorded in "
-              "baseline.sources)")
+              "baseline.sources). V0.2: the four behavioural files that R9 and the Stage 3 plan helpers change (both schedule "
+              "packages and the two Home Assistant simulators) are recorded in two "
+              "source generations (_lab_trace.GENERATIONS: base, r9s3); a tree whose four files are exactly one generation's "
+              "passes this rule and replays that generation's overlay documents (corpus/<generation>/), and any other "
+              "combination of the four files is a changed behavioural file and fails as above")
 TIER_METHOD = ("derived from an audit-hook trace, not by hand, and repeatable with registry/tests/assurance_lab/"
                "trace_inputs.py (a command-line tool, standard library only, not a suite; it exits 1 on any difference "
                "from this table): a sitecustomize module on PYTHONPATH (inherited by the suites' own child processes) "
@@ -1328,7 +1463,16 @@ class DriftReport:
 
 def drift_report(pinned: dict, docs: dict, *, sha_of, strict: bool = False) -> DriftReport:
     """The tiered drift rule: every baseline.sources path (`pinned`: {path: recorded sha256}) whose current digest
-    (sha_of(path); None = missing) differs, with its tier and the corpus documents ({id: doc}) that replay it."""
+    (sha_of(path); None = missing) differs, with its tier and the corpus documents ({id: doc}) that replay it.
+    V0.2: when the four GENERATION_FILES of the tree are exactly those of a known later generation (generation_of), they
+    are judged against that generation's recorded digests, not the base ones; a tree that matches no generation is judged
+    against `pinned` as before (a changed behavioural file fails, naming it)."""
+    gid = generation_of(sha_of)
+    pinned = dict(pinned)
+    if gid not in (None, GENERATION_BASE):
+        for path, sha in GENERATIONS[gid]["sources"].items():
+            if path in pinned:
+                pinned[path] = sha
     items = []
     for path, rec in sorted(pinned.items()):
         now = sha_of(path)

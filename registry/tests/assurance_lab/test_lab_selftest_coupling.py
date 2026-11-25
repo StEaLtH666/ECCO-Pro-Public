@@ -201,10 +201,13 @@ def section_mapping(cw) -> None:
     for h, s in cw.dongle.view.items():
         srcs.setdefault(s["src"], []).append(h)
     print(f"  info  view sources: {', '.join(f'{k} {len(v)}' for k, v in sorted(srcs.items()))}")
+    # V0.2: a tree with R9 reads the dongle's 'NTP Time' text (its start-time capture), a fourth polled template sensor (60 s)
     check("the view: 7 template binary sensors through their REAL lambdas, 3 polled template sensors (two attempt "
-          "counters 30 s, the TOU power ceiling 60 s), 12 TOU slot sensors (MODEL), the rest from published entity states",
+          "counters 30 s, the TOU power ceiling 60 s), 12 TOU slot sensors (MODEL), the rest from published entity states"
+          + (" (a tree with R9: plus the 'NTP Time' text, a fourth polled sensor, 60 s)" if H.R9 else ""),
           len(srcs.get("lambda", [])) == 7 and sorted(cw.dongle.view[h]["period_ms"] for h in srcs.get("polled", []))
-          == [30000, 30000, 60000] and len(srcs.get("tou", [])) == 12)
+          == ([30000, 30000, 60000] if not H.R9 else [30000, 30000, 60000, 60000]) and len(srcs.get("tou", [])) == 12
+          and (not H.R9 or H.E_NTP_TIME in srcs.get("polled", [])))
     viewed = [i for i in ids if i.split(".")[0] != "button" and i not in tou] + [H.E_CEILING]
     check("every HA-read dongle id except the TOU slot sensors has a state in the HA state machine once the world is "
           "built; the TOU slot sensors are not published before the firmware's first configuration Block B response",
@@ -410,6 +413,38 @@ def manual_fp_start(cw, at, minutes=30) -> float:
     return at + 3
 
 
+def section_plan_gate() -> None:
+    """V0.2, a tree with the Stage 3 plan gate (PR 59) only: the two synthetic plan sensors are what the real scheduled Dump to
+    Grid start reads, and without them (or with them not clear) it fails closed with the Stage 3 reason."""
+    print("[3b] Stage 3 plan gate: the synthetic plan sensors stand for the plan package's two sensors and the real DGS1 start "
+          "reads them (held / unreadable / unknown reserve each BLOCK the start, nothing started)")
+    dgs1 = H.package_text("dgs1")
+    check("the loaded DGS1 reads exactly the two plan sensors the stand-ins stand for, each through states('<id>') (the plan "
+          "package itself is read by no lab code)", all(f"states('{e}')" in dgs1 for e in (H.E_PLAN_HOLD, H.E_PLAN_RESERVE)),
+          str([e for e in (H.E_PLAN_HOLD, H.E_PLAN_RESERVE) if f"states('{e}')" not in dgs1]))
+    cw = H.CoupledWorld(U0, bus=IDLE)
+    try:
+        check("a world whose DGS1 reads the plan gate holds the two sensors at 'clear' and at the Stop SOC helper's minimum "
+              f"({H.PLAN_RESERVE_PCT} %), and never loads the plan package itself",
+              cw.plan_gate and cw.ha_state(H.E_PLAN_HOLD) == "clear" and cw.ha_state(H.E_PLAN_RESERVE) == str(H.PLAN_RESERVE_PCT)
+              and not any(k.startswith("input_number.ecco_plan_") for k in cw.w.states))
+    finally:
+        cw.close()
+    for hold, reserve, reason in (("held", None, "OVERRIDE_ACTIVE"), ("unknown", None, "OVERRIDE_UNREADABLE"),
+                                  (None, "unknown", "RESERVE_UNKNOWN")):
+        cw = H.CoupledWorld(U0, bus=IDLE)
+        try:
+            cw.plan_env(at_utc=U0 + 1, hold=hold, reserve=reserve)
+            cw.arm_schedule("dump", "2026-10-21 12:00:00", 30, 3000, stop_soc=20, at_utc=U0 + 60)
+            cw.run_until(ST + 60)
+            last = cw.last_result("dump")
+            check(f"plan stand-in hold={hold!r} reserve={reserve!r}: the real scheduled Dump start is BLOCKED (reason {reason}), "
+                  "starts nothing and presses nothing", last.startswith("BLOCKED") and f"(reason {reason})" in last
+                  and cw.ha_visible()["dump_active"] == "off" and not events(cw, "dongle.cmd", svc="button.press"), last)
+        finally:
+            cw.close()
+
+
 def section_projection() -> None:
     print("[4] projection: the START transaction's busy window; same-script press dropped; any other mutation fails loud")
     cw = H.CoupledWorld(U0, bus=IDLE)
@@ -529,10 +564,15 @@ def section_lifecycle() -> None:
         cw.restart_ha(U0 + 420, 30, rollback_to_utc=U0 + 350)
         cw.run_until(U0 + 470)
         rb = events(cw, "ha.rollback")[0]["data"]["changes"]
+        # V0.2: a tree with R9 initialises every date-and-time helper at world start (Home Assistant's 1970 default; a package
+        # reading states.input_datetime.<helper> needs the entity), so the start helper EXISTED at the rollback instant and is
+        # rolled back to that default, not removed
         check("crash restart: every package helper rolls back to its value at rollback_to_utc (armed on -> off, the start "
-              "helper that did not exist then removed -> unknown)", rb.get(H.ARMED["fp"]) == ["on", "off"]
-              and rb.get(H.START_HELPER["fp"], [None, 1])[1] is None and cw.ha_state(H.ARMED["fp"]) == "off"
-              and cw.ha_state(H.START_HELPER["fp"]) == "unknown", str(rb))
+              "helper that did not exist then removed -> unknown)" + (" (a tree with R9: the start helper existed, at its 1970 "
+              "default, and is rolled back to it)" if H.R9 else ""), rb.get(H.ARMED["fp"]) == ["on", "off"]
+              and rb.get(H.START_HELPER["fp"], [None, 1])[1] == (None if not H.R9 else H.DATETIME_DEFAULT)
+              and cw.ha_state(H.ARMED["fp"]) == "off"
+              and cw.ha_state(H.START_HELPER["fp"]) == ("unknown" if not H.R9 else H.DATETIME_DEFAULT), str(rb))
     finally:
         cw.close()
     cw = H.CoupledWorld(U0, bus=IDLE)
@@ -612,6 +652,7 @@ def section_polled() -> None:
     print("[13] polled template sensors: no state before a boot's first sample (world start, reboot reconnect), the "
           "last sample after an API outage, warm-up samples; FPS1 / DGS1 read 'unknown' through | float(-1)")
     pol = sorted((S.E_ATTEMPTS, D.D_ATTEMPTS, H.E_CEILING))
+    pol_view = sorted(pol + ([H.E_NTP_TIME] if H.R9 else []))     # V0.2: a tree with R9 also reads the 'NTP Time' text (60 s)
     tpl = no_answer_templates()
 
     def states(cw) -> list:
@@ -622,8 +663,9 @@ def section_polled() -> None:
                 for d, t in tpl.items()}
     cw = H.CoupledWorld(U0, bus=IDLE)
     try:
-        check("the three polled sensors are the attempt counters (30 s) and the TOU power ceiling (60 s)",
-              sorted(h for h, s in cw.dongle.view.items() if s["src"] == "polled") == pol)
+        check("the three polled sensors are the attempt counters (30 s) and the TOU power ceiling (60 s)"
+              + (" (a tree with R9: plus the 'NTP Time' text, 60 s)" if H.R9 else ""),
+              sorted(h for h, s in cw.dongle.view.items() if s["src"] == "polled") == pol_view)
         start = (states(cw), cw.ha_state(H.E_LIMIT))
         cw.run_until(U0 + 27.9)
         pre_sample = states(cw)
@@ -1164,6 +1206,8 @@ finally:
 section_fp()
 section_fp_measured_bus()
 section_dump()
+if H.PLAN_GATE:
+    section_plan_gate()
 section_projection()
 section_local()
 section_time_trigger()

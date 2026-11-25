@@ -113,7 +113,7 @@
     "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
     "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
     "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
-    "registry/tests/assurance_lab/_lab_ha.py": "c23ca251a1cc88102f3613e892e9bdd2d1aa2014e6054555a05d8e3a0bc5db82"
+    "registry/tests/assurance_lab/_lab_ha.py": "e3a7612a4f43fecaa6277052e546a5f98a61164dc6a9d98d1dfc4015e38ce7e6"
   },
   "synthetic": true,
   "tier": "coupled",

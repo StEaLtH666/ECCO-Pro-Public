@@ -4,6 +4,15 @@ Status: **offline, test-only.** Every result in this document comes from simulat
 Home Assistant source. Nothing was run on a dongle, an inverter or a Home Assistant instance. The lab changes no production
 behaviour.
 
+**V0.2 (source generations).** The lab was recorded on public main `a7235433`. R9 (the clock-change arming fixes, the Charge
+Battery result-integrity fix and "no automatic start of a missed scheduled run after a Home Assistant restart") and the Stage 3
+plan helpers change four of the files the lab pins as behavioural (the two schedule packages and the two Home Assistant
+simulators), and the merge sequence puts them on `main` before the lab. The lab therefore knows two **source generations**,
+`base` (its own recording) and `r9s3` (R9 and Stage 3 merged), and passes on a tree of either; a tree that is neither still fails
+the tiered drift rule exactly as before. Section 2.10 states what the lab does on each generation, which findings R9 closes,
+and how to add a generation. Nothing in V0.2 changes a production file or the result of any check on a base tree (every
+corpus document re-recorded on the base tree kept its trace digest).
+
 This document describes version **V0.1** of the lab. The file keeps its V0 name. V0.1 applies the corrections that the
 independent audit of 2026-10-19 asked for (items B1 to B7 of its implementation brief). It changes no production file:
 only the lab's own files, this document and `docs/dev/assurance-lab-v0/LAB_SUMMARY.txt`. Section 14 reconciles every V0
@@ -810,6 +819,99 @@ The other 34 are scenario-local (for example `INV-16` owed Stop SOC supervision,
 catalogue gives each one's meaning and checker. No invariant checks SG-02 containment itself (HL-13). Some core checkers are
 weaker or stricter than their one-line meaning above in specific situations; section 5.2 lists each such limitation with
 the suites that work around it.
+
+### 2.10 Source generations (V0.2)
+
+**What a generation is.** `_lab_trace.GENERATIONS` records, for each known generation, the LF-normalised sha256 of the four
+behavioural files that differ between them (`GENERATION_FILES`: `ecco_free_power_schedule.yaml`,
+`ecco_dump_to_grid_schedule.yaml`, `_ha_dump_sim.py`, `_ha_script_sim.py`). `generation()` is the generation whose four digests
+a tree has all of, or `None` for any other combination (an edited file, one file of each, a missing file). The other 23
+behavioural files are the same in both generations. A generation is a recorded state of those four files, never a judgement
+about them: the lab does not decide whether R9 is right, it records what the real packages do with the real firmware.
+
+**What a tree of a later generation changes in the lab** (each item is inert on a base tree):
+
+- the tiered drift rule (`_lab_trace.drift_report`) judges the four files against that generation's digests (a tree of no
+  generation is judged against the base digests, so an edited behavioural file still fails and names itself);
+- `load_doc` reads the generation's **overlay document** `corpus/<generation>/<id>.json` in place of the base one. An overlay is
+  the same scenario (title, tier, seed, start, world, actions, every metadata field and the same anchors) recorded against
+  that generation: only the expectations, the notes, the digests and the anchor lines may differ, and
+  `test_lab_replay_corpus` [1] checks that on every tree, pins the generation's four digests in the overlay, and fails an
+  overlay that is not a canonical valid document of an existing base document. `r9s3` has 30 overlays (every coupled document),
+  recorded with `rerecord_corpus.py --generation r9s3 --from-base`; nine carry different expectations (below), twenty-one
+  differ from their base document in digests and lines only;
+- an anchor the generation rewrote is counted through `_lab_trace.ANCHOR_ALTERNATIVES`: the base text plus its registered
+  alternatives must still occur exactly once in total (both texts, or neither, fail), so a check that wants exactly once
+  keeps wanting it. Four anchors are registered: the two restart-recovery notices (R9 removed the start they cited and one
+  comment in the same automation now marks where the recovery judges), the DGS1 arm-time slot walk (now on the real instants)
+  and the HA simulator's local-time reader (now with the PEP 495 fold);
+- the harness gives the real packages what the tree's packages read: `_lab_ha.R9` and `PLAN_GATE` are judged on the packages
+  (the two Home Assistant start-time capture automations; a `states('sensor.ecco_plan_export_hold')` read), never on comments or
+  digests. Stage 3's scheduled Dump to Grid start fails closed without the plan hold and reserve sensors, so a world whose
+  DGS1 reads them holds the two sensors at synthetic values ('clear'; 10 %, the Stop SOC helper's minimum, so a staged Stop SOC
+  is never raised or blocked), as the repository's own Dump to Grid suites do; the plan package itself is not loaded (its
+  override scripts, seed and `now()` templates belong to the plan suites, and its template attributes are options the static
+  guard refuses). R9's capture guard reads `states.input_datetime.<helper>`, which needs the helper to exist: a date-and-time
+  helper with no value of its own reads the 1970 default in Home Assistant, and the world sets it so before the packages
+  start. A Home Assistant restart writes fresh state objects for the restored helpers, so `last_updated` is reset with
+  `last_changed` (R9's staleness guard compares them). All four are model assumptions in the `_lab_ha` docstring;
+- the suites' expectations follow the packages: each place a suite asserts what R9 changed has an R9 branch (below).
+
+**What R9 changes in the lab's results.** On a base tree nothing changes. On an `r9s3` tree:
+
+| Finding | Base tree | `r9s3` tree | Pinned by |
+|---|---|---|---|
+| F-HF02-1 (a second session after the owner's End, a second lease after a firmware early end, a false MISSED after a natural end) | all three scopes reproduce | the first two do not (R9 records MISSED, one alert, nothing started); the false MISSED after a natural end still reproduces | `closed-by-r9:F-HF02-1` (Free Power, Dump to Grid, scope a); `finding-reproduces:F-HF02-1 (scope b ...)`; corpus HF-02-a |
+| F-HF02-2 (SMR1 says RESTORED with a schedule value after a crash in STARTING) | reproduces | closed: the recovery re-stages nothing | `closed-by-r9:F-HF02-2`; corpus HF-02-c |
+| F-HF03-2 (the recovery starts a new Dump lease after a whole-site cut) | reproduces at 3 of 4 grid points | closed at all four (MISSED, one alert, no lease) | `HA down ... R9` (four points); corpus HF-03-c |
+| F-HF08-1 (a repeated-hour arm refused as a past start) | reproduces | closed: refused with the clock-change text | `closed-by-r9:F-HF08-1`; corpus HF-08-a |
+| F-HF08-2 (a skipped-hour arm runs an hour from the typed time) | reproduces | closed: refused with the clock-change text | `closed-by-r9:F-HF08-2`; corpus HF-08-b |
+| F-HF08-3 (SG-25: the firmware Dump START gate walks local minutes) | coupled run and firmware gate | the DGS1 arm walk now sees the real overlap (the coupled run is refused earlier); the firmware gate is not changed and still admits the lease | `finding-reproduces:F-HF08-3 (... firmware gate alone ...)`; RT-03 compound; corpus HF-08-c |
+| every other finding (31 of 37 counted) | reproduces | reproduces unchanged | the suites' own pins |
+
+Other R9 and Stage 3 effects the suites pin on an `r9s3` tree: the recovery after a restart writes `UNCONFIRMED` (never
+`STARTED OK`) over a result that did not already start with `STARTED`, at every reconnect gap (HF-02.3); the NC-HF02-1 and
+NC-HF02-1b mutants (the fire automation never disarms; the recovery's armed-off guard never matches) are not killed because the
+recovery has no start path any more, and the suite states that as a defence in depth instead of as a kill; the coupling
+self-test's view lists the dongle's `NTP Time` text as a fourth polled sensor and the crash rollback finds the start helper at
+its 1970 default, and a new self-test section (3b) shows that the real scheduled Dump start reads the plan stand-ins (held,
+unreadable and an unknown reserve each BLOCK it, nothing is pressed).
+
+**What the lab cannot say about a generation.** The check that a corpus replay holds is as strong on an overlay as on a base
+document (digest equality and every anchor at its line when the sources match). The expectations of the nine changed
+overlays were written from R9's own documented behaviour (its notice texts, the missed-run rule, the clock-change refusal) and
+read against what the replay does, not copied from it; the remaining twenty-one keep their base expectations unchanged. The
+generation table says which files a tree has, not whether they are the files the owner installed. A tree that has R9 but not
+Stage 3 (the intermediate state after R9 alone) is not a recorded generation: the lab fails it by the drift rule and names the
+file, and a later change to any of the four files needs a new generation (or a re-record of an existing one).
+
+**Counts per generation (quick mode, every suite ok on both).** Pass is the number of checks held excluding finding pins (LAB-SUMMARY `pass`), findings the counted findings reproduced (`finding`), pins the held `finding-reproduces:` checks (`finding_pins`). The base column is the V0.1 table of section 3 plus V0.2's eight new checks (seven generation checks in `test_lab_selftest_core` [11c], one overlay check in `test_lab_replay_corpus` [1]); the `r9s3` column has the same suites, the closed findings no longer reproduced (their closure checks count as pass) and the plan gate section of the coupling self-test:
+
+| Suite | base: pass | base: findings | base: pins | `r9s3`: pass | `r9s3`: findings | `r9s3`: pins |
+|---|---|---|---|---|---|---|
+| `test_lab_selftest_core` | 266 | 0 | 0 | 266 | 0 | 0 |
+| `test_lab_selftest_firmware` | 262 | 0 | 0 | 262 | 0 | 0 |
+| `test_lab_selftest_rtc` | 148 | 0 | 0 | 148 | 0 | 0 |
+| `test_lab_selftest_coupling` | 106 | 0 | 0 | 111 | 0 | 0 |
+| `test_lab_fw_obligations` | 74 | 5 | 8 | 74 | 5 | 8 |
+| `test_lab_fw_durability` | 97 | 8 | 15 | 97 | 8 | 15 |
+| `test_lab_fw_runtime` | 125 | 6 | 9 | 125 | 6 | 9 |
+| `test_lab_fw_guards` | 268 | 0 | 0 | 268 | 0 | 0 |
+| `test_lab_ha_lifecycle` | 172 | 7 | 24 | 179 | 5 | 17 |
+| `test_lab_ha_phantom` | 67 | 1 | 6 | 67 | 1 | 6 |
+| `test_lab_ha_schedules` | 60 | 7 | 13 | 60 | 7 | 13 |
+| `test_lab_dst_rtc` | 143 | 3 | 8 | 140 | 1 | 5 |
+| `test_lab_property` | 65 | 0 | 6 | 65 | 0 | 6 |
+| `test_lab_replay_corpus` | 315 | 0 | 0 | 315 | 0 | 0 |
+| total | 2168 | 37 | 89 | 2177 | 33 | 79 |
+
+`run_lab.py` and `gen_catalogue.py --check` compare a run with the catalogue, which records the base generation, so on an `r9s3` tree their count cross-checks report this generation's different counts (CI collects neither; the `test_*.py` suites are what CI runs).
+
+**Adding a generation.** Run the suites on a tree whose four files are the new state, add its digests to
+`_lab_trace.GENERATIONS` (and a generation id to the tier table's comments where needed), re-record the overlay documents with
+`rerecord_corpus.py --generation <id> --from-base --all` (it refuses a tree that is not of that generation and names a
+failing expectation; read each against what the generation does before committing it), extend the suites' branches where an
+expectation differs, and regenerate the catalogue on a base tree. The new overlay directory is pinned like every other lab file.
 
 ## 3. Running the lab
 
@@ -2655,6 +2757,14 @@ and none needs a change to the lab's results to be meaningful.
 8. Run every lab suite (`run_lab.py`) and confirm the catalogue cross-checks pass, refresh
    `docs/dev/assurance-lab-v0/LAB_SUMMARY.txt` with the invocation it names, and update the counts in this document
    (section 14 lists every headline number).
+
+**Re-recording with source generations (V0.2).** Base documents are re-recorded on a base tree only
+(`rerecord_corpus.py --all`; the tool refuses any other tree and says which generation it is). The overlay documents of a later
+generation are re-recorded on a tree of that generation (`--generation r9s3 --all`); both write the same canonical form and
+refuse a changed trace digest unless named in `--allow-digest-change`. A lab helper edit makes documents of both generations stale
+(they pin `_lab_ha.py` and `_lab_trace.py`), so after such an edit re-record on a base tree, then on a tree of each later
+generation, then regenerate the catalogue on the base tree (the catalogue pins every document of every generation as a lab
+file and its baseline stays the base generation's).
 
 **Regenerate the catalogue.** `SCENARIO_CATALOGUE.json` is generated by `registry/tests/assurance_lab/gen_catalogue.py`, never
 edited by hand. Regenerate it in the same change as **any change to a lab file**: a suite, a helper, a tool, the generator's

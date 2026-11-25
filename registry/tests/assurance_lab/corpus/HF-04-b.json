@@ -131,8 +131,8 @@
     "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
     "registry/tests/assurance_lab/_lab_clock.py": "b2ae1d4d46bfbde289d026ceeead599c41f153a2e5ba8d3ae662f2845fc91423",
     "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8",
-    "registry/tests/assurance_lab/_lab_ha.py": "c23ca251a1cc88102f3613e892e9bdd2d1aa2014e6054555a05d8e3a0bc5db82",
-    "registry/tests/assurance_lab/_lab_trace.py": "4c61ace601a6ba6d6b060cbfa7418341ad1df179073fe494f9ad122f356f5ce5"
+    "registry/tests/assurance_lab/_lab_ha.py": "e3a7612a4f43fecaa6277052e546a5f98a61164dc6a9d98d1dfc4015e38ce7e6",
+    "registry/tests/assurance_lab/_lab_trace.py": "56a9126c61e25314bc4b35592ecefdbe99a25c82032ba2be02da6e4f9d4de3b2"
   },
   "synthetic": true,
   "tier": "coupled",

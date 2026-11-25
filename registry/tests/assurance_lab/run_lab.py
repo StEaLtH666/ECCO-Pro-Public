@@ -523,7 +523,7 @@ def baseline_status(cat: dict) -> tuple[int, int, list[str], list[str]]:
     # the replay suite's rule (test_lab_replay_corpus.py lab_files; _lab_trace.LAB_RULE): every lab .py, that suite
     # included, and every corpus document must be pinned (SCENARIO_CATALOGUE.json cannot pin itself)
     lab = [f"{LAB_REL}/{q.name}" for q in sorted(HERE.glob("*.py"))]
-    lab += [f"{LAB_REL}/corpus/{q.name}" for q in sorted(CORPUS_DIR.glob("*.json"))]
+    lab += [f"{LAB_REL}/corpus/{q.relative_to(CORPUS_DIR).as_posix()}" for q in T.corpus_doc_files(CORPUS_DIR)]   # V0.2: overlays
     unpinned = [rel for rel in lab if rel not in sources]
     if unpinned:
         problems.append(f"{len(unpinned)} lab file(s) not pinned in the catalogue baseline ({', '.join(unpinned[:5])}): "

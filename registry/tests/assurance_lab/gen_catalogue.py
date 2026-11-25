@@ -341,8 +341,8 @@ def tree_sources(reader: T.TreeReader | None = None) -> dict[str, str]:
     (run_all / --save-runs), it records the tree the outputs belong to."""
     R = reader if reader is not None else T.TreeReader(ROOT)
     paths = {f"{LAB_REL}/{p.name}" for p in HERE.glob("*.py")} | set(T.pinned_by_table())
-    for p in CORPUS.glob("*.json"):
-        rel = f"{LAB_REL}/corpus/{p.name}"
+    for p in T.corpus_doc_files(CORPUS):          # V0.2: the base documents and the overlay documents of the later generations
+        rel = f"{LAB_REL}/corpus/{p.relative_to(CORPUS).as_posix()}"
         paths.add(rel)
         try:
             doc = strict_json((R.read_bytes(rel) or b"").decode("utf-8"))
@@ -577,7 +577,7 @@ def build(runs: dict[str, dict] | None = None, committed: dict | None = None, *,
         for s in shape_problems(path + " " + snippet):
             P.append(f"{where}: anchor shape: {s}")
         src = R.text(path) if T._path_ok(path) else None
-        n = src.count(snippet) if src is not None and snippet else -1
+        n = sum(src.count(t) for t in T.anchor_texts(path, snippet)) if src is not None and snippet else -1   # V0.2: alternatives
         P.need(n == 1, f"{where}: anchor found {n} time(s) in {path}: {snippet[:70]!r}")
         return f"{path}: {snippet}"
 
@@ -1232,6 +1232,8 @@ def build(runs: dict[str, dict] | None = None, committed: dict | None = None, *,
         sources.add(f"{LAB_REL}/{n}")
     for stem in docs:
         sources.add(f"{LAB_REL}/corpus/{stem}.json")
+    for q in T.corpus_doc_files(CORPUS):                     # V0.2: the overlay documents of the later source generations
+        sources.add(f"{LAB_REL}/corpus/{q.relative_to(CORPUS).as_posix()}")
     for x in scenarios:
         for a in x["anchors"]:
             sources.add(a.split(": ", 1)[0])
@@ -1362,6 +1364,11 @@ def compare(committed_text: str, b: Build, *,
         drift = T.drift_report(common, b.docs, sha_of=n_src.get, strict=strict)
         for item in drift.items:          # judged by the tiered drift rule, not compared again
             n_src[item.path] = o_src[item.path]
+        gid = T.generation_of(n_src.get)  # V0.2: a tree of a known later generation: its four files are judged by that rule too
+        if gid not in (None, T.GENERATION_BASE):
+            for path in T.GENERATIONS[gid]["sources"]:
+                if path in n_src and path in o_src:
+                    n_src[path] = o_src[path]
         added, removed = sorted(set(n_src) - set(o_src)), sorted(set(o_src) - set(n_src))
         if added or removed:            # a changed pinned set is a lab-side change: reported once, by name
             diffs.append(f"baseline.sources: the pinned set differs (added {added[:6]}{' ...' if len(added) > 6 else ''}"

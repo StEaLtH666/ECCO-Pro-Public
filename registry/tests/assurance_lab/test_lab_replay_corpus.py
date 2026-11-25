@@ -415,7 +415,7 @@ def lab_files() -> list[str]:
     """Every lab suite / helper / runner / tool / corpus file the catalogue must pin, this suite included (V0.1, B1:
     _lab_trace.LAB_RULE; SCENARIO_CATALOGUE.json is the one exemption, it cannot pin its own digest)."""
     out = [f"{LAB_REL}/{p.name}" for p in sorted(HERE.glob("*.py"))]
-    out += [f"{LAB_REL}/corpus/{p.name}" for p in sorted(CORPUS_DIR.glob("*.json"))]
+    out += [f"{LAB_REL}/corpus/{p.relative_to(CORPUS_DIR).as_posix()}" for p in T.corpus_doc_files(CORPUS_DIR)]   # V0.2: overlays
     return out
 
 
@@ -423,7 +423,7 @@ def anchor_hits(path: str, snippet: str, text_of=repo_text) -> int:
     """How often `snippet` occurs in the repository file `path` (-1: the file is missing or the snippet is empty): the
     exactly-once anchor read of [3] (trace_inputs.py classifies a read through this helper as an anchor read)."""
     src = text_of(path)
-    return src.count(snippet) if src is not None and snippet else -1
+    return sum(src.count(t) for t in T.anchor_texts(path, snippet)) if src is not None and snippet else -1   # V0.2: alternatives
 
 
 def cited(path: str, text_of=repo_text) -> bool:
@@ -542,11 +542,17 @@ def catalogue_problems(cat: dict, docs: dict, *, text_of=repo_text, sha_of=repo_
 
     # --- corpus ownership, classification and recorded digests
     cp = P["corpus"]
+    # V0.2: on a tree of a later source generation the documents are that generation's overlays, which record the generation's
+    # digests of the four generation files; the catalogue's baseline stays the base generation's (every other pin is shared)
+    gid = T.generation_of(sha_of)
+    expected = dict(pinned)
+    if gid not in (None, T.GENERATION_BASE):
+        expected.update({p_: s_ for p_, s_ in T.GENERATIONS[gid]["sources"].items() if p_ in pinned})
     for stem, d in sorted(docs.items()):
         for path, sha in sorted(d["source_digests"].items()):
-            if pinned.get(path) != sha:
+            if expected.get(path) != sha:
                 cp.append(f"corpus {stem} records {path} sha256 {sha[:12]} != the catalogue baseline "
-                          f"{(pinned.get(path) or 'unpinned')[:12]} (re-record the document or re-generate the catalogue)")
+                          f"{(expected.get(path) or 'unpinned')[:12]} (re-record the document or re-generate the catalogue)")
     owner = {}
     for x in scen.values():
         for c in x["corpus"]:
@@ -816,7 +822,7 @@ def anchors_not_once(doc: dict, text_of=repo_text) -> list[str]:
     out = []
     for a in doc["source_anchors"]:
         src = text_of(a["path"])
-        n = src.count(a["text"]) if src is not None else -1
+        n = sum(src.count(t) for t in T.anchor_texts(a["path"], a["text"])) if src is not None else -1   # V0.2: alternatives
         if n != 1:
             out.append(f"{a['path']}: found {n} time(s): {a['text'][:60]!r}")
     return out
@@ -854,6 +860,47 @@ TREE_DRIFT = baseline_drift(CAT)     # the catalogue-pinned sources that changed
 # ===========================================================================================================================
 # [1] corpus schema
 # ===========================================================================================================================
+# the fields an overlay document (corpus/<generation>/<id>.json) may differ in from its base document: what a SOURCE GENERATION
+# changes (the expectations it makes true, the notes that say so, the digests and anchor lines of its own sources); every other
+# field is the scenario itself and must be equal, so an overlay replays the same inputs against another generation
+OVERLAY_MAY_DIFFER = ("expect", "notes", "source_digests", "source_anchors", "trace_digest")
+
+
+def overlay_problems() -> list[str]:
+    """V0.2: the overlay documents (corpus/<generation>/*.json) that are not a valid, canonical overlay of an existing base
+    document: they are checked on EVERY tree (a base tree never replays them, but pins and validates them)."""
+    out = []
+    for f in T.corpus_doc_files(CORPUS_DIR):
+        if f.parent == CORPUS_DIR:
+            continue
+        gid, name = f.parent.name, f"{f.parent.name}/{f.name}"
+        try:
+            ov = T.load_doc(f, overlay=False)
+        except (T.LabTraceError, ValueError, UnicodeDecodeError) as exc:
+            out.append(f"{name}: {str(exc)[:120]}")
+            continue
+        base_file = CORPUS_DIR / f.name
+        if ov["id"] != f.stem or not base_file.is_file():
+            out.append(f"{name}: id {ov['id']!r} / no base document {f.name}")
+            continue
+        base = T.load_doc(base_file, overlay=False)
+        if not canonical_ok(ov, f.read_bytes()):
+            out.append(f"{name}: not in the canonical dumps_doc form")
+        same = [k for k in base if k not in OVERLAY_MAY_DIFFER and ov.get(k) != base[k]]
+        extra = sorted((set(ov) ^ set(base)) - set(OVERLAY_MAY_DIFFER))
+        if same or extra:
+            out.append(f"{name}: differs from its base document in {same + extra} (only {list(OVERLAY_MAY_DIFFER)} may)")
+        pins = ov["source_digests"]
+        wrong = sorted(p_ for p_, sha in T.GENERATIONS[gid]["sources"].items() if pins.get(p_) != sha)
+        if wrong:
+            out.append(f"{name}: does not pin generation {gid}'s digest of {wrong}")
+        if ov["tier"] != "coupled":
+            out.append(f"{name}: only a coupled document depends on a generation's files, this one is {ov['tier']}")
+        if [(a["path"], a["text"]) for a in ov["source_anchors"]] != [(a["path"], a["text"]) for a in base["source_anchors"]]:
+            out.append(f"{name}: its anchors are not its base document's (same paths and texts; only the lines move)")
+    return out
+
+
 def section_corpus_schema():
     print("[1] corpus schema: strict load + validate_doc + stem == id, canonical form, synthetic, 13-digit rule")
     docs = {}
@@ -869,12 +916,20 @@ def section_corpus_schema():
     if loaded:
         check(f"every corpus file loads through _lab_trace.load_corpus (strict JSON, validate_doc, stem == id): "
               f"{len(docs)} documents", len(docs) == len(files) and len(docs) > 0)
-    noncanon = [f.stem for f in files if f.stem in docs and not canonical_ok(docs[f.stem], f.read_bytes())]
+    noncanon = [f.stem for f in files if f.stem in docs and not canonical_ok(docs[f.stem], T.doc_file(f).read_bytes())]
     check("every corpus file is in the canonical _lab_trace.dumps_doc form (sorted keys, indent 2, ASCII, LF; a CRLF "
           "working copy is normalised first)", not noncanon, str(noncanon))
+    ovp = overlay_problems()
+    n_ov = sum(1 for f in T.corpus_doc_files(CORPUS_DIR) if f.parent != CORPUS_DIR)
+    check(f"generation overlays (V0.2): every overlay document ({n_ov}: corpus/<generation>/<id>.json, one per coupled "
+          "document the generation changes) is a valid, canonical document of an existing base document of the same id with "
+          "the same scenario (every field but the expectations, notes, digests and anchor lines equal, the same anchors) "
+          "and pins its generation's four files exactly; each lives in a generation the lab records", not ovp, "; ".join(ovp[:3]))
     check("every corpus document is synthetic and names a registered tier",
           all(d["synthetic"] is True and d["tier"] in T.TIERS for d in docs.values()))
-    runs = [f"{f.stem} {p}" for f in files for p in digit_run_problems(lf_bytes(f.read_bytes()).decode("utf-8", "replace"))]
+    runs = [f"{f.parent.name}/{f.stem} {p}" if f.parent != CORPUS_DIR else f"{f.stem} {p}"
+            for f in T.corpus_doc_files(CORPUS_DIR)
+            for p in digit_run_problems(lf_bytes(f.read_bytes()).decode("utf-8", "replace"))]
     check("spec 0.6: every 13-digit run in a corpus file lies inside a sha256 digest and no such line names a meter word",
           not runs, "; ".join(runs[:4]))
     cat_stems = sorted({c for x in CAT.get("scenarios", []) for c in x.get("corpus", [])}) if isinstance(CAT, dict) else []
