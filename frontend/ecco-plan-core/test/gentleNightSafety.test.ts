@@ -740,3 +740,53 @@ test("round 3 F7: a fall against the previous reading is allowed up to the drain
   // a rise is judged as before (the allowance is for falls only)
   assert.deepEqual(plan({ socPct: 40, elapsedMin: 6, previousSoc: { socPct: 20, elapsedMin: 0 }, drainBoundW: 3000 }).codes, ["SOC_IMPLAUSIBLE"]);
 });
+
+test("round 3 F2 (MAJOR): a rate in force that an ordinary change set INSIDE the window while the knee may already have been passed has an unknown knee rate: the tail is taken at the lowest setpoint, so OK needs the deadline to hold even then (by hand)", () => {
+  // the review's case: the owner raised 2000 W to 8000 W at minute 25, AFTER the knee was crossed at 2000 W; reading 91 at minute 30, target 95, window 300 minutes,
+  // deadline 240. The earlier source anchored the tail at the new 8000 W (900 W of tail, finish 145.5, margin 94.5: OK) while the battery stays on 0.125 x 2000 x 0.9 =
+  // 225 W: 5 points x 0.346412 kWh = 7.7 hours. The record cannot tell the earlier rate, so the worst case is the lowest setpoint, 500 W: 56.25 W of tail
+  const win = { chargeWindow: { startMin: 600, endMin: 900 }, bufferMin: 60, elapsedMin: 30, socPct: 91, socAgeMin: 0, targetSocPct: 95, actuatorProfile: "TOU_SLOT_EDITOR" } as const;
+  const raised = plan({ ...win, inForce: { setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 } });
+  assert.equal(raised.status, "TARGET_AT_RISK");
+  assert.ok(raised.codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.equal(raised.now.change, "KEEP");
+  assert.equal(raised.now.setpointW, 8000);
+  assert.equal(band(raised).pessimisticHeld.finishMin, null, "5 points at 56.25 W do not finish in the window");
+  assert.equal(raised.marginMin, null);
+  assert.equal(raised.now.neededMeetsDeadline, false, "no rate makes it when the tail is anchored at the lowest setpoint");
+  assert.equal(band(raised).expected.reachedByDeadline, true, "the expected world is anchored at the rate in force and does");
+  // the same battery with 2000 W still in force is already TARGET_AT_RISK (the truth)
+  assert.equal(plan({ ...win, inForce: { setpointW: 2000, lastChangeAtMin: -60, changesUsed: 0 } }).status, "TARGET_AT_RISK");
+  // what does NOT make the knee rate unknown: a START (changesUsed 0: nothing charged before it), a change before the window opened (nothing charged before it, so
+  // the rate in force was the one at the knee), the window start itself, a target at or below the pessimistic knee, a call before the window
+  const okAt = (inForce: GentleNightInput["inForce"], over: Partial<GentleNightInput> = {}): GentleNightPlan => plan({ ...win, inForce, ...over });
+  for (const c of [okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 0 }), okAt({ setpointW: 8000, lastChangeAtMin: -30, changesUsed: 1 }), okAt({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 1 }),
+    okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 }, { targetSocPct: 90 })]) {
+    assert.ok(!c.codes.includes("KNEE_RATE_UNKNOWN"), c.codes.join(","));
+  }
+  assert.equal(okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 0 }).status, "OK", "a START is anchored at its own rate, margin 94.5");
+  assert.equal(okAt({ setpointW: 8000, lastChangeAtMin: -30, changesUsed: 1 }).status, "OK");
+  assert.ok(!okAt({ setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 }, { elapsedMin: -30, drainBoundW: 0 }).codes.includes("KNEE_RATE_UNKNOWN"));
+  // the window start is the edge: set at 0 is not inside the window, set at 0.5 is; a time that is not given (null) with a counted change cannot be placed, so it counts
+  assert.ok(!okAt({ setpointW: 8000, lastChangeAtMin: 0, changesUsed: 1 }).codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.ok(okAt({ setpointW: 8000, lastChangeAtMin: 0.5, changesUsed: 1 }).codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.ok(okAt({ setpointW: 8000, lastChangeAtMin: null, changesUsed: 1 }).codes.includes("KNEE_RATE_UNKNOWN"));
+  // the knee must MAY be passed when the rate was set: a change made AFTER the reading is judged from the reading plus the charge possible up to it: reading R at minute
+  // 25 (age 5 at minute 30), set at minute 28: 3 minutes at the firmware bound, 3 x 8000 x 1.1 / 60000 / 0.289301 = 1.521 points, so the estimate 1.0 + 1.521 above the
+  // reading reaches 90 from 87.479: 87.4 is surely ahead (no unknown), 87.5 may be past
+  const after = (socPct: number): GentleNightPlan => plan({ ...win, socPct, socAgeMin: 5, drainBoundW: 0, inForce: { setpointW: 8000, lastChangeAtMin: 28, changesUsed: 1 } });
+  assert.ok(!after(87.4).codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.ok(after(87.5).codes.includes("KNEE_RATE_UNKNOWN"));
+  // a change made BEFORE the reading is judged from the reading alone (the position at the change is at most the position at the reading): 88.9 + 1.0 < 90, 89 + 1.0 = 90
+  const before = (socPct: number): GentleNightPlan => plan({ ...win, socPct, socAgeMin: 5, drainBoundW: 0, inForce: { setpointW: 8000, lastChangeAtMin: 10, changesUsed: 1 } });
+  assert.ok(!before(88.9).codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.ok(before(89).codes.includes("KNEE_RATE_UNKNOWN"));
+  // OK is still possible when the deadline holds even at the worst case: 1000 minutes, no buffer, target 91.5 from 91 (pessimistic start 90.0, on the knee): 1.5 points x
+  // 0.346412 = 0.5196 kWh at the 56.25 W tail = 554.3 minutes after minute 30, finish 584.3 <= 1000. At the 8000 W in force (900 W tail) it would be 34.6 minutes
+  const roomy = { ...win, chargeWindow: { startMin: 100, endMin: 1100 }, bufferMin: 0, targetSocPct: 91.5 } as const;
+  const wide = plan({ ...roomy, inForce: { setpointW: 8000, lastChangeAtMin: 25, changesUsed: 1 } });
+  assert.ok(wide.codes.includes("KNEE_RATE_UNKNOWN"));
+  assert.equal(wide.status, "OK");
+  near(band(wide).pessimisticHeld.finishMin, 30 + ((1.5 * PK) / 0.05625) * 60, 0.2, "at the lowest tail");
+  near(band(plan({ ...roomy, inForce: { setpointW: 8000, lastChangeAtMin: 25, changesUsed: 0 } })).pessimisticHeld.finishMin, 30 + ((1.5 * PK) / 0.9) * 60, 0.2, "at the rate in force (a START)");
+});

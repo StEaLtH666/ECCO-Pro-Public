@@ -7,6 +7,7 @@ import { planGentleNight, NIGHT_CODES } from "../src/gentleNight.ts";
 import type { GentleNightPlan, NightInForce } from "../src/gentleNight.ts";
 import { maxChargePowerCeiling, GENTLE_ACTUATOR_PROFILES } from "../src/gentleController.ts";
 import { createTruth, drawTruth } from "./support/gentleNightTruth.ts";
+import { rng } from "./fixtures.ts";
 import type { TruthFamily, TruthParams } from "./support/gentleNightTruth.ts";
 
 const ORDINARY = { changeAtMin: 0, deltaMin: 0 } as const;
@@ -336,4 +337,101 @@ test("closed loop: the sweep is not trivial: OK nights finish close to the deadl
   assert.ok((margins[Math.floor(margins.length * 0.5)] as number) < 90, "median margin " + margins[Math.floor(margins.length * 0.5)]);
   assert.ok((kinds.OK ?? 0) > 0 && (kinds.NO_NEED ?? 0) >= 0);
   assert.ok((kinds.TARGET_AT_RISK ?? 0) + (kinds.UNREACHABLE ?? 0) > 0, JSON.stringify(kinds));
+});
+
+// ---- round 3 (the third independent review of 8999cdf): the two OK guarantees that broke, on the independent truth battery --------------------------------------
+test("closed loop, round 3 F1: a lease STARTed AFTER the reading while the house drains the battery at 3000 W: an OK at the call just after the START makes the deadline in the truth, in the envelope's corner", () => {
+  // The truth's minute 0 is the reading, taken at window minute 0.5 and shown as 40 (clean 39.52, no noise); the house draws the 3000 W bound from the reading until
+  // the START at `startAt`, then the lease charges at its rate to the window end. The planner is asked a minute after the START, with that reading and the lease in
+  // force; the corner: capacity +6 %, efficiency 0.90, the scale error either way. The rates run from well below the planner's own START rate to a little above it.
+  // Before the fix the minutes from the reading to the START were not counted as drain, so rates just below the right one were called OK and the truth missed them.
+  const readAt = 0.5;
+  let ok = 0;
+  let notOk = 0;
+  let truthMisses = 0;
+  for (const sensorErr of [-0.03, 0.03]) {
+    for (const targetPct of [58, 80]) {
+      for (const startAt of [1, 7, 14]) {
+        const p: TruthParams = {
+          seed: 11, family: "IN_ENVELOPE", helperKwh: 31.7, capKwh: 31.7 * 1.06, unit: "AC", effAc: 0.9, dcOver: 1, sensorErr, kneeTrue: 99, tailFrac: 0.125, dropMin: 1,
+          trickleDecayPerHour: 0, noiseAmp: 0, startTrueSoc: 100 - (100 - 39.52) / (1 + sensorErr), windowMin: 300, bufferMin: 60, targetPct, ownerLimitW: 8000, profile: "FREE_POWER_LEASE",
+        };
+        const common = { targetSocPct: targetPct, chargeWindow: { startMin: 30, endMin: 330 }, clockDay: ORDINARY, socPct: 40, drainBoundW: 3000, capacityKwh: 31.7, ceilings: [maxChargePowerCeiling(8000, 8000)], actuatorProfile: "FREE_POWER_LEASE" as const };
+        const start = planGentleNight({ ...common, elapsedMin: startAt, socAgeMin: startAt - readAt });
+        assert.equal(start.now.change, "START");
+        const need = start.now.setpointW as number;
+        for (let rate = Math.max(500, need - 600); rate <= Math.min(8000, need + 300); rate += 100) {
+          const truth = createTruth(p);
+          assert.equal(truth.reading(), 40, "the displayed reading");
+          truth.drainTo(startAt - readAt, 3000);
+          truth.runTo(300 - readAt, rate);
+          const reached = truth.reachedAt();
+          const hit = reached !== null && reached + readAt <= 240 + 1e-6;
+          if (!hit) truthMisses++;
+          const plan = planGentleNight({ ...common, elapsedMin: startAt + 1, socAgeMin: startAt + 1 - readAt, inForce: { setpointW: rate, lastChangeAtMin: startAt, changesUsed: 0 } });
+          const what = "err " + sensorErr + " target " + targetPct + " START at " + startAt + " rate " + rate + " (the planner's own START " + need + ")";
+          if (plan.status === "OK") {
+            ok++;
+            assert.ok(hit, what + ": OK but the truth reached " + (reached === null ? null : reached + readAt) + " against 240");
+          } else notOk++;
+        }
+      }
+    }
+  }
+  assert.ok(ok >= 30, "OK calls: " + ok);
+  assert.ok(notOk >= 30, "calls the planner refuses to call OK: " + notOk);
+  assert.ok(truthMisses >= 30, "rates the truth really misses: " + truthMisses);
+});
+
+test("closed loop, round 3 F2: the owner raises the rate AFTER the knee was crossed at a lower one (the TOU editor's one change): no call is OK while the truth misses (the earlier source called OK 167 of 193 such nights and 30 of those missed)", () => {
+  // The knee is crossed at an outside rate of 1000 to 3000 W 6 to 14 minutes into the night; the owner raises to 5000 to 8000 W at minute 20 to 29, which the record
+  // shows as {raised rate, set at that minute, one change used}; the planner is asked 1 to 5 minutes later with the reading then. The truth keeps the raised rate:
+  // the tail stays anchored at the knee-time power (0.125 to 0.35 of 1000 to 3000 W). Everything inside the declared envelope.
+  const r = rng(2025);
+  let crossedBefore = 0;
+  let truthMisses = 0;
+  let planned = 0;
+  for (let i = 0; i < 400; i++) {
+    const helperKwh = 20 + Math.round(r() * 200) / 10;
+    const capKwh = helperKwh * (0.94 + 0.12 * r());
+    const effAc = 0.9 + 0.07 * r();
+    const kneeTrue = 91 + 8 * r();
+    const lowW = 100 * Math.round(10 + 20 * r());
+    const raiseW = 100 * Math.round(50 + 30 * r());
+    const perMin = ((lowW * effAc) / 1000 / 60 / capKwh) * 100;
+    const raiseAt = 20 + Math.floor(10 * r());
+    const callAt = raiseAt + 1 + Math.floor(5 * r());
+    const p: TruthParams = {
+      seed: i + 1, family: "IN_ENVELOPE", helperKwh, capKwh, unit: "AC", effAc, dcOver: 1, sensorErr: (r() - 0.5) * 0.06, kneeTrue, tailFrac: 0.125 + 0.225 * r(), dropMin: 1 + 4 * r(),
+      trickleDecayPerHour: 0, noiseAmp: 0.1 + 0.35 * r(), startTrueSoc: kneeTrue - perMin * (6 + 8 * r()), windowMin: 300, bufferMin: 60, targetPct: [93, 95, 97, 100][Math.floor(r() * 4)] as number,
+      ownerLimitW: 8000, profile: "TOU_SLOT_EDITOR",
+    };
+    const truth = createTruth(p);
+    truth.runTo(raiseAt, lowW);
+    if (!truth.pastKnee()) continue;
+    crossedBefore++;
+    truth.runTo(callAt, raiseW);
+    const reading = truth.reading();
+    const plan = planGentleNight({
+      targetSocPct: p.targetPct, bufferMin: 60, chargeWindow: { startMin: 30, endMin: 330 }, clockDay: ORDINARY, elapsedMin: callAt, socPct: reading, socAgeMin: 0, capacityKwh: helperKwh,
+      ceilings: [maxChargePowerCeiling(8000, 8000)], actuatorProfile: "TOU_SLOT_EDITOR", inForce: { setpointW: raiseW, lastChangeAtMin: raiseAt, changesUsed: 1 },
+    });
+    assert.notEqual(plan.status, "INPUTS_UNUSABLE", plan.codes.join(","));
+    if (plan.status === "NO_NEED") continue;
+    planned++;
+    truth.runTo(300, raiseW);
+    const reached = truth.reachedAt();
+    const hit = reached !== null && reached <= 240 + 1e-6;
+    if (!hit) truthMisses++;
+    if (plan.status === "OK") {
+      assert.ok(hit, "night " + (i + 1) + ": OK after an outside raise past the knee, but the truth reached " + reached + " against 240 (" + JSON.stringify([lowW, raiseW, raiseAt, callAt, reading, p.targetPct]) + ")");
+    }
+    assert.ok(plan.codes.includes("KNEE_RATE_UNKNOWN") || reading + 1 < 90 || p.targetPct <= 90, "the unknown knee rate is said (reading " + reading + ")");
+  }
+  // 400 nights drawn: the knee was crossed before the raise in 242 (a target reached first stops the charge), 193 needed a plan (49 were already at the target), and the
+  // truth missed 49 of those; the earlier source called 167 of the 193 OK and 30 of them missed. The cost of the worst case is that none of the 193 is called OK (the truth
+  // made 144): the record does not say what the knee was crossed at.
+  assert.ok(crossedBefore >= 200, "nights with the knee crossed before the raise: " + crossedBefore);
+  assert.ok(planned >= 150, "planned: " + planned);
+  assert.ok(truthMisses >= 35, "nights the truth really misses (an always-OK planner would fail them): " + truthMisses);
 });

@@ -55,7 +55,7 @@ export const NIGHT_CODES = [
   "HELD_DWELL", "HELD_BUDGET", "HELD_PATH_FIXED", "HELD_PAST_KNEE", "FORCED_BELOW_CEILING", "TARGET_ABOVE_KNEE", "TOP_OF_CHARGE_TAIL", "GRID_LIMIT_UNKNOWN_NO_CAP",
   "CEILING_AGE_UNKNOWN", "BEFORE_WINDOW", "DEADLINE_PASSED_WINDOW_OPEN", "RATE_NOT_ENOUGH_ALONE", "PESSIMISTIC_MISSES_DEADLINE", "RELIES_ON_LATER_CHANGE", "SETPOINT_UNIT_UNSETTLED",
   "ACTUATOR_FIXED_RATE", "IN_FORCE_INVALID", "IN_FORCE_ZERO_NOT_CHARGING", "PRE_WINDOW_DRAIN_UNKNOWN", "PROFILE_DEFAULT_MOST_RESTRICTIVE", "DRAIN_UNKNOWN_AGED_READING",
-  "DRAIN_NOT_COUNTED",
+  "DRAIN_NOT_COUNTED", "KNEE_RATE_UNKNOWN",
 ] as const;
 export type NightCode = (typeof NIGHT_CODES)[number];
 
@@ -311,6 +311,7 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   PROFILE_DEFAULT_MOST_RESTRICTIVE: "No actuator path was named: the most restrictive path that exists (the Free Power start, one fixed rate) is assumed.",
   DRAIN_UNKNOWN_AGED_READING: "Nothing charged the battery for longer than the limit since the reading (no rate in force, or the reading was taken before the window opened, or the rate in force was set after the reading) and no bound on the battery drain was given: the SOC now is not known, so nothing is recommended (never guessed).",
   DRAIN_NOT_COUNTED: "No drain bound was given: the drain over the few minutes since the reading in which nothing charged the battery (at most the limit) is not counted.",
+  KNEE_RATE_UNKNOWN: "The rate in force was changed inside the window and the battery may already have been past the pessimistic knee before that change: the power the knee was crossed at (which sets the tail) is not in the record, so the tail is taken at the lowest setpoint, the worst case, and OK needs the deadline to hold even then.",
 });
 
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
@@ -375,6 +376,11 @@ interface World {
   dropMin: number;
   /** The world's true position in the reading scale relative to the displayed reading. */
   offset: number;
+}
+
+/** The rate-in-force record as the planner works on it: the input's, plus (internal) the LOWEST setpoint the knee may have been crossed at when the record does not say (round 3 F2). */
+interface ForceState extends NightInForce {
+  kneeFloorW?: number;
 }
 
 interface SimState {
@@ -510,8 +516,8 @@ interface Ctx {
  * anchored at the lower of the rate in force and the rate tried; the LATER of the two (each is consistent with the world's own model, and the battery is in
  * one of the two cases). null when the target is not reached by `until`.
  */
-function pessFinish(c: Ctx, t: number, reading: number, inForceW: number | null, rateW: number, until: number, charging: boolean, past: boolean): number | null {
-  const anchor = inForceW === null ? null : Math.min(inForceW, rateW);
+function pessFinish(c: Ctx, t: number, reading: number, inForceW: number | null, rateW: number, until: number, charging: boolean, past: boolean, floorW: number | null): number | null {
+  const anchor = inForceW === null ? null : Math.min(inForceW, rateW, floorW ?? Infinity);
   const plain = advance(c.pess, startOf(c.pess, t, reading, charging, anchor, rateW), rateW, until, c.target);
   if (!past || anchor === null) return plain;
   const tail = advance(c.pess, pastStart(c, t, reading, anchor), rateW, until, c.target);
@@ -519,9 +525,9 @@ function pessFinish(c: Ctx, t: number, reading: number, inForceW: number | null,
 }
 
 /** The lowest candidate whose constant-rate PESSIMISTIC simulation reaches the target by `deadline`; when none does, the top candidate and `feasible` false. */
-function lowestFeasible(c: Ctx, t: number, reading: number, inForceW: number | null, deadline: number, charging: boolean, past: boolean): { rateW: number; feasible: boolean } {
+function lowestFeasible(c: Ctx, t: number, reading: number, inForceW: number | null, deadline: number, charging: boolean, past: boolean, floorW: number | null): { rateW: number; feasible: boolean } {
   const reaches = (s: number): boolean => {
-    const f = pessFinish(c, t, reading, inForceW, s, deadline, charging, past);
+    const f = pessFinish(c, t, reading, inForceW, s, deadline, charging, past, floorW);
     return f !== null && f <= deadline + EPS;
   };
   let hi = c.cands.length - 1;
@@ -549,13 +555,14 @@ interface Choice {
  * The one decision at one time: the same function decides NOW and every re-plan the projection makes, so the trajectory is the policy itself. `optPos` is
  * the optimistic estimate of the reading now (see kneeMayBePassed); `now` is the real minute of the decision, `simT` where its simulation starts.
  */
-function choose(c: Ctx, reading: number, optPos: number, simT: number, now: number, f: NightInForce): Choice {
+function choose(c: Ctx, reading: number, optPos: number, simT: number, now: number, f: ForceState): Choice {
   const codes: NightCode[] = [];
   const cur = f.setpointW === null ? null : Math.min(f.setpointW, c.ceilingW);
   // a rate in force has charged only once the window is open: before it (and at its first minute) the knee is crossed at whatever rate is in force then
   const charging = cur !== null && now > 0;
   const pastKnee = charging && kneeMayBePassed(c, optPos);
-  const need = lowestFeasible(c, simT, reading, cur, c.deadline, charging, pastKnee);
+  const floorW = f.kneeFloorW ?? null;
+  const need = lowestFeasible(c, simT, reading, cur, c.deadline, charging, pastKnee, floorW);
   if (f.setpointW === null || cur === null) {
     codes.push("START");
     codes.push(!need.feasible ? "RATE_AT_CEILING" : need.rateW <= c.minW ? "RATE_AT_MINIMUM" : "RATE_GENTLEST");
@@ -575,7 +582,7 @@ function choose(c: Ctx, reading: number, optPos: number, simT: number, now: numb
   const pathOk = c.midWindow && c.maxChanges > 0;
   const canChange = pathOk && budgetOk && dwellOk && !pastKnee;
   const heldCode: NightCode = !pathOk ? "HELD_PATH_FIXED" : !budgetOk ? "HELD_BUDGET" : !dwellOk ? "HELD_DWELL" : "HELD_PAST_KNEE";
-  const fin = pessFinish(c, simT, reading, held, held, c.deadline, charging, pastKnee);
+  const fin = pessFinish(c, simT, reading, held, held, c.deadline, charging, pastKnee, floorW);
   const curOk = fin !== null && fin <= c.deadline + EPS;
   let rate = held;
   if (!curOk) {
@@ -587,7 +594,7 @@ function choose(c: Ctx, reading: number, optPos: number, simT: number, now: numb
     }
     if (!need.feasible) codes.push("RATE_AT_CEILING");
   } else {
-    const low = lowestFeasible(c, simT, reading, held, c.deadline - c.slack, charging, pastKnee);
+    const low = lowestFeasible(c, simT, reading, held, c.deadline - c.slack, charging, pastKnee, floorW);
     const lowRate = low.feasible ? low.rateW : held;
     if (held - lowRate >= c.hysteresis - EPS && lowRate >= c.minW) {
       if (canChange) {
@@ -619,21 +626,21 @@ function worse(a: WorldOutcome, b: WorldOutcome): WorldOutcome {
  * inside the change budget and dwell; without `replan` the first rate is HELD for the rest of the window (the status basis). After a STOP the rate in
  * force is what is held (what happens if nothing is done). The pessimistic world runs from each of its consistent starts and reports the worse outcome.
  */
-function project(c: Ctx, w: World, reading0: number, now: number, first: Choice, force0: NightInForce, replan: boolean): Projection {
+function project(c: Ctx, w: World, reading0: number, now: number, first: Choice, force0: ForceState, replan: boolean): Projection {
   const t0 = Math.max(now, 0);
   const forcedOnly = first.codes.includes("FORCED_BELOW_CEILING") && first.rateW === c.ceilingW;
   const drawsBudget = (first.change === "INCREASE" || first.change === "DECREASE") && !forcedOnly;
-  const f0: NightInForce = { setpointW: first.rateW, lastChangeAtMin: first.change === "KEEP" ? force0.lastChangeAtMin : t0, changesUsed: force0.changesUsed + (drawsBudget ? 1 : 0) };
+  const f0: ForceState = { setpointW: first.rateW, lastChangeAtMin: first.change === "KEEP" ? force0.lastChangeAtMin : t0, changesUsed: force0.changesUsed + (drawsBudget ? 1 : 0), kneeFloorW: force0.kneeFloorW };
   const inForceW = force0.setpointW === null ? null : first.change === "STOP" ? force0.setpointW : Math.min(force0.setpointW, c.ceilingW);
   const isPess = w.name === "pessimistic";
-  const anchorW = inForceW === null ? null : isPess ? Math.min(inForceW, first.rateW) : inForceW;
+  const anchorW = inForceW === null ? null : isPess ? Math.min(inForceW, first.rateW, force0.kneeFloorW ?? Infinity) : inForceW;
   const charging = inForceW !== null && now > 0;
   const starts: SimState[] = [startOf(w, t0, reading0, charging, anchorW, first.rateW)];
   if (isPess && first.pastKnee && anchorW !== null) starts.push(pastStart(c, t0, reading0, anchorW));
   let segments: TrajectoryPoint[] = [];
   let outcome: WorldOutcome | null = null;
   for (const st of starts) {
-    let f: NightInForce = f0;
+    let f: ForceState = f0;
     const seg: TrajectoryPoint[] = [{ atMin: t0, inMin: t0 - now, setpointW: first.rateW, change: first.change, conditional: false }];
     let finish: number | null = null;
     if (replan && c.midWindow && c.maxChanges > 0) {
@@ -693,7 +700,7 @@ const UNKNOWNS: readonly string[] = Object.freeze([
   "the BMS response at rates below the top rate (no data)",
   "the SOC at which the charge power falls (no SOC series was saved): the knee is an assumption",
   "the live BMS charge limit and any derating (not read)",
-  "the rate at which the knee was crossed when the rate in force was changed after it (the tail is taken as anchored at the rate in force)",
+  "the rate at which the knee was crossed when the rate in force was changed inside the window while the knee may already have been passed (the tail is then taken at the lowest setpoint: KNEE_RATE_UNKNOWN)",
 ]);
 
 function paramsProblem(p: GentleNightParams): string | null {
@@ -916,11 +923,15 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   // allowance or the best efficiency, the higher), in the most points per kWh; nothing charges before the window opens; before a change made after the
   // reading the rate is not known, so the firmware bound
   let sincePct = 0;
+  // the part of it before the rate in force was set (at the firmware bound): the most the battery can have risen between the reading and that change
+  let preChangePct = 0;
   if (force.setpointW !== null && elapsed > 0) {
     const from = Math.max(elapsed - age, 0);
     const known = force.lastChangeAtMin === null ? from : Math.min(elapsed, Math.max(from, force.lastChangeAtMin));
-    const kwh = (((elapsed - known) * force.setpointW + (known - from) * Math.max(force.setpointW, LIMITS.chargePowerMax)) * Math.max(P.chargeEffMax, P.setpointOvershoot)) / 60 / 1000;
+    const beforeChangeWmin = (known - from) * Math.max(force.setpointW, LIMITS.chargePowerMax);
+    const kwh = (((elapsed - known) * force.setpointW + beforeChangeWmin) * Math.max(P.chargeEffMax, P.setpointOvershoot)) / 60 / 1000;
     sincePct = kwh / fewestKwhPerPct;
+    preChangePct = ((beforeChangeWmin * Math.max(P.chargeEffMax, P.setpointOvershoot)) / 60 / 1000) / fewestKwhPerPct;
   }
 
   if (socPlan >= target) {
@@ -982,12 +993,19 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   if (elapsed > deadline) codes.push("DEADLINE_PASSED_WINDOW_OPEN");
   // the optimistic estimate of the reading now takes no drain (the bound is pessimistic) and the whole charge possible since the reading
   const kneeEstimate = soc + ctx.upOffset + sincePct;
-  const first = choose(ctx, socPlan, kneeEstimate, Math.max(elapsed, 0), elapsed, force);
+  // Round 3 F2. The power the knee was crossed at is the rate in force, UNLESS that rate was set by an ordinary change (the record counts it) inside the window while
+  // the knee may already have been passed when it was set (the optimistic position then: the reading plus the charge possible up to the change): an outside raise
+  // after the knee was crossed at the earlier, lower rate would otherwise be credited at the new rate, and the battery stays on the old low tail. The earlier rate is
+  // not in the record, so the tail is anchored at the LOWEST setpoint any path can hold (the worst case): OK then needs the deadline to hold even so.
+  const kneeRateUnknown = force.setpointW !== null && elapsed > 0 && force.changesUsed >= 1 && (force.lastChangeAtMin === null || force.lastChangeAtMin > 0) && kneeMayBePassed(ctx, soc + ctx.upOffset + preChangePct);
+  const forceNow: ForceState = kneeRateUnknown ? { ...force, kneeFloorW: minW } : force;
+  if (kneeRateUnknown) codes.push("KNEE_RATE_UNKNOWN");
+  const first = choose(ctx, socPlan, kneeEstimate, Math.max(elapsed, 0), elapsed, forceNow);
   for (const k of first.codes) if (!codes.includes(k)) codes.push(k);
-  const pp = project(ctx, pess, socPlan, elapsed, first, force, true);
-  const ph = project(ctx, pess, socPlan, elapsed, first, force, false);
-  const pe = project(ctx, expW, socPlan, elapsed, first, force, true);
-  const po = project(ctx, optW, socPlan, elapsed, first, force, true);
+  const pp = project(ctx, pess, socPlan, elapsed, first, forceNow, true);
+  const ph = project(ctx, pess, socPlan, elapsed, first, forceNow, false);
+  const pe = project(ctx, expW, socPlan, elapsed, first, forceNow, true);
+  const po = project(ctx, optW, socPlan, elapsed, first, forceNow, true);
   // The status basis is the pessimistic world with the first rate HELD: no path makes a later change by itself (see the header), so OK never relies on one.
   const pf = ph.outcome.finishMin;
   const ef = pe.outcome.finishMin;
