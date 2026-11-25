@@ -1412,7 +1412,7 @@ PTT1 = Entry(
         _ptt1.DASHBOARD_REL: "4ced46e37d720744c1d7ea555bf363da1069899235814dddb9c2cc79bfa6a73e",
     },
     # _pex.fingerprint(PTT1): hashes its parent isp1's fingerprint and every declaration above
-    fingerprint="7a63c93dd52c5836a355d55ca0911ebf885dbacc0c5de7fa5abdf04c452d953a",
+    fingerprint="83ff93b6873d6e5f8464601616b0a216379ee08aec571f134639906560e09faf",
     note="the Power Flow Today chart's shared tooltip stays inside the card and the viewport: one EVAL key (apex_config.chart.events.mounted) "
          "per chart, three identical charts; display only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, "
          "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access",
