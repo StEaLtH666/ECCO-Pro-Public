@@ -30,11 +30,14 @@ test("by hand: a plateau-only target needs exactly the rate the arithmetic gives
   assert.ok(lowFinish > 240 && lowFinish < 300, "pessimistic finish " + lowFinish);
   assert.equal(low.status, "TARGET_AT_RISK");
   assert.equal(plan({ targetSocPct: 60, actuatorProfile: "FREE_POWER_LEASE", inForce: { setpointW: 4000, lastChangeAtMin: 0, changesUsed: 0 } }).status, "OK");
-  // on a path that can change, the same low rate is raised at the first re-plan after the dwell: the status relies on that and says so
-  const adapt = plan({ targetSocPct: 60, inForce: { setpointW: 3900, lastChangeAtMin: 0, changesUsed: 0 } });
-  assert.equal(adapt.status, "OK");
+  // on a path that can change, the same low rate is raised at the first re-plan after the dwell; no path makes that raise by itself, so the status is
+  // judged with the rate in force held: TARGET_AT_RISK (stricter than the earlier OK, which is kept as a killed mutant), and it says it relies on the raise
+  const adapt = plan({ targetSocPct: 60, actuatorProfile: "UNCONSTRAINED", inForce: { setpointW: 3900, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(adapt.status, "TARGET_AT_RISK");
   assert.ok(adapt.codes.includes("RELIES_ON_LATER_CHANGE"));
   assert.equal(adapt.now.change, "KEEP");
+  assert.equal(adapt.band?.pessimistic.reachedByDeadline, true, "the planned raise would make it");
+  assert.equal(adapt.band?.pessimisticHeld.reachedByDeadline, false, "the rate in force alone does not");
 });
 
 test("by hand: the finish time of the pessimistic world above the knee (8000 W held, reading 85, target 93): plateau, a one minute fall, then the tail", () => {
@@ -219,13 +222,20 @@ test("the learned capacity counts only when it is the larger (more energy needed
   assert.equal(plan({ targetSocPct: 70, learnedCapacityKwh: null }).now.setpointW, a);
 });
 
-test("before the window opens: the plan starts at the window start with the SOC unchanged, and says so", () => {
-  const early = plan({ elapsedMin: -90 });
+test("before the window opens: the plan starts at the window start from the SOC less the given drain bound, and says so; with no drain bound nothing is recommended", () => {
+  // with a drain bound of 0 W given explicitly the SOC is unchanged until the window opens (the earlier default, now only by explicit assumption)
+  const early = plan({ elapsedMin: -90, preWindowDrainW: 0 });
   assert.ok(early.codes.includes("BEFORE_WINDOW"));
   assert.equal(early.trajectory[0]?.atMin, 0);
   assert.equal(early.trajectory[0]?.inMin, 90);
   assert.equal(early.now.setpointW, plan().now.setpointW, "the same rate as at the window start");
   assert.equal(early.deadlineInMin, 330);
+  // no drain bound: the evening load drains the battery before the window, so the SOC at the window start is not known: refused, never OK
+  const blind = plan({ elapsedMin: -90 });
+  assert.equal(blind.status, "INPUTS_UNUSABLE");
+  assert.deepEqual(blind.codes, ["PRE_WINDOW_DRAIN_UNKNOWN"]);
+  assert.equal(blind.now.setpointW, null);
+  for (const bad of [null, NaN, -1, 30001, "600" as unknown as number]) assert.deepEqual(plan({ elapsedMin: -90, preWindowDrainW: bad }).codes, ["PRE_WINDOW_DRAIN_UNKNOWN"], String(bad));
 });
 
 test("after the deadline with the window still open: best effort, never OK, never a decrease", () => {
@@ -268,6 +278,8 @@ test("the actuator profiles: FREE_POWER_LEASE is one flat rate; TOU_SLOT_EDITOR 
 });
 
 test("in force: dwell, budget, a held rate after the knee, a forced decrease below the ceiling, hysteresis and slack", () => {
+  // the generic model is named explicitly (the default is now the most restrictive existing path); the calls that name another path keep it
+  const plan = (over: Partial<GentleNightInput> = {}): GentleNightPlan => planGentleNight({ ...base, actuatorProfile: "UNCONSTRAINED", ...over });
   const N = plan({ elapsedMin: 100, socPct: 40 }).now.setpointW as number; // the rate needed now with nothing in force
   const low = 2000;
   assert.ok(low < N);

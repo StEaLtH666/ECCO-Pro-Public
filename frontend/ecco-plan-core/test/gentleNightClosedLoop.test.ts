@@ -30,12 +30,18 @@ function runNight(seed: number, family: TruthFamily, over: { dropoutEvery?: numb
   const dwell = p.profile === "UNCONSTRAINED" ? 30 : profile.minDwellMin;
   const ceilings = [maxChargePowerCeiling(8000, p.ownerLimitW)];
   let inForce: NightInForce = { setpointW: null, lastChangeAtMin: null, changesUsed: 0 };
+  // KNEE_MIDWINDOW: an outside rate runs before the planner is first asked (the knee may be crossed at it); the planner then sees it as the rate in force
+  const pre = p.outsideW === undefined ? 0 : (p.preRunMin ?? 0);
+  if (p.outsideW !== undefined) {
+    truth.runTo(pre, p.outsideW);
+    inForce = { setpointW: p.outsideW, lastChangeAtMin: -60, changesUsed: 0 };
+  }
   let previous: { socPct: number; elapsedMin: number } | null = null;
   const plans: GentleNightPlan[] = [];
   let initial: GentleNightPlan | null = null;
   let startedW: number | null = null;
   let tick = 0;
-  for (let t = 0; t < p.windowMin; t += TICK, tick++) {
+  for (let t = pre; t < p.windowMin; t += TICK, tick++) {
     const reading = truth.reading();
     const stale = over.dropoutEvery !== undefined && tick % over.dropoutEvery === 3;
     const input = {
@@ -66,6 +72,8 @@ function runNight(seed: number, family: TruthFamily, over: { dropoutEvery?: numb
         for (const pt of plan.trajectory) assert.ok(pt.setpointW >= 500 && pt.setpointW <= Math.min(8000, p.ownerLimitW) && pt.setpointW % 100 === 0, "trajectory point " + JSON.stringify(pt));
         if (plan.trajectory.length > 1) assert.ok(maxChanges > 0, "a flat path has a flat trajectory");
         assert.ok(plan.trajectory.length - 1 <= maxChanges, "the trajectory stays inside the change budget");
+        // inside the declared envelope a raise after the truth's knee is never credited, so it is never recommended there (review finding BLOCKER 1)
+        if (family !== "STRESS" && truth.pastKnee()) assert.notEqual(plan.now.change, "INCREASE", "a raise past the truth's knee (seed " + seed + ", " + family + ", reading " + reading + ")");
         // the harness applies the recommendation and enforces the profile itself
         if (plan.now.change === "START") {
           inForce = { setpointW: w, lastChangeAtMin: t, changesUsed: 0 };
@@ -100,6 +108,51 @@ test("closed loop, inside the declared envelope: a plan that is OK at the start 
   assert.equal(missedOk, 0);
   assert.ok(ok >= 60, "the sweep must contain many feasible nights, got " + ok);
   assert.ok(atRisk >= 5, "and some that the planner calls at risk or unreachable, got " + atRisk);
+});
+
+test("closed loop, KNEE_MIDWINDOW (an outside rate in force within a few points of the knee, the knee possibly crossed at it): an OK at the first call makes the deadline", () => {
+  let ok = 0;
+  let notOk = 0;
+  let crossedFirst = 0;
+  for (let seed = 1; seed <= 240; seed++) {
+    const r = runNight(seed, "KNEE_MIDWINDOW");
+    const p = drawTruth(seed, "KNEE_MIDWINDOW");
+    if (r.initial.now.change === "INCREASE" && r.initial.codes.includes("HELD_PAST_KNEE")) assert.fail("a held rate cannot be an increase (seed " + seed + ")");
+    if (r.initialStatus === "OK") {
+      ok++;
+      assert.ok(r.reachedAt !== null && r.reachedAt <= r.deadlineMin + 1e-6, "seed " + seed + ": OK at the first call but reached at " + r.reachedAt + " against " + r.deadlineMin + " (" + JSON.stringify(p) + ")");
+    } else if (r.initialStatus !== "NO_NEED") notOk++;
+    if (r.initial.codes.includes("HELD_PAST_KNEE")) crossedFirst++;
+  }
+  assert.ok(ok >= 15, "OK nights near the knee: " + ok);
+  assert.ok(notOk >= 15, "and nights it calls at risk: " + notOk);
+  assert.ok(crossedFirst >= 20, "first calls held past the knee: " + crossedFirst);
+});
+
+test("closed loop, the review's case: 2000 W in force since before the window, the knee crossed at 2000 W, reading 90 at minute 5: no OK and no raise, and the truth does miss", () => {
+  // every parameter inside the declared envelope: capacity +6 %, efficiency 0.90, sensor +3 % (the knee shows at reading 90.73), tail 1/8, a cliff
+  for (const targetPct of [95, 100]) {
+    const p: TruthParams = {
+      seed: 1, family: "IN_ENVELOPE", helperKwh: 31.7, capKwh: 31.7 * 1.06, unit: "AC", effAc: 0.9, dcOver: 1, sensorErr: 0.03, kneeTrue: 91, tailFrac: 0.125, dropMin: 1,
+      trickleDecayPerHour: 0, noiseAmp: 0, startTrueSoc: 90.9, windowMin: 300, bufferMin: 60, targetPct, ownerLimitW: 8000, profile: "UNCONSTRAINED",
+    };
+    const truth = createTruth(p);
+    truth.runTo(5, 2000);
+    assert.ok(truth.pastKnee() && truth.cleanReading() > 90.73 && truth.cleanReading() < 91, "the knee is crossed at 2000 W: " + truth.cleanReading());
+    let inForce: NightInForce = { setpointW: 2000, lastChangeAtMin: -60, changesUsed: 0 };
+    for (let t = 5; t < 300; t += TICK) {
+      // the displayed reading is taken as the rounded-down clean value (90 at minute 5, as in the review), the worst case for the old rule
+      const plan = planGentleNight({
+        targetSocPct: targetPct, chargeWindow: { startMin: 30, endMin: 330 }, clockDay: ORDINARY, elapsedMin: t, socPct: Math.floor(truth.cleanReading()), socAgeMin: 1, capacityKwh: 31.7,
+        ceilings: [maxChargePowerCeiling(8000, 8000)], inForce, actuatorProfile: "UNCONSTRAINED",
+      });
+      assert.notEqual(plan.status, "OK", "minute " + t + " target " + targetPct + ": " + plan.codes.join(","));
+      assert.notEqual(plan.now.change, "INCREASE", "minute " + t);
+      if (plan.now.setpointW !== null && plan.now.change !== "KEEP") inForce = { setpointW: plan.now.setpointW, lastChangeAtMin: t, changesUsed: inForce.changesUsed + 1 };
+      truth.runTo(t + TICK, inForce.setpointW ?? 0);
+    }
+    assert.equal(truth.reachedAt(), null, "the truth misses the target inside the window (" + truth.cleanReading() + ")");
+  }
 });
 
 test("closed loop, outside the declared envelope (knee from 85, tail from 0, trickle): the safety invariants hold and a miss is never called certain-OK later", () => {

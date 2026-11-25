@@ -13,14 +13,22 @@
 //    The tail power is anchored to the plateau power AT THE KNEE (a later raise of the setpoint is never credited). Three worlds are simulated: the
 //    PESSIMISTIC one (earlier knee, lower tail, cliff, larger capacity, lower efficiency, a lower start) decides the rate; the expected and optimistic
 //    ones only describe the band. The knee SOC is NOT KNOWN (no SOC series was saved): the default pessimistic knee is a configurable 90.
+//    Whether the battery may already be past the knee is decided from the reading's OPTIMISTIC estimate (reading + resolution/2 + noise): when it is at or
+//    past the pessimistic knee (and the target is above it) the pessimistic world starts on the tail, anchored at the lower of the rate in force and the
+//    rate tried, and a rate in force is held (a raise inside the reading uncertainty is never credited).
 //  * Rate: the lowest 100 W step (not below 500 W) whose PESSIMISTIC simulation reaches the target by the deadline, from the measured SOC. When none does,
 //    the highest safe rate, status TARGET_AT_RISK (inside the buffer) or UNREACHABLE; the target is never lowered.
+//  * Status OK never relies on a later change: no path makes one by itself (each needs the owner, or the path does not exist), so OK is judged with the
+//    first rate HELD for the rest of the window; when only a planned later change makes the deadline the status is TARGET_AT_RISK (RELIES_ON_LATER_CHANGE).
 //  * Adaptation is honest: the trajectory is the closed-loop policy run on the expected world (re-plan from the measured SOC at each dwell interval,
 //    a change only when the profile's change budget and dwell allow it). Only the RATE_CONTROLLER_PROPOSED path (does not exist) and the unconstrained
-//    generic model can change a rate several times; TOU_SLOT_EDITOR allows at most one coarse, owner-confirmed change; FREE_POWER_LEASE none. Every
-//    point after the first is `conditional`: it is re-computed from the measured SOC when the time comes.
+//    generic model can change a rate several times; TOU_SLOT_EDITOR allows at most one coarse, owner-confirmed change; FREE_POWER_LEASE none (a rate in
+//    force above the ceiling on it gives STOP_RECOMMENDED, never a change). Every point after the first is `conditional`: it is re-computed from the
+//    measured SOC when the time comes. With no profile named, the most restrictive path that exists (FREE_POWER_LEASE) is assumed and said.
 //  * Unknown data is never guessed: stale or unknown SOC, capacity or limits give INPUTS_UNUSABLE. A KNOWN grid import limit with an unknown or stale
-//    demand also gives INPUTS_UNUSABLE; an UNKNOWN grid import limit applies no cap and says so (GRID_LIMIT_UNKNOWN_NO_CAP).
+//    demand also gives INPUTS_UNUSABLE; an UNKNOWN grid import limit applies no cap and says so (GRID_LIMIT_UNKNOWN_NO_CAP). Before the window a bound
+//    on the battery drain until it opens is required (the SOC at the window start is otherwise not known). A rate in force of 0 W is "not charging"
+//    (a START); one below the minimum or off the step (at or below the ceiling) is refused.
 import { ACTUATION_REASON, CONTROLLER_LABEL, DEFAULT_GENTLE_PARAMS, GENTLE_ACTUATOR_PROFILES, applyActuatorProfile, ceilingInSetpointUnits, effectiveCeiling, windowRealMinutes } from "./gentleController.ts";
 import type { ActuatorProfileId, NamedCeiling } from "./gentleController.ts";
 import { fmt, norm, span } from "./time.ts";
@@ -28,8 +36,8 @@ import type { ClockDay } from "./time.ts";
 import { LIMITS } from "./settings.ts";
 import type { NativeSlot } from "./tou.ts";
 
-export type NightStatus = "OK" | "TARGET_AT_RISK" | "UNREACHABLE" | "NO_NEED" | "INPUTS_UNUSABLE" | "CLOCK_CHANGE_NIGHT_REFUSED";
-export type NightChange = "START" | "KEEP" | "INCREASE" | "DECREASE" | "NONE";
+export type NightStatus = "OK" | "TARGET_AT_RISK" | "UNREACHABLE" | "STOP_RECOMMENDED" | "NO_NEED" | "INPUTS_UNUSABLE" | "CLOCK_CHANGE_NIGHT_REFUSED";
+export type NightChange = "START" | "KEEP" | "INCREASE" | "DECREASE" | "STOP" | "NONE";
 
 /** Every reason code the night planner can return (a closed list; the tests pin that nothing else is ever returned). */
 export const NIGHT_CODES = [
@@ -38,6 +46,7 @@ export const NIGHT_CODES = [
   "DEMAND_UNKNOWN", "CLOCK_CHANGE_NIGHT", "AT_TARGET", "RATE_GENTLEST", "RATE_AT_MINIMUM", "RATE_AT_CEILING", "START", "INCREASE_NEEDED", "DECREASE_SAVES",
   "HELD_DWELL", "HELD_BUDGET", "HELD_PATH_FIXED", "HELD_PAST_KNEE", "FORCED_BELOW_CEILING", "TARGET_ABOVE_KNEE", "TOP_OF_CHARGE_TAIL", "GRID_LIMIT_UNKNOWN_NO_CAP",
   "CEILING_AGE_UNKNOWN", "BEFORE_WINDOW", "DEADLINE_PASSED_WINDOW_OPEN", "RATE_NOT_ENOUGH_ALONE", "PESSIMISTIC_MISSES_DEADLINE", "RELIES_ON_LATER_CHANGE", "SETPOINT_UNIT_UNSETTLED",
+  "ACTUATOR_FIXED_RATE", "IN_FORCE_INVALID", "IN_FORCE_ZERO_NOT_CHARGING", "PRE_WINDOW_DRAIN_UNKNOWN", "PROFILE_DEFAULT_MOST_RESTRICTIVE",
 ] as const;
 export type NightCode = (typeof NIGHT_CODES)[number];
 
@@ -133,6 +142,13 @@ export interface GentleNightInput {
   clockDay: ClockDay;
   /** Real minutes since the window opened; negative before it (the plan then starts at the window start). */
   elapsedMin: number;
+  /**
+   * Required before the window opens (elapsedMin < 0): a PESSIMISTIC (high) bound on the battery's net discharge in W, battery side, from the moment of
+   * the reading until the window opens (the house load not covered by solar, divided by the discharge efficiency). The SOC at the window start is then
+   * the reading less this drain over the reading's age plus the time to the window, counted in the most points per kWh the bands allow. Missing before
+   * the window: PRE_WINDOW_DRAIN_UNKNOWN (never guessed). Ignored once the window is open.
+   */
+  preWindowDrainW?: number | null;
   socPct: number | null;
   socAgeMin: number | null;
   previousSoc?: { socPct: number; elapsedMin: number } | null;
@@ -141,7 +157,9 @@ export interface GentleNightInput {
   /** The safe power ceilings that are known (at least the firmware bound and the owner limit as one named ceiling, see maxChargePowerCeiling). */
   ceilings: readonly NamedCeiling[];
   household?: NightHousehold;
+  /** What is in force now. A setpoint of 0 W is "not charging" (the recommendation is a START); one above 0 W but below the minimum or off the step is refused. */
   inForce?: NightInForce | null;
+  /** The path a recommendation would be applied on. Missing: FREE_POWER_LEASE, the most restrictive path that exists (PROFILE_DEFAULT_MOST_RESTRICTIVE). */
   actuatorProfile?: ActuatorProfileId;
   params?: Partial<GentleNightParams>;
 }
@@ -192,11 +210,18 @@ export interface GentleNightPlan {
   now: { setpointW: number | null; change: NightChange; neededW: number | null; neededMeetsDeadline: boolean | null; ceilingW: number | null; ceilingName: string | null; minW: number; stepW: number };
   trajectory: TrajectoryPoint[];
   expectedFinish: { atMin: number; inMin: number; wallClock: string } | null;
-  band: { pessimistic: WorldOutcome; expected: WorldOutcome; optimistic: WorldOutcome } | null;
-  /** Minutes the pessimistic world finishes before the deadline (negative: after it); null when it does not finish in the window. */
+  /**
+   * The three worlds under the policy (with its conditional later changes), and the pessimistic world with the first rate HELD for the rest of the
+   * window: the status, the margin and the buffer that would fit are judged on `pessimisticHeld` (no path makes a later change by itself). After a STOP
+   * recommendation every world is the rate in force held (what happens if nothing is done).
+   */
+  band: { pessimistic: WorldOutcome; expected: WorldOutcome; optimistic: WorldOutcome; pessimisticHeld: WorldOutcome } | null;
+  /** Minutes the pessimistic world with the first rate held finishes before the deadline (negative: after it); null when it does not finish in the window. */
   marginMin: number | null;
-  /** The largest buffer (a multiple of 5) with which the pessimistic world would still make the deadline; null when none does. */
+  /** The largest buffer (a multiple of 5) with which the pessimistic world with the first rate held would still finish in the window; null when none does. */
   bufferThatWouldFitMin: number | null;
+  /** True only with STOP_RECOMMENDED: the rate in force is above the safe ceiling on a path that cannot lower it. */
+  stopRecommended: boolean;
   profile: NightProfileReport | null;
   /** What would be needed to apply the recommendation (nothing here applies it). */
   needed: string[];
@@ -242,18 +267,23 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   HELD_DWELL: "A change is recommended but the path's minimum time since the last change has not passed: the rate in force stays for now.",
   HELD_BUDGET: "A change is recommended but the path's changes for this window are used up: the rate in force stays.",
   HELD_PATH_FIXED: "A change is recommended but this path cannot change a rate after the start: the rate in force stays.",
-  HELD_PAST_KNEE: "The battery is past the pessimistic knee: the BMS sets the power there, a lower setpoint can only slow it and a higher one is not credited, so the rate in force is held.",
+  HELD_PAST_KNEE: "The battery may be past the pessimistic knee (the reading's optimistic estimate is at or past it): the BMS sets the power there, a lower setpoint can only slow it and a higher one is not credited, so the rate in force is held.",
   FORCED_BELOW_CEILING: "The rate in force is above the safe ceiling: it must come down to the ceiling whatever the budget and dwell say.",
   TARGET_ABOVE_KNEE: "The target is above the pessimistic knee, where the charge power falls to a low tail: it takes much longer and is the most at risk.",
   TOP_OF_CHARGE_TAIL: "At a 100 % target the battery may keep charging for a while after the reading reaches 100; stopping at the first 100 would cut it off.",
   GRID_LIMIT_UNKNOWN_NO_CAP: "The grid import limit is unknown, so no grid cap is applied (the plan does not know it would be crossed).",
   CEILING_AGE_UNKNOWN: "A safe ceiling came with no age and is taken as current.",
-  BEFORE_WINDOW: "The window has not opened: the plan starts at the window start and the SOC is taken as unchanged until then.",
+  BEFORE_WINDOW: "The window has not opened: the plan starts at the window start from the reading less the given drain bound over the reading's age and the time to the window.",
   DEADLINE_PASSED_WINDOW_OPEN: "The deadline has passed but the window is still open: best effort only.",
   RATE_NOT_ENOUGH_ALONE: "The expected world reaches the deadline but the pessimistic world does not.",
   PESSIMISTIC_MISSES_DEADLINE: "The pessimistic simulation misses the deadline at the highest safe rate.",
-  RELIES_ON_LATER_CHANGE: "The pessimistic world only makes the deadline with a planned later change (a raise after the dwell): not with the rate in force alone.",
+  RELIES_ON_LATER_CHANGE: "The pessimistic world only makes the deadline with a planned later change, and no path makes one by itself (each needs the owner, or the path does not exist): judged with the first rate held, the status is not OK.",
   SETPOINT_UNIT_UNSETTLED: "What the setpoint means (AC grid watts, DC battery watts or amps) is not established: the plan treats it as grid-side watts for energy and applies the overshoot allowance to converted limits.",
+  ACTUATOR_FIXED_RATE: "This path fixes the rate at the START: the rate in force cannot be lowered to the ceiling, so a STOP is recommended; the status and the band are for the rate in force.",
+  IN_FORCE_INVALID: "The rate in force is above 0 W but below the minimum or off the step (and not above the ceiling): it is not a setpoint this path can hold, so nothing is recommended.",
+  IN_FORCE_ZERO_NOT_CHARGING: "The rate in force is 0 W: taken as not charging, so the recommendation is a START (the change count given is kept).",
+  PRE_WINDOW_DRAIN_UNKNOWN: "The window has not opened and no bound on the battery drain until it opens was given: the SOC at the window start is not known, so nothing is recommended (never guessed).",
+  PROFILE_DEFAULT_MOST_RESTRICTIVE: "No actuator path was named: the most restrictive path that exists (the Free Power start, one fixed rate) is assumed.",
 });
 
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
@@ -326,9 +356,26 @@ interface SimState {
   kneeW: number | null;
 }
 
-function newState(w: World, t: number, soc: number, hintW: number | null): SimState {
-  const past = soc >= w.knee;
-  return { t, soc, kneeAt: past ? t - w.dropMin - 1 : null, kneeW: past ? hintW : null };
+/**
+ * Whether the battery may already be past the PESSIMISTIC knee: the reading's OPTIMISTIC estimate (reading + resolution/2 + noise) is at or past it. Only
+ * a target above the knee counts: inside the envelope a target at or below the pessimistic knee is reached on the plateau.
+ */
+function kneeMayBePassed(c: Ctx, reading: number): boolean {
+  return c.target > c.pess.knee + EPS && reading + c.upOffset >= c.pess.knee - EPS;
+}
+
+/**
+ * The simulation start of world `w` from a displayed reading, with `rateW` the rate simulated and `inForceW` the rate in force (null: none). The
+ * PESSIMISTIC world starts past its knee (on the tail, the fall over) whenever the knee may already be passed, with the tail anchored at the LOWER of the
+ * rate in force and the rate simulated: a raise inside the reading uncertainty is never credited. The other worlds start past their own knee only from
+ * their own position, anchored at the rate in force (or the rate simulated when none is in force).
+ */
+function startState(c: Ctx, w: World, t: number, reading: number, inForceW: number | null, rateW: number): SimState {
+  const soc = Math.min(100, Math.max(0, reading + w.offset));
+  const isPess = w.name === "pessimistic";
+  const past = isPess ? kneeMayBePassed(c, reading) : soc >= w.knee;
+  const anchor = inForceW === null ? rateW : isPess ? Math.min(inForceW, rateW) : inForceW;
+  return { t, soc, kneeAt: past ? t - w.dropMin - 1 : null, kneeW: past ? anchor : null };
 }
 
 /** Integral of the fall factor over the time since the knee from a to b (minutes), 1 on the plateau side, `tr` after the fall of length `drop`. */
@@ -346,6 +393,11 @@ function fallIntegral(a: number, b: number, tr: number, drop: number): number {
  * target is reached, or null. The plateau is linear; after the knee the factor falls to the tail, which is anchored to the plateau power at the knee.
  */
 function advance(w: World, st: SimState, rateW: number, until: number, target: number): number | null {
+  if (!(rateW > 0)) {
+    // no charge at all (a guard: a rate in force is validated and a candidate is at least the minimum, so this never divides by zero)
+    if (st.t < until) st.t = until;
+    return null;
+  }
   const perMin = (rateW * w.eff) / 1000 / 60 / w.pctKwh;
   while (st.t < until - EPS) {
     const dt = Math.min(1, until - st.t);
@@ -408,16 +460,20 @@ interface Ctx {
   hysteresis: number;
   slack: number;
   tick: number;
+  /** Points the reading's true position may be ABOVE the displayed reading (resolution / 2 + noise): the optimistic estimate decides the knee. */
+  upOffset: number;
+  /** True when the path cannot change a rate after the START (midWindowAdjustment false): a rate above the ceiling then gives a STOP, never a change. */
+  fixedPath: boolean;
   pess: World;
   exp: World;
   opt: World;
 }
 
-/** The lowest candidate whose constant-rate simulation in world `w` reaches the target by `deadline`; when none does, the top candidate and `feasible` false. */
-function lowestFeasible(c: Ctx, w: World, t: number, soc0: number, hintW: number | null, deadline: number): { rateW: number; feasible: boolean } {
+/** The lowest candidate whose constant-rate PESSIMISTIC simulation reaches the target by `deadline`; when none does, the top candidate and `feasible` false. */
+function lowestFeasible(c: Ctx, t: number, reading: number, inForceW: number | null, deadline: number): { rateW: number; feasible: boolean } {
   const reaches = (s: number): boolean => {
-    const st = newState(w, t, soc0, hintW ?? s);
-    const f = advance(w, st, s, deadline, c.target);
+    const st = startState(c, c.pess, t, reading, inForceW, s);
+    const f = advance(c.pess, st, s, deadline, c.target);
     return f !== null && f <= deadline + EPS;
   };
   let hi = c.cands.length - 1;
@@ -442,46 +498,51 @@ interface Choice {
 /** The one decision at one time: the same function decides NOW and every re-plan the projection makes, so the trajectory is the policy itself. */
 function choose(c: Ctx, reading: number, simT: number, now: number, f: NightInForce): Choice {
   const codes: NightCode[] = [];
-  const soc0 = Math.max(0, reading + c.pess.offset);
-  const need = lowestFeasible(c, c.pess, simT, soc0, f.setpointW, c.deadline);
-  let rate = need.rateW;
-  let change: NightChange = "START";
-  if (f.setpointW === null) {
+  const cur = f.setpointW === null ? null : Math.min(f.setpointW, c.ceilingW);
+  const need = lowestFeasible(c, simT, reading, cur, c.deadline);
+  if (f.setpointW === null || cur === null) {
     codes.push("START");
     codes.push(!need.feasible ? "RATE_AT_CEILING" : need.rateW <= c.minW ? "RATE_AT_MINIMUM" : "RATE_GENTLEST");
-  } else {
-    const cur = Math.min(f.setpointW, c.ceilingW);
-    if (f.setpointW > c.ceilingW) codes.push("FORCED_BELOW_CEILING");
-    const dwellOk = f.lastChangeAtMin === null || now - f.lastChangeAtMin >= c.dwell - EPS;
-    const budgetOk = f.changesUsed < c.maxChanges;
-    const pathOk = c.midWindow && c.maxChanges > 0;
-    const pastKnee = soc0 >= c.pess.knee - EPS;
-    const canChange = pathOk && budgetOk && dwellOk && !pastKnee;
-    const heldCode: NightCode = !pathOk ? "HELD_PATH_FIXED" : !budgetOk ? "HELD_BUDGET" : !dwellOk ? "HELD_DWELL" : "HELD_PAST_KNEE";
-    const st = newState(c.pess, simT, soc0, cur);
-    const fin = advance(c.pess, st, cur, c.deadline, c.target);
-    const curOk = fin !== null && fin <= c.deadline + EPS;
-    rate = cur;
-    if (!curOk) {
-      if (need.rateW > cur) {
-        if (canChange) {
-          rate = need.rateW;
-          codes.push("INCREASE_NEEDED");
-        } else codes.push(heldCode);
-      }
-      if (!need.feasible) codes.push("RATE_AT_CEILING");
-    } else {
-      const low = lowestFeasible(c, c.pess, simT, soc0, cur, c.deadline - c.slack);
-      const lowRate = low.feasible ? low.rateW : cur;
-      if (cur - lowRate >= c.hysteresis - EPS && lowRate >= c.minW) {
-        if (canChange) {
-          rate = lowRate;
-          codes.push("DECREASE_SAVES");
-        } else codes.push(heldCode);
-      }
-    }
-    change = rate > f.setpointW ? "INCREASE" : rate < f.setpointW ? "DECREASE" : "KEEP";
+    return { rateW: need.rateW, change: "START", codes, neededW: need.rateW, neededMeetsDeadline: need.feasible };
   }
+  if (f.setpointW > c.ceilingW) {
+    codes.push("FORCED_BELOW_CEILING");
+    if (c.fixedPath) {
+      // The path fixes the rate at the START: it cannot come down to the ceiling, so the only safe recommendation is a stop (never a change).
+      codes.push("ACTUATOR_FIXED_RATE");
+      return { rateW: f.setpointW, change: "STOP", codes, neededW: need.rateW, neededMeetsDeadline: need.feasible };
+    }
+  }
+  const held = cur;
+  const dwellOk = f.lastChangeAtMin === null || now - f.lastChangeAtMin >= c.dwell - EPS;
+  const budgetOk = f.changesUsed < c.maxChanges;
+  const pathOk = c.midWindow && c.maxChanges > 0;
+  const pastKnee = kneeMayBePassed(c, reading);
+  const canChange = pathOk && budgetOk && dwellOk && !pastKnee;
+  const heldCode: NightCode = !pathOk ? "HELD_PATH_FIXED" : !budgetOk ? "HELD_BUDGET" : !dwellOk ? "HELD_DWELL" : "HELD_PAST_KNEE";
+  const st = startState(c, c.pess, simT, reading, held, held);
+  const fin = advance(c.pess, st, held, c.deadline, c.target);
+  const curOk = fin !== null && fin <= c.deadline + EPS;
+  let rate = held;
+  if (!curOk) {
+    if (need.rateW > held) {
+      if (canChange) {
+        rate = need.rateW;
+        codes.push("INCREASE_NEEDED");
+      } else codes.push(heldCode);
+    }
+    if (!need.feasible) codes.push("RATE_AT_CEILING");
+  } else {
+    const low = lowestFeasible(c, simT, reading, held, c.deadline - c.slack);
+    const lowRate = low.feasible ? low.rateW : held;
+    if (held - lowRate >= c.hysteresis - EPS && lowRate >= c.minW) {
+      if (canChange) {
+        rate = lowRate;
+        codes.push("DECREASE_SAVES");
+      } else codes.push(heldCode);
+    }
+  }
+  const change: NightChange = rate > f.setpointW ? "INCREASE" : rate < f.setpointW ? "DECREASE" : "KEEP";
   return { rateW: rate, change, codes, neededW: need.rateW, neededMeetsDeadline: need.feasible };
 }
 
@@ -490,16 +551,21 @@ interface Projection {
   outcome: WorldOutcome;
 }
 
-/** Runs the policy in one world: the first decision (the same for every world), then a re-plan at each tick from the world's own SOC, inside the change budget and dwell. */
-function project(c: Ctx, w: World, reading0: number, now: number, first: Choice, force0: NightInForce): Projection {
+/**
+ * Runs the policy in one world: the first decision (the same for every world), then, when `replan`, a re-plan at each tick from the world's own SOC,
+ * inside the change budget and dwell; without `replan` the first rate is HELD for the rest of the window (the status basis). After a STOP the rate in
+ * force is what is held (what happens if nothing is done).
+ */
+function project(c: Ctx, w: World, reading0: number, now: number, first: Choice, force0: NightInForce, replan: boolean): Projection {
   const t0 = Math.max(now, 0);
   const forcedOnly = first.codes.includes("FORCED_BELOW_CEILING") && first.rateW === c.ceilingW;
   const drawsBudget = (first.change === "INCREASE" || first.change === "DECREASE") && !forcedOnly;
   let f: NightInForce = { setpointW: first.rateW, lastChangeAtMin: first.change === "KEEP" ? force0.lastChangeAtMin : t0, changesUsed: force0.changesUsed + (drawsBudget ? 1 : 0) };
   const segments: TrajectoryPoint[] = [{ atMin: t0, inMin: t0 - now, setpointW: first.rateW, change: first.change, conditional: false }];
-  const st = newState(w, t0, Math.min(100, Math.max(0, reading0 + w.offset)), force0.setpointW === null ? first.rateW : Math.min(force0.setpointW, c.ceilingW));
+  const inForceW = force0.setpointW === null ? null : first.change === "STOP" ? force0.setpointW : Math.min(force0.setpointW, c.ceilingW);
+  const st = startState(c, w, t0, reading0, inForceW, first.rateW);
   let finish: number | null = null;
-  if (c.midWindow && c.maxChanges > 0) {
+  if (replan && c.midWindow && c.maxChanges > 0) {
     for (let k = 1; ; k++) {
       const tk = t0 + k * c.tick;
       if (tk >= c.deadline - EPS || tk >= c.windowEnd) break;
@@ -532,7 +598,7 @@ function refuse(status: NightStatus, codes: NightCode[], bits: Partial<GentleNig
   return {
     label: CONTROLLER_LABEL, status, codes, reasons, targetSocPct: null, bufferMin: null, windowRealMin: null, deadlineMin: null, deadlineInMin: null,
     now: { setpointW: null, change: "NONE", neededW: null, neededMeetsDeadline: null, ceilingW: null, ceilingName: null, minW: LIMITS.chargePowerMin, stepW: 100 },
-    trajectory: [], expectedFinish: null, band: null, marginMin: null, bufferThatWouldFitMin: null, profile: null,
+    trajectory: [], expectedFinish: null, band: null, marginMin: null, bufferThatWouldFitMin: null, stopRecommended: false, profile: null,
     needed: ["Nothing can be recommended from these inputs, so nothing is to be applied: the fallback holds whatever is in force."], unknowns: UNKNOWNS.slice(), assumptions: null,
     actuationSupported: false, actuationReason: ACTUATION_REASON, guarantee: "NONE", guaranteeNote: NIGHT_GUARANTEE_NOTE, ...bits,
   };
@@ -568,7 +634,8 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   for (const k of Object.keys(DEFAULT_NIGHT_PARAMS) as (keyof GentleNightParams)[]) if ((given as Record<string, unknown>)[k] !== undefined) merged[k] = (given as Record<string, number>)[k] as number;
   const bad = paramsProblem(merged);
   if (bad !== null) return refuse("INPUTS_UNUSABLE", ["PARAMS_INVALID"], {}, bad);
-  const profileId: ActuatorProfileId = input.actuatorProfile === undefined ? "UNCONSTRAINED" : input.actuatorProfile;
+  const profileNamed = input.actuatorProfile !== undefined;
+  const profileId: ActuatorProfileId = profileNamed ? (input.actuatorProfile as ActuatorProfileId) : "FREE_POWER_LEASE";
   if (!Object.prototype.hasOwnProperty.call(GENTLE_ACTUATOR_PROFILES, profileId)) return refuse("INPUTS_UNUSABLE", ["PROFILE_INVALID"]);
   const tightened = applyActuatorProfile({ ...DEFAULT_GENTLE_PARAMS, stepW: merged.stepW, minW: merged.minW, hardMaxW: merged.hardMaxW, dwellMin: merged.dwellMin, maxChanges: merged.maxChanges }, profileId).params;
   const profile = GENTLE_ACTUATOR_PROFILES[profileId];
@@ -591,6 +658,7 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   if (!isNum(elapsed) || elapsed < -720) return refuse("INPUTS_UNUSABLE", ["ELAPSED_INVALID"]);
 
   const codes: NightCode[] = [];
+  if (!profileNamed) codes.push("PROFILE_DEFAULT_MOST_RESTRICTIVE");
   // SOC: unknown, stale or implausible is never guessed
   const soc = input.socPct;
   if (soc === null || soc === undefined || !isNum(soc)) return refuse("INPUTS_UNUSABLE", ["NO_SOC"]);
@@ -608,14 +676,24 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const nominal = input.capacityKwh;
   if (!isNum(nominal) || nominal <= 0 || nominal > 500) return refuse("INPUTS_UNUSABLE", ["CAPACITY_UNUSABLE"]);
   const capKwh = isNum(learned) && learned > 0 && learned <= 500 ? Math.max(nominal, learned) : nominal;
-  // the force record (what is in force now)
-  const force: NightInForce = input.inForce === undefined || input.inForce === null ? { setpointW: null, lastChangeAtMin: null, changesUsed: 0 } : input.inForce;
-  if (typeof force !== "object" || (force.setpointW !== null && (!isNum(force.setpointW) || force.setpointW < 0)) || !Number.isInteger(force.changesUsed) || force.changesUsed < 0 || (force.lastChangeAtMin !== null && !isNum(force.lastChangeAtMin))) {
+  // the force record (what is in force now); 0 W is "not charging": the recommendation is then a START
+  const given0 = input.inForce === undefined || input.inForce === null ? { setpointW: null, lastChangeAtMin: null, changesUsed: 0 } : input.inForce;
+  if (typeof given0 !== "object" || (given0.setpointW !== null && (!isNum(given0.setpointW) || given0.setpointW < 0)) || !Number.isInteger(given0.changesUsed) || given0.changesUsed < 0 || (given0.lastChangeAtMin !== null && !isNum(given0.lastChangeAtMin))) {
     return refuse("INPUTS_UNUSABLE", ["INPUT_INVALID"]);
   }
+  const force: NightInForce = given0.setpointW === 0 ? { setpointW: null, lastChangeAtMin: given0.lastChangeAtMin, changesUsed: given0.changesUsed } : given0;
+  if (given0.setpointW === 0) codes.push("IN_FORCE_ZERO_NOT_CHARGING");
   const deadline = W - buffer;
+  // before the window: the SOC at the window start is the reading less a given pessimistic drain bound, in the most points per kWh the bands allow
+  let socPlan = soc;
+  if (elapsed < 0) {
+    const drain = input.preWindowDrainW;
+    if (!isNum(drain) || drain < 0 || drain > 30000) return refuse("INPUTS_UNUSABLE", ["PRE_WINDOW_DRAIN_UNKNOWN"]);
+    const fewestKwhPerPct = (capKwh * (1 - P.capacityBandPct / 100)) / (1 + P.socScaleErrPct / 100) / 100;
+    socPlan = Math.max(0, soc - (drain * (age - elapsed)) / 60 / 1000 / fewestKwhPerPct);
+  }
 
-  if (soc >= target) {
+  if (socPlan >= target) {
     const c0: NightCode[] = ["AT_TARGET"];
     if (target >= 100) c0.push("TOP_OF_CHARGE_TAIL");
     return refuse("NO_NEED", c0, { targetSocPct: target, bufferMin: buffer, windowRealMin: W, deadlineMin: deadline, deadlineInMin: deadline - elapsed });
@@ -648,6 +726,9 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   ceiling = floorStep(ceiling, P.stepW);
   const minW = ceilStep(P.minW, P.stepW);
   if (ceiling < minW) return refuse("INPUTS_UNUSABLE", [ceilingName === "grid_headroom" ? "HEADROOM_BELOW_MIN" : "CEILING_BELOW_MIN"]);
+  // a rate in force above the ceiling is always forced down (or stopped); one at or below it must be a setpoint the path can hold
+  const inW = force.setpointW;
+  if (inW !== null && inW <= ceiling + EPS && (inW < minW - EPS || Math.abs(inW / P.stepW - Math.round(inW / P.stepW)) > 1e-9)) return refuse("INPUTS_UNUSABLE", ["IN_FORCE_INVALID"]);
   const cands: number[] = [];
   for (let s = minW; s <= ceiling + EPS; s += P.stepW) cands.push(s);
 
@@ -663,25 +744,32 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const midWindow = profile.midWindowAdjustment && P.maxChanges > 0;
   const ctx: Ctx = {
     target, deadline, windowEnd: W, cands, ceilingW: ceiling, minW, stepW: P.stepW, dwell: P.dwellMin, maxChanges: P.maxChanges, midWindow, hysteresis: P.hysteresisW,
-    slack: P.decreaseSlackMin, tick: Math.max(P.replanMin, P.dwellMin), pess, exp: expW, opt: optW,
+    slack: P.decreaseSlackMin, tick: Math.max(P.replanMin, P.dwellMin), upOffset: P.socResolutionPct / 2 + P.socNoisePct, fixedPath: !profile.midWindowAdjustment,
+    pess, exp: expW, opt: optW,
   };
 
   if (elapsed < 0) codes.push("BEFORE_WINDOW");
   if (elapsed > deadline) codes.push("DEADLINE_PASSED_WINDOW_OPEN");
-  const first = choose(ctx, soc, Math.max(elapsed, 0), elapsed, force);
+  const first = choose(ctx, socPlan, Math.max(elapsed, 0), elapsed, force);
   for (const k of first.codes) if (!codes.includes(k)) codes.push(k);
-  const pp = project(ctx, pess, soc, elapsed, first, force);
-  const pe = project(ctx, expW, soc, elapsed, first, force);
-  const po = project(ctx, optW, soc, elapsed, first, force);
-  const pf = pp.outcome.finishMin;
+  const pp = project(ctx, pess, socPlan, elapsed, first, force, true);
+  const ph = project(ctx, pess, socPlan, elapsed, first, force, false);
+  const pe = project(ctx, expW, socPlan, elapsed, first, force, true);
+  const po = project(ctx, optW, socPlan, elapsed, first, force, true);
+  // The status basis is the pessimistic world with the first rate HELD: no path makes a later change by itself (see the header), so OK never relies on one.
+  const pf = ph.outcome.finishMin;
   const ef = pe.outcome.finishMin;
+  const basisOk = pf !== null && pf <= deadline + EPS;
+  const plannedOk = pp.outcome.finishMin !== null && pp.outcome.finishMin <= deadline + EPS;
+  const stop = first.change === "STOP";
   let status: NightStatus;
-  if (pf !== null && pf <= deadline + EPS) status = "OK";
-  else if ((ef !== null && ef <= deadline + EPS) || (pf !== null && pf <= W + EPS)) status = "TARGET_AT_RISK";
+  if (stop) status = "STOP_RECOMMENDED";
+  else if (basisOk) status = "OK";
+  else if (plannedOk || (ef !== null && ef <= deadline + EPS) || (pf !== null && pf <= W + EPS)) status = "TARGET_AT_RISK";
   else status = "UNREACHABLE";
-  if (status === "OK" && pp.segments.length > 1) codes.push("RELIES_ON_LATER_CHANGE");
-  if (status !== "OK") codes.push("PESSIMISTIC_MISSES_DEADLINE");
-  if (status === "TARGET_AT_RISK" && !(pf !== null && pf <= W + EPS)) codes.push("RATE_NOT_ENOUGH_ALONE");
+  if (plannedOk && !basisOk) codes.push("RELIES_ON_LATER_CHANGE");
+  if (!basisOk) codes.push("PESSIMISTIC_MISSES_DEADLINE");
+  if (status === "TARGET_AT_RISK" && ef !== null && ef <= deadline + EPS && !(pf !== null && pf <= W + EPS)) codes.push("RATE_NOT_ENOUGH_ALONE");
   if (target > kneeP) codes.push("TARGET_ABOVE_KNEE");
   if (target >= 100) codes.push("TOP_OF_CHARGE_TAIL");
   codes.push("SETPOINT_UNIT_UNSETTLED");
@@ -706,7 +794,9 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const rate = first.rateW;
   const needed: string[] = [
     "Nothing here applies the rate: a person or a future controller has to.",
-    profileId === "TOU_SLOT_EDITOR"
+    stop
+      ? "Stop the charge on this path: the rate in force (" + rate + " W) is above the safe ceiling (" + ceiling + " W) and the path cannot lower it; a new START at or below " + ceiling + " W would be a new decision."
+      : profileId === "TOU_SLOT_EDITOR"
       ? "The owner's guarded TOU editor: Review, the typed phrase with its one-time code, Apply, with the charge slot power set to " + rate + " W before the window; each further change needs a new confirmation after " + P.dwellMin + " min; the editor refuses clock-change nights and near slot boundaries."
       : profileId === "FREE_POWER_LEASE"
         ? "The Free Power start (the scheduled Charge Battery package or the button) with the staged power " + rate + " W: it is fixed for the lease."
@@ -719,17 +809,18 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const reasons = uniq.map((k) => CODE_TEXT[k]);
   return {
     label: CONTROLLER_LABEL, status, codes: uniq, reasons, targetSocPct: target, bufferMin: buffer, windowRealMin: W, deadlineMin: deadline, deadlineInMin: deadline - elapsed,
-    now: { setpointW: rate, change: first.change, neededW: first.neededW, neededMeetsDeadline: first.neededMeetsDeadline, ceilingW: ceiling, ceilingName, minW, stepW: P.stepW },
-    trajectory: pe.segments.map((s) => ({ ...s, atMin: Math.round(s.atMin * 10) / 10, inMin: Math.round(s.inMin * 10) / 10, conditional: s.conditional })),
+    now: { setpointW: stop ? null : rate, change: first.change, neededW: first.neededW, neededMeetsDeadline: first.neededMeetsDeadline, ceilingW: ceiling, ceilingName, minW, stepW: P.stepW },
+    trajectory: stop ? [] : pe.segments.map((s) => ({ ...s, atMin: Math.round(s.atMin * 10) / 10, inMin: Math.round(s.inMin * 10) / 10, conditional: s.conditional })),
     expectedFinish: exFinish,
-    band: { pessimistic: pp.outcome, expected: pe.outcome, optimistic: po.outcome },
+    band: { pessimistic: pp.outcome, expected: pe.outcome, optimistic: po.outcome, pessimisticHeld: ph.outcome },
     marginMin: pf === null ? null : Math.round((deadline - pf) * 10) / 10,
     bufferThatWouldFitMin: pf !== null && W - pf >= 0 ? Math.min(120, Math.floor((W - pf) / 5 + EPS) * 5) : null,
+    stopRecommended: stop,
     profile: reportProfile, needed, unknowns: UNKNOWNS.slice(),
     assumptions: {
       capacityKwh: capKwh, capacityBandPct: P.capacityBandPct, chargeEff: P.chargeEff, chargeEffMin: P.chargeEffMin, chargeEffMax: P.chargeEffMax, socScaleErrPct: P.socScaleErrPct,
       kneePessimisticPct: pess.knee, kneeExpectedPct: expW.knee, kneeOptimisticPct: optW.knee, tailPessimistic: pess.tail, tailExpected: expW.tail, tailOptimistic: optW.tail,
-      setpointOvershoot: P.setpointOvershoot, startOffsetPessimisticPct: pess.offset,
+      setpointOvershoot: P.setpointOvershoot, startOffsetPessimisticPct: pess.offset, socAtPlanStartPct: Math.round(socPlan * 100) / 100,
     },
     actuationSupported: false, actuationReason: ACTUATION_REASON, guarantee: "NONE", guaranteeNote: NIGHT_GUARANTEE_NOTE,
   };
