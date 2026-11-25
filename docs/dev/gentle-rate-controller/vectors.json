@@ -1,0 +1,8125 @@
+{
+ "spec": "docs/dev/gentle-rate-controller/SPEC.md revision 1",
+ "frame": {
+  "E0": 1795000000,
+  "NOW0": 1000000,
+  "NIGHT0": 20261125
+ },
+ "vectors": [
+  {
+   "id": "V01",
+   "title": "START without an arm is refused and changes nothing",
+   "ticks": [
+    {
+     "dt": 0,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_NOT_ARMED",
+      "action": "NONE",
+      "disarm": false
+     }
+    }
+   ]
+  },
+  {
+   "id": "V02",
+   "title": "the owner turns the arm off before START",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_DISARMED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V03",
+   "title": "the one-shot arm expires after 12 h and must be cycled before it arms again",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 43200000,
+     "expect": {
+      "state": "IDLE",
+      "event": "R_ARM_EXPIRED",
+      "disarm": true
+     }
+    },
+    {
+     "dt": 1000,
+     "expect": {
+      "state": "IDLE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "expect": {
+      "state": "IDLE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V04",
+   "title": "a refused START consumes the arm: the arm input still on does not re-arm",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_FAULT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_FAULT"
+     },
+     "set": {
+      "fault": true
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "fault": false
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_NOT_ARMED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V05",
+   "title": "START and arm in the same IDLE tick: refused (not yet armed), then armed",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_REFUSE_NOT_ARMED",
+      "action": "NONE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V10",
+   "title": "START refused: wall clock not valid",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_CLOCK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_CLOCK"
+     },
+     "set": {
+      "epoch": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "V11",
+   "title": "START refused: night unknown",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_CLOCK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_CLOCK"
+     },
+     "set": {
+      "night_id": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "V12",
+   "title": "START refused: clock-change night",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_CLOCK_CHANGE",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_CLOCK_CHANGE"
+     },
+     "set": {
+      "clock_change_night": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V13",
+   "title": "START refused: inverter clock 121 s off",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_INVERTER_CLOCK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_INVERTER_CLOCK"
+     },
+     "set": {
+      "inv_skew_s": 121
+     }
+    }
+   ]
+  },
+  {
+   "id": "V14",
+   "title": "START refused: inverter clock unknown",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_INVERTER_CLOCK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_INVERTER_CLOCK"
+     },
+     "set": {
+      "inv_skew_s": -1
+     }
+    }
+   ]
+  },
+  {
+   "id": "V15",
+   "title": "START refused: RTC correction in progress",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_RTC",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_RTC"
+     },
+     "set": {
+      "rtc_busy": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V16",
+   "title": "START refused: a Free Power lease or restore is owed",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_OTHER",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_OTHER"
+     },
+     "set": {
+      "other": 1
+     }
+    }
+   ]
+  },
+  {
+   "id": "V17",
+   "title": "START refused: the TOU editor is in flight",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_OTHER",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_OTHER"
+     },
+     "set": {
+      "other": 4
+     }
+    }
+   ]
+  },
+  {
+   "id": "V18",
+   "title": "START refused: the shared write mutex is held",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_OTHER",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_OTHER"
+     },
+     "set": {
+      "mutex_busy": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V19",
+   "title": "START refused: inverter or BMS fault flags",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_FAULT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_FAULT"
+     },
+     "set": {
+      "fault": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V20",
+   "title": "START refused: telemetry not valid",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TELEMETRY",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_TELEMETRY"
+     },
+     "set": {
+      "tel_ok": false
+     }
+    }
+   ]
+  },
+  {
+   "id": "V21",
+   "title": "START refused: SOC unknown",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SOC",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SOC"
+     },
+     "set": {
+      "soc": -1
+     }
+    }
+   ]
+  },
+  {
+   "id": "V22",
+   "title": "START refused: SOC above 100 %",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SOC",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SOC"
+     },
+     "set": {
+      "soc": 1001
+     }
+    }
+   ]
+  },
+  {
+   "id": "V23",
+   "title": "START refused: plan not valid",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "valid": false
+     }
+    }
+   ]
+  },
+  {
+   "id": "V24",
+   "title": "START refused: plan with no points",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "n": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "V25",
+   "title": "START refused: plan ceiling below the floor",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "ceiling_w": 400
+     }
+    }
+   ]
+  },
+  {
+   "id": "V26",
+   "title": "START refused: plan ceiling not a multiple of 100",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "ceiling_w": 6050
+     }
+    }
+   ]
+  },
+  {
+   "id": "V27",
+   "title": "START refused: plan times not increasing",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "t": [
+       1795000000,
+       1795000000
+      ],
+      "p": [
+       6000,
+       5000
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "V28",
+   "title": "START refused: plan power above 10 kW",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "p": [
+       10001
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "V29",
+   "title": "START refused: plan window end not after the deadline",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "window_end": 1795014100
+     }
+    }
+   ]
+  },
+  {
+   "id": "V30",
+   "title": "START refused: plan slot 7",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "slot": 7
+     }
+    }
+   ]
+  },
+  {
+   "id": "V31",
+   "title": "START refused: plan capacity implausible",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_INVALID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_PLAN_INVALID"
+     },
+     "plan": {
+      "capacity_wh": 500
+     }
+    }
+   ]
+  },
+  {
+   "id": "V32",
+   "title": "START refused: slot carries no grid charge",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "set": {
+      "slot_grid": false
+     }
+    }
+   ]
+  },
+  {
+   "id": "V33",
+   "title": "START refused: plan target differs from the slot's own SOC target",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "set": {
+      "slot_target": 90
+     }
+    }
+   ]
+  },
+  {
+   "id": "V34",
+   "title": "START refused: now is outside the slot",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "set": {
+      "slot_start_min": 60
+     }
+    }
+   ]
+  },
+  {
+   "id": "V35",
+   "title": "START refused: the lease would outlast the slot (slot ends 03:20: 9840 s left, lease 14099 s)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "set": {
+      "slot_end_min": 200
+     }
+    }
+   ]
+  },
+  {
+   "id": "V36",
+   "title": "START refused: slot power below floor + hysteresis",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT_POWER",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT_POWER"
+     },
+     "set": {
+      "live_sp": 700
+     }
+    }
+   ]
+  },
+  {
+   "id": "V37",
+   "title": "START refused: slot power above the firmware bound",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT_POWER",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT_POWER"
+     },
+     "set": {
+      "live_sp": 8100
+     }
+    }
+   ]
+  },
+  {
+   "id": "V38",
+   "title": "START refused: SOC already at the target",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TARGET_MET",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_TARGET_MET"
+     },
+     "set": {
+      "soc": 1000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V39",
+   "title": "START refused: no grid charge running (900 W)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_NOT_CHARGING",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_NOT_CHARGING"
+     },
+     "set": {
+      "batt_w": 900
+     }
+    }
+   ]
+  },
+  {
+   "id": "V40",
+   "title": "START refused: realised 3900 W at 8000: gain 48 % (the slot power is not what limits the charge)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_IMPLAUSIBLE",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_IMPLAUSIBLE"
+     },
+     "set": {
+      "batt_w": 3900
+     }
+    }
+   ]
+  },
+  {
+   "id": "V41",
+   "title": "START refused: realised 12100 W at 8000: gain 151 %",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_IMPLAUSIBLE",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_IMPLAUSIBLE"
+     },
+     "set": {
+      "batt_w": 12100
+     }
+    }
+   ]
+  },
+  {
+   "id": "V42",
+   "title": "START refused: deadline 2999 s away",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TOO_LATE",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_TOO_LATE"
+     },
+     "plan": {
+      "deadline": 1795003000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V43",
+   "title": "START refused: the target is at risk even at today's rate",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TARGET_AT_RISK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_TARGET_AT_RISK"
+     },
+     "set": {
+      "soc": 250
+     }
+    }
+   ]
+  },
+  {
+   "id": "V43b",
+   "title": "START accepted just inside the target guard (SOC 26 %)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "set": {
+      "soc": 260
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V44",
+   "title": "START refused: telemetry 91 s old",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 91000,
+     "cfg": true,
+     "refresh": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TELEMETRY",
+      "disarm": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V45",
+   "title": "START refused: plan 1200.001 s old",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1200001,
+     "sample": true,
+     "cfg": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_PLAN_STALE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V46",
+   "title": "START refused: configuration read 180.001 s old",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 180001,
+     "sample": true,
+     "refresh": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_CONFIG_STALE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V47",
+   "title": "START refused: 6 writes already this night leave no change budget once 3 restores are reserved",
+   "boot": {
+    "flags": 0,
+    "night_id": 20261125,
+    "writes_night": 6
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "IDLE",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_WRITE_BUDGET",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_WRITE_BUDGET"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V48",
+   "title": "the same counter on a NEW night is reset and START is accepted",
+   "boot": {
+    "flags": 0,
+    "night_id": 20261125,
+    "writes_night": 6
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "IDLE",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "set": {
+      "night_id": 20261126
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "writes_night": 1
+     }
+    }
+   ]
+  },
+  {
+   "id": "V50",
+   "title": "standard lease start: one bounded write, verified, response judged",
+   "final": {
+    "state": "LEASED",
+    "v": 6000,
+    "changes": 1,
+    "writes_night": 1,
+    "record_flags": 5
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    }
+   ]
+  },
+  {
+   "id": "V51",
+   "title": "the same lease across the 32-bit uptime wrap",
+   "base_set": {
+    "now_ms": 4294937295
+   },
+   "final": {
+    "state": "LEASED",
+    "v": 6000
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    }
+   ]
+  },
+  {
+   "id": "V52",
+   "title": "dwell: a new plan waits 30 min after the last verified change",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     },
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 4900,
+      "state": "ADJUSTING",
+      "changes": 2,
+      "writes_night": 2,
+      "commit": true,
+      "event": "R_WRITE_REQUESTED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V53",
+   "title": "hysteresis: a change smaller than 300 W is never written",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 31,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       6300
+      ]
+     },
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V54",
+   "title": "reversal: a change against the previous direction needs 600 W",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 30,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       6600
+      ]
+     },
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       6800
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6600
+     }
+    }
+   ]
+  },
+  {
+   "id": "V55",
+   "title": "subtractive: never above the pre-lease value although the plan and the step cap allow more",
+   "base_set": {
+    "live_sp": 7000
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 5100,
+      "gain_pct": 117
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "repeat": 7,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 5300,
+      "live_sp": 5100
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 103,
+      "p_ref": 5300
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       10000
+      ]
+     },
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 7000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V56",
+   "title": "the owner ceiling wins over the step cap (a larger step, downward only)",
+   "base_plan": {
+    "ceiling_w": 5000
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 5000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V57",
+   "title": "the step cap bounds the START write",
+   "base_plan": {
+    "p": [
+     1000
+    ]
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V58",
+   "title": "START at the hysteresis edge writes",
+   "base_plan": {
+    "p": [
+     7900
+    ]
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 7700
+     }
+    }
+   ]
+  },
+  {
+   "id": "V59",
+   "title": "START with nothing to change holds the lease without a write",
+   "base_plan": {
+    "p": [
+     8000
+    ]
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "LEASED",
+      "action": "NONE",
+      "event": "R_LEASE_STARTED",
+      "commit": true,
+      "writes_night": 0,
+      "changes": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "V60",
+   "title": "a later plan point applies at its time (piecewise constant)",
+   "base_plan": {
+    "t": [
+     1794999940,
+     1795001800
+    ],
+    "p": [
+     6000,
+     5000
+    ]
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 4900
+     }
+    }
+   ]
+  },
+  {
+   "id": "V61",
+   "title": "at most 6 changes per lease (a night ceiling of 12 so that the change budget is what binds)",
+   "config": {
+    "dwell_ms": 60000,
+    "settle_ms": 5000,
+    "judge_samples": 1,
+    "night_write_ceiling": 12
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6000,
+      "writes_night": 1
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 4900,
+      "changes": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 5030,
+      "live_sp": 4900
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       4000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 3900,
+      "changes": 3
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 4000,
+      "live_sp": 3900
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       3000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 2900,
+      "changes": 4
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 2970,
+      "live_sp": 2900
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       2000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 2000,
+      "changes": 5
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 2050,
+      "live_sp": 2000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       1500
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 1500,
+      "changes": 6
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 1540,
+      "live_sp": 1500
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       1000
+      ]
+     },
+     "expect": {
+      "action": "NONE",
+      "changes": 6
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "NONE",
+      "changes": 6,
+      "writes_night": 6
+     }
+    }
+   ]
+  },
+  {
+   "id": "V61b",
+   "title": "the floor: never below 500 W however low the plan",
+   "config": {
+    "dwell_ms": 60000,
+    "settle_ms": 5000,
+    "judge_samples": 1
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6000
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       0
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 4000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 4100,
+      "live_sp": 4000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 2000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 2050,
+      "live_sp": 2000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 500
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 520,
+      "live_sp": 500
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 104
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "expect": {
+      "action": "NONE",
+      "v": 500
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "NONE",
+      "v": 500
+     }
+    }
+   ]
+  },
+  {
+   "id": "V61c",
+   "title": "a pre-lease value off the 100 W grid: changes stay on the grid, the restore writes it exactly",
+   "config": {
+    "dwell_ms": 60000,
+    "settle_ms": 5000,
+    "judge_samples": 1
+   },
+   "base_set": {
+    "live_sp": 6950
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 5100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 5300,
+      "live_sp": 5100
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       10000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6900
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "live_sp": 6900
+     },
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 6950
+     }
+    }
+   ]
+  },
+  {
+   "id": "V62",
+   "title": "the night write ceiling reserves 3 restores: with 3 writes earlier tonight only 3 changes",
+   "config": {
+    "dwell_ms": 60000,
+    "settle_ms": 5000,
+    "judge_samples": 1
+   },
+   "boot": {
+    "flags": 0,
+    "night_id": 20261125,
+    "writes_night": 3
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "IDLE",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6000,
+      "writes_night": 4
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 4900,
+      "changes": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 5030,
+      "live_sp": 4900
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       4000
+      ]
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 3900,
+      "changes": 3
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 4000,
+      "live_sp": 3900
+     },
+     "expect": {
+      "event": "R_RESPONSE_OK"
+     }
+    },
+    {
+     "dt": 50000,
+     "keep": true,
+     "plan": {
+      "p": [
+       3000
+      ]
+     },
+     "expect": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V63",
+   "title": "END while the write is in flight is latched and acted on after the verified write",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4,
+    "v": 0,
+    "changes": 0
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED"
+     }
+    },
+    {
+     "dt": 1000,
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_END",
+      "writes_night": 2,
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_END",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V64",
+   "title": "the deadline moves earlier with a new plan, never later; the lease ends there",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "deadline": 1795016000
+     },
+     "expect": {
+      "lease_end": 1795014100,
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "deadline": 1795000260
+     },
+     "expect": {
+      "lease_end": 1795000260,
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_DEADLINE",
+      "value": 8000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_DEADLINE",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V64b",
+   "title": "the deadline is inclusive: a tick exactly at the deadline ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "deadline": 1795000203
+     },
+     "expect": {
+      "lease_end": 1795000203
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_DEADLINE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V70b",
+   "title": "SOC above 100 % without a new frame ends the lease as invalid, not as target reached",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "cfg": true,
+     "refresh": true,
+     "set": {
+      "soc": 1001
+     },
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_SOC_INVALID"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V80b",
+   "title": "inverter clock unknown",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "inv_skew_s": -1
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_INVERTER_CLOCK",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_INVERTER_CLOCK",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V88b",
+   "title": "a change answered 'nothing written' is a failed write",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_WRITE_FAILED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V65",
+   "title": "Home Assistant outage: no plan hand-over for 20 min ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 20,
+     "dt": 60000,
+     "sample": true,
+     "cfg": true,
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "sample": true,
+     "cfg": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_PLAN_LOST",
+      "state": "RESTORING"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V66",
+   "title": "telemetry 91 s old ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 91000,
+     "cfg": true,
+     "refresh": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_TELEMETRY_STALE",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_TELEMETRY_STALE",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V67",
+   "title": "telemetry invalid ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "tel_ok": false
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_TELEMETRY_STALE",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_TELEMETRY_STALE",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V68",
+   "title": "an SOC jump of 6 % ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "soc": 460
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_SOC_INVALID",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_SOC_INVALID",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V69",
+   "title": "SOC falling 2.5 % below the lease maximum ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "soc": 430
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "soc": 405
+     },
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_SOC_INVALID"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V70",
+   "title": "SOC unknown ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "soc": -1
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_SOC_INVALID",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_SOC_INVALID",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V71",
+   "title": "a plan that changes the target ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "plan": {
+      "target": 90
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_PLAN_INVALID",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_PLAN_INVALID",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V72",
+   "title": "an invalid plan ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "plan": {
+      "valid": false
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_PLAN_INVALID",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_PLAN_INVALID",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V73",
+   "title": "a configuration read 181 s old ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 181000,
+     "sample": true,
+     "refresh": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_CONFIG_STALE",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_CONFIG_STALE",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V74",
+   "title": "the slot no longer charges from the grid",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "slot_grid": false
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_CONFIG_DRIFT",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_CONFIG_DRIFT",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V75",
+   "title": "the slot's SOC target changed",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "slot_target": 90
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_CONFIG_DRIFT",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_CONFIG_DRIFT",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V76",
+   "title": "Dump to Grid became active",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "other": 2
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_OTHER_ACTIVITY",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_OTHER_ACTIVITY",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V77",
+   "title": "inverter or BMS fault",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "fault": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_INVERTER_FAULT",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_INVERTER_FAULT",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V78",
+   "title": "clock-change night detected",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "clock_change_night": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_CLOCK_CHANGE",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_CLOCK_CHANGE",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V79",
+   "title": "wall clock lost",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "epoch": 0
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_CLOCK_INVALID",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_CLOCK_INVALID",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V80",
+   "title": "inverter clock 200 s off",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "inv_skew_s": 200
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_INVERTER_CLOCK",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_INVERTER_CLOCK",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V81",
+   "title": "the owner ends it (END)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_END",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_END",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V82",
+   "title": "a foreign slot power in a fresh read latches FAULT and writes nothing; ACK with a fresh read clears it",
+   "final": {
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "live_sp": 7000
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN",
+      "action": "NONE",
+      "commit": true
+     }
+    },
+    {
+     "dt": 200000,
+     "pulse": {
+      "ack": true
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "cfg": true,
+     "pulse": {
+      "ack": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_ACKED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V83",
+   "title": "a configuration read OLDER than the verified write may show the old value (fence); a newer one may not",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "cfg": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE"
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "sample": true,
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "sample": true,
+     "cfg": true,
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V84",
+   "title": "the original value reappearing after a verified change is foreign too",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "live_sp": 8000
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V85",
+   "title": "target reached ends the lease",
+   "base_plan": {
+    "target": 50
+   },
+   "base_set": {
+    "slot_target": 50
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "soc": 450
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "soc": 500
+     },
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_REACHED"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_TARGET_REACHED",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V86",
+   "title": "target guard: behind on time, the charge goes back to today's rate",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 39,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_GUARD"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V87",
+   "title": "uptime watchdog: a frozen wall clock cannot hold the lease open",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 243,
+     "dt": 60000,
+     "keep": true,
+     "epoch_hold": true,
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "epoch_hold": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_WATCHDOG"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V88",
+   "title": "write failed: restore at once",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_WRITE_FAILED",
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_WRITE_FAILED",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V89",
+   "title": "an operation without a result for 15 s is a failure",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 14999,
+     "set": {
+      "arm": false
+     },
+     "expect": {
+      "action": "NONE",
+      "state": "ADJUSTING"
+     }
+    },
+    {
+     "dt": 1,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_OP_TIMEOUT"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V90",
+   "title": "restore failing three times latches FAULT; the 30 s backoff is respected",
+   "final": {
+    "record_flags": 7,
+    "last_reason": "R_RESTORE_FAILED"
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "action": "NONE",
+      "event": "R_RESTORE_RETRY"
+     }
+    },
+    {
+     "dt": 29999,
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1,
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 2,
+      "writes_night": 3
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "event": "R_RESTORE_RETRY"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 3,
+      "writes_night": 4
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_RESTORE_FAILED",
+      "commit": true
+     }
+    },
+    {
+     "dt": 60000,
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V91",
+   "title": "the restore finds a foreign value: FAULT, nothing written",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "action": "RESTORE"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FOREIGN"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V92",
+   "title": "the pre-write ownership read finds a foreign value: FAULT, nothing written",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "pulse": {
+      "op": "FOREIGN"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN",
+      "action": "NONE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V93",
+   "title": "an RTC correction defers a due change; the change follows when it ends",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "set": {
+      "rtc_busy": true
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "set": {
+      "rtc_busy": false
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 4900
+     }
+    }
+   ]
+  },
+  {
+   "id": "V94",
+   "title": "an RTC correction for 5 min ends the lease; the restore waits for the bus",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 5,
+     "dt": 60000,
+     "keep": true,
+     "set": {
+      "rtc_busy": true
+     },
+     "expect_all": {
+      "state": "LEASED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_RTC_STUCK",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "rtc_busy": false
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V95",
+   "title": "a busy write mutex defers the restore",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "mutex_busy": true
+     },
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_END",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "mutex_busy": false
+     },
+     "expect": {
+      "action": "RESTORE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V96",
+   "title": "a busy write mutex defers a due change",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "set": {
+      "mutex_busy": true
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "mutex_busy": false
+     },
+     "expect": {
+      "action": "WRITE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V97",
+   "title": "wrong direction: the charge rose 500 W after a step down",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 8700,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_WRONG_DIRECTION",
+      "action": "RESTORE",
+      "value": 8000,
+      "state": "RESTORING"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V98",
+   "title": "no response twice below the taper ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 8150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_RESPONSE_WEAK",
+      "ineffective": 1,
+      "state": "LEASED",
+      "p_ref": 8150,
+      "gain_pct": 102
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 4400
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "repeat": 7,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "live_sp": 4400
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_NO_RESPONSE",
+      "action": "RESTORE",
+      "value": 8000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V99",
+   "title": "above the taper a weak response is the BMS: hold, no further changes",
+   "base_set": {
+    "soc": 900
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 8150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_BMS_LIMITED",
+      "bms_limited": true,
+      "state": "LEASED",
+      "ineffective": 0
+     }
+    },
+    {
+     "repeat": 31,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V100",
+   "title": "implausible gain: 2000 W at a 6000 setpoint (33 %)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 2000,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_IMPLAUSIBLE_GAIN",
+      "action": "RESTORE",
+      "state": "RESTORING"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V101",
+   "title": "runaway: three samples above 8200*115//100 + 500 = 9930 W",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "repeat": 2,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 9931,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "action": "NONE",
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_RUNAWAY",
+      "action": "RESTORE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V102",
+   "title": "9930 W exactly is not a runaway sample",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 9930,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "action": "NONE",
+      "state": "SETTLING"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V103",
+   "title": "the charge stopped (three samples under 100 W below the taper)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "repeat": 2,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 50,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "event": "R_CHARGE_STOPPED",
+      "action": "RESTORE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V104",
+   "title": "a repeated telemetry frame (same sequence) is not a new sample",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 9931,
+      "live_sp": 6000
+     }
+    },
+    {
+     "repeat": 5,
+     "dt": 1000,
+     "cfg": true,
+     "refresh": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "SETTLING"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V105",
+   "title": "restart during the lease: the boot restores the pre-lease value",
+   "final": {
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "reboot": {
+      "corrupt": -1
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_RESTORE_REQUESTED",
+      "writes_night": 2,
+      "restore_attempts": 1,
+      "last_reason": "R_BOOT_RECOVERY"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V106",
+   "title": "restart while the START write is in flight",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "reboot": {
+      "corrupt": -1
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "p": 6000,
+      "v": 8000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V107",
+   "title": "a corrupt record at boot latches FAULT (no automatic write)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "reboot": {
+      "corrupt": 7
+     },
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE",
+      "last_reason": "R_RECORD_CORRUPT"
+     }
+    },
+    {
+     "dt": 1000,
+     "cfg": true,
+     "pulse": {
+      "ack": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_ACKED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V108",
+   "title": "a record whose restores are exhausted boots into FAULT",
+   "boot": {
+    "flags": 5,
+    "slot": 1,
+    "original": 8000,
+    "v": 6000,
+    "p": 6000,
+    "night_id": 20261125,
+    "writes_night": 4,
+    "changes": 1,
+    "restore_attempts": 3,
+    "lease_end": 1795014100,
+    "reason": 79
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE",
+      "last_reason": "R_RESTORE_FAILED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V109",
+   "title": "a fault record boots into FAULT with its reason",
+   "boot": {
+    "flags": 7,
+    "slot": 1,
+    "original": 8000,
+    "v": 6000,
+    "p": 6000,
+    "night_id": 20261125,
+    "writes_night": 2,
+    "changes": 1,
+    "restore_attempts": 0,
+    "lease_end": 1795014100,
+    "reason": 100
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "FAULT",
+      "last_reason": "R_FOREIGN"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": true
+     },
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V110",
+   "title": "one lease per night; the next night may lease again",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_END",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_END",
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "batt_w": 8200,
+      "live_sp": 8000
+     },
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_NIGHT_USED"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "night_id": 20261126
+     },
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "writes_night": 1
+     }
+    }
+   ]
+  }
+ ],
+ "units": {
+  "classify": [
+   [
+    8000,
+    8000,
+    6000,
+    4900,
+    "CLS_ALREADY"
+   ],
+   [
+    6000,
+    8000,
+    6000,
+    4900,
+    "CLS_OWNED"
+   ],
+   [
+    4900,
+    8000,
+    6000,
+    4900,
+    "CLS_OWNED"
+   ],
+   [
+    7000,
+    8000,
+    6000,
+    4900,
+    "CLS_FOREIGN"
+   ],
+   [
+    0,
+    8000,
+    6000,
+    6000,
+    "CLS_FOREIGN"
+   ],
+   [
+    8000,
+    8000,
+    8000,
+    8000,
+    "CLS_ALREADY"
+   ]
+  ],
+  "records": [
+   {
+    "fields": {
+     "flags": 5,
+     "slot": 1,
+     "original": 8000,
+     "v": 6000,
+     "p": 4900,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 2,
+     "restore_attempts": 0,
+     "lease_end": 1795014100,
+     "reason": 44
+    },
+    "status": "DEC_OK"
+   },
+   {
+    "fields": {
+     "flags": 4,
+     "night_id": 20261125,
+     "writes_night": 3,
+     "reason": 50
+    },
+    "status": "DEC_OK"
+   },
+   {
+    "fields": {
+     "flags": 5,
+     "slot": 1,
+     "original": 8000,
+     "v": 8100,
+     "p": 6000,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 1,
+     "lease_end": 1795000000
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 5,
+     "slot": 0,
+     "original": 8000,
+     "v": 6000,
+     "p": 6000,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 1,
+     "lease_end": 1795000000
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 4,
+     "slot": 1,
+     "night_id": 20261125
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 8,
+     "night_id": 20261125
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 4,
+     "night_id": 20261125,
+     "writes_night": 10
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 5,
+     "slot": 1,
+     "original": 8000,
+     "v": 6000,
+     "p": 6000,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 7,
+     "lease_end": 1795000000
+    },
+    "status": "DEC_BAD_VALUE"
+   }
+  ]
+ }
+}
