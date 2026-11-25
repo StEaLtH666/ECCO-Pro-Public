@@ -1,0 +1,2003 @@
+"""Offline static suite: the Stage 3 LIMITATION is stated, in plain words and identically, everywhere a reader meets the Stage 3 overrides
+(release gate RG-ST3; owner directive of 17 Nov 2026, "do not describe Hold battery, Skip tonight or Prepare for power cut as fully enforced").
+
+The limitation: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an
+assistant. The Stage 3 overrides and the reserve protect ECCO's own starts and the dashboard card, NOT an administrator, an assistant or a press of
+the dongle's own button, and the helpers are plain helpers an administrator or assistant can write. Binding the Start button needs a firmware gate
+(a flash), which is a separate approval and is not part of Stage 3.
+
+  [1] places    ONE regex (the sentence, word for word, on one line) matches exactly once in each of: the card's visible Stage 3 controls (the source
+                and the built bundle), the card README, the plan-core README, and the headers of the two Stage 3 Home Assistant packages; in the
+                packages it sits on a comment line, so it adds no YAML content
+  [2] visible   in the card the note is a plain paragraph placed in the controls block ABOVE the "scripts not found" branch, so it is shown
+                whenever the controls are, with no event binding, no button and no link
+  [3] no path   the card source adds no call-service or write path for it: no service call in src/plan/, the controls keep exactly their two
+                click handlers, the plan call allow-list is still `script.turn_on` on three ids and names no button press, and the Stage 3
+                package headers add comments only
+  [4] mutation  each way of losing the text or adding a path is caught by the checks above; the untouched tree is not flagged
+  [5] manifest  the deployment manifest states the limitation in one short sentence on the guarded-start stanza (and never claims full enforcement);
+                the scheduled Dump to Grid stanza carries the helper dependency and the active-override warning beside R9's full-restart note;
+                the three Stage 3 stanzas (plan helpers, scheduled start, guarded start) say the plan helpers go in the SAME deployment, before the
+                ONE full restart, that the order of the stanzas does not matter, and make no copy-order claim (the deploy tool copies every package and
+                restarts only as a separate step); the guarded start package header says the same
+  [6] wording   (finding 3 of the independent review of 18 Nov 2026; additive) the corrected wording stands at each place that carries it: an override
+                holds back ECCO's own scheduled and guarded export starts, Prepare for power cut sets the reserve ECCO's plan uses, and no override changes the
+                inverter's own reserve, stops the house using the battery, charges the battery or binds the dongle's own Start button; the phrase 'protected
+                reserve' (any case) is absent from the card sources, the bundle, both READMEs and the plan helper package; the plan-core README has the
+                'Known limitations (stated, not fixed in this change)' section with all its items, each with its direction of failure; the Stage 3
+                limitation sentence is still in every place; mutants and a control
+  [7] second    (second independent review of the fixes, 18 Nov 2026; additive) the Known limitations section now has 22 items: 9 and 10 say what was shown (item 9 was
+                run and is not a failure; item 10 was only read), 11 is reworded, 19 to 22 are new (restart inside the repeated hour, the overwritten BLOCKED text, a
+                momentary unreadable sensor, the leftover staging); the status wording of each, the helper package comment, the schedule package header and the
+                CHANGELOG caveats are required, the over-claiming sentences must be gone; mutants and a control
+  [8] item 20   (owner decision r14, 19 Nov 2026; additive) limitation 20, the press-time BLOCKED text overwritten with STARTED OK, is FIXED: item 20, the schedule package header, the alert
+                sentence and the CHANGELOG say so in the new words, the old wording (overwritten, no alert, dismissed, only the record is lost) is gone from item 20 and the header, the Stage 3
+                limitation sentence (RG-ST3: the dongle's own Start button is not bound) stands exactly once in each place and item 20 and the header still say so, nothing says 'fully enforced',
+                all 22 items are still listed; mutants and a control
+  [9] item 19   (owner decision r14, 19 Nov 2026; additive) limitation 19, the restart inside the repeated hour, is MITIGATED offline by an absolute epoch record read raise-only: items 1, 11, 17
+                and 19 say so in the new words (the old 'open owner decision' wording is replaced, never merely dropped), the new item 23 (the card reads the timestamp attribute only: display
+                only, the backend decides) exists, the helper package comment and the CHANGELOG say so, the Stage 3 limitation sentence (RG-ST3) stands exactly once in each place, nothing says
+                'fully enforced', and all 23 items are listed; mutants and a control
+  [10] item 20 (owner decision r15, 19 Nov 2026; additive) limitation 20 is EXTENDED: a STARTING, FAILED or CANCELLED result is no longer overwritten with STARTED OK either. Item 20, the schedule package
+                header, the alert's two sentences (BLOCKED: this run did not start it; FAILED: this run did not confirm that it started it) and a new CHANGELOG bullet say so, the old wording ('is not covered
+                by the fix', 'keeps the rule it had', 'still replaced by STARTED OK') is gone, what is still true (a FAILED text can be a false negative) is stated, the RG-ST3 sentence stands exactly once in
+                each place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
+
+  [11] item 23 (owner decision r15, 19 Nov 2026; additive) limitation 23, the card could not cancel an override that only the epoch record holds, is FIXED offline: the card reads the epoch records, mirrors the backend's
+                read rule, offers the guarded Cancel for such an override and for a record it cannot read, and reads back the revision and BOTH records. Item 23 (FIXED, with what is not claimed), the item 19 sentence
+                about the card, the plan-core README's epoch row and card paragraph, the plan helper package comment and a new CHANGELOG bullet say so in the new words; the old wording ('does not read the absolute epoch
+                records', 'NOT changed', 'offers Cancel only for an override it shows as running') is gone; the card's reader and bundle name the three epoch records and nothing in the card writes one; the RG-ST3
+                sentence stands exactly once in each place, nothing says 'fully enforced', all 23 items are listed; mutants (the old wording restored is one) and a control
+  [12] item 20  (owner decision r15, 19 Nov 2026; additive) limitation 20's LAST path is FIXED: the startup recovery after a Home Assistant restart no longer writes STARTED OK over a result this schedule did not verify.
+                Item 20, the schedule package header and a new CHANGELOG bullet say so (a result that already starts with STARTED keeps the old text; FAILED, BLOCKED and CANCELLED are final; every other result becomes an
+                UNCONFIRMED text), the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'the same fallback as the old one') is gone, what is still true is stated (the Free Power schedule package
+                is unchanged, a FAILED text can be a false negative), the package CODE is pinned statically (one UNCONFIRMED text within 255 characters, the STARTED test and the FAILED, BLOCKED or CANCELLED test once each, no
+                unconditional STARTED OK write), item 23 carries its two review notes, RG-ST3 stands once per place, nothing says 'fully enforced', all 23 items are listed; mutants and a control
+  [13] item 10  (owner decision r15, 19 Nov 2026, rewritten by owner decision r30, 20 Nov 2026; additive) limitation 10, the schedule packages' start-time reads on the clock-change day, was EXAMINED offline on 19 Nov 2026;
+                R9 (merged) now implements, OFFLINE, P-A (arming refuses a skipped, repeated or unreadable start label, both schedule packages) and P-B (the Export to Grid arm-time TOU overlap walk uses the real instants).
+                Item 10 says, in separate places, what is implemented offline and what the offline proof is, what is NOT verified on a real Home Assistant (P-F open), what is NOT changed (the firmware START gate, arm
+                time only, the one-hour UK probe, the unchanged findings) and what you would see; the Known limitations introduction and two CHANGELOG bullets agree (the r15 bullet stays the record of 19 Nov 2026, its
+                superseded sentences marked). This REPLACES the r15 requirements that R9 made false ('there are findings and nothing was changed', 'PROPOSED and NOT implemented', 'NOT fail closed (reproduced)', 'is NOT
+                refused', 'its proposals are not implemented', 'so there is no backstop'): they are forbidden texts and killed mutants, every other old requirement is kept, and the new facts are pinned one by one. The claims
+                about the packages are tied to the package text; every 'implemented' is qualified ('offline' or 'not'), every 'verified' or 'proven' is 'not verified' or 'unverified'; nothing says 'fully enforced', 'guarantee'
+                or 'safe to'. Item 10 is still numbered 10 and names the clock-change day, the item count is still 23, the item and the bullets are ASCII and name no address or token, the RG-ST3 sentence stands once per place;
+                mutants and a control
+
+  [13b] review    (the independent review of 20 Nov 2026; additive) F1 the oracle method is worded exactly (every real UTC minute walked only to COUNT how often each wall-clock label occurs; the real arm
+                validation run once per label and compared with that count; the old 'run through the real arm validation' and 'minute by minute' are forbidden texts); F2 the over-claim guard is hardened
+                (banned words, 'passed' / 'installed' / 'deployed' only after a negation, 'flash' only as a decision not taken, 'implemented offline' must end its clause, every sentence that names a real system
+                needs a negation of its own) and is stated plainly as a WORD-LIST guard, defence in depth, not a proof; five over-claims of the review and ten rewordings are killed in all four scopes; F3 the
+                arm-time TOU walk runs only when the TOU slot table can be read (pinned, tied to the package text; whether an unreadable table should fail closed stays an open owner question); F4 a mutant whose
+                anchor is absent is reported by ONE final check and never raises
+
+Writes nothing; no Home Assistant, no network, no hardware. It proves the text is there and that no path was added; it does not make the
+overrides stronger (they stay a PARTIAL protection until the firmware boundary is addressed).
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+
+CARD = ROOT / "frontend" / "ecco-energy-actions-card"
+PLACES = {
+    "card controls (source)": CARD / "src" / "plan" / "controls.ts",
+    "card bundle": CARD / "dist" / "ecco-energy-actions-card.js",
+    "card README": CARD / "README.md",
+    "plan-core README": ROOT / "frontend" / "ecco-plan-core" / "README.md",
+    "package header: ecco_plan_helpers.yaml": ROOT / "home-assistant" / "packages" / "ecco_plan_helpers.yaml",
+    "package header: ecco_dump_to_grid_guarded_start.yaml": ROOT / "home-assistant" / "packages" / "ecco_dump_to_grid_guarded_start.yaml",
+}
+PACKAGE_PLACES = ("package header: ecco_plan_helpers.yaml", "package header: ecco_dump_to_grid_guarded_start.yaml")
+
+# The one sentence (ASCII, one line, no site value), restated here independently of the card source.
+LIMITATION = (
+    "Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant "
+    "or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of "
+    "the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a "
+    "firmware gate (a flash, approved separately)."
+)
+LIMITATION_RE = re.compile(re.escape(LIMITATION))
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
+
+def text_of(path: Path) -> str:
+    try:
+        return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    except OSError:
+        return ""
+
+
+BLOCK_COMMENT = re.compile(r"/\*[\s\S]*?\*/")
+LINE_COMMENT = re.compile(r"(?m)^\s*//.*$")
+
+
+def code_of(ts: str) -> str:
+    """TypeScript source with block comments and whole-line comments removed."""
+    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", ts))
+
+
+def places_problems(texts: dict[str, str]) -> list[str]:
+    out = []
+    for name in PLACES:
+        n = len(LIMITATION_RE.findall(texts.get(name, "")))
+        if n != 1:
+            out.append(f"{name}: {n}x")
+    return out
+
+
+def package_comment_problems(texts: dict[str, str]) -> list[str]:
+    """In each package the sentence is on a comment line (so no YAML content is added)."""
+    out = []
+    for name in PACKAGE_PLACES:
+        lines = [ln for ln in texts.get(name, "").split("\n") if LIMITATION in ln]
+        if len(lines) != 1 or not lines[0].lstrip().startswith("#"):
+            out.append(name)
+    return out
+
+
+def visible_problems(controls: str) -> list[str]:
+    """The note is one plain paragraph in controlsView, above the scripts-missing branch."""
+    out = []
+    note = re.findall(r"<p class=\"plan-reason plan-limitation\" data-plan-limitation role=\"note\">\$\{START_BUTTON_LIMITATION\}</p>", controls)
+    if len(note) != 1:
+        out.append(f"the note paragraph appears {len(note)}x")
+        return out
+    at, branch = controls.index(note[0]), controls.find("${vm.missingScripts.length")
+    if not 0 <= at < branch:
+        out.append("the note is not above the scripts-missing branch")
+    view = controls[controls.find("export function controlsView"):]
+    if view.find(note[0]) < 0 or view.find(note[0]) > view.find("vm.missingScripts.length"):
+        out.append("the note is not inside controlsView before its conditional")
+    if not re.search(r"export const START_BUTTON_LIMITATION =\s*\n?\s*\"" + re.escape(LIMITATION) + r"\";", controls):
+        out.append("START_BUTTON_LIMITATION is not exactly the sentence")
+    if re.search(r"data-plan-limitation[^>]*[@.?]?(click|change|input|keydown)", note[0]) or "@" in note[0] or "<button" in note[0] or "<a " in note[0]:
+        out.append("the note carries an event binding, a button or a link")
+    return out
+
+
+def path_problems(controls: str, actions: str, plan_dir_texts: dict[str, str]) -> list[str]:
+    out = []
+    cc = code_of(controls)
+    if "callService" in cc or re.search(r"\bhass\b", cc):
+        out.append("controls.ts calls the service layer or touches hass")
+    if len(re.findall(r"@click=", cc)) != 2:
+        out.append("controls.ts no longer has exactly its two click handlers (a choice and Cancel)")
+    if len(re.findall(r"\bdispatch\(", cc)) != 2:
+        out.append("controls.ts no longer dispatches exactly two calls")
+    for name, t in plan_dir_texts.items():
+        if "callService" in code_of(t):
+            out.append(f"src/plan/{name} names callService")
+    ac = code_of(actions)
+    ids = re.search(r"export const PLAN_CONTROL_IDS = \{(.*?)\} as const;", ac, re.S)
+    keys = sorted(re.findall(r"\"(\w+)\"\s*:", ids.group(1))) if ids else []
+    if keys != ["cancel_script", "last_result", "start_script"]:
+        out.append(f"PLAN_CONTROL_IDS is not the three declared ids ({keys})")
+    if not re.search(r"c\.domain !== \"script\" \|\| c\.service !== \"turn_on\"", ac):
+        out.append("the allow-list no longer requires script.turn_on")
+    if re.search(r"\"button\"|\bpress\b|\"switch\"|set_value|\"esphome\"|domain:\s*\"(?!script\")", ac):
+        out.append("planActions.ts names a button press or another domain")
+    return out
+
+
+texts = {name: text_of(p) for name, p in PLACES.items()}
+controls_text = texts["card controls (source)"]
+actions_text = text_of(CARD / "src" / "plan" / "planActions.ts")
+plan_dir = {p.name: text_of(p) for p in sorted((CARD / "src" / "plan").glob("*.ts"))}
+
+# ===========================================================================
+print("[1] places")
+# ===========================================================================
+check("every place exists and is readable", all(texts[n] for n in PLACES), str([n for n in PLACES if not texts[n]]))
+check("the sentence is ASCII, one line, and names no address, token or site value",
+      LIMITATION.isascii() and "\n" not in LIMITATION and not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", LIMITATION, re.I))
+for name in PLACES:
+    n = len(LIMITATION_RE.findall(texts[name]))
+    check(f"the limitation sentence stands exactly once in {name}", n == 1, f"{n}x")
+check("in each Stage 3 package it is a comment line (no YAML content added)", not package_comment_problems(texts), str(package_comment_problems(texts)))
+
+# ===========================================================================
+print("")
+print("[2] visible in the card")
+# ===========================================================================
+check("the card shows it as a plain paragraph above the scripts-missing branch of the controls, with no binding, button or link",
+      not visible_problems(controls_text), str(visible_problems(controls_text)))
+
+# ===========================================================================
+print("")
+print("[3] no call-service or write path")
+# ===========================================================================
+check("the card source adds no service call or write path for it (controls: two handlers, no callService, no hass; allow-list unchanged)",
+      not path_problems(controls_text, actions_text, plan_dir), str(path_problems(controls_text, actions_text, plan_dir)))
+check("no file under src/plan/ names callService", all("callService" not in code_of(t) for t in plan_dir.values()))
+check("the plan call allow-list still reads script.turn_on on exactly the override start, the override cancel and a configured guarded start",
+      "script.ecco_plan_override_start" in actions_text and "script.ecco_plan_override_cancel" in actions_text
+      and "isGuardedStart" in actions_text and "button.press" not in code_of(actions_text))
+
+# ===========================================================================
+print("")
+print("[4] mutation (each loss or added path is caught; the untouched tree is not flagged)")
+# ===========================================================================
+for name in PLACES:
+    gone = dict(texts)
+    gone[name] = texts[name].replace(LIMITATION, "")
+    check(f"mutant caught: the sentence removed from {name}", bool(places_problems(gone)))
+    soft = dict(texts)
+    soft[name] = texts[name].replace("Partial protection only", "Protected")
+    check(f"mutant caught: the heading words softened in {name}", bool(places_problems(soft)))
+    twice = dict(texts)
+    twice[name] = texts[name] + "\n" + LIMITATION
+    check(f"mutant caught: the sentence doubled in {name}", bool(places_problems(twice)))
+for name in PACKAGE_PLACES:
+    live = dict(texts)
+    live[name] = texts[name].replace("# STATED LIMITATION (release gate RG-ST3): " + LIMITATION, "limit: " + LIMITATION)
+    check(f"mutant caught: the sentence moved out of a comment in {name}", bool(package_comment_problems(live)))
+check("mutant caught: a click handler on the note", bool(visible_problems(controls_text.replace('role="note">${START_BUTTON_LIMITATION}', 'role="note" @click=${() => dispatch(x)}>${START_BUTTON_LIMITATION}'))))
+check("mutant caught: the note moved below the scripts-missing branch",
+      bool(visible_problems(re.sub(r"(      <p class=\"plan-reason plan-limitation\"[^\n]*\n)(      \$\{vm\.missingScripts\.length)", r"\2", controls_text).replace(
+          "</div>\n  `;\n}\n\n/** The renderer", "<p class=\"plan-reason plan-limitation\" data-plan-limitation role=\"note\">${START_BUTTON_LIMITATION}</p></div>\n  `;\n}\n\n/** The renderer"))))
+check("mutant caught: a callService in the controls", bool(path_problems(controls_text + "\nconst x = () => hass.callService('button', 'press', {});\n", actions_text, plan_dir)))
+check("mutant caught: a third click handler in the controls", bool(path_problems(controls_text + "\n// @click=\nhtml`<b @click=${() => 1}></b>`;\n", actions_text, plan_dir)))
+check("mutant caught: a button press in the plan allow-list", bool(path_problems(controls_text, actions_text.replace('c.service !== "turn_on"', 'c.service !== "press"'), plan_dir)))
+check("mutant caught: a fourth plan control id", bool(path_problems(controls_text, actions_text.replace('"cancel_script": "script.ecco_plan_override_cancel"', '"cancel_script": "script.ecco_plan_override_cancel",\n  "start_button": "button.x"'), plan_dir)))
+check("control: the untouched tree is not flagged", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text)
+      and not path_problems(controls_text, actions_text, plan_dir))
+
+# ===========================================================================
+print("")
+print("[5] the deployment manifest states the same limitation in one short sentence, on the guarded-start stanza, and its warnings stand on the schedule stanza")
+# ===========================================================================
+# The manifest is where an installer reads what a package needs and what it does not guarantee, so the unresolved limitation is stated there too, in
+# one short ASCII sentence (no number, entity id, address or site value), on a comment line in the comment block directly above the guarded start's
+# stanza. The manifest never calls the protection fully enforced. The scheduled Dump to Grid stanza carries the helper dependency (the plan helpers go in
+# the SAME deployment, before the ONE full restart; until they are installed and Home Assistant has restarted fully every scheduled start is refused) and
+# the active-override warning (while an override is active, the records cannot be read or the reserve is invalid, every scheduled and every guarded start
+# is REFUSED, seen only at the start time). The ORDER of the copies does not matter (the deploy tool copies every package in the manifest, checks the
+# configuration and restarts Home Assistant only when that is separately requested), so no stanza may say the plan helpers must be copied first; the
+# three stanzas (plan helpers, scheduled start, guarded start) say the same thing.
+MANIFEST = ROOT / "deployment" / "ha-manifest.yaml"
+MANIFEST_LIMITATION = "The dongle's own Start button is not bound by these protections (unresolved; it needs a firmware gate, approved separately)."
+GUARD_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml"
+SCHEDULE_STANZA = "  - source: home-assistant/packages/ecco_dump_to_grid_schedule.yaml"
+HELPERS_STANZA = "  - source: home-assistant/packages/ecco_plan_helpers.yaml"
+SCHEDULE_NOTES = ("FULL Home Assistant restart",                       # R9's note, kept
+                  "ecco_plan_helpers.yaml", "OVERRIDE_UNREADABLE",     # the helper dependency (its same-deployment wording: DEPENDENCY_NOTES)
+                  "Hold battery, Skip tonight or Prepare for power cut", "REFUSED", "blocked alert", "last-result text")   # the active-override warning
+# What each of the three Stage 3 stanzas says about the helper package, as prose (comment markers dropped, lines joined, so a phrase may wrap).
+DEPENDENCY_NOTES = {
+    "scheduled-start": ("SAME deployment", "ONE full Home Assistant restart", "does not matter", "every scheduled start is refused", "every guarded start is refused"),
+    "guarded-start": ("SAME deployment", "ONE full Home Assistant restart", "does not matter", "every guarded start is refused"),
+    "plan helpers": ("SAME deployment", "ONE full Home Assistant restart", "does not matter"),
+}
+DEPENDENCY_STANZAS = {"scheduled-start": SCHEDULE_STANZA, "guarded-start": GUARD_STANZA, "plan helpers": HELPERS_STANZA}
+COPY_ORDER_CLAIM = re.compile(r"plan helpers first|installed first|WITH or BEFORE|BEFORE the guarded|BEFORE the changed|copied first", re.I)
+FULL_CLAIM = re.compile(r"fully[- ]enforc|full enforcement|fully[- ]protect|completely (?:enforc|protect)", re.I)
+
+
+def block_above(lines: list[str], stanza: str) -> list[str]:
+    """The comment lines directly above `stanza` (empty when the stanza is missing or not preceded by comments)."""
+    if lines.count(stanza) != 1:
+        return []
+    j = lines.index(stanza)
+    k = j
+    while k > 0 and lines[k - 1].lstrip().startswith("#"):
+        k -= 1
+    return lines[k:j]
+
+
+def dependency_problems(lines: list[str]) -> list[str]:
+    """What each Stage 3 stanza says about the helper package: the same deployment, the one full restart, no copy-order claim."""
+    out = []
+    for name, stanza in DEPENDENCY_STANZAS.items():
+        prose = " ".join(ln.lstrip().lstrip("#").strip() for ln in block_above(lines, stanza))
+        lacking = [s for s in DEPENDENCY_NOTES[name] if s not in prose]
+        if lacking:
+            out.append(f"the {name} stanza's comment block lacks {lacking}")
+        claim = COPY_ORDER_CLAIM.search(prose)
+        if claim:
+            out.append(f"the {name} stanza's comment block claims a copy order ({claim.group(0)!r})")
+    return out
+
+
+def manifest_problems(text: str) -> list[str]:
+    out = []
+    lines = text.split("\n")
+    hits = [i for i, ln in enumerate(lines) if MANIFEST_LIMITATION in ln]
+    if len(hits) != 1 or text.count(MANIFEST_LIMITATION) != 1:
+        out.append(f"the limitation sentence stands {text.count(MANIFEST_LIMITATION)}x in {len(hits)} line(s), not exactly once")
+    elif not lines[hits[0]].lstrip().startswith("#"):
+        out.append("the limitation sentence is not on a comment line")
+    elif lines[hits[0]] not in block_above(lines, GUARD_STANZA):
+        out.append("the limitation sentence is not in the comment block directly above the guarded-start stanza")
+    if FULL_CLAIM.search(text):
+        out.append("the manifest claims full enforcement")
+    above = "\n".join(block_above(lines, SCHEDULE_STANZA))
+    missing = [s for s in SCHEDULE_NOTES if s not in above]
+    if missing:
+        out.append(f"the schedule stanza's comment block lacks {missing}")
+    out.extend(dependency_problems(lines))
+    return out
+
+
+manifest_text = text_of(MANIFEST)
+check("the manifest sentence is ASCII, one line, short, and spells no number, entity id, address or site value",
+      MANIFEST_LIMITATION.isascii() and "\n" not in MANIFEST_LIMITATION and len(MANIFEST_LIMITATION) < 140
+      and not re.search(r"\d|\b(?:sensor|switch|button|number|input_[a-z]+|script)\.|token|password", MANIFEST_LIMITATION, re.I))
+check("the manifest exists and is readable", bool(manifest_text))
+check("the manifest states the limitation exactly once, on a comment line directly above the guarded-start stanza; it never claims full enforcement; the schedule stanza "
+      "carries the helper dependency, the active-override warning and R9's full-restart note", not manifest_problems(manifest_text), str(manifest_problems(manifest_text)))
+check("the plan helpers, scheduled-start and guarded-start stanzas each say the plan helpers go in the SAME deployment, before the ONE full restart, that the order of "
+      "the stanzas does not matter, and none claims a copy order", not dependency_problems(manifest_text.split("\n")), str(dependency_problems(manifest_text.split("\n"))))
+check("the manifest names no entity id, address or site value in the notes above the two stanzas (comment lines only)",
+      not re.search(r"\b(?:sensor|switch|button|number|input_[a-z]+|binary_sensor)\.[a-z_]+|\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+                    "\n".join(block_above(manifest_text.split("\n"), GUARD_STANZA) + block_above(manifest_text.split("\n"), SCHEDULE_STANZA)), re.I))
+_gone = manifest_text.replace(MANIFEST_LIMITATION, "")
+check("mutant caught: the manifest sentence removed", bool(manifest_problems(_gone)))
+check("mutant caught: the manifest sentence doubled", bool(manifest_problems(manifest_text + "\n# " + MANIFEST_LIMITATION)))
+check("mutant caught: the manifest sentence softened", bool(manifest_problems(manifest_text.replace("is not bound by", "is bound by"))))
+check("mutant caught: the manifest sentence moved above another stanza",
+      bool(manifest_problems(manifest_text.replace("  # " + MANIFEST_LIMITATION + "\n", "").replace(SCHEDULE_STANZA, "  # " + MANIFEST_LIMITATION + "\n" + SCHEDULE_STANZA))))
+check("mutant caught: the manifest sentence on a line that is not a comment",
+      bool(manifest_problems(manifest_text.replace("# " + MANIFEST_LIMITATION, "note: " + MANIFEST_LIMITATION))))
+check("mutant caught: the manifest claims the protection is fully enforced", bool(manifest_problems(manifest_text + "\n# The overrides are fully enforced.")))
+check("mutant caught: the schedule stanza's helper dependency removed", bool(manifest_problems(manifest_text.replace("SAME deployment", "other deployment"))))
+
+
+def caught(mutant: str) -> bool:
+    """A mutant is caught when it really differs from the untouched manifest and the manifest check flags it."""
+    return mutant != manifest_text and bool(manifest_problems(mutant))
+
+
+check("mutant caught: the schedule stanza says the plan helpers go first again", caught(manifest_text.replace(SCHEDULE_STANZA, "  # Install the two together, the plan helpers first.\n" + SCHEDULE_STANZA)))
+check("mutant caught: the plan helpers stanza says BEFORE the guarded start again", caught(manifest_text.replace("the SAME deployment as the guarded start below", "BEFORE the guarded start below", 1)))
+check("mutant caught: the guarded-start stanza says installed first again", caught(manifest_text.replace("installed in the SAME deployment, before the ONE full", "installed first, before the ONE full", 1)))
+check("mutant caught: the guarded-start stanza no longer says every guarded start is refused until the helpers are in",
+      caught(manifest_text.replace("every guarded start\n  # is refused.", "every guarded start\n  # is allowed.", 1)))
+check("mutant caught: the one-full-restart statement removed from the scheduled-start stanza", caught(manifest_text.replace("before the ONE full Home Assistant restart (the R9 note", "before the restart (the R9 note", 1)))
+check("mutant caught: the order-does-not-matter sentence removed from the plan helpers stanza", caught(manifest_text.replace("(the order of the stanzas in this list does not matter): both", "): both", 1)))
+_guard_header = texts["package header: ecco_dump_to_grid_guarded_start.yaml"]
+
+
+def guard_header_problems(text: str) -> list[str]:
+    head = " ".join(ln.lstrip().lstrip("#").strip() for ln in text.split("\n")[:8])
+    out = []
+    if "installed in the same deployment, before the one full Home Assistant restart" not in head:
+        out.append("the header does not say the plan helpers go in the same deployment, before the one full restart")
+    if "installed first" in text:
+        out.append("the header says the plan helpers must be installed first")
+    return out
+
+
+check("the guarded start package header says the plan helpers go in the same deployment, before the one full restart, and claims no copy order",
+      not guard_header_problems(_guard_header), str(guard_header_problems(_guard_header)))
+check("mutant caught: the guarded start package header says installed first again",
+      bool(guard_header_problems(_guard_header.replace("installed in the same deployment, before the one full Home Assistant restart", "installed first"))))
+check("mutant caught: the schedule stanza's active-override warning removed", bool(manifest_problems(manifest_text.replace("last-result text", "result"))))
+check("mutant caught: R9's full-restart note removed from the schedule stanza", bool(manifest_problems(manifest_text.replace("FULL Home Assistant restart", "restart"))))
+check("control: the untouched manifest is not flagged", not manifest_problems(manifest_text))
+
+# ===========================================================================
+print("")
+print("[6] the corrected wording (what an override does and does not do), no 'protected reserve', and the known limitations (finding 3 of the review of 18 Nov 2026)")
+# ===========================================================================
+# Finding 3 (MAJOR, over-claim): the card and the documents said that Prepare for power cut "raises a protected reserve (never lowers it)". That over-stated
+# it. The raised reserve is the reserve ECCO's PLAN uses (the effective reserve sensor: the larger of the owner's reserve and a running power-cut reserve,
+# each rounded up). The trusted backend refuses the scheduled Dump to Grid start and the card's guarded manual start when it cannot be read or is invalid, and
+# raises the Stop SOC the scheduled start stages to at least that reserve; it does NOT change the inverter's own reserve or any inverter setting, does not
+# stop the house using the battery, does not charge the battery and does not bind the dongle's own Start button. These checks are ADDITIVE: they require that
+# wording at each place that carries it, forbid the old phrase, and require the "Known limitations" section of the plan-core README with all its items.
+CARD_SRC_DIR = CARD / "src"
+PLAN_HELPERS_PKG = ROOT / "home-assistant" / "packages" / "ecco_plan_helpers.yaml"
+OVERRIDE_POLICY_TS = ROOT / "frontend" / "ecco-plan-core" / "src" / "overridePolicy.ts"
+card_sources = {str(p.relative_to(CARD)).replace("\\", "/"): text_of(p) for p in sorted(CARD_SRC_DIR.rglob("*.ts"))}
+
+PROTECTED_RE = re.compile(r"protected\s+(?:reserve|floor)", re.I)
+INVERTER_RESERVE_RE = re.compile(r"(?:(?:does|do) not change the inverter's own reserve|the inverter's own reserve is not changed)", re.I)
+
+
+def flat(text: str) -> str:
+    """Prose view: every run of white space becomes one space, so a phrase may wrap across lines."""
+    return re.sub(r"\s+", " ", text)
+
+
+def flat_yaml(text: str) -> str:
+    """Prose view of a YAML file's comments: the comment marker at the start of each line is dropped, then as flat()."""
+    return flat(re.sub(r"(?m)^[ \t]*# ?", "", text))
+
+
+# What the card says now (the source strings; the bundle carries them too). The effect text of Prepare for power cut has a number in the middle, so it is two parts.
+CONTROLS_WORDING = (
+    "Holds back ECCO's own scheduled and guarded export starts. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+    "Holds back ECCO's own scheduled and guarded export starts tonight. It does not stop the battery charging or discharging, and it does not stop the dongle's own Start button.",
+    "Sets the reserve ECCO's plan uses to the larger of your own reserve and the power-cut reserve, and holds back ECCO's own export starts. It does not change the inverter's own reserve and does not stop the house using the battery. It does not charge the battery.",
+    "They hold back ECCO's own export starts and, for Prepare for power cut, set the reserve ECCO's plan uses. They do not change the inverter's own reserve or any inverter setting, do not stop the house using the battery and never charge it.",
+)
+PRESENT_WORDING = (
+    "An override can only hold back ECCO's own export starts or raise the reserve ECCO's plan uses; it never writes the inverter's table, does not change the inverter's own reserve and never stops a running session.",
+    "Intended: ECCO's own scheduled and guarded export starts are held; charging and the inverter table are untouched.",
+    "Intended: ECCO's own export starts tonight are held; charging continues.",
+    "Intended: the reserve ECCO's plan uses is ",
+    " % or more, and ECCO's own export starts are held. The inverter's own reserve is not changed.",
+)
+CARD_README_WORDING = (
+    "override holds back ECCO's own scheduled and guarded export starts; it does not stop the battery charging or discharging and it does not stop the dongle's own Start button.",
+    "Prepare for power cut also sets the reserve ECCO's plan uses (the larger of your own reserve and the power-cut reserve, each rounded up). It does not change the inverter's own reserve or any inverter setting, does not stop the house using the battery, and never charges.",
+    "\"Known limitations (stated, not fixed in this change)\"",
+)
+PLAN_CORE_README_WORDING = (
+    "**What an override does, and does not do.**",
+    "gate ECCO's own scheduled Dump to Grid start and the card's guarded manual start, and nothing else",
+    "Prepare for power cut also sets the reserve ECCO's plan uses",
+    "An override does NOT change the inverter's own reserve or any inverter setting, does NOT stop the house using the battery, does NOT stop the battery charging or discharging, does NOT charge the battery, and does NOT bind the dongle's own Start button",
+    "Prepare for power cut sets the reserve ECCO's plan uses (the row above) and NEVER charges",
+    "an unreadable input is skipped (the other value stands)",
+)
+PACKAGE_WORDING = (
+    "It is the reserve ECCO's own plan uses, not an inverter setting.",
+    "Prepare for power cut adds a running reserve to ECCO's plan",
+    "it does not change the inverter's own reserve or any inverter setting, it does not stop the house using the battery, it does not stop the battery charging or discharging, it never starts a charge, and it does not bind the dongle's own Start button",
+)
+
+LIMITS_HEADING = "### Known limitations (stated, not fixed in this change)"
+LIMIT_ITEMS = (   # (number, a phrase that must stand in the item's bold title, lower case)
+    (1, "unreadable input falls back"), (2, "raise-only is compared"), (3, "start and cancel can interleave"), (4, "does not handle a failed press"),
+    (5, "unguarded unless"), (6, "floored to the minute"), (7, "first-run seed marker"), (8, "owner_reserve"), (9, "0.0001"), (10, "clock-change day"),
+    (11, "timestamp"), (12, "not atomic"),
+    # beyond the twelve the review's list names: smaller or informational items
+    (13, "input shapes"), (14, "discretionary"), (15, "already staged"), (16, "confirmation switch"), (17, "modelled, not live-proven"), (18, "site mapping"),
+    # the second review of the fixes (18 Nov 2026): a restart inside the repeated hour, the overwritten BLOCKED text, a momentary unreadable sensor, the leftover staging
+    (19, "repeated hour"), (20, "overwritten"), (21, "momentary"), (22, "leftover staging"),
+    # owner decision r14 (19 Nov 2026): the card reads the timestamp attribute only (display only; the backend decides)
+    (23, "attribute only"),
+)
+DIRECTION_RE = re.compile(r"Direction: (?:fail open|fail closed|either way|neutral|informational|unknown|believed fail closed|not applicable|your limits)")
+# Item 10 (owner decision r15, 19 Nov 2026) lists a direction per finding, so its own direction is 'mixed, as listed'. That is allowed for item 10 ONLY (the set above is not widened for any other item).
+DIRECTION_MIXED_RE = re.compile(r"Direction: mixed, as listed\.")
+DIRECTION_MIXED_ITEMS = (10,)
+
+
+def card_text_places() -> dict[str, str]:
+    """The places that carry the corrected card wording (by name), as read now."""
+    return {
+        "card controls (source)": text_of(CARD / "src" / "plan" / "controls.ts"),
+        "card plan view (source)": text_of(CARD / "src" / "plan" / "present.ts"),
+        "card bundle": text_of(CARD / "dist" / "ecco-energy-actions-card.js"),
+        "card README": text_of(CARD / "README.md"),
+        "plan-core README": text_of(ROOT / "frontend" / "ecco-plan-core" / "README.md"),
+        "package: ecco_plan_helpers.yaml": text_of(PLAN_HELPERS_PKG),
+    }
+
+
+def wording_problems(t: dict[str, str]) -> list[str]:
+    """The corrected wording at every place that carries it, and the inverter's-own-reserve statement in the card text and both READMEs."""
+    out = []
+    for name in ("card controls (source)", "card bundle"):
+        for phrase in CONTROLS_WORDING:
+            if phrase not in flat(t.get(name, "")):
+                out.append(f"{name} lacks: {phrase[:70]}")
+    for name in ("card plan view (source)", "card bundle"):
+        for phrase in PRESENT_WORDING:
+            if phrase not in flat(t.get(name, "")):
+                out.append(f"{name} lacks: {phrase[:70]}")
+    for phrase in CARD_README_WORDING:
+        if phrase not in flat(t.get("card README", "")):
+            out.append(f"card README lacks: {phrase[:70]}")
+    for phrase in PLAN_CORE_README_WORDING:
+        if phrase not in flat(t.get("plan-core README", "")):
+            out.append(f"plan-core README lacks: {phrase[:70]}")
+    for phrase in PACKAGE_WORDING:
+        if phrase not in flat_yaml(t.get("package: ecco_plan_helpers.yaml", "")):
+            out.append(f"plan helper package lacks: {phrase[:70]}")
+    for name in ("card controls (source)", "card bundle", "card README", "plan-core README"):
+        if not INVERTER_RESERVE_RE.search(flat(t.get(name, ""))):
+            out.append(f"{name} does not say that an override does not change the inverter's own reserve")
+    return out
+
+
+def old_phrase_problems(t: dict[str, str]) -> list[str]:
+    """'protected reserve' (any case) must not stand in the card sources, the bundle, both READMEs or the plan helper package."""
+    return [name for name, text in t.items() if PROTECTED_RE.search(text)]
+
+
+def never_charges_problems(t: dict[str, str]) -> list[str]:
+    """The statements that an override never charges are still there (kept on purpose)."""
+    want = {
+        "card controls (source)": ("It does not charge the battery.",),
+        "card README": ("never charges",),
+        "plan-core README": ("NEVER charges",),
+        "package: ecco_plan_helpers.yaml": ("it never starts a charge",),
+    }
+    out = []
+    for name, phrases in want.items():
+        body = flat_yaml(t.get(name, "")) if name.startswith("package") else flat(t.get(name, ""))
+        out.extend(f"{name} lost: {p}" for p in phrases if p not in body)
+    return out
+
+
+def limitations_problems(readme: str) -> list[str]:
+    """The Known limitations section of the plan-core README: present once, all its items numbered in order, each naming its subject, its direction of failure and what you would see."""
+    n = readme.count(LIMITS_HEADING)
+    if n != 1:
+        return [f"the heading stands {n}x"]
+    start = readme.index(LIMITS_HEADING) + len(LIMITS_HEADING)
+    nxt = re.search(r"(?m)^#{2,3} ", readme[start:])
+    section = readme[start:start + nxt.start()] if nxt else readme[start:]
+    heads = [(int(num), title) for num, title in re.findall(r"(?m)^(\d+)\. \*\*(.+?)\*\*", section)]
+    out = []
+    if [num for num, _ in heads] != [num for num, _ in LIMIT_ITEMS]:
+        out.append(f"the numbered items are {[num for num, _ in heads]}, not 1..{len(LIMIT_ITEMS)}")
+        return out
+    bodies = re.split(r"(?m)^(?=\d+\. \*\*)", section)[1:]
+    for (num, phrase), (_, title), body in zip(LIMIT_ITEMS, heads, bodies):
+        if phrase not in title.lower():
+            out.append(f"item {num} does not name '{phrase}' in its title")
+        if not (DIRECTION_RE.search(flat(body)) or (num in DIRECTION_MIXED_ITEMS and DIRECTION_MIXED_RE.search(flat(body)))):
+            out.append(f"item {num} states no direction of failure")
+        if "You would see:" not in flat(body):
+            out.append(f"item {num} does not say what you would see")
+    return out
+
+
+w6 = card_text_places()
+scope_texts = dict(w6)
+scope_texts.update({f"card {k}": v for k, v in card_sources.items()})   # every card source file, by name
+scope_texts["package: ecco_dump_to_grid_guarded_start.yaml"] = texts["package header: ecco_dump_to_grid_guarded_start.yaml"]
+
+check("the corrected wording stands at each place that carries it: the card blurbs and Quick overrides note, the plan view's effect and status texts (source and bundle), "
+      "the card README, the plan-core README and the plan helper package comments", not wording_problems(w6), str(wording_problems(w6)))
+check("'protected reserve' (any case) is absent from every card source file, the card bundle, both READMEs and the plan helper package (and the guarded start package)",
+      not old_phrase_problems(scope_texts), str(old_phrase_problems(scope_texts)))
+check("the card sources are read (the scan is not vacuous)", len(card_sources) >= 15 and "src/plan/controls.ts" in card_sources, str(sorted(card_sources)[:3]))
+check("it is said, in the card text and in the plan-core README, that an override does not change the inverter's own reserve",
+      all(INVERTER_RESERVE_RE.search(flat(w6[n])) for n in ("card controls (source)", "card bundle", "plan-core README")))
+check("the statements that an override never charges are still there (card text, card README, plan-core README, package)", not never_charges_problems(w6), str(never_charges_problems(w6)))
+def refusal_text_problems(policy_ts: str, package_yaml: str) -> list[str]:
+    """The refusal text 'an override never lowers a reserve' stays, unchanged, in the validator and in the plan helper package (it is true there; the suites compare the two)."""
+    return [n for n, t in (("overridePolicy.ts", policy_ts), ("ecco_plan_helpers.yaml", package_yaml)) if "an override never lowers a reserve" not in t]
+
+
+check("the refusal text 'an override never lowers a reserve' is unchanged in the validator and in the plan helper package (true there; the suites compare the two)",
+      not refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"]), str(refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"])))
+check("nothing claims the overrides are fully enforced (the card sources, the bundle, both READMEs, the package comments)",
+      not [n for n, v in scope_texts.items() if FULL_CLAIM.search(v)], str([n for n, v in scope_texts.items() if FULL_CLAIM.search(v)]))
+check("the Stage 3 limitation sentence is still in every place it was, exactly once (the new section and the new wording did not add or remove a copy)",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("the plan-core README has the 'Known limitations (stated, not fixed in this change)' section: twenty-three numbered items (the review's twelve first, six smaller ones, the four of the second review, and item 23 of owner decision r14), each with its direction "
+      "of failure and what you would see", not limitations_problems(w6["plan-core README"]), str(limitations_problems(w6["plan-core README"])))
+check("the card README points to that section (a one-line pointer)", "Known limitations (stated, not fixed in this change)" in flat(w6["card README"]))
+
+# ---- mutants: each way of losing the corrected wording, re-introducing the old phrase or losing the section is caught; the untouched tree is not flagged ----
+for name in ("card controls (source)", "card plan view (source)", "card bundle", "card README", "plan-core README", "package: ecco_plan_helpers.yaml"):
+    bad = dict(w6)
+    bad[name] = w6[name] + "\nRaises a protected reserve (never lowers it).\n"
+    sc = dict(scope_texts)
+    sc[name] = bad[name]
+    check(f"mutant caught: 'raises a protected reserve' back in {name}", bool(old_phrase_problems(sc)))
+    sc[name] = w6[name] + "\nThe Protected\n  Reserve is raised.\n"
+    check(f"mutant caught: 'Protected Reserve' (case and a line wrap) back in {name}", bool(old_phrase_problems(sc)))
+_old_prepare = "Raises a protected reserve (never lowers it) and holds exports. It does not charge the battery."
+_new_prepare = CONTROLS_WORDING[2]
+check("mutant caught: the old Prepare for power cut blurb restored in the card source", bool(wording_problems({**w6, "card controls (source)": w6["card controls (source)"].replace(_new_prepare, _old_prepare)})))
+check("mutant caught: the old Prepare for power cut blurb restored in the bundle", bool(wording_problems({**w6, "card bundle": w6["card bundle"].replace(_new_prepare, _old_prepare)})))
+check("mutant caught: the old effect text 'the reserve is raised to ... (never lowered)' restored in the plan view",
+      bool(wording_problems({**w6, "card plan view (source)": w6["card plan view (source)"].replace(PRESENT_WORDING[3], "Intended: the reserve is raised to ").replace(PRESENT_WORDING[4], " % (never lowered) and export starts are held.")})))
+check("mutant caught: 'It does not charge the battery.' dropped from the card source", bool(never_charges_problems({**w6, "card controls (source)": w6["card controls (source)"].replace("It does not charge the battery.", "")})))
+check("mutant caught: 'NEVER charges' dropped from the plan-core README", bool(never_charges_problems({**w6, "plan-core README": w6["plan-core README"].replace("NEVER charges", "charges")})))
+check("mutant caught: the inverter's-own-reserve statement dropped from the card source",
+      bool(wording_problems({**w6, "card controls (source)": w6["card controls (source)"].replace("does not change the inverter's own reserve", "keeps the reserve")})))
+check("mutant caught: the inverter's-own-reserve statement dropped from the plan-core README",
+      bool(wording_problems({**w6, "plan-core README": re.sub(r"does NOT change the\s+inverter's own reserve", "keeps the reserve", w6["plan-core README"])})))
+check("mutant caught: the card README pointer to the limitations section removed",
+      bool(wording_problems({**w6, "card README": w6["card README"].replace("Known limitations (stated, not fixed in this change)", "Known limits")})))
+check("mutant caught: the package comment's 'does not bind the dongle's own Start button' dropped",
+      bool(wording_problems({**w6, "package: ecco_plan_helpers.yaml": w6["package: ecco_plan_helpers.yaml"].replace("it does not bind the dongle's own Start button", "it binds the Start button")})))
+check("mutant caught: the overrides called fully enforced in the card source", bool(FULL_CLAIM.search(w6["card controls (source)"] + "\n// The overrides are fully enforced.")))
+check("mutant caught: the refusal text reworded in the validator", bool(refusal_text_problems(text_of(OVERRIDE_POLICY_TS).replace("an override never lowers a reserve", "an override keeps a reserve"), w6["package: ecco_plan_helpers.yaml"])))
+check("mutant caught: the refusal text reworded in the plan helper package", bool(refusal_text_problems(text_of(OVERRIDE_POLICY_TS), w6["package: ecco_plan_helpers.yaml"].replace("an override never lowers a reserve", "an override keeps a reserve"))))
+check("mutant caught: the Stage 3 limitation sentence removed from the new section's neighbourhood (the plan-core README)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: the Stage 3 limitation sentence doubled by a copy in the Known limitations section",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITS_HEADING, LIMITS_HEADING + "\n\n" + LIMITATION)})))
+_lim = w6["plan-core README"]
+check("mutant caught: the Known limitations heading removed", bool(limitations_problems(_lim.replace(LIMITS_HEADING, "### Notes"))))
+check("mutant caught: the Known limitations heading doubled", bool(limitations_problems(_lim + "\n" + LIMITS_HEADING + "\n")))
+_h = _lim.find(LIMITS_HEADING)
+_sec_end = _lim.find("\n### ", _h + 1) if _h >= 0 else -1
+_built = 0
+for num, phrase in LIMIT_ITEMS[:-1]:   # remove item `num` from inside the section (other numbered lists of the README are left alone)
+    _a, _b = _lim.find(f"\n{num}. **", _h, _sec_end), _lim.find(f"\n{num + 1}. **", _h, _sec_end)
+    if _h >= 0 and 0 <= _a < _b:
+        _built += 1
+        check(f"mutant caught: limitation item {num} ('{phrase}') removed", bool(limitations_problems(_lim[:_a] + _lim[_b:])))
+_last = _lim.find(f"\n{len(LIMIT_ITEMS)}. **", _h, _sec_end)
+check("mutant caught: the last limitation item removed", _h >= 0 and 0 <= _last < _sec_end and bool(limitations_problems(_lim[:_last] + "\n" + _lim[_sec_end:])))
+check("the limitation-item mutants were all built (one per item but the last)", _built == len(LIMIT_ITEMS) - 1, f"{_built} built")
+check("mutant caught: an item's direction of failure removed", bool(limitations_problems(_lim.replace("Direction: fail open for that one number", "Note: for that one number"))))
+check("mutant caught: an item's 'You would see' removed", bool(limitations_problems(_lim.replace("You would see: a stale last result and no start.", "Nothing else."))))
+check("mutant caught: an item's subject reworded (the schedule packages' clock-change reads)", bool(limitations_problems(_lim.replace("clock-change day", "clock change"))))
+check("mutant caught: the items renumbered", bool(limitations_problems(_lim.replace("\n7. **The first-run", "\n8. **The first-run"))))
+check("control: the untouched tree is not flagged by the new checks", not wording_problems(w6) and not old_phrase_problems(scope_texts) and not never_charges_problems(w6) and not limitations_problems(_lim))
+
+# ===========================================================================
+print("")
+print("[7] the second independent review of the fixes (18 Nov 2026; additive): the limitation items say what was shown, and the caveats stand in the comments and the CHANGELOG")
+# ===========================================================================
+# The first version of known limitations 9 and 10 was written from a task text and not run. Item 9 (a reserve in (0, 0.0001)) was run against the current packages and simulators and
+# is NOT a failure there; item 10 (the schedule packages' start-time reads on the clock-change day) was only read. Both now say so. (Item 10 was examined offline on 19 Nov 2026 by owner decision r15: see [13], which replaces the wording required here.) Four items are new: 19 (a restart inside the repeated
+# hour may restore an expiry an hour early: recalled from Home Assistant core, not verified, not modelled), 20 (a press-time BLOCKED text overwritten with STARTED OK when Dump to Grid is
+# active as the loop ends; FIXED on 19 Nov 2026 by owner decision r14, see [8]), 21 (a momentarily unreadable sensor at press time costs that night's export) and 22 (the leftover staging). The checks below require the status wording of those
+# items, the four new items by name (LIMIT_ITEMS above, never fewer than before), and the caveats in the helper package comment, the schedule package header and the CHANGELOG; each is shown
+# to fail without it.
+SCHEDULE_PKG = ROOT / "home-assistant" / "packages" / "ecco_dump_to_grid_schedule.yaml"
+CHANGELOG = ROOT / "CHANGELOG.md"
+ITEM_STATUS = {   # item number -> phrases its body must carry (what was reproduced, what was only reasoned or recalled, what was not examined)
+    9: ("NOT reproduced", "Run now against the current packages and simulators", "Reasoned, not examined"),
+    # r15 (19 Nov 2026): item 10 was EXAMINED offline. The old requirement ("Shown by reading", "Not examined: what those reads give", "not reproduced and is not claimed") is false now and is replaced by the new
+    # wording; the old wording is forbidden and a killed mutant in [13] (OLD10_ITEM). r30 (20 Nov 2026): R9 implements P-A and P-B OFFLINE, so the old requirement "PROPOSED and NOT implemented" (false for those two) is
+    # replaced by "implemented offline" and "not verified on a real Home Assistant" (the old phrase is forbidden in [13]); every other phrase is kept.
+    10: ("EXAMINED offline on 19 Nov 2026", "NOT fail closed", "FAIL CLOSED", "NOT EXAMINABLE", "implemented offline", "not verified on a real Home Assistant", "28 Mar 2027"),
+    1: ("RETAINED since owner decision r14", "fail closed for the unreadable power-cut record"),
+    11: ("modelled, not live-proven", "stricter than the earlier state-string read", "the two are read raise-only, the later valid instant winning"),
+    17: ("input_number restores an exact ten-digit epoch", "whether `input_number.set_value` accepts a value that large"),
+    19: ("recalled", "not verified here", "NOT said to be preserved across a restart", "MITIGATED offline 19 Nov 2026 by owner decision r14", "the later of the two valid instants",
+         "an epoch record that is missing, reset to 0 or unreadable cannot release one the attribute still shows as running", "fail closed", "that includes a restart with an override running",
+         "The card now reads both records and offers the guarded Cancel (item 23, owner decision r15)"),   # r15: replaces "Not changed: the card (item 23)" (the card is changed now)
+    23: ("`timestamp` attribute only", "FIXED offline on 19 Nov 2026 (owner decision r15", "mirrors the backend's read rule", "the same Cancel", "BOTH records", "Cancel NOT confirmed",
+         "the backend, not the card, still decides", "not seen in a browser or on a real Home Assistant"),   # r15: replaces "display only; the backend decides", "does not read the absolute epoch records of item 19", "NOT changed", "Not reproduced in a browser"
+    20: ("FIXED on 19 Nov 2026 (owner decision r14)", "is never overwritten", "the schedule notifications are not dismissed", "Dump to Grid is active now",
+         "this run did not start it", "test_ecco_plan_enforcement.py` [12]", "still not bound by any override (RG-ST3)", "STARTING, FAILED or CANCELLED", "Not examined: how real Home Assistant renders the notice"),
+    21: ("Reproduced offline", "not examined: whether and for how long a real template reload", "lost until the owner arms the schedule again", "every attempt, the first included"),
+    22: ("Reproduced offline", "not examined on a dongle", "no step that restores the earlier values"),
+}
+SCHEDULE_HEADER_WORDING = (
+    "Fixed 19 Nov 2026 (owner decision r14: a refusal stays a refusal)",
+    "a result that starts with BLOCKED is never replaced by",
+    "the schedule notifications are not dismissed",
+    "that Dump to Grid is active now and that this run did not start it",
+    "which no override binds (RG-ST3)",
+    "Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)",   # r15: replaces "A STARTING, FAILED or CANCELLED result keeps the rule it had" (the old rule is gone)
+    "It runs on EVERY attempt, the first included",
+    "momentarily unknown or unavailable at that moment",
+    "that night's scheduled export is lost until the owner arms it again",
+    "The staging of that attempt stays on the dongle",
+    "the steps after the loop still run",
+    "This script presses nothing in that case",
+)
+HELPER_COMMENT_WORDING = (
+    "NOT PROVEN, and not claimed",
+    "stays so across a restart",
+    "restores that expiry 60 minutes early",
+    "MITIGATED offline by source 2 (owner decision r14), and remains an item for the supervised check",
+)
+CHANGELOG_WORDING = (
+    "stricter than before when the attribute is missing",
+    "Residual, not fixed and not proven in real Home Assistant",
+    "The attribute is not claimed to be preserved across a restart",
+)
+OLD_WORDING = (   # the sentences that over-claimed: they must not stand
+    ("the plan helper package comment", "which is the true instant"),
+    ("the CHANGELOG", "exactly as an unparseable state was"),
+    ("the CHANGELOG", "(the true instant) instead of parsing"),
+    ("the CHANGELOG", "late and never early"),
+)
+
+
+def item_bodies(readme: str) -> dict[int, str]:
+    """The Known limitations items of the plan-core README as {number: flat text}; empty when the section is not there exactly once."""
+    if readme.count(LIMITS_HEADING) != 1:
+        return {}
+    start = readme.index(LIMITS_HEADING) + len(LIMITS_HEADING)
+    nxt = re.search(r"(?m)^#{2,3} ", readme[start:])
+    section = readme[start:start + nxt.start()] if nxt else readme[start:]
+    out: dict[int, str] = {}
+    for part in re.split(r"(?m)^(?=\d+\. \*\*)", section)[1:]:
+        out[int(re.match(r"(\d+)\.", part).group(1))] = flat(part)
+    return out
+
+
+def status_problems(readme: str) -> list[str]:
+    bodies = item_bodies(readme)
+    out = []
+    for num, phrases in ITEM_STATUS.items():
+        body = bodies.get(num, "")
+        out.extend(f"item {num} lacks: {p}" for p in phrases if p not in body)
+    return out
+
+
+def comment_problems(helper_text: str, schedule_text: str, changelog: str) -> list[str]:
+    out = []
+    fh, fs, fc = flat_yaml(helper_text), flat_yaml(schedule_text), flat(changelog)
+    out.extend(f"the plan helper package comment lacks: {p}" for p in HELPER_COMMENT_WORDING if p not in fh)
+    out.extend(f"the schedule package header lacks: {p}" for p in SCHEDULE_HEADER_WORDING if p not in fs)
+    out.extend(f"the CHANGELOG lacks: {p}" for p in CHANGELOG_WORDING if p not in fc)
+    for where, phrase in OLD_WORDING:
+        body = {"the plan helper package comment": fh, "the CHANGELOG": fc}[where]
+        if phrase in body:
+            out.append(f"{where} still says: {phrase}")
+    return out
+
+
+NOOP_MUTANTS: list[str] = []   # every mutation whose anchor was absent from the text it mutates (reported by ONE final check; a missing anchor never raises)
+
+
+def drop_phrase(text: str, phrase: str) -> str:
+    """`text` with every occurrence of `phrase` replaced by 'REMOVED' (whitespace in the phrase may match a line wrap). When the phrase is absent the text comes back
+    UNCHANGED and the phrase is recorded in NOOP_MUTANTS (a clean FAIL of the final check, never an AssertionError): a mutant that cannot be built is reported, not a crash."""
+    pat = r"\s+".join(re.escape(w) for w in phrase.split())
+    new, n = re.subn(pat, "REMOVED", text)
+    if n < 1:
+        NOOP_MUTANTS.append(phrase)
+    return new
+
+
+def item_span(readme: str, num: int) -> tuple[int, int] | None:
+    """The slice of the README that is limitation item `num` (from its newline to the start of the next item or section); None when the heading or the item is missing."""
+    h = readme.find(LIMITS_HEADING)
+    a = readme.find(f"\n{num}. **", h) if h >= 0 else -1
+    if a < 0:
+        return None
+    b = readme.find(f"\n{num + 1}. **", a)
+    if b < 0:
+        b = readme.find("\n### ", a)
+    return (a, b) if b > a else None
+
+
+def drop_in_item(readme: str, num: int, phrase: str) -> str:
+    """The README with every occurrence of `phrase` removed from limitation item `num` only (the other items are left alone); unchanged (and recorded) when the item is missing."""
+    span = item_span(readme, num)
+    if span is None:
+        NOOP_MUTANTS.append(f"item {num}: {phrase}")
+        return readme
+    a, b = span
+    return readme[:a] + drop_phrase(readme[a:b], phrase) + readme[b:]
+
+
+s2_helper, s2_schedule, s2_changelog = text_of(PLAN_HELPERS_PKG), text_of(SCHEDULE_PKG), text_of(CHANGELOG)
+s2_readme = w6["plan-core README"]
+check("the limitation items say what was shown: 9 (not reproduced, run now, the rest only reasoned), 10 (EXAMINED offline since r15; P-A and P-B implemented offline since r30, not verified on a real Home Assistant), 11, and the new 19 to 22 (recalled or reproduced offline, and what was "
+      "not examined)", not status_problems(s2_readme), str(status_problems(s2_readme)))
+check("the plan-core README has the four items of the second review (19 restart in the repeated hour, 20 overwritten BLOCKED text, 21 momentary unreadable sensor, 22 leftover staging) "
+      "after the earlier eighteen, none removed", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and [p for n, p in LIMIT_ITEMS if 19 <= n <= 22] == ["repeated hour", "overwritten", "momentary", "leftover staging"]
+      and not limitations_problems(s2_readme), str(limitations_problems(s2_readme)))
+check("the caveats stand: the plan helper package comment says the timestamp attribute is NOT proven and not claimed across a restart (the open decision), the schedule package header says "
+      "what the press-time recheck costs and the STARTED OK overwrite, and the CHANGELOG says stricter-when-missing and the residual; the over-claiming sentences are gone",
+      not comment_problems(s2_helper, s2_schedule, s2_changelog), str(comment_problems(s2_helper, s2_schedule, s2_changelog)))
+_s2_items = " ".join(item_bodies(s2_readme).values())
+check("the limitation items name no address, token or site value, and neither they nor the two package comments claim anything fully enforced",
+      bool(_s2_items) and not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", _s2_items, re.I)
+      and not FULL_CLAIM.search(_s2_items + " " + flat_yaml(s2_helper) + " " + flat_yaml(s2_schedule)))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+_cut = s2_readme.find("\n19. **", s2_readme.find(LIMITS_HEADING))
+_end = s2_readme.find("\n### ", _cut)
+check("mutant caught: the four items of the second review removed (the README back to eighteen items)", _cut > 0 and _end > _cut and bool(limitations_problems(s2_readme[:_cut] + "\n" + s2_readme[_end:])))
+check("mutant caught: item 9 worded as a fact again ('reads as unreadable', starts refused)",
+      bool(status_problems(s2_readme.replace("a failure was suspected and was NOT reproduced", "renders in exponent form and reads as unreadable"))))
+check("mutant caught: item 10 worded as not examined again (the statement that it was EXAMINED offline lost)", bool(status_problems(drop_in_item(s2_readme, 10, "EXAMINED offline on 19 Nov 2026"))))
+for num, phrases in ITEM_STATUS.items():
+    for ph in phrases:
+        check(f"mutant caught: item {num} loses '{ph[:48]}'", bool(status_problems(drop_in_item(s2_readme, num, ph))))
+for ph in HELPER_COMMENT_WORDING:   # a comment phrase may wrap across lines behind the comment marker: the prose view (marker dropped) is mutated, and the same function reads it
+    check(f"mutant caught: the plan helper package comment loses '{ph[:48]}'", bool(comment_problems(drop_phrase(flat_yaml(s2_helper), ph), s2_schedule, s2_changelog)))
+for ph in SCHEDULE_HEADER_WORDING:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(comment_problems(s2_helper, drop_phrase(flat_yaml(s2_schedule), ph), s2_changelog)))
+for ph in CHANGELOG_WORDING:
+    check(f"mutant caught: the CHANGELOG loses '{ph[:48]}'", bool(comment_problems(s2_helper, s2_schedule, drop_phrase(s2_changelog, ph))))
+for where, phrase in OLD_WORDING:
+    bad_h, bad_c = (s2_helper + "\n# which is the true instant\n", s2_changelog) if where.startswith("the plan helper") else (s2_helper, s2_changelog + "\n" + phrase + "\n")
+    check(f"mutant caught: {where} says again '{phrase}'", bool(comment_problems(bad_h, s2_schedule, bad_c)))
+check("control: the untouched tree is not flagged by the second-review checks",
+      not status_problems(s2_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog) and not limitations_problems(s2_readme))
+
+# ===========================================================================
+print("")
+print("[8] known limitation 20 is FIXED (owner decision r14, 19 Nov 2026; additive): the new wording stands, the old wording is gone, RG-ST3 and the 22 items stay")
+# ===========================================================================
+# The press-time BLOCKED text is no longer overwritten with STARTED OK when Dump to Grid is active (running proof: test_ecco_plan_enforcement.py [12]). Item 20 stays in the list (with what was
+# done), the schedule package header and the CHANGELOG say so, and what is still true is stated: the dongle's own Start button is not bound by any override (RG-ST3), this change reports an
+# active Dump to Grid and does not stop it (and, before owner decision r15 ([10]), that a STARTING, FAILED or CANCELLED result kept its old rule: it no longer does). These checks are ADDITIVE to [6] and [7]: they require the new wording, forbid the old
+# wording where it described the current behaviour, re-require the Stage 3 limitation sentence and the 22 items, and forbid any 'fully enforced' claim.
+OLD20_ITEM = ("only the record of the reason is lost", "pins today's behaviour", "the reason is lost from the record", "it documents the limitation and does not approve it")
+OLD20_HEADER = ("unless Dump to Grid is found active when the loop ends, in which case the result text reads STARTED OK", "only the record of the reason is lost",
+                "the end-of-run alert is skipped and the schedule notifications are dismissed", "A limit, not fixed: this BLOCKED text")
+ALERT_SENTENCE = "Dump to Grid is active now, and this run did not start it (it may have been started from the dongle's own Start button or by hand). Check it, and the plan overrides, before assuming it is held."
+CHANGELOG20 = ("a press-time BLOCKED result stays BLOCKED", "known limitation 20", "owner decision r14", "STARTING, FAILED and CANCELLED results keep their old rule",
+               "the dongle's own Start button, still not bound (RG-ST3)")
+
+
+def code_lines(text: str) -> str:
+    """The package text without comment lines (a comment is not what Home Assistant runs)."""
+    return "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("#"))
+
+
+def bullet20(changelog: str) -> str:
+    """The CHANGELOG bullet about limitation 20 (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: a press-time BLOCKED result stays BLOCKED")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def fixed20_problems(readme: str, schedule: str, changelog: str) -> list[str]:
+    out = []
+    item = item_bodies(readme).get(20, "")
+    fs, fc = flat_yaml(schedule), flat(bullet20(changelog))
+    out.extend(f"item 20 still says: {p}" for p in OLD20_ITEM if p in item)
+    out.extend(f"the schedule package header still says: {p}" for p in OLD20_HEADER if p in fs)
+    if "(RG-ST3)" not in item or "not bound" not in item:
+        out.append("item 20 no longer says that the dongle's own Start button is not bound (RG-ST3)")
+    if "which no override binds (RG-ST3)" not in fs:
+        out.append("the schedule package header no longer says that no override binds the dongle's own Start button (RG-ST3)")
+    out.extend(f"the CHANGELOG lacks: {p}" for p in CHANGELOG20 if p not in fc)
+    code = code_lines(schedule)
+    if flat(code).count(ALERT_SENTENCE) != 1:
+        out.append(f"the alert sentence stands {flat(code).count(ALERT_SENTENCE)}x in the package (not in a comment)")
+    # r15: the old requirement here ('and not r.startswith('BLOCKED') }}' stands in the overwrite step) pinned the step that wrote STARTED OK for every result but BLOCKED. Owner decision r15 removed that step:
+    # the steps after the loop write no success text and the one step that acts on Dump to Grid being active acts on a STARTING result only (a BLOCKED result is spared by construction, as FAILED and CANCELLED are).
+    if "could not confirm the start as its own" in code or code.count("and r.startswith('STARTING') }}") != 1:
+        out.append("the steps after the loop write the fallback success text again, or the step does not act on a STARTING result only (so a BLOCKED, FAILED or CANCELLED result is not spared)")
+    if FULL_CLAIM.search(item + " " + fs + " " + schedule + " " + fc):
+        out.append("a 'fully enforced' claim stands in item 20, the package or the CHANGELOG")
+    return out
+
+
+f8_readme, f8_schedule, f8_changelog = s2_readme, s2_schedule, s2_changelog
+check("limitation 20 is fixed in the words of item 20, the schedule package header (and its alert sentence in the code) and the CHANGELOG; the old wording is gone from item 20 and the header; item 20 and the "
+      "header still say the dongle's own Start button is not bound (RG-ST3); no 'fully enforced' claim", not fixed20_problems(f8_readme, f8_schedule, f8_changelog), str(fixed20_problems(f8_readme, f8_schedule, f8_changelog)))
+check("the 22 numbered items are all still listed, item 20 among them (nothing was removed because it was fixed)", [n for n, _ in LIMIT_ITEMS][:22] == list(range(1, 23)) and not limitations_problems(f8_readme)
+      and 20 in item_bodies(f8_readme), str(limitations_problems(f8_readme)))
+check("the Stage 3 limitation sentence (RG-ST3) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("the 'Known limitations' introduction says item 20 was fixed and that the other items were not", "except item 20" in flat(f8_readme) and "NOT fixed" in flat(f8_readme))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM_STATUS[20]:
+    check(f"mutant caught: item 20 loses '{ph[:48]}'", bool(status_problems(drop_in_item(s2_readme, 20, ph))))
+check("mutant caught: item 20 worded as the limitation again (only the record of the reason is lost)",
+      bool(fixed20_problems(f8_readme.replace("Not examined: how real Home Assistant renders the notice.", "Not examined: how real Home Assistant renders the notice; only the record of the reason is lost."), f8_schedule, f8_changelog)))
+check("mutant caught: item 20 worded as a documented, not approved pin again",
+      bool(fixed20_problems(f8_readme.replace("it replaces the pin of the old behaviour that stood in [11]", "it documents the limitation and does not approve it"), f8_schedule, f8_changelog)))
+check("mutant caught: the old 'A limit, not fixed' bullet restored in the schedule package header", bool(fixed20_problems(f8_readme, f8_schedule.replace("#   - Fixed 19 Nov 2026 (owner decision r14: a refusal stays a refusal): this BLOCKED text", "#   - A limit, not fixed: this BLOCKED text"), f8_changelog)))
+check("mutant caught: the old 'unless Dump to Grid is found active ... STARTED OK' sentence restored in the schedule package header",
+      bool(fixed20_problems(f8_readme, f8_schedule.replace("raises the notification, also when Dump to Grid is found active when\n# the loop ends (see the last point below).",
+                                                           "raises the notification, unless Dump to Grid is found active when\n# the loop ends, in which case the result text reads STARTED OK (see the last point below)."), f8_changelog)))
+check("mutant caught: the alert sentence removed from the package code", bool(fixed20_problems(f8_readme, f8_schedule.replace(ALERT_SENTENCE.split(" (it may")[0], "Dump to Grid is running"), f8_changelog)))
+check("mutant caught: the alert sentence only in a comment, not in the package code",
+      bool(fixed20_problems(f8_readme, f8_schedule.replace("\n                Dump to Grid is active now, and this run did not start it", "\n                # Dump to Grid is active now, and this run did not start it"), f8_changelog)))
+# r15: the mutant that stood here ("the overwrite step no longer excludes a BLOCKED result") named a step that no longer exists; its two successors:
+check("mutant caught: the step after the loop acts on every result again (the STARTING test removed: a BLOCKED, FAILED or CANCELLED result is no longer spared)", bool(fixed20_problems(f8_readme, f8_schedule.replace("and r.startswith('STARTING') }}", "}}"), f8_changelog)))
+check("mutant caught: the fallback success text is back in the package code (the old overwrite)",
+      bool(fixed20_problems(f8_readme, f8_schedule.replace("                        Dump to Grid is active now, but this run did not confirm that it started it\n", "                        STARTED OK - Dump to Grid is active; this run could not confirm the start as its own\n"), f8_changelog)))
+check("mutant caught: item 20 loses the RG-ST3 statement", bool(fixed20_problems(f8_readme.replace("still not bound by any override (RG-ST3)", "still open"), f8_schedule, f8_changelog)))
+check("mutant caught: the schedule package header loses the RG-ST3 statement", bool(fixed20_problems(f8_readme, f8_schedule.replace("which no override binds (RG-ST3)", "which nothing binds"), f8_changelog)))
+check("mutant caught: the CHANGELOG bullet removed", bool(fixed20_problems(f8_readme, f8_schedule, drop_phrase(f8_changelog, "a press-time BLOCKED result stays BLOCKED"))))
+check("mutant caught: the CHANGELOG bullet loses the limitation 20 reference", bool(fixed20_problems(f8_readme, f8_schedule, drop_phrase(f8_changelog, "known limitation 20"))))
+check("mutant caught: item 20 claims the overrides are fully enforced", bool(fixed20_problems(f8_readme.replace("**A press-time BLOCKED result was", "**Fully enforced: a press-time BLOCKED result was"), f8_schedule, f8_changelog)))
+check("mutant caught: the CHANGELOG bullet claims the overrides are fully enforced",
+      bool(fixed20_problems(f8_readme, f8_schedule, f8_changelog.replace("(owner decision r14, 19 Nov 2026; known limitation 20 fixed;", "(fully enforced; owner decision r14, 19 Nov 2026; known limitation 20 fixed;"))))
+check("mutant caught: the schedule package header claims full enforcement", bool(fixed20_problems(f8_readme, f8_schedule + "\n# The overrides are fully enforced.\n", f8_changelog)))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to the Known limitations item 20 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
+_h8 = f8_readme.index(LIMITS_HEADING)
+check("mutant caught: item 20 removed (21 items)", bool(limitations_problems(f8_readme[:f8_readme.index("\n20. **", _h8)] + f8_readme[f8_readme.index("\n21. **", _h8):])))
+check("control: the untouched tree is not flagged by the item 20 checks", not fixed20_problems(f8_readme, f8_schedule, f8_changelog) and not status_problems(f8_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog))
+
+# ===========================================================================
+print("")
+print("[9] known limitation 19 is MITIGATED offline (owner decision r14, 19 Nov 2026; additive): the epoch record is stated, item 23 is new, the old 'open owner decision' wording is replaced, RG-ST3 and the 23 items stay")
+# ===========================================================================
+# Each override's expiry is also held as an absolute epoch record (an input_number per kind) and read raise-only with the date-and-time attribute (running proof: test_ecco_plan_helpers_package.py [14]
+# and test_ecco_plan_enforcement.py [13]). Item 19 stays in the list with what changed and what is still modelled only; items 1, 11 and 17 say what that did to them; item 23 is new (the card
+# reads the attribute only and may show an override as ended up to an hour early after a restart: display only, the backend decides). These checks are ADDITIVE to [6] to [8]: they require the new wording,
+# forbid the old wording where it described the current behaviour (an open owner decision; the unreadable power-cut record published as the owner's reserve; the state-string claim for the card),
+# re-require the Stage 3 limitation sentence (RG-ST3) and the 23 items, and forbid any 'fully enforced' claim.
+OLD19_ITEM = ("An open owner decision (accept the residual", "Not reproduced, not changed, and not claimed either way")
+OLD1_ITEM = ("With the power-cut record unreadable while it runs, the owner's reserve is published instead.",)
+OLD23_ITEM = ("does not read the absolute epoch records of item 19", "README are NOT changed", "display only; the backend decides", "it offers no Cancel: call")   # the r14 wording of item 23 (owner decision r15 replaced it)
+OLD19_HELPER = ("an open owner decision and an item for the supervised check",)
+OLD19_CHANGELOG = ("This is an open owner decision (accept",)
+CHANGELOG_R14 = ("an absolute epoch record", "read raise-only", "the later of the two valid instants", "known limitations 19 and 23", "owner decision r14", "it was skipped before",
+                 "supersedes what the earlier bullet", "still not bound by any override (RG-ST3)", "known limitation 23, display only; the backend decides")
+HELPER_R14 = ("EACH EXPIRY IS HELD TWICE", "the LATER of the two instants wins (raise-only)", "UNREADABLE when EITHER source is invalid", "The start script writes source 2 BEFORE source 1",
+              "A source 2 that is missing, reset to 0 or unreadable can never release an override that source 1 still shows as running", "that is LATE", "NOT PROVEN, and not claimed",
+              "MITIGATED offline by source 2 (owner decision r14)")
+
+
+def bullet_r14(changelog: str) -> str:
+    """The CHANGELOG bullet of the absolute epoch record (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: an override's expiry is also an absolute epoch record")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def mitigated19_problems(readme: str, helper: str, changelog: str) -> list[str]:
+    out = []
+    bodies = item_bodies(readme)
+    item19, item23 = bodies.get(19, ""), bodies.get(23, "")
+    out.extend(f"item 19 still says: {p}" for p in OLD19_ITEM if p in item19)
+    out.extend(f"item 1 still says: {p}" for p in OLD1_ITEM if p in bodies.get(1, ""))
+    fh = flat_yaml(helper)
+    out.extend(f"the plan helper package comment still says: {p}" for p in OLD19_HELPER if p in fh)
+    out.extend(f"the plan helper package comment lacks: {p}" for p in HELPER_R14 if p not in fh)
+    fc, fb = flat(changelog), flat(bullet_r14(changelog))
+    out.extend(f"the CHANGELOG still says: {p}" for p in OLD19_CHANGELOG if p in fc)
+    out.extend(f"the CHANGELOG lacks: {p}" for p in CHANGELOG_R14 if p not in fb)
+    if "MITIGATED" not in item19 or "FIXED" in item19:
+        out.append("item 19 must say MITIGATED (offline) and not FIXED: it is not proven in real Home Assistant")
+    # r15 replaces the r14 rule 'item 23 may not say FIXED' by its opposite: the card IS changed, so item 23 says FIXED (offline), and says what is not claimed
+    if "FIXED offline on 19 Nov 2026 (owner decision r15" not in item23 or "not seen in a browser or on a real Home Assistant" not in item23:
+        out.append("item 23 must say FIXED offline (owner decision r15) and that it was not seen in a browser or on a real Home Assistant")
+    out.extend(f"item 23 still says: {p}" for p in OLD23_ITEM if p in item23)
+    if "item 19" not in item23:
+        out.append("item 23 must point to item 19")
+    intro = flat(readme)
+    if "added item 23" not in intro or "item 19 (mitigated offline the same day by an absolute epoch record" not in intro or "items 9, 10 and 19 to 23" not in intro:
+        out.append("the Known limitations introduction does not name item 23, the mitigated item 19 and the items that say what was reproduced")
+    if "except item 20" not in intro or "NOT fixed" not in intro:
+        out.append("the Known limitations introduction lost 'except item 20' or 'NOT fixed'")
+    for name, body in (("item 19", item19), ("item 23", item23), ("the plan helper package comment", fh), ("the CHANGELOG bullet", fb)):
+        if FULL_CLAIM.search(body):
+            out.append(f"a 'fully enforced' claim stands in {name}")
+    if "the dongle's own Start button" not in flat(readme) or "not bound" not in flat(readme):
+        out.append("the plan-core README no longer says that the dongle's own Start button is not bound")
+    return out
+
+
+m9_readme, m9_helper, m9_changelog = s2_readme, s2_helper, s2_changelog
+check("limitation 19 is MITIGATED in the words of item 19, items 1, 11, 17 and 23, the plan helper package comment and the CHANGELOG bullet; the old 'open owner decision' wording is gone; "
+      "no FIXED or 'fully enforced' claim", not mitigated19_problems(m9_readme, m9_helper, m9_changelog) and not status_problems(m9_readme), str(mitigated19_problems(m9_readme, m9_helper, m9_changelog) + status_problems(m9_readme)))
+check("the 23 numbered items are all listed (the first 22 in their order and item 23 last), none removed or merged", [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and len(LIMIT_ITEMS) == 23
+      and not limitations_problems(m9_readme) and sorted(item_bodies(m9_readme)) == list(range(1, 24)), str(limitations_problems(m9_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+EPOCH_IDS = tuple(f"input_number.ecco_plan_override_{k}_expires_epoch" for k in ("hold_battery", "skip_tonight", "prepare_power_cut"))
+
+
+def epoch_reader_problems(sources: dict[str, str], bundle: str, readme_text: str) -> list[str]:
+    """Owner decision r15 (replaces the r14 check that the card does not name the epoch records): the card's reader and its bundle name all three, nothing in the plan section's sources writes one
+    (no helper write service, the one service is script.turn_on), and the card README, a frozen file, is untouched by this change (it still names none)."""
+    out = []
+    helpers = code_of(sources.get("src/plan/helpers.ts", ""))
+    out.extend(f"src/plan/helpers.ts does not name {e}" for e in EPOCH_IDS if e not in helpers)
+    out.extend(f"the card bundle does not name {e}" for e in EPOCH_IDS if e not in bundle)
+    plan_code = " ".join(code_of(v) for k, v in sources.items() if k.startswith("src/plan/"))
+    if re.search(r"set_value|set_datetime|input_number\.set|input_datetime\.set", plan_code):
+        out.append("a source under src/plan/ names a helper write service")
+    if "expires_epoch" in readme_text:
+        out.append("the card README (frozen) now names an epoch record: it is a pinned file and must not change")
+    return out
+
+
+check("the card's reader (src/plan/helpers.ts) and its bundle name the three epoch records, nothing under src/plan/ writes a helper, and the card README (frozen) is untouched (owner decision r15 replaces the r14 check that the card did not name them)",
+      not epoch_reader_problems(card_sources, texts["card bundle"], texts["card README"]), str(epoch_reader_problems(card_sources, texts["card bundle"], texts["card README"])))
+check("mutant caught: the card's reader does not name an epoch record (the r14 state of the card)",
+      bool(epoch_reader_problems({**card_sources, "src/plan/helpers.ts": card_sources["src/plan/helpers.ts"].replace(EPOCH_IDS[0], "input_number.x")}, texts["card bundle"], texts["card README"])))
+check("mutant caught: the card bundle does not name an epoch record (an old bundle)", bool(epoch_reader_problems(card_sources, texts["card bundle"].replace(EPOCH_IDS[1], "input_number.x"), texts["card README"])))
+check("mutant caught: a plan source writes a helper", bool(epoch_reader_problems({**card_sources, "src/plan/controls.ts": card_sources["src/plan/controls.ts"] + "\nconst w = \"input_number.set_value\";\n"}, texts["card bundle"], texts["card README"])))
+check("mutant caught: the frozen card README names an epoch record", bool(epoch_reader_problems(card_sources, texts["card bundle"], texts["card README"] + "\n" + EPOCH_IDS[0])))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM_STATUS[19]:
+    check(f"mutant caught: item 19 loses '{ph[:48]}'", bool(status_problems(drop_in_item(m9_readme, 19, ph))))
+for num in (1, 11, 17, 23):
+    for ph in ITEM_STATUS[num]:
+        check(f"mutant caught: item {num} loses '{ph[:48]}'", bool(status_problems(drop_in_item(m9_readme, num, ph))))
+for ph in HELPER_R14:      # (the fourth HELPER_COMMENT_WORDING phrase, replaced by r14, is mutated by the loop of [7])
+    check(f"mutant caught: the plan helper package comment loses '{ph[:48]}'", bool(mitigated19_problems(m9_readme, drop_phrase(flat_yaml(m9_helper), ph), m9_changelog)))
+for ph in CHANGELOG_R14:
+    check(f"mutant caught: the CHANGELOG bullet loses '{ph[:48]}'", bool(mitigated19_problems(m9_readme, m9_helper, drop_phrase(m9_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet removed", bool(mitigated19_problems(m9_readme, m9_helper, drop_phrase(m9_changelog, "an absolute epoch record, read raise-only"))))
+check("mutant caught: the open owner decision restored in item 19", bool(mitigated19_problems(m9_readme.replace("The card now reads both records and offers the guarded Cancel (item 23, owner decision r15).", "An open owner decision (accept the residual, or have the start script push the expiry). The card now reads both records and offers the guarded Cancel (item 23, owner decision r15)."), m9_helper, m9_changelog)))
+check("mutant caught: the open owner decision restored in the plan helper package comment", bool(mitigated19_problems(m9_readme, m9_helper + "\n# an open owner decision and an item for the supervised check\n", m9_changelog)))
+check("mutant caught: the open owner decision restored in the CHANGELOG", bool(mitigated19_problems(m9_readme, m9_helper, m9_changelog + "\nThis is an open owner decision (accept the residual).\n")))
+check("mutant caught: item 19 claims it FIXED", bool(mitigated19_problems(m9_readme.replace("MITIGATED offline 19 Nov 2026 by owner decision r14.**", "FIXED offline 19 Nov 2026 by owner decision r14.**"), m9_helper, m9_changelog)))
+check("mutant caught: item 23 no longer says FIXED (the r14 state of the card: display only)", bool(mitigated19_problems(m9_readme.replace("FIXED offline on 19 Nov 2026 (owner decision r15", "described on 19 Nov 2026 (owner decision r15"), m9_helper, m9_changelog)))
+check("mutant caught: item 23 says FIXED but no longer says it was not seen in a browser or on a real Home Assistant", bool(mitigated19_problems(m9_readme.replace("not seen in a browser or on a real Home Assistant", "proven"), m9_helper, m9_changelog)))
+check("mutant caught: item 23 says again that the card does not read the epoch records (the old wording restored)",
+      bool(mitigated19_problems(m9_readme.replace("the backend, not the card, still decides:", "the card does not read the absolute epoch records of item 19; the backend, not the card, still decides:"), m9_helper, m9_changelog)))
+check("mutant caught: item 19 claims the overrides are fully enforced", bool(mitigated19_problems(m9_readme.replace("The card now reads both records and offers the guarded Cancel (item 23, owner decision r15).", "The overrides are fully enforced. The card now reads both records and offers the guarded Cancel (item 23, owner decision r15)."), m9_helper, m9_changelog)))
+check("mutant caught: item 23 claims the overrides are fully enforced", bool(mitigated19_problems(m9_readme.replace("the backend, not the card, still decides: the hold,", "the backend, not the card, still decides, fully enforced: the hold,"), m9_helper, m9_changelog)))
+check("mutant caught: the helper package comment claims full enforcement", bool(mitigated19_problems(m9_readme, m9_helper + "\n# These overrides are fully enforced.\n", m9_changelog)))
+check("mutant caught: the CHANGELOG bullet claims full enforcement", bool(mitigated19_problems(m9_readme, m9_helper, m9_changelog.replace("known limitations 19 and 23; offline, nothing installed)", "known limitations 19 and 23; fully enforced; offline, nothing installed)"))))
+check("mutant caught: the Known limitations introduction does not name item 23", bool(mitigated19_problems(m9_readme.replace("added\nitem 23.", "added\nnothing."), m9_helper, m9_changelog)))
+_a23 = m9_readme.index("\n23. **", m9_readme.index(LIMITS_HEADING))
+check("mutant caught: item 23 does not point to item 19", bool(mitigated19_problems(m9_readme[:_a23] + m9_readme[_a23:].replace("item 19", "another item"), m9_helper, m9_changelog)))
+check("mutant caught: item 1 says again that the owner's reserve is published when the power-cut record is unreadable",
+      bool(mitigated19_problems(m9_readme.replace("before r14 the owner's reserve was published instead", "With the power-cut record unreadable while it runs, the owner's reserve is published instead."), m9_helper, m9_changelog)))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan helper package", bool(places_problems({**texts, "package header: ecco_plan_helpers.yaml": texts["package header: ecco_plan_helpers.yaml"].replace(LIMITATION, "")})))
+_h9 = m9_readme.index(LIMITS_HEADING)
+check("mutant caught: item 23 removed (22 items)", bool(limitations_problems(m9_readme[:m9_readme.index("\n23. **", _h9)] + "\n" + m9_readme[m9_readme.index("\n### Install order", _h9):])))
+check("mutant caught: item 19 removed (22 items)", bool(limitations_problems(m9_readme[:m9_readme.index("\n19. **", _h9)] + m9_readme[m9_readme.index("\n20. **", _h9):])))
+check("mutant caught: items 19 and 23 merged (item 23 text inside item 19)",
+      bool(limitations_problems(m9_readme.replace("\n23. **The card used to read", "\n   **The card used to read"))))
+check("control: the untouched tree is not flagged by the r14 checks", not mitigated19_problems(m9_readme, m9_helper, m9_changelog) and not status_problems(m9_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog)
+      and not limitations_problems(m9_readme))
+
+# ===========================================================================
+print("")
+print("[10] known limitation 20 EXTENDED (owner decision r15, 19 Nov 2026; additive): a STARTING, FAILED or CANCELLED result is no longer overwritten with STARTED OK either; the new wording stands, the old wording is gone")
+# ===========================================================================
+# Owner decision r15: the steps after the scheduled start's retry loop write no success text. A FAILED or CANCELLED result stays exactly as written, a result still STARTING with Dump to Grid active becomes CANCELLED (the
+# owner cancelled) or a FAILED TO START text that says Dump to Grid is active now and this run did not confirm that it started it, and the alert's sentence says 'did not confirm' for a FAILED result and still 'did not start
+# it' for a BLOCKED one (running proof: test_ecco_plan_enforcement.py [12] and [14]). These checks are ADDITIVE to [6] to [9]: they require the new wording in item 20, the schedule package header and a new CHANGELOG bullet,
+# forbid the old wording where it described the current behaviour, state what is still true (a FAILED text can be a false negative), re-require the Stage 3 limitation sentence (RG-ST3) and the 23 items, and forbid any
+# 'fully enforced' claim. The CHANGELOG bullet of r14 stays as written (a record of what was true then); the r15 bullet says it supersedes the sentence about the old rule.
+OLD20_R15_ITEM = ("is not covered by the fix", "it is still replaced by STARTED OK, as before", "still replaced by STARTED OK")
+OLD20_R15_HEADER = ("keeps the rule it had", "it is still replaced by STARTED OK")
+ITEM20_R15 = ("FIXED the same day (owner decision r15)", "owner decision r15", "FAILED TO START text", "did not confirm that it started it", "STARTED OK is still written inside the loop only",
+              "With Dump to Grid not active nothing changed", "and [14] (every result class", "a FAILED text can be a false negative", "still not bound by any override (RG-ST3)")
+HEADER_R15 = ("Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)", "the steps after the loop never write a success text", "A FAILED or CANCELLED result is final too",
+              "STARTED OK is written only inside the loop", "such a FAILED text can be a false negative", "nothing changes while Dump to Grid is not active", "which no override binds (RG-ST3)")
+CHANGELOG_R15 = ("a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either", "known limitation 20 extended", "owner decision r15", "FAILED TO START text", "did not confirm that it started it",
+                 "STARTED OK is written only in the loop", "This supersedes the sentence of the bullet above", "STARTING, FAILED and CANCELLED results keep their old rule", "still not bound (RG-ST3)",
+                 "the Free Power schedule package has the same fallback text", "false negative")
+ALERT_CONFIRM = ("Dump to Grid is active now, but this run did not confirm that it started it (it may have been started from the dongle's own Start button or by hand, or, if a start transaction had begun, "
+                 "late by this run's own press). Check it, and the plan overrides, before assuming it is held.")
+
+
+def bullet15(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def extended20_problems(readme: str, schedule: str, changelog: str) -> list[str]:
+    out = []
+    item = item_bodies(readme).get(20, "")
+    fs, fb = flat_yaml(schedule), flat(bullet15(changelog))
+    code = code_lines(schedule)
+    out.extend(f"item 20 still says: {p}" for p in OLD20_R15_ITEM if p in item)
+    out.extend(f"the schedule package header still says: {p}" for p in OLD20_R15_HEADER if p in fs)
+    out.extend(f"item 20 lacks: {p}" for p in ITEM20_R15 if p not in item)
+    out.extend(f"the schedule package header lacks: {p}" for p in HEADER_R15 if p not in fs)
+    out.extend(f"the CHANGELOG bullet of r15 lacks: {p}" for p in CHANGELOG_R15 if p not in fb)
+    if flat(code).count(ALERT_CONFIRM) != 1:
+        out.append(f"the alert's 'did not confirm' sentence stands {flat(code).count(ALERT_CONFIRM)}x in the package code (not in a comment)")
+    if flat(code).count(ALERT_SENTENCE) != 1:
+        out.append(f"the alert's BLOCKED sentence ('did not start it') stands {flat(code).count(ALERT_SENTENCE)}x in the package code")
+    if "could not confirm the start as its own" in code:
+        out.append("the fallback success text is in the package code")
+    if code.count("and r.startswith('STARTING') }}") != 1:
+        out.append("the step that acts on Dump to Grid being active does not act on a STARTING result only")
+    if FULL_CLAIM.search(item + " " + fs + " " + schedule + " " + fb):
+        out.append("a 'fully enforced' claim stands in item 20, the package or the CHANGELOG")
+    return out
+
+
+x_readme, x_schedule, x_changelog = s2_readme, s2_schedule, s2_changelog
+check("limitation 20 is extended in the words of item 20, the schedule package header (and the alert's two sentences in its code) and the new CHANGELOG bullet; the old wording is gone; what is still true is stated",
+      not extended20_problems(x_readme, x_schedule, x_changelog), str(extended20_problems(x_readme, x_schedule, x_changelog)))
+check("the 23 numbered items are all still listed, item 20 among them (nothing was removed because it was extended)", [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and not limitations_problems(x_readme)
+      and 20 in item_bodies(x_readme), str(limitations_problems(x_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once, and item 20 and the schedule package header still say it",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text) and "(RG-ST3)" in item_bodies(x_readme).get(20, "") and "which no override binds (RG-ST3)" in flat_yaml(x_schedule))
+check("the r14 wording of item 20 and the r14 CHANGELOG bullet is not lost (additive): the BLOCKED sentence, 'the schedule notifications are not dismissed', 'is never overwritten' and the r14 bullet stand",
+      not fixed20_problems(x_readme, x_schedule, x_changelog) and not status_problems(x_readme), str(fixed20_problems(x_readme, x_schedule, x_changelog) + status_problems(x_readme)))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM20_R15:
+    check(f"mutant caught: item 20 loses '{ph[:48]}'", bool(extended20_problems(drop_in_item(x_readme, 20, ph), x_schedule, x_changelog)))
+for ph in HEADER_R15:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(extended20_problems(x_readme, drop_phrase(flat_yaml(x_schedule), ph), x_changelog)))
+for ph in CHANGELOG_R15:
+    check(f"mutant caught: the CHANGELOG bullet of r15 loses '{ph[:48]}'", bool(extended20_problems(x_readme, x_schedule, drop_phrase(x_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet of r15 removed", bool(extended20_problems(x_readme, x_schedule, drop_phrase(x_changelog, "a STARTING, FAILED or CANCELLED result is no longer turned into STARTED OK either"))))
+check("mutant caught: item 20 says again that a STARTING, FAILED or CANCELLED result is not covered by the fix",
+      bool(extended20_problems(x_readme.replace("Not examined: how real Home Assistant renders the notice.", "A STARTING, FAILED or CANCELLED result is not covered by the fix. Not examined: how real Home Assistant renders the notice."), x_schedule, x_changelog)))
+check("mutant caught: item 20 says again that the old rule stands (still replaced by STARTED OK)",
+      bool(extended20_problems(x_readme.replace("Not examined: how real Home Assistant renders the notice.", "It is still replaced by STARTED OK, as before. Not examined: how real Home Assistant renders the notice."), x_schedule, x_changelog)))
+check("mutant caught: the schedule package header says again that a STARTING, FAILED or CANCELLED result keeps the rule it had",
+      bool(extended20_problems(x_readme, x_schedule + "\n# A STARTING, FAILED or CANCELLED result keeps the rule it had.\n", x_changelog)))
+check("mutant caught: the alert's 'did not confirm' sentence removed from the package code", bool(extended20_problems(x_readme, x_schedule.replace(ALERT_CONFIRM.split(" (it may")[0], "Dump to Grid is running"), x_changelog)))
+check("mutant caught: the alert's 'did not confirm' sentence only in a comment, not in the package code",
+      bool(extended20_problems(x_readme, x_schedule.replace("\n                Dump to Grid is active now, but this run did not confirm", "\n                # Dump to Grid is active now, but this run did not confirm"), x_changelog)))
+check("mutant caught: the alert's BLOCKED sentence changed to 'did not confirm' (nothing was pressed: it did not start it)",
+      bool(extended20_problems(x_readme, x_schedule.replace("Dump to Grid is active now, and this run did not start it", "Dump to Grid is active now, but this run did not confirm that it started it"), x_changelog)))
+check("mutant caught: the fallback success text is back in the package code", bool(extended20_problems(x_readme, x_schedule.replace("                        Dump to Grid is active now, but this run did not confirm that it started it\n",
+                                                                                                                             "                        STARTED OK - Dump to Grid is active; this run could not confirm the start as its own\n"), x_changelog)))
+check("mutant caught: the step after the loop acts on every result again (the STARTING test removed)", bool(extended20_problems(x_readme, x_schedule.replace("and r.startswith('STARTING') }}", "}}"), x_changelog)))
+check("mutant caught: item 20 claims the overrides are fully enforced", bool(extended20_problems(x_readme.replace("**A press-time BLOCKED result was", "**Fully enforced: a press-time BLOCKED result was"), x_schedule, x_changelog)))
+check("mutant caught: the schedule package header claims full enforcement", bool(extended20_problems(x_readme, x_schedule + "\n# The overrides are fully enforced.\n", x_changelog)))
+check("mutant caught: the CHANGELOG bullet of r15 claims full enforcement",
+      bool(extended20_problems(x_readme, x_schedule, x_changelog.replace("(owner decision r15, 19 Nov 2026; known limitation 20 extended;", "(fully enforced; owner decision r15, 19 Nov 2026; known limitation 20 extended;"))))
+check("mutant caught: item 20 loses the RG-ST3 statement", bool(extended20_problems(x_readme.replace("still not bound by any override (RG-ST3)", "still open"), x_schedule, x_changelog)))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 20 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
+check("control: the untouched tree is not flagged by the item 20 (r15) checks", not extended20_problems(x_readme, x_schedule, x_changelog) and not fixed20_problems(x_readme, x_schedule, x_changelog)
+      and not status_problems(x_readme) and not comment_problems(s2_helper, s2_schedule, s2_changelog) and not limitations_problems(x_readme))
+
+# ===========================================================================
+print("")
+print("[11] known limitation 23 FIXED offline (owner decision r15, 19 Nov 2026; additive): the card reads the epoch records, mirrors the backend's read rule, offers the guarded Cancel and reads back both records")
+# ===========================================================================
+# The card (src/plan/helpers.ts, controlsModel.ts, controls.ts, present.ts, view.ts; the bundle rebuilt) now reads the three epoch records next to the date-and-time records, takes per kind the later of the two valid instants,
+# shows the kind as running while either is in the future, shows it as held by Home Assistant when a record cannot be read, and offers the SAME guarded Cancel for both; it then reads back the revision and both records and says
+# confirmed, pending or NOT confirmed (running proof: frontend/ecco-energy-actions-card/test/planEpochCancel.test.ts). These checks are ADDITIVE to [6] to [10]: they require the new wording in item 23, item 19, the plan-core
+# README's epoch row and card paragraph, the plan helper package comment and a new CHANGELOG bullet, forbid the old wording where it described the current behaviour, state what is not claimed (modelled offline, not seen in a
+# browser or on a real Home Assistant), re-require the Stage 3 limitation sentence (RG-ST3) and the 23 items, and forbid any 'fully enforced' claim.
+OLD23_README = ("The card does not read them", "It does not read the absolute epoch records (known limitation 23: display only", "(known limitation 23: display only; the backend decides)")
+OLD23_HELPER = ("The card does not read these records",)
+ITEM23_R15 = ("`timestamp` attribute only", "FIXED offline on 19 Nov 2026 (owner decision r15", "the later of the two valid instants", "Held by Home Assistant", "a plain-words note", "the backend allows a cancel on an unreadable or disagreeing record",
+              "UTC", "older package", "`script.turn_on` on `script.ecco_plan_override_cancel` with the stored revision as compare-and-set", "no new service, no second control route and no direct helper write",
+              "Cancel confirmed", "Cancel sent", "Cancel NOT confirmed", "BOTH records", "browser's clock", "a reload forgets it", "modelled and tested offline", "not seen in a browser or on a real Home Assistant",
+              "the backend, not the card, still decides", "Direction: fail closed", "You would see:", "item 19")
+README_R15 = ("The card reads them too (owner decision r15)", "known limitation 23, fixed on 19 Nov 2026 by owner decision r15", "mirrors the backend's read rule",
+              "item 23 (the card; fixed offline on 19 Nov 2026 by owner decision r15")
+HELPER_R15 = ("The card reads them too (owner decision r15)", "offers the guarded Cancel", "mirrors the backend's read rule")
+CHANGELOG_R15C = ("the card offers the guarded Cancel for an override the backend holds only through its epoch record or cannot read", "known limitation 23 fixed", "owner decision r15", "reads back the plan revision and BOTH records",
+                  "Cancel NOT confirmed", "not seen in a browser or on a real Home Assistant", "This supersedes the sentence of the r14 bullet that says the card is not changed", "still not bound by any override (RG-ST3)",
+                  "bundle was rebuilt", "re-sealed", "the existing guarded cancel path")
+
+
+def bullet_r15c(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 for the card (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: the card offers the guarded Cancel for an override")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def fixed23_problems(readme: str, helper: str, changelog: str) -> list[str]:
+    out = []
+    bodies = item_bodies(readme)
+    item23, item19 = bodies.get(23, ""), bodies.get(19, "")
+    fr, fh, fb = flat(readme), flat_yaml(helper), flat(bullet_r15c(changelog))
+    out.extend(f"item 23 lacks: {p}" for p in ITEM23_R15 if p not in item23)
+    out.extend(f"item 23 still says: {p}" for p in OLD23_ITEM if p in item23)
+    out.extend(f"item 19 lacks: {p}" for p in ("The card now reads both records and offers the guarded Cancel (item 23, owner decision r15)", "call `script.ecco_plan_override_cancel` yourself") if p not in item19)
+    out.extend(f"item 19 still says: {p}" for p in ("Not changed: the card (item 23)", "The card offers Cancel only for an override it shows as running") if p in item19)
+    out.extend(f"the plan-core README lacks: {p}" for p in README_R15 if p not in fr)
+    out.extend(f"the plan-core README still says: {p}" for p in OLD23_README if p in fr)
+    out.extend(f"the plan helper package comment lacks: {p}" for p in HELPER_R15 if p not in fh)
+    out.extend(f"the plan helper package comment still says: {p}" for p in OLD23_HELPER if p in fh)
+    out.extend(f"the CHANGELOG bullet of r15 (card) lacks: {p}" for p in CHANGELOG_R15C if p not in fb)
+    if FULL_CLAIM.search(item23 + " " + item19 + " " + fh + " " + fb):
+        out.append("a 'fully enforced' claim stands in item 23, item 19, the package comment or the CHANGELOG bullet")
+    if "FIXED" in item19:
+        out.append("item 19 must stay MITIGATED, not FIXED")
+    if "the dongle's own Start button" not in fr or "not bound" not in fr:
+        out.append("the plan-core README no longer says that the dongle's own Start button is not bound")
+    return out
+
+
+f_readme, f_helper, f_changelog = s2_readme, s2_helper, s2_changelog
+check("limitation 23 is FIXED offline in the words of item 23, the item 19 sentence about the card, the plan-core README, the plan helper package comment and the new CHANGELOG bullet; the old wording is gone; "
+      "what is not claimed is stated", not fixed23_problems(f_readme, f_helper, f_changelog), str(fixed23_problems(f_readme, f_helper, f_changelog)))
+check("the 23 numbered items are all still listed, item 23 last (nothing was removed because it was fixed), and item 23 still names its subject",
+      [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and not limitations_problems(f_readme) and 23 in item_bodies(f_readme) and "attribute only" in LIMIT_ITEMS[-1][1], str(limitations_problems(f_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("nothing claims the overrides are fully enforced (item 23, the card sources, the bundle, both READMEs, the package comments, the CHANGELOG bullet)",
+      not FULL_CLAIM.search(" ".join([f_readme, f_helper, flat(bullet_r15c(f_changelog)), texts["card bundle"], texts["card README"]] + list(card_sources.values()))))
+check("the earlier checks of items 19 and 23 and of the r14 CHANGELOG bullet still hold in their r15 wording (additive)", not mitigated19_problems(f_readme, f_helper, f_changelog) and not status_problems(f_readme))
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM23_R15:
+    check(f"mutant caught: item 23 loses '{ph[:48]}'", bool(fixed23_problems(drop_in_item(f_readme, 23, ph), f_helper, f_changelog)))
+for ph in README_R15:
+    check(f"mutant caught: the plan-core README loses '{ph[:48]}'", bool(fixed23_problems(drop_phrase(f_readme, ph), f_helper, f_changelog)))
+for ph in HELPER_R15:
+    check(f"mutant caught: the plan helper package comment loses '{ph[:48]}'", bool(fixed23_problems(f_readme, drop_phrase(flat_yaml(f_helper), ph), f_changelog)))
+for ph in CHANGELOG_R15C:
+    check(f"mutant caught: the CHANGELOG bullet of r15 (card) loses '{ph[:48]}'", bool(fixed23_problems(f_readme, f_helper, drop_phrase(f_changelog, ph))))
+check("mutant caught: the CHANGELOG bullet of r15 (card) removed", bool(fixed23_problems(f_readme, f_helper, drop_phrase(f_changelog, "the card offers the guarded Cancel for an override the backend holds only through its epoch record or cannot read"))))
+check("mutant caught: the plan-core README says again that the card does not read the epoch records", bool(fixed23_problems(f_readme.replace("The card reads them too (owner decision r15)", "The card does not read them"), f_helper, f_changelog)))
+check("mutant caught: the plan helper package comment says again that the card does not read the records", bool(fixed23_problems(f_readme, f_helper.replace("The card reads them too (owner decision r15)", "The card does not read these records (owner decision r14)"), f_changelog)))
+check("mutant caught: item 19 says again that the card is not changed", bool(fixed23_problems(f_readme.replace("The card now reads both records and offers the guarded Cancel (item 23, owner decision r15).", "Not changed: the card (item 23)."), f_helper, f_changelog)))
+check("mutant caught: item 19 says again that the card offers Cancel only for a running override", bool(fixed23_problems(f_readme.replace("call `script.ecco_plan_override_cancel` yourself", "call `script.ecco_plan_override_cancel` yourself (The card offers Cancel only for an override it shows as running)"), f_helper, f_changelog)))
+check("mutant caught: item 19 claims FIXED", bool(fixed23_problems(f_readme.replace("MITIGATED offline 19 Nov 2026 by owner decision r14.**", "FIXED offline 19 Nov 2026 by owner decision r14.**"), f_helper, f_changelog)))
+check("mutant caught: item 23 claims the overrides are fully enforced", bool(fixed23_problems(f_readme.replace("the backend, not the card, still decides:", "the backend, not the card, still decides (fully enforced):"), f_helper, f_changelog)))
+check("mutant caught: the CHANGELOG bullet of r15 (card) claims full enforcement", bool(fixed23_problems(f_readme, f_helper, f_changelog.replace("known limitation 23 fixed;", "known limitation 23 fixed; fully enforced;"))))
+check("mutant caught: the plan helper package comment claims full enforcement", bool(fixed23_problems(f_readme, f_helper + "\n# The overrides are fully enforced.\n", f_changelog)))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+_h11 = f_readme.index(LIMITS_HEADING)
+check("mutant caught: item 23 removed (22 items)", bool(limitations_problems(f_readme[:f_readme.index("\n23. **", _h11)] + "\n" + f_readme[f_readme.index("\n### Install order", _h11):])))
+check("control: the untouched tree is not flagged by the item 23 (r15) checks", not fixed23_problems(f_readme, f_helper, f_changelog) and not mitigated19_problems(f_readme, f_helper, f_changelog)
+      and not status_problems(f_readme) and not limitations_problems(f_readme) and not epoch_reader_problems(card_sources, texts["card bundle"], texts["card README"]))
+
+# ===========================================================================
+print("")
+print("[12] known limitation 20, its last path (owner decision r15, 19 Nov 2026; additive): the startup recovery never writes STARTED OK over a result this schedule did not verify; item 20, the schedule package header and a new CHANGELOG bullet say so; item 23 carries two notes")
+# ===========================================================================
+# The startup recovery after a Home Assistant restart (ecco_dump_to_grid_schedule_startup_recovery) used to write "STARTED OK - running (Home Assistant restarted during the session)" whenever the schedule was armed, now was inside the
+# window and Dump to Grid was active, whatever the last result was. Owner decision r15: only a last result that already starts with STARTED keeps that text (and the disarm), a FAILED, BLOCKED or CANCELLED result is final and stays
+# exactly as written, every other result becomes an UNCONFIRMED text that says Dump to Grid is active after a Home Assistant restart and that this schedule did not confirm that it started it (running proof:
+# test_ecco_plan_enforcement.py [15] and registry/tests/test_ha_r9_missed_runs.py). These checks are ADDITIVE to [6] to [11]: they require the new wording in item 20, the schedule package header and a new CHANGELOG bullet, forbid the
+# old wording where it described the current behaviour, state what is still true (the Free Power schedule package is unchanged; a FAILED text can be a false negative), require the two review notes of item 23 (the card's up-to-59-second
+# lag after a record ends inside a minute, and a missing epoch helper entity on a new package), re-require the Stage 3 limitation sentence (RG-ST3) once per place and the 23 items, and forbid any 'fully enforced' claim. Static
+# checks of the package code pin the recovery's three outcomes without running it (the running proof is the suites named above).
+OLD20_REC_ITEM = ("it is not one of these steps, it was not changed here", "it cannot tell who started Dump to Grid either", "has the same fallback as the old one and was not changed")
+ITEM20_REC = ("What changed, r15, the last path", "the startup recovery after a Home Assistant restart", "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final and stays exactly as written",
+              "UNCONFIRMED text of at most 255 characters", "this schedule did not confirm that it started it", "presses and starts nothing", "test_ecco_plan_enforcement.py` [15]",
+              "the Free Power schedule package still has its own old fallback and its own startup recovery, unchanged and outside this task", "a FAILED text that the startup recovery leaves in place can be a false negative as well",
+              "never STARTED OK unless this run's own start was verified, after a Home Assistant restart too", "still not bound by any override (RG-ST3)")
+HEADER_REC = ("Fixed 19 Nov 2026 (owner decision r15, the last path of known limitation 20)", "the startup recovery after a Home Assistant restart no longer writes STARTED OK over a result this schedule did not verify",
+              "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final and is left exactly as written", "becomes an UNCONFIRMED text",
+              "this schedule did not confirm that it started it", "The recovery presses and starts nothing", "every case with Dump to Grid not active is unchanged",
+              "the Free Power schedule package has its own old fallback and recovery, unchanged", "which no override binds (RG-ST3)")
+CHANGELOG_REC = ("known limitation 20, the last path", "owner decision r15", "a last result that already starts with STARTED", "a result that starts with FAILED, BLOCKED or CANCELLED is final", "UNCONFIRMED text",
+                 "did not confirm that it started it", "presses or starts nothing", "no alert is added", "This supersedes the sentence of the r15 bullet above that says the startup recovery was not changed",
+                 "still not bound (RG-ST3)", "the Free Power schedule package still has its own old fallback and recovery", "false negative", "known limitation 23", "re-sealed")
+ITEM23_NOTES = ("up to 59 seconds after the backend has cleared it", "the answer is then NOT_ACTIVE and the readback says Cancel NOT confirmed", "On a NEW package in which one or more epoch helper entities are missing",
+                "the backend reads that kind as unknown", "the card judges the missing record as absent and may show the kind as cleared without a Cancel", "the card lists the problem line",
+                "the cancel script still works", "the owner must repair the helper")
+REC_UNCONFIRMED_RE = re.compile(r'value: "(UNCONFIRMED - [^"\n]*)"')
+REC_STARTED_TEST = "states('input_text.ecco_dump_to_grid_schedule_last_result').startswith('STARTED') }}"
+REC_FINAL_TEST = "{{ r.startswith('FAILED') or r.startswith('BLOCKED') or r.startswith('CANCELLED') }}"
+REC_OLD_WRITE = ("            sequence:\n              - action: input_text.set_value\n                target:\n                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+                 "                data:\n                  value: \"STARTED OK - running (Home Assistant restarted during the session)\"\n")
+
+
+def bullet_rec(changelog: str) -> str:
+    """The CHANGELOG bullet of owner decision r15 for the startup recovery (up to the next bullet); empty when it is not there."""
+    a = changelog.find("- **Stage 3: the startup recovery never writes STARTED OK over a result this schedule did not verify")
+    b = changelog.find("\n- **", a + 1) if a >= 0 else -1
+    return changelog[a:b] if a >= 0 and b > a else ""
+
+
+def recovery_code_problems(schedule: str) -> list[str]:
+    """What the package CODE (not its comments) says about the recovery's active branch: three outcomes, one UNCONFIRMED text within the helper, no unconditional STARTED OK write."""
+    code = code_lines(schedule)
+    out = []
+    found = REC_UNCONFIRMED_RE.findall(code)
+    if len(found) != 1:
+        out.append(f"the UNCONFIRMED text is written {len(found)}x in the package code (once expected)")
+    else:
+        t = found[0]
+        if len(t) > 255:
+            out.append(f"the UNCONFIRMED text has {len(t)} characters (the helper keeps 255)")
+        out.extend(f"the UNCONFIRMED text lacks: {p}" for p in ("Dump to Grid is active after a Home Assistant restart", "this schedule did not confirm that it started it") if p not in t)
+        if "STARTED" in t:
+            out.append("the UNCONFIRMED text says STARTED")
+    if code.count('value: "STARTED OK - running (Home Assistant restarted during the session)"') != 1:
+        out.append("the recovery's STARTED OK text is not written exactly once")
+    if code.count(REC_STARTED_TEST) != 1:
+        out.append("the recovery does not test that the last result starts with STARTED exactly once")
+    if code.count(REC_FINAL_TEST) != 1:
+        out.append("the recovery does not leave a FAILED, BLOCKED or CANCELLED result alone exactly once")
+    if REC_OLD_WRITE in code:
+        out.append("the recovery writes STARTED OK unconditionally again (the old branch)")
+    return out
+
+
+def last_path_problems(readme: str, schedule: str, changelog: str) -> list[str]:
+    out = []
+    bodies = item_bodies(readme)
+    item20, item23 = bodies.get(20, ""), bodies.get(23, "")
+    fs, fb = flat_yaml(schedule), flat(bullet_rec(changelog))
+    out.extend(f"item 20 still says: {p}" for p in OLD20_REC_ITEM if p in item20)
+    out.extend(f"item 20 lacks: {p}" for p in ITEM20_REC if p not in item20)
+    out.extend(f"the schedule package header lacks: {p}" for p in HEADER_REC if p not in fs)
+    out.extend(f"the CHANGELOG bullet of the startup recovery lacks: {p}" for p in CHANGELOG_REC if p not in fb)
+    out.extend(f"item 23 lacks: {p}" for p in ITEM23_NOTES if p not in item23)
+    out.extend(recovery_code_problems(schedule))
+    if FULL_CLAIM.search(item20 + " " + item23 + " " + fs + " " + schedule + " " + fb):
+        out.append("a 'fully enforced' claim stands in item 20, item 23, the package or the CHANGELOG bullet")
+    return out
+
+
+l_readme, l_schedule, l_changelog = s2_readme, s2_schedule, s2_changelog
+check("limitation 20's last path is fixed in the words of item 20, the schedule package header and the new CHANGELOG bullet; the old wording ('not changed here', 'cannot tell who started Dump to Grid either', 'has the same fallback as the old one') "
+      "is gone; what is still true is stated (the Free Power package, a FAILED false negative, RG-ST3); item 23 carries its two review notes; the package code writes the UNCONFIRMED text once (within 255 characters), tests STARTED and FAILED, BLOCKED or "
+      "CANCELLED once each and no longer writes STARTED OK unconditionally", not last_path_problems(l_readme, l_schedule, l_changelog), str(last_path_problems(l_readme, l_schedule, l_changelog)))
+check("the 23 numbered items are all still listed (nothing was removed), and the earlier item 20 and item 23 checks still hold in their wording (additive)",
+      [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and not limitations_problems(l_readme) and not fixed20_problems(l_readme, l_schedule, l_changelog) and not extended20_problems(l_readme, l_schedule, l_changelog)
+      and not fixed23_problems(l_readme, s2_helper, l_changelog) and not status_problems(l_readme), str(limitations_problems(l_readme) + fixed20_problems(l_readme, l_schedule, l_changelog) + extended20_problems(l_readme, l_schedule, l_changelog)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once, and item 20, the schedule package header and the CHANGELOG bullet still say it",
+      not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text) and "(RG-ST3)" in item_bodies(l_readme).get(20, "") and "which no override binds (RG-ST3)" in flat_yaml(l_schedule)
+      and "(RG-ST3)" in bullet_rec(l_changelog))
+check("the schedule package header gains the startup recovery bullet next to the r15 one and keeps the r15 bullet (additive)", "Fixed 19 Nov 2026 (owner decision r15: every final status reflects the actual outcome)" in flat_yaml(l_schedule)
+      and "Fixed 19 Nov 2026 (owner decision r15, the last path of known limitation 20)" in flat_yaml(l_schedule), "")
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM20_REC:
+    check(f"mutant caught: item 20 loses '{ph[:48]}'", bool(last_path_problems(drop_in_item(l_readme, 20, ph), l_schedule, l_changelog)))
+for ph in HEADER_REC:
+    check(f"mutant caught: the schedule package header loses '{ph[:48]}'", bool(last_path_problems(l_readme, drop_phrase(flat_yaml(l_schedule), ph), l_changelog)))
+for ph in CHANGELOG_REC:
+    check(f"mutant caught: the CHANGELOG bullet of the startup recovery loses '{ph[:48]}'", bool(last_path_problems(l_readme, l_schedule, drop_phrase(l_changelog, ph))))
+for ph in ITEM23_NOTES:
+    check(f"mutant caught: item 23 loses '{ph[:48]}'", bool(last_path_problems(drop_in_item(l_readme, 23, ph), l_schedule, l_changelog)))
+check("mutant caught: the CHANGELOG bullet of the startup recovery removed", bool(last_path_problems(l_readme, l_schedule, drop_phrase(l_changelog, "the startup recovery never writes STARTED OK over a result this schedule did not verify"))))
+check("mutant caught: item 20 says again that the startup recovery was not changed here",
+      bool(last_path_problems(l_readme.replace("Not examined: how real Home Assistant renders the notice.", "The startup recovery: it is not one of these steps, it was not changed here. Not examined: how real Home Assistant renders the notice."), l_schedule, l_changelog)))
+check("mutant caught: item 20 says again that the recovery cannot tell who started Dump to Grid either",
+      bool(last_path_problems(l_readme.replace("Not examined: how real Home Assistant renders the notice.", "The startup recovery: it cannot tell who started Dump to Grid either. Not examined: how real Home Assistant renders the notice."), l_schedule, l_changelog)))
+check("mutant caught: the UNCONFIRMED text is replaced by a success text in the package code", bool(last_path_problems(l_readme, l_schedule.replace('value: "UNCONFIRMED - Dump to Grid is active', 'value: "STARTED OK - Dump to Grid is active'), l_changelog)))
+check("mutant caught: the UNCONFIRMED text no longer says that this schedule did not confirm the start (code)", bool(last_path_problems(l_readme, l_schedule.replace("but this schedule did not confirm that it started it", "and this schedule started it"), l_changelog)))
+check("mutant caught: the UNCONFIRMED text exceeds the 255-character helper (code)", bool(last_path_problems(l_readme, l_schedule.replace('value: "UNCONFIRMED - Dump to Grid is active', 'value: "UNCONFIRMED - ' + "x" * 120 + ' - Dump to Grid is active'), l_changelog)))
+check("mutant caught: the STARTED test is removed from the recovery (code)", bool(last_path_problems(l_readme, l_schedule.replace(REC_STARTED_TEST, "true }}"), l_changelog)))
+check("mutant caught: the FAILED, BLOCKED or CANCELLED test is removed from the recovery (code)", bool(last_path_problems(l_readme, l_schedule.replace(REC_FINAL_TEST, "{{ false }}"), l_changelog)))
+check("mutant caught: the old unconditional STARTED OK write is back in the recovery (code)", bool(last_path_problems(l_readme, l_schedule + "\n" + REC_OLD_WRITE, l_changelog)))
+check("mutant caught: item 20 claims the overrides are fully enforced", bool(last_path_problems(l_readme.replace("**A press-time BLOCKED result was", "**Fully enforced: a press-time BLOCKED result was"), l_schedule, l_changelog)))
+check("mutant caught: the schedule package header claims full enforcement", bool(last_path_problems(l_readme, l_schedule + "\n# The overrides are fully enforced.\n", l_changelog)))
+check("mutant caught: the CHANGELOG bullet claims full enforcement", bool(last_path_problems(l_readme, l_schedule, l_changelog.replace("(owner decision r15, 19 Nov 2026; known limitation 20, the last path;", "(fully enforced; owner decision r15, 19 Nov 2026; known limitation 20, the last path;"))))
+check("mutant caught: item 20 loses the RG-ST3 statement", bool(last_path_problems(l_readme.replace("still not bound by any override (RG-ST3)", "still open"), l_schedule, l_changelog)))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 20 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("20. **A press-time BLOCKED result was", "20. " + LIMITATION + " **A press-time BLOCKED result was")})))
+check("control: the untouched tree is not flagged by the startup recovery checks", not last_path_problems(l_readme, l_schedule, l_changelog) and not recovery_code_problems(l_schedule) and not limitations_problems(l_readme))
+
+
+# ===========================================================================
+print("")
+print("[13] known limitation 10 (owner decision r15, 19 Nov 2026; rewritten by owner decision r30, 20 Nov 2026; additive): the schedule packages' start-time reads on the clock-change day: P-A and P-B are implemented OFFLINE in R9, "
+      "that is not verified on a real Home Assistant, the rest is unchanged; item 10, the introduction and two CHANGELOG bullets say so")
+# ===========================================================================
+# 19 Nov 2026 (owner decision r15): item 10 was EXAMINED offline (a zone-aware Europe/London harness, 28 Mar 2027, 31 Oct 2027, 25 Oct 2026, each with an ordinary-day control) and rewritten with findings and PROPOSALS
+# that were NOT implemented; nothing in the packages was changed, and [13] required that wording. 20 Nov 2026 (owner decision r30): R9 is merged into this branch and implements, OFFLINE, P-A (arming refuses a skipped,
+# repeated or unreadable start label, in both schedule packages, before 'must be in the future') and P-B (the Export to Grid package's arm-time TOU overlap walk uses the real instants). The owner approved updating limitation
+# 10 "to reflect which clock-change fixes are implemented in R9, while clearly distinguishing offline proof from real HA verification" and "do not weaken either branch's pin protection". So the old statements that are
+# now false ('there are findings and nothing was changed', 'PROPOSED and NOT implemented', 'NOT fail closed (reproduced)' for the start label and the TOU walk, 'is NOT refused', 'its proposals are not implemented',
+# 'so there is no backstop') are FORBIDDEN texts and killed mutants; every old requirement that is still true is KEPT; and the new facts are pinned one by one: P-A and P-B 'implemented offline', 'not verified on a real
+# Home Assistant', the firmware START gate unchanged, arm time only, the one-hour (UK) probe, P-F open, the offline proof described as offline. The claims the item makes about the packages (the refusal text, its order before
+# 'must be in the future', the fixed one-hour probe, the single arm trigger, the walk on the real instants, no TOU check in the Free Power package, the firmware not changed, P-F open) are tied to the package text
+# statically. Over-claim guards: in item 10, the Known limitations introduction and the two CHANGELOG bullets every 'implemented' is qualified ('offline' or 'not'), every 'verified' or 'proven' is preceded by 'not ' or 'un',
+# and 'fully enforced', 'guarantee' and 'safe to' are absent (item 10 also carries neither 'fixed' nor 'safe'). Since the review of 20 Nov 2026 the guard also bans confirmed / live-tested / works live, lets passed,
+# worked, tested, deployed and installed stand only after a negation, names a flash only as a decision not taken, makes every 'implemented offline' end its clause, and gives every sentence that names a real
+# system, the firmware or the TOU slot table a negation of its own: a WORD-LIST guard, defence in depth, not a proof that no over-claim can be written (section [13b] holds its killed mutants).
+FREE_PKG = ROOT / "home-assistant" / "packages" / "ecco_free_power_schedule.yaml"
+DUMP_DOC = ROOT / "docs" / "DUMP_TO_GRID_V1.md"
+CLOCK_TEXT = "REJECTED - the start time is a skipped, repeated or unreadable local time (clock change); pick another time"
+FUTURE_VALUE = 'value: "REJECTED - scheduled start must be in the future"'
+NEW10_TITLE = ("The schedule packages' start-time reads on the clock-change day: two proposals of the 19 Nov 2026 examination (P-A and P-B) are implemented offline in R9 (owner decision r30, 20 Nov 2026); "
+               "that is not verified on a real Home Assistant, and the rest is unchanged.")
+R15_TITLE = "The schedule packages' start-time reads on the clock-change day were EXAMINED offline on 19 Nov 2026 (owner decision r15); there are findings and nothing was changed."   # false since R9
+OLD10_TITLE = "The schedule packages' naive start-time reads were not examined for the clock-change day."
+OLD10_ITEM = (   # none of it may stand in item 10: the [7]-era wording (not examined) and the r15 wording that R9 made false
+    "were not examined for the clock-change day", "naive start-time reads were not examined", "Shown by reading: the scheduled Dump to Grid package reads its",
+    "no running check that was read for this item covers a start time inside the repeated or the skipped hour", "Not examined: what those reads give", "not reproduced and is not claimed",
+    "Direction: unknown (not examined)", "possibly a missed or refused scheduled start",
+    # r15 wording that is false since R9 (owner decision r30):
+    "there are findings and nothing was changed", "nothing was changed", "PROPOSED and NOT implemented", "NOT fail closed (reproduced)", "is NOT refused", "walks the window as continuous wall-clock minutes",
+    "(a false refusal; older than R9)", "so there is no backstop", "its proposals are not implemented",
+)
+OLD10_README = ("were not examined for the clock-change day", "Not examined: what those reads give", "Direction: unknown (not examined)",
+                "PROPOSED and NOT implemented", "its proposals are not implemented", "there are findings and nothing was changed", "NOT fail closed (reproduced)")   # and none may stand anywhere in the README
+ITEM10_SCOPE = (   # the examination of 19 Nov 2026, kept (still true) and the two decisions
+    NEW10_TITLE, "EXAMINED offline on 19 Nov 2026", "owner decision r15", "owner decision r30", "a zone-aware (Europe/London) harness", "the packages' own template expressions and the repository's simulators",
+    "28 Mar 2027 (spring forward: the local hour 01:00 to 01:59 does not exist)", "31 Oct 2027 (fall back: that hour happens twice)", "the past 25 Oct 2026", "each with an ordinary-day control",
+    "(a) IMPLEMENTED OFFLINE in R9", "(b) NOT VERIFIED ON A REAL HOME ASSISTANT", "(c) NOT CHANGED by R9", "(d) what you would see",
+)
+ITEM10_IMPL = (   # (a) what R9 implements, offline
+    "not installed on any Home Assistant", "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented offline", "in both schedule packages",
+    'BEFORE "must be in the future"', "arming in the second 01:xx hour for a 01:xx start is still refused (fail closed) but now with that text",
+    "P-B (an epoch-correct TOU walk or a refusal when the window spans the change; R9 chose the walk) is implemented offline", "in the Export to Grid package only",
+    "walks the run on the real instants", "a minute whose local time cannot be read refuses the arm", "(both only when the TOU slot table can be read: see (c))",
+    "the Charge Battery (Free Power) package has no such check",
+)
+ITEM10_PROOF = (   # what the offline proof is, and that it is only that
+    "an independent oracle", "every real UTC minute of each change day walked, counting how often each wall-clock label occurs",
+    "is compared with the real arm validation label by label", "each of the 1440 wall-clock minute labels of a day is armed once and its answer compared with the oracle's count",
+    "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026", "both readings of a naive local string",
+    "failing-first", "mutants of both changes", "registry/tests/test_ha_r9_missed_runs.py [5]", "home-assistant/tests/test_ecco_r9_stage3_composition.py [19]",
+    "an offline proof of the offline model only, not a test on a real Home Assistant",
+)
+ITEM10_BEFORE = (   # the findings of 19 Nov 2026, kept as the record of what R9 changed
+    "before R9, these two were NOT fail closed", "was read as the first reading of that label and was not refused", "a skipped 01:30 starts at 02:30 BST (60 minutes later than typed, while the ARMED text still shows 01:30)", "a repeated 01:30 starts once, at its first occurrence",
+    "walked the window as continuous wall-clock minutes", "(a false accept)", "(a false refusal)", 'refused with a misleading text ("must be in the future")',
+)
+ITEM10_UNVERIFIED = (   # (b)
+    "NOT EXAMINABLE offline", "recalled, not verified", "the real Home Assistant time-trigger rule", "whether its process time zone equals the configured zone for the naive-string read",
+    "whether a date-and-time helper accepts a skipped time", "its restore after a restart (item 19)", "the dongle's timers and TOU gate across a clock change",
+    "P-F (a supervised read-only template check of the three conversions", "is still open", "everything in (a) stays not verified on a real Home Assistant",
+)
+ITEM10_UNCHANGED = (   # (c)
+    "the dongle firmware's START gate is not changed (a flash is a separate decision)", "(reasoned from the code, not run)", "the arm-time check of (a) is the only one that sees a charge slot after the skipped hour",
+    "only when the schedule is armed", "a start helper edited while the schedule is armed is not checked again", "shifts the label by a constant one hour", "right for the UK clock change only", "only Europe/London was modelled",
+    "EXACT (reproduced)", "is epoch arithmetic", "nothing starts twice",
+    "FAIL CLOSED (reproduced)", "is never captured for R9", "the watchdog does not rescue a lost on-time start", "(EXPIRY_ABOVE_CAP, a 25 hour night)", "is covered by item 19",
+    "The Free Power schedule package behaves identically",
+    # F3 (review of 20 Nov 2026): the arm-time TOU walk of (a) is skipped when the TOU slot table cannot be read (package text: the walk sits inside `if ns.ok`, ns.ok is false for any unreadable row)
+    "The TOU walk of (a) runs only when the TOU slot table can be read", "a time that reads as hours and minutes and a charge source that is not unknown, unavailable or empty",
+    "the package does not walk the window at all", "this check does not refuse the arm", "the firmware's own START gate is then the only gate",
+    "the offline suite pins that an unreadable slot table does not refuse the arm",
+    "Whether an unreadable TOU slot table should fail closed stays an open question for the owner and is not decided here",
+)
+ITEM10_SEE = (   # (d)
+    "Direction: mixed, as listed.", "against the slots it really covers (when the TOU slot table can be read)", "You would see: a start that fires an hour away from the label typed on a change day, or a refused or MISSED run that was in fact fine", "with R9 installed (offline only so far)",
+    "The next clock change is 28 Mar 2027.",
+)
+ITEM10_ALL = ITEM10_SCOPE + ITEM10_IMPL + ITEM10_PROOF + ITEM10_BEFORE + ITEM10_UNVERIFIED + ITEM10_UNCHANGED + ITEM10_SEE
+INTRO10 = ("Item 10 was EXAMINED offline on 19 Nov 2026 (owner decision r15)", "updated on 20 Nov 2026 (owner decision r30)", "P-A (the refusal of a skipped, repeated or unreadable start label at arm time)",
+           "P-B (the arm-time TOU overlap walk on the real instants)", "are implemented offline in R9", "that is not verified on a real Home Assistant", "everything else in it is unchanged")
+INTRO10_OLD = ("its proposals are not implemented", "nothing was changed", "PROPOSED and NOT implemented")   # false since R9: forbidden in the introduction
+R15_MARK = "- **Stage 3: known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten"
+R30_MARK = "- **Stage 3: known limitation 10 now says which clock-change refusals and checks R9 implements offline"
+CHANGELOG_R15D = (   # the r15 bullet stays the record of 19 Nov 2026, with its superseded sentences marked
+    "known limitation 10 (the schedule packages' start-time reads on the clock-change day) was examined offline and rewritten", "owner decision r15", "documentation only", "zone-aware (Europe/London)",
+    "28 Mar 2027", "31 Oct 2027", "25 Oct 2026", "Reproduced and exact", "NOT fail closed", "FAIL CLOSED", "there was no backstop on 19 Nov 2026", "NOT EXAMINABLE offline",
+    "SUPERSEDED IN PART on 20 Nov 2026 (owner decision r30, see the next bullet)", "this bullet records what was true on 19 Nov 2026, before R9",
+    "PROPOSED on 19 Nov 2026, each needing the owner's decision", "were implemented offline by R9 on 20 Nov 2026", "the others are not implemented",
+    "This supersedes the sentences of the earlier bullets", "not reviewed or not examined for the clock-change day", "no package, card, bundle, pin assertion, scan, gate, threshold or hash of a frozen file was edited",
+    "still not bound by any override (RG-ST3)",
+)
+CHANGELOG_R15D_OLD = ("PROPOSED and NOT implemented", "Reproduced and NOT fail closed", "so there is no backstop", "its proposals are not implemented")
+CHANGELOG_R30 = (
+    "known limitation 10 now says which clock-change refusals and checks R9 implements offline (P-A, P-B), what is not verified on a real Home Assistant and what is unchanged", "owner decision r30, 20 Nov 2026",
+    "documentation and its static check only, nothing installed", "keeping offline proof and real Home Assistant verification apart",
+    "Implemented offline in R9: P-A", "before 'must be in the future'", "still fails closed but with the clock-change text", "P-B (the Export to Grid package's arm-time TOU overlap check walks the run on the real instants",
+    "the Charge Battery package has no such check", "The proof is offline only", "an independent oracle", "every real UTC minute of each change day walked, counting how often each wall-clock label occurs",
+    "compared with the real arm validation label by label", "exactly the 60 skipped or repeated minutes of 28 Mar 2027, 31 Oct 2027 and 25 Oct 2026",
+    "failing-first runs on the unchanged packages and mutants", "Not verified on a real Home Assistant", "recalled, not verified", "P-F, the supervised read-only template check, is still open",
+    "Unchanged: the dongle firmware's START gate", "a flash is a separate decision", "the arm-time-only check (a start helper edited while the schedule is armed is not checked again)",
+    "the Export to Grid TOU walk runs only when the TOU slot table can be read", "whether an unreadable table should fail closed stays an open question for the owner, not decided here",
+    "the repeated-time probe (a constant one-hour shift: the UK only)", "the second-hour capture loss", "the Skip tonight cap", "the epoch arithmetic of every deadline",
+    "This supersedes, for P-A and P-B, the sentences of the r15 bullet above", "the r15 bullet stays the record of 19 Nov 2026",
+    "a word-list guard that catches the common over-claims", "defence in depth, not a proof that no over-claim can be written", "the pin of the wording is stricter", "No package, card, bundle, scan, gate, threshold, pin-chain declaration or hash of a frozen file was edited", "still not bound by any override (RG-ST3)",
+)
+OLD10_ORACLE = (   # the oracle method as it was worded wrongly (finding F1): none may stand in item 10, the introduction or either CHANGELOG bullet
+    "run through the real arm validation", "every real UTC minute of each change day run", "minute by minute",
+)
+CHANGELOG_R30_OLD = ("guarded against over-claims", "guarded against over-claim")   # the r30 sentence that over-stated a word-list guard (finding F2)
+EVERYWHERE_OLD = ("PROPOSED and NOT implemented", "its proposals are not implemented", "there are findings and nothing was changed", "NOT fail closed (reproduced)")   # in none of the files that carry the wording
+DOC_PROBE_OPEN = "(proposal P-F) is still open"
+
+
+def bullet_of(changelog: str, marker: str) -> str:
+    """The CHANGELOG bullet that starts with `marker` (up to the next top-level bullet); empty when it is not there exactly once."""
+    if changelog.count(marker) != 1:
+        return ""
+    a = changelog.index(marker)
+    b = changelog.find("\n- **", a + 1)
+    return changelog[a:b] if b > a else ""
+
+
+def bullet_r15d(changelog: str) -> str:
+    return bullet_of(changelog, R15_MARK)
+
+
+def bullet_r30(changelog: str) -> str:
+    return bullet_of(changelog, R30_MARK)
+
+
+def limitations_intro(readme: str) -> str:
+    """The introduction of the Known limitations section (from its heading to item 1) as flat text; empty when the heading or item 1 is missing."""
+    h = readme.find(LIMITS_HEADING)
+    e = readme.find("\n1. **", h) if h >= 0 else -1
+    return flat(readme[h:e]) if h >= 0 and e > h else ""
+
+
+# ---- the over-claim guard -------------------------------------------------------------------------------------------------------------------------------
+# WHAT IT IS (owner review of 20 Nov 2026, finding F2): a WORD-LIST guard that is clause-local where it can be. It catches the common over-claims (a result word,
+# an install, a flash, a claim about a real system, an 'implemented offline and ...' that goes on to a real system). It is defence in depth, NOT a proof that no
+# over-claim can be written; the sentences that the suite pins one by one (ITEM10_ALL, CHANGELOG_R30 ...) carry the real weight. It runs over item 10, the Known
+# limitations introduction and the two CHANGELOG bullets. Every allowance below is LOCAL to the word or clause it qualifies: a 'not' in another sentence does not help.
+BANNED_RE = re.compile(r"(?i)\b(?:confirm(?:ed|s|ation)?|live[- ]test(?:ed|s|ing)?|(?:works?|worked|working)\s+live|succeed(?:ed|s)?|in production|in service|rolled out|shipped|go(?:es)? live|went live)\b")
+# a result, a run or an install word is allowed only right after a negation ('not installed', 'nothing deployed', 'has not been installed'); 'installed' may also be followed
+# at once by '(offline only'. Nothing else qualifies it: not a 'not' elsewhere in the sentence.
+GATED_RE = re.compile(r"(?i)\b(?:pass(?:ed|es|ing)?|work(?:s|ed|ing)?|tested|testing|deploy(?:ed|s|ing|ment)?|install(?:ed|s|ing|ation)?)\b")
+NEGATED_BEFORE_RE = re.compile(r"(?i)\b(?:not|nothing|never|no)\s+(?:(?:was|is|were|are|been|be|yet|ever)\s+)*$")
+OFFLINE_ONLY_AFTER_RE = re.compile(r"\s*\(offline only\b")
+# a flash may be named only as a decision that is not taken; every other 'flash...' (flashed, after the flash, now flashes) is refused
+FLASH_OK = ("a flash is a separate decision", "needs a flash")
+# 'live' may stand in exactly one sentence; every other 'live' (works live, live-tested, the live Home Assistant) is refused
+LIVE_OK = ("None was seen on a live Home Assistant",)
+# 'implemented offline' (and 'implements offline') must END its clause after at most an explicit location or an offline-only qualifier from this list; 'and ...', a comma
+# and a new claim, a 'then' or 'as well' after it is a claim about something else
+IMPL_TAIL_RE = re.compile(
+    r"(?i)(?:\s+(?:in R9|by R9|in both schedule packages|in the Export to Grid package only|on 20 Nov 2026|\(P-A, P-B\)"
+    r"|\(owner decision r30, 20 Nov 2026(?:; not installed on any Home Assistant)?\)|\(not installed\)|\(offline only[^()]*\)))*"
+    r"\s*(?:$|[;:.)]|,\s*(?:\([a-d]\)|that is not verified\b|so the findings\b|what is not verified\b))")
+# a sentence that names a real system, the firmware or the TOU slot table must carry a negation or an 'open' / 'unchanged' marker IN THAT SENTENCE
+REAL_SYSTEM_RE = re.compile(
+    r"(?i)\b(?:real|live|actual|owner's)\s+(?:Home\s+Assistant|dongle|inverter|firmware|hardware|system|installation)\b|\bfirmware\b|\bSTART gate\b|\bdongle\b|\binverter\b"
+    r"|\bhardware\b|\bslot table\b|\bin the field\b|\bproduction\b")
+NEGATION_RE = re.compile(r"(?i)\b(?:not|no|none|never|nothing|nor|neither|cannot|without|unverified|unproven|recalled|reasoned|open|until|unchanged)\b|n't\b|\bstay as they are\b")
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[`\"])")
+
+
+def overclaim_problems(name: str, body: str, strict: bool = False) -> list[str]:
+    """No unqualified 'implemented' (it needs 'offline' after it or 'not ' before it) and every 'implemented offline' ends its clause; no 'verified' or 'proven' that is not
+    'not verified' / 'unverified' / 'unproven'; no 'fully enforced', 'guarantee', 'safe to'; none of the banned words (confirmed, live-tested, works live ...); 'passed', 'worked',
+    'tested', 'deployed' and 'installed' only after a negation; 'flash' only as a decision not taken; 'live' only in the one sentence that says nothing was seen live; and every sentence
+    that names a real system, the firmware or the TOU slot table carries a negation of its own.
+    `strict` (item 10 only) also bans 'fixed', 'safe' and 'guaranteed' for the real system."""
+    out = []
+
+    def ctx(m) -> str:
+        return "..." + body[max(0, m.start() - 30):m.end() + 30]
+
+    for m in re.finditer(r"(?i)\bimplemented\b", body):
+        if not (re.search(r"(?i)\bnot $", body[:m.start()]) or body[m.end():].lower().startswith(" offline")):
+            out.append(f"{name}: 'implemented' is not qualified by 'offline' or 'not': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    for m in re.finditer(r"(?i)\bimplements?\b", body):   # 'implements' needs 'offline' in its own sentence, after it
+        end = re.search(r"[.!?](?:\s|$)", body[m.end():])
+        if "offline" not in body[m.end():m.end() + (end.start() if end else len(body))].lower():
+            out.append(f"{name}: 'implements' has no 'offline' in its own sentence: {ctx(m)}")
+    for m in re.finditer(r"(?i)\bimplement(?:ed|s)\s+offline\b", body):
+        if not IMPL_TAIL_RE.match(body, m.end()):
+            out.append(f"{name}: 'implemented offline' does not end its clause (what follows is not a listed location or offline-only qualifier): {ctx(m)}")
+    for m in re.finditer(r"(?i)\b(?:verified|proven)\b", body):
+        if not re.search(r"(?i)\bnot $", body[:m.start()]):
+            out.append(f"{name}: '{m.group(0)}' is not preceded by 'not ' or 'un': ...{body[max(0, m.start() - 30):m.end() + 20]}")
+    for m in BANNED_RE.finditer(body):
+        out.append(f"{name}: banned over-claim word '{m.group(0)}': {ctx(m)}")
+    for m in GATED_RE.finditer(body):
+        word = m.group(0).lower()
+        if NEGATED_BEFORE_RE.search(body[:m.start()]):
+            continue
+        if word.startswith("install") and OFFLINE_ONLY_AFTER_RE.match(body, m.end()):
+            continue
+        out.append(f"{name}: '{m.group(0)}' is not directly negated ('not ', 'nothing ', 'never ') and not followed by '(offline only': {ctx(m)}")
+    rest = body
+    for ok in FLASH_OK:
+        rest = re.sub(re.escape(ok), "", rest, flags=re.I)
+    for m in re.finditer(r"(?i)\bflash\w*", rest):
+        out.append(f"{name}: 'flash' is named other than as a decision not taken ('a flash is a separate decision', 'needs a flash'): ...{rest[max(0, m.start() - 30):m.end() + 30]}")
+    rest = body
+    for ok in LIVE_OK:
+        rest = rest.replace(ok, "")
+    for m in re.finditer(r"(?i)\blive\b", rest):
+        out.append(f"{name}: 'live' stands outside 'None was seen on a live Home Assistant': ...{rest[max(0, m.start() - 30):m.end() + 30]}")
+    for s in SENTENCE_SPLIT_RE.split(body):
+        m = REAL_SYSTEM_RE.search(s)
+        if m and not NEGATION_RE.search(s):
+            out.append(f"{name}: a sentence names '{m.group(0)}' with no negation, 'open' or 'unchanged' in the same sentence: {s[:110]}")
+    if FULL_CLAIM.search(body):
+        out.append(f"{name}: a 'fully enforced' claim")
+    if re.search(r"(?i)guarantee|safe to", body):
+        out.append(f"{name}: 'guarantee' or 'safe to'")
+    if strict and re.search(r"(?i)\b(?:fixed|safe|safely)\b", body):
+        out.append(f"{name}: 'fixed' or 'safe'")
+    if not body.isascii():
+        out.append(f"{name} is not ASCII")
+    if re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|token|password|key=", body, re.I):
+        out.append(f"{name} names an address, token or password")
+    return out
+
+
+ROW_TIME_TEST = r"t is match('^\\d{1,2}:\\d{2}$')"   # as the Export to Grid package spells the slot time test (two backslashes in the YAML text)
+
+
+def package_tie_problems(dump: str, free: str) -> list[str]:
+    """What item 10 says about the two schedule packages, read from the package text (static): the refusal text, its place before 'must be in the future', the fixed one-hour probe, the single arm trigger (arm time
+    only), the walk on the real instants (Export to Grid only), no TOU check in the Free Power package, the firmware not changed, P-F open."""
+    out = []
+    for name, pk in (("Export to Grid", dump), ("Charge Battery (Free Power)", free)):
+        refusal = f'value: "{CLOCK_TEXT}"'
+        a, f = pk.find(refusal), pk.find(FUTURE_VALUE)
+        if pk.count(refusal) != 1 or pk.count(FUTURE_VALUE) != 1 or not 0 <= a < f:
+            out.append(f"{name}: the clock-change refusal is not in the package once, before the 'must be in the future' refusal")
+        for probe in ("(t + 3600) | timestamp_custom(f, true, 'unreadable')) == s", "(t - 3600) | timestamp_custom(f, true, 'unreadable')) == s", "{{ t <= 0"):
+            if pk.count(probe) != 1:
+                out.append(f"{name}: the label test lacks: {probe}")
+        m = re.search(r"- id: \S+_schedule_arm_validation\n    alias: .*\n    mode: restart\n    triggers:\n((?:      .*\n)+?)    actions:", pk)
+        if not m or not re.fullmatch(r'      - trigger: state\n        entity_id: \S+_schedule_armed\n        to: "on"\n', m.group(1)):
+            out.append(f"{name}: the arm validation is not triggered by the armed switch turning on, and by nothing else")
+        if "(proposal P-F) is still open" not in flat_yaml(pk):
+            out.append(f"{name}: the header no longer says that P-F is still open")
+    if dump.count("k * 60) | timestamp_local") != 1 or "range(0, dur + 1)" not in dump:
+        out.append("Export to Grid: the TOU overlap walk is not on the real instants")
+    # F3: the walk sits inside the readability flag (`ns.ok`: false for any of the six rows whose time is not H:MM or whose charge source is unknown, unavailable or empty), so an unreadable table is not walked
+    if dump.count("{% if ns.ok and (start_ts | float(0)) > 0 %}") != 1 or dump.count("{% set ns.ok = false %}") != 1 or "c not in ['unknown', 'unavailable', '']" not in dump \
+            or "range(1, 7)" not in dump or ROW_TIME_TEST not in dump:
+        out.append("Export to Grid: the TOU walk is no longer inside the slot table readability flag (item 10 says an unreadable slot table is not walked)")
+    if "an unreadable slot table still defers to the firmware" not in flat_yaml(dump):
+        out.append("Export to Grid: the header no longer says that an unreadable slot table defers to the firmware")
+    if "is NOT changed here (a firmware change is a separate flash)" not in flat_yaml(dump):
+        out.append("Export to Grid: the header no longer says that the firmware is not changed")
+    if "charge source set" in free:
+        out.append("Charge Battery (Free Power): it has a TOU overlap check now (item 10 says it has none)")
+    return out
+
+
+def item10_problems(readme: str, changelog: str, dump: str = "", free: str = "") -> list[str]:
+    out = []
+    item10 = item_bodies(readme).get(10, "")
+    fr, intro, b15, b30 = flat(readme), limitations_intro(readme), flat(bullet_r15d(changelog)), flat(bullet_r30(changelog))
+    if not item10:
+        out.append("item 10 is not there")
+    if len(re.findall(r"(?m)^10\. \*\*" + re.escape(NEW10_TITLE) + r"\*\*", readme)) != 1:
+        out.append("item 10 does not stand once, numbered 10, under its new title")
+    out.extend(f"item 10 lacks: {p}" for p in ITEM10_ALL if p not in item10)
+    out.extend(f"item 10 still says: {p}" for p in OLD10_ITEM if p in item10)
+    out.extend(f"the plan-core README still says: {p}" for p in OLD10_README if p in fr)
+    out.extend(f"the Known limitations introduction lacks: {p}" for p in INTRO10 if p not in intro)
+    out.extend(f"the Known limitations introduction still says: {p}" for p in INTRO10_OLD if p in intro)
+    if not b15:
+        out.append("the CHANGELOG bullet of r15 (item 10) is not there exactly once")
+    if not b30:
+        out.append("the CHANGELOG bullet of r30 (item 10) is not there exactly once")
+    if b15 and b30 and changelog.index(R15_MARK) > changelog.index(R30_MARK):
+        out.append("the r30 bullet comes before the r15 bullet it supersedes")
+    out.extend(f"the CHANGELOG bullet of r15 (item 10) lacks: {p}" for p in CHANGELOG_R15D if p not in b15)
+    out.extend(f"the CHANGELOG bullet of r15 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b15)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) lacks: {p}" for p in CHANGELOG_R30 if p not in b30)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) still says: {p}" for p in CHANGELOG_R15D_OLD if p in b30)
+    out.extend(f"the CHANGELOG bullet of r30 (item 10) still says: {p}" for p in CHANGELOG_R30_OLD if p in b30)
+    for where, body in (("item 10", item10), ("the Known limitations introduction", intro), ("the CHANGELOG bullet of r15 (item 10)", b15), ("the CHANGELOG bullet of r30 (item 10)", b30)):
+        out.extend(f"{where} still words the oracle method wrongly: {p}" for p in OLD10_ORACLE if p in body)
+    out.extend(overclaim_problems("item 10", item10, strict=True))
+    out.extend(overclaim_problems("the Known limitations introduction", intro))
+    out.extend(overclaim_problems("the CHANGELOG bullet of r15 (item 10)", b15))
+    out.extend(overclaim_problems("the CHANGELOG bullet of r30 (item 10)", b30))
+    if dump and free:
+        out.extend(package_tie_problems(dump, free))
+        if flat(CLOCK_TEXT) not in item10:
+            out.append("item 10 does not quote the clock-change refusal text of the packages exactly")
+    return out
+
+
+def everywhere_problems(files: dict[str, str]) -> list[str]:
+    """None of the files that carry the wording (README, CHANGELOG, the Export to Grid doc, both schedule packages) says that P-A or P-B are not implemented, or the other r15 sentences R9 made false."""
+    return [f"{n} still says: {p}" for n, t in files.items() for p in EVERYWHERE_OLD if p in flat(t)]
+
+
+def in_item(readme: str, num: int, fn) -> str:
+    """The README with limitation item `num` replaced by fn(its text); unchanged (and recorded) when the item is missing."""
+    span = item_span(readme, num)
+    if span is None:
+        NOOP_MUTANTS.append(f"item {num} (in_item)")
+        return readme
+    a, b = span
+    return readme[:a] + fn(readme[a:b]) + readme[b:]
+
+
+def in_intro(readme: str, fn) -> str:
+    """The README with the Known limitations introduction replaced by fn(its text); unchanged (and recorded) when the heading or item 1 is missing."""
+    h = readme.find(LIMITS_HEADING)
+    e = readme.find("\n1. **", h) if h >= 0 else -1
+    if e < 0:
+        NOOP_MUTANTS.append("the Known limitations introduction (in_intro)")
+        return readme
+    return readme[:h] + fn(readme[h:e]) + readme[e:]
+
+
+def in_bullet(changelog: str, marker: str, fn) -> str:
+    """The CHANGELOG with the bullet that starts with `marker` replaced by fn(its text); unchanged (and recorded) when the bullet is missing."""
+    a = changelog.find(marker)
+    if a < 0:
+        NOOP_MUTANTS.append(f"bullet: {marker[:60]}")
+        return changelog
+    b = changelog.find("\n- **", a + 1)
+    if b < 0:
+        b = len(changelog)
+    return changelog[:a] + fn(changelog[a:b]) + changelog[b:]
+
+
+def sw(text: str, phrase: str, repl: str) -> str:
+    """`text` with every occurrence of `phrase` (whitespace in it may match a line wrap) replaced by `repl`. When the phrase is absent the text comes back UNCHANGED and the
+    phrase is recorded in NOOP_MUTANTS (a clean FAIL of the final check, never an AssertionError)."""
+    pat = r"\s+".join(re.escape(w) for w in phrase.split())
+    new, n = re.subn(pat, lambda m: repl, text)
+    if n < 1:
+        NOOP_MUTANTS.append(phrase)
+    return new
+
+
+n_readme, n_changelog = s2_readme, s2_changelog
+n_dump, n_free, n_doc = text_of(SCHEDULE_PKG), text_of(FREE_PKG), text_of(DUMP_DOC)
+n_files = {"the plan-core README": n_readme, "the CHANGELOG": n_changelog, "docs/DUMP_TO_GRID_V1.md": n_doc, "the Export to Grid package": n_dump, "the Charge Battery (Free Power) package": n_free}
+
+
+def all10(rd=None, cl=None, dp=None, fp=None) -> list[str]:
+    return item10_problems(n_readme if rd is None else rd, n_changelog if cl is None else cl, n_dump if dp is None else dp, n_free if fp is None else fp)
+
+
+check("limitation 10 says what R9 implements OFFLINE (P-A, P-B), what the offline proof is, what is NOT VERIFIED on a real Home Assistant (P-F open), what is NOT CHANGED (the firmware START gate, arm time only, the one-hour UK probe, "
+      "the unchanged findings) and what you would see; the Known limitations introduction and both CHANGELOG bullets agree; the r15 findings stay as the record of 19 Nov 2026", not all10(), str(all10()))
+check("the claims item 10 makes about the packages hold in the package text (the refusal text exactly, before 'must be in the future', the fixed one-hour probe, ONE arm trigger, the walk on the real instants, no TOU check in "
+      "the Free Power package, the firmware not changed, P-F open)", not package_tie_problems(n_dump, n_free) and flat(CLOCK_TEXT) in item_bodies(n_readme).get(10, ""), str(package_tie_problems(n_dump, n_free)))
+check("no file that carries the wording still says that P-A or P-B are not implemented, or any other r15 sentence R9 made false (the README, the CHANGELOG, docs/DUMP_TO_GRID_V1.md, both schedule packages)",
+      not everywhere_problems(n_files), str(everywhere_problems(n_files)))
+check("item 10 is present and numbered 10, still names the clock-change day in its title, and the 23 numbered items are all still listed (the count did not change); its direction is 'mixed, as listed' (allowed for item 10 only)",
+      [n for n, _ in LIMIT_ITEMS] == list(range(1, 24)) and LIMIT_ITEMS[9] == (10, "clock-change day") and sorted(item_bodies(n_readme)) == list(range(1, 24)) and not limitations_problems(n_readme)
+      and DIRECTION_MIXED_ITEMS == (10,), str(limitations_problems(n_readme)))
+check("the Stage 3 limitation sentence (RG-ST3: the dongle's own Start button is not bound) is still in every place it was, exactly once", not places_problems(texts) and not package_comment_problems(texts) and not visible_problems(controls_text))
+check("nothing claims the overrides are fully enforced (item 10, the Known limitations introduction, both CHANGELOG bullets, the plan-core README, the card sources and bundle, both package headers)",
+      not FULL_CLAIM.search(" ".join([n_readme, flat(bullet_r15d(n_changelog)), flat(bullet_r30(n_changelog)), texts["card bundle"], texts["card README"], flat_yaml(s2_helper), flat_yaml(s2_schedule)] + list(card_sources.values()))))
+check("the earlier checks of items 9, 11, 19, 20 and 23 still hold in their wording (additive), and item 10 no longer needs the old [7] wording",
+      not status_problems(n_readme) and not mitigated19_problems(n_readme, s2_helper, n_changelog) and not fixed23_problems(n_readme, s2_helper, n_changelog) and not last_path_problems(n_readme, s2_schedule, n_changelog)
+      and not fixed20_problems(n_readme, s2_schedule, n_changelog) and not extended20_problems(n_readme, s2_schedule, n_changelog) and "Not examined: what those reads give" not in flat(n_readme), "")
+
+# ---- mutants: each lost or softened statement is caught; the untouched tree is not flagged ----
+for ph in ITEM10_ALL:
+    check(f"mutant caught: item 10 loses '{ph[:48]}'", bool(all10(rd=drop_in_item(n_readme, 10, ph))))
+for ph in INTRO10:
+    check(f"mutant caught: the Known limitations introduction loses '{ph[:48]}'", bool(all10(rd=in_intro(n_readme, lambda s, ph=ph: drop_phrase(s, ph)))))
+for ph in CHANGELOG_R15D:
+    check(f"mutant caught: the CHANGELOG bullet of r15 (item 10) loses '{ph[:48]}'", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s, ph=ph: drop_phrase(s, ph)))))
+for ph in CHANGELOG_R30:
+    check(f"mutant caught: the CHANGELOG bullet of r30 (item 10) loses '{ph[:48]}'", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s, ph=ph: drop_phrase(s, ph)))))
+check("mutant caught: the CHANGELOG bullet of r15 (item 10) removed", bool(all10(cl=drop_phrase(n_changelog, CHANGELOG_R15D[0]))))
+check("mutant caught: the CHANGELOG bullet of r30 (item 10) removed", bool(all10(cl=drop_phrase(n_changelog, R30_MARK))))
+check("mutant caught: the r30 bullet moved before the r15 bullet it supersedes",
+      bool(all10(cl=n_changelog.replace(bullet_r15d(n_changelog), "@@R15@@").replace(bullet_r30(n_changelog), bullet_r15d(n_changelog)).replace("@@R15@@", bullet_r30(n_changelog)))))
+# the owner's named mutants
+check("mutant caught: the r15 wording restored (item 10 titled 'were EXAMINED offline ... there are findings and nothing was changed' again)", bool(all10(rd=n_readme.replace(NEW10_TITLE, R15_TITLE))))
+check("mutant caught: the [7]-era wording restored (item 10 titled 'naive start-time reads were not examined for the clock-change day' again)", bool(all10(rd=n_readme.replace(NEW10_TITLE, OLD10_TITLE))))
+for old in OLD10_ITEM:
+    check(f"mutant caught: the old sentence '{old[:48]}' added to item 10 (every required phrase still there: the forbidden text alone kills it)",
+          bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + old))))
+check("mutant caught: 'not verified on a real Home Assistant' dropped from item 10 (every place)", bool(all10(rd=drop_in_item(n_readme, 10, "not verified on a real Home Assistant"))))
+check("mutant caught: 'not verified on a real Home Assistant' dropped from the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: drop_phrase(s, "not verified on a real Home Assistant")))))
+check("mutant caught: 'implemented' left unqualified in item 10 (every required phrase still there: the over-claim guard alone kills it)",
+      bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. P-A is implemented."))))
+check("mutant caught: 'P-A is implemented offline' softened to 'P-A is implemented' in item 10", bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented offline", "P-A (refuse a skipped, repeated or unreadable start label at arm time) is implemented")))))
+check("mutant caught: 'are implemented offline in R9' softened to 'are implemented in R9' in the introduction", bool(all10(rd=in_intro(n_readme, lambda s: sw(s, "are implemented offline in R9", "are implemented in R9")))))
+check("mutant caught: 'implemented' left unqualified in the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "Implemented offline in R9: P-A", "Implemented in R9: P-A")))))
+check("mutant caught: 'implemented' left unqualified in the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "were implemented offline by R9", "were implemented by R9")))))
+check("mutant caught: the proposals turned into 'IMPLEMENTED in this change' (unqualified) in item 10", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. IMPLEMENTED in this change."))))
+check("mutant caught: 'NOT fail closed' removed from item 10 (the finding turned into a fail-closed one)", bool(all10(rd=drop_in_item(n_readme, 10, "NOT fail closed"))))
+check("mutant caught: 'before R9, these two were NOT fail closed' softened to 'were fail closed'", bool(all10(rd=sw(n_readme, "these two were NOT fail closed", "these two were fail closed"))))
+check("mutant caught: 'was read as the first reading of that label and was not refused' softened to 'was refused' (the record of 19 Nov 2026 falsified)",
+      bool(all10(rd=sw(n_readme, "was read as the first reading of that label and was not refused", "was refused"))))
+check("mutant caught: 'NOT EXAMINABLE offline' turned into 'EXAMINED offline'", bool(all10(rd=sw(n_readme, "(and NOT EXAMINABLE offline)", "(and EXAMINED offline)"))))
+check("mutant caught: 'is still open' (P-F) turned into 'is done' in item 10", bool(all10(rd=sw(n_readme, "is still open: until it is done", "is done: since it was done"))))
+check("mutant caught: 'fully enforced' added to item 10", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: s + " The overrides are fully enforced."))))
+check("mutant caught: 'fully enforced' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The overrides are fully enforced."))))
+for word, text in (("verified", "P-A is verified on a real Home Assistant."), ("proven", "P-B is proven."), ("guaranteed", "The refusal is guaranteed."), ("safe to", "It is safe to install."),
+                   ("fixed", "The clock-change reads are fixed."), ("safe", "The start is safe.")):
+    check(f"mutant caught: '{word}' added to item 10 (an over-claim for the real system)", bool(all10(rd=sw(n_readme, "The next clock change is 28 Mar 2027.", "The next clock change is 28 Mar 2027. " + text))))
+for word, text in (("verified", "P-A is verified."), ("proven", "P-B is proven."), ("guarantee", "It gives a guarantee."), ("safe to", "It is safe to install.")):
+    check(f"mutant caught: '{word}' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s, text=text: s + " " + text))))
+    check(f"mutant caught: '{word}' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s, text=text: s + " " + text))))
+    check(f"mutant caught: '{word}' added to the r15 bullet", bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s, text=text: s + " " + text))))
+check("control: 'not verified' and 'unverified' are accepted by the over-claim guard", not overclaim_problems("x", "It is not verified on a real Home Assistant, it is unverified and unproven; P-A is implemented offline; it is not implemented.", strict=True))
+check("mutant caught: the offline proof described as a test on a real Home Assistant",
+      bool(all10(rd=drop_in_item(n_readme, 10, "an offline proof of the offline model only, not a test on a real Home Assistant").replace("REMOVED", "a proof on a real Home Assistant"))))
+check("mutant caught: the P-F sentence dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "P-F (a supervised read-only template check of the three conversions"))))
+check("mutant caught: the firmware START gate sentence dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "the dongle firmware's START gate is not changed (a flash is a separate decision)"))))
+check("mutant caught: the firmware START gate called changed in item 10", bool(all10(rd=sw(n_readme, "the dongle firmware's START gate is not changed (a flash is a separate decision)", "the dongle firmware's START gate is changed (a flash is a separate decision)"))))
+check("mutant caught: 'arm time only' dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "a start helper edited while the schedule is armed is not checked again"))))
+check("mutant caught: the one-hour (UK only) limit of the probe dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "right for the UK clock change only"))))
+check("mutant caught: the proposals sentence of the r15 bullet restored ('PROPOSED and NOT implemented, each needing the owner's decision')",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "PROPOSED on 19 Nov 2026, each needing the owner's decision", "PROPOSED and NOT implemented, each needing the owner's decision")))))
+check("mutant caught: the proposals sentence 'PROPOSED and NOT implemented' added to the r30 bullet", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " PROPOSED and NOT implemented."))))
+check("mutant caught: 'its proposals are not implemented' restored in the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " its proposals are not implemented."))))
+check("mutant caught: 'its proposals are not implemented' (README sentence) restored", bool(all10(rd=sw(n_readme, "everything else in it is unchanged", "nothing was changed and its proposals are not implemented"))))
+check("mutant caught: 'there was no backstop on 19 Nov 2026' turned back into 'there is no backstop' in the r15 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: sw(s, "there was no backstop on 19 Nov 2026", "there is no backstop")))))
+check("mutant caught: the r15 finding restored without its date ('Reproduced and NOT fail closed') in the r15 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R15_MARK, lambda s: s + " Reproduced and NOT fail closed: a start time typed as a skipped local label is not refused."))))
+check("mutant caught: item 10 removed (22 items)", bool(limitations_problems(n_readme[:n_readme.index("\n10. **", n_readme.index(LIMITS_HEADING))] + n_readme[n_readme.index("\n11. **", n_readme.index(LIMITS_HEADING)):])))
+check("mutant caught: item 10 renumbered", bool(all10(rd=n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))) or bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
+check("mutant caught: item 10 renumbered (the limitations check alone)", bool(limitations_problems(n_readme.replace("\n10. **" + NEW10_TITLE, "\n11. **" + NEW10_TITLE))))
+_h13 = n_readme.index(LIMITS_HEADING)
+_e13 = n_readme.index("\n### ", _h13 + 1)
+check("mutant caught: the item count changed (a 24th item added)", bool(limitations_problems(n_readme[:_e13] + "\n24. **A new item.** Direction: neutral. You would see: nothing.\n" + n_readme[_e13:])))
+check("mutant caught: the item count changed (item 23 removed)", bool(limitations_problems(n_readme[:n_readme.index("\n23. **", n_readme.index(LIMITS_HEADING))] + "\n\n" + n_readme[n_readme.index("\n### ", n_readme.index("\n23. **", n_readme.index(LIMITS_HEADING))):])))
+check("mutant caught: item 10 loses its direction of failure", bool(limitations_problems(sw(n_readme, "Direction: mixed, as listed.", "Note: as listed."))))
+check("mutant caught: item 10 loses its 'You would see'", bool(limitations_problems(drop_in_item(n_readme, 10, "You would see:"))))
+check("mutant caught: item 10 loses 'clock-change day' from its title", bool(limitations_problems(n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))) and bool(all10(rd=n_readme.replace(NEW10_TITLE, NEW10_TITLE.replace("clock-change day", "clock change")))))
+check("mutant caught: 'mixed, as listed' is NOT accepted as the direction of any other item (item 1)",
+      bool(limitations_problems(sw(n_readme, "Direction: fail open for that one number", "Direction: mixed, as listed. That one number"))))
+check("mutant caught: item 10 is not ASCII", bool(all10(rd=sw(n_readme, "a 25 hour night", "a 25 hour night " + chr(0x2013)))))
+check("mutant caught: item 10 names a token", bool(all10(rd=sw(n_readme, "a 25 hour night", "a 25 hour night, token"))))
+check("mutant caught: the r30 bullet is not ASCII", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " " + chr(0x2013)))))
+check("mutant caught: the clock-change refusal text quoted in item 10 differs from the packages' by one letter", bool(all10(rd=sw(n_readme, CLOCK_TEXT, CLOCK_TEXT.replace("pick another", "pick anothe")))))
+check("mutant caught: the Stage 3 limitation sentence removed from the plan-core README", bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace(LIMITATION, "")})))
+check("mutant caught: a copy of the Stage 3 limitation sentence added to item 10 (the sentence must stand once)",
+      bool(places_problems({**texts, "plan-core README": texts["plan-core README"].replace("\n10. **" + NEW10_TITLE, "\n10. " + LIMITATION + " **" + NEW10_TITLE)})))
+# the package ties
+check("mutant caught: the clock-change refusal moved after 'must be in the future' in the Export to Grid package",
+      bool(package_tie_problems(n_dump.replace(f'value: "{CLOCK_TEXT}"', "@@C@@").replace(FUTURE_VALUE, f'value: "{CLOCK_TEXT}"').replace("@@C@@", FUTURE_VALUE), n_free)))
+check("mutant caught: the clock-change refusal moved after 'must be in the future' in the Charge Battery package",
+      bool(package_tie_problems(n_dump, n_free.replace(f'value: "{CLOCK_TEXT}"', "@@C@@").replace(FUTURE_VALUE, f'value: "{CLOCK_TEXT}"').replace("@@C@@", FUTURE_VALUE))))
+check("mutant caught: the repeated-time probe is no longer a fixed one hour (3601 s) in the Export to Grid package", bool(package_tie_problems(n_dump.replace("(t + 3600)", "(t + 3601)"), n_free)))
+check("mutant caught: the repeated-time probe is no longer a fixed one hour (3500 s) in the Charge Battery package", bool(package_tie_problems(n_dump, n_free.replace("(t - 3600)", "(t - 3500)"))))
+def with_second_trigger(pk: str) -> str:
+    """The package with a second trigger (a Home Assistant start event) added to its arm validation: arm time only is then no longer true."""
+    new = re.sub(r"(- id: \S+_schedule_arm_validation\n    alias: .*\n    mode: restart\n    triggers:\n(?:      .*\n)+?)(    actions:)", r"\1      - trigger: homeassistant\n        event: start\n\2", pk, count=1)
+    if new == pk:
+        NOOP_MUTANTS.append("a second trigger on the arm validation (the validation block was not found)")
+    return new
+
+
+check("mutant caught: the Export to Grid arm validation gains a second trigger (arm time only is no longer true)", bool(package_tie_problems(with_second_trigger(n_dump), n_free)))
+check("mutant caught: the Charge Battery arm validation gains a second trigger (arm time only is no longer true)", bool(package_tie_problems(n_dump, with_second_trigger(n_free))))
+check("mutant caught: the Export to Grid TOU walk goes back to wall-clock minutes", bool(package_tie_problems(n_dump.replace("k * 60) | timestamp_local", "k) | timestamp_local"), n_free)))
+check("mutant caught: the Charge Battery package gains a TOU overlap check (item 10 says it has none)", bool(package_tie_problems(n_dump, n_free + "\n# a TOU slot with a charge source set\n")))
+check("mutant caught: the Export to Grid header stops saying that the firmware is not changed", bool(package_tie_problems(n_dump.replace("is NOT changed here (a firmware change is a separate flash)", "is changed here"), n_free)))
+check("mutant caught: the Export to Grid header stops saying that P-F is still open", bool(package_tie_problems(n_dump.replace("(proposal P-F) is still open", "(proposal P-F) is done"), n_free)))
+check("mutant caught: the unreadable-label test removed from the Charge Battery package", bool(package_tie_problems(n_dump, n_free.replace("{{ t <= 0", "{{ false"))))
+check("mutant caught: the r15 sentence 'PROPOSED and NOT implemented' added to a package header", bool(everywhere_problems({**n_files, "the Export to Grid package": n_dump + "\n# PROPOSED and NOT implemented\n"})))
+check("mutant caught: the r15 sentence 'its proposals are not implemented' added to docs/DUMP_TO_GRID_V1.md", bool(everywhere_problems({**n_files, "docs/DUMP_TO_GRID_V1.md": n_doc + "\nits proposals are not implemented.\n"})))
+check("mutant caught: 'NOT fail closed (reproduced)' added to the CHANGELOG", bool(everywhere_problems({**n_files, "the CHANGELOG": n_changelog + "\nNOT fail closed (reproduced)\n"})))
+check("control: the untouched tree is not flagged by the item 10 checks", not all10() and not limitations_problems(n_readme) and not status_problems(n_readme) and not places_problems(texts) and not everywhere_problems(n_files))
+
+# ===========================================================================
+# The independent review of 20 Nov 2026 (verdict APPROVE_WITH_MINORS) of the r30 change to limitation 10: its four findings, each with killed in-memory mutants run against the REAL texts.
+#   F1  the CHANGELOG said the oracle ran 'every real UTC minute of each change day through the real arm validation'. It does not: the oracle WALKS every real UTC minute only to COUNT how often each
+#       wall-clock label occurs; the real arm validation is then run once per wall-clock label (1440 labels a day) and its answer is compared with the oracle's count. Item 10 and the r30 bullet
+#       now say exactly that, it is pinned, and the old sentence (and 'minute by minute') is a forbidden text.
+#   F2  the over-claim guard was a short word list that five over-claims all passed. It is hardened (see the comment above overclaim_problems), it is stated plainly for what it is (a word-list guard,
+#       defence in depth, not a proof), and each of the five (L1 to L5) and ten rewordings of its own (W1 to W10) are killed mutants in all four scopes.
+#   F3  the arm-time TOU walk runs only when the TOU slot table can be read (the Export to Grid package skips it otherwise and defers to the firmware's gate, which still walks the old way). Item 10 and the
+#       r30 bullet say so, it is pinned and tied to the package text; whether an unreadable table should fail closed stays an OPEN owner question and is not decided.
+#   F4  a mutant whose anchor is absent from the text it mutates (for example every 'not verified on a real Home Assistant' dropped from the README) used to abort the run with an AssertionError inside
+#       drop_phrase before [13] ran; the helpers now return the text unchanged and one final check lists every such mutant, so every mutant ends in a recorded PASS or FAIL line.
+# ===========================================================================
+print("")
+print("[13b] the review of 20 Nov 2026 of limitation 10: the oracle method worded exactly (F1), the over-claim guard hardened (F2), the unreadable TOU slot table named (F3), a clean FAIL for every mutant (F4)")
+ITEM10 = item_bodies(n_readme).get(10, "")
+INTRO = limitations_intro(n_readme)
+B15, B30 = flat(bullet_r15d(n_changelog)), flat(bullet_r30(n_changelog))
+SCOPES = (("item 10", ITEM10, True), ("the Known limitations introduction", INTRO, False), ("the CHANGELOG bullet of r15 (item 10)", B15, False), ("the CHANGELOG bullet of r30 (item 10)", B30, False))
+TAIL13 = "The next clock change is 28 Mar 2027."
+
+# ---- F1: the oracle method, exactly ----
+check("F1: item 10 and the r30 bullet word the oracle exactly (every real UTC minute walked only to count how often each wall-clock label occurs; the real arm validation run once per label and compared with that count); "
+      "the old wording ('run through the real arm validation', 'minute by minute') stands nowhere in the four texts",
+      all(p in ITEM10 for p in ITEM10_PROOF[:4]) and all(p in B30 for p in ("every real UTC minute of each change day walked, counting how often each wall-clock label occurs", "compared with the real arm validation label by label"))
+      and not any(p in body for _, body, _s in SCOPES for p in OLD10_ORACLE))
+check("mutant caught: the r30 bullet says again that every real UTC minute was 'run through the real arm validation' (the required phrase is replaced)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "every real UTC minute of each change day walked, counting how often each wall-clock label occurs", "every real UTC minute of each change day run through the real arm validation")))))
+check("mutant caught: the old oracle sentence added to the r30 bullet (every required phrase still there: the forbidden text alone kills it)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The oracle ran every real UTC minute of each change day run through the real arm validation."))))
+check("mutant caught: item 10 says again that the oracle is compared 'minute by minute' (the required phrase is replaced)",
+      bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "is compared with the real arm validation label by label", "is compared with the real arm validation minute by minute")))))
+check("mutant caught: 'minute by minute' added to item 10 (every required phrase still there: the forbidden text alone kills it)", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " The arm validation is compared minute by minute."))))
+check("mutant caught: 'minute by minute' added to the Known limitations introduction", bool(all10(rd=in_intro(n_readme, lambda s: s + " The oracle is compared minute by minute."))))
+check("mutant caught: the 1440 labels dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "each of the 1440 wall-clock minute labels of a day is armed once and its answer compared with the oracle's count"))))
+
+# ---- F2: the over-claim guard, hardened ----
+check("F2: the r30 bullet says plainly what the guard is (a word-list guard that catches the common over-claims; defence in depth, not a proof) and no longer says 'guarded against over-claims'",
+      "a word-list guard that catches the common over-claims" in B30 and "defence in depth, not a proof that no over-claim can be written" in B30 and not any(p in B30 for p in CHANGELOG_R30_OLD))
+check("mutant caught: the r30 bullet says again that the wording is 'guarded against over-claims' (the required sentence is replaced)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: sw(s, "checked by a word-list guard that catches the common over-claims (defence in depth, not a proof that no over-claim can be written)", "guarded against over-claims")))))
+check("mutant caught: 'guarded against over-claims' added to the r30 bullet (every required phrase still there: the forbidden text alone kills it)",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: s + " The wording is guarded against over-claims."))))
+check("mutant caught: 'defence in depth, not a proof that no over-claim can be written' dropped from the r30 bullet",
+      bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: drop_phrase(s, "defence in depth, not a proof that no over-claim can be written")))))
+OVERCLAIMS = (   # the five of the review (L1 to L5) and rewordings of my own (W1 to W10): different words, the same over-claim
+    ("L1", "P-A and P-B are confirmed on the owner's Home Assistant and work live."),
+    ("L2", "P-F was run on the real Home Assistant and passed; the refusal is live-tested."),
+    ("L3", "P-A is implemented offline and installed on the live Home Assistant."),
+    ("L4", "P-B is implemented offline and on the real Home Assistant as well."),
+    ("L5", "The firmware START gate now also walks the real instants after the flash."),
+    ("W1", "P-A and P-B were checked on the owner's Home Assistant and behave correctly there."),
+    ("W2", "The refusal has been exercised on the real Home Assistant and succeeded."),
+    ("W3", "P-A is implemented offline, then deployed to the owner's Home Assistant."),
+    ("W4", "The Export to Grid arm check was run on the owner's dongle and refused correctly."),
+    ("W5", "R9 is in service on the owner's Home Assistant."),
+    ("W6", "P-B is implemented offline as well as in the field."),
+    ("W7", "The firmware gate now walks the real instants too."),
+    ("W8", "P-A is implemented offline and runs unchanged on real hardware."),
+    ("W9", "P-F, the read-only template check, was carried out on the owner's Home Assistant and everything held."),
+    ("W10", "An unreadable TOU slot table is refused, so the arm fails closed."),
+)
+check("F2: the guard accepts the real item 10, introduction and both bullets (the over-claim mutants below start from clean texts)",
+      all(not overclaim_problems(nm, body, strict) for nm, body, strict in SCOPES), str([(nm, overclaim_problems(nm, body, strict)[:2]) for nm, body, strict in SCOPES if overclaim_problems(nm, body, strict)]))
+for label, text in OVERCLAIMS:
+    for nm, body, strict in SCOPES:
+        base, new = overclaim_problems(nm, body, strict), overclaim_problems(nm, body + " " + text, strict)
+        check(f"mutant caught by the over-claim guard alone: {label} appended to {nm}: {text[:70]}", len(new) > len(base), str(new[-2:]))
+    check(f"mutant caught end to end: {label} appended to item 10: {text[:70]}", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " " + text))))
+RULE_CASES = (   # one case per forbidden word or phrase of the review, each appended to item 10
+    ("confirmed", "P-A and P-B are confirmed."), ("live-tested", "The refusal is live-tested."), ("works live", "P-A works live."), ("work live", "P-A and P-B work live."),
+    ("passed", "P-F passed."), ("worked", "P-F worked."), ("tested", "P-A was tested."), ("flashed", "The dongle was flashed."), ("after the flash", "The gate walks the real instants after the flash."),
+    ("a flash that was done", "A flash was done."), ("implemented offline and", "P-A is implemented offline and on the real Home Assistant as well."),
+    ("implemented offline, then", "P-A is implemented offline, then used on the real Home Assistant."), ("installed", "P-A is installed."), ("deployed", "P-A is deployed."),
+    ("installed, with a 'not' in ANOTHER sentence", "P-A is installed. R9 is not installed anywhere else."),
+    ("passed, with a 'not' in ANOTHER sentence", "P-F passed. R9 is not installed."),
+    ("implemented offline and, with a 'not' later in the sentence", "P-A is implemented offline and installed on the real Home Assistant, not on a test system."),
+    ("a real-system sentence with no negation", "The refusal behaves correctly on the real Home Assistant."), ("a firmware sentence with no negation", "The firmware START gate walks the real instants."),
+)
+for label, text in RULE_CASES:
+    base, new = overclaim_problems("item 10", ITEM10, True), overclaim_problems("item 10", ITEM10 + " " + text, True)
+    check(f"mutant caught by the over-claim guard alone: {label}: {text[:70]}", len(new) > len(base), str(new[-2:]))
+HONEST = (   # honest negations and decisions that are not taken: appended to the real item 10, none may be flagged
+    "R9 is not installed on the real Home Assistant.", "Nothing is installed; nothing was deployed.", "With R9 installed (offline only so far) the arm is refused.", "A flash is a separate decision.",
+    "The firmware START gate needs a flash and is not changed.", "P-F has not passed because it has not been run.", "It does not work on the owner's Home Assistant yet.",
+    "P-A is implemented offline in R9 (not installed), that is not verified on a real Home Assistant.", "P-A is implemented offline in both schedule packages: arming refuses it.",
+    "None was seen on a live Home Assistant.", "An unreadable TOU slot table is not refused and is not decided here.",
+)
+for text in HONEST:
+    check(f"control: the over-claim guard accepts the honest sentence: {text[:70]}", not overclaim_problems("item 10", ITEM10 + " " + text, True), str(overclaim_problems("item 10", ITEM10 + " " + text, True)[:2]))
+
+# ---- F3: the arm-time TOU walk runs only when the TOU slot table can be read ----
+check("F3: item 10 says that the TOU walk runs only when the TOU slot table can be read, what an unreadable table does, and that whether it should fail closed stays open (not decided); the r30 bullet agrees; "
+      "the claim is tied to the package text (the walk sits inside the readability flag; the header says an unreadable slot table defers to the firmware)",
+      all(p in ITEM10 for p in ITEM10_UNCHANGED[-7:]) and "(both only when the TOU slot table can be read: see (c))" in ITEM10 and "against the slots it really covers (when the TOU slot table can be read)" in ITEM10
+      and "the Export to Grid TOU walk runs only when the TOU slot table can be read" in B30 and not package_tie_problems(n_dump, n_free), str(package_tie_problems(n_dump, n_free)))
+check("mutant caught: the owner's question turned into a decision in item 10 ('is decided: an unreadable TOU slot table fails closed')",
+      bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "stays an open question for the owner and is not decided here", "is decided: an unreadable TOU slot table fails closed")))))
+check("mutant caught: the walk made unconditional in item 10 ('always runs')", bool(all10(rd=in_item(n_readme, 10, lambda s: sw(s, "The TOU walk of (a) runs only when the TOU slot table can be read", "The TOU walk of (a) always runs")))))
+check("mutant caught: the readable-table condition dropped from part (a) of item 10", bool(all10(rd=drop_in_item(n_readme, 10, "(both only when the TOU slot table can be read: see (c))"))))
+check("mutant caught: the unreadable-table sentence of part (c) dropped from item 10", bool(all10(rd=drop_in_item(n_readme, 10, "Whether an unreadable TOU slot table should fail closed stays an open question for the owner and is not decided here"))))
+check("mutant caught: an unreadable TOU slot table is claimed to fail closed, in a new sentence of item 10", bool(all10(rd=sw(n_readme, TAIL13, TAIL13 + " An unreadable TOU slot table now fails closed."))))
+check("mutant caught: the r30 bullet loses the unreadable-table sentence", bool(all10(cl=in_bullet(n_changelog, R30_MARK, lambda s: drop_phrase(s, "the Export to Grid TOU walk runs only when the TOU slot table can be read")))))
+check("mutant caught: the Export to Grid package walks without the readability flag (`ns.ok and` removed)", bool(package_tie_problems(sw(n_dump, "{% if ns.ok and (start_ts | float(0)) > 0 %}", "{% if (start_ts | float(0)) > 0 %}"), n_free)))
+check("mutant caught: the Export to Grid package no longer marks an unreadable row (`ns.ok = false` removed)", bool(package_tie_problems(sw(n_dump, "{% set ns.ok = false %}", "{% set ns.ok = true %}"), n_free)))
+check("mutant caught: the Export to Grid header stops saying that an unreadable slot table defers to the firmware", bool(package_tie_problems(sw(n_dump, "an unreadable slot table still defers to the firmware", "an unreadable slot table is refused"), n_free)))
+
+# ---- F4: every mutant ends in a recorded line, never in an exception ----
+_n0 = len(NOOP_MUTANTS)
+_unchanged = (drop_phrase("alpha beta", "gamma") == "alpha beta" and sw("alpha beta", "gamma", "x") == "alpha beta" and drop_in_item("no limitations here", 10, "gamma") == "no limitations here"
+              and in_item("no limitations here", 10, lambda s: s) == "no limitations here" and in_intro("no limitations here", lambda s: s) == "no limitations here"
+              and in_bullet("no bullet here", "- **absent", lambda s: s) == "no bullet here" and with_second_trigger("not a package") == "not a package")
+_recorded = len(NOOP_MUTANTS) - _n0
+del NOOP_MUTANTS[_n0:]
+check("F4: a mutant whose anchor is absent leaves the text unchanged and is recorded (drop_phrase, sw, drop_in_item, in_item, in_intro, in_bullet and the second-trigger mutant never raise)", _unchanged and _recorded == 7, f"recorded {_recorded}")
+_n0 = len(NOOP_MUTANTS)
+_all_nv = sw(n_readme, "not verified on a real Home Assistant", "REMOVED")
+_cleanly = (bool(all10(rd=_all_nv)) and bool(status_problems(_all_nv)) and drop_in_item(_all_nv, 10, "not verified on a real Home Assistant") == _all_nv
+            and bool(all10(rd=in_intro(_all_nv, lambda s: drop_phrase(s, "not verified on a real Home Assistant")))))
+del NOOP_MUTANTS[_n0:]
+check("F4: the mutant 'every not verified on a real Home Assistant dropped from the README' is killed by recorded FAILs of the primary checks ([7] item 10 and [13]) and the mutant helpers that follow it return "
+      "unchanged text instead of raising", _cleanly)
+
+check("no mutant of this suite was a no-op: every phrase it drops or swaps, and every item, heading and bullet it edits, was present in the text it mutated (a missing anchor is reported here as ONE FAIL, "
+      "never as an exception inside a helper)", not NOOP_MUTANTS, str(NOOP_MUTANTS[:6]))
+
+print("")
+print("[14] the plan-core README's install order agrees with the pinned manifest (review of 21 Nov 2026; additive): R9's packages first, the voice-assistant decision (RG-F3) before any entity is created, the three Stage 3 packages in the SAME deployment with ONE full restart and no copy-order claim, the guarded-start setting named")
+IO_HEAD = "### Install order for the owner"
+
+
+def install_order_section(rd: str) -> str:
+    """The text of the install-order section of the plan-core README (from its heading to the next heading); empty when it is not there exactly once."""
+    if rd.count(IO_HEAD) != 1:
+        return ""
+    a = rd.index(IO_HEAD)
+    m = re.search(r"\n### ", rd[a + len(IO_HEAD):])
+    return rd[a: a + len(IO_HEAD) + (m.start() if m else len(rd))]
+
+
+def install_order_problems(rd: str) -> list[str]:
+    out = []
+    sec = install_order_section(rd)
+    if not sec:
+        return ["the install-order section is not there exactly once"]
+    flat_sec = " ".join(sec.split())
+    for ph in ("R9 first", "FULL Home Assistant restart", "never after it", "release gate RG-F3", "read the exposure list read-only",
+               "in the SAME deployment, then ONE full Home Assistant restart", "The order of the three copies does not matter",
+               "every scheduled start and every guarded start is refused (fail closed)", "`dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`",
+               "Until `dump_to_grid.guarded_start` is set, the card's own Start button presses the dongle's button directly (known limitation 5), so no override binds it", 
+               "the confirmation switch stays off"):
+        if flat_sec.count(ph) != 1:
+            out.append(f"'{ph}' appears {flat_sec.count(ph)}x (expected once)")
+    for bad in ("so step 2 comes first", "(restart)", "installed first", "comes first", "fully enforced"):
+        if bad in flat_sec:
+            out.append(f"the old or over-claiming wording '{bad}' is back")
+    at = {k: flat_sec.find(k) for k in ("R9 first", "release gate RG-F3", "in the SAME deployment", "Look at the eight limits", "Copy the rebuilt card bundle")}
+    if not (0 <= at["R9 first"] < at["release gate RG-F3"] < at["in the SAME deployment"] < at["Look at the eight limits"] < at["Copy the rebuilt card bundle"]):
+        out.append(f"the steps are out of order: {at}")
+    if len(re.findall(r"(?m)^\d+\. ", sec)) != 8:
+        out.append("the section does not list exactly 8 steps")
+    return out
+
+
+_io_readme = texts["plan-core README"]
+_io_problems = install_order_problems(_io_readme)
+check("14: the install-order section is stated as reviewed (R9 first, RG-F3 before any entity, one deployment and ONE full restart, no copy order, the guarded start named)", not _io_problems, str(_io_problems[:4]))
+check("14: the old two-restart sequence is gone ('Install `ecco_plan_helpers.yaml` (restart)', 'so step 2 comes first') and the Stage 3 limitation sentence still stands exactly once in the plan-core README",
+      "so step 2 comes first" not in _io_readme and "`ecco_plan_helpers.yaml` (restart)" not in _io_readme and len(LIMITATION_RE.findall(_io_readme)) == 1)
+_io_sec = install_order_section(_io_readme)
+_R9_LINE = [ln for ln in _io_sec.split("\n") if ln.startswith("2. R9 first")][0]
+_io_mutants = {
+    "the old step 2 and step 4 restored": _io_readme.replace("4. Install `ecco_plan_helpers.yaml`, `ecco_dump_to_grid_guarded_start.yaml` and the changed `ecco_dump_to_grid_schedule.yaml` in the SAME deployment, then ONE full Home Assistant restart.",
+                                                           "4. Install `ecco_plan_helpers.yaml` (restart). They refuse every start while the plan sensors cannot be read, so step 2 comes first."),
+    "'in the SAME deployment' dropped": _io_readme.replace("in the SAME deployment, then ONE full", "then ONE full"),
+    "the RG-F3 step dropped": _io_readme.replace("release gate RG-F3", "a later gate"),
+    "'never after it' dropped": _io_readme.replace("never after it", "in any order"),
+    "the copy-order claim added": _io_readme.replace("The order of the three copies does not matter", "The plan helpers come first"),
+    "the guarded-start setting no longer named as the reason the card's Start is unguarded": _io_readme.replace("Until `dump_to_grid.guarded_start` is set,", "Until it is set,"),
+    "a second install-order heading": _io_readme + "\n" + IO_HEAD + " (copy)\n",
+    "the R9 step moved after the plan helpers step": _io_readme.replace(_io_sec, _io_sec.replace(_R9_LINE, "").rstrip("\n") + "\n" + _R9_LINE + "\n\n"),
+}
+for _n, _m in _io_mutants.items():
+    check(f"14: mutant caught: {_n}", _m != _io_readme and bool(install_order_problems(_m)))
+check("14: the untouched README is not flagged (control)", install_order_problems(_io_readme) == [])
+
+print("")
+if FAILURES:
+    print(f"{len(FAILURES)} check(s) FAILED:")
+    for n in FAILURES:
+        print(f"  - {n}")
+    sys.exit(1)
+print("All Stage 3 limitation static tests PASSED.")
+print("NOTE: a static check that the limitation is stated and that no path was added; the overrides stay a PARTIAL protection (release gate RG-ST3).")
