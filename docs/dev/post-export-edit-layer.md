@@ -302,3 +302,14 @@ Intelligence or ecco_core change, ZERO Modbus operation, no service call, no ent
 
 The code reads `window.visualViewport` and the card's DOM; it cannot see a clipping ancestor other than `ha-card` (a sticky Home Assistant
 header over the top of the view is not subtracted from the visible area).
+
+## What ovw4 changed
+
+`ovw4` sets the Stage 3 plan options on the Overview's one Energy Actions card in the repository's own dashboard
+(`registry/tests/_ovw4_scope.py`; pinned by `home-assistant/tests/test_ecco_energy_actions_plan_options.py`): `show_plan: true`, the `plan` block
+(`entity_prefix`, the generic quoted default device slug that `tools/ecco_site_render.py` renders per site exactly as it does for the TOU Settings
+cards, and `reserve`, the owner's reserve helper) and `dump_to_grid.guarded_start`. Before it the options existed only on a production dashboard, so
+a render of this repository differed from it and a whole-file dashboard deploy would have removed them. It edits no chain-pinned artifact; its one
+frozen edit is the dashboard (two exact (before, after) pairs). The dashboard version is not bumped (the precedent is `wsc1` and `ptt1`). The site
+policy's protected layer (the Overview's flow card) is byte-identical, so the preservation gate's hash for it is unchanged. ZERO firmware, Home
+Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call of its own.

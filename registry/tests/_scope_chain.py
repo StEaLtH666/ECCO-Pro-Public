@@ -131,6 +131,7 @@ import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
 import _ovw3_scope as _ovw3  # noqa: E402
+import _ovw4_scope as _ovw4  # noqa: E402
 import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _ptt1_scope as _ptt1  # noqa: E402
@@ -1417,7 +1418,30 @@ PTT1 = Entry(
          "per chart, three identical charts; display only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, "
          "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1)
+# ovw4 (the Overview's Energy Actions card carries the Stage 3 plan options; _ovw4_scope.py): made on public main after ptt1 (the newest entry
+# when it was built; its fingerprint is sealed after ptt1's and is sealed again if another entry merges first). Stage 3 (PR 59) added three
+# optional settings to the Energy Actions card: `show_plan`, `plan` (entity_prefix, reserve) and `dump_to_grid.guarded_start`. The repository's
+# dashboard never set them, so a production Overview that uses them differed from a render of this repository (and a whole-file dashboard
+# deploy would have removed them). ovw4 sets them on the ONE Energy Actions card of the Overview view in the dashboard's generic naming (the
+# quoted default device slug, which tools/ecco_site_render.py renders per site exactly as it does for the TOU Settings cards). FROZEN edit
+# (PEX): the dashboard (_ovw4_scope.FROZEN_REVERTERS; as of ptt1 it is ptt1's checkpoint, byte for byte); the dashboard version is NOT bumped
+# (the precedent of wsc1 and ptt1). The site policy's protected layer (the Overview's flow card) is untouched. Nothing is newly enrolled.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package, deployment
+# manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no service call of its own.
+OVW4 = Entry(
+    id="ovw4", pr="OVW4", commit="unmerged",
+    added_files=_ovw4.ADDED_FILES,
+    frozen_reverts=dict(_ovw4.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ovw4; as of pub0 it is its pub0 state (manifest result)
+        _ovw4.DASHBOARD_REL: "6959c967d5ce457a87e55ac947e48496c745277bef4f95d994b48426bec36d6c",
+    },
+    # _pex.fingerprint(OVW4): hashes its parent ptt1's fingerprint and every declaration above
+    fingerprint="92f3ff54a3173c79199393cbd249f4629c08b5d29a5f34fd620989a5f9742acb",
+    note="the Overview's Energy Actions card sets show_plan, the plan block (generic entity_prefix, the reserve helper) and "
+         "dump_to_grid.guarded_start, as Stage 3's card supports them; display configuration only, the dashboard version is not bumped: "
+         "ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
