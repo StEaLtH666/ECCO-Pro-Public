@@ -619,6 +619,10 @@ test("round 3 F5: a world that starts at or above the target has reached it NOW:
   const pre = plan({ targetSocPct: 99.6, elapsedMin: -60, drainBoundW: 0, socPct: 99.3, socAgeMin: 0 });
   assert.ok(pre.codes.includes("BEFORE_WINDOW"));
   assert.equal(band(pre).optimistic.finishMin, 0);
+  // the review's own pre-window input (an odd window, a 5 point resolution, no overshoot, a single flat rate): the optimistic world starts at 97.27 + 2.5 = 99.77, above the 99
+  // target, so it has finished when the window opens, minute 0 (the earlier source gave -14.65)
+  const r5 = plan({ targetSocPct: 99, bufferMin: 40, chargeWindow: { startMin: 48, endMin: 701 }, elapsedMin: -403.9237322644429, socPct: 97.27485497945985, socAgeMin: 2, capacityKwh: 57.927392001555205, ceilings: [{ name: "x", watts: 5049.689671191426 }], drainBoundW: 0, actuatorProfile: "UNCONSTRAINED", params: { socResolutionPct: 5, setpointOvershoot: 1, maxChanges: 0, dropMin: 1 } });
+  assert.equal(band(r5).optimistic.finishMin, 0);
   // a seeded sweep with the reading within 1.2 points below the target, before, at and after the window opens and the deadline, on every path: no world finishes before now
   const r = rng(305);
   const profiles = ["UNCONSTRAINED", "FREE_POWER_LEASE", "TOU_SLOT_EDITOR", "RATE_CONTROLLER_PROPOSED"] as const;
@@ -971,6 +975,12 @@ test("round 3 F4: UNREACHABLE means not even the highest safe rate the path can 
 test("round 3 F4: the band is per-world policy and can come out of order on an adaptive path, but with the rate held the order pessimistic >= expected >= optimistic holds on every flat path (sweep)", () => {
   const r = rng(309);
   const fin = (w: { finishMin: number | null }): number => (w.finishMin === null ? Infinity : w.finishMin);
+  // the review's rate-controller case (a documented property, not a bound): each policy world re-plans from its own reading, and here the optimistic world finishes at 137.0,
+  // AFTER the expected one (131.6); the held pessimistic world (146.0) is still the latest of the four
+  const r4b = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", targetSocPct: 90.01, bufferMin: 15, chargeWindow: { startMin: 1125, endMin: 1313 }, elapsedMin: 0, socPct: 6, socAgeMin: 4.7253172414685345, capacityKwh: 2.4483993398575397, ceilings: [{ name: "max_charge_power_effective", watts: 5993.0262166578 }], drainBoundW: 1451.919028508891, inForce: { setpointW: 3600, lastChangeAtMin: null, changesUsed: 1 } });
+  const b4 = band(r4b);
+  assert.ok(fin(b4.optimistic) > fin(b4.expected), "the policy worlds are scenarios: " + fin(b4.optimistic) + " after " + fin(b4.expected));
+  assert.ok(fin(b4.pessimisticHeld) >= fin(b4.optimistic) && fin(b4.pessimisticHeld) >= fin(b4.expected));
   let compared = 0;
   for (let i = 0; i < 500; i++) {
     const p = plan({
