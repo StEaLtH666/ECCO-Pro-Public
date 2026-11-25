@@ -241,6 +241,10 @@ export interface GentleNightPlan {
    * The three worlds under the policy (with its conditional later changes), and the pessimistic world with the first rate HELD for the rest of the
    * window: the status, the margin and the buffer that would fit are judged on `pessimisticHeld` (no path makes a later change by itself). After a STOP
    * recommendation every world is the rate in force held: what happens IF NOTHING IS DONE (null when the inputs give no plan).
+   * The three policy worlds are SCENARIOS, not bounds (round 3 F4): each re-plans from its OWN measured SOC, so a world that is behind can raise a rate that a
+   * world that is ahead holds (it may be past the knee: HELD_PAST_KNEE), and on a path that adapts (UNCONSTRAINED, RATE_CONTROLLER_PROPOSED, the editor's one
+   * change) their finish times and SOC at the deadline can come out of order. With the rate held (`pessimisticHeld`, and every flat path) the order
+   * pessimistic >= expected >= optimistic holds.
    */
   band: { pessimistic: WorldOutcome; expected: WorldOutcome; optimistic: WorldOutcome; pessimisticHeld: WorldOutcome } | null;
   /** Minutes the pessimistic world with the first rate held finishes before the deadline (negative: after it); null when it does not finish in the window, and after a STOP. */
@@ -303,7 +307,7 @@ const CODE_TEXT: Readonly<Record<NightCode, string>> = Object.freeze({
   BEFORE_WINDOW: "The window has not opened: the plan starts at the window start from the reading less the given drain bound over the reading's age and the time to the window (nothing charges before the window opens).",
   DEADLINE_PASSED_WINDOW_OPEN: "The deadline has passed but the window is still open: best effort only. The SOC shown for the deadline is then the SOC now (never above the target): the one at the deadline is in the past.",
   RATE_NOT_ENOUGH_ALONE: "The expected world reaches the deadline but the pessimistic world does not.",
-  PESSIMISTIC_MISSES_DEADLINE: "The pessimistic simulation misses the deadline at the highest safe rate.",
+  PESSIMISTIC_MISSES_DEADLINE: "The pessimistic simulation, with the first rate held for the rest of the window, misses the deadline.",
   RELIES_ON_LATER_CHANGE: "The pessimistic world only makes the deadline with a planned later change, and no path makes one by itself (each needs the owner, or the path does not exist): judged with the first rate held, the status is not OK.",
   SETPOINT_UNIT_UNSETTLED: "What the setpoint means (AC grid watts, DC battery watts or amps) is not established: the plan treats it as grid-side watts for energy and applies the overshoot allowance to converted limits.",
   ACTUATOR_FIXED_RATE: "This path fixes the rate at the START: the rate in force cannot be lowered to the ceiling, so a STOP is recommended; the band, when the inputs give one, is for the rate in force (what happens if nothing is done).",
@@ -976,7 +980,14 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   if (socPlan >= target) {
     const c0: NightCode[] = ["AT_TARGET"];
     if (target >= 100) c0.push("TOP_OF_CHARGE_TAIL");
-    return halt("NO_NEED", c0, { targetSocPct: target, bufferMin: buffer, windowRealMin: W, deadlineMin: deadline, deadlineInMin: deadline - elapsed });
+    // Round 3 F8: nothing is planned, but a rate in force is not the planner's to stop; on the path that has no stop at a target SOC (the Free Power lease) it goes on
+    // charging past the target, and the plan says so (stopping it is the owner's choice) instead of "the fallback holds whatever is in force"
+    const inW = force.setpointW;
+    const needed = inW === null ? ["Nothing is to be applied: the battery is at or above the target."]
+      : profileId === "FREE_POWER_LEASE"
+        ? ["Nothing here applies anything. The battery is at or above the target, but the Free Power lease in force (" + inW + " W) has no stop at a target SOC: it keeps charging past the target until the lease ends. Stopping it is the owner's choice."]
+        : ["Nothing here applies anything. The battery is at or above the target; the rate in force (" + inW + " W) is left as it is."];
+    return halt("NO_NEED", c0, { targetSocPct: target, bufferMin: buffer, windowRealMin: W, deadlineMin: deadline, deadlineInMin: deadline - elapsed, needed });
   }
   if (elapsed >= W) return halt("INPUTS_UNUSABLE", ["WINDOW_OVER"], { targetSocPct: target, bufferMin: buffer, windowRealMin: W, deadlineMin: deadline, deadlineInMin: deadline - elapsed });
 
@@ -1050,11 +1061,19 @@ export function planGentleNight(input: GentleNightInput): GentleNightPlan {
   const ef = pe.outcome.finishMin;
   const basisOk = pf !== null && pf <= deadline + EPS;
   const plannedOk = pp.outcome.finishMin !== null && pp.outcome.finishMin <= deadline + EPS;
+  // Round 3 F4: UNREACHABLE says that not even the HIGHEST safe rate the path can still apply reaches the target inside the window in the pessimistic world. A rate in
+  // force that only the dwell (or the knee, where a raise is not credited) holds below it does not make the target unreachable (the review's case: 500 W held by the
+  // dwell, 5000 W would finish at 194 of a window end of 238): that is TARGET_AT_RISK. A path that cannot change the rate (the lease) or a used-up change budget
+  // cannot raise it, so the rate in force held is the answer there. The highest rate goes through the same model as any rate tried.
+  const inForceW = force.setpointW === null ? null : Math.min(force.setpointW, ceiling);
+  const mayRaise = inForceW === null || (ctx.midWindow && ctx.maxChanges > 0 && force.changesUsed < ctx.maxChanges);
+  const topFinish = mayRaise ? pessFinish(ctx, Math.max(elapsed, 0), socPlan, inForceW, ceiling, W, inForceW !== null && elapsed > 0, first.pastKnee, forceNow.kneeFloorW ?? null) : null;
+  const topOk = topFinish !== null && topFinish <= W + EPS;
   const stop = first.change === "STOP";
   let status: NightStatus;
   if (stop) status = "STOP_RECOMMENDED";
   else if (basisOk) status = "OK";
-  else if (plannedOk || (ef !== null && ef <= deadline + EPS) || (pf !== null && pf <= W + EPS)) status = "TARGET_AT_RISK";
+  else if (plannedOk || (ef !== null && ef <= deadline + EPS) || (pf !== null && pf <= W + EPS) || topOk) status = "TARGET_AT_RISK";
   else status = "UNREACHABLE";
   if (plannedOk && !basisOk) codes.push("RELIES_ON_LATER_CHANGE");
   if (!basisOk) codes.push("PESSIMISTIC_MISSES_DEADLINE");

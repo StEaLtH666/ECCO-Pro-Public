@@ -933,3 +933,87 @@ test("round 3 F9: the planner never throws for a ceiling name that cannot be con
   }
   assert.equal(planned, 1500);
 });
+
+test("round 3 F4: UNREACHABLE means not even the highest safe rate the path can still apply reaches the target inside the window; a rate that only the dwell holds low is TARGET_AT_RISK (by hand)", () => {
+  // the review's case: UNCONSTRAINED, window 303 to 541 (238 minutes), buffer 90, minute 0.5, reading 88.277 (2 min old), owner limit 5000 W, 500 W set at minute -0.5
+  // (the dwell holds it for 30 minutes), target 95. The 500 W held never gets there, but 5000 W applied now finishes: the pessimistic start 87.277 reaches the knee 90 on the
+  // plateau (4.5 kW = 0.21651 points a minute) in 12.58 minutes, the cliff minute gives 0.1218 points, then 4.878 points on the tail 0.125 x 4.5 kW = 0.5625 kW take
+  // 180.25 minutes: minute 194.3, before the window end (238), after the deadline (148): at risk, not unreachable
+  const rc = { actuatorProfile: "UNCONSTRAINED", targetSocPct: 95, bufferMin: 90, chargeWindow: { startMin: 303, endMin: 541 }, elapsedMin: 0.5, socPct: 88.27706020426044, socAgeMin: 2.0001, inForce: { setpointW: 500, lastChangeAtMin: -0.5, changesUsed: 0 } } as const;
+  const owner = (watts: number): GentleNightInput["ceilings"] => [{ name: "max_charge_power_effective", watts }];
+  const p = plan({ ...rc, ceilings: owner(5000) });
+  const perMin = 4.5 / 60 / PK;
+  const atTop = 0.5 + (90 - (88.27706020426044 - 1.0)) / perMin + 1 + (5 - ((1 + 0.125) / 2) * perMin) / (0.125 * perMin);
+  assert.ok(atTop > 148 && atTop < 238, "by hand " + atTop);
+  assert.equal(p.status, "TARGET_AT_RISK");
+  assert.equal(p.now.change, "KEEP");
+  assert.equal(p.now.setpointW, 500);
+  assert.ok(p.codes.includes("HELD_DWELL") && p.codes.includes("PESSIMISTIC_MISSES_DEADLINE"), p.codes.join(","));
+  assert.equal(band(p).pessimisticHeld.finishMin, null, "the 500 W held never gets there");
+  // the same battery with the owner limit lowered to 1500 W: the highest safe rate is then 1500 W (0.065 points a minute, then a 168 W tail: about 10 hours), so UNREACHABLE
+  assert.equal(plan({ ...rc, ceilings: owner(1500) }).status, "UNREACHABLE");
+  // the editor's dwell (60 minutes) holds 2000 W set at minute 50: 8000 W would finish at 218 of 300 (14.2 kWh at 7.2 kW), 2000 W held takes 473 minutes
+  const dwell = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 50, changesUsed: 0 } });
+  assert.equal(dwell.status, "TARGET_AT_RISK");
+  assert.ok(dwell.codes.includes("HELD_DWELL"));
+  // a path that cannot change the rate (the lease) and a used-up change budget cannot apply a higher one: the rate in force held is the answer, UNREACHABLE as before
+  assert.equal(plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } }).status, "UNREACHABLE");
+  assert.equal(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 1 } }).status, "UNREACHABLE");
+  assert.equal(plan({ actuatorProfile: "UNCONSTRAINED", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 6 } }).status, "UNREACHABLE");
+  // and the same battery with the dwell passed (set at minute 0) is raised now: the raise is the first recommendation, so it is judged held and is OK
+  const passed = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(passed.now.change, "INCREASE");
+  assert.equal(passed.status, "OK");
+});
+
+test("round 3 F4: the band is per-world policy and can come out of order on an adaptive path, but with the rate held the order pessimistic >= expected >= optimistic holds on every flat path (sweep)", () => {
+  const r = rng(309);
+  const fin = (w: { finishMin: number | null }): number => (w.finishMin === null ? Infinity : w.finishMin);
+  let compared = 0;
+  for (let i = 0; i < 500; i++) {
+    const p = plan({
+      actuatorProfile: "FREE_POWER_LEASE", socPct: Math.floor(r() * 950) / 10, targetSocPct: 60 + Math.floor(r() * 41), bufferMin: 5 * Math.floor(r() * 25), elapsedMin: Math.floor(r() * 250), capacityKwh: 15 + r() * 30,
+      inForce: { setpointW: 500 + 100 * Math.floor(r() * 76), lastChangeAtMin: 0, changesUsed: 0 },
+    });
+    if (p.band === null || p.status === "STOP_RECOMMENDED") continue;
+    compared++;
+    const b = p.band;
+    assert.ok(fin(b.pessimistic) >= fin(b.expected) - 1e-9 && fin(b.expected) >= fin(b.optimistic) - 1e-9, JSON.stringify(b));
+    assert.ok(b.pessimistic.socAtDeadlinePct <= b.expected.socAtDeadlinePct + 1e-9 && b.expected.socAtDeadlinePct <= b.optimistic.socAtDeadlinePct + 1e-9, JSON.stringify(b));
+    assert.deepEqual(b.pessimistic, b.pessimisticHeld, "a flat path: the policy is the held rate");
+  }
+  assert.ok(compared > 300, "compared " + compared);
+});
+
+test("round 3 F8: at or above the target with a lease in force the advice says the lease goes on charging past the target and that stopping it is the owner's choice, not that nothing is to be applied (by hand)", () => {
+  // the review's case: the Free Power lease (default path), 3000 W set at minute 0, reading 85 against a target of 80 at minute 60
+  const lease = plan({ elapsedMin: 60, socPct: 85, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(lease.status, "NO_NEED");
+  assert.deepEqual(lease.codes, ["AT_TARGET"]);
+  const text = lease.needed.join(" ");
+  assert.match(text, /3000 W/);
+  assert.match(text, /no stop at a target SOC/);
+  assert.match(text, /keeps charging past the target/);
+  assert.match(text, /the owner's choice/);
+  assert.doesNotMatch(text, /fallback holds/);
+  assert.equal(lease.now.setpointW, null, "nothing is recommended");
+  assert.equal(lease.stopRecommended, false);
+  // the same with the lease named, and with 100 % (the top-of-charge caution rides along)
+  assert.match(plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 100, targetSocPct: 100, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } }).needed.join(" "), /keeps charging past the target/);
+  // a path that has a target stop says only that the rate in force is left as it is; nothing in force says only that nothing is to be applied; neither claims a charge goes on
+  for (const actuatorProfile of ["TOU_SLOT_EDITOR", "UNCONSTRAINED", "RATE_CONTROLLER_PROPOSED"] as const) {
+    const q = plan({ actuatorProfile, elapsedMin: 60, socPct: 85, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } });
+    assert.equal(q.status, "NO_NEED");
+    assert.match(q.needed.join(" "), /the rate in force \(3000 W\) is left as it is/, actuatorProfile);
+    assert.doesNotMatch(q.needed.join(" "), /keeps charging|fallback holds/, actuatorProfile);
+  }
+  const none = plan({ elapsedMin: 60, socPct: 85 });
+  assert.equal(none.status, "NO_NEED");
+  assert.doesNotMatch(none.needed.join(" "), /keeps charging|fallback holds|rate in force/);
+  // 0 W in force means not charging: no lease keeps charging
+  assert.doesNotMatch(plan({ elapsedMin: 60, socPct: 85, inForce: { setpointW: 0, lastChangeAtMin: 0, changesUsed: 0 } }).needed.join(" "), /keeps charging/);
+  // a rate in force ABOVE a known ceiling is still the STOP (checked before the target): 8000 W against a 6000 W limit
+  const stop = plan({ elapsedMin: 60, socPct: 85, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(stop.status, "STOP_RECOMMENDED");
+  assert.doesNotMatch(stop.needed.join(" "), /keeps charging past the target/);
+});
