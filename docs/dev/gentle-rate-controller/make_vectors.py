@@ -4,9 +4,10 @@ is noted beside the less obvious ones); nothing here runs the model. test_refere
 meets every expectation and that vectors.json is exactly what this script writes.
 
 Frame (vector_runner.py): E0 = 00:35 local, the slot runs 00:30-05:30 (grid, target 100 %), the plan deadline is 04:30
-(E0 + 14100), the window end 05:30 (E0 + 17700), capacity 31700 Wh, taper 90 %, one plan point of 6000 W realised.
-Target guard at SOC 40.0 %: plateau 500 * 31700 // 1000 = 15850 Wh at 8200*85//100 = 6970 W -> 8186 s, tail 3170 Wh at
-8200*25//100 = 2050 W -> 5566 s; it trips once epoch + 13752 + 900 >= E0 + 17100, i.e. from E0 + 2448.
+(E0 + 14100), the window end 05:30 (E0 + 17700), capacity 30000 Wh, taper 90 %, one plan point of 6000 W realised.
+Every number is a synthetic test frame, not a site reading.
+Target guard at SOC 40.0 %: plateau 500 * 30000 // 1000 = 15000 Wh at 8200*85//100 = 6970 W -> 7747 s, tail 3000 Wh at
+8200*25//100 = 2050 W -> 5268 s; it trips once epoch + 13015 + 900 >= E0 + 17100, i.e. from E0 + 3185.
 Before the lease the slot power is 8000 and the battery takes 8200 W (gain 102 %).
 """
 
@@ -133,14 +134,14 @@ R = [
      "R_REFUSE_IMPLAUSIBLE", {"set": {"batt_w": 3900}}),
     ("V41", "realised 12100 W at 8000: gain 151 %", "R_REFUSE_IMPLAUSIBLE", {"set": {"batt_w": 12100}}),
     ("V42", "deadline 2999 s away", "R_REFUSE_TOO_LATE", {"plan": {"deadline": E0 + 3000}}),
-    # soc 25.0 %: plateau 650*31700//1000 = 20605 Wh -> 10642 s, tail 5566 s; E0+1+16208+900 >= E0+17100
-    ("V43", "the target is at risk even at today's rate", "R_REFUSE_TARGET_AT_RISK", {"set": {"soc": 250}}),
+    # soc 19.0 %: plateau 710*30000//1000 = 21300 Wh -> 11001 s, tail 5268 s; E0+1+16269+900 >= E0+17100
+    ("V43", "the target is at risk even at today's rate", "R_REFUSE_TARGET_AT_RISK", {"set": {"soc": 190}}),
 ]
 for vid, title, reason, extra in R:
     vec(vid, "START refused: " + title, refuse(reason, extra))
-# soc 26.0 %: plateau 20288 Wh -> 10478 s, tail 5566 s: E0+1+16044+900 < E0+17100
-vec("V43b", "START accepted just inside the target guard (SOC 26 %)",
-    [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "set": {"soc": 260},
+# soc 20.0 %: plateau 21000 Wh -> 10846 s, tail 5268 s: E0+1+16114+900 < E0+17100
+vec("V43b", "START accepted just inside the target guard (SOC 20 %)",
+    [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "set": {"soc": 200},
                  "expect": {"state": "ADJUSTING", "action": "WRITE", "value": 6000}}])
 vec("V44", "START refused: telemetry 91 s old",
     [dict(ARM), {"dt": 91000, "cfg": True, "refresh": True, "pulse": {"start": True},
@@ -357,9 +358,9 @@ vec("V85", "target reached ends the lease", prefix() + [
     {"dt": 10000, "keep": True, "set": {"soc": 500},
      "expect": {"action": "RESTORE", "event": "R_TARGET_REACHED"}}] + restore_ok("R_TARGET_REACHED", 2),
     base_plan={"target": 50}, base_set={"slot_target": 50})
-# guard from epoch E0 + 2448 (see the frame note): tick 40 after the prefix (E0 + 83 + 60k)
+# guard from epoch E0 + 3185 (see the frame note): tick 52 after the prefix (E0 + 83 + 60k)
 vec("V86", "target guard: behind on time, the charge goes back to today's rate",
-    prefix() + [{"repeat": 39, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
+    prefix() + [{"repeat": 51, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
                 {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD"}}])
 # watchdog = (E0+14100 - (E0+1)) * 1000 + 600000 = 14699000 ms from NOW0+1000: tick 244 after the prefix
 vec("V87", "uptime watchdog: a frozen wall clock cannot hold the lease open",

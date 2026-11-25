@@ -41,7 +41,7 @@ BASE_IN = {"now_ms": NOW0, "night_id": NIGHT0, "clock_change_night": False, "inv
            "sample_seq": 1, "live_sp": 8000, "slot_start_min": 30, "slot_end_min": 330, "slot_grid": True,
            "slot_target": 100}
 BASE_PLAN = {"valid": True, "slot": 1, "target": 100, "deadline": E_MID + 270 * 60, "window_end": E_MID + 330 * 60,
-             "ceiling_w": 8000, "capacity_wh": 31700, "taper": 90, "t": [E0 - 60], "p": [6000]}
+             "ceiling_w": 8000, "capacity_wh": 30000, "taper": 90, "t": [E0 - 60], "p": [6000]}
 
 
 def load_vectors(path: Path = HERE / "vectors.json") -> list[dict]:

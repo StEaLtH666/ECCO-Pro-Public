@@ -26,7 +26,7 @@ TICK_S = 10
 class Scenario:
     name: str = "normal"
     seed: int = 0
-    capacity_wh: float = 31700.0
+    capacity_wh: float = 30000.0
     plan_capacity_factor: float = 1.06
     k: float = 1.025
     soc0: float = 30.0

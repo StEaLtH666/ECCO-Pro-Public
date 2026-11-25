@@ -1336,14 +1336,14 @@
       "last_reason": "R_REFUSE_TARGET_AT_RISK"
      },
      "set": {
-      "soc": 250
+      "soc": 190
      }
     }
    ]
   },
   {
    "id": "V43b",
-   "title": "START accepted just inside the target guard (SOC 26 %)",
+   "title": "START accepted just inside the target guard (SOC 20 %)",
    "ticks": [
     {
      "dt": 0,
@@ -1363,7 +1363,7 @@
       "start": true
      },
      "set": {
-      "soc": 260
+      "soc": 200
      },
      "expect": {
       "state": "ADJUSTING",
@@ -6009,7 +6009,7 @@
      }
     },
     {
-     "repeat": 39,
+     "repeat": 51,
      "dt": 60000,
      "keep": true,
      "expect_all": {
